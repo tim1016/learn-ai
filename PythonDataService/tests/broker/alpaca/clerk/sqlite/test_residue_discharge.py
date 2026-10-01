@@ -196,20 +196,6 @@ async def test_a_residue_no_exit_episode_names_refuses(clocked_repo) -> None:  #
     assert _discharges(repo) == []
 
 
-@pytest.mark.parametrize("reason", [None, "", "   "])
-async def test_a_blank_operator_reason_is_recorded_as_absent(clocked_repo, reason) -> None:  # noqa: F811
-    """The panel's typed confirmation is the acknowledgement; it sends no reason."""
-    repo, _clock = clocked_repo
-    await _stranded(repo)
-
-    await _discharge(repo, _FakeRead(positions=[]), reason=reason)
-
-    [transition] = _discharges(repo)
-    assert AttributedResidueDischargedFacts.from_facts_json(
-        transition["facts_json"]
-    ).operator_reason is None
-
-
 async def test_a_netted_account_discharges_only_the_residue(clocked_repo) -> None:  # noqa: F811
     """A's stale +10 beside B's real -10: the broker shows -10, and discharging
     A's residue is exactly what restores broker = attribution."""

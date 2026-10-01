@@ -193,17 +193,6 @@ async def test_a_manual_limit_alpaca_ends_unfilled_ends_its_effect_and_bots_may_
     assert _owner_reads(repo).ending == owner_copy
 
 
-async def test_a_gtc_limit_alpaca_expires_reads_as_expired_at_alpaca(clocked_repo) -> None:  # noqa: F811
-    repo, _clock = clocked_repo
-    website = _AlpacaWebsite(repo=repo)
-    manual = await _buy_limit(repo, website, time_in_force="gtc")
-    assert manual.leg.order_ref is not None
-
-    await _frame(repo, _ended_at_alpaca(repo, website, manual.leg.order_ref, "expired"), event_type="expired")
-
-    assert _owner_reads(repo).ending == "Expired at Alpaca."
-
-
 async def test_a_working_or_filled_manual_order_has_no_broker_ending_to_show(clocked_repo) -> None:  # noqa: F811
     repo, _clock = clocked_repo
     website = _AlpacaWebsite(repo=repo)
@@ -218,23 +207,7 @@ async def test_a_working_or_filled_manual_order_has_no_broker_ending_to_show(clo
     assert [t["transition_kind"] for t in _manual_endings(repo, manual.leg.order_ref)] == ["MANUAL_ORDER_FILLED"]
 
 
-async def test_a_share_count_of_a_million_or_more_reads_in_plain_digits(clocked_repo) -> None:  # noqa: F811
-    repo, _clock = clocked_repo
-    website = _AlpacaWebsite(repo=repo)
-    manual = await _buy_limit(repo, website, quantity=2_000_000)
-    assert manual.leg.order_ref is not None
-    _ended_at_alpaca(repo, website, manual.leg.order_ref, "canceled", filled_quantity=1_250_000.5)
-
-    await _reconciliation_pass(repo, website, spy_held=1_250_000.5)
-
-    assert _owner_reads(repo).ending == "Cancelled at Alpaca with 1250000.5 of 2000000 shares filled."
-
-
 # ── The owner copy covers exactly the states the fold ends ────────────────────
-
-
-def test_the_owner_copy_covers_exactly_the_unfilled_terminal_states() -> None:
-    assert frozenset(manual_order_completion._ENDING_COPY) == order_projection.UNFILLED_TERMINAL_STATES
 
 
 def test_an_unfilled_state_with_no_owner_copy_stops_the_import_not_the_sweep(

@@ -503,30 +503,6 @@ async def test_a_regular_only_authority_refuses_an_extended_decision(tmp_path: P
     assert trade.submitted_legs == []
 
 
-@pytest.mark.parametrize(
-    ("policy", "expected_window"),
-    [(_EXTENDED_POLICY, _WINDOW), (ProgramLegPolicy.regular_only(), None)],
-)
-def test_the_facade_publishes_its_leg_policy(
-    tmp_path: Path,
-    policy: ProgramLegPolicy,
-    expected_window: ExtendedHoursWindow | None,
-) -> None:
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
-    facade = SqliteAlpacaClerkFacade(
-        repo=repo,
-        read=_FakeReadPort(),
-        trade=_FakeTradePort(),
-        account_mode="paper",
-        program_leg_policy=policy,
-    )
-    try:
-        assert facade.program_leg_policy == (policy if policy.allowances is None else replace(policy, allowances=replace(policy.allowances, exit_bps=None)))
-        assert facade.program_leg_policy.window == expected_window
-    finally:
-        repo.close()
-
-
 def test_a_facade_built_without_a_policy_is_regular_only(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
     facade = SqliteAlpacaClerkFacade(

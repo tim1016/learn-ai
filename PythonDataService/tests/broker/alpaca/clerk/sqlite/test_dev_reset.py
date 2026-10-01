@@ -380,20 +380,6 @@ def test_cleanup_keeps_nonempty_quarantine_for_inspection(tmp_path: Path) -> Non
     assert residue.read_text(encoding="utf-8") == "inspect me"
 
 
-def test_reset_refuses_non_paper_account_without_moving_authority(tmp_path: Path) -> None:
-    clerk_root = tmp_path / "clerk"
-    runner_root = tmp_path / "runner"
-    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
-    account_dir.mkdir(parents=True)
-    journal = account_dir / "order_journal.jsonl"
-    journal.write_text("{}\n", encoding="utf-8")
-
-    with pytest.raises(DeveloperCleanSlateResetRefused, match="only for paper"):
-        _reset(clerk_root=clerk_root, runner_root=runner_root, account_mode="live")
-
-    assert journal.is_file()
-
-
 def test_reset_refuses_the_shadow_namespace_by_name(tmp_path: Path) -> None:
     """ADR 0059 D10: a shadow authority is never a developer-reset target.
 

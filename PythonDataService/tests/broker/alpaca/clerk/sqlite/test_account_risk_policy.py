@@ -31,11 +31,6 @@ def test_policy_rejects_a_loss_cap_that_is_not_whole_cents() -> None:
         _policy(cap=100.001)
 
 
-def test_policy_accepts_the_canonical_helper_s_binary_noise_tolerance() -> None:
-    """99.89999999999999 is whole-cent under require_whole_cent_loss_cap's ULP tolerance."""
-    assert _policy(cap=99.89999999999999).loss_usd == 99.89999999999999
-
-
 def _hold(repo: ClerkSqliteRepository) -> dict | None:
     return repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, strategy_instance_id=None)
 

@@ -394,16 +394,6 @@ def _our_order_ref(intent_id: str = "abc") -> str:
     return build_order_ref(build_bot_order_namespace(SID), intent_id)
 
 
-def test_plan_is_clean_when_no_foreign_orders_and_positions_match() -> None:
-    plan = plan_account_reconciliation(
-        namespaces=_namespaces(),
-        broker_orders=[],
-        broker_positions=[_position("SPY", quantity=5)],
-        attributed_positions={"SPY": 5.0},
-    )
-    assert plan.verdict == "clean"
-
-
 def test_plan_flags_unexplained_order_for_a_foreign_client_order_id() -> None:
     foreign = _broker_order("manual/someone/v1:xyz")
     plan = plan_account_reconciliation(

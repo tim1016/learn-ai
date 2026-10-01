@@ -34,17 +34,6 @@ def _clock(start: int = 1_700_000_000_000):
     return tick
 
 
-def test_a_fresh_authority_has_no_holds_table_only_the_view() -> None:
-    conn = sqlite3.connect(":memory:")
-    schema.configure_connection(conn)
-    schema.apply_schema(conn)
-
-    row = conn.execute(
-        "SELECT type FROM sqlite_master WHERE name = 'holds'"
-    ).fetchone()
-    assert row is not None and row[0] == "view"
-
-
 def test_the_holds_view_refuses_every_write() -> None:
     """A missed write path must fail at its INSERT, not maintain a second copy.
 

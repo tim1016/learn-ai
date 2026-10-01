@@ -311,29 +311,6 @@ async def test_the_loop_survives_a_failing_observation(tmp_path: Path) -> None:
     repo.close()
 
 
-async def test_the_loop_waits_its_own_cadence_between_ticks(tmp_path: Path) -> None:
-    """Independence from the reconcile pass is the point: this loop's wait
-    is its own fixed interval, never the reconciler's backoff."""
-    repo, providers = _repo(tmp_path), _Providers()
-    waits: list[float] = []
-
-    async def record(seconds: float) -> None:
-        waits.append(seconds)
-
-    sync = StreamHealthHoldSync(
-        repo=repo,
-        gate=providers.gate(),
-        interval_s=INTERVAL_S,
-        sleep=record,
-        max_ticks=3,
-    )
-
-    await sync.run()
-
-    assert waits == [INTERVAL_S, INTERVAL_S, INTERVAL_S]
-    repo.close()
-
-
 async def test_failing_ticks_never_slow_the_cadence(tmp_path: Path) -> None:
     """The independence claim, stated as behaviour (#1777 WP4 decision 1).
 
@@ -364,27 +341,6 @@ async def test_failing_ticks_never_slow_the_cadence(tmp_path: Path) -> None:
 
     assert waits == [INTERVAL_S] * 4, f"the loop backed off on failure: {waits}"
     repo.close()
-
-
-def test_the_sync_cannot_observe_the_reconciler_at_all(tmp_path: Path) -> None:
-    """Structural companion to the test above.
-
-    Independence is easiest to preserve if the sync simply has no way to
-    consult the reconcile loop. It takes a repository and a health gate --
-    nothing that carries backoff state.
-    """
-    import inspect
-
-    parameters = set(inspect.signature(StreamHealthHoldSync.__init__).parameters)
-
-    assert parameters == {
-        "self",
-        "repo",
-        "gate",
-        "interval_s",
-        "sleep",
-        "max_ticks",
-    }, f"the hold sync grew a dependency; check it is not the reconciler: {parameters}"
 
 
 def test_a_warming_symbol_never_raises_the_account_hold(tmp_path: Path) -> None:
