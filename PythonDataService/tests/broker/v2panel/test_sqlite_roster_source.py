@@ -1095,8 +1095,8 @@ def test_sqlite_decision_receipts_adapt_durable_s1_rows_without_jsonl(
     assert receipts[0].bar_ref == "SPY@1700000180000"
     assert receipts[0].reason_code == "STRATEGY_ENTER"
     assert receipts[0].intent_id == "intent-3"
-    # PRD Sec 19: decision/effect identities stored at Clerk intake are read
-    # back verbatim, attached directly to the receipt, never inferred from
+    # Decision/effect identities stored at Clerk intake are read back
+    # verbatim, attached directly to the receipt, never inferred from
     # proximity.
     assert receipts[0].decision_id == "deadbeef"
     assert receipts[0].effect_operation_id == "effect-op-3"

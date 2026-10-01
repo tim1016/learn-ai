@@ -1,4 +1,4 @@
-"""Chart projection — LIVE (today) + bounded Polygon timeframe panes (spec §8).
+"""Chart projection — LIVE (today) + bounded Polygon timeframe panes.
 
 Two contracts:
 
@@ -122,7 +122,7 @@ def notice_view(notice: _PolygonFailure) -> ChartOverlayNoticeView:
 
 # A history batch provider answers one query with a *complete* batch -- the
 # Clerk-side seam `build_history_chart` calls exactly once per public history
-# attempt (FR-008). The production implementation is either a direct
+# attempt. The production implementation is either a direct
 # in-process call to `history_batch_walk.fetch_complete_history_batch` (the
 # `combined`/`fleet_coordinator` posture) or `RemoteHistoryBatchClient.fetch_batch`
 # (a real fleet-enrolled clerk_agent); tests inject a fake. Takes the one
@@ -155,7 +155,7 @@ def _ibkr_bar_to_chart_bar(bar: IbkrMinuteBar) -> ChartBar:
 
 
 def aggregator_bars_to_chart_bars(bars: Sequence[IbkrMinuteBar]) -> list[ChartBar]:
-    """Map live-aggregator ring-buffer bars to ``ChartBar`` (§8).
+    """Map live-aggregator ring-buffer bars to ``ChartBar``.
 
     Canonical implementation: this module (extracted from the LIVE-pane
     mapping originally inlined in ``build_live_chart``). Reused verbatim by
@@ -195,7 +195,7 @@ def markers_in_window(
 
 
 def live_window(now_ms: int) -> tuple[int, int]:
-    """Return the (open_ms, close_ms) window for today's LIVE pane (§8, §15).
+    """Return the (open_ms, close_ms) window for today's LIVE pane.
 
     "Today" is the canonical NY trading date. On a session day the window is the
     real session open→close (respecting half-days); when the market is closed
@@ -312,7 +312,7 @@ def build_live_chart(
     window: tuple[int, int],
     now_ms: int,
 ) -> ChartLiveResponse:
-    """Build the LIVE pane from bars + SQLite-native fill markers (§8).
+    """Build the LIVE pane from bars + SQLite-native fill markers.
 
     ``chart_window`` is the output of ``live_chart_window.resolve_chart_window``
     (source tags already truthful). ``window`` is the canonical today-window from
@@ -392,7 +392,7 @@ async def build_history_chart(
     batch_provider: HistoryBatchProvider,
     now_ms: int,
 ) -> ChartHistoryResponse:
-    """Build the bounded Polygon series for a selected timeframe (§8).
+    """Build the bounded Polygon series for a selected timeframe.
 
     The returned candles are the newest complete display window for the chosen
     timeframe. Indicator clients therefore receive one coherent candle set per

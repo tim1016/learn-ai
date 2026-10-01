@@ -70,7 +70,7 @@ class _PhaseFeed:
     genuinely running process consumes and durably captures a receipt for
     every closed 15-minute bucket. ``retained_bars`` flow through
     ``recent_closed_bars`` -- exactly what a durable source-bar ledger hands
-    a booting process for warmup/replay (PRD section 13.1/13.3). Production
+    a booting process for warmup/replay. Production
     keeps these two channels just as separate: ``_RetainedSourceBarFeed``
     only appends to the ledger as bars stream live; it never treats one
     boot's ``stream_bars`` output as another boot's retained history.
@@ -163,7 +163,7 @@ async def test_replay_recreates_a_crashed_candidate_as_uncaptured_with_no_broker
         # Phase 2 ("resume/replay"): a fresh process, a new run_id, and no
         # live stream of its own -- its only input is the durable retained
         # ledger, which now includes the crash bar exactly as the real
-        # SourceBarLedger would hand a resumed bot (PRD section 13.1/13.3).
+        # SourceBarLedger would hand a resumed bot.
         await bot_trade_strategy.run_trade_bot(_binding(run_id="run-2"), _PhaseFeed(retained_bars=bars))
 
         # No new broker-bound call was ever made for the recovered candidate.

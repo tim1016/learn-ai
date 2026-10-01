@@ -16,7 +16,7 @@ through :meth:`ClerkSqliteRepository.commit_first_transition` — there is no
 longer a separate ``reserve_command()`` step or a public ``serialized()``
 lock for this module to compose. Stop also now takes a caller-supplied
 ``lifecycle_run_id`` instead of resolving it from the currently active run
-(see the pinned contract's §3a for the full rationale).
+(see ADR 0035's binding annex §3a for the full rationale).
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ def _operator_lifecycle_key(
     action: str,
     intended_end_state: str,
 ) -> str:
-    """Pinned contracts doc §3a — the operator-lifecycle natural key."""
+    """ADR 0035's binding annex §3a — the operator-lifecycle natural key."""
     return f"{account_id}:{strategy_instance_id}:{lifecycle_run_id}:{action}:{intended_end_state}"
 
 

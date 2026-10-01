@@ -20,7 +20,7 @@ Three states, and the difference between them is the whole safety property:
     resolve. :func:`resolved_alpaca_settings` **raises**; it does not fall
     back to the environment. A configuration failure that silently reverted
     to whatever ``.env`` happens to hold is precisely the "fallback to stale
-    user settings" the plan forbids (§5), and on a live installation it is how
+    user settings" ADR 0060 Decision 7 forbids, and on a live installation it is how
     a worker ends up trading someone else's limits.
 
 ``unresolved``
@@ -31,7 +31,7 @@ Three states, and the difference between them is the whole safety property:
     ``worker_binding.py`` — an installation whose profiles database holds no
     selection at all, which Package F's import retires).
 
-The refusal vocabulary is the contract's (§6): ``broker_unconfigured`` and
+The refusal reasons are code-like and stable: ``broker_unconfigured`` and
 ``profiles_database_unavailable`` are both 503 — the gate is closed and the
 reason is surfaced, and the *service still boots* (#2014). A closed gate is
 never a crash loop.
@@ -52,22 +52,21 @@ if TYPE_CHECKING:
     # ``from __future__ import annotations``.
     from app.broker.alpaca.profile.runtime_context import AlpacaRuntimeContext
 
-# Contract §6 refusal codes. Code-like and stable: the Frontend renders them
+# Refusal codes. Code-like and stable: the Frontend renders them
 # through the shared ``receiptLabel`` pipe, and the prose beside them is
 # backend-authored (ADR 0035 D12).
 BROKER_UNCONFIGURED: Final = "broker_unconfigured"
 PROFILES_DATABASE_UNAVAILABLE: Final = "profiles_database_unavailable"
 APPLY_PREFLIGHT_REFUSED: Final = "apply_preflight_refused"
-# Custody opened on an account the revision did not pin (contract §6). A 409
+# Custody opened on an account the revision did not pin. A 409
 # there, but here it is a boot-time refusal: the gate closes and stays closed.
 ACCOUNT_PIN_MISMATCH: Final = "account_pin_mismatch"
 # A variable the profiles database replaced is still set on an installation that
 # has cut over (ADR 0060 open question 1, resolved by the owner 2026-09-10:
 # refuse, do not ignore quietly — narrowed the same day to *deliberate* boots
 # only, so an ordinary restart logs these names and binds rather than raising
-# this). Not in contract §6's table, which was written before that answer
-# existed; the shape is the same and package F's ``legacy_environment`` module is
-# the only raiser.
+# this). The shape is the same as the codes above and package F's
+# ``legacy_environment`` module is the only raiser.
 RETIRED_ENVIRONMENT_SETTINGS: Final = "retired_environment_settings"
 
 
@@ -75,7 +74,7 @@ RETIRED_ENVIRONMENT_SETTINGS: Final = "retired_environment_settings"
 class UnboundBroker:
     """Why this worker has no broker binding, in the operator's words.
 
-    ``reason`` is the contract §6 code; ``message`` and ``next_step`` are
+    ``reason`` is the stable refusal code; ``message`` and ``next_step`` are
     backend-authored prose the UI renders and never composes itself.
     """
 
@@ -84,7 +83,7 @@ class UnboundBroker:
     next_step: str
 
     def as_detail(self) -> dict[str, str]:
-        """The contract §6 error body, identical in shape to C's refusals."""
+        """The error body, identical in shape to C's refusals."""
         return {"reason": self.reason, "message": self.message, "next_step": self.next_step}
 
 
@@ -106,7 +105,7 @@ class BrokerUnbound(RuntimeError):
     @property
     def http_status(self) -> int:
         # Both refusals this raises are "the gate is closed and the reason is
-        # surfaced" (contract §6), never a client mistake.
+        # surfaced", never a client mistake.
         return 503
 
     def as_detail(self) -> dict[str, str]:

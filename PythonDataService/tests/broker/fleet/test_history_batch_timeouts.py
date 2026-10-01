@@ -1,6 +1,6 @@
-"""Both hops of one browser history request must widen (issue #2204, FR-010).
+"""Both hops of one browser history request must widen (issue #2204).
 
-Pins the ordering the PRD requires in two places: the two constants
+Pins the ordering that must hold in two places: the two constants
 themselves, and the OUTER coordinator -> Clerk delivery bound declared on the
 ``bot_chart_history`` ``ProviderOperation``. The INNER Clerk -> coordinator
 bound ``RemoteHistoryBatchClient`` builds its transport with is pinned in
@@ -23,7 +23,7 @@ from app.broker.fleet.provider import ProviderOperation
 
 
 def test_outer_bound_is_strictly_larger_than_the_inner_bound() -> None:
-    """The one assertion FR-010 requires a test to pin."""
+    """The outer delivery bound must outlast the inner one."""
     assert HISTORY_BATCH_OUTER_TIMEOUT_S > HISTORY_BATCH_INNER_TIMEOUT_S
 
 

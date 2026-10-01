@@ -31,8 +31,8 @@ model, not the dict/BaseModel mismatch above.
 accepted a violation of: bars sorted strictly increasing by ``start_ms``,
 every bar's ``end_ms`` exceeding its ``start_ms``, and every bar tagged
 ``source="polygon"`` (the sole source this operation ever returns). The
-batch-level ``source`` field is the response's own provenance declaration
-(PRD FR-007), distinct from each bar's own ``source`` tag.
+batch-level ``source`` field is the response's own provenance declaration,
+distinct from each bar's own ``source`` tag.
 
 Boundary bound on ``as_of_ms`` / ``effective_as_of_ms``: the backward walk
 (``app.lean_sidecar.trading_calendar.session_start_for_bar_count``) crashes
@@ -151,7 +151,7 @@ class HistoryBatchResponse(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
     bars: list[ChartBar]
-    #: The batch's own provenance declaration (PRD FR-007) -- distinct from
+    #: The batch's own provenance declaration -- distinct from
     #: each bar's own ``source`` tag, which the validator below also pins to
     #: ``"polygon"``. Always ``"polygon"``: this operation has exactly one
     #: vendor.

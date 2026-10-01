@@ -69,7 +69,7 @@ _ENDPOINT_MODE = RetiredSetting(
 )
 
 # The six risk-envelope values, in ``LiveEnvelopeValues`` field order so the
-# mapping below is read top-to-bottom against the contract's §2.4 table.
+# mapping below reads top-to-bottom against that dataclass.
 _ENVELOPE_SETTINGS: Final[tuple[RetiredSetting, ...]] = (
     RetiredSetting(
         env_var="ALPACA_LIVE_LOSS_FRACTION",
@@ -113,7 +113,7 @@ ENVELOPE_FIELD_BY_SETTING: Final[dict[str, str]] = {
     "live_xh_exit_bps": "xh_exit_bps",
 }
 
-# The other side of the ownership inventory's §F table, recorded so the
+# The other side of the retired settings above, recorded so the
 # distinction is a test rather than a memory. **These are not retired and must
 # keep working after cutover.** ``ALPACA_API_KEY_ID`` / ``ALPACA_API_SECRET_KEY``
 # in particular *are* the ``default`` credential slot: refusing a boot because

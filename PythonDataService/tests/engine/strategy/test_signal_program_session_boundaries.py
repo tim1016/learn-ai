@@ -39,12 +39,9 @@ implied:
     proving it once, combined with the decision-bucket-level early-close
     proof for every program, gives full coverage without a 6x runtime cost
     for logic that cannot vary by program.
-  * DST is proven two ways: a calendar-only test shows the canonical
-    module's real ZoneInfo-derived open differs from what a banned fixed
-    -05:00 offset would have produced, by exactly one hour, across a real
-    transition discovered by scanning ``ZoneInfo`` offsets (never a
-    hardcoded March/November date); a per-program test then shows the
-    decision clock accepts real bars from both sides of that transition
+  * DST is proven by one per-program test: the decision clock accepts the
+    first real bar from each side of a spring-forward transition, discovered
+    by scanning ``ZoneInfo`` offsets (never a hardcoded March/November date),
     without quarantine.
 """
 

@@ -1,10 +1,9 @@
 """Closed operator vocabulary for the broker-v2 bot control panel (S1).
 
-Spec §13 / decision register #7, #10, #18, #19. This module is the **Python
-authority** for the ~25-code closed vocabulary the panel renders: phases,
-duty-outcome kinds, hold reasons, reconciliation verdicts, channel states,
-station ids, station states, and action ids. It is the source of truth the
-committed snapshot pins (see
+This module is the **Python authority** for the ~25-code closed vocabulary the
+panel renders: phases, duty-outcome kinds, hold reasons, reconciliation
+verdicts, channel states, station ids, station states, and action ids. It is
+the source of truth the committed snapshot pins (see
 ``scripts/regenerate_broker_v2_vocabulary_snapshot.py``).
 
 Two invariants this file enforces and the contract tests pin:
@@ -12,8 +11,8 @@ Two invariants this file enforces and the contract tests pin:
 - Terminal Stop requires fresh Deploy; historical PAUSED is projected as STOPPED.
 - Every emitted code carries server-authored copy (``label`` + ``explanation``)
   in :data:`OPERATOR_COPY`; the copy-coverage contract test fails visibly when a
-  code is emitted without copy (decision #7 — no open-ended string reaches the
-  UI unlabeled).
+  code is emitted without copy (no open-ended string reaches the UI
+  unlabeled).
 
 The vocabulary is *closed*: the frontend renders exactly what it is handed and
 executes only the known action ids. A future broker code that is not in this
@@ -24,17 +23,17 @@ from __future__ import annotations
 
 from typing import Final, Literal, get_args
 
-# ── Phases (bot lifecycle phase, §12) ────────────────────────────────────────
+# ── Phases (bot lifecycle phase) ─────────────────────────────────────────────
 # Narrowed from the shared BotLifecyclePhase; the panel never renders anything
 # outside this closed set.
 Phase = Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
 PHASES: Final[frozenset[str]] = frozenset({"OFF_DUTY", "ON_DUTY", "RETIRED"})
 
-# ── Desired state (§12) ───────────────────────────────────────────────────────
+# ── Desired state ─────────────────────────────────────────────────────────────
 DesiredState = Literal["RUNNING", "STOPPED"]
 DESIRED_STATES: Final[frozenset[str]] = frozenset({"RUNNING", "STOPPED"})
 
-# ── Duty-outcome kinds (§7.2) ────────────────────────────────────────────────
+# ── Duty-outcome kinds ───────────────────────────────────────────────────────
 # The typed terminal duty facts a bot records on exit (bot_runner exit taxonomy,
 # ``schemas.bot_lifecycle.BotDutyOutcomeKind``, which a contract test holds this
 # to) plus the not-yet-exited sentinel the panel shows while a bot is on duty.
@@ -47,7 +46,7 @@ DUTY_OUTCOME_KINDS: Final[frozenset[str]] = frozenset(
     {"ON_DUTY", "STOPPED", "HALTED", "CRASHED", "FAILED_LAUNCH", "EXITED_UNVERIFIED", "RETIRED"}
 )
 
-# ── Hold reasons (§7.3) ──────────────────────────────────────────────────────
+# ── Hold reasons ─────────────────────────────────────────────────────────────
 # The closed set of exposure-hold reason codes the clerk can journal, plus two
 # sentinels that no cause ever carries: ``NO_HOLD`` says the account is clear,
 # and ``UNKNOWN_HOLD`` is the fail-closed answer for an active hold whose
@@ -93,7 +92,7 @@ HOLD_REASON_BY_STORED_CODE: Final[dict[str, HoldReason]] = {
     "LIVE_ENVELOPE_LOSS_HOLD": "LIVE_ENVELOPE_LOSS_HOLD",
 }
 
-# ── Reconciliation verdicts (§7.3) ───────────────────────────────────────────
+# ── Reconciliation verdicts ──────────────────────────────────────────────────
 # Mirrors clerk.models.ReconciliationVerdict exactly (kept in lockstep by the
 # contract test test_reconciliation_verdicts_match_clerk_model).
 ReconciliationVerdict = Literal["clean", "unexplained_order", "missing_intent", "stale"]
@@ -101,11 +100,11 @@ RECONCILIATION_VERDICTS: Final[frozenset[str]] = frozenset(
     {"clean", "unexplained_order", "missing_intent", "stale"}
 )
 
-# ── Channel states (§7.3) ────────────────────────────────────────────────────
+# ── Channel states ───────────────────────────────────────────────────────────
 ChannelState = Literal["healthy", "unhealthy", "unknown"]
 CHANNEL_STATES: Final[frozenset[str]] = frozenset({"healthy", "unhealthy", "unknown"})
 
-# ── Station ids (§7.1, the six-station rail) ─────────────────────────────────
+# ── Station ids (the six-station rail) ───────────────────────────────────────
 StationId = Literal["SIGNAL", "INTENT", "SUBMIT_GATE", "BROKER_ACK", "FILL", "RECONCILED"]
 STATION_IDS: Final[tuple[StationId, ...]] = (
     "SIGNAL",
@@ -116,13 +115,13 @@ STATION_IDS: Final[tuple[StationId, ...]] = (
     "RECONCILED",
 )
 
-# ── Station states (§7, the five states) ─────────────────────────────────────
+# ── Station states (the five states) ─────────────────────────────────────────
 StationState = Literal["satisfied", "waiting", "blocked", "unknown_stale", "not_applicable"]
 STATION_STATES: Final[frozenset[str]] = frozenset(
     {"satisfied", "waiting", "blocked", "unknown_stale", "not_applicable"}
 )
 
-# ── Action ids (§11, the closed presented-actions enum) ──────────────────────
+# ── Action ids (the closed presented-actions enum) ───────────────────────────
 ActionId = Literal[
     "archive",
     "reconcile_now",
@@ -186,7 +185,7 @@ if not set(QUIESCE_ACTION_IDS) <= set(ACTION_IDS):
     raise RuntimeError("QuiesceActionId must be a subset of the presented ActionId set")
 
 
-# ── Server-authored copy (decision #7) ───────────────────────────────────────
+# ── Server-authored copy ─────────────────────────────────────────────────────
 # One label + explanation per emitted code. The copy-coverage contract test
 # fails if any code is missing an entry (or carries a trivial one). This is the
 # sole semantic-copy authority; the TS copy map is an emergency fallback.

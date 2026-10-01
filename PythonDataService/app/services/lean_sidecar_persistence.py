@@ -685,7 +685,7 @@ def build_persist_payload(
     # anchors and may be UTC midnight.  They are not safe chart bounds: a
     # close on the final session necessarily occurs later than that day's
     # midnight.  The strict report instead starts and ends at the timestamps
-    # actually covered by LEAN's curve/trade evidence, matching PRD §9.2.
+    # actually covered by LEAN's curve/trade evidence.
     covered_start_ms = min(
         [*mark_timestamps, *(trade.entry_ms_utc for trade in paired_trades)],
         default=start_date_ms,

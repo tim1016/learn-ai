@@ -1,4 +1,4 @@
-"""Fail-closed continuity inside IbkrMarketDataFeed.stream_bars (spec §4.2, §4.5, §8)."""
+"""Fail-closed continuity inside IbkrMarketDataFeed.stream_bars (spec #1921 §4.2, §4.5, §8)."""
 
 from __future__ import annotations
 
@@ -351,7 +351,7 @@ async def test_an_ordinary_gap_with_no_interruption_is_delivered_without_events(
 ) -> None:
     """Ruling P11: a gap the live stream simply had (no interruption) stays non-fatal.
 
-    The port promises ordinary bar gaps are silent (spec §6). Scanning for
+    The port promises ordinary bar gaps are silent (spec #1921 §6). Scanning for
     wholly-missed minutes on *every* emitted bar would turn a quiet two-minute
     RTH stretch into a run-ending refusal.
     """
@@ -751,7 +751,7 @@ async def test_sink_failure_is_fatal_and_typed(monkeypatch: pytest.MonkeyPatch) 
 async def test_sink_failure_at_the_interruption_ends_the_run_after_the_delivered_minute(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No bar may follow an interruption whose evidence could not be written (spec rule 9).
+    """No bar may follow an interruption whose evidence could not be written (spec #1921 §4.2 rule 9).
 
     The complete minute was delivered before the socket died (#2345) and needs
     no continuity evidence; the interruption that follows it cannot be
@@ -871,7 +871,7 @@ async def test_the_landing_minute_after_a_complete_flush_must_prove_itself_by_co
     The open minute was complete and flushed, so nothing records it as touched;
     the landing minute holds one generation's contributions, so
     ``spans_interruption`` reads false. Only the loop can see where the
-    resubscribed line landed (spec §4.2 rule 4) -- without that fact a 10/12
+    resubscribed line landed (spec #1921 §4.2 rule 4) -- without that fact a 10/12
     minute was delivered as ``realtime`` inside the decision session.
     """
     sink = _RecordingSink()

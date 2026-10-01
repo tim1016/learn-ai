@@ -58,7 +58,7 @@ def run_cell_gates(
     engine_normalized_orders: list[CrossRunOrderEvent],
     trade_tolerances: CrossReconciliationTolerances | None = None,
     # Branch-A default: matrix fixtures pin IBKR brokerage, so
-    # COMMISSION_DRIFT is gating per spec § "Gate 3". Note this
+    # COMMISSION_DRIFT is gating (ADR 0070 decision 9, D3). Note this
     # inverts compare_cross_engine's own default of False.
     assert_fees: bool = True,
 ) -> CellRunReport:
@@ -72,8 +72,8 @@ def run_cell_gates(
     ``engine_normalized_orders`` is the list of fills returned by the
     Engine Lab run (from ``cross_runner.run_engine_lab_on_workspace``).
 
-    ``assert_fees`` defaults to ``True`` (Branch-A semantics) per spec
-    § "Gate 3" — matrix fixtures pin IBKR brokerage and COMMISSION_DRIFT
+    ``assert_fees`` defaults to ``True`` (Branch-A semantics, ADR 0070
+    decision 9 D3) — matrix fixtures pin IBKR brokerage and COMMISSION_DRIFT
     must be gating. This inverts ``compare_cross_engine``'s own default
     of ``False``; pass ``False`` explicitly when running against
     Branch-B fixtures.

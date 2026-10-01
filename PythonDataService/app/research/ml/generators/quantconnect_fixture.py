@@ -16,7 +16,7 @@ versions, calendar window). Provenance is captured separately in the
 fixture's ``attribution.md`` (or sidecar JSON) and passed to the importer
 as explicit arguments.
 
-Phase 1 §A scope: schema validation, symbol filter, date conversion,
+Scope: schema validation, symbol filter, date conversion,
 manifest + chunk write. Real-fixture parity tests are gated on a QC
 Cloud capture.
 

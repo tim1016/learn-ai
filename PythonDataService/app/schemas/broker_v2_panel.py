@@ -1,9 +1,9 @@
 """Contract schemas for the broker-v2 bot control panel (S1).
 
 Backend-authored, broker-generic Pydantic models the Angular panel renders
-strictly from (spec §4, §5, §7, §8, §11). Everything here is a projection over
-the S0 evidence + durable lifecycle artifacts + the clerk's journal-derived
-state; no schema derives display prose the frontend must invent.
+strictly from. Everything here is a projection over the S0 evidence + durable
+lifecycle artifacts + the clerk's journal-derived state; no schema derives
+display prose the frontend must invent.
 
 Temporal fields are ``int64 ms UTC``.
 Every operator code (phase, verdict, station id/state, action id, ...) comes
@@ -69,11 +69,11 @@ def _validate_simulated_authority_metadata(
         )
 
 
-# ── §4 Panel capability profile ──────────────────────────────────────────────
+# ── Panel capability profile ─────────────────────────────────────────────────
 
 
 class StationApplicability(BaseModel):
-    """One station's applicability for this broker/mode (§4, §7).
+    """One station's applicability for this broker/mode.
 
     ``applicable=False`` renders the station in the rail's fifth state
     (``not_applicable``); Angular never guesses which stations a broker has.
@@ -88,7 +88,7 @@ class StationApplicability(BaseModel):
 
 
 class PanelProfile(BaseModel):
-    """Closed descriptor extending BrokerCapabilities for the panel (§4).
+    """Closed descriptor extending BrokerCapabilities for the panel.
 
     Angular renders strictly from this: an inapplicable station renders as
     ``not_applicable``. A bot's commands are not listed here: its panel
@@ -99,22 +99,22 @@ class PanelProfile(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     broker: str
-    # Fee-reporting fidelity for this broker's fills (§10). "none" → the panel
+    # Fee-reporting fidelity for this broker's fills. "none" → the panel
     # renders "Fees not reported", never $0.00.
     fee_fidelity: Literal["per_fill", "aggregate", "none"]
-    # Whether the broker has a native live-bar strain for the LIVE chart pane
-    # (§8). Alpaca phase-1: False — the LIVE pane uses the IBKR bridge +
-    # Polygon fallback (ADR 0032 amendment).
+    # Whether the broker has a native live-bar strain for the LIVE chart pane.
+    # Alpaca phase-1: False — the LIVE pane uses the IBKR bridge +
+    # Polygon fallback (ADR 0032 amendment 1).
     live_bars_supported: bool
-    # Which stations apply to this broker/mode (§7).
+    # Which stations apply to this broker/mode.
     stations: list[StationApplicability]
 
 
-# ── §5 Catalog view (bots list roster row) ───────────────────────────────────
+# ── Catalog view (bots list roster row) ──────────────────────────────────────
 
 
 class PanelAction(BaseModel):
-    """One backend-presented action (§11).
+    """One backend-presented action.
 
     Angular executes only the closed set of known action ids and renders
     exactly what it is given. ``revision`` binds the action to the panel-state
@@ -151,7 +151,7 @@ still holds simulated cash, never the account's money."""
 
 
 class BotCatalogView(BaseModel):
-    """One roster row: bot status + slice-0 rollups (§5).
+    """One roster row: bot status + slice-0 rollups.
 
     Assembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``
     (incremental cache). ``needs_attention`` and ``status_label`` drive the
@@ -228,11 +228,11 @@ class BotCatalogView(BaseModel):
         return type(self).model_validate(self.model_dump() | facts)
 
 
-# ── §7 Panel view (single bot control panel) ─────────────────────────────────
+# ── Panel view (single bot control panel) ────────────────────────────────────
 
 
 class DutyOutcomeView(BaseModel):
-    """Typed terminal duty fact shown on the bot-health card (§7.2)."""
+    """Typed terminal duty fact shown on the bot-health card."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -246,7 +246,7 @@ class DutyOutcomeView(BaseModel):
 
 
 class BotHealthCard(BaseModel):
-    """Bot-health card beside the rail (§7.2).
+    """Bot-health card beside the rail.
 
     Terminal Stop retains custody evidence; new trading requires fresh Deploy.
     """
@@ -260,16 +260,16 @@ class BotHealthCard(BaseModel):
     desired_state_label: str
     running: bool
     duty_outcome: DutyOutcomeView | None
-    # Decision-receipt freshness (§9): the ts of the latest decision receipt,
+    # Decision-receipt freshness: the ts of the latest decision receipt,
     # and whether it is stale against the freshness threshold.
     last_decision_at_ms: int | None
     decision_stale: bool
-    # Last bar seen (§7.2): the most recent bar this bot evaluated.
+    # Last bar seen: the most recent bar this bot evaluated.
     last_bar_at_ms: int | None
 
 
 class ChannelHealthView(BaseModel):
-    """One market-data / execution channel's health (§7.3)."""
+    """One market-data / execution channel's health."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -382,7 +382,7 @@ class StartupJoinView(BaseModel):
 
 
 class ClerkCard(BaseModel):
-    """Account/clerk card beside the rail (§7.3)."""
+    """Account/clerk card beside the rail."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -412,7 +412,7 @@ class ClerkCard(BaseModel):
 
 
 class StationView(BaseModel):
-    """One of the six transaction-rail stations (§7.1).
+    """One of the six transaction-rail stations.
 
     ``state`` is one of the five states; ``blocker`` is populated only when
     ``state == "blocked"`` (carries the reused OperatorBlocker contract).
@@ -431,7 +431,7 @@ class StationView(BaseModel):
 
 
 class TransactionRail(BaseModel):
-    """The six-station rail rendering one selected transaction (§7.1)."""
+    """The six-station rail rendering one selected transaction."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -502,7 +502,7 @@ class RecentDecisionView(BaseModel):
         "exited",
         "no_action",
         "blocked",
-        # FR-016: replay recreated a staged candidate with no Clerk
+        # Replay recreated a staged candidate with no Clerk
         # disposition (a crash between `SignalSession.advance()` and
         # intake); DISCARD applied, no effect created. Mirrors
         # `DecisionOutcome` in app/broker/alpaca/clerk/sqlite/decision_receipts.py.
@@ -515,8 +515,8 @@ class RecentDecisionView(BaseModel):
     reason_code: str
     bar_ref: str
     order_ref: str | None
-    # PRD Sec 19 causal provenance: the durable evaluation/effect identities
-    # the Clerk stored at intake time (`decision_id` == `evaluation_id`;
+    # Causal provenance (ADR 0043 decision 5): the durable evaluation/effect
+    # identities the Clerk stored at intake time (`decision_id` == `evaluation_id`;
     # `effect_operation_id` binds the decision to its accepted custody
     # operation). The projector never infers these from timing or ordering —
     # `None` renders the explicit absence of a stored link (e.g. a `no_action`
@@ -612,7 +612,7 @@ OpenPnlDirection = Literal["gain", "loss", "flat"]
 
 
 class BotPanelView(BaseModel):
-    """The full 5s-poll panel projection for one bot (§7).
+    """The full 5s-poll panel projection for one bot.
 
     Everything except chart data: bot health, clerk/account state, the six-
     station rail, a journal-tail reference, the presented actions, and the
@@ -632,18 +632,18 @@ class BotPanelView(BaseModel):
     account_id: str
     symbol: str
     mode: Literal["log_only", "dry_run", "trade"]
-    # PRD Sec 11.1/11.2 immutable identity: the exact versioned seal bound to
-    # this strategy instance, reused verbatim from its single canonical shape
+    # Immutable identity (ADR 0043 decision 1): the exact versioned seal bound
+    # to this strategy instance, reused verbatim from its single canonical shape
     # (``app.schemas.signal_program_seal``) rather than re-derived here. This
     # is seal content only — never health, custody, current policy, checkpoint
-    # codec, or simulated fill policy (PRD Sec 11.3 draws that line; those
-    # stay on ``health`` / ``clerk`` / ``execution_policy`` below). ``None``
-    # is an explicit absence: a legacy pre-seal instance or a compatibility
-    # strategy with no registered Signal Program, never an inferred one.
+    # codec, or simulated fill policy (those stay on ``health`` / ``clerk`` /
+    # ``execution_policy`` below). ``None`` is an explicit absence: a legacy
+    # pre-seal instance or a compatibility strategy with no registered Signal
+    # Program, never an inferred one.
     sealed_program: SealedBotProgram | None
-    # PRD Sec 11.3/11.4 dynamic run evidence: whether the program bytes this
-    # run was admitted on are proven compatible with the sealed
-    # ``(program_version, golden_trace_root)``. This replays the durable
+    # Dynamic run evidence (ADR 0043, 2026-09-30 amendment): whether the
+    # program bytes this run was admitted on are proven compatible with the
+    # sealed ``(program_version, golden_trace_root)``. This replays the durable
     # per-run record written at Start/Resume when one exists, and only proves
     # the currently loaded bytes live when it does not; read ``verification``
     # to tell which — a panel read must never be mistaken for a fresh proof.
@@ -666,7 +666,7 @@ class BotPanelView(BaseModel):
     health: BotHealthCard
     clerk: ClerkCard
     rail: TransactionRail
-    # Journal-tail reference (§7.4): the bounded read endpoint + the newest seq
+    # Journal-tail reference: the bounded read endpoint + the newest seq
     # the panel observed, so the tail component knows where to page from.
     journal_tail_ref: str
     journal_tail_seq: int | None
@@ -698,7 +698,7 @@ class BotPanelView(BaseModel):
     working_orders: list[WorkingOrderView]
     recent_decisions: list[RecentDecisionView]
     recent_fills: list[RecentFillView]
-    # S0 rollup summary — backend-computed FIFO P&L (§10).  Frontend renders,
+    # S0 rollup summary — backend-computed FIFO P&L.  Frontend renders,
     # never recomputes.  "Fees not reported" renders when fee_fidelity="none".
     fills_today: int | None
     realized_pnl_today: float | None
@@ -732,14 +732,14 @@ class BotPanelView(BaseModel):
         return self
 
 
-# ── §11 Presented-actions execution request/response ─────────────────────────
+# ── Presented-actions execution request/response ─────────────────────────────
 
 
 class PanelActionRequest(BaseModel):
-    """Execute one presented action (§11).
+    """Execute one presented action.
 
     Identity is NEVER a request field — it derives from the authenticated
-    control channel (§14). The form carries only the reason.
+    control channel. The form carries only the reason.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -784,7 +784,7 @@ class PanelActionReceipt(BaseModel):
 
 
 class PanelActionResult(PanelActionReceipt):
-    """The outcome of an executed action (§11).
+    """The outcome of an executed action.
 
     On success the caller re-polls the panel; ``applied`` distinguishes a fresh
     application from an idempotent replay (``applied=False`` — the key was seen
@@ -795,7 +795,7 @@ class PanelActionResult(PanelActionReceipt):
 
 
 class PanelActionErrorResponse(BaseModel):
-    """A rejected action execution (409/500) (§11, PRD #1716 FR-4).
+    """A rejected action execution (409/500) (PRD #1716 FR-4).
 
     Published so the OpenAPI contract and generated frontend types carry the
     exact error shape callers previously narrowed by hand from an untyped
@@ -816,7 +816,7 @@ class PanelActionErrorResponse(BaseModel):
     reason_code: str | None
 
 
-# ── §11b Cohort flatten (ADR 0051, #1802) ────────────────────────────────────
+# ── Cohort flatten (ADR 0051, #1802) ─────────────────────────────────────────
 
 #: The flatten-class action ids a cohort leg may execute: the recovery
 #: ladder's ``execute_safe_flatten``, the one flatten a bot's panel presents
@@ -972,18 +972,18 @@ class CohortActionResult(BaseModel):
     failed_count: int
 
 
-# ── §8 Chart shapes ──────────────────────────────────────────────────────────
+# ── Chart shapes ─────────────────────────────────────────────────────────────
 
 ChartSource = Literal["ibkr", "polygon", "mixed"]
 ChartHistoryTimeframe = Literal["1m", "15m", "30m", "1h", "1d"]
 
 
 class ChartBar(BaseModel):
-    """One source-tagged OHLCV bar for a chart pane (§8).
+    """One source-tagged OHLCV bar for a chart pane.
 
     Broker-generic — decoupled from the IBKR-specific ``IbkrMinuteBar``. Prices
     are strings to preserve exact decimal representation over the wire.
-    ``source`` is truthfully tagged ``ibkr`` / ``polygon`` / ``mixed`` (§8).
+    ``source`` is truthfully tagged ``ibkr`` / ``polygon`` / ``mixed``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -999,7 +999,7 @@ class ChartBar(BaseModel):
 
 
 class ChartFillMarker(BaseModel):
-    """One fill marker for a chart pane (§8, §10).
+    """One fill marker for a chart pane.
 
     Projected from the clerk journal's fill events filtered by the bot's
     namespace. ``side`` and ``price`` render the buy/sell marker.
@@ -1024,7 +1024,7 @@ class ChartFillMarker(BaseModel):
 
 
 class ChartOverlayNoticeView(BaseModel):
-    """An honest chip explaining a fallback overlay (§8)."""
+    """An honest chip explaining a fallback overlay."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -1061,7 +1061,7 @@ class ChartFeedView(BaseModel):
 
 
 class ChartLiveResponse(BaseModel):
-    """Today's merged, source-tagged LIVE-pane bars + today's fill markers (§8).
+    """Today's merged, source-tagged LIVE-pane bars + today's fill markers.
 
     ``as_of_ms`` and the two session boundaries derive from the canonical NY
     calendar — "today" is the NY trading date, never browser-local midnight.
@@ -1123,7 +1123,7 @@ class LiveSnapshotUnavailableResponse(BaseModel):
 
 
 class ChartHistoryResponse(BaseModel):
-    """Bounded Polygon chart response for one selected timeframe (§8).
+    """Bounded Polygon chart response for one selected timeframe.
 
     ``bars`` is the bounded display window. ``indicator_bars`` includes every
     available preceding warmup candle, capped by the configured Polygon history
@@ -1154,7 +1154,7 @@ class ChartHistoryResponse(BaseModel):
     overlay_notices: list[ChartOverlayNoticeView] = Field(default_factory=list)
     as_of_ms: int
 
-# ── §Lane attention (one lane's bell items, #2228) ───────────────────────────
+# ── Lane attention (one lane's bell items, #2228) ────────────────────────────
 
 
 LaneAttentionKind = Literal[

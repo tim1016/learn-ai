@@ -1,6 +1,6 @@
 """Secret values appear in no row, payload, log, or error — asserted, not assumed.
 
-Contract §8's obligation, driven end to end: a full profile lifecycle over
+The obligation, driven end to end: a full profile lifecycle over
 HTTP with real-looking Alpaca credentials in the environment, then a search for
 those exact values in the database file's raw bytes, in every response body,
 and in everything the configuration module logged. A profile references an

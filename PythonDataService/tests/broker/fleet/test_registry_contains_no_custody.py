@@ -1,4 +1,4 @@
-"""The registry is custody-free: the shipped DDL never grows lane data (FR-023).
+"""The registry is custody-free: the shipped DDL never grows lane data (ADR 0062 Decision 1).
 
 Every table and every column of the fleet schema is asserted against a closed
 allowlist. Custody, orders, fills, positions, activation, arming and envelope

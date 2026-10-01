@@ -1,5 +1,4 @@
-"""Unit tests for the durable desired-state sidecar (PRD-A § 16.4
-Resolution 7 / PR-D).
+"""Unit tests for the durable desired-state sidecar.
 
 Covers round-trip, atomic-write hygiene, default-when-absent, version
 bump, and corrupt-file refusal.

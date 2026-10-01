@@ -1,4 +1,4 @@
-/* Legacy Data Lab URL ingress adapter (PRD §14).
+/* Legacy Data Lab URL ingress adapter.
  *
  * Pure resolver for pre-redesign /data-lab and /data-quality URLs. It maps a
  * legacy URL to one of the three canonical child routes plus a validated,
@@ -57,11 +57,11 @@ export function resolveLegacyDataLabUrl(url: string): LegacyDataLabResolution {
   const path = parsed.pathname.replace(/\/+$/, '') || '/';
   const query = parsed.searchParams;
 
-  // /data-quality redirects to Validate (PRD §7.1 / §14).
+  // /data-quality redirects to Validate.
   const isQualityPath = path === '/data-quality';
 
   // Mode selection — invalid values fall back with a warning. The default
-  // destination is Explore; `sessionId` alone never leaves it (PRD §14).
+  // destination is Explore; `sessionId` alone never leaves it.
   let route: DataLabRoute = '/data-lab/explore';
   // A canonical child path keeps its own destination. The /data-quality →
   // /data-lab/validate redirect preserves the query string, so the shell
@@ -79,7 +79,7 @@ export function resolveLegacyDataLabUrl(url: string): LegacyDataLabResolution {
   }
 
   // sessionId: Explore unless the legacy mode explicitly selects Export or
-  // Validate (PRD §14). Non-UUID values are dropped with a warning.
+  // Validate. Non-UUID values are dropped with a warning.
   const sessionId = query.get('sessionId');
   if (sessionId !== null) {
     if (isUuid(sessionId)) params['sessionId'] = sessionId;

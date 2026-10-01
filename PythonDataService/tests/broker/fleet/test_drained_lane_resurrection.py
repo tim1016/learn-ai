@@ -130,7 +130,7 @@ def _agent_app(clerk_id: str) -> FastAPI:
 def test_a_v1_evidence_file_reads_back_as_provisioned_and_still_vouches(
     tmp_path: Path,
 ) -> None:
-    """The legacy volume keeps its FR-066 story: v1 parses, v1 vouches."""
+    """The legacy volume keeps its offline-boot story: v1 parses, v1 vouches."""
     root = tmp_path / "clerk"
     root.mkdir()
     _write_v1_evidence(root, clerk_id=CLERK, volume_id="vol_x")
@@ -495,7 +495,7 @@ async def test_local_presence_translates_the_typed_refusal(
                 adapter_version="alpaca-1",
                 fleet_protocol_version=2,
             )
-        # The translation must not land in the family FR-066's offline
+        # The translation must not land in the family the offline
         # fallback catches — that family boots stale evidence.
         assert not isinstance(refused.value, FleetPresenceError)
     finally:
@@ -992,7 +992,7 @@ async def test_a_drained_lane_restarting_offline_never_resurrects_its_binding(
             await open_fleet_lane(
                 settings=_offline_settings(provisioned), volume_root=root
             )
-        # And the FR-066 predicate itself refuses the tombstone, tuple and
+        # And the offline-boot predicate itself refuses the tombstone, tuple and
         # generation notwithstanding — had a boot somehow opened offline.
         assert not evidence_vouches_for(
             tombstone,

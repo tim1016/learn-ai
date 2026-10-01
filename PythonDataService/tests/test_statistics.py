@@ -653,7 +653,7 @@ class TestValidateStatistics:
 
 
 class TestSummarizeFiniteSanitization:
-    """Regression for audit § 5.3 — non-finite floats must be coerced to None.
+    """Regression: non-finite floats must be coerced to None.
 
     Before fix: profit_factor (all-wins) emits float('inf'); FastAPI/Pydantic
     serialization raised `ValueError: Out of range float values are not JSON

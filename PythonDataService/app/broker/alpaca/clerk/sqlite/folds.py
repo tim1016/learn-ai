@@ -1,5 +1,4 @@
-"""Fold registry — the pure, replayable current-state derivation PRD Phase 1
-calls for ("keep the fold a pure, replayable function").
+"""Fold registry — the pure, replayable current-state derivation.
 
 A fold is keyed by ``transition_kind`` (not passed as an ad-hoc closure at
 append time) so the *same* lookup drives both live appends and mirror-rebuild
@@ -400,9 +399,9 @@ def _fold_command_rejected(conn: sqlite3.Connection, payload: dict[str, Any]) ->
 
 
 def _fold_enter_accepted(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    """Pinned contract §4 "Command/effect admission, broker-eligible"
+    """ADR 0035's binding annex §4 "Command/effect admission, broker-eligible"
     (#1377): the fold atomically creates ``effect_operations`` and ``orders``
-    (both ``accepted`` — no broker or local work has begun yet, per §5's
+    (both ``accepted`` — no broker or local work has begun yet, per the annex's §5
     state machine) plus the ``commands`` row that references them, all
     before ``commit_first_transition`` returns. Nothing about a broker call
     is durable yet, so there is nothing here for recovery to duplicate, only
@@ -872,8 +871,8 @@ def _fold_manual_order_cancel_terminal(conn: sqlite3.Connection, payload: dict[s
 
 
 def _fold_exit_attributed_flat(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    """EXIT's precise terminal-success proof (#1379, pinned contract §6's
-    "terminal EXIT receipt"): the attributed exposure for this operation's
+    """EXIT's precise terminal-success proof (#1379, ADR 0035's binding
+    annex §6 "terminal EXIT receipt"): the attributed exposure for this operation's
     symbol has been independently verified flat (see
     ``exit.resolve_exit``'s verification step) — reuses
     ``_fold_effect_terminal`` unchanged (ENTER never reaches ``succeeded``
@@ -1305,7 +1304,7 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
 def _this_transition_sequence(conn: sqlite3.Connection) -> int:
     """The ``custody_transitions.sequence`` of the row this fold is running
     for. Safe to read mid-fold: ``_commit_transition_row`` inserts the
-    transition row *before* invoking the fold (§4), and the whole commit runs
+    transition row *before* invoking the fold (ADR 0035's binding annex §4), and the whole commit runs
     under the repository's write lock plus a live ``BEGIN IMMEDIATE``, so no
     other writer can have advanced ``sequence`` in between. Used to mint a
     globally-unique, replay-deterministic id for a fold's own auxiliary rows

@@ -1,6 +1,6 @@
 """No ``/api/brokers/{broker}/…`` route shadows the configuration prefix.
 
-Contract §4 and §8. Five routers already share the ``/api/brokers`` prefix, and
+Five routers already share the ``/api/brokers`` prefix, and
 one of them serves ``/{broker}/…`` wildcards, so which handler answers
 ``/api/brokers/alpaca/configuration/owner`` would otherwise depend on the order
 ``app/main.py`` happens to register them in. This resolves every configuration

@@ -1,4 +1,4 @@
-"""Tests for AlpacaSettings — mode agreement and URL derivation (spec §7)."""
+"""Tests for AlpacaSettings — mode agreement and URL derivation."""
 
 from __future__ import annotations
 

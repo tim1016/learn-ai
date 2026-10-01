@@ -223,7 +223,7 @@ def _project_fixture(
                     # `accept_enter`, never `accept_exit` — it exists to
                     # prove execution-slice capture/fold/projection, not
                     # EXIT domain semantics or ENTER admission. #1722's
-                    # ENTER fence (ADR 0042, PRD FR-020:
+                    # ENTER fence (ADR 0042:
                     # ATTRIBUTED_EXPOSURE_EXISTS/ENTER_IN_PROGRESS) is a
                     # write-side admission concern orthogonal to what this
                     # fixture replays, so bypass it here.

@@ -24,7 +24,7 @@ def test_alpha_decay_below_min_folds_marks_test_invalid():
     must be False so consumers render an "insufficient folds" placeholder
     rather than a misleading p-value.
     """
-    sharpes = [0.8, 0.0, 0.0]  # the example from the audit PDF
+    sharpes = [0.8, 0.0, 0.0]  # the AAPL momentum example
 
     result = _compute_sharpe_trend_slope(sharpes)
 

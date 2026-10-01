@@ -162,8 +162,8 @@ async def test_lean_and_engine_agree_on_polygon_fixture(monkeypatch) -> None:
     to_date = date.fromisoformat(meta["to_date"])
 
     # Skip — not fail — when observed_trade_count hasn't been filled in
-    # yet. Same semantic as a missing fixture: the operator (Task 10 of
-    # the parity plan) has captured the bars but hasn't yet recorded
+    # yet. Same semantic as a missing fixture: the operator has
+    # captured the bars but hasn't yet recorded
     # the parity-receipt metadata. The fixture cannot serve as a
     # ground-truth receipt without it, but it is also not the engine's
     # fault, so the test should not block CI.

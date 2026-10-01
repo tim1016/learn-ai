@@ -1,9 +1,8 @@
 """Phase 3 capture-smoke: validate QC fixture shape once it lands.
 
-Skipped on master until ``tests/fixtures/golden/qc-aapl-phase3/`` is
-committed. The first test ensures the orders payload has every event
-field the reconciler reads; the second logs ``FEE_PRESENCE_BRANCH=A|B``
-so reviewers know whether commission parity is in scope for this fixture.
+Skipped until ``tests/fixtures/golden/qc-aapl-phase3/`` is committed. The one
+test pins the exact first and last bar timestamps of the captured minute
+history.
 """
 
 from __future__ import annotations

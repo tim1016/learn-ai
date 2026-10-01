@@ -1,9 +1,9 @@
 """Opening, migrating and reopening the profiles database.
 
-"Done when: create/edit/reload/stage/apply survives a service restart …
-migrations are repeatable and preserve rows" (plan §6, package B). A restart is
-exactly close-and-reopen from the same path, which is what these assert; that
-the path survives ``podman compose down -v`` is a property of the external
+Create, edit, reload, stage and apply survive a service restart, and migrations
+are repeatable and preserve rows (package B). A restart is exactly
+close-and-reopen from the same path, which is what these assert; that the path
+survives ``podman compose down -v`` is a property of the external
 Clerk volume the database sits on, pinned by ``test_clerk_dir_parity.py``.
 """
 
@@ -197,7 +197,7 @@ def test_an_unreadable_database_refuses_instead_of_crashing(clerk_dir: Path) -> 
 def test_a_revision_is_immutable_apart_from_binding_its_pin_once(
     clerk_dir: Path, clock: FrozenClock
 ) -> None:
-    """Contract §5 wants this in the schema, not in a caller's memory."""
+    """This rule lives in the schema, not in a caller's memory."""
     service = _service_on(clerk_dir, clock)
     created = paper_profile(service)
     profile_id = created.profile.profile_id

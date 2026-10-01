@@ -1,9 +1,9 @@
-"""Delivery B qualification: complete scoped contracts (PRD §10.1–§10.4).
+"""Delivery B qualification: complete scoped contracts.
 
 A real coordinator surface (registry + clerk-scoped router) forwards to a
 real agent process over a real socket — the same qualification posture as
 the A2 lane tests, now through the public routes the frontend will call.
-Every §10.4 refusal family, the §10.3 command envelope, per-event stream
+Every stable refusal family, the command envelope, per-event stream
 provenance and the composed auth policy are pinned here.
 """
 
@@ -364,7 +364,7 @@ def fleet(tmp_path: Path) -> _Fleet:
 async def test_the_directory_lists_lanes_with_catalog_capabilities(
     fleet: _Fleet,
 ) -> None:
-    """§10.1: the broker-neutral directory derives from the registry."""
+    """The broker-neutral directory derives from the registry."""
     async with fleet.client() as client:
         directory = await client.get("/api/broker-clerks")
         assert directory.status_code == 200
@@ -434,7 +434,7 @@ async def test_b2_desk_reads_and_account_bound_run_evidence_route_through_the_la
 
 
 async def test_a_wrong_target_account_refuses_without_dispatch(fleet: _Fleet) -> None:
-    """§10.4: the path's account is checked against the confirmed assignment."""
+    """The path's account is checked against the confirmed assignment."""
     async with fleet.client() as client:
         wrong = await client.get(
             f"{fleet.base}/accounts/00000000-0000-0000-0000-000000000000"
@@ -445,7 +445,7 @@ async def test_a_wrong_target_account_refuses_without_dispatch(fleet: _Fleet) ->
 
 
 async def test_an_unsupported_broker_or_lane_refuses(fleet: _Fleet) -> None:
-    """§10.4: broker_not_supported and clerk_not_found at their pinned statuses."""
+    """broker_not_supported and clerk_not_found at their pinned statuses."""
     async with fleet.client() as client:
         unsupported = await client.get(
             f"/api/brokers/ibkr/clerks/{fleet.lane.clerk_id}/account"
@@ -461,7 +461,7 @@ async def test_an_unsupported_broker_or_lane_refuses(fleet: _Fleet) -> None:
 
 
 async def test_the_command_envelope_is_required_and_coherent(fleet: _Fleet) -> None:
-    """§10.3: no implicit canonical command — the envelope is the contract."""
+    """No implicit canonical command — the envelope is the contract."""
     actions = f"{fleet.base}/accounts/{ACCOUNT}/bots/sid-9/actions"
     async with fleet.client() as client:
         missing = await client.post(actions, json={"action_id": "arm"})
@@ -524,7 +524,7 @@ async def test_the_command_envelope_is_required_and_coherent(fleet: _Fleet) -> N
 
 
 async def test_a_delivered_command_persists_its_routing_receipt(fleet: _Fleet) -> None:
-    """D11: pinned attempt before dispatch; delivered is terminal with receipt."""
+    """A pinned attempt before dispatch; delivered is terminal with receipt."""
     actions = f"{fleet.base}/accounts/{ACCOUNT}/bots/sid-9/actions"
     async with fleet.client() as client:
         delivered = await client.post(
@@ -575,7 +575,7 @@ async def test_the_manual_order_path_converter_routes(fleet: _Fleet) -> None:
 
 
 async def test_stream_events_carry_and_verify_provenance(fleet: _Fleet) -> None:
-    """FR-076: every event proves its origin; the frames re-emit it publicly."""
+    """Every event proves its origin; the frames re-emit it publicly."""
     async with fleet.client() as client, client.stream(
         "GET", f"{fleet.base}/accounts/{ACCOUNT}/gallery/stream"
     ) as response:
@@ -616,11 +616,11 @@ async def test_a_stale_identity_midstream_closes_the_stream(tmp_path: Path) -> N
 
 
 async def test_commands_without_an_approved_endpoint_refuse(tmp_path: Path) -> None:
-    """A session citing an unapproved endpoint is not routable (§10.4)."""
+    """A session citing an unapproved endpoint is not routable."""
     lane = _Lane(tmp_path / "control2")
     try:
         # A local-presence session cites no endpoint reference; routing it
-        # over HTTP is a delivery-time refusal (§10.4 clerk_unreachable).
+        # over HTTP is a delivery-time refusal (clerk_unreachable).
         session = lane.service.register_agent_session(
             clerk_id=lane.clerk_id,
             worker_key=lane.worker_key,
@@ -1073,7 +1073,7 @@ def test_incompatible_protocol_versions_refuse_registration(
 
 
 def test_existing_wildcards_do_not_shadow_the_clerk_surface() -> None:
-    """PRD §10.2: a clerk-scoped request resolves to the fleet route, never
+    """A clerk-scoped request resolves to the fleet route, never
     to an unscoped wildcard agent route mounted earlier."""
     import json
     import os
@@ -1214,7 +1214,7 @@ async def test_the_envelope_generation_fence_and_target_are_enforced(
 
 
 async def test_a_settled_attempt_never_redispatches(fleet: _Fleet) -> None:
-    """D11: a retry of a settled key reconciles; it never resubmits."""
+    """A retry of a settled key reconciles; it never resubmits."""
     actions = f"{fleet.base}/accounts/{ACCOUNT}/bots/sid-9/actions"
     payload = {
         "action_id": "arm",
@@ -1303,7 +1303,7 @@ async def test_a_stale_pin_is_refused_before_the_agent_handler(fleet: _Fleet) ->
 async def test_a_lane_serving_a_different_epoch_fails_the_coordinators_echo_check(
     tmp_path: Path,
 ) -> None:
-    """FR-076: the echo is a check, not a formality.
+    """The echo is a check, not a formality.
 
     Reads pass the agent-side pin gate (``_pin_mismatch`` compares epoch only
     for mutations), so a lane serving a stale epoch answers 200 — and the

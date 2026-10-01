@@ -197,8 +197,8 @@ def test_qc_aapl_phase3_trade_level_parity(tmp_path: Path) -> None:
     truncates the achievable backtest to the 2-day window 2026-02-09 → 2026-02-11.
     Result: 1 entry fill on 2026-02-10 morning, no exit (positive prediction
     every day in the window). Round-trip P&L coverage is not pursued
-    (decision 2026-05-12 — see authority doc § 10 and the reconciliation
-    report for the full rationale).
+    (decision 2026-05-12 — see docs/references/reconciliations/qc-aapl-phase3.md
+    for the full rationale).
 
     The (R8) invariant validates that our engine's NEXT_SESSION_OPEN +
     PredictionRef.lookup="next_after_bar_close" produces the same fill

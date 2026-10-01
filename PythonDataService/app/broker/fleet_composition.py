@@ -5,8 +5,8 @@ The fleet package stays broker-neutral by construction — no module under
 ``tests/broker/fleet/test_import_isolation.py``). This module is the one
 place the application wires concrete adapters into the production mapping the
 coordinator, the CLI and the agent registration path share. A provider enters
-this mapping only by reviewed code change (PRD FR-001); delivery A2 adds
-Alpaca and nothing else.
+this mapping only by reviewed code change (ADR 0062 Decision 6); delivery A2
+adds Alpaca and nothing else.
 """
 
 from __future__ import annotations

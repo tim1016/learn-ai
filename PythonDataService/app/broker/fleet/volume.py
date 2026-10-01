@@ -1,6 +1,6 @@
 """Clerk volume identity: the marker, the canonical root, and the proof order.
 
-PRD FR-020–027: every production clerk owns a distinct physical volume whose
+ADR 0062 Decision 2: every production clerk owns a distinct physical volume whose
 root carries a versioned identity marker naming broker, clerk, volume and a
 nonsecret mount attestation. Verification — canonical root, marker, deployment
 expectation, registry identity — happens *before* any database writer or
@@ -52,15 +52,15 @@ def resolve_canonical_root(root: Path) -> Path:
     """Prove ``root`` is a real directory reached without a symlink anywhere.
 
     A symlinked component is a mis-mount wearing a canonical name (a bind or
-    a link into another volume), so it refuses rather than resolving through
-    (PRD FR-026). ``OSError`` and a missing root refuse the same way: an
+    a link into another volume), so it refuses rather than resolving through.
+    ``OSError`` and a missing root refuse the same way: an
     unavailable volume is not permission to proceed.
 
     What this check deliberately does *not* claim: proof that the root is a
     distinct mount point. Inside a container the registry cannot see the
     host's mount table, and ``st_dev`` cannot distinguish two named volumes
     on one backing filesystem. The deployment-owned attestation recorded in
-    the marker and the registry is that proof (owner decision D1: Docker
+    the marker and the registry is that proof (Docker
     Compose named volumes); what this module adds on top is the canonical
     path, the marker agreement, and the refusal of nested roots sharing one
     mounted volume.
@@ -103,8 +103,7 @@ def write_volume_marker(root: Path, marker: VolumeMarker) -> None:
     """Write the marker atomically; refuse to overwrite any existing identity.
 
     A root that already carries a marker is not a fresh volume. The common
-    cause is a copied or re-mounted clone, so the refusal names that family
-    (PRD FR-026).
+    cause is a copied or re-mounted clone, so the refusal names that family.
     """
     target = marker_path(resolve_canonical_root(root))
     if target.exists():
@@ -207,7 +206,7 @@ def verify_volume_identity(
     expected_attestation_kind: str,
     expected_attestation_id: str,
 ) -> VolumeMarker:
-    """The fail-before-authority gate (PRD FR-025): prove the mounted root.
+    """The fail-before-authority gate (ADR 0062 Decision 2): prove the mounted root.
 
     Order matters and is observable through the refusal family: canonical
     mount first, marker presence second, marker agreement last. A caller that

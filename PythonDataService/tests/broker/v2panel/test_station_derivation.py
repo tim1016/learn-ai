@@ -1,4 +1,4 @@
-"""Tests for the six-station transaction-rail derivation (S1, spec §7.1)."""
+"""Tests for the six-station transaction-rail derivation (S1)."""
 
 from __future__ import annotations
 

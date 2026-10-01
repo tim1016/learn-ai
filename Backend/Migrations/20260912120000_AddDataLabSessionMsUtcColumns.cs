@@ -10,7 +10,7 @@ namespace Backend.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            // Additive only (PRD data-lab-workspace-redesign §13 steps 1–2):
+            // Additive only (steps 1–2 of the dual-read migration):
             // nullable int64 ms UTC columns; legacy CreatedAt/UpdatedAt/
             // FromDate/ToDate remain untouched for dual-read compatibility.
             migrationBuilder.AddColumn<long>(

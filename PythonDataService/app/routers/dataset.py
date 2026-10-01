@@ -247,8 +247,7 @@ async def plan_dataset(request: DatasetPlanRequest) -> DatasetPlanResponse:
     Planning touches only the local NYSE calendar — it never calls
     Polygon. Bar counts are arithmetic estimates typed with assumptions
     and provenance; output columns come from the same projection
-    function the ZIP generation path uses (data-lab workspace redesign
-    PRD §12).
+    function the ZIP generation path uses.
     """
     try:
         return build_dataset_plan(request)

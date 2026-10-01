@@ -4,7 +4,7 @@ Pure ``SELECT`` + row-to-dataclass mapping, no write path, no lock, no fold
 concerns — split out of ``repository.py`` to keep that module under the
 file-size ceiling as new read surfaces accumulate slice over slice.
 ``ClerkSqliteRepository`` methods delegate here; callers outside this package
-still never see a cursor (PRD §9.2) — they go through the repository, which
+still never see a cursor — they go through the repository, which
 happens to forward to this module for these queries.
 """
 

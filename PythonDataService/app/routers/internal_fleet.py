@@ -8,7 +8,7 @@ is two-factor and environment-only: the ``X-Fleet-Agent-Token`` header must
 match the clerk's agent service token in the coordinator's environment
 (``FLEET_AGENT_SERVICE_TOKENS_JSON``), and the registration body presents the
 durable ``worker_key`` the registry itself compares. The browser installation
-secret never appears here and is never forwarded to an agent (PRD FR-046).
+secret never appears here and is never forwarded to an agent.
 
 No unauthenticated fallback exists: a deployment without the token mapping
 refuses every internal call. ``/internal`` stays outside the exported
@@ -448,7 +448,7 @@ async def history_batch(
     for translating any qualification-only injected fault into an
     appropriate HTTP response (a 503, the same "unexpected coordinator
     response" the real ``RemoteHistoryBatchClient`` already converts into
-    the stable ``coordinator_unavailable`` notice, FR-010) -- this route
+    the stable ``coordinator_unavailable`` notice) -- this route
     does not know, or need to know, that such a fault vocabulary exists.
     """
     _authorized_agent(

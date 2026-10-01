@@ -412,8 +412,7 @@ class Diagnostics(BaseModel):
 
 
 class DecisionColumnSpec(BaseModel):
-    """One strategy-specific column in ``decisions.parquet`` (PRD-A §16.1
-    Resolution 5).
+    """One strategy-specific column in ``decisions.parquet``.
 
     The spec is authoritative for the per-strategy decision-row schema:
     the live runtime resolves the parquet columns as
@@ -453,7 +452,7 @@ class StrategySpec(BaseModel):
     exit: ExitBlock
     diagnostics: Diagnostics = Field(default_factory=Diagnostics)
 
-    # ── Live-runtime / deployment fields (PRD-A §16) ──────────────────
+    # ── Live-runtime / deployment fields ──────────────────────────────
     # All optional with defaults so strategy evaluation remains focused on
     # signals/positions. They are consumed only by the live runtime.
     #
@@ -461,7 +460,7 @@ class StrategySpec(BaseModel):
     # shadow deterministically produce different run_ids — "graduation
     # requires a new ledger" for free (ADR 0002). ``bar_source_descriptor``
     # is stamped on every decision row (Layer B baseline). ``decision_columns``
-    # declares the strategy-specific decision-row schema (Resolution 5).
+    # declares the strategy-specific decision-row schema.
     # IBKR Gateway clientId is deliberately absent: it is deployment/runtime
     # infrastructure assigned per process by the host daemon or environment.
     submit_mode: Literal["live_paper", "shadow"] = "live_paper"
@@ -531,7 +530,7 @@ class StrategySpec(BaseModel):
                     f"condition references undeclared prediction id: {ref_id!r} (declared: {sorted(declared_pred_ids)})"
                 )
 
-        # ---- decision-column validators (PRD-A §16.1 Resolution 5) ------
+        # ---- decision-column validators ---------------------------------
         # Names must be unique; collision with the universal core columns
         # is rejected in app.engine.live.artifacts.resolve_decision_columns
         # (the resolver owns the core vocabulary — checking it here would

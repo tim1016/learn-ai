@@ -1,11 +1,11 @@
-"""Panel data-source facade (spec §3, §5, §7, §8, §11).
+"""Panel data-source facade.
 
 Resolves the live dependencies the account-scoped panel endpoints need — the
 account id, the order journal, the decision journals, the bot roster, the clerk
 status, and the live chart aggregator — and delegates every computation to the
 pure projection functions. The router stays transport-only; this facade is the
 single seam that touches process singletons.
-Account scope (§3): every method validates ``account_id`` against the broker's
+Account scope: every method validates ``account_id`` against the broker's
 real account and raises :class:`AccountMismatchError` (→ 404) on a mismatch, so
 a stale deep link never reads another account's evidence.
 """
@@ -197,7 +197,7 @@ def _program_build_for_display(
     *,
     verified_at_ms: int,
 ) -> ProgramBuildAdmissionFact:
-    """PRD Sec 11.3 run evidence: what was actually proven for THIS run.
+    """Run evidence (ADR 0043, 2026-09-30 amendment): what was actually proven for THIS run.
 
     Prefers the durable per-run record written at Start/Resume
     (``BotBindingRepository.read_program_build_evidence``) over a fresh
@@ -283,7 +283,7 @@ def _run_source_evidence_for(binding: BrokerBotBinding) -> RunSourceEvidence | N
 
 
 async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
-    """Build the bots-list catalog for one account (§5)."""
+    """Build the bots-list catalog for one account."""
     resolved = await validate_account(broker, account_id)
     try:
         sqlite_catalog = await read_sqlite_catalog(
@@ -425,7 +425,7 @@ async def _get_panel_with_entries_from_authority(
     decision = decisions[-1] if decisions else None
     economics = evidence.economics.snapshot
 
-    # PRD Sec 11.3/11.4 run evidence: prefer the exact build durably recorded
+    # Run evidence (ADR 0043, 2026-09-30 amendment): prefer the exact build durably recorded
     # for THIS run at Start/Resume over a fresh re-check, which can drift
     # from what actually started running if the manifest or artifacts change
     # underfoot afterwards (#1728 Gap 2). Falls back to the same canonical
@@ -545,7 +545,7 @@ async def get_panel(
     *,
     transaction_ref: str | None = None,
 ) -> BotPanelView:
-    """Build the current panel projection for one bot (§7)."""
+    """Build the current panel projection for one bot."""
     panel, _entries, _session_fills = await _get_panel_with_entries(
         broker,
         account_id,
@@ -583,7 +583,7 @@ async def get_history_chart(
     sid: str,
     timeframe: ChartHistoryTimeframe,
 ) -> ChartHistoryResponse:
-    """Build the bounded HISTORY chart pane for one bot (§8)."""
+    """Build the bounded HISTORY chart pane for one bot."""
     from app.services.broker_v2_panel.panel_chart_data_source import (
         get_history_chart as build_history_chart_response,
     )
@@ -597,7 +597,7 @@ def _action_performers(
     *,
     reconciled: ReconciliationCut | None = None,
 ) -> dict[str, ActionPerformer]:
-    """Map each executable lifecycle action id to the coroutine that performs it (§11, §12).
+    """Map each executable lifecycle action id to the coroutine that performs it.
 
     Only Archive (Clear) reaches this executor: every other presented action
     is the SQLite recovery catalog's and runs through
@@ -642,7 +642,7 @@ async def run_action(
     operator_identity: str,
     reconciled: ReconciliationCut | None = None,
 ) -> PanelActionResult:
-    """Execute one presented action for a bot (§11).
+    """Execute one presented action for a bot.
 
     Recomputes the current panel revision (the guard the POST is checked
     against), then delegates to the execution service. Identity is the

@@ -15,14 +15,14 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestam
 import { TransactionEvidenceTimelineComponent } from './transaction-evidence-timeline.component';
 
 /**
- * Transaction rail (spec §7.1).
+ * Transaction rail.
  *
  * Renders one selected transaction's six stations. Five states each as
  * icon + text + color — never color alone (AXE / WCAG AA). Station receipts
  * expand inline; raw evidence is fetched only when requested and remains in
  * the station accordion as a formatted timeline.
  *
- * Not-applicable stations come from the capability profile (§4), not from
+ * Not-applicable stations come from the capability profile, not from
  * local logic. When `profile` is null the component still renders all
  * stations in `unknown_stale` state — the bot page should not render the
  * rail until the profile is loaded.

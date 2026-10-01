@@ -63,7 +63,7 @@ describe('ExploreComponent', () => {
     const { http, store, fixture } = await renderExplore();
     flushCatalog(http);
 
-    // Scope edit → commit marks stale (PRD §7.3 / FR-003).
+    // Scope edit → commit marks stale.
     store.patchDraft({ ticker: 'SPY', window: WINDOW });
     store.commitScope();
     expect(store.chartStale()).toBe(true);
@@ -140,7 +140,7 @@ describe('ExploreComponent', () => {
     store.commitScope();
     fixture.detectChanges();
 
-    // Collapsed section never fetches (FR-010).
+    // Collapsed section never fetches.
     http.verify();
 
     await userEvent.click(screen.getByRole('button', { name: /Headlines for SPY/ }));

@@ -202,7 +202,7 @@ def next_trigger_ms(
         is ``rth_trigger_instants(d, ...)`` when ``window`` is absent and
         ``extended_trigger_instants(d, ..., window)`` when it is declared.
     Reference:
-        As ``rth_trigger_instants``/``extended_trigger_instants`` (spec §4.4;
+        As ``rth_trigger_instants``/``extended_trigger_instants`` (spec #1921 §4.4;
         ADR 0059 D5.2); trading days from the canonical calendar
         ``app/lean_sidecar/trading_calendar.py``.
     Canonical implementation: this file.

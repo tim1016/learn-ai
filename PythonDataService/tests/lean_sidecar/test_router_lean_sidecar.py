@@ -948,7 +948,7 @@ def test_trusted_run_request_model_legacy_shape_defaults_adjustment_to_raw() -> 
 
 
 def test_trusted_run_request_model_new_shape_defaults_adjusted_to_true() -> None:
-    """PR B § 4.4: NEW-shape callers (carrying a ``data_policy`` block)
+    """PR B: NEW-shape callers (carrying a ``data_policy`` block)
     that omit ``adjusted`` get the field default ``True`` — the
     pre-adjusted-staging default for the post-PR-B contract. This is
     distinct from the legacy-shape default, which preserves PR A's

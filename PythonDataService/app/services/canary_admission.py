@@ -116,7 +116,7 @@ def canary_gate_applies(*, mode: str, program_build_state: str) -> bool:
     """True only once a real Alpaca Paper trade-mode build is already proven.
 
     Dry Run uses its own isolated synthetic authority and is never subject to
-    the canary allowlist (PRD Sec 15). A program with no registered Signal
+    the canary allowlist. A program with no registered Signal
     Program (``program_build_state == "NOT_APPLICABLE"``) has no seal to
     compose a canary proof from, so it is out of this gate's scope entirely —
     the legacy event-handler strategies keep working exactly as before.

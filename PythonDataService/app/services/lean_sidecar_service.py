@@ -481,7 +481,7 @@ def _runtime_polygon_adjustment(data_policy: DataPolicy) -> Literal["raw"]:
     """Return the ``adjustment`` kwarg to pass to ``fetch_canonical_minute_bars``.
 
     PR B P1 (review feedback): ``data_policy.adjusted`` records the
-    *staging-pipeline INTENT* (spec § 4.4) but is **not** mapped to a
+    *staging-pipeline INTENT* but is **not** mapped to a
     Polygon adjustment mode at runtime. ``fetch_canonical_minute_bars``
     and the bundled trusted templates only accept ``"raw"`` today, so
     emitting ``"adjusted"`` here would 500 every PR-B-default request
@@ -973,7 +973,7 @@ async def _run_trusted_sample(
 
     # PR B: data-provenance knobs (source/session/adjusted) live on
     # ``request.data_policy``. ``data_policy.adjusted`` records the
-    # staging-pipeline INTENT (spec § 4.4) — the LEAN runtime always
+    # staging-pipeline INTENT — the LEAN runtime always
     # consumes Raw bars regardless of that flag. The pre-adjusted
     # staging pipeline that would honor ``adjusted=True`` lands in
     # Phase 2+; until then, ``fetch_canonical_minute_bars`` only
@@ -1390,9 +1390,6 @@ def _build_manifest(
     failure_reason: str | None = None,
 ) -> RunManifest:
     """Construct the full reproducibility manifest from the run.
-
-    Field-order mirrors the ADR §"Reproducibility manifest" bullet
-    list so a reviewer can grep against the authority doc.
 
     Reviewer P1.3: ``response`` is optional. When the launcher
     rejects or is unreachable before producing a ``LaunchResponse``,

@@ -4,7 +4,7 @@ import { firstValueFrom } from 'rxjs';
 
 import { environment } from '../../../../environments/environment';
 
-/* DataLabPlanService — thin transport for POST /api/dataset/plan (PRD §12).
+/* DataLabPlanService — thin transport for POST /api/dataset/plan.
  *
  * Python authors the canonical column plan, session resolution, and
  * workload estimates. The Angular side renders the receipt unchanged and

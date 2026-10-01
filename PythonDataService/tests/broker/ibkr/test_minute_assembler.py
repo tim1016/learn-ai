@@ -1,4 +1,4 @@
-"""MinuteAssembler survives an interruption and proves completeness by count (spec §4.2 rules 2–3)."""
+"""MinuteAssembler survives an interruption and proves completeness by count."""
 
 from __future__ import annotations
 

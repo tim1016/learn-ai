@@ -593,8 +593,8 @@ async def test_replay_warmup_bars_names_the_candidate_without_disposition(key: s
     as the one named candidate, and never silently dropped or re-executed.
 
     The whole reference window is replayed. Only the FIRST uncaptured
-    staged candidate is ever flagged (``replay_warmup_bars``: PRD 13.3 step
-    6 names one, step 7 silently catches up the rest), so feeding past the
+    staged candidate is ever flagged (``replay_warmup_bars`` flags that
+    one and silently catches up the rest), so feeding past the
     target changes nothing about what is returned -- while a slice sized in
     closes would have re-imported the consolidator-lag assumption this file
     no longer makes.

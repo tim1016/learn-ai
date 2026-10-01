@@ -1,7 +1,7 @@
-"""Real-socket qualification of the internal HTTP seam (audit 2026-09-13, finding 8).
+"""Real-socket qualification of the internal HTTP seam.
 
 These tests run a real asyncio HTTP server on a real loopback socket — not an
-in-process ASGI transport — because the audit's finding is precisely about
+in-process ASGI transport — because the point is precisely
 behavior only a real transport exhibits: incremental SSE delivery, refused
 redirects, one-way cancellation, and the proof that the pinned httpx 0.28.1
 ASGI transport buffers a streaming response to completion and therefore must
@@ -248,7 +248,7 @@ async def test_cancellation_propagates_to_the_open_stream(
 
 
 async def test_the_asgi_transport_buffers_and_must_not_carry_streams() -> None:
-    """The documented negative proof (audit 2026-09-13, finding 8): httpx
+    """The documented negative proof: httpx
     0.28.1's ASGI transport collects the response before returning it, so a
     long-lived stream never delivers incrementally through it."""
 
@@ -341,9 +341,9 @@ def test_cleartext_fleet_traffic_stays_inside_the_private_boundary() -> None:
     """http:// is loopback/private only; https goes anywhere; garbage refuses.
 
     The agent service token and worker key ride internal calls, so a public
-    cleartext destination is refused before any byte is sent (audit
-    2026-09-13, finding 4). IP literals are judged directly; an unresolvable
-    host name cannot be verified and refuses rather than being trusted.
+    cleartext destination is refused before any byte is sent. IP literals are
+    judged directly; an unresolvable host name cannot be verified and refuses
+    rather than being trusted.
     """
     from app.broker.fleet.internal_http import (
         FleetTransportRefused,

@@ -4,7 +4,7 @@ import {
   DataLabWindowMsUtc,
 } from './data-lab-workspace-store';
 
-/* Pure request mappers (PRD §7.2 / §12): map DataLabWorkspaceStore state to
+/* Pure request mappers: map DataLabWorkspaceStore state to
  * the existing wire payloads — the chart request body DataLabChartComponent
  * posts to `/api/chart/data` today, and the generate-zip payload shaped like
  * `_buildGenerateZipPayload` in data-lab.component.ts. Dates are derived from

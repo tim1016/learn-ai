@@ -19,7 +19,7 @@ export interface ExploreColorSelection {
 }
 
 /**
- * Indicator controls of Data Lab Explore (PRD §9 / §10): the searchable
+ * Indicator controls of Data Lab Explore: the searchable
  * indicator drawer and the active-indicator chips (configure / remove /
  * recolor). Presentational — all mutations route back to the parent and
  * its workspace store.

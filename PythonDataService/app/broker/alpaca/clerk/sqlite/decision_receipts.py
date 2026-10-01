@@ -72,7 +72,7 @@ class DecisionReceipt(BaseModel):
     intent_id: str = ""
     order_ref: str = ""
     indicator_snapshot: dict[str, float | int | str | None] = Field(default_factory=dict)
-    # PRD Sec 19 stored causal identity, written by
+    # Stored causal identity, written by
     # ``append_atomic_decision_receipt_row`` in this same module
     # (``decision_id`` == ``evaluation_id``). It belongs on the receipt row
     # it describes, not in a structure paired alongside it. A row with

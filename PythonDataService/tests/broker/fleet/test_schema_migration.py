@@ -1,4 +1,4 @@
-"""The registered registry migrations (audit 2026-09-13; #2073b).
+"""The registered registry migrations (ADR 0062 addendum; #2073b).
 
 A v1 registry — the only shape the pre-hardening spine ever wrote, and one
 that exists in no production deployment — must upgrade to v2 inside one

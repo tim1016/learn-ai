@@ -1,6 +1,6 @@
 """Build the single-file HTML dashboard for the data-divergence study.
 
-Sections rendered (per research plan §8):
+Sections rendered:
   1. Header summary — counts, date range, headline numbers.
   2. Feed comparison — Polygon vs TV OHLCV differences, with prose context.
   3. Indicator divergence matrix — heatmap + per-row table.

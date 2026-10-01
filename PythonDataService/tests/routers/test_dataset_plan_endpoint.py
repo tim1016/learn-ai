@@ -4,7 +4,7 @@ The plan endpoint resolves date intent through the canonical NYSE
 calendar (never ``T23:59:59``, never a hard-coded 390-minute session),
 projects output columns through the same function the ZIP generation
 path uses, and types bar counts as arithmetic estimates with explicit
-assumptions and provenance (data-lab workspace redesign PRD §12/§18).
+assumptions and provenance.
 """
 
 from __future__ import annotations

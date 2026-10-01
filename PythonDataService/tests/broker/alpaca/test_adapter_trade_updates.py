@@ -26,8 +26,8 @@ import pytest
 from app.broker.alpaca.adapter import from_alpaca_trade_update, rfc3339_to_ms
 from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
-# Broker figures are float display values (contract §money), not ported math, so
-# a tight-but-explicit tolerance pins mapping fidelity without Decimal rigor.
+# Broker figures are float display values, not ported math, so a tight-but-explicit
+# tolerance pins mapping fidelity without Decimal rigor.
 _ATOL = 1e-9
 _RTOL = 0.0
 

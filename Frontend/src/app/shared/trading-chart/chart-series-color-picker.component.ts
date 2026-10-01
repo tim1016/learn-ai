@@ -14,7 +14,7 @@ import {
 } from './chart-series-color-tokens';
 
 /** Accessible named swatch radio group for assigning a chart series color
- *  token (PRD §10). Emits token IDs only — never hex or arbitrary CSS. The
+ *  token. Emits token IDs only — never hex or arbitrary CSS. The
  *  selected swatch carries a checked outline plus an aria-checked radio role,
  *  so selection is never signaled by color alone. */
 @Component({

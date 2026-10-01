@@ -65,7 +65,7 @@ hold a Clerk request-pool slot for the fleet-lane capacity ceremony step) and
 ``"unavailable"`` (raises :class:`RecordedHistoryInjectedUnavailable`, which
 ``internal_fleet.py`` turns into a non-200 response -- the same "unexpected
 coordinator response" the real ``RemoteHistoryBatchClient`` already converts
-into the stable ``coordinator_unavailable`` notice, FR-010). No sleeping is
+into the stable ``coordinator_unavailable`` notice). No sleeping is
 used to model "unavailable": a real timeout and a real non-200 response are
 already equivalent as far as the Clerk-side client is concerned, so an
 immediate refusal keeps the ceremony fast while still exercising that exact
@@ -313,7 +313,7 @@ async def build_qualification_recorded_history_batch(
     only under the Compose qualification gate. Raises
     :class:`RecordedHistoryInjectedUnavailable` while armed to ``"unavailable"``
     -- the router converts that into a non-200 response, which the real
-    Clerk-side client already treats identically to a timeout (FR-010).
+    Clerk-side client already treats identically to a timeout.
     """
     mode = recorded_history_mode()
     if mode == "unavailable":

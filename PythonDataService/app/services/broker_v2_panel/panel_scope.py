@@ -4,7 +4,7 @@ Every account-scoped panel endpoint starts here: it resolves the broker's
 real account, the bot runner's view of a sid, and the activated Clerk, and
 translates each subsystem's typed failure into a :mod:`panel_errors` one.
 
-Account scope (spec §3): ``account_id`` is validated against the broker's
+Account scope: ``account_id`` is validated against the broker's
 real account and :class:`AccountMismatchError` (-> 404) is raised on a
 mismatch, so a stale deep link never reads another account's evidence.
 """
@@ -53,7 +53,7 @@ def _require_panel_broker(broker: str) -> None:
 
 
 async def validate_account_scope(broker: str, account_id: str, sid: str) -> None:
-    """Validate broker + account_id + sid for operator-gated endpoints (§3, §14).
+    """Validate broker + account_id + sid for operator-gated endpoints.
 
     Raises ``AccountMismatchError`` (→ 404) when the path ``account_id``
     does not match the broker's real account, and ``UnknownBotError`` (→ 404)

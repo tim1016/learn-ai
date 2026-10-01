@@ -3,9 +3,8 @@
 Public surface: :class:`ClerkSqliteRepository` and its typed inputs/outputs.
 Everything else in this package (``schema``, ``hashchain``, ``mirror``,
 ``registry``, ``folds``, ``reads``, ``writes``, ``models``) is implementation
-detail behind that repository boundary — PRD §9.2: "SQL stays behind one
-repository boundary and never spreads through routers, strategy, or
-presentation code."
+detail behind that repository boundary: SQL stays behind it and never spreads
+through routers, strategy, or presentation code.
 """
 
 from __future__ import annotations

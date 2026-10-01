@@ -47,7 +47,7 @@ export interface StrategyInfo {
     multiplier: number;
     parameter?: string | null;
   };
-  /** Recency Chart eligibility (design spec D1) — long-only equity, numeric-only params. */
+  /** Recency Chart eligibility — long-only equity, numeric-only params. */
   recency_supported?: boolean;
   /** Registry role: `production_candidate` or `operational_validation_harness`. */
   strategy_category?: string;

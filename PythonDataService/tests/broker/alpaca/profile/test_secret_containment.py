@@ -1,10 +1,10 @@
 """No secret value, fragment, or length crosses a boundary (contract §1, §3).
 
-"Secret values appear in no row, payload, log, or error — asserted, not
-assumed" is one of the contract's own test obligations (§8). This module is
-that assertion: every surface a credential can plausibly reach — a ``repr``, a
-``str``, a log record, an error's operator prose, the availability payload — is
-searched for the fixture secrets and for their lengths.
+Secret values appear in no row, payload, log, or error — asserted, not
+assumed. This module is that assertion: every surface a credential can
+plausibly reach — a ``repr``, a ``str``, a log record, an error's operator
+prose, the availability payload — is searched for the fixture secrets and for
+their lengths.
 """
 
 from __future__ import annotations

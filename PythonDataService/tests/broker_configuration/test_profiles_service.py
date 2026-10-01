@@ -1,6 +1,6 @@
 """Profiles, immutable revisions, archive rules, and the pin.
 
-The behaviour half of package B's "done when": create/edit/clone/archive,
+The behaviour half of package B: create/edit/clone/archive,
 concurrent stale edits return conflicts, archive rules preserve references.
 """
 
@@ -379,7 +379,7 @@ async def test_repinning_the_same_account_is_idempotent(
 async def test_verification_refuses_when_no_verifier_is_installed(
     clerk_dir: Path, clock: FrozenClock
 ) -> None:
-    """Package B ships the seam, not the broker call (contract §7)."""
+    """Package B ships the seam, not the broker call."""
     unwired = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,

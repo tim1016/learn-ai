@@ -10,7 +10,7 @@ of the authority's own semantics:
    *offline* only when the volume already carries confirmation evidence
    vouching for a prior grant; a first enrolment with no coordinator refuses.
 2. ``reserve_account`` — the broker-qualified reservation, before custody
-   and the execution lease open (PRD FR-063). The loser of a reservation
+   and the execution lease open. The loser of a reservation
    race refuses to open authority at all.
 3. ``confirm_binding`` — after the worker's local acknowledgement: the
    confirmed binding observation fenced by this session, then the clerk's

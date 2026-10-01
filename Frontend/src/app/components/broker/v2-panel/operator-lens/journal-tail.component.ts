@@ -14,7 +14,7 @@ import { fmtTimestampLocal } from '../../format';
 const ALL_KINDS = '' as const;
 
 /**
- * Journal tail (spec §7.4).
+ * Journal tail.
  *
  * Newest-first order-journal entries from the evidence endpoint.
  * Filterable by kind; each row expands to its summarized receipt and selects
@@ -54,7 +54,7 @@ export class JournalTailComponent {
 
   /**
    * Unique kind values present in the current page, as {kind, label} pairs.
-   * Pills display the backend-authored `kind_label` (human copy, §13); the
+   * Pills display the backend-authored `kind_label` (human copy); the
    * filter key remains the raw `kind` enum string so filtering is exact.
    */
   protected readonly availableKinds = computed(() => {

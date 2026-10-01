@@ -26,7 +26,7 @@ confirm, observe) has nothing to do with a bounded market-data read, and
 widening that narrow interface for one unrelated operation would blur it for
 every future presence caller (PRD #2201 §10.3). It also does not live under
 ``app.broker.fleet`` itself: that package's generic spine may import no
-provider implementation (PRD FR-005,
+provider implementation (enforced by
 ``tests/broker/fleet/test_import_isolation.py``), and this module reaches
 Alpaca-clerk-shaped types transitively through ``chart_projection_service``.
 """
@@ -102,7 +102,7 @@ class RemoteHistoryBatchClient:
 
     Every failure mode this call can hit -- timeout, connection refusal, a
     non-200 status, or a malformed/unexpected body -- is absorbed here into
-    the stable ``coordinator_unavailable`` notice (FR-010): the caller always
+    the stable ``coordinator_unavailable`` notice: the caller always
     gets back a completed (possibly notice-only) batch, never an exception, so
     ``build_history_chart`` has exactly one code path regardless of transport
     health. The notice text is generic; the diagnostic detail (exception
@@ -206,7 +206,7 @@ def _construct_provider() -> HistoryBatchProvider:
     """Select and build this process's history-batch provider by its fleet role.
 
     A ``clerk_agent`` role reaches Polygon only through the authenticated
-    internal hop (FR-015: it never calls Polygon directly). Every other role
+    internal hop (it never calls Polygon directly). Every other role
     that can reach this call at all is its own coordinator and answers
     in-process (issue #2204 gate F5's positive role match).
 

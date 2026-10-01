@@ -68,11 +68,10 @@ class ProfileInUse(BrokerConfigurationError):
 
 
 class DisplayNameConflict(BrokerConfigurationError):
-    """Two live profiles cannot share one display name (contract §2.2).
+    """Two live profiles cannot share one display name.
 
-    Not in the §6 table, which enumerates the refusals the *flows* produce and
-    omits the one the uniqueness rule in §2.2 makes unavoidable. Recorded here
-    rather than folded into ``profile_in_use``, which means something else.
+    The uniqueness rule makes this refusal unavoidable. Recorded here rather
+    than folded into ``profile_in_use``, which means something else.
     """
 
     reason: ClassVar[str] = "display_name_conflict"
@@ -121,10 +120,9 @@ class ProfilesDatabaseUnavailable(BrokerConfigurationError):
 class InvalidLiveEnvelope(BrokerConfigurationError):
     """A live envelope value is outside the domain ``AlpacaSettings`` enforces.
 
-    Not in the §6 table either. The contract states the envelope's domain in
-    §2.4 without naming the refusal a violation produces, and this path has to
-    refuse something an operator can act on rather than surface a ``TypeError``
-    from the hash.
+    ADR 0060 Decision 6 states the envelope's domain without naming the refusal
+    a violation produces, and this path has to refuse something an operator can
+    act on rather than surface a ``TypeError`` from the hash.
     """
 
     reason: ClassVar[str] = "live_envelope_invalid"
@@ -134,9 +132,9 @@ class InvalidLiveEnvelope(BrokerConfigurationError):
 class InvalidPaperAllowances(BrokerConfigurationError):
     """A paper revision's extended-hours allowances are out of domain or misplaced.
 
-    Not in the §6 table, for the reason ``live_envelope_invalid`` is not: the
-    paper allowance pair (#2440, owner decision 2026-09-25) states its domain
-    in §2.3 without naming the refusal a violation produces. Distinct from
+    Like ``live_envelope_invalid``, it has no pre-named refusal: the paper
+    allowance pair (#2440, owner decision 2026-09-25) states its domain without
+    naming the refusal a violation produces. Distinct from
     ``live_envelope_invalid`` because a paper revision has no live envelope,
     and a refusal that names one would send the operator to the wrong fields.
     """

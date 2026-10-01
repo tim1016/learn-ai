@@ -1,4 +1,4 @@
-"""Panel capability profile — the closed per-broker descriptor (spec §4).
+"""Panel capability profile — the closed per-broker descriptor.
 
 Angular renders strictly from this profile: an inapplicable station renders as
 ``not_applicable``.
@@ -38,10 +38,10 @@ def alpaca_panel_profile() -> PanelProfile:
     """The closed panel capability profile for Alpaca paper (phase 1).
 
     - ``fee_fidelity="none"`` — Alpaca's ``trade_updates`` stream reports no
-      per-fill commission, so the panel renders "Fees not reported" (§10).
+      per-fill commission, so the panel renders "Fees not reported".
     - ``live_bars_supported=False`` — no Alpaca-native live-bar strain in
       phase 1; the LIVE pane uses the IBKR bridge + Polygon fallback
-      (ADR 0032 amendment, §8).
+      (ADR 0032 amendment 1).
     - All six stations apply; log-only bots simply idle at SIGNAL.
     """
     return PanelProfile(

@@ -199,7 +199,7 @@ def test_params_schema_is_round_trippable_json():
 
 
 def test_recency_supported_flags_numeric_only_strategies_true():
-    """Recency Chart eligibility (design spec D1) — numeric-param strategies."""
+    """Recency Chart eligibility — numeric-param strategies."""
     strategies = {strategy["name"]: strategy for strategy in _list_strategies()}
     for key in ("ema_crossover_signal", "sma_crossover", "rsi_mean_reversion"):
         assert strategies[key]["recency_supported"] is True, key

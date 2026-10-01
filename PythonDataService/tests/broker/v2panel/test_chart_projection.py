@@ -1,4 +1,4 @@
-"""Tests for the chart projections (S1, spec §8).
+"""Tests for the chart projections (S1).
 
 Covers bounded Polygon timeframes and their display-bar counts, the LIVE pane
 source-tagging + fill markers, and a regression that the 7-day live resolver

@@ -1,4 +1,4 @@
-"""The host ceremony surface for the broker clerk fleet (ADR 0062, PRD §9.4).
+"""The host ceremony surface for the broker clerk fleet (ADR 0062).
 
 Enrollment, retirement, verification and release run here — on the host,
 against the coordinator's control volume — because each requires host powers
@@ -393,7 +393,7 @@ def _migrate_existing(args: argparse.Namespace) -> int:
     registry row, the volume marker, the seeded binding generation, the
     imported assignment and the confirmation evidence — so an interrupted
     run converges on rerun and identities are never reminted to get past a
-    partial failure (audit 2026-09-13, finding 10).
+    partial failure.
     """
 
     from app.broker_configuration.worker_lifecycle import installation_worker

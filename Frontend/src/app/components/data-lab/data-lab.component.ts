@@ -117,7 +117,7 @@ export function parseYmdMsUtc(s: string): number | null {
 }
 
 /**
- * Data Lab route shell (PRD §7.2).
+ * Data Lab route shell.
  *
  * Owns the compact scope bar (with the calendar-resolved quick-range chips),
  * the three route tabs, the saved-setups drawer, and one RunDockComponent.
@@ -156,13 +156,13 @@ export class DataLabComponent {
 
   readonly barTimeframes = BAR_TIMEFRAMES;
 
-  // ── Legacy URL ingress (PRD §14) ───────────────────────────
+  // ── Legacy URL ingress ─────────────────────────────────────
   /** Warnings surfaced by the ingress adapter, shown in a dismissible banner. */
   readonly ingressWarnings = signal<string[]>([]);
 
   constructor() {
     // Seed the product's thirteen-indicator default recipe into a fresh
-    // workspace (PRD §4 / §7.3). Seeding never fetches anything.
+    // workspace. Seeding never fetches anything.
     if (this.store.indicators().length === 0) {
       for (const entry of DEFAULT_DATA_LAB_INDICATORS) {
         this.store.addIndicator(entry.canonicalKey, entry.params);
@@ -335,7 +335,7 @@ export class DataLabComponent {
   /** Commit the draft scope. Edits before this never trigger fetches. A
    *  successful commit requests a chart refresh — the operator applied a
    *  scope on purpose and expects the chart to follow (2026-09-13 product
-   *  decision, superseding PRD §14's explicit-refresh-only rule). */
+   *  decision, superseding the earlier explicit-refresh-only rule). */
   applyScope(): void {
     const result = this.store.commitScope();
     this.scopeCommitError.set(result.ok ? null : result.error);
@@ -531,7 +531,7 @@ export class DataLabComponent {
     this.sessionName.set(session.name);
     this.store.setSavedSession({ id: session.id, schemaVersion: DATA_LAB_WORKSPACE_SCHEMA_VERSION });
     // Hand the snapshot (if any) to Explore — restoring it renders cached
-    // bars with no HTTP call; the chart is marked stale meanwhile (PRD §16).
+    // bars with no HTTP call; the chart is marked stale meanwhile.
     if (session.chartSnapshot) {
       this.store.setRestoredChartSnapshot(session.chartSnapshot);
     }

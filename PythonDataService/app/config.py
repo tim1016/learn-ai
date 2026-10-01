@@ -82,8 +82,8 @@ class FleetSettings(BaseSettings):
     # ``{"clrk_…": "svct_…"}``. Env-only credential material; never stored
     # in a registry and never logged.
     AGENT_SERVICE_TOKENS_JSON: str = ""
-    # The deployment namespace qualifying volume roots (audit 2026-09-13,
-    # finding 4).
+    # The deployment namespace qualifying volume roots (ADR 0062
+    # addendum, item 6).
     DEPLOYMENT_NAMESPACE: str = "host:local"
     # Heartbeat cadence; the registry's staleness window is 30 s.
     HEARTBEAT_INTERVAL_S: float = 10.0
@@ -240,7 +240,7 @@ class Settings(BaseSettings):
     # this shared secret is configured or a local-dev operator explicitly opts out.
     DATA_PLANE_CONTROL_SECRET: str = ""
     DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL: bool = False
-    # Broker-v2 panel operator identity (spec §14, interim posture). Control
+    # Broker-v2 panel operator identity (interim posture). Control
     # mutations authenticate via DATA_PLANE_CONTROL_SECRET; the server attaches
     # THIS configured identity to journaled actions. Operator identity is never
     # a request field — no free-text identity input anywhere in the UI.

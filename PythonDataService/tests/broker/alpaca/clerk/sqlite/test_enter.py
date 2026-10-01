@@ -3,7 +3,7 @@ UNKNOWN resolution with the 30s grace, concurrent-duplicate dedup, and
 namespace-attributed idempotent fill folding, over the SQLite spine.
 
 Rebuilt against the corrective foundation slice's ``commit_first_transition``
-(no ``reserve_command()``/``serialized()``); see the pinned contract's §4
+(no ``reserve_command()``/``serialized()``); see ADR 0035's binding annex §4
 transaction-matrix row "Command/effect admission, broker-eligible" for why a
 fresh ENTER lands in ``accepted`` state, not ``in_progress``, before any
 broker attempt.
@@ -223,7 +223,7 @@ def test_enter_identity_payload_hash_differs_for_an_extended_hours_leg() -> None
 def test_accept_alone_commits_accepted_state_before_any_broker_attempt(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """Pinned contract §4/§5: a fresh ENTER lands its command and effect
+    """ADR 0035 binding annex §4/§5: a fresh ENTER lands its command and effect
     operation in ``accepted`` — not ``in_progress`` — since no broker or
     local work has begun yet. ``in_progress`` is reserved for the moment a
     broker attempt (or its resolution) actually starts."""
@@ -918,7 +918,7 @@ async def test_duplicate_fill_observation_does_not_double_count(
 async def test_out_of_order_broker_state_event_does_not_regress_orders_broker_state(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """§3c: an event whose source timestamp is older than the value already
+    """Annex §3c: an event whose source timestamp is older than the value already
     recorded must not regress ``orders.broker_state``."""
     trade = _FakeTrade(submit_result=_broker_order("x", status="accepted", updated_at_ms=1_700_000_001_000))
     submission = await submit_enter(
@@ -1078,7 +1078,7 @@ async def test_ack_with_no_source_timestamp_does_not_crash_or_regress_broker_sta
     repo: ClerkSqliteRepository,
 ) -> None:
     """``BrokerOrder.updated_at_ms`` is optional (Alpaca can omit it); a
-    ``None`` source timestamp must never crash the §3c idempotency guard,
+    ``None`` source timestamp must never crash the annex §3c idempotency guard,
     and must never be treated as newer than an already-recorded real one."""
     trade = _FakeTrade(submit_result=_broker_order("x", status="accepted", updated_at_ms=1_700_000_000_900))
     submission = await submit_enter(
@@ -1477,7 +1477,7 @@ def test_fold_order_evidence_advances_each_effect_while_another_strategy_remains
     )
 
 
-# ── Operation claim fences broker contact (pinned contract §2) ──────────────
+# ── Operation claim fences broker contact (ADR 0035 D5) ─────────────────────
 
 
 async def test_submit_enter_claims_the_operation_before_broker_contact(

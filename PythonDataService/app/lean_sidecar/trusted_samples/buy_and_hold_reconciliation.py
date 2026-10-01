@@ -4,8 +4,7 @@ Identical to ``buy_and_hold.py`` in behavior (buy SPY on first OnData,
 hold to end of backtest, record every received bar to
 ``observations.csv``) but pins the brokerage, account type, fill
 model, and fee model explicitly so the run is eligible for
-Engine-Lab-vs-LEAN reconciliation per ADR § "Brokerage, fill, and fee
-policy" and invariant #11.
+Engine-Lab-vs-LEAN reconciliation per ADR 0070 decision 8.
 
 The Phase 5a self-reconciler (``app/lean_sidecar/reconciler.py``) will
 return a clean fee report for runs of THIS sample, and a "many drift"

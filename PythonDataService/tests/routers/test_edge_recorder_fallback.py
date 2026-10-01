@@ -193,7 +193,7 @@ class TestParseIvSeriesNullCoalescing:
     parser must handle explicit null without crashing on ``float(None)``,
     and both shapes (missing-key, explicit-null) must take the same
     imputed-evidence branch. CodeRabbit P1 on PR 47, refined per
-    iv-research-chat-notes.md §5.3 — imputed bars now drop the health
+    ADR 0071 decision 11 — imputed bars now drop the health
     factor entirely (confidence = 1 - vcs) rather than apply a 0.5 prior.
     """
 

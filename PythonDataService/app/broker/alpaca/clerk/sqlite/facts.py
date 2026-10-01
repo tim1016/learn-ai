@@ -16,7 +16,7 @@ the dataclass here alongside the fold that consumes it
 (``folds._fold_enter_accepted``). The evidence-fold kinds that follow it
 (``ORDER_SUBMIT_UNCERTAIN``, ``ORDER_SUBMIT_FAILED``, ``ORDER_FILL_OBSERVED``)
 only ever *update* an already-existing ``effect_operations``/``orders`` row —
-none of their fields are needed to rebuild that row's identity — but §3d's
+none of their fields are needed to rebuild that row's identity — but the annex's §3d
 "no untyped snapshot bag" rule still applies to whatever they *do* carry
 beyond outer transition columns, so those get typed dataclasses too.
 ``ORDER_SUBMIT_ACKED`` is the near-exception: every field its fold reads
@@ -200,7 +200,7 @@ class CommandRejectedFacts:
 
 @dataclass(frozen=True)
 class EnterAcceptedFacts:
-    """§3d's ``ENTER_ACCEPTED`` row: command idempotency key/hash/kind/action,
+    """The annex's §3d ``ENTER_ACCEPTED`` row: command idempotency key/hash/kind/action,
     the decision id, the effect idempotency key/kind, and the complete
     immutable broker leg — everything ``_fold_enter_accepted`` needs to
     rebuild the ``commands``, ``effect_operations``, and ``orders`` rows from

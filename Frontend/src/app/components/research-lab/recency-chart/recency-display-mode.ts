@@ -1,5 +1,5 @@
 /**
- * Recency Chart display-mode window logic (design spec D18-D19).
+ * Recency Chart display-mode window logic.
  *
  * All-symbols mode bounds the visible window to roughly one trading week
  * so many minute-scale lanes stay legible; single-symbol mode (exactly

@@ -20,7 +20,7 @@ This module exposes:
 **Sovereignty rule:** we store raw bid/ask per contract and the
 *internal-solver* IV. Polygon's IV field is never stored as an
 authoritative IV value — even when it appears in the snapshot response,
-it is dropped here. See research-doc §7.1.
+it is dropped here. See ADR 0071 decision 1.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ SLOT_CHOICES = ("09:35", "12:30", "15:55", "16:00")
 """Daily snapshot slots accepted by the recorder.
 
 15:55 runs alongside 16:00 for the trial-month experiment described in
-research-doc §7.6 / §8.2.3 (compare solver-fail rate, spread width, vcs,
+ADR 0071 decision 7 (compare solver-fail rate, spread width, vcs,
 IV30 stability before deciding whether to swap). All four are persisted;
 the 15:55 vs 16:00 decision is downstream of measurement."""
 
@@ -79,7 +79,7 @@ class RecordedIvSnapshot:
     raw_chain: list[dict]
     error: str | None = None
     # Stability score in [0, 1] computed at write time via the IV30 health
-    # suite (research-doc §4.8). None on error rows and on legacy rows that
+    # suite. None on error rows and on legacy rows that
     # pre-date this field — readers take the drop-health-factor branch in
     # ``_parse_iv_series`` (confidence = 1 - vcs) and surface the missing
     # evidence via ``health_imputed_now``. Defaulted so back-compat JSONL
@@ -141,7 +141,7 @@ class InMemoryIvSnapshotStore(IvSnapshotStore):
 class JsonlIvSnapshotStore(IvSnapshotStore):
     """Append-only JSONL file store. One file per ticker.
 
-    Rationale (decisions doc §1 Q3): single Postgres table is the
+    Rationale (ADR 0071 decision 8): single Postgres table is the
     eventual production target, but adding ``asyncpg`` + a migration
     pipeline is heavier than tonight's scope. JSONL gives us the same
     schema, append-only writes, and a reversible upgrade path: the
@@ -313,7 +313,7 @@ def record_iv_snapshot(
             )
 
         # Health score is computed off the same chain so the recorder
-        # fallback can propagate it downstream (research-doc §4.8 / §9).
+        # fallback can propagate it downstream.
         # ``target_calendar_days`` is threaded through so the score
         # reflects the IV that was actually computed — the recorder
         # accepts 1..180 day requests and a non-default tenor would

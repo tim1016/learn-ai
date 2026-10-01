@@ -1,4 +1,4 @@
-"""Tests for the broker-neutral capture journal (Broker System v2, §6)."""
+"""Tests for the broker-neutral capture journal (Broker System v2, ADR 0032)."""
 
 from __future__ import annotations
 

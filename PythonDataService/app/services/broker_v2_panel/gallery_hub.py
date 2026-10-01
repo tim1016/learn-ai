@@ -4,15 +4,15 @@ Aggregates the bot catalog (``panel_data_source.get_catalog`` in production)
 and per-symbol live bars (``LIVE_BAR_AGGREGATOR`` in production) into one
 versioned ``GalleryLiveSnapshot`` for the gallery wall's REST bootstrap and
 SSE channel. The wall shows every **non-retired** bot — running and
-stopped/off-duty alike (bot-gallery-redesign spec §7.1, D3) — filtered by the
-closed-vocabulary status label (``BotCatalogView.status_label == "Retired"``,
-the field ``catalog_projection_service.status_label_for`` already populates;
-see ``_is_retired``).
+stopped/off-duty alike — filtered by the closed-vocabulary status label
+(``BotCatalogView.status_label == "Retired"``, the field
+``catalog_projection_service.status_label_for`` already populates; see
+``_is_retired``).
 Retired bots never reach the snapshot or update. A stopped bot still needs
 today's bars to chart, so its symbol is subscribed/read exactly like a
 running one's — this can subscribe more symbols than the old running-only
-scope when a stopped bot holds an otherwise-unwatched symbol; accepted (spec
-§11 risk). Bar mapping reuses the existing live-pane conversion in
+scope when a stopped bot holds an otherwise-unwatched symbol; accepted. Bar
+mapping reuses the existing live-pane conversion in
 ``chart_projection_service.aggregator_bars_to_chart_bars`` — no new bar→
 ``ChartBar`` mapping is introduced here.
 
@@ -79,8 +79,8 @@ def _is_retired(row: BotCatalogView) -> bool:
     the single source of truth for the phase→status-label vocabulary,
     ``catalog_projection_service.status_label_for`` — rather than
     re-deriving the phase comparison here, so this predicate can never drift
-    from the canonical mapping. Retired bots are archived, off-wall by design
-    (spec §11): retired identities must not reappear as active tiles.
+    from the canonical mapping. Retired bots are archived, off-wall by design:
+    retired identities must not reappear as active tiles.
     """
     return getattr(row, "status_label", "") == "Retired"
 

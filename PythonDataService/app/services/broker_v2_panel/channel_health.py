@@ -1,4 +1,4 @@
-"""Clerk submission-channel health evaluation (§7.3).
+"""Clerk submission-channel health evaluation.
 
 Extracted from ``panel_projection_service`` when #1777 added the
 connectivity question: the two verdicts, their shared presence/freshness
@@ -29,7 +29,7 @@ from app.broker.alpaca.clerk.stream_health import account_scope_satisfied
 from app.broker.v2panel.vocabulary import ChannelState
 
 # A channel-health observation older than this is not "fresh" for the
-# clear-hold gate (§7.3). Derived from the hold sync's own cadence (#1777
+# clear-hold gate. Derived from the hold sync's own cadence (#1777
 # WP4 decision 8) — this used to reuse the station staleness threshold, one
 # trading day, which at a 15 s observation cadence never fired.
 # Three ticks of the clerk's stream-health cadence. Deliberately its own
@@ -149,7 +149,7 @@ def evaluate_channels_at_account_scope(
 
 
 def channel_state(*, healthy: bool, observed_at_ms: int, now_ms: int) -> ChannelState:
-    """Derive the closed channel state from health + freshness (§7.3)."""
+    """Derive the closed channel state from health + freshness."""
     if now_ms - observed_at_ms > CHANNEL_FRESH_THRESHOLD_MS:
         return "unknown"
     return "healthy" if healthy else "unhealthy"

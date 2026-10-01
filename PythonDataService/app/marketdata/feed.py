@@ -5,7 +5,7 @@ stamped on every bar, whatever produced it. It lives here rather than in
 a broker silo because it is not vendor-specific: ``app.broker.ibkr.bar_models``
 imports it from this module (#1813 PR-C, 2026-08-27).
 
-Design constraints (from ADR 0022 + phase-3 design §4 + #1258 L2):
+Design constraints (from ADR 0022 + #1258 L2):
 
 * No IBKR types escape this module.  The IBKR implementation (ibkr_feed.py)
   translates ``IbkrMinuteBar`` and ``IBKRBarStreamError`` at the boundary.
@@ -385,7 +385,7 @@ async def record_continuity_event(
 ) -> ContinuityEventRef:
     """Write one continuity fact through the consumer's sink, or fail closed.
 
-    Spec §4.2 rule 9: continuing without the evidence that was promised is
+    Spec #1921 §4.2 rule 9: continuing without the evidence that was promised is
     forbidden. Every writer goes through this one function so a sink failure
     surfaces as the same typed ``CONTINUITY_EVIDENCE_UNWRITABLE`` wherever it
     happens, rather than escaping as whatever the sink's own failure was --

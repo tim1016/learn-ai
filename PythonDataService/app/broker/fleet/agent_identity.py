@@ -1,4 +1,4 @@
-"""The serving runtime's identity echo (FR-076, delivery B).
+"""The serving runtime's identity echo (ADR 0062 Decision 5).
 
 The agent answers fleet-addressed requests — the ones the coordinator pins
 with ``X-Fleet-*`` headers — with the identity it actually serves, derived
@@ -156,7 +156,7 @@ async def _send_refusal(
 
 
 def _unpinned_mutation_refusal() -> BrokerAndClerkRequired:
-    """The FR-070 family a lane agent answers an unpinned mutation with."""
+    """The refusal family a lane agent answers an unpinned mutation with."""
     return BrokerAndClerkRequired(
         "This process serves one clerk lane and accepts mutations only from "
         "the fleet coordinator, which pins the broker and clerk it "

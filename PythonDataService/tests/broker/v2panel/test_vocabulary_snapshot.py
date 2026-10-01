@@ -1,4 +1,4 @@
-"""Contract tests for the closed broker-v2 panel vocabulary (S1, spec §13).
+"""Contract tests for the closed broker-v2 panel vocabulary (S1).
 
 Pins the snapshot ↔ live-set parity, the copy-coverage rule (every emitted code
 carries non-trivial server-authored copy), same-run Pause/Continue vocabulary,

@@ -3,7 +3,7 @@
 Golden-trace qualification test mirroring
 ``tests/engine/strategy/test_sma_signal_program.py::
 test_validated_sma_settings_corpus_has_a_pinned_trace_root`` — see that
-test's docstring for why this is the runtime admission gate (PRD S11.4):
+test's docstring for why this is the runtime admission gate (ADR 0043 decision 2):
 a program edit that changes behavior without also updating the registry's
 sealed ``golden_trace_root`` must fail here, not slip through as a
 "qualified" receipt.

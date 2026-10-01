@@ -200,10 +200,10 @@ class StrategyGridConfigRequest(_CamelCaseModel):
 
 
 class RecencyChartSpecRequest(_CamelCaseModel):
-    """One Recency launch's grid and window, as sent at launch and stored in the durable row (design spec D4).
+    """One Recency launch's grid and window, as sent at launch and stored in the durable row.
 
     Each parameter's range is either an explicit value list or an
-    inclusive low/high/step sweep (design spec D4) — the discriminated
+    inclusive low/high/step sweep — the discriminated
     ``type`` field lets one dict carry either shape per parameter.
     """
 

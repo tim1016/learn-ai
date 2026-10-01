@@ -8,14 +8,14 @@ from AlgorithmImports import *  # noqa: F403  (QuantConnect convention)
 
 class SpyVwapReversionReference(QCAlgorithm):
     """Parity reference for the learn-ai SPY 1-min VWAP-band reversion shadow
-    strategy (PRD-C / PR-K).
+    strategy.
 
     This algorithm is the *reference oracle*: it runs on QuantConnect Cloud
     (LEAN), and its exported orders are reconciled trade-by-trade against the
     Python port in `app/engine/strategy/algorithms/spy_vwap_reversion.py` via
     `app/research/parity/qc_reconciler.py` at atol=1e-9.
 
-    Formulation (PRD-C accepted defaults — keep these EXACT so the port can
+    Formulation (the accepted defaults — keep these EXACT so the port can
     match bit-for-bit):
 
       * Symbol / resolution: SPY, 1-minute.
@@ -35,12 +35,11 @@ class SpyVwapReversionReference(QCAlgorithm):
         and trivially reproducible in the port — no cash-buffer rounding.
 
     Pinned parameters live as class attributes so the Python port reads the
-    same numbers. Do not change them without regenerating the golden fixture
-    and bumping `docs/references/spy-vwap-reversion-port.md`.
+    same numbers. Do not change them without regenerating the golden fixture.
     """
 
     # ── Pinned parameters (the port must mirror these EXACTLY) ───────────
-    K = 2.0                     # band multiplier (PRD: k ≈ 1.5–2.0)
+    K = 2.0                     # band multiplier (k ≈ 1.5–2.0)
     LOOKBACK = 30               # bars for the rolling sigma of dist
     QUANTITY = 100              # fixed share quantity per entry
     SKIP_OPEN_MIN = 5           # no entries in the first 5 min of RTH
@@ -50,8 +49,7 @@ class SpyVwapReversionReference(QCAlgorithm):
     FORCE_FLAT_MINUTE = 55
 
     def initialize(self):
-        # PIN the backtest window here before running (see the walkthrough in
-        # docs/references/spy-vwap-reversion-port.md). Use a quiet RTH window
+        # PIN the backtest window here before running. Use a quiet RTH window
         # with no SPY corporate actions for a clean golden fixture.
         self.set_start_date(2024, 3, 4)
         self.set_end_date(2024, 3, 8)

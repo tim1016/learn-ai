@@ -112,7 +112,7 @@ export type BotEndPreviewRequest = components['schemas']['BotEndPreviewRequest']
  * Targets the clerk-scoped routing surface (fleet delivery B):
  * `/api/brokers/{broker}/clerks/{clerkId}/accounts/{accountId}/…`. Every
  * request carries broker and clerk identity (FR-092), commands carry the
- * §10.3 envelope frozen from the caller's `ResourceTarget` (FR-094/095),
+ * command envelope frozen from the caller's `ResourceTarget` (FR-094/095),
  * and the two unscoped legacy bot-run reads stay on their compatibility
  * paths until delivery E's measured retirement.
  */
@@ -122,7 +122,7 @@ export class BrokerV2PanelService {
   private readonly polls = inject(PolledReadScheduler);
 
   /**
-   * Wrap one command payload with the §10.3 envelope. The envelope's
+   * Wrap one command payload with the command envelope. The envelope's
    * idempotency identity is frozen by the interaction owner before it calls
    * the service. The capability is the endpoint's declared catalog
    * capability, not caller input.
@@ -551,7 +551,7 @@ export class BrokerV2PanelService {
     );
   }
 
-  /** §14 Operator-gated raw evidence — bounded, paged, audit-logged. */
+  /** Operator-gated raw evidence — bounded, paged, audit-logged. */
   getEvidence(
     target: ResourceTarget,
     sid: string,

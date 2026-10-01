@@ -6,7 +6,7 @@ This module backs ``MarketDataFeed`` with the existing, proven IBKR bar path
 import IBKR types; all other consumers depend only on the neutral port in
 ``feed.py``.
 
-Architecture (phase-3 design §4 + #1258 L2 "one shared feed, in-process fan-out"):
+Architecture (#1258 L2 "one shared feed, in-process fan-out"):
 
 * One ``IbkrMarketDataFeed`` instance lives in the data plane for the lifetime
   of the process.  All bots and consumers in the same container call

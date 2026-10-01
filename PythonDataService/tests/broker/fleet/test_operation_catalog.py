@@ -1,7 +1,7 @@
 """The typed operation catalog: one contract for routing, contracts and codegen.
 
-Audit 2026-09-13, finding 6: strings cannot express method, capability,
-readiness, idempotency, stream shape or account requirements. The catalog
+Strings cannot express method, capability, readiness, idempotency, stream
+shape or account requirements (ADR 0062 addendum, item 4). The catalog
 validation here is what every adapter's conformance suite runs, so no
 provider enters a registry with an ambiguous or drifting operation set.
 """

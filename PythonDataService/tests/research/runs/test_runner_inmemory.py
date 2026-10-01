@@ -306,8 +306,7 @@ def test_metrics_match_summarize_output(fake_data_factory):
 def test_exposure_uses_consolidated_bar_resolution():
     """Exposure converts held 15-minute bars into the minute equity-curve unit.
 
-    Regression for the Build Alpha functionality validation report
-    F-BA-001: ``bars_held_total`` is counted in consolidated bars,
+    Regression: ``bars_held_total`` is counted in consolidated bars,
     while ``total_bars`` is the engine's minute-bar equity curve
     length. Dividing directly understates exposure by ``resolution``.
     """

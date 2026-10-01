@@ -1,4 +1,4 @@
-"""Tests for presented-action execution (S1, spec §11).
+"""Tests for presented-action execution (S1).
 
 Pins the three execution invariants: revision guard (stale → 409), idempotency
 (re-post is a no-op), and identity-from-channel (never a request field).

@@ -6,7 +6,7 @@ Distinct from ``command_channel.py``: commands are one-shot, per-run
 events (``artifacts/live_runs/<run_id>/commands/``); desired-state is
 persistent operator intent keyed by ``strategy_instance_id``
 (``artifacts/live_state/<strategy_instance_id>/desired_state.json``),
-surviving across runs. See plan §16.4 Resolution 7.
+surviving across runs.
 
 Mirrors ``live_state_sidecar.py``'s envelope + repo + atomic-write
 pattern and reuses its ``_file_lock`` / ``fsync_parent_dir`` helpers

@@ -25,7 +25,7 @@ rather than a duration.
 The resolved ``max(...)`` is stored as an absolute instant on the clerk row
 at drain time (``clerks.drain_deadline_at_ms``) and never recomputed: both
 legs can move after the drain — a deployment may re-tune the duration, a
-calendar version bump may change a future session — and §7.3 forbids the
+calendar version bump may change a future session — and ADR 0063 §7.3 forbids the
 bound moving once a drain is entered.
 
 The canonical calendar is imported *inside* the function, deliberately: the

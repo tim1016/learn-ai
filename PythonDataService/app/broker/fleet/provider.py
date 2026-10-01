@@ -1,20 +1,20 @@
 """The provider-adapter protocol, the typed operation catalog and the
 code-owned production registry.
 
-PRD §9.1: the fleet package defines a narrow protocol; the first production
-adapter will be Alpaca (Phase 2). Test-only fakes are injectable through
+The fleet package defines a narrow protocol; the first production
+adapter is Alpaca. Test-only fakes are injectable through
 constructor injection and never enter the production mapping. A provider
 adapter declares its immutable provider ID, adapter version, canonical
 account-ID function, typed capabilities, typed operation catalog and
 provider-authored summary shape; the provider alone owns its clients,
 credentials, verification, commands, custody, receipts, risk, arming,
-recovery and tests (FR-004).
+recovery and tests.
 
 The generic layer routes and verifies; it does not trade. It never translates
 one provider's operation into another's, and it never infers that a capability
-declared by one provider exists for another (FR-006).
+declared by one provider exists for another (ADR 0062 Decision 6).
 
-The operation catalog (audit 2026-09-13, finding 6) is the *single* contract:
+The operation catalog (ADR 0062 addendum, item 4) is the *single* contract:
 the coordinator's forwarding allowlist, the agent's mounts, the exported
 OpenAPI and the generated frontend builders all derive from the provider's
 typed declarations, so no second hand-maintained route list can drift from
@@ -38,7 +38,7 @@ from app.broker.fleet.internal_http import DEFAULT_INTERNAL_TIMEOUT_S
 #: The fleet protocol this build speaks. An agent registering under a
 #: different protocol version refuses explicitly — a newer coordinator must
 #: not advertise operations to an older agent merely because its own adapter
-#: knows them (audit 2026-09-13, finding 6).
+#: knows them (ADR 0062 addendum, item 4).
 FLEET_PROTOCOL_VERSION = 2
 
 
@@ -269,7 +269,7 @@ def validate_operation_catalog(operations: frozenset[ProviderOperation]) -> None
 
 @dataclass(frozen=True, slots=True)
 class ServedContext:
-    """The identity a routed operation must be checked against (PRD FR-075).
+    """The identity a routed operation must be checked against.
 
     The agent-side validation hook receives this; the coordinator-side checks
     (broker/clerk/epoch/generation) live in the control service. Kept in this
@@ -309,8 +309,8 @@ class BrokerProviderAdapter(Protocol):
         """The typed operation catalog this provider's clerk serves.
 
         The single source the coordinator allowlist, agent mounts, exported
-        contracts and generated frontend builders derive from (audit
-        2026-09-13, finding 6). Every operation's capability must appear in
+        contracts and generated frontend builders derive from
+        (ADR 0062 addendum, item 4). Every operation's capability must appear in
         ``capabilities``; an empty catalog means the provider serves no
         operations yet.
         """
@@ -319,7 +319,7 @@ class BrokerProviderAdapter(Protocol):
     def canonical_account_id(self, external_account_id: str) -> str:
         """Canonicalize one external account ID under this provider's rules.
 
-        The provider alone defines canonicity (PRD FR-051); the registry treats
+        The provider alone defines canonicity (ADR 0062 Decision 3); the registry treats
         the result as opaque. Two providers may canonicalize the same raw
         string differently, which is why assignment uniqueness is
         provider-qualified.
@@ -330,7 +330,7 @@ class BrokerProviderAdapter(Protocol):
         """Author the provider-typed summary for the directory.
 
         The returned mapping is the provider's own vocabulary (for Alpaca,
-        endpoint mode and authority state, per PRD §10.1). The fleet directory
+        endpoint mode and authority state). The fleet directory
         does not interpret its financial contents; the observation carries only
         facts the registry already holds (reported state, account, binding
         generation, the typed lane summary the agent reported).
@@ -338,7 +338,7 @@ class BrokerProviderAdapter(Protocol):
         ...
 
     def validate_served_context(self, context: ServedContext) -> None:
-        """Refuse a served context this provider cannot honor (PRD FR-003).
+        """Refuse a served context this provider cannot honor.
 
         Provider-owned safety gates (for Alpaca: mode agreement, arming,
         envelope) answer here; the generic layer has already checked broker,
@@ -349,11 +349,11 @@ class BrokerProviderAdapter(Protocol):
         ...
 
 
-# The production registry is code-owned (PRD FR-001): a provider enters by a
+# The production registry is code-owned (ADR 0062 Decision 6): a provider enters by a
 # reviewed code change, never by configuration or request. It deliberately
 # stays empty in this broker-neutral package — the live registry is
 # app/broker/fleet_composition.py's production_provider_adapters(), which
-# composes the concrete adapters (Alpaca, as of Phase 2) the application
+# composes the concrete adapters (Alpaca) the application
 # actually serves.
 PRODUCTION_PROVIDER_ADAPTERS: Mapping[str, BrokerProviderAdapter] = {}
 

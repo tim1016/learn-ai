@@ -1,4 +1,4 @@
-"""Fake-provider conformance: N clerks across two adapters (PRD Phase 6 gate).
+"""Fake-provider conformance: N clerks across two adapters.
 
 ``fake_alpha`` and ``fake_beta`` run as the only two providers. What is proved
 here is the extension boundary itself: provider-qualified assignment,
@@ -790,7 +790,7 @@ async def _send_bot_action(router, lane, *, label: str, key: str):
 async def test_a_same_key_retry_while_the_first_dispatch_is_in_flight_is_never_redelivered(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
-    """#2319: the D11 gate covered only *settled* attempts. A same-key retry
+    """#2319: the redispatch gate covered only *settled* attempts. A same-key retry
     arriving while the first dispatch still awaits the lane found the row at
     ``not_dispatched`` (with ``dispatched_at_ms`` set), re-marked it
     idempotently and forwarded the command a second time. The retry must

@@ -11,7 +11,7 @@ compared to Engine Lab. Specifically:
   must stage real daily benchmark bars.
 * Brokerage / fill / commission models are LEAN defaults. A
   reconciliation-grade run must pin Interactive Brokers semantics per
-  ADR §"Brokerage, fill, and fee policy".
+  ADR 0070 decision 8.
 * The fixture only stages five trading days of synthetic minute bars;
   no factor or map files. Any algorithm that touches corporate-action
   windows is out of scope.

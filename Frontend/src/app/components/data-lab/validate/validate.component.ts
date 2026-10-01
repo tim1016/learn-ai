@@ -47,10 +47,10 @@ interface QualityAnalyzeResponse {
 }
 
 /**
- * Data Lab Validate (PRD §7.5) — one readable column: pandas-ta CSV vs
+ * Data Lab Validate — one readable column: pandas-ta CSV vs
  * TradingView CSV comparison, report display/download, and focused quality
  * evidence. The past-chain inspector stays under the Build dataset options
- * companion (PRD §7.5) — linked from here.
+ * companion — linked from here.
  */
 @Component({
   selector: 'app-data-lab-validate',

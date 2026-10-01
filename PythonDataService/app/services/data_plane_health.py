@@ -76,7 +76,7 @@ def resolved_code_revision() -> str:
     """Return the process's resolved code revision (env override or git SHA).
 
     The provenance value callers stamp on their evidence — e.g. the Recency
-    Chart's evidence fingerprint (design spec D16), which must distinguish
+    Chart's evidence fingerprint (ADR 0072 decision 5), which must distinguish
     trades produced by different strategy-code revisions.
     """
     return _CODE_REVISION

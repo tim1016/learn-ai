@@ -392,7 +392,7 @@ async def test_a_refusal_the_sink_cannot_take_is_typed_unwritable(
 ) -> None:
     """The bot layer's own refusal writes through the feed's typed wrapper.
 
-    Spec §4.2 rule 9 is about the evidence, not about who writes it: a sink
+    ADR 0053 decision 7 is about the evidence, not about who writes it: a sink
     that cannot take this refusal must end the run as
     ``CONTINUITY_EVIDENCE_UNWRITABLE``, not leak the sink's own exception past
     the port on the way to the run outcome.

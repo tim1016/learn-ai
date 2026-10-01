@@ -541,7 +541,7 @@ class MinuteAssembler:
         """Classify one emitted minute; the one ordering both feed paths dispatch on (#2364).
 
         ``touched`` is the caller's fact that an interruption cut this minute
-        open or landed in it (ruling P9, spec §4.2 rule 4); ``spans_interruption``
+        open or landed in it (ruling P9, spec #1921 §4.2 rule 4); ``spans_interruption``
         counts as touched too. Order matters and lives only here:
 
         1. Twelve prints is every print a minute can hold, so a minute holding

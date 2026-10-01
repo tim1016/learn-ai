@@ -398,7 +398,7 @@ public class MarketDataServiceTests
 
     #endregion
 
-    #region Temporal integrity — regression for audit § 2.5
+    #region Temporal integrity — DateTime.Parse must yield Kind=Utc
 
     /// <summary>
     /// Regression: before fix, DateTime.Parse without CultureInfo/DateTimeStyles

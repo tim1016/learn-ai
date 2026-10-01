@@ -31,7 +31,7 @@ export const LAKE_BACKFILLABLE_ASSET_CLASS = 'us_equity';
  * The catalog is served by the data-plane core (the browser's ingress in the
  * split fleet) from a Polygon reference walk — a listing universe is market
  * reference data, and the coordinator must construct no provider broker
- * client (FR-041). Order-time eligibility stays with the order path; nothing
+ * client. Order-time eligibility stays with the order path; nothing
  * here claims a symbol is currently tradable.
  *
  * One cached read per tab, shared by every picker on the page, exactly like
