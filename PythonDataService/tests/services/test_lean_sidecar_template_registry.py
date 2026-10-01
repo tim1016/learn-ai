@@ -86,7 +86,7 @@ def test_rsi_mean_reversion_is_in_source_registry() -> None:
 # Deliberately NOT auto-derived: computing `lean_twin` from a name match
 # would make "a template shares this strategy's name" mean "these two
 # implementations produce the same trades", which is a numerical claim and
-# needs a receipt (CLAUDE.md guiding philosophy #2), not a string compare.
+# needs a receipt (ADR 0069 §1), not a string compare.
 # ----------------------------------------------------------------------
 
 #: Templates that legitimately have no registry strategy pointing at them.

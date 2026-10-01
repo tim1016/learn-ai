@@ -60,8 +60,8 @@ def _article(**overrides: Any) -> dict[str, Any]:
 def test_serialize_news_article_reads_insights_the_sdk_model_would_drop() -> None:
     """Regression: the SDK's TickerNews dataclass has no ``insights`` field.
 
-    Asserting on a third-party internal is deliberate here, against
-    ``testing.md``'s general guidance: this is a canary telling us when the
+    Asserting on a third-party internal is deliberate here, against the
+    usual guidance: this is a canary telling us when the
     raw-payload workaround can be retired, not a test of library behaviour
     we depend on.
 
@@ -98,7 +98,7 @@ def test_serialize_news_article_converts_published_utc_to_canonical_ms() -> None
     row = PolygonClientService._serialize_news_article(_article())
 
     assert row["published_utc_ms"] == PUBLISHED_MS
-    # temporal-rigor: the vendor's RFC3339 string is snapped to ms and not kept.
+    # The vendor's RFC3339 string is snapped to ms and not kept.
     assert "published_utc" not in row
 
 

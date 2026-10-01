@@ -161,7 +161,7 @@ def _hold_transition(
 
 
 # ── Shared broker doubles + factories (reused across the SQLite Clerk suite) ──
-# Per AGENTS.md "don't duplicate utility functions": new test modules import
+# New test modules import
 # these from here rather than copying per-file. The fake trade port is honest
 # about the submitted leg (echoes side AND quantity), so an exact-close proof
 # cannot pass on a wrong-sized reduction.

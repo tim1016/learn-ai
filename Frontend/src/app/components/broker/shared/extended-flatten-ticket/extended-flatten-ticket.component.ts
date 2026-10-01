@@ -66,8 +66,8 @@ interface ReviewedLimit {
  * Every one of those numbers is the Clerk's. Pressing Review asks the Clerk
  * what the operator's own price would do against the quote it holds, and the
  * answer is what the confirm pane renders and Send sends; this component
- * derives no execution or cost figure of its own (AGENTS.md § "Python owns
- * all math"). A price the Clerk refuses as past its band never reaches the
+ * derives no execution or cost figure of its own (ADR 0068: Python owns
+ * the math). A price the Clerk refuses as past its band never reaches the
  * confirm pane.
  *
  * Quote age is measured from when this browser received the quote, so a

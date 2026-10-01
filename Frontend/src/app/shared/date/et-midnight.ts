@@ -2,8 +2,8 @@
  * ET-anchored trading-date boundaries as ``int64 ms UTC``.
  *
  * A trading date on the wire is one ms value anchored at an ET session
- * boundary, never a string (temporal-rigor.md, "Date-anchored and wall-clock
- * values"). The client picks dates in a date input, so it needs the exact
+ * boundary, never a string (ADR 0022 (a), date-anchored and wall-clock
+ * values). The client picks dates in a date input, so it needs the exact
  * instant "midnight America/New_York on that date" — which moves against UTC
  * across DST. Resolved through ``Intl`` so no fixed offset is ever assumed.
  */

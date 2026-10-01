@@ -204,7 +204,7 @@ def test_live_values_must_be_finite(field: str, bad: float) -> None:
 # file's settings declare. ``live_envelope._ENVELOPE_DOMAINS`` is a second copy
 # of those bounds -- necessary, because an envelope also arrives from an arming
 # record read off disk and never passes through settings -- and the parity test
-# below is what stops the two from drifting (CLAUDE.md guiding philosophy #5).
+# below is what stops the two from drifting.
 _JUST_OUTSIDE: tuple[tuple[str, float], ...] = (
     ("loss_fraction", 0.0),
     ("loss_fraction", 1.0),

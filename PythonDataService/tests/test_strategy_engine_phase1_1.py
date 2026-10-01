@@ -1,6 +1,5 @@
-"""Tests for Phase 1.1 additions to the options strategy engine.
+"""Tests for the opt-in additions to the options strategy engine.
 
-Phase 1.1 of `docs/architecture/numerical-authority-migration-plan.md`:
 ``analyze_strategy`` gains opt-in current-time fields so
 ``OptionsStrategyLabComponent`` can stop computing them in TypeScript.
 

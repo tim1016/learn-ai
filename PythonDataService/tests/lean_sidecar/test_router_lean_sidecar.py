@@ -178,7 +178,7 @@ async def client() -> AsyncClient:
 #                = 09:30 ET of 2025-01-13 (Mon, no MLK)
 #                = 14:30 UTC = 1_736_778_600_000
 # Pre-P2.5 callers sent midnight-UTC ms; that contract is now rejected
-# by the validator. See docs/handoffs/2026-05-18-design-p2-5-date-semantics-v2.md.
+# by the validator (ADR 0022 (a): a trading date is its session-open instant).
 _GOOD_START_MS = 1_736_173_800_000
 _GOOD_END_MS = 1_736_778_600_000
 
@@ -235,7 +235,7 @@ def _mock_launcher_healthz(mock: respx.MockRouter) -> None:
 
 
 class TestCalendarNextTradingDayOpenEndpoint:
-    """Per docs/handoffs/2026-05-18-design-p2-5-date-semantics-v2.md, the
+    """Per ADR 0022 (a), the
     half-open window's exclusive ``end_ms_utc`` is the 09:30 ET session
     open of the trading day *after* the operator's chosen end date. The
     frontend calls this endpoint so the unified Engine Lab's LEAN

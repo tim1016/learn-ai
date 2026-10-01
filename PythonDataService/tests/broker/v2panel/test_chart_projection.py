@@ -424,7 +424,7 @@ async def test_history_excludes_the_still_open_candle(timeframe: str) -> None:
 
     Regression for a filter that tested only the bar's start: at 10:30 the 1h
     bar opened at 10:00 was returned as complete even though it closes at
-    11:00. Bars are labelled by their close (``temporal-rigor.md``), so an
+    11:00. Bars are labelled by their close, so an
     unelapsed span must be withheld rather than drawn.
     """
     span_ms = _TIMEFRAME_SPAN_MS[timeframe]

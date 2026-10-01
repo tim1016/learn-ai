@@ -3,9 +3,7 @@
 ``trading_sessions_for`` is a thin adapter over
 ``app.lean_sidecar.trading_calendar`` -- the canonical NYSE calendar and the
 only ``mcal`` construction in the repo. The parity test at the bottom is what
-makes that claim checkable rather than aspirational (CLAUDE.md
-guiding-philosophy #5, ``.claude/rules/temporal-rigor.md`` "Calendar
-authority").
+makes that claim checkable rather than aspirational (ADR 0022 (d)).
 """
 
 from __future__ import annotations
@@ -67,7 +65,7 @@ def test_week_spanning_a_holiday():
 def test_sessions_are_the_canonical_calendar_verbatim(start: date, end: date) -> None:
     """The adapter adds a vocabulary, never a calendar opinion.
 
-    Required by guiding-philosophy #5: a duplicate that exists for a real
+    Required by ADR 0022 (d): a duplicate that exists for a real
     reason (here, layer-locality -- the lake's catalog wants a reason per
     skipped day) carries a parity test naming the canonical file. That file is
     ``app/lean_sidecar/trading_calendar.py``.

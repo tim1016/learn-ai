@@ -1,7 +1,7 @@
 /**
  * Frontend aliases over mechanically generated Python OpenAPI contracts.
  *
- * All temporal fields are `int64 ms UTC` numbers per temporal-rigor.md.
+ * All temporal fields are `int64 ms UTC` numbers.
  * Python owns the semantic contract; this file adds only convenient local
  * names plus closed rendering-only unions for template exhaustiveness.
  */

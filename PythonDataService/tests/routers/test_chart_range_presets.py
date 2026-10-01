@@ -147,7 +147,7 @@ async def test_range_presets_endpoint_returns_the_resolver_output(api: FastAPI) 
         assert isinstance(preset["start_ms_utc"], int)
         assert isinstance(preset["end_ms_utc"], int)
         # Temporal wire values are ms-only: no date strings may appear on the
-        # contract (AGENTS.md hard rule on ISO-free wire).
+        # contract.
         assert "start_date" not in preset
         assert "end_date" not in preset
         # Same estimator get_allowed_timeframes uses; a window of all full

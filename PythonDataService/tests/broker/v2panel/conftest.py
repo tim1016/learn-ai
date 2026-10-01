@@ -233,8 +233,7 @@ _BODY = {
     "exit_terms": {"exit_allowance_bps": 20, "band_multiple": 2, "spread_cap_bps": 50},
     "submission_key": "submission-0001",
     # ema_crossover_signal, not deployment_validation: #1672 deliberately
-    # changed deployment_validation's session-boundary literals (see
-    # docs/references/deployment-validation-consecutive-green.md), which
+    # changed deployment_validation's session-boundary literals, which
     # invalidates its manifest-pinned evidence hashes until a fresh QC
     # Cloud reconciliation is run. This file exercises the deploy route's
     # own orchestration, not evidence-hash integrity — that's covered by

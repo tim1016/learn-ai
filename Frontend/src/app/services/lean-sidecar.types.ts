@@ -6,7 +6,7 @@
  * lockstep with the Python side — the Phase 2a/3a contract says the
  * wire format is the source of truth.
  *
- * Per ``.claude/rules/numerical-rigor.md``, every timestamp on the wire
+ * Every timestamp on the wire
  * is ``int64 ms UTC``. TypeScript can't represent int64 exactly past
  * 2^53, but for our 2026-era timestamps ``number`` is faithful.
  *

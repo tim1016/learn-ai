@@ -4,7 +4,7 @@
  *
  * A time the owner types is typed in the zone they look at (their local
  * zone), so it is converted from its numeric parts, never by parsing a
- * string as a date (temporal-rigor.md bans ``new Date(string)``). The
+ * string as a date (never ``new Date(string)``). The
  * ``Date`` here is arithmetic inside one function only; nothing but the ms
  * value leaves.
  */

@@ -41,7 +41,7 @@ class TestSanitizeAggregates:
         assert len(result["data"]) == 2
 
     def test_duplicates_raise_error(self):
-        """Duplicate timestamps must raise ValueError (fail-fast per numerical-rigor rules)."""
+        """Duplicate timestamps must raise ValueError (fail-fast per ADR 0022 (h))."""
         raw = [
             {
                 "timestamp": 1704067200000,

@@ -362,7 +362,7 @@ describe('AlpacaDeployWorkflowComponent symbol scoping', () => {
 
     const observed = screen.getByText(/Checks observed/);
     // Server-authored `evaluated_at_ms`, rendered by the shared component —
-    // never a client clock (temporal-rigor.md).
+    // never a client clock (ADR 0022 (e)).
     expect(observed.querySelector('app-timestamp-display')).toBeTruthy();
   });
 

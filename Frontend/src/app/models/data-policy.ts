@@ -6,9 +6,6 @@
  * backend-neutral: both the in-process engine path and the LEAN sidecar
  * path send the identical block, so the compare-view can gate on field
  * equality without normalizing between two vocabularies.
- *
- * See `docs/superpowers/specs/2026-05-19-pr-b-engine-lab-unified-design.md`
- * § 6.1 for the canonical example.
  */
 
 /** Polygon-style (timespan, multiplier) pair carrying a single timeframe. */

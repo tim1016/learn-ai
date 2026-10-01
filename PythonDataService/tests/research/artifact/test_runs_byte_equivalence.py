@@ -1,7 +1,6 @@
 """PR 4 acceptance bar: byte-identical runs/ persistence.
 
-Per ``docs/architecture/research-artifact-seam.md`` § "Per-PR
-acceptance bar", every strangler PR must demonstrate that the
+Every strangler PR must demonstrate that the
 migrated phase writes byte-identical artifact files to what the
 pre-seam ``storage.py`` would have written. **runs/ is the highest-
 risk migration of the four**: ``ledger.json`` is the canonical-JSON

@@ -3,7 +3,7 @@
 Runs both engines on the same SPY data window, persists each through the
 Python-owned run tables, reconciles the two persisted trade ledgers with the
 in-process classifier the parity verdict uses, and asserts zero divergences
-in the gating set from ``.claude/rules/numerical-rigor.md``:
+in the gating set of ADR 0069 §6:
 
   {DECISION_MISMATCH, DIRECTION_MISMATCH, QUANTITY_MISMATCH,
    FILL_PRICE_DRIFT, ORDER_TYPE_MISMATCH, PNL_DRIFT,

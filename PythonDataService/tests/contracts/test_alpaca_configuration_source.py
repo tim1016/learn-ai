@@ -13,8 +13,7 @@ reading the environment would keep answering for whatever ``.env`` says, which
 after an applied profile switch is a *different account* than the one the
 worker bound. Nothing would fail; the numbers would just be someone else's.
 
-A grep-shaped invariant is the right instrument here for the same reason
-`.claude/rules/temporal-rigor.md` states its ban list as one: the rule is
+A grep-shaped invariant is the right instrument here: the rule is
 "nobody else may call this", which no single call site can assert about itself.
 """
 

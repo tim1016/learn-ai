@@ -1,7 +1,5 @@
 /**
  * Frontend Black-Scholes parity test.
- * See `docs/architecture/iv-ownership-research.md` §6 (tolerances and
- * validation) for the consolidated tolerance table.
  *
  * Pins agreement between `Frontend/src/app/utils/black-scholes.ts::bsPrice`
  * and the canonical Python pricer

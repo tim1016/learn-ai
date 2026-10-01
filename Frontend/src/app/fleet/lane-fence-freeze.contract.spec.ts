@@ -8,8 +8,7 @@
  * #2068 branch it listed `bot-panel-shell.component.ts` and that era's roster
  * and gallery pages (`bots-list-page.component.ts`,
  * `bot-gallery-page.component.ts`, since retired by PRD #2560) — see
- * `docs/references/reconciliations` note for the exact command and output,
- * or the PR body for #2068.
+ * the PR body for #2068 for the exact command and output.
  *
  * Known limitation: this is a file-level, textual co-occurrence check, not a
  * data-flow one. It passes as soon as `freezeLaneFence(` appears anywhere in

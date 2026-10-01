@@ -1,4 +1,4 @@
-"""Cross-engine Black-Scholes parity test (Phase 1.4 of migration plan).
+"""Cross-engine Black-Scholes parity test.
 
 Pins equivalence between the two in-repo BSM implementations on a 360-case
 input grid:
@@ -11,7 +11,7 @@ to numerical roundoff. If they don't, one of them has drifted and the test
 identifies the bad case.
 
 Fixture: ``tests/fixtures/golden/bs-price-cross-engine/`` (input grid + tolerance).
-Documentation: ``docs/architecture/numerical-authority-migration-plan.md`` Phase 1.4.
+Why: ADR 0068 Decision 4 (a duplicate inside Python carries a parity test).
 
 Tolerance: ``atol=1e-10, rtol=0``. Both paths evaluate the same formula in
 single-evaluation closed-form math with no recursive accumulation; agreement

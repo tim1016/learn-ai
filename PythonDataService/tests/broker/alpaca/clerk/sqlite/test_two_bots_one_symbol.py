@@ -1,8 +1,7 @@
 """Two bots trading one symbol in one Alpaca account (research #2469).
 
 What the Clerk does today when two strategy instances hold and trade the same
-symbol in one account. Findings note:
-``docs/references/two-bots-one-symbol-2469.md``.
+symbol in one account.
 
 Passing tests pin current behaviour. Every fixture comes from the existing
 Clerk suites (``conftest``, ``test_budget_commands``,

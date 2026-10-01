@@ -5,7 +5,7 @@ IBKR's published US-equity fixed-tier fee schedule independently of the
 model implementation (the expected fees are derived from the schedule, not
 from the model). Comparisons use ``Decimal`` exact equality — the schedule
 is exact rational arithmetic, so the bit-exact equivalence level applies
-(``.claude/rules/numerical-rigor.md``).
+(ADR 0069 §2).
 """
 
 from __future__ import annotations

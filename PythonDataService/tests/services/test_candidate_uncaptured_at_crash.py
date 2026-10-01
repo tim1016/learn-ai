@@ -1,5 +1,4 @@
-"""Fault-injection coverage for FR-016 (issue #1728, PRD section 13.3/13.4):
-``docs/prds/sealed-signal-program-to-governed-alpaca-bot.md``.
+"""Fault-injection coverage for FR-016 (issue #1728).
 
 Replay must recreate a staged EMA candidate a crash left uncaptured -- one
 that reached ``SignalSession.advance()`` but never reached Clerk intake --
@@ -12,8 +11,7 @@ specific evaluation that never reached custody.
 Reuses the proven LEAN-parity EMA crossover fixture and Clerk test double
 from ``tests/_helpers/bot_runner/`` (``_ema_parity_bars_through_first_exit``,
 ``_FakeClerk``, ``_tradable_market_liveness``) instead of re-deriving a
-fresh crossover fixture -- see CLAUDE.md "don't duplicate utility
-functions". Modeled on the crash-simulation idiom in
+fresh crossover fixture. Modeled on the crash-simulation idiom in
 ``tests/broker/alpaca/clerk/sqlite/test_atomic_seam_fault_injection.py``:
 a crash is simulated by simply never performing the next step, not by
 throwing mid-function.

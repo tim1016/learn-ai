@@ -1,9 +1,7 @@
 /**
- * Past-chain inspector — D10 / R1 of the options-routes cleanup
- * (`docs/architecture/options-research.md` § 5.3; decision R1 recorded in the pruned routes-research doc, git history).
+ * Past-chain inspector.
  *
- * UX per UX-Q3 of `docs/architecture/options-ux-design-prompt.md (pruned 2026-09-12, git history)`,
- * locked by the 2026-04-29 Claude Design pass:
+ * UX locked by the 2026-04-29 Claude Design pass:
  * - Inline collapsed card with a "Preview chain on this date" CTA
  * - Loading state with progress text + skeleton
  * - Expanded chain (calls left, puts right, ATM marker, change % colouring)

@@ -198,8 +198,7 @@ def test_validated_against_only_names_evidence_that_actually_exists() -> None:
     """A sealed contract's ``validated_against`` is audit metadata: it names
     the evidence a reader is supposed to be able to go read. If it names a
     test that was deleted or renamed, the seal still verifies and every test
-    still passes -- the receipt just quietly points at nothing, which is the
-    exact failure mode ``.claude/rules/numerical-rigor.md`` exists to prevent.
+    still passes -- the receipt just quietly points at nothing.
 
     This is a real regression, not a hypothetical: the six per-program
     ``test_validated_*_settings_corpus_has_a_pinned_trace_root`` functions

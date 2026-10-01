@@ -1,12 +1,12 @@
 """Regenerate a registered Signal Program's golden ``EvaluationTrace`` corpus.
 
-PRD ``docs/prds/sealed-signal-program-to-governed-alpaca-bot.md`` Slice 5
+Under ADR 0043 the repo
 promotes additional strategies through the governed Signal Program seam
 established for ``ema_crossover_signal``. Each promotion needs its own golden
 trace corpus (``tests/fixtures/golden/<name>/v1/trace-corpus.json``), but
 until this script existed there was no command that produced one: the
 existing ``ema-signal-session`` corpus was hand-authored, in violation of
-``.claude/rules/numerical-rigor.md``'s requirement that every golden fixture
+ADR 0069 §1's requirement that every golden fixture
 carry the command used to regenerate it.
 
 This command is generic across every registered Signal Program — it takes no

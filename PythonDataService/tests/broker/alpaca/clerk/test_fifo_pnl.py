@@ -1,7 +1,7 @@
 """Golden-fixture tests for canonical FIFO P&L (broker-v2 panel S0).
 
 Fixture authority: PythonDataService/tests/fixtures/golden/broker-v2-fifo-pnl/attribution.md
-Tolerance: atol=1e-9, rtol=0 (numerical-rigor.md accumulated-P&L default).
+Tolerance: atol=1e-9, rtol=0 (stricter than the 1e-6 accumulated-P&L default, ADR 0069 §3).
 
 Each scenario is derived by hand from the FIFO algorithm and documented
 in-line so a quant reviewer can audit without running the code.

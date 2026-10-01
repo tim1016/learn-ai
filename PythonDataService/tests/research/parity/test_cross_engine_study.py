@@ -12,8 +12,6 @@ Markers:
 Until a cell is regenerated, its test skips with a
 "fixture missing" message. That is the intended state of this test until
 fixtures are pinned.
-
-Reference: docs/superpowers/specs/2026-05-21-cross-engine-golden-matrix-design.md
 """
 
 from __future__ import annotations

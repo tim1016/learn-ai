@@ -1,6 +1,6 @@
 /* Indicator picker — every rule is scoped under .ip-root (set via the
  * component host class), so it ports between hosts without leaking. Ports
- * the standalone prototype at docs/design/indicator-picker-prototype-2026-05-10.html
+ * the standalone prototype
  * with no behavioural changes — only tokens are sourced from _tokens.scss. */
 
 :host {

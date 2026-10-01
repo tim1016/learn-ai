@@ -5,7 +5,7 @@ mints a Signal Program's ``golden_trace_root``, and every program promoted
 from issue #1730 onward is qualified against a corpus it produced. A silent
 regression in its replay would not fail loudly -- it would mint a *new*
 root that then gets committed and pinned as "golden", which is precisely
-the anti-pattern ``.claude/rules/numerical-rigor.md`` bans. These tests pin
+the anti-pattern ADR 0069 §1 bans. These tests pin
 the generator against a corpus it did not author.
 """
 

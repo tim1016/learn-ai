@@ -2,7 +2,7 @@
 
 ``LeanSetHoldingsSizing`` must reproduce LEAN's ``SetHoldings`` share count
 exactly (atol=0) against the golden fixture — 20 entries from a pinned LEAN
-run. See docs/references/lean-set-holdings.md.
+run.
 """
 
 from __future__ import annotations

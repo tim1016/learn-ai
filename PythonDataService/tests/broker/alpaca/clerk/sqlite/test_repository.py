@@ -804,8 +804,8 @@ def test_attributed_positions_by_symbol_sums_across_bots(tmp_path: Path) -> None
         )
         repo._conn.commit()
 
-    # Golden fractional aggregation; the tolerance is the source-backed
-    # contract in docs/references/clerk-invariants.md §3.
+    # Golden fractional aggregation; the tolerance matches
+    # POSITION_QTY_EPSILON (1e-9).
     assert repo.attributed_positions_by_symbol() == {"SPY": pytest.approx(0.3, abs=1e-9)}
     repo.close()
 

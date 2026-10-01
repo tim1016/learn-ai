@@ -1,7 +1,6 @@
 """LEAN data-folder round-trip fidelity test.
 
-Per ``docs/architecture/lean-sidecar-lab.md`` §"LEAN data-folder
-fidelity" (non-negotiable #9): write a tiny deterministic price series
+Write a tiny deterministic price series
 through ``lean_format.write_lean_day_zip``, then read it back through
 ``lean_format.LeanMinuteDataReader``. The reader/writer pair is the
 contract; if a future change breaks deci-cent encoding or

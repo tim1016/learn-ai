@@ -2,8 +2,8 @@
 
 ``package.json``'s ``lint-staged`` config used to run ``ruff format`` (which
 rewrites pre-existing regions of any touched file) after ``ruff check --fix``
-on every Python commit, while the documented CI gate — ``.claude/CLAUDE.md``
-and ``PythonDataService/CLAUDE.md`` — is ``ruff check`` only, with
+on every Python commit, while the CI gate (``.github/workflows/ci.yml``)
+is ``ruff check`` only, with
 ``ruff format`` documented as its own explicit command. The two disagreeing
 made ``--no-verify`` the pragmatic default for several #2137/#2138 commits
 (#2148). This pins the hook to the same tool the gate runs.
