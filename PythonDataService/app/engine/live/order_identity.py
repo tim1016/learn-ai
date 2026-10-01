@@ -106,17 +106,6 @@ def build_bot_order_namespace(strategy_instance_id: str) -> str:
     )
 
 
-def emergency_flatten_strategy_instance_id(account_id: str) -> str:
-    """Return the reserved emergency-flatten identity for one account.
-
-    Emergency flatten runs outside a normal bot ledger, but its broker events
-    must still have one durable Clerk owner. Keeping this identity derivation
-    here makes the command and Clerk validate the same namespace.
-    """
-
-    return f"eflat-{account_id}"
-
-
 def build_manual_order_namespace(operator_or_session: str) -> str:
     """``manual/{operator_or_session}/v1`` — app-minted manual ownership scope."""
     from app.engine.live.identity import validate_strategy_instance_id
@@ -176,17 +165,6 @@ def order_ref_namespace_matches(
     except OrderRefParseError:
         return False
     return namespace in allowed_namespaces
-
-
-def validate_order_ref_components(
-    order_ref: str, bot_order_namespace: str, intent_id: str
-) -> bool:
-    """For an order **we** placed: validate equality of the stored components.
-
-    No parsing — we hold the components, so we check the invariant
-    ``order_ref == f"{namespace}:{intent_id}"`` directly (ADR-0008 §1).
-    """
-    return order_ref == f"{bot_order_namespace}{ORDER_REF_SEP}{intent_id}"
 
 
 def classify_ownership(
@@ -265,5 +243,4 @@ __all__ = [
     "order_ref_namespace_matches",
     "parse_order_ref",
     "validate_broker_owned_instance_id",
-    "validate_order_ref_components",
 ]

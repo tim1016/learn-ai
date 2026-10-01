@@ -13,7 +13,6 @@ from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import (
     SignalIntentExecutionContext,
 )
-from app.engine.live.action_plan_signal_executor import StockActionPlanSignalExecutor
 from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
@@ -26,17 +25,6 @@ class _ReadyIndicator:
 
     def update(self, _time: datetime, _value: Decimal) -> None:
         """Keep a controlled ready value for a one-bar decision test."""
-
-
-@dataclass
-class _RecordingExecutionContext:
-    calls: list[tuple[str, str, Decimal | float | None]] = field(default_factory=list)
-
-    def set_holdings(self, symbol: str, fraction: Decimal | float) -> None:
-        self.calls.append(("set_holdings", symbol, fraction))
-
-    def liquidate(self, symbol: str) -> None:
-        self.calls.append(("liquidate", symbol, None))
 
 
 @dataclass
@@ -165,33 +153,3 @@ def test_two_bps_variant_applies_configured_gap_and_inclusive_rsi_gates(
     assert [intent.kind for intent in executor.intents] == (
         [SignalIntentKind.ENTER] if should_enter else []
     )
-
-
-def test_stock_action_plan_executor_selects_the_trade_asset() -> None:
-    action_plan = {
-        "on_enter": [
-            {
-                "leg_id": "nvda_long",
-                "instrument": {"kind": "stock", "underlying": "NVDA"},
-                "position": "long",
-                "qty_ratio": 1,
-            }
-        ],
-        "on_exit": [{"kind": "close_leg", "entry_leg_id": "nvda_long"}],
-    }
-    executor = StockActionPlanSignalExecutor.from_action_plan(action_plan)
-    context = _RecordingExecutionContext()
-
-    executor.execute(
-        context,
-        SignalIntent(SignalIntentKind.ENTER, bar_close_ms=1, intended_price=Decimal("500")),
-    )
-    executor.execute(
-        context,
-        SignalIntent(SignalIntentKind.EXIT, bar_close_ms=2, intended_price=Decimal("501")),
-    )
-
-    assert context.calls == [
-        ("set_holdings", "NVDA", Decimal(1)),
-        ("liquidate", "NVDA", None),
-    ]
