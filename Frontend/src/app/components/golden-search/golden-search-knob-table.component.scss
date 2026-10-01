@@ -2,6 +2,7 @@
 .table-wrap { overflow-x: auto; }
 .knobs { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
 .knobs caption { text-align: left; color: var(--text-secondary); padding-bottom: var(--space-2); }
+.knobs caption small { display: block; }
 .knobs th, .knobs td { padding: var(--space-2); border-bottom: 1px solid var(--border-light); text-align: left; vertical-align: top; }
 .knobs thead th { color: var(--text-secondary); font-weight: var(--fw-medium); white-space: nowrap; }
 .order { white-space: nowrap; display: flex; align-items: center; gap: var(--space-1); }

@@ -20,8 +20,8 @@ interface KnobRow {
 
 /**
  * The knob table (#2696): every declared knob in search order with its unit
- * and legal domain, Search or Keep fixed, the searched range (and grid step
- * under Grid) or the fixed value, and up/down to change the search order.
+ * and legal domain, Search or Keep fixed, the searched range and its smallest
+ * step or the fixed value, and up/down to change the search order.
  * Fixed controls and constraints are listed read-only beneath. Read-only for
  * a locked study's frozen plan.
  */
@@ -48,7 +48,11 @@ export class GoldenSearchKnobTableComponent {
       return { plan, knob, label: knob?.label ?? plan.name, first: index === 0, last: index === plans.length - 1 };
     });
   });
-  protected readonly showGridStep = computed(() => this.method() === 'grid');
+  protected readonly stepHint = computed(() =>
+    this.method() === 'grid'
+      ? 'Grid tests every value from low to high at the smallest step.'
+      : 'Zoom stops narrowing a knob once its spacing reaches the smallest step.',
+  );
 
   protected problem(name: string, field: KnobNumberField): string | null {
     return this.problems().get(knobProblemKey(name, field)) ?? null;

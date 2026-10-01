@@ -9,7 +9,7 @@ import { etDayEndMs, etMidnightMs } from '../../shared/date/et-midnight';
 import type { FillModeName } from '../../models/fill-mode';
 import type { GoldenSearchMethod, KnobMode, KnobPair, KnobPlan, ProtocolRequest, RankingMeasure, StrategyCapability } from './golden-search.types';
 
-export type KnobNumberField = 'low' | 'high' | 'fixed_value' | 'grid_step';
+export type KnobNumberField = 'low' | 'high' | 'fixed_value' | 'step';
 
 export type ProtocolNumberField =
   | 'min_trades'
@@ -81,13 +81,12 @@ function patchKnob(protocol: ProtocolRequest, name: string, patch: (knob: KnobPl
   return { ...protocol, knobs: protocol.knobs.map((knob) => (knob.name === name ? patch(knob) : knob)) };
 }
 
-/** A searched knob under Grid needs a step; the declaration's neighbor step is the starting suggestion. */
-function withGridSteps(protocol: ProtocolRequest, capability: StrategyCapability | null): ProtocolRequest {
-  if (protocol.method !== 'grid') return protocol;
-  const steps = new Map((capability?.knobs ?? []).map((knob) => [knob.name, knob.neighbor_step]));
+/** Every searched knob needs its smallest step (under Zoom and Grid alike); the declaration's default step is the starting suggestion. */
+function withSteps(protocol: ProtocolRequest, capability: StrategyCapability | null): ProtocolRequest {
+  const steps = new Map((capability?.knobs ?? []).map((knob) => [knob.name, knob.default_step]));
   return {
     ...protocol,
-    knobs: protocol.knobs.map((knob) => (knob.mode === 'search' && knob.grid_step === null ? { ...knob, grid_step: steps.get(knob.name) ?? null } : knob)),
+    knobs: protocol.knobs.map((knob) => (knob.mode === 'search' && knob.step === null ? { ...knob, step: steps.get(knob.name) ?? null } : knob)),
   };
 }
 
@@ -142,9 +141,9 @@ export function applyPlanEdit(draft: PlanDraft, edit: PlanEdit, capability: Stra
   const { protocol, problems } = draft;
   switch (edit.kind) {
     case 'method':
-      return { protocol: withGridSteps({ ...protocol, method: edit.method }, capability), problems };
+      return { protocol: { ...protocol, method: edit.method }, problems };
     case 'knob-mode':
-      return { protocol: withGridSteps(patchKnob(protocol, edit.name, (knob) => ({ ...knob, mode: edit.mode })), capability), problems };
+      return { protocol: withSteps(patchKnob(protocol, edit.name, (knob) => ({ ...knob, mode: edit.mode })), capability), problems };
     case 'knob-number': {
       const key = knobProblemKey(edit.name, edit.field);
       const value = readNumber(edit.raw);

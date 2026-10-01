@@ -1,10 +1,9 @@
 <div class="table-wrap" role="region" tabindex="0" aria-label="Knobs">
   <table class="knobs">
-    <caption>Knobs, in search order</caption>
+    <caption>Knobs, in search order <small>{{ stepHint() }}</small></caption>
     <thead>
       <tr>
-        <th scope="col">Order</th><th scope="col">Knob</th><th scope="col">Mode</th><th scope="col">Value or range</th>
-        @if (showGridStep()) { <th scope="col">Grid step</th> }
+        <th scope="col">Order</th><th scope="col">Knob</th><th scope="col">Mode</th><th scope="col">Value or range</th><th scope="col">Smallest step</th>
       </tr>
     </thead>
     <tbody>
@@ -61,18 +60,16 @@
             }
             </div>
           </td>
-          @if (showGridStep()) {
-            <td>
-              @if (row.plan.mode === 'search') {
-                @if (readonly()) {
-                  {{ row.plan.grid_step ?? '—' }}
-                } @else {
-                  <input #step pInputText type="number" [step]="row.knob?.quantum ?? 'any'" min="0" [value]="row.plan.grid_step ?? ''" [attr.aria-label]="row.label + ' grid step'" [attr.aria-invalid]="problem(row.plan.name, 'grid_step') !== null" (input)="onNumber(row.plan.name, 'grid_step', step.value)" />
-                  @if (problem(row.plan.name, 'grid_step'); as message) { <small class="problem" role="alert">{{ message }}</small> }
-                }
-              } @else { <span class="muted">—</span> }
-            </td>
-          }
+          <td>
+            @if (row.plan.mode === 'search') {
+              @if (readonly()) {
+                {{ row.plan.step ?? '—' }}
+              } @else {
+                <input #step pInputText type="number" [step]="row.knob?.quantum ?? 'any'" min="0" [value]="row.plan.step ?? ''" [attr.aria-label]="row.label + ' smallest step'" [attr.aria-invalid]="problem(row.plan.name, 'step') !== null" (input)="onNumber(row.plan.name, 'step', step.value)" />
+                @if (problem(row.plan.name, 'step'); as message) { <small class="problem" role="alert">{{ message }}</small> }
+              }
+            } @else { <span class="muted">—</span> }
+          </td>
         </tr>
       }
     </tbody>

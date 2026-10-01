@@ -150,18 +150,29 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(service.preflight).toHaveBeenCalledTimes(1);
   });
 
-  it('preflights the Grid method with a grid step for every searched knob', async () => {
+  it('sends a smallest step for every searched knob, and a knob turned to Search starts at its declared step', async () => {
     const service = fakeService();
     const { view } = await renderForm(service);
     await pickSpy(service, view);
 
-    fireEvent.click(screen.getByRole('radio', { name: /grid search/i }));
-
+    expect(screen.getByLabelText('Fast EMA length smallest step')).not.toBeNull();
+    fireEvent.change(screen.getByLabelText('Search or keep fixed: Crossover gap (bps)'), { target: { value: 'search' } });
     await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('radio', { name: /grid search/i }));
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(3));
+
     const sent = service.preflight.mock.lastCall?.[0];
     expect(sent?.method).toBe('grid');
-    expect(sent?.knobs.find((k) => k.name === 'fast_period')?.grid_step).toBe(1);
-    expect(screen.getByLabelText('Fast EMA length grid step')).not.toBeNull();
+    expect(sent?.knobs.filter((k) => k.mode === 'search').map((k) => [k.name, k.step])).toEqual([
+      ['gap', 0.05],
+      ['rsi_min', 1],
+      ['rsi_max', 1],
+      ['fast_period', 1],
+      ['slow_period', 1],
+      ['hold_bars', 1],
+      ['gap_bps', 0.5],
+    ]);
+    expect(sent?.knobs.some((k) => 'grid_step' in k)).toBe(false);
   });
 
   it('locks the checked plan and reports its study; a retry after no answer reuses the idempotency key', async () => {

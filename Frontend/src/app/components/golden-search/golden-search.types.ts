@@ -33,6 +33,8 @@ export interface CapabilityKnob {
   default_low: number;
   default_high: number;
   neighbor_step: number;
+  /** The smallest step a searched knob starts with; a multiple of `quantum`. */
+  default_step: number;
   searchable_by_default: boolean;
   warmup_dependent: boolean;
   default_value: number;
@@ -77,8 +79,12 @@ export interface KnobPlan {
   high: number;
   /** Used when `mode` is `fixed`. */
   fixed_value: number;
-  /** Required for a searched knob under the Grid method. */
-  grid_step: number | null;
+  /**
+   * The smallest step, required for every searched knob (a multiple of the
+   * declared quantum): Grid samples `low..high` at it, and Zoom stops
+   * refining the knob once a round's spacing would fall below it.
+   */
+  step: number | null;
 }
 
 export interface SelectionPolicy {

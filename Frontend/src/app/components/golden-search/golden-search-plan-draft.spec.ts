@@ -40,12 +40,22 @@ describe('applyPlanEdit', () => {
     expect(applyPlanEdit(draft(), { kind: 'number', field: 'drawdown_percent', raw: 'abc' }, emaCapability()).problems.has(numberProblemKey('drawdown_percent'))).toBe(true);
   });
 
-  it('gives every searched knob a grid step (its neighbor step) when Grid is chosen, and leaves fixed knobs without one', () => {
-    const next = applyPlanEdit(draft(), { kind: 'method', method: 'grid' }, emaCapability());
+  it('gives a knob its declared default step when it becomes searched, under Zoom as under Grid', () => {
+    const searched = applyPlanEdit(draft(), { kind: 'knob-mode', name: 'gap_bps', mode: 'search' }, emaCapability());
 
-    expect(next.protocol.method).toBe('grid');
-    expect(next.protocol.knobs.find((k) => k.name === 'gap')?.grid_step).toBe(0.05);
-    expect(next.protocol.knobs.find((k) => k.name === 'gap_bps')?.grid_step).toBeNull();
+    expect(searched.protocol.method).toBe('zoom');
+    expect(searched.protocol.knobs.find((k) => k.name === 'gap_bps')?.step).toBe(0.5);
+
+    const grid = applyPlanEdit(searched, { kind: 'method', method: 'grid' }, emaCapability());
+    expect(grid.protocol.knobs).toEqual(searched.protocol.knobs);
+  });
+
+  it('keeps a step the trader set when a knob is held fixed and searched again', () => {
+    const edited = applyPlanEdit(draft(), { kind: 'knob-number', name: 'gap', field: 'step', raw: '0.1' }, emaCapability());
+    const fixed = applyPlanEdit(edited, { kind: 'knob-mode', name: 'gap', mode: 'fixed' }, emaCapability());
+    const again = applyPlanEdit(fixed, { kind: 'knob-mode', name: 'gap', mode: 'search' }, emaCapability());
+
+    expect(again.protocol.knobs.find((k) => k.name === 'gap')?.step).toBe(0.1);
   });
 
   it('reorders the search order and stops at either end', () => {
