@@ -11,7 +11,7 @@ SNAPSHOT_PATH = Path(__file__).resolve().parents[2] / "app" / "operator" / "noti
 
 def test_operator_notice_code_snapshot_matches() -> None:
     """OperatorNoticeCode is mirrored to the snapshot. Updating one without
-    the other indicates drift and would break frontend types.
+    the other indicates drift.
     """
     snapshot = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
     actual = list(get_literal_args(OperatorNoticeCode))
@@ -21,9 +21,7 @@ def test_operator_notice_code_snapshot_matches() -> None:
         f"{snapshot['operator_notice_codes']}\n"
         f"Actual ({len(actual)} codes): {actual}\n"
         "If this change is intentional, update "
-        "PythonDataService/app/operator/notices/snapshot.json "
-        "and the matching Frontend literal in "
-        "Frontend/src/app/models/operator-notice.ts."
+        "PythonDataService/app/operator/notices/snapshot.json."
     )
 
 

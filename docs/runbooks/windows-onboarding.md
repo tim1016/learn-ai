@@ -72,7 +72,7 @@ compose `env_file`; copy from its `.env.example`):
 
 **`Frontend/src/environments/environment.development.ts`** — copy from
 `environment.development.ts.example`, then fill `primeUiLicense` (PrimeNG
-license key) and optionally `polygonApiKey`. Without this file `ng serve`
+license key). Without this file `ng serve`
 crash-loops with "file replacements does not exist".
 
 ## 4. First-run ceremonies (one-time, both required)
