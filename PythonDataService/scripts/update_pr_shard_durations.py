@@ -1,6 +1,6 @@
 """Regenerate scripts/pr_shard_durations.json from a measured full run.
 
-Runs the unsharded PR gate (the same paths, markers, and xdist settings as
+Runs the unsharded PR gate (the same roots, markers, and xdist settings as
 ``scripts.run_fast_tests``) with ``--durations=0`` and records each test's
 combined setup+call+teardown seconds. ``scripts.pytest_shard`` deals those
 measured tests across shards longest-first so no shard approaches the
@@ -59,7 +59,7 @@ def write_durations(durations: Mapping[str, float]) -> None:
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     completed = subprocess.run(
-        [*pytest_command(()), "--durations=0"],
+        [*pytest_command(), "--durations=0"],
         cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
         text=True,

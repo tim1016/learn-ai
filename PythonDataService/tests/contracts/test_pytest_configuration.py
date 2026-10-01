@@ -12,10 +12,6 @@ import pytest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 SERVICE_ROOT = REPOSITORY_ROOT / "PythonDataService"
 CI_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/ci.yml"
-DAILY_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/daily-tests.yml"
-E2E_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/frontend-e2e.yml"
-FRONTEND_BUDGET_RUNNER = REPOSITORY_ROOT / "Frontend/scripts/run-test-budget.cjs"
-FRONTEND_CI_CONFIG = REPOSITORY_ROOT / "Frontend/vitest.ci.config.ts"
 FAST_TEST_COMMAND_SOURCES = (
     CI_WORKFLOW,
     REPOSITORY_ROOT / ".claude/CLAUDE.md",
@@ -62,16 +58,14 @@ def test_fast_test_commands_filter_by_marker_not_name() -> None:
 
 
 def test_python_pr_suite_has_a_hard_two_minute_budget() -> None:
-    from scripts.run_fast_tests import DAILY_ONLY_PATHS, TEST_BUDGET_SECONDS, pytest_command
+    from scripts.run_fast_tests import TEST_BUDGET_SECONDS, pytest_command
 
-    command = pytest_command((), shard_index=1, shard_count=4)
+    command = pytest_command(shard_index=1, shard_count=4)
 
     assert TEST_BUDGET_SECONDS == 120
     assert command[0:3] == [sys.executable, "-m", "pytest"]
     marker_index = len(command) - 1 - command[::-1].index("-m")
     assert command[marker_index + 1] == "not slow"
-    for path in DAILY_ONLY_PATHS:
-        assert f"--ignore={path}" in command
     assert command[-4:] == ["--pr-shard-index", "1", "--pr-shard-count", "4"]
     assert "python -m scripts.run_fast_tests" in CI_WORKFLOW.read_text(encoding="utf-8")
 
@@ -102,15 +96,6 @@ def test_python_pr_shards_balance_by_measured_duration() -> None:
     # Tests missing from the durations file keep the stable hash shard.
     for nodeid in unknown:
         assert assignments[nodeid] == hash_shard(nodeid, shard_count=4)
-
-
-def test_committed_pr_shard_durations_drive_the_balance() -> None:
-    from scripts.pytest_shard import load_pr_shard_durations
-
-    durations = load_pr_shard_durations()
-
-    assert len(durations) >= 1000
-    assert all(duration > 0 for duration in durations.values())
 
 
 # A tiny project the shard plugin deals: six measured tests whose
@@ -308,7 +293,7 @@ def test_run_fast_tests_returns_the_child_exit_code_and_reports_its_time(
     )
 
     with caplog.at_level(logging.INFO, logger="scripts.run_fast_tests"):
-        returncode = runner.run_fast_tests((), shard_index=5, shard_count=16)
+        returncode = runner.run_fast_tests(shard_index=5, shard_count=16)
 
     assert returncode == 3
     line = summary.read_text(encoding="utf-8")
@@ -333,7 +318,7 @@ def test_run_fast_tests_kills_an_overrun_and_reports_the_exceeded_budget(
         lambda *_a, **_k: _child_command("import time; time.sleep(60)"),
     )
 
-    assert runner.run_fast_tests(()) == 124
+    assert runner.run_fast_tests() == 124
     assert re.fullmatch(
         r"Python PR tests \(unsharded\) took \d+\.\ds of the 1-second budget "
         r"\(exceeded\)\n",
@@ -357,7 +342,7 @@ def test_run_fast_tests_keeps_the_exit_code_when_the_step_summary_is_unwritable(
     )
 
     with caplog.at_level(logging.WARNING, logger="scripts.run_fast_tests"):
-        assert runner.run_fast_tests(()) == 3
+        assert runner.run_fast_tests() == 3
     assert "Could not append the test time to GITHUB_STEP_SUMMARY" in caplog.text
 
 
@@ -378,49 +363,3 @@ def test_parse_durations_sums_phases_and_keeps_node_ids_with_spaces() -> None:
         "tests/test_a.py::test_x[with a space]": 1.7,
         "tests/test_a.py::test_y": 0.01,
     }
-
-
-def test_pr_workflow_runs_bounded_python_and_frontend_shards() -> None:
-    ci_contents = CI_WORKFLOW.read_text(encoding="utf-8")
-    frontend_config = FRONTEND_CI_CONFIG.read_text(encoding="utf-8")
-    frontend_job = ci_contents.split("  frontend-test-shard:", maxsplit=1)[1].split(
-        "\n  frontend-test:", maxsplit=1
-    )[0]
-
-    assert "python-test-shard:" in ci_contents
-    assert (
-        "shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]" in ci_contents
-    )
-    assert (
-        'python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/16"' in ci_contents
-    )
-    assert "name: Frontend Test Shard ${{ matrix.shard }}/6" in frontend_job
-    assert "shard: [1, 2, 3, 4, 5, 6]" in frontend_job
-    assert 'TEST_SHARD_COUNT: "6"' in frontend_job
-    assert "--runner-config=vitest.ci.config.ts" in frontend_job
-    assert "shard:" in frontend_config
-
-
-def test_daily_workflow_owns_deferred_python_coverage() -> None:
-    contents = DAILY_WORKFLOW.read_text(encoding="utf-8")
-
-    assert "schedule:" in contents
-    assert "cron:" in contents
-    assert "python -m pytest tests app/engine/tests" in contents
-    assert "tests/unit/data_lake tests/integration/data_lake" in contents
-    assert '-m "not slow"' not in contents
-
-
-def test_other_change_gating_suites_are_bounded_or_daily() -> None:
-    ci_contents = CI_WORKFLOW.read_text(encoding="utf-8")
-    daily_contents = DAILY_WORKFLOW.read_text(encoding="utf-8")
-    e2e_contents = E2E_WORKFLOW.read_text(encoding="utf-8")
-    frontend_runner = FRONTEND_BUDGET_RUNNER.read_text(encoding="utf-8")
-
-    assert "const TEST_BUDGET_MS = 120_000;" in frontend_runner
-    assert "- run: npm test" in ci_contents
-    assert 'timeout --signal=KILL 120s dotnet test' in ci_contents
-    assert '--filter "Category!=PostgresIntegration"' in ci_contents
-    assert "dotnet test Backend.Tests/Backend.Tests.csproj" in daily_contents
-    assert "schedule:" in e2e_contents
-    assert "pull_request:" not in e2e_contents

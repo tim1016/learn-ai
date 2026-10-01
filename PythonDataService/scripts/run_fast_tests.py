@@ -1,8 +1,9 @@
-"""Run the change-gating Python suite within its two-minute budget.
+"""Run the quick Python tests within the two-minute budget.
 
-The complete suite belongs to the daily workflow.  This runner is the single
-source of truth for the deterministic, dependency-light baseline used during
-development and on pull requests.
+A quick test is any test not marked ``slow``, wherever it lives: the runner
+collects pytest.ini's ``testpaths``, the same roots the daily run collects.
+Tests that need PostgreSQL skip without ``POSTGRES_URL`` and run daily, with
+the ``slow`` ones.
 """
 
 from __future__ import annotations
@@ -19,48 +20,9 @@ from collections.abc import Sequence
 logger = logging.getLogger(__name__)
 
 TEST_BUDGET_SECONDS = 120
-FAST_TEST_PATHS = (
-    "tests/unit",
-    "tests/indicators",
-    "tests/edge",
-    "tests/utils",
-    "tests/engine",
-    "tests/routers",
-    "tests/schemas",
-    "tests/services",
-    "tests/operator",
-    "tests/contracts",
-    # Keep the whole Alpaca broker surface in the gate: filename-stem change
-    # detection cannot reliably map its routers and shared custody modules to
-    # their consumers.
-    "tests/broker",
-    "tests/scripts",
-    # The spec layer's own root, beside the package it tests (#2485): it was
-    # silently uncollected, so its stale tests failed on master unnoticed.
-    # Its conftest primes POLYGON_API_KEY and the Signal Program source
-    # anchor, the same two facts tests/conftest.py primes for the main root.
-    "app/engine/strategy/spec/tests",
-    # #2619: suites only the daily run collected went red for weeks while
-    # every PR stayed green. The cheap, dependency-light ones join the gate
-    # so a signature change (deploy(exit_terms=...)), a launch preflight
-    # probe, or a fixture-hash drift fails the PR that causes it, not the
-    # next morning's run. Postgres-backed suites (backtest_runs/
-    # test_service_db, the grid-search receipt-minting parity test) stay
-    # daily-only: they skip without POSTGRES_URL by design.
-    "tests/installation_migration",
-    "tests/lean_sidecar",
-    "tests/research/ml",
-    "app/engine/tests",
-    "tests/test_statistics.py",
-)
-DAILY_ONLY_PATHS = (
-    "tests/unit/data_lake",
-    "tests/integration/data_lake",
-)
 
 
 def pytest_command(
-    extra_paths: Sequence[str],
     *,
     shard_index: int | None = None,
     shard_count: int | None = None,
@@ -73,12 +35,13 @@ def pytest_command(
         sys.executable,
         "-m",
         "pytest",
-        *FAST_TEST_PATHS,
-        *extra_paths,
+        "-n",
+        "auto",
+        "-q",
+        "-m",
+        "not slow",
+        "--tb=short",
     ]
-    for path in DAILY_ONLY_PATHS:
-        command.append(f"--ignore={path}")
-    command.extend(("-n", "auto", "-q", "-m", "not slow", "--tb=short"))
     if shard_index is not None and shard_count is not None:
         command.extend(
             (
@@ -145,7 +108,6 @@ def report_elapsed_seconds(
 
 
 def run_fast_tests(
-    extra_paths: Sequence[str],
     *,
     shard_index: int | None = None,
     shard_count: int | None = None,
@@ -154,7 +116,6 @@ def run_fast_tests(
     started = time.monotonic()
     process = subprocess.Popen(
         pytest_command(
-            extra_paths,
             shard_index=shard_index,
             shard_count=shard_count,
         ),
@@ -189,17 +150,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="INDEX/COUNT",
         help="run one deterministic, one-based CI shard",
     )
-    parser.add_argument(
-        "--list-baseline",
-        action="store_true",
-        help="write the baseline paths, one per line, for CI change detection",
-    )
-    parser.add_argument("test_paths", nargs="*", help="additional changed test paths")
     args = parser.parse_args(argv)
-
-    if args.list_baseline:
-        sys.stdout.write("\n".join(FAST_TEST_PATHS) + "\n")
-        return 0
 
     shard_index: int | None = None
     shard_count: int | None = None
@@ -215,7 +166,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     return run_fast_tests(
-        args.test_paths,
         shard_index=shard_index,
         shard_count=shard_count,
     )
