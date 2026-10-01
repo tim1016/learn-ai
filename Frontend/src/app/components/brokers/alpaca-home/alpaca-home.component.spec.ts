@@ -840,6 +840,35 @@ describe('AlpacaHomeComponent', () => {
       expect(retryTarget).toEqual(firstTarget);
     });
 
+    it('holds the outcome with both buttons disabled while a retry is in flight (#2767)', async () => {
+      let answerRetry: (value: CohortActionResult) => void = () => { throw new Error('the retry was never sent'); };
+      const clearBots = vi.fn()
+        .mockRejectedValueOnce(new Error('network down'))
+        .mockImplementationOnce(() => new Promise<CohortActionResult>((resolve) => { answerRetry = resolve; }));
+      await renderHome({ clearBots });
+      const fold = finishedFold();
+      fireEvent.click(within(fold).getByRole('checkbox', { name: 'Select all finished bots' }));
+      fireEvent.click(within(fold).getByRole('button', { name: 'Clear selected (2)' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Clear 2' }));
+
+      const unknown = await screen.findByText(/The clear did not reach a result/);
+      expect(unknown.closest('p')?.getAttribute('role')).toBe('alert');
+      const outcome = screen.getByRole('region', { name: 'Clear outcome' });
+      const retryButton = within(outcome).getByRole('button', { name: 'Try again' }) as HTMLButtonElement;
+      fireEvent.click(retryButton);
+
+      // The card stays and says it is busy, rather than vanishing until the answer.
+      await vi.waitFor(() => expect(retryButton.disabled).toBe(true));
+      expect(retryButton.getAttribute('aria-busy')).toBe('true');
+      expect((within(outcome).getByRole('button', { name: 'Dismiss' }) as HTMLButtonElement).disabled).toBe(true);
+
+      answerRetry(clearResult([clearedLeg('old-bot'), clearedLeg('older-bot')]));
+      await screen.findByText('Cleared 2 of 2 bots.');
+      await vi.waitFor(() =>
+        expect((within(outcome).getByRole('button', { name: 'Dismiss' }) as HTMLButtonElement).disabled).toBe(false));
+      expect(clearBots).toHaveBeenCalledTimes(2);
+    });
+
     it('names the bots a batch ended before reaching, and re-sends the same batch for them', async () => {
       const clearBots = vi.fn()
         .mockResolvedValueOnce(clearResult([clearedLeg('dry-old'), authorityLostLeg('old-bot')]))

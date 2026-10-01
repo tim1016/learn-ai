@@ -18,6 +18,8 @@ import { HOME_CLEAR_COPY, clearRetryCanChange, isCleared, type ClearOutcome } fr
 })
 export class HomeClearOutcomeComponent {
   readonly outcome = input.required<ClearOutcome>();
+  /** A re-send of this clear is in flight (#2767). */
+  readonly busy = input(false);
 
   readonly retryRequested = output();
   readonly dismissed = output();
