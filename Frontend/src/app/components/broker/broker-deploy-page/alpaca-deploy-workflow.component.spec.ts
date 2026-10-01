@@ -1412,6 +1412,40 @@ describe('AlpacaDeployWorkflowComponent — Deploy again', () => {
     });
   });
 
+  it('refuses Deploy while the earlier bot’s settings are read', async () => {
+    const service = mockService();
+    service.getDeployPrefill.mockImplementation(() => new Promise<BotDeployPrefill>(() => undefined));
+    await renderWithQuery(service, { from: PREFILL.source_strategy_instance_id });
+    // No whenStable: the settings being read are a pending task that never ends here.
+    await formShown();
+    await chooseMoney();
+
+    expect(deployButton().disabled).toBe(true);
+    expect(within(stepRegion('Confirm')).getByText('Reading the earlier bot’s settings…')).toBeTruthy();
+  });
+
+  it('settings that answer while a Deploy is in flight are refused out loud, and that Deploy’s receipt stands', async () => {
+    const service = mockService();
+    let answerDeploy: (receipt: BudgetDeployReceipt) => void = () => undefined;
+    service.deployBudgetBot.mockImplementation(() => new Promise<BudgetDeployReceipt>((resolve) => (answerDeploy = resolve)));
+    service.getDeployPrefill.mockResolvedValue(PREFILL);
+    const page = await openAt(service, {});
+    await formShown();
+    await page.fixture.whenStable();
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+
+    arriveAt(page, { ...page.url.query, from: PREFILL.source_strategy_instance_id });
+
+    const refusal = await screen.findByRole('alert', { name: 'Deploy again' });
+    expect(refusal.textContent).toContain('A Deploy was already sent from this form; nothing was applied.');
+    expect(screen.queryByText(/Prefilled from/)).toBeNull();
+    answerDeploy({ ...RECEIPT, account_id: DEPLOY_VIEW.account_id });
+    expect(await screen.findByRole('status', { name: RECEIPT.message })).toBeTruthy();
+    expect(submittedBody(service)).not.toHaveProperty('replaces_strategy_instance_id');
+  });
+
   it('says when the earlier bot’s settings cannot be read, and offers a fresh form', async () => {
     const service = mockService();
     service.getDeployPrefill.mockRejectedValue(new HttpErrorResponse({
@@ -1463,7 +1497,7 @@ describe('AlpacaDeployWorkflowComponent — Golden Search handoff (#2696)', () =
     await formShown();
     offer.answer(goldenDeployOffer());
 
-    const note = await screen.findByRole('region', { name: 'Golden configuration' });
+    const note = await screen.findByRole('status', { name: 'Golden configuration' });
     expect(note.textContent).toContain('Golden configuration gq-0001- from Golden Search.');
     expect(note.textContent).toContain('a setting it leaves out is the strategy\'s default');
     expect(offer.deployOffer).toHaveBeenCalledWith('gq-0001-aaaa-bbbb');
@@ -1490,14 +1524,14 @@ describe('AlpacaDeployWorkflowComponent — Golden Search handoff (#2696)', () =
     const page = await openWithHandoff(service, 'gq-0001-aaaa-bbbb', offer.deployOffer);
     await formShown();
     offer.answer(goldenDeployOffer());
-    await screen.findByRole('region', { name: 'Golden configuration' });
+    await screen.findByRole('status', { name: 'Golden configuration' });
     await page.fixture.whenStable();
     await openStep('What');
 
     const fast = screen.getByRole('textbox', { name: 'Fast EMA length' });
     fireEvent.change(fast, { target: { value: '9' } });
 
-    await vi.waitFor(() => expect(screen.getByRole('region', { name: 'Golden configuration' }).textContent).toContain('no longer holds the exact golden settings'));
+    await vi.waitFor(() => expect(screen.getByRole('status', { name: 'Golden configuration' }).textContent).toContain('no longer holds the exact golden settings'));
   });
 
   it('refuses a qualification that is not ready, with its explanation, and applies nothing', async () => {
@@ -1550,10 +1584,73 @@ describe('AlpacaDeployWorkflowComponent — Golden Search handoff (#2696)', () =
     await formShown();
     offer.answer(goldenDeployOffer({ program_key: 'not_offered_here' }));
 
-    const note = await screen.findByRole('region', { name: 'Golden configuration' });
+    const note = await screen.findByRole('status', { name: 'Golden configuration' });
     expect(within(note).getByRole('alert').textContent).toContain('Its strategy is not offered on this account now.');
-    await vi.waitFor(() => expect(note.textContent).toContain('no longer holds the exact golden settings'));
     expect(note.textContent).not.toContain('exact settings are applied');
+    expect(note.textContent).not.toContain('The form was edited since');
+  });
+
+  it('refuses Deploy while the golden configuration is read, and says so', async () => {
+    const service = mockService(GOLDEN_VIEW);
+    const offer = pendingOffer();
+    await openWithHandoff(service, 'gq-0001-aaaa-bbbb', offer.deployOffer);
+    // No whenStable: the offer being read is a pending task until it answers.
+    await formShown();
+    await chooseMoney();
+
+    expect(screen.getByRole('status', { name: 'Reading the golden configuration' }).textContent).toContain('Reading the golden configuration…');
+    expect(deployButton().disabled).toBe(true);
+    expect(within(stepRegion('Confirm')).getByText('Reading the golden configuration…')).toBeTruthy();
+
+    offer.answer(goldenDeployOffer());
+    await screen.findByRole('status', { name: 'Golden configuration' });
+    expect(screen.queryByRole('status', { name: 'Reading the golden configuration' })).toBeNull();
+  });
+
+  it('a golden configuration that answers while a Deploy is in flight is refused out loud, and that Deploy’s receipt stands', async () => {
+    const service = mockService(GOLDEN_VIEW);
+    let answerDeploy: (receipt: BudgetDeployReceipt) => void = () => undefined;
+    service.deployBudgetBot.mockImplementation(() => new Promise<BudgetDeployReceipt>((resolve) => (answerDeploy = resolve)));
+    const offer = pendingOffer();
+    const page = await openAt(service, {}, [{ provide: GoldenSearchService, useValue: { deployOffer: offer.deployOffer } }]);
+    await formShown();
+    await page.fixture.whenStable();
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+
+    arriveAt(page, { ...page.url.query, [GOLDEN_QUALIFICATION_QUERY_PARAM]: 'gq-0001-aaaa-bbbb' });
+    await vi.waitFor(() => expect(offer.deployOffer).toHaveBeenCalledOnce());
+    offer.answer(goldenDeployOffer());
+
+    const refusal = await screen.findByRole('alert', { name: 'Golden configuration' });
+    expect(refusal.textContent).toContain('A Deploy was already sent from this form; nothing was applied.');
+    expect(symbolPicker(page.fixture).symbol()).toBe('SPY');
+    answerDeploy({ ...RECEIPT, account_id: GOLDEN_VIEW.account_id });
+    expect(await screen.findByRole('status', { name: RECEIPT.message })).toBeTruthy();
+  });
+
+  it('a golden configuration that answers over a receipt leaves the receipt and applies nothing', async () => {
+    const service = mockService(GOLDEN_VIEW);
+    const offer = pendingOffer();
+    const page = await openAt(service, {}, [{ provide: GoldenSearchService, useValue: { deployOffer: offer.deployOffer } }]);
+    await formShown();
+    await page.fixture.whenStable();
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await screen.findByRole('status', { name: RECEIPT.message });
+
+    arriveAt(page, { ...page.url.query, [GOLDEN_QUALIFICATION_QUERY_PARAM]: 'gq-0001-aaaa-bbbb' });
+    await vi.waitFor(() => expect(offer.deployOffer).toHaveBeenCalledOnce());
+    offer.answer(goldenDeployOffer());
+    await vi.waitFor(() => expect(page.url.query).not.toHaveProperty(GOLDEN_QUALIFICATION_QUERY_PARAM));
+    await page.fixture.whenStable();
+
+    expect(screen.getByRole('status', { name: RECEIPT.message })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare a new deployment' }));
+    const refusal = await screen.findByRole('alert', { name: 'Golden configuration' });
+    expect(refusal.textContent).toContain('A Deploy was already sent from this form; nothing was applied.');
+    expect(symbolPicker(page.fixture).symbol()).toBe('SPY');
   });
 
   it('never fetches a link that does not name a qualification', async () => {

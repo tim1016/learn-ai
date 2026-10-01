@@ -54,14 +54,18 @@
         <button type="button" (click)="clearPrefill()">Start from a fresh form</button>
       </section>
     }
-    @if (goldenHandoff(); as golden) {
+    @if (goldenPending()) {
+      <section class="deploy-again" role="status" aria-label="Reading the golden configuration">
+        <p>Reading the golden configuration…</p>
+      </section>
+    } @else if (goldenHandoff(); as golden) {
       @if (golden.kind === 'applied') {
-        <section class="deploy-again" aria-label="Golden configuration">
+        <section class="deploy-again" role="status" aria-label="Golden configuration">
           <p>
             <strong>Golden configuration <code>{{ golden.offer.qualification_id.slice(0, 8) }}</code> from Golden Search.</strong>
             @if (goldenStillApplied()) {
               Its strategy, symbol and exact settings are applied; a setting it leaves out is the strategy's default. Choose where it trades, fresh money and confirm.
-            } @else {
+            } @else if (!goldenStrategyMissing()) {
               The form was edited since: it no longer holds the exact golden settings.
             }
           </p>

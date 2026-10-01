@@ -112,6 +112,16 @@ const QUALIFICATION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 type GoldenHandoff =
   | { readonly kind: 'applied'; readonly offer: QualificationDeployOffer }
   | { readonly kind: 'refused'; readonly id: string; readonly reason: string };
+
+/** A handoff's answer (Deploy again's settings, a golden offer), with this
+ * form's Deploy activity at the moment it was asked for (#2696). */
+interface HandoffAnswer<T> {
+  readonly answer: T;
+  readonly askedAt: number;
+}
+
+/** Why a handoff that answered after a Deploy went out is not applied (#2696). */
+const SENT_BEFORE_HANDOFF = 'A Deploy was already sent from this form; nothing was applied.';
 /** A submission key exactly as the backend admits it (`SUBMISSION_KEY_PATTERN`,
  * pinned to the OpenAPI contract by the spec). A `?submission=` outside it is
  * ignored: the backend would refuse every read and Deploy under it (422). */
@@ -816,9 +826,12 @@ export class AlpacaDeployWorkflowComponent {
       const sid = this.deployAgainSid();
       return sid === null ? undefined : { sid, accountId: this.accountId().trim() };
     },
-    loader: ({ params }) => this.panelService.getDeployPrefill(this.deployTarget(params.accountId), params.sid),
+    loader: ({ params }) => this.askHandoff(this.panelService.getDeployPrefill(this.deployTarget(params.accountId), params.sid)),
   });
+  /** Deploy again's settings answered after a Deploy went out from this form, so they were not applied. */
+  private readonly prefillRefused = signal(false);
   protected readonly prefillError = computed(() => {
+    if (this.prefillRefused()) return SENT_BEFORE_HANDOFF;
     const error = this.prefill.error();
     return error === undefined
       ? null
@@ -828,7 +841,7 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly prefillStrategyMissing = computed(() => {
     const view = this.currentView();
     if (view === null || this.replaces() === null || !this.prefill.hasValue()) return false;
-    const key = this.prefill.value().strategy_key;
+    const key = this.prefill.value().answer.strategy_key;
     return !view.strategies.some((strategy) => strategy.strategy_key === key);
   });
 
@@ -845,16 +858,18 @@ export class AlpacaDeployWorkflowComponent {
    * only when a handoff arrives; a Deploy without one never constructs it. */
   protected readonly goldenOffer = resource({
     params: () => this.goldenQualificationId() ?? undefined,
-    loader: ({ params }) => this.injector.get(GoldenSearchService).deployOffer(params),
+    loader: ({ params }) => this.askHandoff(this.injector.get(GoldenSearchService).deployOffer(params)),
   });
+  /** The golden offer is still being read. */
+  protected readonly goldenPending = computed(() => this.goldenQualificationId() !== null && this.goldenOffer.isLoading());
 
   /** What the last handoff did; kept after its parameter is cleared. */
   protected readonly goldenHandoff = signal<GoldenHandoff | null>(null);
 
-  /** The applied golden settings are still exactly what the form holds. */
+  /** The applied golden settings are still exactly what the form holds, its strategy among them. */
   protected readonly goldenStillApplied = computed(() => {
     const handoff = this.goldenHandoff();
-    if (handoff?.kind !== 'applied') return false;
+    if (handoff?.kind !== 'applied' || this.goldenStrategyMissing()) return false;
     const ticket = this.ticket();
     return ticket.strategyKey === handoff.offer.program_key && ticket.symbol === handoff.offer.symbol.trim().toUpperCase()
       && sameParameterValues(ticket.parameters, handoff.offer.parameters);
@@ -866,6 +881,18 @@ export class AlpacaDeployWorkflowComponent {
     const view = this.currentView();
     return handoff?.kind === 'applied' && view !== null && !view.strategies.some((strategy) => strategy.strategy_key === handoff.offer.program_key);
   });
+
+  /** A handoff still being read: Deploy waits for it, so what it sends is
+   * never a form the handoff is about to replace (#2696). */
+  private readonly handoffPending = computed(() => {
+    if (this.goldenPending()) return 'Reading the golden configuration…';
+    if (this.deployAgainSid() !== null && this.prefill.isLoading()) return 'Reading the earlier bot’s settings…';
+    return null;
+  });
+
+  /** Bumped when a Deploy starts and when it ends: a handoff asked for at the
+   * same count as it answers saw no Deploy go out while it loaded (#2696). */
+  private deployActivity = 0;
 
   // ── Submission ────────────────────────────────────────────────────────────
 
@@ -885,6 +912,10 @@ export class AlpacaDeployWorkflowComponent {
         canSubmit: false,
         guidance: 'The account changed. Nothing was sent. Review the refreshed account before deploying.',
       };
+    }
+    const pending = this.handoffPending();
+    if (pending !== null) {
+      return { canSubmit: false, guidance: pending };
     }
     const selectedStrategy = this.selectedStrategy();
     if (selectedStrategy === null) {
@@ -1293,12 +1324,15 @@ export class AlpacaDeployWorkflowComponent {
     });
 
     // Deploy again pre-fills once per earlier bot; a draft that already came
-    // from it keeps the owner's edits.
+    // from it keeps the owner's edits. Settings that answer after a Deploy
+    // went out from this form are refused out loud instead.
     effect(() => {
       if (!this.prefill.hasValue()) return;
-      const prefill = this.prefill.value();
+      const { answer: prefill, askedAt } = this.prefill.value();
       untracked(() => {
-        if (this.replaces() !== prefill.source_strategy_instance_id) this.applyPrefill(prefill);
+        if (this.replaces() === prefill.source_strategy_instance_id) return;
+        if (this.handoffMayApply(askedAt)) this.applyPrefill(prefill);
+        else this.prefillRefused.set(true);
       });
     });
 
@@ -1310,21 +1344,23 @@ export class AlpacaDeployWorkflowComponent {
       if (raw === null) return;
       const id = this.goldenQualificationId();
       const error = this.goldenOffer.error();
-      const offer = this.goldenOffer.hasValue() ? this.goldenOffer.value() : null;
+      const asked = this.goldenOffer.hasValue() ? this.goldenOffer.value() : null;
       untracked(() => {
         if (id === null) {
           this.goldenHandoff.set({ kind: 'refused', id: raw, reason: 'This link does not name a golden configuration. Nothing was applied.' });
         } else if (error !== undefined) {
           this.goldenHandoff.set({ kind: 'refused', id, reason: extractServerMessage(error, 'The golden configuration could not be read. Nothing was applied.') });
-        } else if (offer === null) {
+        } else if (asked === null) {
           return;
-        } else if (offer.qualification_id !== id) {
+        } else if (asked.answer.qualification_id !== id) {
           // An answer about another qualification is never applied, and never left waiting in silence.
           this.goldenHandoff.set({ kind: 'refused', id, reason: 'The answer named a different golden configuration. Nothing was applied.' });
-        } else if (offer.status === 'ready') {
-          this.applyGoldenOffer(offer);
+        } else if (asked.answer.status !== 'ready') {
+          this.goldenHandoff.set({ kind: 'refused', id, reason: asked.answer.explanation });
+        } else if (!this.handoffMayApply(asked.askedAt)) {
+          this.goldenHandoff.set({ kind: 'refused', id, reason: SENT_BEFORE_HANDOFF });
         } else {
-          this.goldenHandoff.set({ kind: 'refused', id, reason: offer.explanation });
+          this.applyGoldenOffer(asked.answer);
         }
         void this.clearGoldenParam();
       });
@@ -1373,10 +1409,26 @@ export class AlpacaDeployWorkflowComponent {
       : fresh;
   }
 
+  /** Asks for a handoff, noting this form's Deploy activity at that moment. */
+  private askHandoff<T>(request: Promise<T>): Promise<HandoffAnswer<T>> {
+    const askedAt = this.deployActivity;
+    return request.then((answer) => ({ answer, askedAt }));
+  }
+
+  /**
+   * A handoff replaces the form only when nothing was sent from it since the
+   * handoff was asked for: no Deploy in flight, none started or answered
+   * while it loaded, and no receipt it would wipe. A Deploy whose outcome was
+   * already unknown when it was asked keeps its key through the fresh draft.
+   */
+  private handoffMayApply(askedAt: number): boolean {
+    return !this.submitting() && this.receipt() === null && this.deployActivity === askedAt;
+  }
+
   /** Deploy again: a fresh draft from the earlier bot's sealed settings. Its
    * money and consent are never copied, and it gets its own submission key. */
   private applyPrefill(prefill: BotDeployPrefill): void {
-    this.receipt.set(null);
+    this.prefillRefused.set(false);
     this.frozenCommand.set(null);
     this.clearAdmission();
     this.submitError.set(null);
@@ -1399,6 +1451,7 @@ export class AlpacaDeployWorkflowComponent {
   /** Clear: back to a fresh form on this account's default strategy and
    * its defaults for new bots, and the earlier bot is no longer named. */
   protected async clearPrefill(): Promise<void> {
+    this.prefillRefused.set(false);
     this.restoreDraft(this.freshDraft({
       ...EMPTY_DEPLOY_SETTINGS,
       ...exitTermSettings(this.currentView()?.default_exit_terms),
@@ -1419,7 +1472,6 @@ export class AlpacaDeployWorkflowComponent {
    * the canonical parameters leave out is the strategy's schema default, which
    * the form shows and the Deploy request leaves out the same way. */
   private applyGoldenOffer(offer: QualificationDeployOffer): void {
-    this.receipt.set(null);
     this.frozenCommand.set(null);
     this.clearAdmission();
     this.submitError.set(null);
@@ -1671,6 +1723,7 @@ export class AlpacaDeployWorkflowComponent {
     if (!view || !strategy || mode === null || settings === null || !this.canSubmit()) return;
 
     this.submitting.set(true);
+    this.deployActivity += 1;
     this.submitError.set(null);
     this.admissionDecision.set(null);
     const submission = this.submissionFor(settings);
@@ -1715,6 +1768,7 @@ export class AlpacaDeployWorkflowComponent {
       }
     } finally {
       this.submitting.set(false);
+      this.deployActivity += 1;
       if (refused) this.focusAfterRender(() => this.confirmStep()?.focusRefusal());
     }
   }
