@@ -6,105 +6,105 @@
       "program_key": "deployment_validation",
       "program_version": "deployment-validation/v1",
       "golden_trace_root": "5dca9fde8269386367e9d12b5f22a4caaa11c20d93ae44094e62a91c461d9ce8",
-      "artifact_digest": "37765585c1cb7a809765f06653c3a02ef5279fc23d17d5a61af669f2279665df",
+      "artifact_digest": "cef4596589462644ce8f9bd4522ee211212c72794efab2abd1f77d676ac40a34",
       "wiring_digest": "d93d64d3ee31025c65523cfcef652ed417cf8818c7780d3d83d2eb2ff6b8fe10",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[deployment_validation]",
-      "qualified_at_ms": 1790835053911,
+      "qualified_at_ms": 1790836297613,
       "git_provenance": {
-        "commit_sha": "d3ec4a328731920d8d3162c29e01fb72b9746be1",
+        "commit_sha": "2e8de558f9aab3c6c9285275bbd1b9399fc5da6b",
         "dirty": false
       },
-      "receipt_hash": "67025347be4a6cf115da1912a1faa74eed257ce08f33a8c459f7d03860f39ca0"
+      "receipt_hash": "b13716d8864bee05e7f10c228b6dcc61f9b6af89667fb7a2ff2cefff3656d8a1"
     },
     {
       "schema_version": 2,
       "program_key": "ema_crossover_signal",
       "program_version": "ema-crossover-signal/v1",
       "golden_trace_root": "16044218d7505ab73b632318def91596fae29e9c1d6c4e58c655e9efa4dbf184",
-      "artifact_digest": "c046186b2e1653471834e6972fb6f3b41bd7e86ec346987418eea634c6ba3a51",
+      "artifact_digest": "968d9ef785a80c9b8b143706f79e64a8d98d46213b15fef41c33d7bc07221847",
       "wiring_digest": "c9ae1a6b2a97fdf8426f4eac827cb883fac862a33c1d9d05a20e81ebde5859fc",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[ema_crossover_signal]",
-      "qualified_at_ms": 1790835053911,
+      "qualified_at_ms": 1790836297613,
       "git_provenance": {
-        "commit_sha": "d3ec4a328731920d8d3162c29e01fb72b9746be1",
+        "commit_sha": "2e8de558f9aab3c6c9285275bbd1b9399fc5da6b",
         "dirty": false
       },
-      "receipt_hash": "77d4fab9f1bc8a4d39ac89526096f2d674924558cfed559e9764691eb4cc8571"
+      "receipt_hash": "5d450f73ef9c9f36ddda1751ad7e8b05faf9a300567a49406744322f217c61a0"
     },
     {
       "schema_version": 2,
       "program_key": "rsi_mean_reversion",
       "program_version": "rsi-mean-reversion/v1",
       "golden_trace_root": "46d0b13b5e3307d983b4d5b4a1a21ba790db5e5644d164364a787bb2a12acde7",
-      "artifact_digest": "1c9fba38fec50a33e9ccaefd65f51451a0087100e2643b5c240314d9039d9ae6",
+      "artifact_digest": "93e502afd7cfb38dddef9edcf33537f6d02f9614ad589f7090991c34e6aad212",
       "wiring_digest": "09e49310beab3ae2ec2150ea038571f81450a4b5e9d10dd5dca107f7e7159802",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[rsi_mean_reversion]",
-      "qualified_at_ms": 1790835053911,
+      "qualified_at_ms": 1790836297613,
       "git_provenance": {
-        "commit_sha": "d3ec4a328731920d8d3162c29e01fb72b9746be1",
+        "commit_sha": "2e8de558f9aab3c6c9285275bbd1b9399fc5da6b",
         "dirty": false
       },
-      "receipt_hash": "7212b9660c6a5b4f8ac6dd6a55625258b35423de3c3865ac9325f6400cc60fa4"
+      "receipt_hash": "e668c235906c91850b9cf95921f01166a532ba237c27cf44a077fe1f93dde5c1"
     },
     {
       "schema_version": 2,
       "program_key": "sma_crossover",
       "program_version": "sma-crossover/v1",
       "golden_trace_root": "b0a136f7b485179bc37c7998df430480b94b0866d9bc58dbead636fa84a320e9",
-      "artifact_digest": "cf70196f84ffd6b82f482ba06acbecf208ac1c46d4d60056c16a392de35c8478",
+      "artifact_digest": "1e97b8d6c44bc6b2192a8cb9bf5140bc5119039fe883de5cf48ba38a5eaddfa8",
       "wiring_digest": "66e5a684d861b7c14380af4d04a95ccc54cabd2088029718196c6e47e89e745e",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[sma_crossover]",
-      "qualified_at_ms": 1790835053911,
+      "qualified_at_ms": 1790836297613,
       "git_provenance": {
-        "commit_sha": "d3ec4a328731920d8d3162c29e01fb72b9746be1",
+        "commit_sha": "2e8de558f9aab3c6c9285275bbd1b9399fc5da6b",
         "dirty": false
       },
-      "receipt_hash": "a15ff6111ae94e5c98a3956672cd64487800b062eeb07b875e0fb92f12f87fad"
+      "receipt_hash": "37b634df5aabc77e2f80fc9a27051e733400ffb15f2be49527407a86b7dbc105"
     },
     {
       "schema_version": 2,
       "program_key": "spy_strategy_a",
       "program_version": "spy-strategy-a/v1",
       "golden_trace_root": "7ee88013046505a9df88fa9c83b94e1f5f4c4de92718dd874ca157b5eea25f5f",
-      "artifact_digest": "bd7c2c5aed369b8aa02a51f554486d1b56dbd59913fd3e1249544f62010353c4",
+      "artifact_digest": "030c15142d37062a85bb0d66cd7ce0f0581dcb538a9d79be73b7ee48f4ccaace",
       "wiring_digest": "614c80f2cbb34a8b895e03eb45ab9b23cc8f33a9972ed2dd24423441b9e254fa",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_a]",
-      "qualified_at_ms": 1790835053911,
+      "qualified_at_ms": 1790836297613,
       "git_provenance": {
-        "commit_sha": "d3ec4a328731920d8d3162c29e01fb72b9746be1",
+        "commit_sha": "2e8de558f9aab3c6c9285275bbd1b9399fc5da6b",
         "dirty": false
       },
-      "receipt_hash": "d83d5794181f09674ef99e6a98e2e9b7c2ba74b71b56029479c64c0f1ac96518"
+      "receipt_hash": "1148bcb53a747ff58f2ee17a1e76ababea4cb65bba5ceebb8f7ce3752be48a2f"
     },
     {
       "schema_version": 2,
       "program_key": "spy_strategy_b",
       "program_version": "spy-strategy-b/v1",
       "golden_trace_root": "775a5dfd4a98090111c4aa0f643f647b4b14cf27c9334ac266ebc9565b7485b4",
-      "artifact_digest": "4ed9b833dd945f28e6db2345ebef1f80157a769c5dcf95d47cc7306e6baf1f5b",
+      "artifact_digest": "e24d83101ca14a01881f69789fd14e394e4c3b930e625302a75a176cd75e1258",
       "wiring_digest": "ea0bd30a66173cbdcbd5abfd0b8043945ae391044d4357376261126b0801f013",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_b]",
-      "qualified_at_ms": 1790835053911,
+      "qualified_at_ms": 1790836297613,
       "git_provenance": {
-        "commit_sha": "d3ec4a328731920d8d3162c29e01fb72b9746be1",
+        "commit_sha": "2e8de558f9aab3c6c9285275bbd1b9399fc5da6b",
         "dirty": false
       },
-      "receipt_hash": "ed2e31d269977d72f8c62118174e190330667f2f8fc72de716be181ec76c5a54"
+      "receipt_hash": "d8365bf1c9c48a78797dd3756e9ba89583ee64f24cb75de313c64e2b6200d8aa"
     },
     {
       "schema_version": 2,
       "program_key": "spy_strategy_c",
       "program_version": "spy-strategy-c/v1",
       "golden_trace_root": "9efc77718f0028e78ad6ea7d56ffda19a510cbba7f5ea3b5a6d5cccade6a75c6",
-      "artifact_digest": "add3faf670ec2832cc6a09afc8d1d464c3aba3fea79af126dab30a4136a77900",
+      "artifact_digest": "4573ba4f0922c99453b4d19be0043e7a502c1fd8a4a75ae21d643980e25aeb69",
       "wiring_digest": "846fe8e70a82baaace813b9fe395b626e38fa615d8e7151e190865156e4c08e3",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_c]",
-      "qualified_at_ms": 1790835053911,
+      "qualified_at_ms": 1790836297613,
       "git_provenance": {
-        "commit_sha": "d3ec4a328731920d8d3162c29e01fb72b9746be1",
+        "commit_sha": "2e8de558f9aab3c6c9285275bbd1b9399fc5da6b",
         "dirty": false
       },
-      "receipt_hash": "120fa3c20e5b4c9254083c31e48b5bf423c0a6b7ec654174c2656a504a885ec0"
+      "receipt_hash": "28f72f6379fb24e366d23b2118e935a9ccaea32d49bb77847a8af4077571efc8"
     }
   ]
 }
