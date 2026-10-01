@@ -1316,8 +1316,11 @@ export class AlpacaDeployWorkflowComponent {
           this.goldenHandoff.set({ kind: 'refused', id: raw, reason: 'This link does not name a golden configuration. Nothing was applied.' });
         } else if (error !== undefined) {
           this.goldenHandoff.set({ kind: 'refused', id, reason: extractServerMessage(error, 'The golden configuration could not be read. Nothing was applied.') });
-        } else if (offer === null || offer.qualification_id !== id) {
+        } else if (offer === null) {
           return;
+        } else if (offer.qualification_id !== id) {
+          // An answer about another qualification is never applied, and never left waiting in silence.
+          this.goldenHandoff.set({ kind: 'refused', id, reason: 'The answer named a different golden configuration. Nothing was applied.' });
         } else if (offer.status === 'ready') {
           this.applyGoldenOffer(offer);
         } else {

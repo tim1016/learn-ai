@@ -1528,6 +1528,34 @@ describe('AlpacaDeployWorkflowComponent — Golden Search handoff (#2696)', () =
     expect(screen.getByText(/^Deployment Validation on SPY/)).toBeTruthy();
   });
 
+  it('refuses an answer about a different qualification instead of applying it or waiting in silence', async () => {
+    const service = mockService(GOLDEN_VIEW);
+    const offer = pendingOffer();
+    const page = await openWithHandoff(service, 'gq-0001-aaaa-bbbb', offer.deployOffer);
+    await formShown();
+    offer.answer(goldenDeployOffer({ qualification_id: 'gq-9999-other' }));
+
+    const refusal = await screen.findByRole('alert', { name: 'Golden configuration' });
+    expect(refusal.textContent).toContain('gq-0001-');
+    expect(refusal.textContent).toContain('named a different golden configuration. Nothing was applied.');
+    await vi.waitFor(() => expect(page.url.query).toEqual({}));
+    expect(screen.getByText(/^Deployment Validation on SPY/)).toBeTruthy();
+    expect(symbolPicker(page.fixture).symbol()).toBe('SPY');
+  });
+
+  it('a ready qualification whose strategy this account does not offer is flagged, and its settings are not claimed', async () => {
+    const service = mockService(DEPLOY_VIEW);
+    const offer = pendingOffer();
+    await openWithHandoff(service, 'gq-0001-aaaa-bbbb', offer.deployOffer);
+    await formShown();
+    offer.answer(goldenDeployOffer({ program_key: 'not_offered_here' }));
+
+    const note = await screen.findByRole('region', { name: 'Golden configuration' });
+    expect(within(note).getByRole('alert').textContent).toContain('Its strategy is not offered on this account now.');
+    await vi.waitFor(() => expect(note.textContent).toContain('no longer holds the exact golden settings'));
+    expect(note.textContent).not.toContain('exact settings are applied');
+  });
+
   it('never fetches a link that does not name a qualification', async () => {
     const service = mockService(GOLDEN_VIEW);
     const offer = pendingOffer();
