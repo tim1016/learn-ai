@@ -10,8 +10,9 @@ const loadBrokerLaneUnavailable = () =>
     (module) => module.BrokerLaneUnavailableComponent,
   );
 
-// A served document copies a canonical repo document; the copies listed in
-// `scripts/check_documentation_contract.py` fail CI when the two differ.
+// A served document copies a canonical repo document;
+// `PythonDataService/tests/contracts/test_served_document_copies.py` fails CI
+// when the two differ.
 const loadMarkdownDocPage = () =>
   import('./components/docs/markdown-doc-page.component').then(
     (module) => module.MarkdownDocPageComponent,
