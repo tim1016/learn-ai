@@ -288,7 +288,7 @@ def _approve(
         proof = _build_proof(request, canonical, blob_store, artifact_digest, wiring_digest)
         checkpoint = dataclasses.replace(checkpoint, proof=proof.as_dict())
         save_checkpoint(checkpoint)
-    _require_blobs(proof, blob_store)
+        _require_blobs(proof, blob_store)
 
     run_id = checkpoint.run_id
     if run_id is None:
@@ -332,7 +332,7 @@ def _published_despite(study_id: str, failure: _ApprovalFailure) -> str:
     except _ApprovalFailure as unreadable:
         raise _ApprovalFailure(
             "STORE_UNAVAILABLE",
-            f"The research store failed while publishing ({failure.__cause__.__class__.__name__}), so whether the "
+            f"The research store failed while publishing ({type(failure.__cause__).__name__}), so whether the "
             "version was published is not known. Retry the approval: a retry answers with the version if it was "
             "published, and publishes it once if it was not.",
         ) from unreadable
