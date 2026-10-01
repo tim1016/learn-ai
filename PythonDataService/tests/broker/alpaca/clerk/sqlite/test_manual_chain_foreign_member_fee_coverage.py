@@ -8,15 +8,22 @@ execution. Before #2787 the row kept C an outside order to every money read:
 C's account activity was skipped as the Clerk's own, so fee coverage never
 saw the outside order witnessed and stayed incomplete for ever, and a
 budgeted account refused every bot entry. This pins that C counts once, as
-the manual leg's, wherever money is counted, and that a bot ENTER filled
-where only REST saw it is never stuck the same way.
+the manual leg's, wherever money is counted.
+
+A bot order's fill frame the stream never delivered was stuck the same way:
+the sweep's REST answer credits its shares as a cumulative that names no
+execution, and nothing ever replaced it. Its executions are now recorded
+from the account activity the fee evidence retains.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
+
+import pytest
 
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
@@ -26,14 +33,17 @@ from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.contract.models import BrokerOrderLeg
-from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _accept_day_pnl_enter, _broker_order_fixture
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXECUTION_COVERAGE_CONFLICT_REASON_CODE
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _broker_order_fixture
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _deploy, _gate, _new_budget_repo
 from tests.broker.alpaca.clerk.sqlite.test_manual_order_filled_over_rest import (
     _EXEC_1,
+    _EXEC_2,
     _EXEC_C,
     _ActivityFeed,
     _AlpacaAccount,
+    _coverage_conflict_episodes,
     _credited,
     _fill_frame,
     _filled,
@@ -120,32 +130,119 @@ async def test_a_bot_entry_is_admitted_once_a_chain_member_first_seen_as_foreign
         repo.close()
 
 
-async def test_a_bot_entry_filled_only_over_rest_is_fee_complete_once_its_exact_execution_lands(
-    day_pnl_repo: ClerkSqliteRepository,
-) -> None:
-    """The bot-ENTER twin #2787 asked about does not stay incomplete.
+# ── A bot order whose fill frame the stream never delivered ─────────────────
 
-    A bot order is never an outside order: its broker id is its own ``orders``
-    row's. While only the sweep's REST cumulative stands, the account's fill
-    coverage is honestly incomplete for that cumulative, whether or not the
-    order's FILL activity was read. Once the stream's exact execution lands
-    under the id the activity embeds, the activity is witnessed as the bot's
-    own and coverage is complete.
-    """
-    repo = day_pnl_repo
-    accepted = _accept_day_pnl_enter(repo, decision_id="filled-over-rest")
+
+def _bot_entry_filled_over_rest(
+    repo: ClerkSqliteRepository, *, decision_id: str, quantity: float = 5
+) -> tuple[str, BrokerOrder]:
+    """The deployed bot's market buy, filled where only the sweep's REST answer saw it: a cumulative."""
+    accepted = accept_enter(
+        repo, account_id=repo.account_id, strategy_instance_id="a", decision_id=decision_id,
+        lifecycle_run_id="run-a", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=quantity),
+        reference_price=100, envelope=_reading_after_every_execution(repo),
+    )
     assert accepted.order_ref is not None and accepted.effect_operation_id is not None
     filled = _broker_order_fixture(
-        accepted.order_ref, status="filled", quantity=10, filled_quantity=10, filled_avg_price=100,
+        accepted.order_ref, status="filled", quantity=quantity, filled_quantity=quantity, filled_avg_price=100,
     ).model_copy(update={"updated_at_ms": NOON, "observed_at_ms": NOON, "filled_at_ms": NOON})
     fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=filled)
-    feed = _ActivityFeed()
-    feed.fill(execution_id=_EXEC_1, order_id=filled.order_id, quantity=10, price=100, at_ms=NOON)
-    assert await FeeEvidenceSync(repo=repo, read=_AlpacaAccount(feed=feed, spy_held=10.0)).tick()
-    assert not repo.fee_attribution(now_ms=repo.clock()).known
+    assert _credited(repo, accepted.order_ref) == [(None, "cumulative_recovery", quantity, 100.0)]
+    return accepted.order_ref, filled
 
-    assert await _fill_frame(repo, filled, execution_id=_EXEC_1, quantity=10, price=100) == "order_event"
 
-    fees = repo.fee_attribution(now_ms=repo.clock())
-    assert fees.known, fees.unresolved
-    assert fees.external_fills == ()
+async def _read_account_activity(repo: ClerkSqliteRepository, feed: _ActivityFeed) -> None:
+    """One tick of the Clerk's fee-evidence producer against Alpaca's account activity."""
+    await FeeEvidenceSync(repo=repo, read=_AlpacaAccount(feed=feed, spy_held=5.0)).tick()
+
+
+async def test_a_bot_entry_whose_fill_frame_never_arrives_is_credited_from_account_activity(
+    tmp_path: Path,
+) -> None:
+    """The stream never delivers the bot's fill; the sweep's REST answer credits its 5 shares as a cumulative.
+
+    A read before Alpaca posts the execution changes nothing. The read that
+    retains it records the execution as the bot's exact slice, which replaces
+    the cumulative -- the same 5 shares, never 10 -- so fee coverage and the
+    account's P&L coverage are complete and the other bot's entry is admitted.
+    """
+    repo = _new_budget_repo(tmp_path)
+    try:
+        _deploy(repo, "a", 60_000)
+        _deploy(repo, "b", 30_000)
+        order_ref, filled = _bot_entry_filled_over_rest(repo, decision_id="filled-over-rest")
+        feed = _ActivityFeed()
+        await _read_account_activity(repo, feed)
+        assert _credited(repo, order_ref) == [(None, "cumulative_recovery", 5.0, 100.0)]
+        assert not repo.fee_attribution(now_ms=repo.clock()).known
+
+        feed.fill(execution_id=_EXEC_1, order_id=filled.order_id, quantity=5, price=100, at_ms=NOON)
+        await _read_account_activity(repo, feed)
+
+        assert _credited(repo, order_ref) == [(_EXEC_1, "activity_recovery", 5.0, 100.0)]
+        assert repo.attributed_positions_by_symbol() == pytest.approx({"SPY": 5.0}, abs=1e-9, rel=0)
+        fees = repo.fee_attribution(now_ms=repo.clock())
+        assert fees.known, fees.unresolved
+        assert _account_execution_coverage(repo) == "complete"
+        entry = accept_enter(
+            repo, account_id=repo.account_id, strategy_instance_id="b", decision_id="after-recovery",
+            lifecycle_run_id="run-b", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+            reference_price=100, envelope=_reading_after_every_execution(repo),
+        )
+        assert entry.created
+    finally:
+        repo.close()
+
+
+async def test_executions_past_a_bot_orders_quantity_record_nothing_and_raise_one_coverage_conflict(
+    tmp_path: Path,
+) -> None:
+    """Alpaca's fill history names 8 shares of executions for the bot's 5-share order.
+
+    No order executes more than it asked for, so the activity-to-execution
+    bridge is wrong and could credit an execution twice: nothing is recorded,
+    the cumulative stands, and one coverage conflict names every activity,
+    however many reads follow.
+    """
+    repo = _new_budget_repo(tmp_path)
+    try:
+        _deploy(repo)
+        order_ref, filled = _bot_entry_filled_over_rest(repo, decision_id="over-quantity")
+        feed = _ActivityFeed()
+        feed.fill(execution_id=_EXEC_1, order_id=filled.order_id, quantity=5, price=100, at_ms=NOON)
+        feed.fill(execution_id=_EXEC_2, order_id=filled.order_id, quantity=3, price=100, at_ms=NOON + 1)
+
+        for _ in range(2):
+            await _read_account_activity(repo, feed)
+
+        assert _credited(repo, order_ref) == [(None, "cumulative_recovery", 5.0, 100.0)]
+        assert _coverage_conflict_episodes(repo) == ["active"]
+        named = repo._conn.execute(
+            "SELECT evidence_refs_json FROM uncertainties WHERE reason_code = ? AND resolved_at_ms IS NULL",
+            (EXECUTION_COVERAGE_CONFLICT_REASON_CODE,),
+        ).fetchone()["evidence_refs_json"]
+        assert {row["id"] for _at_ms, row in feed.rows} <= set(json.loads(named))
+    finally:
+        repo.close()
+
+
+async def test_a_late_stream_redelivery_of_a_recovered_bot_execution_is_never_credited_twice(
+    tmp_path: Path,
+) -> None:
+    """The bot's execution was recorded from account activity; the stream then delivers its frame after all."""
+    repo = _new_budget_repo(tmp_path)
+    try:
+        _deploy(repo)
+        order_ref, filled = _bot_entry_filled_over_rest(repo, decision_id="late-frame")
+        feed = _ActivityFeed()
+        feed.fill(execution_id=_EXEC_1, order_id=filled.order_id, quantity=5, price=100, at_ms=NOON)
+        await _read_account_activity(repo, feed)
+        assert _credited(repo, order_ref) == [(_EXEC_1, "activity_recovery", 5.0, 100.0)]
+
+        assert await _fill_frame(repo, filled, execution_id=_EXEC_1, quantity=5, price=100) == "order_event"
+
+        assert _credited(repo, order_ref) == [(_EXEC_1, "activity_recovery", 5.0, 100.0)]
+        assert repo.attributed_positions_by_symbol() == pytest.approx({"SPY": 5.0}, abs=1e-9, rel=0)
+        assert _coverage_conflict_episodes(repo) == []
+    finally:
+        repo.close()

@@ -34,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 )
 from app.broker.contract.models import BrokerActivity, OrderSide
 from app.services.alpaca_fee_attribution import (
+    CollapsedDeliveries,
     FeeAttribution,
     FeeCharge,
     FeeFill,
@@ -307,6 +308,13 @@ def _recorded_evidence(conn: sqlite3.Connection) -> list[FeeEvidenceFacts]:
             (FEE_EVIDENCE_KIND,),
         )
     ]
+
+
+def retained_activities(conn: sqlite3.Connection) -> CollapsedDeliveries[BrokerActivity]:
+    """Every activity row the recorded evidence retained, each identity once, with any disagreeing copies."""
+    return collapse_activity_deliveries(
+        activity for snapshot in _recorded_evidence(conn) for activity in snapshot.activities
+    )
 
 
 def fold_fee_evidence(_conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
