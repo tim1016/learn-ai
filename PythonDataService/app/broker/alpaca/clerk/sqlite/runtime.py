@@ -314,10 +314,6 @@ class StartupBrokerTruthUnavailable(RuntimeError):
         )
 
 
-class MissingEntryCustodyError(RuntimeError):
-    """An EXIT decision has no SQLite-owned entry identity to target."""
-
-
 @dataclass(frozen=True)
 class _PublishedReconciliation:
     """A reconciliation verdict bound to the instant it was observed.
@@ -390,7 +386,7 @@ class SqliteAlpacaClerkFacade:
         # refuses one on an account not switched to budgets (#2553) and bounds
         # the rest by their deployment's budget. Every account authority
         # composes one; ``None`` only on a store no authority composed
-        # (qualification rehearsals). Composed by the authority selector,
+        # (test fixtures). Composed by the authority selector,
         # never built here.
         self._live_envelope = live_envelope
         # #2623: how an ENTER refused only because executions postdate the
@@ -2134,7 +2130,6 @@ __all__ = [
     "EntryReading",
     "IntakeFencePoisonedError",
     "IntakeFenceYieldError",
-    "MissingEntryCustodyError",
     "ReentrantAsyncLock",
     "SqliteAlpacaClerkFacade",
     "StartupBrokerTruthUnavailable",

@@ -171,26 +171,6 @@ class _TestDecisionReceiptRepository:
         self._rows[(strategy_instance_id, bar_ref)] = row
         return row
 
-    def update_decision_receipt_for_bar(
-        self,
-        *,
-        strategy_instance_id: str,
-        bar_ref: str,
-        outcome: str,
-        order_ref: str | None,
-        facts_json: str,
-    ) -> DecisionReceiptResource:
-        key = (strategy_instance_id, bar_ref)
-        updated = self._rows[key].model_copy(
-            update={
-                "outcome": outcome,
-                "order_ref": order_ref,
-                "facts_json": facts_json,
-            }
-        )
-        self._rows[key] = updated
-        return updated
-
     def decision_receipt_tail(
         self,
         *,
@@ -200,9 +180,8 @@ class _TestDecisionReceiptRepository:
         """FR-016: warmup replay reads this to reapply known dispositions.
 
         Dict insertion order matches ascending ``seq`` order here (``seq``
-        is assigned once at append; ``update_decision_receipt_for_bar``
-        replaces a row in place without reordering it), mirroring the real
-        repository's "bounded newest suffix in ascending sequence order".
+        is assigned once at append), mirroring the real repository's
+        "bounded newest suffix in ascending sequence order".
         """
         matching = [
             row for (sid, _bar_ref), row in self._rows.items() if sid == strategy_instance_id

@@ -29,7 +29,6 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.external_orders import observe_external_order
 from app.broker.alpaca.clerk.sqlite.facts import (
-    ExecutionCorrectedFacts,
     ExecutionSliceFilledFacts,
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -47,13 +46,11 @@ _FIXTURE_FAMILIES = (
     "googl_round_trip",
     "external_order",
     "partial_fill_sequence",
-    "downward_correction",
     "null_vs_verified_zero",
 )
 _S2_FAMILIES = (
     "googl_round_trip",
     "partial_fill_sequence",
-    "downward_correction",
     "null_vs_verified_zero",
 )
 
@@ -99,10 +96,6 @@ def _assert_execution_frames_are_slice_evidence(fixture_input: Mapping[str, Any]
             assert float(payload["qty"]) <= float(payload["order"]["filled_qty"])
     if fixture_input.get("trade_updates"):
         assert execution_frames > 0
-    for correction in fixture_input.get("authority_corrections", []):
-        source_event_at_ms = correction.get("source_event_at_ms")
-        assert isinstance(source_event_at_ms, int) and not isinstance(source_event_at_ms, bool)
-        assert source_event_at_ms >= 0
 
 
 def _assert_external_order_is_not_bot_owned(fixture_input: Mapping[str, Any]) -> None:
@@ -173,30 +166,6 @@ def _slice_transition(
     )
 
 
-def _correction_transition(
-    repo: ClerkSqliteRepository,
-    accepted: EnterSubmission,
-    facts: ExecutionCorrectedFacts,
-    *,
-    source_event_at_ms: int,
-) -> TransitionInput:
-    return TransitionInput(
-        strategy_instance_id=accepted.command.strategy_instance_id,
-        run_id=accepted.command.run_id,
-        command_id=accepted.command.command_id,
-        effect_operation_id=accepted.effect_operation_id,
-        order_ref=accepted.order_ref,
-        transition_kind="EXECUTION_CORRECTED",
-        custody_owner="ACCOUNT_CLERK",
-        execution_authority="ACCOUNT_CLERK",
-        operation_state="in_progress",
-        source_event_at_ms=source_event_at_ms,
-        clerk_observed_at_ms=repo.clock(),
-        summary_code="EXECUTION_CORRECTED",
-        facts_json=facts.to_facts_json(),
-    )
-
-
 def _project_fixture(
     fixture_input: Mapping[str, Any],
     *,
@@ -234,7 +203,6 @@ def _project_fixture(
 
         frames = list(fixture_input.get("trade_updates", []))
         accepted_by_client_order_id: dict[str, EnterSubmission] = {}
-        accepted_by_execution_id: dict[str, EnterSubmission] = {}
         execution_order: dict[str, int] = {}
         if frames:
             fixture_strategy_instance_id = str(fixture_input["strategy_instance"]["strategy_instance_id"])
@@ -297,32 +265,7 @@ def _project_fixture(
                     ),
                 )
                 assert outcome == "appended"
-                accepted_by_execution_id[facts.execution_id] = accepted
                 execution_order[facts.execution_id] = len(execution_order)
-
-        for correction_data in fixture_input.get("authority_corrections", []):
-            target_execution_id = str(correction_data["superseded_execution_ref"])
-            accepted = accepted_by_execution_id[target_execution_id]
-            facts = ExecutionCorrectedFacts(
-                execution_id=str(correction_data["execution_id"]),
-                superseded_execution_ref=target_execution_id,
-                symbol=str(correction_data["symbol"]),
-                side=str(correction_data["side"]),
-                corrected_qty=float(correction_data["corrected_qty"]),
-                corrected_price=float(correction_data["corrected_price"]),
-                why=str(correction_data["why"]),
-            )
-            outcome = repo.append_execution_correction_or_raise(
-                correction=_correction_transition(
-                    repo,
-                    accepted,
-                    facts,
-                    source_event_at_ms=int(correction_data["source_event_at_ms"]),
-                ),
-                build_uncertainty=lambda reason: (_ for _ in ()).throw(AssertionError(reason)),
-            )
-            assert outcome == "appended"
-            execution_order[facts.execution_id] = len(execution_order)
 
         marks = {
             str(symbol): MarketMark(

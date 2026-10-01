@@ -39,10 +39,7 @@ from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.external_orders import (
     UNIDENTIFIED_BROKER_ORDER_ID,
-    InvalidExternalOrderCursor,
-    SqliteExternalOrderReader,
     acknowledge_external_order,
-    observe_external_order,
 )
 from app.broker.alpaca.clerk.sqlite.facts import ExitReducingOrderCreatedFacts
 from app.broker.alpaca.clerk.sqlite.folds import (
@@ -50,7 +47,6 @@ from app.broker.alpaca.clerk.sqlite.folds import (
     position_quantity_is_nonzero,
 )
 from app.broker.alpaca.clerk.sqlite.manual_orders import submit_manual_order
-from app.broker.alpaca.clerk.sqlite.models import CommittedTransition, TransitionInput
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
@@ -69,7 +65,6 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXIT_STUCK_REASON_CODE,
-    STREAM_HEALTH_HOLD_REASON_CODE,
     ExitNotFlatCause,
     ExitStuckCause,
 )
@@ -862,60 +857,6 @@ async def test_acknowledging_external_order_resolves_only_its_hold_and_keeps_aud
     ) == 1
 
 
-async def test_external_order_reader_paginates_durable_observations_with_account_scoped_cursor(
-    repo: ClerkSqliteRepository,
-) -> None:
-    first = _broker_order("alpaca-console:first", order_id="external-1")
-    second = _broker_order("alpaca-console:second", order_id="external-2")
-    await reconcile_account(repo, read=_FakeRead(orders=[first, second]), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
-    reader = SqliteExternalOrderReader.from_repository(repo)
-    try:
-        first_page = reader.external_orders(page_size=1)
-        second_page = reader.external_orders(cursor=first_page.next_cursor, page_size=1)
-
-        assert [order.external_order_id for order in first_page.orders] == ["external-2"]
-        assert first_page.orders[0].observation_sequence >= 1
-        assert first_page.orders[0].acknowledgement_sequence is None
-        assert first_page.orders[0].observation_recorded_at_ms is not None
-        assert first_page.orders[0].acknowledgement_recorded_at_ms is None
-        assert first_page.next_cursor is not None
-        assert [order.external_order_id for order in second_page.orders] == ["external-1"]
-        assert second_page.next_cursor is None
-    finally:
-        reader.close()
-
-
-async def test_external_order_cursor_survives_a_later_broker_snapshot_update(
-    repo: ClerkSqliteRepository,
-) -> None:
-    """The cursor follows immutable first-observation custody, not mutable poll time."""
-    first = _broker_order("alpaca-console:first", order_id="external-1")
-    second = _broker_order("alpaca-console:second", order_id="external-2")
-    await reconcile_account(repo, read=_FakeRead(orders=[first, second]), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
-    reader = SqliteExternalOrderReader.from_repository(repo)
-    try:
-        first_page = reader.external_orders(page_size=1)
-        assert [order.external_order_id for order in first_page.orders] == ["external-2"]
-        assert first_page.next_cursor is not None
-
-        observe_external_order(
-            repo,
-            order=second.model_copy(
-                update={"filled_avg_price": 101.25, "observed_at_ms": second.observed_at_ms + 1}
-            ),
-        )
-
-        second_page = reader.external_orders(cursor=first_page.next_cursor, page_size=1)
-        refreshed = repo.external_order("external-2")
-        assert [order.external_order_id for order in second_page.orders] == ["external-1"]
-        assert refreshed is not None
-        assert refreshed.order_type == "market"
-        assert refreshed.limit_price is None
-        assert refreshed.filled_avg_price == 101.25
-    finally:
-        reader.close()
-
-
 async def test_reconciliation_does_not_append_duplicate_external_fact_for_a_new_poll_time(
     repo: ClerkSqliteRepository,
 ) -> None:
@@ -931,32 +872,6 @@ async def test_reconciliation_does_not_append_duplicate_external_fact_for_a_new_
     )
 
     assert len(repo.custody_transitions()) == before
-
-
-async def test_external_order_reader_filters_review_state_without_cross_filter_cursor_reuse(
-    repo: ClerkSqliteRepository,
-) -> None:
-    first = _broker_order("alpaca-console:first", order_id="external-1")
-    second = _broker_order("alpaca-console:second", order_id="external-2")
-    third = _broker_order("alpaca-console:third", order_id="external-3")
-    await reconcile_account(repo, read=_FakeRead(orders=[first, second, third]), trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY)
-    acknowledge_external_order(repo, external_order_id="external-1", operator="operator-1")
-    reader = SqliteExternalOrderReader.from_repository(repo)
-    try:
-        review_required = reader.external_orders(lifecycle_state="review_required", page_size=1)
-        reviewed = reader.external_orders(lifecycle_state="reviewed", page_size=10)
-
-        assert [order.external_order_id for order in review_required.orders] == ["external-3"]
-        assert review_required.next_cursor is not None
-        assert [order.external_order_id for order in reviewed.orders] == ["external-1"]
-        with pytest.raises(InvalidExternalOrderCursor, match="filter scope"):
-            reader.external_orders(
-                cursor=review_required.next_cursor,
-                lifecycle_state="reviewed",
-                page_size=1,
-            )
-    finally:
-        reader.close()
 
 
 async def test_acknowledgement_does_not_reactivate_stale_external_observations(
@@ -1396,88 +1311,6 @@ async def test_clean_reconciliation_resolves_position_drift_uncertainty(
         )
         is None
     )
-
-
-def test_raise_uncertainty_if_none_active_serializes_two_concurrent_callers(
-    repo: ClerkSqliteRepository,
-) -> None:
-    """``raise_uncertainty_if_none_active``'s check-then-append must be one
-    continuous critical section, not two separately-lockable steps — else
-    two genuinely concurrent callers (an automatic sweep pass and an
-    operator's "Reconcile now" landing at the same instant) could both
-    observe "no active hold" before either appends one.
-
-    Forcing that exact interleaving via a barrier *inside* the critical
-    section (the technique test_enter.py's same-owner-race test uses) isn't
-    possible here: a true mutex makes the interleaving structurally
-    unreachable, so a barrier planted inside it would simply deadlock
-    (thread B can never reach the barrier while genuinely excluded by the
-    lock). Proving mutual exclusion instead: pause thread A *after* its
-    append (still inside the lock, since ``append_transition`` hasn't
-    returned to ``raise_uncertainty_if_none_active`` yet) and confirm thread B —
-    attempting the identical call concurrently — is genuinely blocked
-    (hasn't returned) for as long as thread A holds the lock, then only
-    proceeds once released, at which point it must see A's hold and no-op.
-    """
-    thread_a_appended = threading.Event()
-    release_thread_a = threading.Event()
-    original_append_transition = ClerkSqliteRepository.append_transition
-
-    def paused_append_transition(
-        self: ClerkSqliteRepository, transition: TransitionInput
-    ) -> CommittedTransition:
-        result = original_append_transition(self, transition)
-        thread_a_appended.set()
-        release_thread_a.wait(timeout=5)
-        return result
-
-    def build_transition() -> TransitionInput:
-        return _hold_transition(reason_code=STREAM_HEALTH_HOLD_REASON_CODE)
-
-    result_a: list[bool] = []
-    result_b: list[bool] = []
-
-    def worker_a() -> None:
-        result_a.append(
-            repo.raise_uncertainty_if_none_active(
-                scope="ACCOUNT_CLERK",
-                reason_code=STREAM_HEALTH_HOLD_REASON_CODE,
-                strategy_instance_id=None,
-                build_transition=build_transition,
-            )
-        )
-
-    def worker_b() -> None:
-        result_b.append(
-            repo.raise_uncertainty_if_none_active(
-                scope="ACCOUNT_CLERK",
-                reason_code=STREAM_HEALTH_HOLD_REASON_CODE,
-                strategy_instance_id=None,
-                build_transition=build_transition,
-            )
-        )
-
-    ClerkSqliteRepository.append_transition = paused_append_transition  # type: ignore[method-assign]
-    try:
-        thread_a = threading.Thread(target=worker_a)
-        thread_a.start()
-        assert thread_a_appended.wait(timeout=2)  # A appended; still holding the lock, paused
-
-        thread_b = threading.Thread(target=worker_b)
-        thread_b.start()
-        thread_b.join(timeout=0.2)
-        assert thread_b.is_alive()  # B is genuinely blocked on the lock, not racing ahead
-
-        release_thread_a.set()
-        thread_a.join(timeout=2)
-        thread_b.join(timeout=2)
-    finally:
-        ClerkSqliteRepository.append_transition = original_append_transition  # type: ignore[method-assign]
-
-    assert result_a == [True]
-    assert result_b == [False]
-    raised = [t for t in repo.custody_transitions() if t["transition_kind"] == "ACCOUNT_HOLD_RAISED"]
-    assert len(raised) == 1
 
 
 async def test_reconcile_account_reports_stale_and_fails_closed_on_broker_read_failure(

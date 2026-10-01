@@ -118,10 +118,9 @@ def _decision_for_transaction(
 ) -> DecisionReceipt | None:
     """The bot's own most recent decision causally linked to ``transaction_ref``.
 
-    Mirrors the exact-key join
-    ``decision_receipts_by_transaction`` performs in storage
-    (``intent_id = ? OR order_ref = ?``) over the bounded in-memory window —
-    never the nearest-time or most-recent decision (PRD Sec 19).
+    An exact-key match (``intent_id`` or ``order_ref``) over the bounded
+    in-memory window — never the nearest-time or most-recent decision
+    (PRD Sec 19).
     """
     matches = [
         decision

@@ -78,7 +78,6 @@ def test_main_selects_one_authority_and_has_no_additive_sqlite_writer() -> None:
     assert "set_active_clerk_runtime(alpaca_clerk_runtime)" not in source
     assert "evidence_sink=alpaca_clerk_runtime.evidence_sink" in source
     assert "alpaca_clerk_runtime.sweep" in source
-    assert "get_or_open_repository" not in source
     assert "sqlite_alpaca_sweep" not in source
     assert "SqliteReconciliationSweep" not in source
 
@@ -200,23 +199,6 @@ def test_alpaca_models_and_reads_have_no_legacy_custody_fallback() -> None:
     assert 'Literal["alpaca"]' in transaction_router
     assert "Activated SQLite Clerk transaction history is unavailable" in transaction_router
     assert "Activated SQLite Clerk transaction detail is unavailable" in transaction_router
-
-
-def test_migration_gate_requires_an_explicit_nonempty_inventory() -> None:
-    gate = (
-        APPLICATION_ROOT
-        / "broker/alpaca/clerk/sqlite/activation_inventory.py"
-    ).read_text(encoding="utf-8")
-    cli = (
-        REPOSITORY_ROOT
-        / "PythonDataService/scripts/qualify_alpaca_activation_inventory.py"
-    ).read_text(encoding="utf-8")
-
-    assert "at least one in-use account" in gate
-    assert "store.resolve(" in gate
-    assert "verify_database(" in gate
-    assert "--inventory" in cli
-    assert "--output" in cli
 
 
 def test_every_reconciliation_sweep_publishes_its_verdict() -> None:

@@ -6,8 +6,8 @@ name: learn-ai-fleet
 x-fleet-agent: &fleet-agent
   build:
     context: ./PythonDataService
-    # Always-on: never the `qualification` stage, which the Dockerfile ends on
-    # (#2576). One image tag, one stage.
+    # Always-on: name the stage, so a stage added after `runtime` never ships
+    # into it (#2576). One image tag, one stage.
     target: runtime
   image: ${FLEET_IMAGE:-learn-ai-fleet-agent:local}
   profiles: ["fleet"]

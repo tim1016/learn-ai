@@ -80,8 +80,6 @@ def _op(
 
 
 _CONFIGURATION = OperationReadiness.CONFIGURATION_ACCESS
-_EXECUTE = OperationReadiness.EXECUTION
-_READ = OperationIdempotency.READ
 _DURABLE = OperationIdempotency.DURABLE_KEY
 _ONE_SHOT = OperationIdempotency.ONE_SHOT
 #: A mutation that only stops a bot or reduces exposure, so a draining lane

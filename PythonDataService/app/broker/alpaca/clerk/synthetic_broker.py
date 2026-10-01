@@ -76,8 +76,6 @@ SYNTHETIC_CAPABILITIES = BrokerCapabilities(
     max_concurrent_streams=0,
     rest_rate_limit_per_min=0,
 )
-# The sim world's historical name for the shared binding error.
-SyntheticBarBindingError = SynthesizedBarBindingError
 
 
 class SimulatedPriceUnavailableError(RuntimeError):
@@ -539,7 +537,6 @@ __all__ = [
     "SYNTHETIC_BROKER_ID",
     "SYNTHETIC_CAPABILITIES",
     "SimulatedPriceUnavailableError",
-    "SyntheticBarBindingError",
     "SyntheticBroker",
     "filter_synthesized_orders",
     "shape_immediate_order",

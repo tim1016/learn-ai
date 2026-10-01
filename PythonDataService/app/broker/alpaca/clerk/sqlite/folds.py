@@ -16,7 +16,7 @@ rather than growing an if/elif chain here or in the repository.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import Any
 
 from app.broker.alpaca.clerk.sqlite import reads
@@ -44,7 +44,6 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     AttributedResidueDischargedFacts,
     CommandRejectedFacts,
     EnterAcceptedFacts,
-    ExecutionCorrectedFacts,
     ExecutionCoverageQuarantinedFacts,
     ExecutionCoverageResolvedFacts,
     ExecutionSliceFilledFacts,
@@ -58,7 +57,6 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     RunStartedFacts,
     RunStoppedFacts,
     StrategyInstanceRetiredFacts,
-    validate_execution_corrected_facts,
     validate_execution_coverage_quarantined_facts,
     validate_execution_coverage_resolved_facts,
     validate_execution_slice_facts,
@@ -119,27 +117,6 @@ class FoldRegistry:
     def registered_kinds(self) -> frozenset[str]:
         """Expose the closed transition vocabulary for projection-copy checks."""
         return frozenset(self._folds)
-
-    def replacing(self, overrides: Mapping[str, FoldFn]) -> FoldRegistry:
-        """A copy of this registry that folds some kinds a different way.
-
-        The offline v8-to-v9 ceremony rebuilds a *historical* v9 database, so
-        it needs the folds that were current at v9, not the ones current now.
-        Deriving that registry from this one keeps the two in step by
-        construction: a kind added later is replayed by the ceremony without a
-        second list needing an edit, and only the handful of kinds whose
-        projection shape actually changed are named here.
-
-        Every overridden kind must already be registered — an override for an
-        unknown kind is a typo or a rename that would otherwise silently do
-        nothing.
-        """
-        unknown = sorted(set(overrides) - set(self._folds))
-        if unknown:
-            raise ValueError(f"cannot replace unregistered transition_kind(s): {unknown}")
-        derived = FoldRegistry()
-        derived._folds = {**self._folds, **overrides}
-        return derived
 
     def apply(self, conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
         """Look up and run the fold for ``payload['transition_kind']``.
@@ -1237,92 +1214,6 @@ def _complete_filled_manual_order_if_exact_coverage_complete(
     _fold_manual_order_filled(conn, completion_payload)
 
 
-def _fold_execution_corrected(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    """Replace one effective execution while retaining its audit history.
-
-    Formula: attributed_qty' = attributed_qty + sign(side) *
-      (corrected_qty - superseded_qty).
-    Reference: docs/prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md
-      § Task S1.2 (execution-slice facts + folds).
-    Canonical implementation: this file.
-    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
-      test_folds_execution.py::test_execution_correction_replaces_effective_quantity.
-    """
-    facts = ExecutionCorrectedFacts.from_facts_json(payload["facts_json"])
-    validate_execution_corrected_facts(facts)
-
-    already_recorded = conn.execute("SELECT 1 FROM fills WHERE execution_id = ?", (facts.execution_id,)).fetchone()
-    if already_recorded is not None:
-        return
-    owner = conn.execute(
-        "SELECT subject_id, strategy_instance_id FROM effect_operations WHERE effect_operation_id = ?",
-        (payload["effect_operation_id"],),
-    ).fetchone()
-    if owner is None:
-        raise ValueError("correction requires its durable owning effect")
-    superseded = conn.execute(
-        "SELECT f.fill_id, f.order_ref, f.qty, f.price, f.side, f.evidence_source, f.fee, "
-        "f.fee_fidelity, e.subject_id, e.strategy_instance_id, "
-        "COALESCE(s.symbol, json_extract(manual_acceptance.facts_json, '$.leg.symbol')) AS symbol "
-        "FROM fills f JOIN orders o ON o.order_ref = f.order_ref "
-        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        "LEFT JOIN strategy_instances s ON s.strategy_instance_id = e.strategy_instance_id "
-        "LEFT JOIN custody_transitions manual_acceptance ON manual_acceptance.sequence = ("
-        "SELECT MIN(acceptance.sequence) FROM custody_transitions acceptance "
-        "WHERE acceptance.order_ref = o.order_ref "
-        "AND acceptance.effect_operation_id = e.effect_operation_id "
-        "AND acceptance.transition_kind = 'MANUAL_ORDER_ACCEPTED') "
-        "WHERE f.execution_id = ? "
-        "AND NOT EXISTS (SELECT 1 FROM fills successor "
-        "WHERE successor.superseded_execution_ref = f.execution_id)",
-        (facts.superseded_execution_ref,),
-    ).fetchone()
-    if superseded is None:
-        raise ValueError(f"correction target {facts.superseded_execution_ref!r} is missing or no longer effective")
-    if superseded["order_ref"] != payload["order_ref"]:
-        raise ValueError("correction target belongs to a different order")
-    if superseded["subject_id"] != owner["subject_id"]:
-        raise ValueError("correction target belongs to a different custody subject")
-    if superseded["strategy_instance_id"] != owner["strategy_instance_id"]:
-        raise ValueError("correction target belongs to a different strategy instance")
-    if not isinstance(superseded["symbol"], str) or not superseded["symbol"]:
-        raise ValueError("correction target is missing owned symbol evidence")
-    if superseded["symbol"].upper() != facts.symbol.upper():
-        raise ValueError("correction symbol does not match the superseded execution")
-    if superseded["side"] != facts.side:
-        raise ValueError("correction side does not match the superseded execution")
-
-    conn.execute(
-        "INSERT INTO fills (fill_id, order_ref, qty, price, side, is_correction, execution_id, "
-        "evidence_source, event_kind, superseded_execution_ref, fee, fee_fidelity, "
-        "source_event_at_ms, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
-        "VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'correction', ?, ?, ?, ?, ?, ?, ?)",
-        (
-            facts.execution_id,
-            payload["order_ref"],
-            facts.corrected_qty,
-            facts.corrected_price,
-            facts.side,
-            facts.execution_id,
-            superseded["evidence_source"],
-            facts.superseded_execution_ref,
-            superseded["fee"],
-            superseded["fee_fidelity"],
-            payload["source_event_at_ms"],
-            payload["clerk_observed_at_ms"],
-            payload["recorded_at_ms"],
-            _this_transition_sequence(conn),
-        ),
-    )
-    _apply_attributed_position_delta(
-        conn,
-        payload=payload,
-        symbol=facts.symbol,
-        side=facts.side,
-        quantity=facts.corrected_qty - superseded["qty"],
-    )
-
-
 def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Namespace-attributed exposure fold: ``positions`` sums only this
     order's owned fills, keyed by ``strategy_instance_id`` — never derived by
@@ -1334,7 +1225,7 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
     Reference: docs/references/clerk-invariants.md §2.
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
-      test_folds_execution.py::test_cumulative_recovery_fill_is_explicitly_tagged.
+      test_folds_execution.py::test_one_exact_auto_supersedes_many_cumulative_recovery_rows.
 
     The evidence carries Alpaca's REST-reported *cumulative*
     ``filled_quantity``/``filled_avg_price`` for the order, not a
@@ -1368,10 +1259,9 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
     reverses exposure.
 
     This recovery fold never fabricates a correction identity: it writes only
-    a newly observed positive cumulative delta. Broker corrections instead
-    use ``EXECUTION_CORRECTED``, which names the superseded execution slice.
-    Effective totals exclude those superseded rows, allowing a later recovery
-    snapshot to contribute only its genuinely unrecorded delta.
+    a newly observed positive cumulative delta. Effective totals exclude
+    superseded rows (``fills.superseded_execution_ref``), allowing a later
+    recovery snapshot to contribute only its genuinely unrecorded delta.
     """
     facts = OrderFillObservedFacts.from_facts_json(payload["facts_json"])
     order_ref = payload["order_ref"]
@@ -1523,55 +1413,6 @@ def _fold_account_hold_resolved(conn: sqlite3.Connection, payload: dict[str, Any
     )
 
 
-# ── Historical v9 account-hold folds (offline v8-to-v9 ceremony only) ────────
-# ``offline_v9_upgrade`` rebuilds a *v9* database from a v8 mirror and then
-# proves it projection-for-projection against the v8 source. A v9 file keeps a
-# hold in the ``holds`` table under the spelling the transition carried, so the
-# replay that builds it has to write what v9 wrote — the folds below are the
-# pre-v12 bodies, restored verbatim, not the v12 ones aimed at
-# ``uncertainties``. Replaying the current folds into the stage puts the
-# episode in a different table under a normalised code and fails the parity
-# proof, refusing an upgrade that is in fact sound.
-#
-# They cannot be expressed by parameterising the v12 folds: v9 stored the
-# reason code unnormalised and the evidence refs in arrival order, whereas the
-# v12 envelope normalises the code and sorts the refs. That divergence is the
-# whole point of keeping two bodies rather than one with a flag.
-def _fold_account_hold_raised_v9(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    """Open one database-unique account hold episode for a typed cause (v9)."""
-    facts = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
-    hold_id = f"hold:{_this_transition_sequence(conn)}"
-    conn.execute(
-        "INSERT INTO holds (hold_id, scope, strategy_instance_id, reason_code, state, "
-        "opened_at_ms, resolved_at_ms, evidence_refs_json) "
-        "VALUES (?, 'ACCOUNT_CLERK', NULL, ?, 'ACTIVE', ?, NULL, ?)",
-        (
-            hold_id,
-            facts.reason_code,
-            payload["recorded_at_ms"],
-            canonicalize(facts.evidence_refs),
-        ),
-    )
-
-
-def _fold_account_hold_refreshed_v9(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    facts = AccountHoldRaisedFacts.from_facts_json(payload["facts_json"])
-    conn.execute(
-        "UPDATE holds SET evidence_refs_json = ? WHERE scope = 'ACCOUNT_CLERK' "
-        "AND reason_code = ? AND state = 'ACTIVE'",
-        (canonicalize(facts.evidence_refs), facts.reason_code),
-    )
-
-
-def _fold_account_hold_resolved_v9(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    facts = AccountHoldResolvedFacts.from_facts_json(payload["facts_json"])
-    conn.execute(
-        "UPDATE holds SET state = 'RESOLVED', resolved_at_ms = ?, evidence_refs_json = ? "
-        "WHERE scope = 'ACCOUNT_CLERK' AND reason_code = ? AND state = 'ACTIVE'",
-        (payload["recorded_at_ms"], canonicalize(facts.evidence_refs), facts.reason_code),
-    )
-
-
 def _fold_fee_evidence(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     from app.broker.alpaca.clerk.sqlite.fee_evidence import fold_fee_evidence
 
@@ -1633,7 +1474,6 @@ DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCELED", _fold_manual_order_cance
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_TERMINAL", _fold_manual_order_terminal)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCEL_CONFIRMED", _fold_manual_order_cancel_confirmed)
 DEFAULT_FOLD_REGISTRY.register("MANUAL_ORDER_CANCEL_TERMINAL", _fold_manual_order_cancel_terminal)
-DEFAULT_FOLD_REGISTRY.register("EXECUTION_CORRECTED", _fold_execution_corrected)
 DEFAULT_FOLD_REGISTRY.register("ATTRIBUTED_RESIDUE_DISCHARGED", _fold_attributed_residue_discharged)
 DEFAULT_FOLD_REGISTRY.register("RECONCILIATION_ATTEMPTED", _fold_reconciliation_attempted)
 DEFAULT_FOLD_REGISTRY.register("ACCOUNT_HOLD_RAISED", _fold_account_hold_raised)
@@ -1671,14 +1511,3 @@ DEFAULT_FOLD_REGISTRY.register("ENTRY_TERMINAL_CONFIRMED", lambda _conn, _payloa
 DEFAULT_FOLD_REGISTRY.register("ORDER_SUBMIT_REQUESTED", lambda _conn, _payload: None)
 
 DEFAULT_FOLD_REGISTRY.register("EXIT_MARKET_HOLD", lambda _conn, _payload: None)
-
-# The registry the offline v8-to-v9 ceremony replays with. Identical to the
-# default except for the three kinds whose projection target moved at v12; see
-# the historical-fold block above.
-V9_FOLD_REGISTRY = DEFAULT_FOLD_REGISTRY.replacing(
-    {
-        "ACCOUNT_HOLD_RAISED": _fold_account_hold_raised_v9,
-        "ACCOUNT_HOLD_REFRESHED": _fold_account_hold_refreshed_v9,
-        "ACCOUNT_HOLD_RESOLVED": _fold_account_hold_resolved_v9,
-    }
-)

@@ -15,7 +15,6 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
     DEFAULT_RECENT_FILL_LIMIT,
     EconomicProjectionError,
     EconomicProjectionUnavailable,
-    InvalidEconomicCursor,
     MarketMark,
     SqliteEconomicProjectionReader,
     _to_execution_row,
@@ -23,7 +22,6 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
 )
 from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import (
-    ExecutionCorrectedFacts,
     ExecutionSliceFilledFacts,
     UncertaintyRaisedFacts,
 )
@@ -46,10 +44,6 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.broker.contract.models import BrokerOrderLeg
 from app.lean_sidecar.trading_calendar import SessionWindow, session_window_for_date
 from tests.broker.alpaca.clerk.sqlite.conftest import _broker_order_fixture, _clock_at
-from tests.broker.alpaca.clerk.sqlite.test_folds_execution import (
-    _correction_transition,
-    _correction_uncertainty_transition,
-)
 from tests.broker.alpaca.clerk.sqlite.test_reconcile import _FakeRead, _FakeTrade, _position
 
 _ACCOUNT_ID = "PA-S2-ECONOMICS"
@@ -144,47 +138,6 @@ def _append_slice(
         build_coverage_conflict=lambda: (_ for _ in ()).throw(
             AssertionError("exact test fixture cannot have cumulative recovery coverage")
         ),
-    )
-    assert result == "appended"
-
-
-def _append_correction(
-    repo: ClerkSqliteRepository,
-    accepted: EnterSubmission,
-    *,
-    execution_id: str,
-    superseded_execution_ref: str,
-    quantity: float,
-    price: float,
-    occurred_at_ms: int,
-) -> None:
-    facts = ExecutionCorrectedFacts(
-        execution_id=execution_id,
-        superseded_execution_ref=superseded_execution_ref,
-        symbol="GOOGL",
-        side="BUY",
-        corrected_qty=quantity,
-        corrected_price=price,
-        why="Broker correction fixture",
-    )
-    correction = TransitionInput(
-        strategy_instance_id=_SID,
-        run_id=accepted.command.run_id,
-        command_id=accepted.command.command_id,
-        effect_operation_id=accepted.effect_operation_id,
-        order_ref=accepted.order_ref,
-        transition_kind="EXECUTION_CORRECTED",
-        custody_owner="ACCOUNT_CLERK",
-        execution_authority="ACCOUNT_CLERK",
-        operation_state="in_progress",
-        source_event_at_ms=occurred_at_ms,
-        clerk_observed_at_ms=repo.clock(),
-        summary_code="EXECUTION_CORRECTED",
-        facts_json=facts.to_facts_json(),
-    )
-    result = repo.append_execution_correction_or_raise(
-        correction=correction,
-        build_uncertainty=lambda reason: (_ for _ in ()).throw(AssertionError(reason)),
     )
     assert result == "appended"
 
@@ -581,58 +534,6 @@ def test_account_pnl_attribution_includes_both_window_bounds_and_preserves_fifo_
         repo.close()
 
 
-def test_late_correction_keeps_root_execution_time_for_fifo_and_session_window(tmp_path: Path) -> None:
-    """A post-close correction must not move the earlier sell's closed-lot date."""
-    repo, accepted = _repository(tmp_path)
-    session = session_window_for_date(date(2026, 8, 10))
-    try:
-        buy_at = session.open_ms_utc + 1_000
-        sell_at = session.open_ms_utc + 2_000
-        correction_at = session.close_ms_utc + 1_000
-        _append_slice(
-            repo,
-            accepted,
-            execution_id="exec-root-buy",
-            side="BUY",
-            quantity=2.0,
-            price=100.0,
-            occurred_at_ms=buy_at,
-        )
-        _append_slice(
-            repo,
-            accepted,
-            execution_id="exec-sell",
-            side="SELL",
-            quantity=2.0,
-            price=110.0,
-            occurred_at_ms=sell_at,
-        )
-        _append_correction(
-            repo,
-            accepted,
-            execution_id="exec-root-buy-corrected",
-            superseded_execution_ref="exec-root-buy",
-            quantity=2.0,
-            price=101.0,
-            occurred_at_ms=correction_at,
-        )
-
-        snapshot = _snapshot(repo, session=session)
-        reader = SqliteEconomicProjectionReader.from_repository(repo)
-        try:
-            execution_page = reader.account_executions(state="effective")
-        finally:
-            reader.close()
-
-        assert snapshot.fills_today == 2
-        assert snapshot.realized_pnl_today == pytest.approx(18.0, abs=_ATOL, rel=_RTOL)
-        corrected = next(row for row in execution_page.executions if row.execution_id == "exec-root-buy-corrected")
-        assert corrected.filled_at_ms == buy_at
-        assert corrected.recorded_at_ms != corrected.filled_at_ms
-    finally:
-        repo.close()
-
-
 def test_open_pnl_requires_every_mark_and_carries_mark_observation_time(tmp_path: Path) -> None:
     repo, accepted = _repository(tmp_path)
     session = session_window_for_date(date(2026, 8, 10))
@@ -742,82 +643,6 @@ def test_half_day_session_excludes_execution_at_canonical_early_close(tmp_path: 
         snapshot = _snapshot(repo, session=session)
 
         assert snapshot.fills_today == 1
-    finally:
-        repo.close()
-
-
-def test_pages_are_keyset_bounded_and_account_rows_preserve_effective_state(tmp_path: Path) -> None:
-    repo, accepted = _repository(tmp_path)
-    session = session_window_for_date(date(2026, 8, 10))
-    try:
-        for sequence in range(3):
-            _append_slice(
-                repo,
-                accepted,
-                execution_id=f"exec-page-{sequence}",
-                side="BUY",
-                quantity=1.0,
-                price=100.0 + sequence,
-                occurred_at_ms=session.open_ms_utc + sequence * 1_000,
-            )
-        reader = SqliteEconomicProjectionReader.from_repository(repo)
-        try:
-            first = reader.bot_fills(_SID, limit=1)
-            assert first.next_cursor is not None
-            second = reader.bot_fills(_SID, limit=1, cursor=first.next_cursor)
-            execution_page = reader.account_executions(limit=10, origin="strategy", state="effective")
-        finally:
-            reader.close()
-
-        assert len(first.fills) == 1
-        assert len(second.fills) == 1
-        assert first.fills[0].event_key != second.fills[0].event_key
-        assert {row.state for row in execution_page.executions} == {"effective"}
-        assert {row.origin for row in execution_page.executions} == {"strategy"}
-    finally:
-        repo.close()
-
-
-def test_execution_page_cursor_is_rejected_after_effective_fill_revision(tmp_path: Path) -> None:
-    """A correction changes the leaf set, so continuing an old page would be unsafe."""
-    repo, accepted = _repository(tmp_path)
-    session = session_window_for_date(date(2026, 8, 10))
-    try:
-        _append_slice(
-            repo,
-            accepted,
-            execution_id="exec-cursor-first",
-            side="BUY",
-            quantity=1.0,
-            price=100.0,
-            occurred_at_ms=session.open_ms_utc,
-        )
-        _append_slice(
-            repo,
-            accepted,
-            execution_id="exec-cursor-second",
-            side="BUY",
-            quantity=1.0,
-            price=101.0,
-            occurred_at_ms=session.open_ms_utc + 1_000,
-        )
-        reader = SqliteEconomicProjectionReader.from_repository(repo)
-        try:
-            first = reader.bot_fills(_SID, limit=1)
-            assert first.next_cursor is not None
-            _append_correction(
-                repo,
-                accepted,
-                execution_id="exec-cursor-second-corrected",
-                superseded_execution_ref="exec-cursor-second",
-                quantity=1.0,
-                price=102.0,
-                occurred_at_ms=session.open_ms_utc + 1_000,
-            )
-            with pytest.raises(InvalidEconomicCursor, match="invalid execution page cursor"):
-                reader.bot_fills(_SID, limit=1, cursor=first.next_cursor)
-        finally:
-            reader.close()
     finally:
         repo.close()
 
@@ -1292,63 +1117,6 @@ def test_a_second_conflicting_order_widens_the_one_episode(tmp_path: Path) -> No
             == "resolved"
         )
         assert _recorded_price_conflict_episode(repo) is None
-    finally:
-        repo.close()
-
-
-@pytest.mark.asyncio
-async def test_a_correction_that_explains_the_difference_clears_the_conflict(
-    tmp_path: Path,
-) -> None:
-    """#2460: a terminal order's totals are never re-folded, so the
-    correction-explained exit runs from the reconciliation sweep's
-    re-derivation: once an identified execution correction changes the
-    recorded fills to the broker's reported average, the sweep drops the
-    order and coverage returns to complete."""
-    from app.broker.alpaca.clerk.sqlite.order_evidence import reconcile_execution_price_conflicts
-
-    repo, accepted = _repository(tmp_path)
-    try:
-        now = repo.clock()
-        _append_slice(repo, accepted, execution_id="fill-original", side="BUY",
-                      quantity=10.0, price=100.0, occurred_at_ms=now)
-        _fold_total(repo, accepted, quantity=10.0, price=100.0, updated_at_ms=now)
-        _fold_total(repo, accepted, quantity=10.0, price=90.0, updated_at_ms=now + 1)
-        assert _recorded_price_conflict_episode(repo) is not None
-        assert reconcile_execution_price_conflicts(repo) == 0  # fills still say 100
-
-        correction = ExecutionCorrectedFacts(
-            execution_id="correction-1",
-            superseded_execution_ref="fill-original",
-            symbol="GOOGL",
-            side="BUY",
-            corrected_qty=10.0,
-            corrected_price=90.0,
-            why="broker bust corrected the average to its reported total",
-        )
-        outcome = repo.append_execution_correction_or_raise(
-            correction=_correction_transition(
-                repo, accepted=accepted, facts=correction, source_event_at_ms=now + 2
-            ),
-            build_uncertainty=lambda reason: _correction_uncertainty_transition(
-                repo, reason=reason, execution_id="correction-1"
-            ),
-        )
-        assert outcome == "appended"
-
-        assert reconcile_execution_price_conflicts(repo) == 1
-        assert _recorded_price_conflict_episode(repo) is None
-        reader = SqliteEconomicProjectionReader.from_repository(repo)
-        try:
-            snapshot = reader.bot_economic_snapshot(
-                _SID,
-                session_window=None,
-                marks={"GOOGL": MarketMark(price=110.0, observed_at_ms=now + 3)},
-            )
-        finally:
-            reader.close()
-        assert snapshot is not None
-        assert snapshot.execution_coverage == "complete"
     finally:
         repo.close()
 

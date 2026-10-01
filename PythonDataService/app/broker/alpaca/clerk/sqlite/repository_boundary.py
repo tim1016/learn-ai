@@ -134,20 +134,6 @@ EXTERNAL_REPOSITORY_WRITER_CENSUS = (
         rationale="The panel recovery dispatcher passes the bot's selected facade (the account's, or a Dry Run's own sim: authority) through the same typed recovery-action boundary as HTTP.",
     ),
     ExternalRepositoryWriter(
-        path="app/services/alpaca_sqlite_synthetic_drill_support.py",
-        owner="new_repo",
-        call="register_strategy_instance",
-        classification=RepositoryWriterClassification.ATOMIC,
-        rationale="Synthetic setup registers one instance through the repository's write coordinator.",
-    ),
-    ExternalRepositoryWriter(
-        path="app/services/alpaca_sqlite_synthetic_drill_support.py",
-        owner="new_repo",
-        call="submit_start_run",
-        classification=RepositoryWriterClassification.ATOMIC,
-        rationale="Synthetic setup admits one run through commit_first_transition's atomic idempotency path.",
-    ),
-    ExternalRepositoryWriter(
         path="app/services/sqlite_clerk_transaction_projection.py",
         owner="sqlite_acknowledge_external_order",
         call="acknowledge_external_order",

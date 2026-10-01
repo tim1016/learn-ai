@@ -190,17 +190,10 @@ def test_allowance_converters_keep_defaults_legacy_knobs_only_apply_at_upgrade(m
     assert stamped.exit_spread_cap_bps == Decimal("200")
     # One concept, one value: the ticket warning and the enforcement gate
     # share the canonical numbers, so tuning one cannot drift the other.
-    from app.broker.alpaca.clerk.recovery_reduction import (
-        RECOVERY_BAND_ALLOWANCE_MULTIPLE,
-        RECOVERY_SPREAD_WARNING_BPS,
-    )
-    from app.broker.alpaca.marketable_limit import (
-        DEFAULT_EXIT_BAND_MULTIPLE,
-        DEFAULT_EXIT_SPREAD_CAP_BPS,
-    )
+    from app.broker.alpaca.clerk.recovery_reduction import RECOVERY_SPREAD_WARNING_BPS
+    from app.broker.alpaca.marketable_limit import DEFAULT_EXIT_SPREAD_CAP_BPS
 
     assert RECOVERY_SPREAD_WARNING_BPS == int(DEFAULT_EXIT_SPREAD_CAP_BPS) == 50
-    assert RECOVERY_BAND_ALLOWANCE_MULTIPLE == DEFAULT_EXIT_BAND_MULTIPLE
 
 
 def test_invalid_deploy_knob_values_degrade_loudly_to_the_declared_defaults() -> None:

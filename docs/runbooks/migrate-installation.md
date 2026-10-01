@@ -16,10 +16,9 @@ IBKR supplies live bars and Alpaca handles accounts and orders. The tool is
 
 ## What moves, and what does not
 
-The bundle is one file. It carries the five podman volumes
+The bundle is one file. It carries the four podman volumes
 (`learn-ai_pgdata`, `learn-ai_alpaca-fleet-control`,
-`learn-ai-alpaca-clerk-data`, `learn-ai-alpaca-paper-clerk-data`,
-`learn-ai-alpaca-clerk-qualification-data`), plus `data-lake-volume/`,
+`learn-ai-alpaca-clerk-data`, `learn-ai-alpaca-paper-clerk-data`), plus `data-lake-volume/`,
 `PythonDataService/artifacts/`, `PythonDataService/cache/` and
 `PythonDataService/lean-cache/`.
 

@@ -908,31 +908,6 @@ class ExecutionCoverageResolvedFacts:
 
 
 @dataclass(frozen=True)
-class ExecutionCorrectedFacts:
-    """An auditable effective replacement for one prior execution slice.
-
-    The correction's ``execution_id`` is a distinct broker identity.  The
-    superseded row remains in ``fills`` so every exposure adjustment can be
-    reconstructed from the custody transition stream.
-    """
-
-    execution_id: str
-    superseded_execution_ref: str
-    symbol: str
-    side: str
-    corrected_qty: float
-    corrected_price: float
-    why: str
-
-    def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
-
-    @classmethod
-    def from_facts_json(cls, facts_json: str) -> ExecutionCorrectedFacts:
-        return cls(**json.loads(facts_json))
-
-
-@dataclass(frozen=True)
 class CustodySubjectRegisteredFacts:
     """Versioned identity for a non-bot Clerk custody subject."""
 
@@ -1374,29 +1349,3 @@ def validate_manual_order_replaced_facts(facts: ManualOrderReplacedFacts) -> Non
         raise ValueError("manual order replacement replaced_by must be a followable broker order id")
     if facts.replaces == facts.replaced_by:
         raise ValueError("a replacement link cannot point at the order it replaces")
-
-
-def validate_execution_corrected_facts(facts: ExecutionCorrectedFacts) -> None:
-    """Reject malformed broker correction inputs before transition admission.
-
-    Formula: n/a — input-boundary validation for replacement execution facts.
-    Reference: docs/prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md
-      § Task S1.2.
-    Canonical implementation: this file.
-    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
-      test_folds_execution.py::test_execution_correction_invalid_target_raises_uncertainty.
-    """
-    if not isinstance(facts.execution_id, str) or not facts.execution_id:
-        raise ValueError("correction execution_id must be non-empty")
-    if not isinstance(facts.superseded_execution_ref, str) or not facts.superseded_execution_ref:
-        raise ValueError("superseded_execution_ref must be non-empty")
-    if facts.execution_id == facts.superseded_execution_ref:
-        raise ValueError("a correction cannot supersede itself")
-    if not isinstance(facts.symbol, str) or not facts.symbol:
-        raise ValueError("correction symbol must be non-empty")
-    if facts.side not in {"BUY", "SELL"}:
-        raise ValueError(f"invalid correction side {facts.side!r}")
-    _require_finite_positive(facts.corrected_qty, field="corrected_qty")
-    _require_finite_positive(facts.corrected_price, field="corrected_price")
-    if not isinstance(facts.why, str) or not facts.why:
-        raise ValueError("correction why must be non-empty")

@@ -61,33 +61,3 @@ HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-graceful-shutdown", "10"]
-
-# --- One-shot qualification stage ---
-# Keep pytest and developer tooling out of the always-on data-plane image. This
-# target is selected only by the Compose ``qualification`` profile, where the
-# test tree and authenticated fixture are mounted read-only.
-#
-# This is the LAST stage, which is what a build that names no ``--target``
-# produces. Every Compose service built from this context therefore names its
-# ``target:`` explicitly -- ``runtime`` for everything always-on -- and
-# tests/contracts/test_data_plane_image_stage.py fails the contract test for a
-# service that forgets (#2576).
-FROM runtime AS qualification
-
-# requirements-dev.txt pulls in the heavy and light pins with ``-r``, so all
-# three go in together; the runtime stage ships none of them (nothing there
-# reads a requirement file). tests/contracts/test_data_plane_image_stage.py
-# pins this COPY to the ``-r`` lines of requirements-dev.txt.
-COPY requirements-heavy.txt requirements-light.txt requirements-dev.txt ./
-RUN pip install -r requirements-dev.txt
-# Pytest and ruff config: pytest needs ``asyncio_mode = auto`` from its file, or
-# it defaults to strict mode and any un-decorated async test errors out at
-# collection; ruff needs its file to run under the same ruleset as CI. Only
-# this stage is used to run either, so only this stage ships their config.
-COPY ./pytest.ini ./pytest.ini
-COPY ./ruff.toml ./ruff.toml
-RUN mkdir -p \
-    /app/contracts \
-    /app/evidence \
-    /app/artifacts/alpaca_clerk/qualification \
-    /app/production-alpaca-clerk

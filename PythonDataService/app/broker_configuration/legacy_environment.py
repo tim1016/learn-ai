@@ -126,12 +126,8 @@ NEVER_RETIRED_SETTINGS: Final[tuple[str, ...]] = (
     "ALPACA_API_SECRET_KEY",
     "ALPACA_CREDENTIAL_LIVE_KEY_ID",
     "ALPACA_CREDENTIAL_LIVE_SECRET_KEY",
-    "ALPACA_QUALIFICATION_API_KEY_ID",
-    "ALPACA_QUALIFICATION_API_SECRET_KEY",
     # Deployment bootstrap — must exist *before* a profile can be loaded.
     "ALPACA_CLERK_DIR",
-    "ALPACA_CLERK_PRODUCTION_ACCOUNT_ID",
-    "ALPACA_CLERK_UI_EVIDENCE_PATH",
     "ALPACA_MARKET_STATUS_UPSTREAM_URL",
     # Capability/release gates — never a profile permission switch.
     "ALPACA_SQLITE_MANUAL_TRADING_ENABLED",
