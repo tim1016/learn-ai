@@ -74,19 +74,19 @@ Rules:
 
 The endpoint is transport. The service is logic. They live in different files.
 
-- `app/routers/indicators.py` — HTTP concerns only
-- `app/services/indicator_service.py` — engine calls, data loading, computation
+- `app/routers/<domain>.py` — HTTP concerns only (e.g. `app/routers/return_distribution.py`)
+- `app/services/<domain>_service.py` — engine calls, data loading, computation (e.g. `app/services/return_distribution_service.py`)
 - Service methods are testable without a running FastAPI instance.
 
 ### 4. Write tests
 
 Two layers of test:
 
-**Service-level unit tests** (`tests/unit/services/test_indicator_service.py`):
+**Service-level unit tests** (`tests/services/test_<domain>_service.py`):
 - Mock external data (Polygon, Postgres) at the HTTP or connection layer using `respx` or a DB fixture.
 - Assert on the engine's output shape and values.
 
-**Endpoint-level integration tests** (`tests/integration/routers/test_indicators.py`):
+**Endpoint-level tests** (`tests/routers/test_<domain>_endpoint.py`):
 - Use `httpx.AsyncClient` with `ASGITransport(app=app)` — NOT `TestClient` for async routes.
 - Hit the endpoint with a realistic request, assert on status code, response shape, and at least one value.
 - Mock the service layer for endpoint tests; don't mock at the HTTP layer again.
@@ -96,7 +96,11 @@ Two layers of test:
 The endpoint usually isn't the final product — it has a consumer. Depending on who consumes it:
 
 - **.NET backend**: Add or update a typed client in `Backend/` that calls this endpoint. Use `JsonNamingPolicy.SnakeCaseLower` for deserialization. Handoff: tell the user the endpoint is live, and either delegate the .NET client work to a follow-up task or invoke the `write-graphql-resolver` skill if the endpoint output is being exposed via GraphQL.
-- **Angular frontend (rare)**: Usually the frontend goes through the .NET GraphQL gateway, not directly to Python. Confirm with the user if they want direct access.
+- **Angular frontend**: most data-plane features call `/api/` directly (routed by `Frontend/proxy.conf.js`) and use the generated types in `Frontend/src/app/api/broker.types.ts`. Go through .NET GraphQL only when a Backend resolver already owns the data.
+
+### 6. Regenerate the contract
+
+Regenerate the contract: `PythonDataService/.venv/bin/python PythonDataService/scripts/export_openapi_contract.py`, then `cd Frontend && npm run codegen:openapi`. Commit `contracts/openapi/python-data-service.openapi.json` and `Frontend/src/app/api/broker.types.ts`. Any change to a serialized model needs this, not just a new route.
 
 ## Output
 

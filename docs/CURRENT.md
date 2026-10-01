@@ -11,7 +11,6 @@ audit, and handoff in the repository.
 
 ## Core Authority Docs
 
-- `docs/math-sources-of-truth.md` — canonical implementation per math concept.
 - `docs/architecture/engine-authority-map.md` — which engine owns each job.
 - `docs/architecture/numerical-authority-migration-plan.md` — active math-authority migration sequence.
 - `.claude/rules/numerical-rigor.md` — tolerances, golden fixtures, timestamp rules, reconciliation taxonomy.

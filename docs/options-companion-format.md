@@ -233,7 +233,7 @@ $\Gamma$ and $\mathcal{V}$ are identical for calls and puts.
 
 These match the legacy `quantlib_pricer.price_option` output conventions (see `quantlib_pricer.py` lines 207, 215, 223), so existing downstream consumers don't need to change.
 
-**Validation status.** Per-bar Greek values are pending a formal parity pass against LEAN's analytic engine. Tracked in `docs/math-sources-of-truth.md`. Until that lands, treat Greeks as research-grade — directionally correct, signs and magnitudes consistent with closed-form (sample 0DTE put bar verified in §10), but not yet pinned to a golden fixture.
+**Validation status.** Per-bar Greek values are pending a formal parity pass against LEAN's analytic engine. Until that lands, treat Greeks as research-grade — directionally correct, signs and magnitudes consistent with closed-form (sample 0DTE put bar verified in §10), but not yet pinned to a golden fixture.
 
 **Cross-references:**
 - Frontend Black–Scholes (Abramowitz & Stegun normal CDF, used for the strategy lab's payoff curves only — NOT the companion CSVs): black-scholes-implementation.md (pruned to git history 2026-09-12 — current authority: `docs/architecture/options-math-authorities.md`)
@@ -343,4 +343,4 @@ A golden-fixture parity test is still **pending** for this pipeline. Per the `nu
 - Reference IV computed via QuantLib **and** SciPy Brent independently; require agreement to `atol=1e-9`.
 - Reference Greeks from `_bsm_greeks` compared against an independent closed-form implementation (e.g. `py_vollib`); require agreement to `atol=1e-6, rtol=1e-6` (matching the project tolerance for Greeks per `.claude/rules/numerical-rigor.md`).
 
-Tracked in `docs/math-sources-of-truth.md` under `Status: pending-fixture`. The 2026-04-25 parity check in §10.1–§10.2 stands as the current empirical evidence that the pipeline produces sensible numbers; the golden fixture is the formal cross-check.
+The service's module docstring records it as pending a parity pass. The 2026-04-25 parity check in §10.1–§10.2 stands as the current empirical evidence that the pipeline produces sensible numbers; the golden fixture is the formal cross-check.

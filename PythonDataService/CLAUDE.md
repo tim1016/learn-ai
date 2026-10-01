@@ -5,15 +5,14 @@
 | Action       | Command                                                                   |
 |--------------|---------------------------------------------------------------------------|
 | Run          | `podman compose up python-service` (localhost:8000)                       |
-| Test (PR)    | `DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m scripts.run_fast_tests` |
-| Test (daily) | `python -m pytest tests app/engine/tests -v`                              |
+| Test         | `DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/<path>` (host venv; the test that proves the change — CI runs the rest) |
 | Build        | `podman compose build python-service`                                     |
-| Lint         | `ruff check PythonDataService/app/`                                       |
+| Lint         | `ruff check PythonDataService/app/ PythonDataService/tests/`              |
 | Format       | `ruff format PythonDataService/app/`                                      |
 | Logs         | `podman logs -f polygon-data-service`                                     |
 | API docs     | http://localhost:8000/docs (Swagger UI)                                   |
 
-Python service has **no dependencies** — runs standalone.
+The data plane depends on the **redis** container (health-checked) and reads `POSTGRES_URL`.
 
 ## LEAN Sidecar launcher (Phase 2a)
 
@@ -31,7 +30,7 @@ cd PythonDataService
 # Bind to 0.0.0.0 so the polygon-data-service container can reach
 # the launcher via host.containers.internal. Loopback-only would refuse
 # connections from the container's network namespace.
-.venv/Scripts/python.exe -m uvicorn app.lean_sidecar.launcher.app:app \
+.venv/bin/python -m uvicorn app.lean_sidecar.launcher.app:app \
     --host 0.0.0.0 --port 8090
 ```
 
@@ -74,60 +73,8 @@ launcher's working directory and compose against the directory holding
 `compose.yaml`, and the two disagree exactly where it matters, so
 `lake_mount.launcher_host_lake_root` refuses rather than picking one.
 
-## File Structure
-
-```
-app/
-├── main.py                       # FastAPI app init, router registration
-├── config.py                     # Pydantic Settings (env vars)
-├── routers/                      # 19 API route modules
-│   ├── aggregates.py             # Polygon OHLCV fetching
-│   ├── options.py                # Options chain snapshots
-│   ├── indicators.py             # SMA, EMA, RSI, MACD, Bollinger Bands
-│   ├── engine.py                 # Lean engine integration
-│   ├── strategy.py               # Strategy execution
-│   ├── backtest.py               # Event replay backtesting
-│   ├── research.py               # Batch research experiments
-│   ├── sanitize.py               # Gap detection & data cleaning
-│   ├── data_quality.py           # Data validation
-│   ├── volatility.py             # Volatility surface analysis
-│   ├── quantlib_options.py       # Black-Scholes pricing
-│   ├── market_monitor.py         # Real-time ticker monitoring
-│   └── ...                       # chart, dataset, snapshot, tickers, etc.
-├── services/                     # Business logic layer
-│   ├── polygon_client.py         # Polygon.io SDK wrapper
-│   ├── ta_service.py             # Technical analysis calculations
-│   ├── sanitizer.py              # Data sanitization pipeline
-│   ├── strategy_engine.py        # Strategy execution engine
-│   ├── quantlib_pricer.py        # QuantLib option pricing
-│   ├── strategies/               # 7 strategy implementations
-│   └── ...
-├── engine/                       # Lean Framework backtesting (37 files)
-│   ├── consolidators/            # OHLCV bar consolidation
-│   ├── data/                     # Data providers
-│   ├── execution/                # Trade execution models
-│   ├── framework/                # Engine orchestration
-│   ├── indicators/               # Technical indicator implementations
-│   ├── options/                  # Options Greeks
-│   ├── results/                  # Result aggregation
-│   ├── strategy/                 # Strategy base classes
-│   └── tests/                    # Engine-specific tests
-├── research/                     # Research modules (30 files)
-│   ├── features/                 # Feature engineering
-│   ├── options/                  # Options research
-│   ├── signal/                   # Signal research
-│   └── validation/               # Validation routines
-├── ml/                           # Machine learning preprocessing
-├── volatility/                   # Volatility surface analysis
-├── models/                       # Pydantic request/response models
-└── utils/                        # Shared utility functions
-```
-
 ## Key Patterns
 
-- **FastAPI router pattern** — `app.include_router(router, prefix=..., tags=[...])`
-- **Pydantic v2** models for request/response — use `model_validator` (not `@validator`)
-- **`async def`** for all route handlers
 - **Module-level singletons** for services (instantiated at import time)
 - **pandas + pandas-ta** for indicator calculations
 - **Polygon.io SDK v1.12.5** — `list_snapshot_options_chain()` uses `params={}` dict
@@ -136,10 +83,7 @@ app/
 ## Testing
 
 - **pytest** with `asyncio_mode = auto` (in `pytest.ini`)
-- **httpx.AsyncClient** + `ASGITransport` for endpoint tests (not `TestClient`)
 - Fixtures in `tests/conftest.py`
-- Mock external APIs (Polygon, FRED) at HTTP layer with `respx` or `pytest-httpx`
-- Name pattern: `test_<function>_<scenario>`
 - Marker `@pytest.mark.slow` for daily-only slow or infrastructure-heavy tests
 
 ## Gotchas

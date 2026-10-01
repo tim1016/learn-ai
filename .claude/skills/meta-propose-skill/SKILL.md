@@ -63,17 +63,9 @@ When proposing a new skill, produce this:
 2. **Check `.claude/rules/`.** If the pattern is really a *convention* (not a task), it might belong in a rules file, not a skill.
 3. **Confirm with the user** before generating the `SKILL.md`. Skill creation is not a reflex — each skill adds description text to every Claude Code session's context. Noise has a cost.
 
-## Skill authoring rules
+## Writing the skill
 
-When the user approves a proposal and asks you to write the `SKILL.md`:
-
-- **Name in gerund form** where it fits ("port-indicator" becomes "porting indicators" in description). Kebab-case in the directory name.
-- **Description must include trigger phrases** the user would actually say. Anthropic's own skill-authoring docs show activation can jump from 20% to 90% with better descriptions — this is the single most important part.
-- **Keep under ~500 lines.** Reference additional files if more detail is needed.
-- **Imperative/infinitive voice**: "Port the indicator" not "You should port the indicator".
-- **Explicit "When NOT to use" section**, not just "When to use".
-- **Execution phases numbered and in strict order** where order matters.
-- **Anti-patterns section at the end** listing specific things to avoid.
+When the user approves a proposal and asks you to write the `SKILL.md`, use the `writing-for-agents` skill.
 
 ## Iteration
 

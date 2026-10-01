@@ -19,7 +19,7 @@ Write or debug a Hot Chocolate v15 resolver in `Backend/`. Covers query resolver
 Before writing a resolver:
 
 1. Is the underlying data or service already implemented? If the resolver is fronting a Python endpoint, confirm `add-fastapi-endpoint` has been run. If it's fronting EF Core, confirm the entity and DbContext setup exist.
-2. Does the schema already have the type? Check `Backend/Schema/` or wherever types are defined.
+2. Does the schema already have the type? Check `Backend/GraphQL/Types/`.
 3. Is this a new top-level field on `Query`/`Mutation`, or a field resolver on an existing type?
 
 ## Hot Chocolate v15 specifics
@@ -27,35 +27,37 @@ Before writing a resolver:
 **Critical gotcha**: HC v15 strips the `Get` prefix from method names when inferring field names. `GetUserById` becomes `userById` on the schema. To control this, use `[GraphQLName("...")]` explicitly on every resolver method. Do not rely on inference.
 
 ```csharp
-[QueryType]
-public static class IndicatorQueries
+[ExtendObjectType(typeof(Query))]
+public class IndicatorQuery
 {
     [GraphQLName("ema")]
-    public static async Task<EmaResult> GetEma(
+    public async Task<EmaResult> GetEma(
         string symbol,
         int period,
-        DateTime start,
-        DateTime end,
+        long startMsUtc,
+        long endMsUtc,
         [Service] IIndicatorClient client,
         CancellationToken ct)
     {
-        return await client.ComputeEmaAsync(symbol, period, start, end, ct);
+        return await client.ComputeEmaAsync(symbol, period, startMsUtc, endMsUtc, ct);
     }
 }
 ```
+
+Register the class in `Program.cs` with `.AddTypeExtension<IndicatorQuery>()` on the `AddQueryType<Query>()` root (mutations: `[ExtendObjectType(typeof(Mutation))]` on the `AddMutationType<Mutation>()` root).
 
 ## Execution
 
 ### 1. Choose the resolver shape
 
-- **Query resolver**: reads data. Idempotent. Place in `Backend/GraphQL/Queries/<Domain>Queries.cs`.
-- **Mutation resolver**: writes data. Side-effecting. Place in `Backend/GraphQL/Mutations/<Domain>Mutations.cs`.
+- **Query resolver**: reads data. Idempotent. Place in `Backend/GraphQL/<Domain>Query.cs`.
+- **Mutation resolver**: writes data. Side-effecting. Place in `Backend/GraphQL/<Domain>Mutation.cs`.
 - **Field resolver**: computes a field on an existing type (e.g., `User.fullName` derived from `firstName` + `lastName`). Place next to the type definition.
 
 ### 2. Write the resolver
 
-- `static` methods on `static` classes marked with `[QueryType]` or `[MutationType]` attributes.
-- `[Service]` attribute for service injection (not constructor injection; resolvers are static).
+- Methods on an `[ExtendObjectType]` class registered with `AddTypeExtension<T>()`.
+- `[Service]` attribute for service injection (not constructor injection).
 - Always accept and pass `CancellationToken` through to downstream calls.
 - Return concrete types or union results for domain errors; throw only for unexpected conditions.
 - `[GraphQLName("fieldName")]` on every method for stable schema naming.
@@ -100,7 +102,7 @@ Don't throw `Exception` for expected conditions like "user not found". Use a uni
 ```csharp
 [UnionType]
 public abstract record EmaResult;
-public sealed record EmaSuccess(decimal[] Values, DateTime[] Timestamps) : EmaResult;
+public sealed record EmaSuccess(decimal[] Values, long[] TimestampsMsUtc) : EmaResult;
 public sealed record EmaError(string Code, string Message) : EmaResult;
 ```
 
@@ -108,7 +110,7 @@ The resolver returns the appropriate case; clients discriminate with a `__typena
 
 ### 5. Test the resolver
 
-Use `IRequestExecutor` to run the schema against raw GraphQL queries. Place tests in `Backend.Tests/GraphQL/`.
+Place tests in `Backend.Tests/Unit/GraphQL/`. The existing tests call the resolver method directly with Moq'd services and `TestDbContextFactory`; for a schema-level check (field names, unions), use `IRequestExecutor` to run raw GraphQL queries against the schema.
 
 ```csharp
 [Fact]
@@ -121,7 +123,7 @@ public async Task Ema_ValidSymbol_ReturnsSuccess()
     var result = await executor.ExecuteAsync(
         """
         query {
-            ema(symbol: "SPY", period: 10, start: "2024-01-01", end: "2024-01-31") {
+            ema(symbol: "SPY", period: 10, startMsUtc: 1704067200000, endMsUtc: 1706745600000) {
                 __typename
                 ... on EmaSuccess { values }
             }
@@ -153,7 +155,7 @@ Report:
 ## Anti-patterns to avoid
 
 - Relying on HC's `Get` prefix stripping (use explicit `[GraphQLName]`)
-- Constructor injection on resolver classes (resolvers are static; use `[Service]` parameter injection)
+- Constructor injection on resolver classes (use `[Service]` parameter injection)
 - Throwing exceptions for domain errors — use union result types
 - N+1 queries in list resolvers (use DataLoader)
 - Forgetting `CancellationToken` in the call chain

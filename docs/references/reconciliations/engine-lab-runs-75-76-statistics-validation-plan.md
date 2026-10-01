@@ -792,8 +792,7 @@ upstream difference using the existing taxonomy: input/rate/benchmark as
 `commission`; formula/availability branch as `strategy-logic`; numeric-only
 accumulation as `precision`. Fix one first divergence at a time.
 
-Every touched/new function carries the four-field Math Provenance Contract and
-updates `docs/math-sources-of-truth.md`.
+Every touched/new function carries the four-field Math Provenance Contract.
 
 **Exit gate:** all 55 fields currently exposed by `LeanStatisticsResponse`
 match, every dashboard string matches exactly, and additional LEAN fields remain
@@ -1350,8 +1349,8 @@ at most half a displayed unit. Do not treat the rounded string itself as a
 - Pin the LEAN source commit and vendor the exact statistics implementation and
   dependencies used by the image.
 - Add fixture schema, attribution template, hash verifier, and stable reason
-  codes. Update `docs/math-sources-of-truth.md` and
-  `docs/architecture/engine-authority-map.md` for the new authorities.
+  codes. Update `docs/architecture/engine-authority-map.md` for the new
+  authorities.
 
 **Review gate:** the schema can represent every setting that caused runs 75 and
 76 to diverge; omission of an execution or statistics dependency fails review.
@@ -1589,8 +1588,6 @@ LEAN-native parity delta or feed a mixed-definition grade comparison.
   — short no-trade smoke receipt.
 - [Engine validation analytics reference](../engine-validation-analytics.md) —
   current performance-memory definitions.
-- [Math sources of truth](../../math-sources-of-truth.md) — current statistic
-  and verdict authorities.
 - [Engine authority map](../../architecture/engine-authority-map.md) — Engine
   Lab's engine-level ownership.
 
