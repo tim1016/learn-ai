@@ -9,8 +9,8 @@ import type { StrategyCapability, StudyDetail } from './golden-search.types';
 
 /**
  * The study heading and data strip (#2696): strategy and instrument, the
- * fixed development and final-test intervals, the frozen protocol, the
- * record's revision and the final test's exposure, plus the state tags.
+ * frozen protocol, the record's revision and the final test's exposure, plus
+ * the state tags. The intervals are on the scope line beneath the steps.
  */
 @Component({
   selector: 'app-golden-search-study-strip',

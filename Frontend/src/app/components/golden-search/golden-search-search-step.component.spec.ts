@@ -30,6 +30,18 @@ describe('GoldenSearchSearchStepComponent', () => {
     expect(pathRow(allPeriod, 'Slow EMA length').textContent).toMatch(/10\s*kept current/);
   });
 
+  it('summarizes each searched knob (start, value kept, why it stopped) and counts the evaluated, cached and invalid points', async () => {
+    await renderStep(studyDetail('awaiting_validation'));
+    const allPeriod = screen.getByRole('region', { name: 'All-period search' });
+
+    expect(allPeriod.textContent).toMatch(/486 evaluated · 134 cached · 18 invalid\s*· 2 passes completed/);
+    const summary = within(allPeriod).getByRole('table', { name: /each searched knob/i });
+    const fast = within(summary).getByRole('rowheader', { name: /fast ema length/i }).closest('tr');
+    expect(fast?.textContent).toMatch(/5\s*8\s*moved\s*No better tested move/);
+    const slow = within(summary).getByRole('rowheader', { name: /slow ema length/i }).closest('tr');
+    expect(slow?.textContent).toMatch(/10\s*10\s*kept current\s*Minimum step reached/);
+  });
+
   it('says why the search stopped and warns about a knob that ended at the edge of its searched range', async () => {
     await renderStep(studyDetail('awaiting_validation'));
     const allPeriod = screen.getByRole('region', { name: 'All-period search' });
@@ -58,10 +70,11 @@ describe('GoldenSearchSearchStepComponent', () => {
   });
 
   it('says a Grid study has no path rather than inventing one, and shows a failed winner run as failed', async () => {
-    const grid = procedureView({ rounds: [], edge_hits: [], winner_metrics: metrics({ status: 'failed', error: 'engine refused the window', sharpe_ratio: null }) });
+    const grid = procedureView({ rounds: [], edge_hits: [], knob_summary: [], winner_metrics: metrics({ status: 'failed', error: 'engine refused the window', sharpe_ratio: null }) });
     await renderStep(studyDetail('awaiting_validation', { method: 'grid', results: { ...studyDetail('awaiting_validation').results, search: grid, recent: null }, protocol: { ...studyDetail('locked').protocol, recent_window: false } }));
 
     expect(screen.getByText(/no path to show/i)).not.toBeNull();
+    expect(screen.queryByText(/passes completed/)).toBeNull();
     expect(screen.queryByRole('table', { name: /round by round/i })).toBeNull();
     expect(screen.getByText(/run failed — engine refused the window/i)).not.toBeNull();
   });

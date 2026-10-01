@@ -51,6 +51,7 @@
     </section>
 
     <div class="step-body">
+      <app-golden-search-scope-line [scope]="d.scope" />
       @switch (selectedStep()) {
         @case ('plan') { <app-golden-search-plan-summary [study]="d" [capability]="capability()" /> }
         @case ('search') { <app-golden-search-search-step [study]="d" [capability]="capability()" /> }

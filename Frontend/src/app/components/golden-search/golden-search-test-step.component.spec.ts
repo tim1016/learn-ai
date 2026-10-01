@@ -38,6 +38,19 @@ describe('GoldenSearchTestStepComponent', () => {
     expect(second.textContent).toContain('No result recorded.');
   });
 
+  it('reads every fold against the frozen incumbent on the same test months, a failed fold included', async () => {
+    await renderStep(studyDetail('awaiting_candidate'));
+
+    const benchmark = (index: number): string => foldRow(index).querySelectorAll('td')[6]?.textContent ?? '';
+    expect(benchmark(1)).toMatch(/Trades\s*17/);
+    expect(benchmark(1)).toMatch(/Sharpe\s*0\.41/);
+    expect(benchmark(2)).toMatch(/Sharpe\s*-0\.20/);
+
+    const linked = within(screen.getByRole('table', { name: /linked test-period return by fold/i })).getAllByRole('row');
+    expect(linked[1].textContent).toMatch(/2\.10%\s*0\.70%/);
+    expect(linked[2].textContent).toMatch(/Line broken — fold missing\s*0\.30%/);
+  });
+
   it('reads a key the canonical point omits as its declared default, so an explicit default is no change', async () => {
     const base = validationView();
     // The frozen seed omits fast_period (identity-neutral default 5); this winner states it explicitly.
@@ -63,15 +76,16 @@ describe('GoldenSearchTestStepComponent', () => {
     expect(within(table).getAllByRole('row')[2].textContent).toContain('Line broken — fold missing');
     const svg = view.container.querySelector('app-golden-search-linked-line svg');
     expect(svg?.getAttribute('aria-hidden')).toBe('true');
-    expect(svg?.querySelectorAll('path')).toHaveLength(0);
+    expect(svg?.querySelectorAll('path.line')).toHaveLength(0);
     expect(svg?.querySelectorAll('circle')).toHaveLength(1);
+    expect(svg?.querySelectorAll('path.benchmark')).toHaveLength(1);
   });
 
   it('draws one unbroken segment when every fold has a linked value', async () => {
     const base = validationView();
     const view = await renderStep(withValidation({ ...base, linked: [{ ...base.linked[0] }, { ...base.linked[1], linked_return: -0.013 }] }));
 
-    expect(view.container.querySelectorAll('app-golden-search-linked-line path')).toHaveLength(1);
+    expect(view.container.querySelectorAll('app-golden-search-linked-line path.line')).toHaveLength(1);
   });
 
   it('before the procedure is tested over time, says what will happen instead of showing empty results', async () => {

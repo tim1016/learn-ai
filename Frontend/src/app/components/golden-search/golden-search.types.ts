@@ -312,9 +312,32 @@ export interface ZoomRound {
   invalid: [number, string][];
   /** `[value, ineligibility code or null when eligible]`. */
   results: [number, string | null][];
+  /** The objective each evaluated value scored (null when undefined), in `results` order. */
+  objectives: [number, number | null][];
   chosen: number;
   moved: boolean;
   current_before: number;
+  /** True on the round where the knob's spacing reached its smallest step. */
+  quantization_limit: boolean;
+}
+
+/** One searched knob's outcome over the whole procedure, authored in Python from its rounds. */
+export interface KnobSummary {
+  knob: string;
+  label: string;
+  unit: string;
+  start_value: number;
+  retained_value: number;
+  moved: boolean;
+  stop_reason: StopReason;
+  /** From a closed copy map, e.g. "No better tested move", "Minimum step reached". */
+  stop_explanation: string;
+}
+
+export interface ProcedureCounts {
+  evaluated: number;
+  cached: number;
+  invalid: number;
 }
 
 export interface ProcedureView {
@@ -327,6 +350,11 @@ export interface ProcedureView {
   edge_hits: string[];
   evaluations: number;
   incomplete: boolean;
+  knob_summary: KnobSummary[];
+  counts: ProcedureCounts;
+  passes_completed: number;
+  /** The all-period search's pair landscapes, centered on its winner; the recent procedure has none. */
+  pair_maps?: PairMap[];
 }
 
 export type FoldRunStatus = 'pending' | 'running' | 'completed' | 'failed';
@@ -337,6 +365,8 @@ export interface ValidationFold extends FoldPlan {
   winner_hash: string | null;
   train_metrics: Metrics | null;
   test_metrics: Metrics | null;
+  /** The frozen incumbent on the same test window: the benchmark every fold is read against. */
+  incumbent_test_metrics: Metrics | null;
   failure_reason: string | null;
 }
 
@@ -352,10 +382,20 @@ export interface LinkedFoldReturn {
   linked_return: number | null;
 }
 
+export interface ValidationSummaryPills {
+  /** Python-authored, e.g. "5 of 6 folds judged". */
+  judged: string;
+  test_trades: number;
+  median_retention: number | null;
+}
+
 export interface ValidationView {
   folds: ValidationFold[];
   verdict: ValidationVerdict | null;
   linked: LinkedFoldReturn[];
+  /** The frozen incumbent's test returns linked the same way. */
+  incumbent_linked: LinkedFoldReturn[];
+  summary_pills: ValidationSummaryPills;
   explanation: string;
 }
 
@@ -389,6 +429,14 @@ export interface EvidenceCandidate {
   ineligibility: string | null;
   neighbors: CandidateNeighborhood[];
   stress: StressResult[];
+  /** From a closed copy map keyed by the candidate's situation. */
+  guidance: { title: string; text: string };
+  flags: Finding[];
+  /** Python-authored, e.g. "Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars". */
+  params_sentence: string;
+  fixed_sentence: string;
+  /** False for the incumbent: keeping the current settings needs no final test. */
+  exam_eligible: boolean;
 }
 
 export interface PairMapCell {
@@ -478,6 +526,17 @@ export interface StudyResults {
   qualification: QualificationView | null;
 }
 
+/** The scope line every step shows above its comparisons. */
+export interface StudyScope {
+  development_label_start_ms: number;
+  development_end_ms: number;
+  final_start_ms: number;
+  final_end_ms: number;
+  final_state: 'locked' | 'opened_once';
+  capital: number;
+  costs_sentence: string;
+}
+
 export interface StudyDetail extends StudySummary {
   /** The frozen protocol echo. */
   protocol: ProtocolRequest;
@@ -491,6 +550,7 @@ export interface StudyDetail extends StudySummary {
   decision: StudyDecision | null;
   candidate_key: CandidateKey | null;
   exam_locked: boolean;
+  scope: StudyScope;
 }
 
 // ---------------------------------------------------------------- commands
@@ -597,11 +657,19 @@ export interface CandidateTrade {
   pnl: number;
   pnl_pct: number;
   indicators: Readonly<Record<string, number | null>>;
+  exit_reason: string | null;
+}
+
+export interface CumulativeReturnPoint {
+  ms: number;
+  /** A fraction of starting capital. */
+  value: number;
 }
 
 export interface CandidateRunDetail {
   window: IntervalMs;
   metrics: Metrics;
+  cumulative_return: CumulativeReturnPoint[];
   daily_equity: DailyEquityPoint[];
   drawdown: DrawdownPoint[];
   monthly: MonthlyResult[];

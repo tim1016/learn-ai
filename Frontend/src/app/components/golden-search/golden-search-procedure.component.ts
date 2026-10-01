@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { DecimalPipe } from '@angular/common';
 
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { knobsByName, pointEntries } from './golden-search-display';
@@ -29,13 +30,14 @@ interface PathRow {
 /**
  * One search procedure's evidence (#2696): the retained settings and their
  * development metrics, why it stopped, knobs that ended at the edge of their
- * searched range, and — for Zoom — the round-by-round path: the values tried
+ * searched range, the evaluated/cached/invalid counts, each searched knob's
+ * start, kept value and stop reason, and — for Zoom — the round-by-round path: the values tried
  * with their eligibility, the constraint-skipped values, the value kept, and
  * whether the knob moved. Every number is the server's.
  */
 @Component({
   selector: 'app-golden-search-procedure',
-  imports: [GoldenSearchMetricsComponent, ReceiptLabelPipe],
+  imports: [DecimalPipe, GoldenSearchMetricsComponent, ReceiptLabelPipe],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-procedure.component.html',
   styleUrl: './golden-search-procedure.component.scss',

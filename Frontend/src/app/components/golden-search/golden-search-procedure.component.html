@@ -10,6 +10,31 @@
   @for (label of edgeHits(); track label) {
     <p class="edge" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i> {{ label }} ended at the edge of its searched range — a better setting may lie outside it.</p>
   }
+  <p class="muted">
+    {{ p.counts.evaluated | number }} evaluated · {{ p.counts.cached | number }} cached · {{ p.counts.invalid | number }} invalid
+    @if (method() === 'zoom') { · {{ p.passes_completed }} {{ p.passes_completed === 1 ? 'pass' : 'passes' }} completed }
+  </p>
+
+  @if (p.knob_summary.length > 0) {
+    <div class="table-wrap" role="region" tabindex="0" [attr.aria-label]="heading() + ' — each knob'">
+      <table class="path">
+        <caption>Each searched knob: where it started, the value kept, and why it stopped</caption>
+        <thead>
+          <tr><th scope="col">Knob</th><th scope="col">Started at</th><th scope="col">Kept</th><th scope="col">Why it stopped</th></tr>
+        </thead>
+        <tbody>
+          @for (row of p.knob_summary; track row.knob) {
+            <tr>
+              <th scope="row">{{ row.label }} <small>{{ row.unit }}</small></th>
+              <td class="num">{{ row.start_value }}</td>
+              <td class="num"><strong>{{ row.retained_value }}</strong> <small>{{ row.moved ? 'moved' : 'kept current' }}</small></td>
+              <td>{{ row.stop_explanation }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
 
   <div class="winner">
     <h4>Retained settings</h4>
@@ -17,7 +42,7 @@
       @for (entry of winner(); track entry.name) { <li><span>{{ entry.label }}</span> <strong>{{ entry.value ?? '—' }}</strong></li> }
     </ul>
     <app-golden-search-metrics [metrics]="p.winner_metrics" />
-    <p class="muted">{{ p.evaluations }} evaluations in this procedure · development data, used to choose these settings</p>
+    <p class="muted">Development data, used to choose these settings.</p>
   </div>
 
   @if (path().length > 0) {

@@ -22,7 +22,7 @@ thead th { color: var(--text-secondary); font-weight: var(--fw-medium); white-sp
 th[scope='row'] { font-weight: var(--fw-regular); }
 .dates { white-space: nowrap; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
-.folds td:nth-child(6), .folds td:nth-child(7) { min-width: 14rem; }
+.folds td:nth-child(6), .folds td:nth-child(7), .folds td:nth-child(8) { min-width: 14rem; }
 .tag { border: 1px solid var(--border-light); border-radius: var(--radius-pill); padding: 0 var(--space-2); white-space: nowrap; }
 .tag[data-status='failed'] { border-color: var(--bear); color: var(--bear); }
 .reason { display: block; margin-top: var(--space-1); color: var(--bear); }

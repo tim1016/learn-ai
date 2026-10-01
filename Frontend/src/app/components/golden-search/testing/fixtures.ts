@@ -152,12 +152,46 @@ export function procedureView(overrides: Partial<ProcedureView> = {}): Procedure
     stop_reason: 'no_improvement',
     stop_explanation: 'A full pass moved no knob, so the search kept its last settings.',
     rounds: [
-      { pass_index: 0, knob: 'fast_period', round_index: 0, low: 3, high: 12, values: [3, 5, 8, 10, 12], invalid: [[12, 'The fast EMA must be shorter than the slow EMA.']], results: [[3, 'TOO_FEW_TRADES'], [5, null], [8, null], [10, null]], chosen: 8, moved: true, current_before: 5 },
-      { pass_index: 0, knob: 'slow_period', round_index: 0, low: 8, high: 30, values: [8, 13, 19, 24, 30], invalid: [], results: [[10, null], [13, null], [19, null], [24, null], [30, null]], chosen: 10, moved: false, current_before: 10 },
+      {
+        pass_index: 0,
+        knob: 'fast_period',
+        round_index: 0,
+        low: 3,
+        high: 12,
+        values: [3, 5, 8, 10, 12],
+        invalid: [[12, 'The fast EMA must be shorter than the slow EMA.']],
+        results: [[3, 'TOO_FEW_TRADES'], [5, null], [8, null], [10, null]],
+        objectives: [[3, null], [5, 0.92], [8, 1.18], [10, 1.02]],
+        chosen: 8,
+        moved: true,
+        current_before: 5,
+        quantization_limit: false,
+      },
+      {
+        pass_index: 0,
+        knob: 'slow_period',
+        round_index: 0,
+        low: 8,
+        high: 30,
+        values: [8, 13, 19, 24, 30],
+        invalid: [],
+        results: [[10, null], [13, null], [19, null], [24, null], [30, null]],
+        objectives: [[10, 1.18], [13, 1.1], [19, 1.05], [24, 0.98], [30, 0.9]],
+        chosen: 10,
+        moved: false,
+        current_before: 10,
+        quantization_limit: false,
+      },
     ],
     edge_hits: ['rsi_max'],
     evaluations: 63,
     incomplete: false,
+    knob_summary: [
+      { knob: 'fast_period', label: 'Fast EMA length', unit: 'decision bars', start_value: 5, retained_value: 8, moved: true, stop_reason: 'no_improvement', stop_explanation: 'No better tested move' },
+      { knob: 'slow_period', label: 'Slow EMA length', unit: 'decision bars', start_value: 10, retained_value: 10, moved: false, stop_reason: 'quantization_limit', stop_explanation: 'Minimum step reached' },
+    ],
+    counts: { evaluated: 486, cached: 134, invalid: 18 },
+    passes_completed: 2,
     ...overrides,
   };
 }
@@ -166,8 +200,17 @@ export function validationView(overrides: Partial<ValidationView> = {}): Validat
   const [first, second] = preflight().folds;
   return {
     folds: [
-      { ...first, status: 'completed', winner: { ...INCUMBENT_PARAMS, fast_period: 8 }, winner_hash: 'f0', train_metrics: metrics({ sharpe_ratio: 1.4 }), test_metrics: metrics({ sharpe_ratio: 0.9, total_return_pct: 0.021 }), failure_reason: null },
-      { ...second, status: 'failed', winner: null, winner_hash: null, train_metrics: null, test_metrics: null, failure_reason: 'NO_ELIGIBLE_CANDIDATE' },
+      {
+        ...first,
+        status: 'completed',
+        winner: { ...INCUMBENT_PARAMS, fast_period: 8 },
+        winner_hash: 'f0',
+        train_metrics: metrics({ sharpe_ratio: 1.4 }),
+        test_metrics: metrics({ sharpe_ratio: 0.9, total_return_pct: 0.021 }),
+        incumbent_test_metrics: metrics({ total_trades: 17, sharpe_ratio: 0.41, total_return_pct: 0.007 }),
+        failure_reason: null,
+      },
+      { ...second, status: 'failed', winner: null, winner_hash: null, train_metrics: null, test_metrics: null, incumbent_test_metrics: metrics({ total_trades: 15, sharpe_ratio: -0.2, total_return_pct: -0.004 }), failure_reason: 'NO_ELIGIBLE_CANDIDATE' },
     ],
     verdict: {
       label: 'could not be judged',
@@ -184,6 +227,11 @@ export function validationView(overrides: Partial<ValidationView> = {}): Validat
       { fold_index: 0, test_end_ms: first.test_end_ms, linked_return: 0.021 },
       { fold_index: 1, test_end_ms: second.test_end_ms, linked_return: null },
     ],
+    incumbent_linked: [
+      { fold_index: 0, test_end_ms: first.test_end_ms, linked_return: 0.007 },
+      { fold_index: 1, test_end_ms: second.test_end_ms, linked_return: 0.002972 },
+    ],
+    summary_pills: { judged: '1 of 2 folds judged', test_trades: 42, median_retention: null },
     explanation: 'Each fold searched only its own training months.',
     ...overrides,
   };
@@ -258,6 +306,15 @@ export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> =
     decision: null,
     candidate_key: null,
     exam_locked: false,
+    scope: {
+      development_label_start_ms: DEVELOPMENT_START_MS,
+      development_end_ms: FINAL_START_MS,
+      final_start_ms: FINAL_START_MS,
+      final_end_ms: FINAL_END_MS,
+      final_state: 'locked',
+      capital: 100000,
+      costs_sentence: 'No commission · no slippage · fills at the decision minute open',
+    },
     ...overrides,
   };
 }

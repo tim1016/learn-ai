@@ -172,6 +172,27 @@ describe('GoldenSearchStudyComponent', () => {
     expect(service.command.mock.calls[1][1].idempotency_key).toBe(service.command.mock.calls[0][1].idempotency_key);
   });
 
+  it('every step shows the server scope: development dates, the final test and whether it is still locked, capital and costs', async () => {
+    const study = studyDetail('awaiting_candidate');
+    const service = fakeService(study);
+    const view = await renderStudy(service);
+    const nav = within(screen.getByRole('navigation', { name: 'Research steps' }));
+
+    for (const step of [/plan/i, /search/i, /test over time/i, /compare/i]) {
+      fireEvent.click(nav.getByRole('button', { name: step }));
+      await view.fixture.whenStable();
+      const scope = screen.getByRole('note', { name: 'Study scope' });
+      expect(scope.textContent).toMatch(/Development:\s*2024-01-01\s*–\s*2025-12-31/);
+      expect(scope.textContent).toMatch(/Final test\s*2026-01-01\s*–\s*2026-03-31\s*: locked/);
+      expect(scope.textContent).toContain('$100,000 starting capital · No commission');
+    }
+
+    service.get.mockResolvedValueOnce({ ...study, scope: { ...study.scope, final_state: 'opened_once' } });
+    await view.fixture.componentInstance.reload();
+    await view.fixture.whenStable();
+    expect(screen.getByRole('note', { name: 'Study scope' }).textContent).toMatch(/Final test\s*2026-01-01\s*–\s*2026-03-31\s*: opened once/);
+  });
+
   it('Plan step: the frozen plan is read-only and Revise starts a new linked study', async () => {
     const service = fakeService(studyDetail('awaiting_validation'));
     await renderStudy(service);

@@ -20,7 +20,7 @@
       <table class="folds">
         <caption>Folds — training winner and its test result</caption>
         <thead>
-          <tr><th scope="col">Fold</th><th scope="col">Training</th><th scope="col">Test</th><th scope="col">Status</th><th scope="col">Winner vs starting point</th><th scope="col">Training result</th><th scope="col">Test result</th></tr>
+          <tr><th scope="col">Fold</th><th scope="col">Training</th><th scope="col">Test</th><th scope="col">Status</th><th scope="col">Winner vs starting point</th><th scope="col">Training result</th><th scope="col">Test result</th><th scope="col">Current settings, same test</th></tr>
         </thead>
         <tbody>
           @for (row of rows(); track row.fold.fold_index) {
@@ -35,6 +35,7 @@
               <td>{{ row.changes ?? 'No winner' }}</td>
               <td><app-golden-search-metrics [metrics]="row.fold.train_metrics" [compact]="true" /></td>
               <td><app-golden-search-metrics [metrics]="row.fold.test_metrics" [compact]="true" /></td>
+              <td><app-golden-search-metrics [metrics]="row.fold.incumbent_test_metrics" [compact]="true" /></td>
             </tr>
           }
         </tbody>
@@ -43,18 +44,19 @@
 
     <section class="linked" aria-labelledby="gs-linked-title">
       <h3 id="gs-linked-title">The procedure's test history</h3>
-      <p class="muted">Test-period returns linked across folds; each fold starts flat with fresh capital. A missing fold breaks the line.</p>
-      <app-golden-search-linked-line [points]="v.linked" />
+      <p class="muted">Test-period returns linked across folds; each fold starts flat with fresh capital. A missing fold breaks the line. Dashed: the current settings on the same test months.</p>
+      <app-golden-search-linked-line [points]="v.linked" [benchmark]="v.incumbent_linked" />
       <div class="table-wrap" role="region" tabindex="0" aria-label="Linked test-period return">
         <table class="linked-table">
           <caption>Linked test-period return by fold</caption>
-          <thead><tr><th scope="col">Fold</th><th scope="col">Test ends</th><th scope="col" class="num">Linked return</th></tr></thead>
+          <thead><tr><th scope="col">Fold</th><th scope="col">Test ends</th><th scope="col" class="num">Linked return</th><th scope="col" class="num">Current settings</th></tr></thead>
           <tbody>
-            @for (point of v.linked; track point.fold_index) {
+            @for (point of linkedRows(); track point.fold_index) {
               <tr>
                 <th scope="row">{{ point.fold_index + 1 }}</th>
                 <td><app-timestamp-display [value]="point.test_end_ms - 1" mode="date-et" /></td>
                 <td class="num">{{ point.linked_return === null ? 'Line broken — fold missing' : (point.linked_return | percent: '1.2-2') }}</td>
+                <td class="num">{{ point.benchmark === null ? 'Line broken — fold missing' : (point.benchmark | percent: '1.2-2') }}</td>
               </tr>
             }
           </tbody>

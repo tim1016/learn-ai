@@ -6,7 +6,7 @@ import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { entryText, pointDifferences } from './golden-search-display';
 import { GoldenSearchLinkedLineComponent } from './golden-search-linked-line.component';
 import { GoldenSearchMetricsComponent } from './golden-search-metrics.component';
-import type { StrategyCapability, StudyDetail, ValidationFold } from './golden-search.types';
+import type { LinkedFoldReturn, StrategyCapability, StudyDetail, ValidationFold } from './golden-search.types';
 
 interface FoldRow {
   readonly fold: ValidationFold;
@@ -14,13 +14,19 @@ interface FoldRow {
   readonly changes: string | null;
 }
 
+interface LinkedRow extends LinkedFoldReturn {
+  /** The frozen incumbent's linked return through the same fold; null once its line is broken. */
+  readonly benchmark: number | null;
+}
+
 /**
  * The Test over time step (#2696): each fold re-ran the frozen procedure on
  * its own training window from the original ranges and starting point, then
  * tested only that winner on the next months. Shows every fold (failures
- * included), the legacy verdict with its coverage, and the linked test-period
- * return line with its table alternative. It judges the selection procedure,
- * not any single candidate.
+ * included) beside the frozen incumbent on the same test window (the
+ * benchmark), the legacy verdict with its coverage, and both linked
+ * test-period return lines with their table alternative. It judges the
+ * selection procedure, not any single candidate.
  */
 @Component({
   selector: 'app-golden-search-test-step',
@@ -42,6 +48,12 @@ export class GoldenSearchTestStepComponent {
       const changed = pointDifferences(fold.winner, seed, this.capability());
       return { fold, changes: changed.length === 0 ? 'Same as the starting point' : changed.map(entryText).join(' · ') };
     });
+  });
+  protected readonly linkedRows = computed<LinkedRow[]>(() => {
+    const validation = this.study().results.validation;
+    if (validation === null) return [];
+    const benchmark = new Map(validation.incumbent_linked.map((point) => [point.fold_index, point.linked_return]));
+    return validation.linked.map((point) => ({ ...point, benchmark: benchmark.get(point.fold_index) ?? null }));
   });
   protected readonly pending = computed(() =>
     this.study().state === 'validation_running'

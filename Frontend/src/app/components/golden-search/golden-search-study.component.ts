@@ -10,6 +10,7 @@ import type { GridSearchRefusal } from '../grid-search/grid-search.types';
 import { GoldenSearchCompareStepComponent } from './golden-search-compare-step.component';
 import { GoldenSearchDecisionStepComponent } from './golden-search-decision-step.component';
 import { GoldenSearchPlanSummaryComponent } from './golden-search-plan-summary.component';
+import { GoldenSearchScopeLineComponent } from './golden-search-scope-line.component';
 import { GoldenSearchSearchStepComponent } from './golden-search-search-step.component';
 import { primaryAction, STUDY_STEPS, stepForState, stepProgress, type PrimaryAction, type StepProgress, type StudyStep } from './golden-search-steps';
 import { GoldenSearchStudyStripComponent } from './golden-search-study-strip.component';
@@ -31,7 +32,8 @@ const PROGRESS_TEXT: Readonly<Record<StepProgress, string>> = {
 
 /**
  * One Golden Search study (#2696): the study strip, the five steps, the
- * server's guidance for the current state with the one next action, and the
+ * server's guidance for the current state with the one next action, the
+ * scope line above every step, and the
  * record controls (Cancel, Finish, Hide). Every stage change is a command
  * carrying the study's revision and an idempotency key; a command that
  * authorizes a stage starts its job through the jobs boundary. Polls while a
@@ -46,6 +48,7 @@ const PROGRESS_TEXT: Readonly<Record<StepProgress, string>> = {
     GoldenSearchCompareStepComponent,
     GoldenSearchDecisionStepComponent,
     GoldenSearchPlanSummaryComponent,
+    GoldenSearchScopeLineComponent,
     GoldenSearchSearchStepComponent,
     GoldenSearchStudyStripComponent,
     GoldenSearchTestStepComponent,
