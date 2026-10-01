@@ -2,7 +2,7 @@
 
 **Status:** Accepted 2026-09-16
 **Provenance:** The owner's 2026-09-16 grill-with-docs session on why the account list, Bots roster and Gallery felt hard to move between. A walk through the running app found that each operational page carried a different set of links to its siblings, the top bar's Bots/Gallery links dropped the account the operator was in, four menu items led to the same list of account cards, the account page re-rendered every account card above itself, and nothing could switch Paper to Live in place. The broker-wide Bots/Gallery chooser pages had shipped that morning in #2168.
-**Related:** ADR 0062 (broker clerk fleet — the lane dimension this navigation sits on), ADR 0059 (Decision 8 amended the same day: the account number leaves the always-on-screen set), ADR 0060 (account nickname), PRD `docs/prds/2026-09-12-multi-broker-clerk-control-plane.md` §9.10 and §13.
+**Related:** ADR 0062 (broker clerk fleet — the lane dimension this navigation sits on), ADR 0059 (Decision 8 amended the same day: the account number leaves the always-on-screen set), ADR 0060 (account nickname), and §9.10 and §13 of the fleet PRD (in Git history).
 **Vocabulary:** `CONTEXT.md` § "Account workspace (resolved 2026-09-16)" (new); § "Broker Desk lenses" renames **Broker Desk** to **account overview**; § "App shell" revised (Botasur, menubar, account badge).
 
 ## Decision

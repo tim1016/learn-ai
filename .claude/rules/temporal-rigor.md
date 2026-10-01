@@ -21,7 +21,7 @@ It explicitly does **not** govern:
 
 **Every temporal value in flight, at rest, or on the wire is an integer count of milliseconds since Unix epoch UTC (`int64 ms UTC`).** No exceptions. ISO strings, `datetime` / `DateTime` objects, tz-aware ISO-with-`Z`, and naive datetimes are all **disallowed as wire and storage formats**. Language-native types are allowed only for arithmetic within a single function; they must be converted back to `int64 ms UTC` before returning, writing, or serializing.
 
-Rationale: four different wire formats were in flight before this rule (`int ms`, naive-ISO-with-lying-`Z`, `"YYYY-MM-DD HH:MM"` that parses as local in the browser, .NET `DateTime` with `Kind=Local`-by-accident). See `docs/audits/computational-fidelity-2026-04-22.md` § 2 and its addendum § 3.
+Rationale: four different wire formats were in flight before this rule (`int ms`, naive-ISO-with-lying-`Z`, `"YYYY-MM-DD HH:MM"` that parses as local in the browser, .NET `DateTime` with `Kind=Local`-by-accident).
 
 ### Ingest to the closest constructible instant
 

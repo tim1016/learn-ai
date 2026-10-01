@@ -2,7 +2,7 @@
 
 **Status:** Delivery D implementation and operations contract. This is supporting
 evidence, not an authority that changes [ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md)
-or the [multi-broker Clerk PRD](../prds/2026-09-12-multi-broker-clerk-control-plane.md).
+or the multi-broker Clerk PRD (in Git history).
 
 ## Delivery boundary
 

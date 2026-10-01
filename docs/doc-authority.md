@@ -70,32 +70,19 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 |---|---|
 | 0001 | Control-plane substrate: JSON + Parquet, files canonical |
 | 0002 | Shadow-mode enforcement at the adapter level (no submit) |
-| 0003 | Operational topology: host venv |
 | 0004 | Instance-addressed operator control plane (durable desired-state) |
-| 0005 | Engine-authored readiness; two-altitude broker ownership |
-| 0006 | Deploy is a host-daemon control-plane op; content-addressed `run_id` |
-| 0007 | Host-daemon shared-secret auth |
 | 0008 | Durable submit protocol: order identity + recovery |
-| 0009 | Live sizing authority + provenance (the spec is not the live sizing authority) |
-| 0010 | Operator-action contract: flatten / pause / stop |
 | 0011 | Broker safety verdict: fail-closed, halt-on-transition, guarded Resume |
 | 0012 | Strategy as signal generator; action-plan baseline |
-| 0013 | Operator surface: judgment vs evidence (no frontend-derived verdicts) |
 | 0014 | Broker-authored operator view: backend-rendered narratives |
 | 0015 | Operator notice contract |
-| 0016 | Bot-control trader-authored activity + deploy packages |
-| 0017 | Per-bot lifecycle workbench: nodes explain, not gate |
 | 0018 | Broker session mirror: client observatory + recovery |
-| 0019 | Daemon diagnostics: composed control-plane authority |
 | 0020 | Strategy validation is a strategy-level property; Deploy selects only |
 | 0021 | Deploy launch defaults and the paper-execution guardrail envelope |
 | 0022 | Temporal authority: canonical calendar and timestamps |
 | 0023 | Strategy-validation human flag and Deploy re-home |
-| 0024 | Bot event stream narrated-gate pipeline |
-| 0025 | Single dominant headline notice placement |
 | 0026 | Daily bot lifecycle: three states and the single-writer evaluator (§4 and its 2026-07-21 amendment superseded for Alpaca by ADR 0038; §4's derived-projection design was never built — read the banner before implementing) |
 | 0027 | Operator blocker disposition taxonomy |
-| 0028 | Bot Cockpit channel contracts (Clerk authority is superseded by ADR-0030) |
 | 0029 | Live-session authority and IBKR capability (superseded: ADR 0059 D5.2's declared window is the only proof of extended hours) |
 | 0030 | Account Clerk authority is account-rooted and journal-canonical |
 | 0031 | Cross-stack boundary selection and generated contracts |
@@ -108,7 +95,6 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | 0038 | One bot control plane (Alpaca runner); the evaluator plane retires with IBKR bot-control. SQLite holds the duty facts it already fences; control intent stays file-backed so the stop latch outlives the Clerk. Supersedes ADR 0026 §4 for Alpaca |
 | 0039 | An ADR's Status states the decision's standing, not the code's conformance. The ADR file is the sole status authority; one closed value (`Accepted`/`Proposed`/`Superseded`/`Retired`) per ADR, narrative moved out, CI-checkable |
 | 0040 | `CONTEXT.md` is one glossary of the live trading/operator domain (not repo process); every section declares its lineage (`live` / `historical (ADR 0037/0038)` / `compatibility evidence (ADR 0038)` / `neutral`); the dangling §16.4 deferral is deleted; every newly accepted ADR carries a `Vocabulary:` line |
-| 0041 | **RETIRED 2026-09-14** (subject deleted with the manual; Decision 6 survives in test_vocabulary_snapshot.py). The operator manual's Button Reference (and Glossary tables) are generated from `OPERATOR_COPY`, not hand-written; "When available" prose is dropped in favour of the panel's runtime gate reasons; CI regenerate-and-diff, as for the OpenAPI/GraphQL snapshots |
 | 0042 | Sealed signal decisions meet account-scoped custody at one semantic seam |
 | 0043 | Signal Program build proof, two-level seal identity, and append-or-clone legacy migration |
 | 0044 | Two strategy-validation categories with a permanent Live ceiling for operational harnesses |
@@ -153,11 +139,8 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` | Focused Alpaca SQLite recovery/cutover subprocedure incorporated by `docs/broker-clerk-fleet-authority.md`; no independent policy authority | — | 2026-08-06 |
 | `docs/architecture/ibkr-integration-tdd.md` | IBKR read/evidence design rationale and retired-actuation record ("why") | Former Phase 3/4 submit/cancel design (retired by #1583) | 2026-08-19 |
 | `docs/engine-persistence-authority.md` | Engine-side `BacktestEngine` runs persisting through `.NET` (parity gate + 6/8-category compare) | — | 2026-05-19 |
-| `docs/feature-runner-authority.md` | Research Lab → Feature Runner | — | 2026-05-01 |
 | `docs/ibkr-integration-authority.md` | Current read-only IBKR capability/account/order-history/market-data authority and retired-actuation boundary | Retired phase plans and the pre-#1583 executable snapshot (Git history) | 2026-08-19 |
-| `docs/indicator-reliability-authority.md` | Indicator reliability methodology | — | — |
 | `docs/ml-predictions-authority.md` | ML predictions (prediction-set artifact, StrategySpec wiring, QC parity infra) | — | 2026-05-12 |
-| `docs/portfolio-management.md` | Portfolio management system | `docs/portfolio-system.md` (duplicate, disputed — pruned archive copy, git history) | — |
 | `docs/signal-engine-authority.md` | Signal engine | — | — |
 | `docs/known-gaps.md` | Living open-defect backlog (what is still broken or deferred) | consolidates the pruned audit-finding trees | 2026-08-19 |
 
@@ -168,22 +151,10 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | Doc | Domain | Notes |
 |---|---|---|
 | `docs/architecture-manual.md` | Plain-language architecture map for the owner (lanes, seams, sources of truth, design weak spots) | A map, not an authority: it links to the ADRs and canonical docs it summarises and yields to them. Served in-app at `/docs/architecture-manual` from a byte copy the documentation contract checks |
-| `docs/architecture/alpaca-configuration-ownership-inventory.md` | Per-setting class, callers and migration disposition for every `ALPACA_*` variable | Evidence for ADR 0060 Decision 1; records the type-fidelity constraint on the envelope sha and that `ALPACA_PAPER_CARRYOVER_ENABLED` has no runtime consumer |
 | `docs/architecture/broker-configuration-profile-contract.md` | Record shapes, credential-slot scheme, route surface and error taxonomy for broker configuration profiles | The shared contract packages B-E implement under ADR 0060; not authority over the ADR |
-| `docs/architecture/build-alpha-style-features-1-8-research-spec.md` | Alpha-style features | Features 6-8 may be unshipped — keep for traceability |
-| `docs/architecture/edge-feature-design.md` | Edge feature engineering spec | Actionable engineering spec |
 | `docs/architecture/iv-ownership-research.md` | IV pipeline research | ~32k tokens; authoritative research backing IV pipeline |
 | `docs/architecture/options-research.md` | Options implementation truth | Self-declared single-source doc for surviving options surfaces; §5 pipeline stubs still being authored |
-| `docs/architecture/sse-job-streams.md` | SSE job streams | SSE is in use per IBKR integration |
-| `docs/audits/computational-fidelity-2026-04-22.md` | Timestamp ban motivation | Cited by `numerical-rigor.md` |
-| `docs/audits/computational-fidelity-2026-04-22-addendum.md` | Timestamp ban motivation | Addendum cited by same rule |
-| `docs/audits/structural-integrity-2026-04-22.md` | Known violation baseline | Historical context |
-| `docs/audits/clerk-lineage-reachability-2026-08-17.md` | Alpaca-vs-IBKR Clerk lineage coupling and request reachability | Supporting evidence for wayfinder #1589 / ADR-0030/0032/0035 scope questions; distinguishes *executed* from merely *imported* |
-| `docs/audits/alpaca-sqlite-sole-authority-retirement-2026-08-19.md` | ADR-0037 legacy Alpaca custody retirement and migration-gate receipt | Records structural deletion, preserved SQLite/IBKR evidence boundaries, and the explicit external-inventory prerequisite for #1618/#1656–#1660 |
-| `docs/audits/numeric-authority-census-2026-08-17.md` | P&L / exposure / position implementation census | Supporting evidence for #1590 and ADR 0036; refutes the suspected FIFO duplication |
-| `docs/audits/submit-to-custody-fail-open-sweep-2026-08-17.md` | Alpaca submit-to-custody fail-open seams (5 confirmed, 9 refuted) | Supporting evidence for #1592; its confirmed seams are landed in `docs/known-gaps.md` via #1604 |
-| `docs/design/user-owned-broker-configurations-plan-2026-09-10.md` | Delegation plan for moving broker configuration out of the environment file | Owner decisions D1-D5 (2026-09-10) and the A-G package split; ADR 0060 is its Package A |
-| `docs/indicator-reliability-methodology.md` | Indicator reliability details | Backs `indicator-reliability-authority.md` |
+| `docs/indicator-reliability-methodology.md` | Indicator reliability details | Served in-app at `/docs/indicator-reliability-methodology` from a byte copy the documentation contract checks |
 | `docs/references/alpaca-sqlite-clerk-invariant-traceability.md` | ADR 0035 invariant-to-code/test evidence | Supports ADR 0035 and issue #1395 review |
 | `docs/references/alpaca-sqlite-clerk-recovery-language.md` | Trader/operator action-language matrix | Backend-authored wording contract evidence; operator policy remains in the manuals |
 | `docs/references/alpaca-sqlite-clerk-source-guarantees.md` | Alpaca guarantee-to-implementation matrix | Official-source provenance for adapter constraints |
@@ -191,13 +162,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | `docs/references/pandas-ta-dispatch.md` | Port attributions for the sixteen pandas-ta pass-through indicators dispatched by Data Lab | Consolidated 2026-09-12 from sixteen per-indicator stubs; ported indicators keep their own notes |
 | `docs/math-rigor.md` | Variance-time and FRED rate backing | Cited by the IV and FRED-rate provenance blocks |
 | `docs/options-companion-format.md` | Options companion data format | Operational reference |
-| `docs/options-cross-section-overview.md` | Options cross-section research | Useful pipeline context |
-| `docs/portfolio-validation-plan.md` | Portfolio validation tests | 10 core tests; likely partially actionable — flag before archiving |
-| `docs/process/agent-collaboration.md` | Multi-agent collaboration process | Operational |
-| `docs/process/autonomous-decisions.md` | Autonomous decision-making process | Operational |
-| `docs/process/pr-review-escalations.md` | PR escalation protocol | Operational |
 | `docs/spy-lean-output-report.md` | SPY LEAN reconciliation | Evidential artifact |
-| `docs/spy-lean-output/source-map.md` | LEAN output source map | Pairs with the report |
 | `docs/tv-polygon-validation-gotchas.md` | TradingView/Polygon alignment | Operational gotchas |
 
 ---
@@ -209,10 +174,7 @@ when the feature ships and an ADR or authority doc absorbs the decision, the PRD
 is pruned to git history (as the broker-session-mirror and daemon-diagnostics
 PRDs were on 2026-07-04). Verify status before trusting them as current.
 
-| Doc | Domain |
-|---|---|
-| `docs/prds/alpaca-account-clerk-sqlite-control-plane.md` | Proposed Alpaca Account Clerk SQLite authority, operation-first custody timeline, and fail-closed recovery; requires a follow-up ADR before implementation authority |
-| `docs/prds/sealed-signal-program-to-governed-alpaca-bot.md` | In-flight strategy-composition, deterministic replay, synthetic Dry Run, and Clerk-governed Alpaca Paper design; requires ADR capture before authority-changing implementation |
+None is in flight today.
 
 ---
 

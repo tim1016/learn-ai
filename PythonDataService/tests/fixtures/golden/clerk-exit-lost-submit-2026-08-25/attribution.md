@@ -2,8 +2,7 @@
 
 ## Source
 
-The 50-bot fleet-stress campaign of 2026-08-25, finding **S15c**
-(`docs/audits/bot-fleet-stress-2026-08-25.md`). At 11:44 CT a websocket drop
+The 50-bot fleet-stress campaign of 2026-08-25, finding **S15c**. At 11:44 CT a websocket drop
 swallowed the broker response to one bot's ENTRY submit. Alpaca's read-only
 `orders:by_client_order_id` endpoint returned 404 for that exact client order
 id: the order **never existed at the broker**. The clerk voided the ENTER

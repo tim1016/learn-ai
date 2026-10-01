@@ -512,7 +512,7 @@ component deletions) live in
   — the migration roadmap that the R8 deferred item will close out.
 - [`docs/options-companion-format.md`](../options-companion-format.md)
   — to be absorbed into §5.4.
-- [`docs/options-cross-section-overview.md`](../options-cross-section-overview.md)
+- `docs/options-cross-section-overview.md` (removed; in Git history)
   — to be absorbed into §4.
 
 **PR audit trail** (this doc):

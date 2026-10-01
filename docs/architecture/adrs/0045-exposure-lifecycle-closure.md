@@ -1,7 +1,7 @@
 # ADR 0045 — Exposure lifecycle closure: recovery flatten executor, EXIT refusal taxonomy, stuck-EXIT watchdog
 
 **Status:** Accepted 2026-08-24
-**Provenance:** Authored with the exposure-lifecycle-closure implementation (PRD #1752, PRs #1763/#1765/#1768 and this PR), from `docs/superpowers/plans/2026-08-24-exposure-lifecycle-closure.md`; spec: `docs/audits/strategy-execution-research-directions-2026-08-24.md` Direction 1. Supersedes [ADR 0010](0010-operator-action-contract-flatten-pause-stop.md) for the active Alpaca/SQLite control plane.
+**Provenance:** Authored with the exposure-lifecycle-closure implementation (PRD #1752, PRs #1763/#1765/#1768 and this PR), from `docs/superpowers/plans/2026-08-24-exposure-lifecycle-closure.md`; spec: Direction 1 of the 2026-08-24 strategy-execution research brief (in Git history). Supersedes ADR 0010 (now deleted; in Git history) for the active Alpaca/SQLite control plane.
 **Decision drivers:** F18/F19 (ops study 2026-08-24 §8–§9); the "correct mechanism exists, unwired" failure mode named by the same-day research directions.
 **Related:** ADR 0035 (SQLite sole Alpaca custody authority), ADR 0038 (Alpaca sole bot control plane), ADR 0041 (generated Button Reference), ADR 0010 (superseded).
 **Vocabulary:** `CONTEXT.md` § "Exposure lifecycle closure" — Recovery EXIT, Safe flatten, Redrive, `EXIT_STUCK`.

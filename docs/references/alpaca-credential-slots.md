@@ -1,6 +1,6 @@
 # Alpaca credential slots, the resolved runtime context, and account verification
 
-**Status:** supporting for [ADR 0060](../architecture/adrs/0060-broker-configuration-is-a-user-owned-profile-on-the-clerk-volume.md) (Proposed), Package C of the [user-owned broker configurations plan](../design/user-owned-broker-configurations-plan-2026-09-10.md). Implements [the profile contract](../architecture/broker-configuration-profile-contract.md) §3 and the §7 row for C. Lineage: live.
+**Status:** supporting for [ADR 0060](../architecture/adrs/0060-broker-configuration-is-a-user-owned-profile-on-the-clerk-volume.md) (Proposed), Package C of the user-owned broker configurations plan (in Git history). Implements [the profile contract](../architecture/broker-configuration-profile-contract.md) §3 and the §7 row for C. Lineage: live.
 
 Package C builds the resolution layer only. Nothing here is wired into
 `app/main.py` or the running worker's boot path — Package D composes it — and
@@ -145,10 +145,9 @@ constraints and `base_url`/`is_paper`/`is_live` derivation all remain in
 ## Retired, and never retired
 
 Package F's cutover, and the distinction it is easiest to get wrong. The
-authority is
-[`alpaca-configuration-ownership-inventory.md`](../architecture/alpaca-configuration-ownership-inventory.md)
-§F; `app/broker_configuration/legacy_environment.py` encodes both lists and
-`tests/broker_configuration/test_legacy_environment.py` asserts they stay
+authority is `app/broker_configuration/legacy_environment.py`, which encodes
+both lists (the former configuration ownership inventory §F is in Git history),
+and `tests/broker_configuration/test_legacy_environment.py` asserts they stay
 disjoint.
 
 **Retired — seven names, refused on a deliberate change after cutover.**

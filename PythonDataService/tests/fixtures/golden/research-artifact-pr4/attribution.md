@@ -6,9 +6,8 @@ Pre-PR4 byte-for-byte capture of `ledger.json` and `result.json` as
 produced by `app.research.runs.storage.save_run` against a fully-
 populated, deterministic `RunLedger` + `BacktestRunResult`. PR 4
 migrates `runs/` onto the shared `app/research/artifact/` seam; the
-acceptance bar from
-`docs/architecture/research-artifact-seam.md` § "Per-PR acceptance
-bar" requires the migrated `save_run` to write byte-identical files
+acceptance bar (ADR 0072 Decision 3: the run ledger stays immutable and
+hash-addressed) requires the migrated `save_run` to write byte-identical files
 for the same inputs — preserving the canonical-JSON hash on which
 existing replay addresses depend.
 

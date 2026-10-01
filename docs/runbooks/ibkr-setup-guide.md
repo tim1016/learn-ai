@@ -43,8 +43,7 @@ for it.
 
 Auto restart is not the complete remedy. It preserves the session across the
 nightly logout, but IBKR still forces a weekly re-login regardless of Auto
-restart (`docs/audits/bot-fleet-stress-2026-08-25.md`, S1 finding, "Root
-cause was not IBKR"). Before the first bot launch after that weekly window,
+restart. Before the first bot launch after that weekly window,
 confirm the Gateway shows a logged-in session and the clerk's broker health
 view reports the market-data feed connected — do not assume Auto restart alone
 carried the session through it.

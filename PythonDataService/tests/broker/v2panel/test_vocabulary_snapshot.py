@@ -128,18 +128,18 @@ def test_missing_copy_raises_keyerror() -> None:
         copy_for("NOT_A_REAL_CODE")
 
 
-# ── Literal ↔ collection parity (ADR 0041 decision 6) ────────────────────────
+# ── Literal ↔ collection parity ─────────────────────────────────────────────
 # Every closed vocabulary in this module is declared twice: once as a
 # ``Literal`` (for static type-checking on request/response schemas) and once
 # as a runtime ``frozenset``/``tuple`` (for iteration — including by the
 # ``ALL_VOCABULARY_CODES`` below). Nothing enforces the two stay equal.
 #
 # ``ActionId`` (a ``Literal``) and ``ACTION_IDS`` (a tuple) drifting apart is
-# the exact failure this ADR names: a member added to the ``Literal`` alone
+# the failure this guards against: a member added to the ``Literal`` alone
 # makes the request schema accept it while the copy-coverage test above stays
 # green and every generated artifact (snapshot, manual) silently omits it. The
 # same drift is possible for any of the other eight pairs, so all nine are
-# swept here, not just the one the ADR calls out by name.
+# swept here, not just ``ActionId``.
 _LITERAL_COLLECTION_PAIRS = (
     ("Phase", Phase, PHASES),
     ("DesiredState", DesiredState, DESIRED_STATES),
@@ -159,7 +159,7 @@ _LITERAL_COLLECTION_PAIRS = (
 def test_literal_matches_runtime_collection(name: str, literal: object, collection: object) -> None:
     """A ``Literal`` alias and its runtime collection must name the same codes.
 
-    Regression test for ADR 0041 decision 6: ``ActionId`` gained nine members
+    Regression test: ``ActionId`` gained nine members
     over time that ``ACTION_IDS`` never received, and nothing failed. Asserting
     ``set(get_args(...)) == set(collection)`` for every pair closes the gap so a
     future addition to one side without the other fails here, not by shipping an

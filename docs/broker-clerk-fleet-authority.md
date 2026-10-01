@@ -33,8 +33,6 @@ could not settle — but it bounds §6 and §7, and the bound is stated there.
 | Authority | What it owns |
 |---|---|
 | [ADR 0062](architecture/adrs/0062-broker-clerk-fleet-control-plane.md) (Accepted 2026-09-12, + A1 addendum 2026-09-13) | The decision and its intent |
-| [PRD](prds/2026-09-12-multi-broker-clerk-control-plane.md) | Requirements |
-| [Delivery review](design/2026-09-13-clerk-fleet-delivery-review.md) | Delivery shape |
 | `CONTEXT.md` § "Broker clerk fleet (resolved 2026-09-12)" | Vocabulary — adopted here unchanged |
 | [ADR 0059](architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md) / [ADR 0060](architecture/adrs/0060-broker-configuration-is-a-user-owned-profile-on-the-clerk-volume.md) | Deployment consent, effective account risk and profile changes, retained per clerk |
 
@@ -357,7 +355,7 @@ claims to fix.**
 | Decision 5: provider safety gates answer before any mutation | ADR 0062 | Dispatched now at the routing seam (§4) — but the Alpaca adapter declares no refusal the seam can currently trigger. The gate is structurally live and semantically empty for the only production provider (owner decision pending) |
 | The coordinator "never serves an unscoped agent family itself" | `CONTEXT.md:2121` | It serves two unscoped agent-family reads |
 | "The browser secret terminates at the coordinator" | `CONTEXT.md`, composed-auth bullet | Documentation, not code (§4) |
-| Retained unscoped **mutations** will retire with the compatibility mechanism | `docs/design/fleet-b-route-inventory.md` | `_SAFE_METHODS = frozenset({"GET", "HEAD"})` (`app/broker/fleet/lane_runtime.py:31`) — the mechanism **can never reach mutations**. Retirement is also all-families-or-nothing despite a per-family constant, and the gate is clerk-agent-only, so it cannot reach the browser's actual compatibility reads |
+| Retained unscoped **mutations** will retire with the compatibility mechanism | The fleet-B route inventory (in Git history) | `_SAFE_METHODS = frozenset({"GET", "HEAD"})` (`app/broker/fleet/lane_runtime.py:31`) — the mechanism **can never reach mutations**. Retirement is also all-families-or-nothing despite a per-family constant, and the gate is clerk-agent-only, so it cannot reach the browser's actual compatibility reads |
 | The refusal vocabulary has 16 / 21 families | PRD / `app/broker/fleet/errors.py` | The true wire vocabulary is **25** (22 declared + 3 minted inline) |
 | `production_adapter()` resolves live adapters | `app/broker/fleet/provider.py:348-350` | Resolves against a deliberately-empty constant, has no callers, always refuses `"alpaca"`. The live registry is `app/broker/fleet_composition.py:27-29` |
 
@@ -478,7 +476,7 @@ data quality before redeploying.
 ## 10. What this document replaced
 
 `docs/broker-v2-operator-manual.md` was generated under
-[ADR 0041](architecture/adrs/0041-generated-operator-button-reference.md) — **retired 2026-09-14**,
+ADR 0041 (now deleted) — **retired 2026-09-14**,
 because this change deletes its entire subject. Its Button Reference and
 Glossary were produced from `app/broker/v2panel/vocabulary.py` and CI-gated with
 `git diff --exit-code` over the source and served copies.
@@ -504,6 +502,5 @@ than a CI gate — recorded here so the loss is visible rather than silent.
 - Moving the installation to another Mac (export, import, go-live, going back):
   `docs/runbooks/migrate-installation.md`
 - Alpaca clerk recovery: `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md`
-- Route and lane inventories: `docs/design/fleet-b-route-inventory.md`,
-  `docs/design/fleet-a2-lane-inventory.md`, `docs/design/fleet-d-runtime-ownership-matrix.md`
+- Delivery D ownership matrix: `docs/design/fleet-d-runtime-ownership-matrix.md`
 - Open defects: `docs/known-gaps.md`

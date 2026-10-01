@@ -9,20 +9,19 @@
   account/generation/database-bound activation fence does so. Acceptance is
   supported by the deterministic/adversarial qualification suite, verified online
   backup and recovery evidence, no-fallback authority guards, and the UI-driven
-  one-share SPY ENTER/EXIT/Stop/reconcile ceremony in
-  [`alpaca-sqlite-clerk-paper-soak-2026-08-07.md`](../../audits/alpaca-sqlite-clerk-paper-soak-2026-08-07.md).
+  one-share SPY ENTER/EXIT/Stop/reconcile ceremony of the 2026-08-07 paper soak
+  (its report is in Git history).
   The execution-ledger sole-authority expansion below runs in that **fresh schema-v8
   authority generation** for that account. Generation 1 was preserved intact and
   generation 2 was initialized clean-slate, with no import, during the
-  human-supervised paper cutover in
-  [the execution PRD](../../prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md).
+  human-supervised paper cutover of the 2026-08-10 execution plan (in Git
+  history).
   The earlier multi-session fault matrix remains historical governance. The bounded
   post-acceptance fault campaign and supervised paper receipts completed on
   2026-08-11. Live-money trading remains disabled and is out of scope (this ADR
   neither gates nor enables live-money).
 - **Context:** Alpaca Account Clerk control-plane; the SQLite control-plane PRD
-  (`docs/prds/alpaca-account-clerk-sqlite-control-plane.md`); an architecture
-  grilling session on 2026-08-04.
+  (in Git history); an architecture grilling session on 2026-08-04.
 - **Supersedes (on acceptance, for the Alpaca clerk only):**
   - **ADR 0001** — the JSON/Parquet control-plane *substrate* choice, as
     instantiated by the Alpaca clerk's two JSONL files (`order_inbox.jsonl`,
@@ -350,8 +349,8 @@ This ADR's Status is unchanged by the annex's existence. *(Reworded
 
 ## Qualification gate
 
-Implementation evidence for both gates is published in
-`docs/audits/alpaca-sqlite-clerk-qualification-{smoke,full}.{json,md}`: (a) the
+Implementation evidence for both gates was published as the qualification
+smoke and full reports (in Git history): (a) the
 adversarial correctness matrix (atomicity, idempotency, broker races, custody/
 uncertainty, database failure incl. mirror-rebuild and hash-chain verification,
 UI delivery), and (b) the performance budgets at the 1/10/100-bot and
@@ -360,7 +359,7 @@ Alpaca-paper proof of exactly one one-share ENTER and one strategy-owned EXIT,
 capture-before-contact identity continuity, SQLite-attributed exposure, broker
 fills, terminal flatness, Stop, reconciliation, reload reconstruction, and
 side-effect-free evidence inspection. The closure record is the soak report and
-the execution PRD linked above. Remaining injected-fault and multi-session rows
+the execution plan named above. Remaining injected-fault and multi-session rows
 are tracked in [issue #1440](https://github.com/tim1016/learn-ai/issues/1440) as
 post-acceptance hardening and are not claims of completed live execution.
 Live-money trading stays disabled throughout.
