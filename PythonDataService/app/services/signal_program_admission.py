@@ -22,7 +22,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.config import settings
-from app.engine.strategy.params import decision_timeframe_ms_for
+from app.engine.strategy.params import StrategyParamsBase, decision_timeframe_ms_for
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
 from app.schemas.run_admission import (
     ProgramBuildAdmissionFact,
@@ -207,10 +207,12 @@ def build_start_program_seal(
         ),
         # Copied straight from the registry contract — the same objects, not
         # a re-derivation — so these can never fall out of sync with it.
-        signals=contract.signals,
+        # Series and exit rule are resolved for these parameters: an EMA
+        # length or hold is a parameter (#2696).
+        signals=contract.resolved_signals(validated),
         decision_streams=contract.decision_streams,
         bar_integrity=contract.bar_integrity,
-        exit_eligibility=contract.exit_eligibility,
+        exit_eligibility=contract.resolved_exit_eligibility(validated),
         numerical_provenance=contract.numerical_provenance,
     )
     configured_hash = configured.semantic_hash()
@@ -521,6 +523,9 @@ def _seal_checks(
     seal without ever being gated.
     """
     configured = seal.configured_signal
+    # The series and exit rule a seal attests to depend on its own parameters
+    # (#2696), so they are compared against the contract resolved for them.
+    sealed_params = _sealed_parameters(binding.strategy_key, configured)
     return (
         _SealCheck(
             "strategy_instance_id",
@@ -575,8 +580,13 @@ def _seal_checks(
             "The registered parameter schema has moved since this instance was sealed.",
         ),
         _SealCheck(
+            "parameters",
+            sealed_params is not None,
+            "The sealed parameters no longer validate against the registered parameter schema.",
+        ),
+        _SealCheck(
             "signals",
-            configured.signals == contract.signals,
+            sealed_params is not None and configured.signals == contract.resolved_signals(sealed_params),
             "The registered signal semantics have moved since this instance was sealed.",
         ),
         _SealCheck(
@@ -591,7 +601,8 @@ def _seal_checks(
         ),
         _SealCheck(
             "exit_eligibility",
-            configured.exit_eligibility == contract.exit_eligibility,
+            sealed_params is not None
+            and configured.exit_eligibility == contract.resolved_exit_eligibility(sealed_params),
             "The registered exit-eligibility rule has moved since this instance was sealed.",
         ),
         _SealCheck(
@@ -617,10 +628,23 @@ def _seal_checks(
     )
 
 
+def _sealed_parameters(program_key: str, configured: ConfiguredSignalProgramSeal) -> StrategyParamsBase | None:
+    """The parameter model a seal's own values build, or ``None`` when they no longer validate."""
+    try:
+        return _STRATEGY_REGISTRY[program_key].param_schema.model_validate(
+            {name: parameter.value for name, parameter in configured.parameters.items()}
+        )
+    except ValidationError:
+        return None
+
+
 def _parameters_match(contract: SignalProgramContract, effective: dict[str, Any]) -> bool:
+    # A canonical dump omits a parameter at its identity-neutral default
+    # (#2696), and every validated setting a dump can omit is that default
+    # (pinned in tests), so an absent name reads as the validated value.
     return (
         str(effective.get("symbol", "")).upper() in contract.validated_symbols
-        and all(effective.get(name) == value for name, value in contract.validated_settings.items())
+        and all(effective.get(name, value) == value for name, value in contract.validated_settings.items())
     )
 
 

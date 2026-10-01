@@ -1,9 +1,9 @@
 """EMA Crossover Signal — Python port of LEAN's C# reference algorithm.
 
-Formula: Long-only EMA(5)/EMA(10) crossover on 15-minute signal bars with an RSI(14) filter. Entry: fresh EMA5 > EMA10 crossover AND (EMA5 - EMA10) >= 0.20 AND 50 <= RSI <= 70. Exit: 5 consolidated bars (75 minutes) after entry.
-Reference: Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs (Apr 2026 revision); TradingView Pine validation `docs/validation/SPY_EMA_Crossover_RSI.pine`; validation report `docs/validation/SPY_EMA_Crossover_Validation_Report.pdf`.
+Formula: Long-only EMA(fast)/EMA(slow) crossover on 15-minute signal bars with an RSI(14) filter; fast/slow default to 5/10. Entry: fresh EMA(fast) > EMA(slow) crossover AND (EMA(fast) - EMA(slow)) >= gap (default 0.20) AND the normalized gap >= gap_bps (default 0) AND rsi_min <= RSI <= rsi_max (default 50–70). Exit: hold_bars consolidated decision bars after entry (default 5, i.e. 75 minutes inside one session).
+Reference: Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs (Apr 2026 revision); TradingView Pine validation `docs/validation/SPY_EMA_Crossover_RSI.pine`; validation report `docs/validation/SPY_EMA_Crossover_Validation_Report.pdf`. The reference hardcodes 5/10/5; other lengths extend it (#2696) and have no reference twin.
 Canonical implementation: this file. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json` reproduces the default-SPY signal sequence trade-by-trade (Phase 1 acceptance gate, 2026-05-04).
-Validated against: `tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py`; the historical LEAN/TradingView/spec suite, including `app/engine/strategy/spec/tests/test_spec_spy_ema_parity.py`; and the SPY/QQQ three- and six-month LEAN cells under `tests/fixtures/golden/cross-engine-studies/cells/`.
+Validated against: `tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py`; the historical LEAN/TradingView/spec suite, including `app/engine/strategy/spec/tests/test_spec_spy_ema_parity.py`; and the SPY/QQQ three- and six-month LEAN cells under `tests/fixtures/golden/cross-engine-studies/cells/` (all at the 5/10/5 default point). Non-default lengths and hold: `tests/engine/strategy/algorithms/test_ema_crossover_signal_lengths.py`.
 
 Line-for-line port of
 ``Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs`` (Apr 2026 revision).
@@ -13,12 +13,23 @@ prices, as the LEAN reference output at
 
 Strategy rules:
   * 15-minute signal bars consolidated from minute data.
-  * Long-only EMA(5)/EMA(10) crossover with RSI(14) filter (Wilders).
-  * Entry: fresh EMA5 > EMA10 crossover AND (ema5 - ema10) >= 0.20
-           AND 50 <= RSI <= 70.
+  * Long-only EMA(fast)/EMA(slow) crossover with RSI(14) filter (Wilders).
+    The reference's EMA(5)/EMA(10) is the default.
+  * Entry: fresh EMA(fast) > EMA(slow) crossover AND
+           (ema_fast - ema_slow) >= gap AND rsi_min <= RSI <= rsi_max.
   * Position lifecycle: emit ENTER on the signal bar, then EXIT after exactly
-    5 consolidated bars (75 minutes). The execution boundary selects and
-    sizes the traded asset.
+    ``hold_bars`` consolidated decision bars (default 5, 75 minutes). The
+    countdown advances only on decision bars, so a hold that outlasts the
+    session resumes on the next session's bars; it never counts wall-clock
+    time. The execution boundary selects and sizes the traded asset.
+  * A crossover is fresh only against a relation the previous bar
+    established. With slow >= 15 both EMAs turn ready on the same bar as
+    RSI(14), so that first ready bar cannot enter; at the 5/10 defaults the
+    EMAs are ready five bars earlier and this never applies.
+
+Naming: ``_ema5``/``_ema10``, ``DecisionSnapshot.ema5``/``ema10`` and the
+trade log's ``"ema5"``/``"ema10"`` indicator keys keep the reference's names
+for byte-stable evidence, but hold the configured fast and slow EMA.
 
 Trade logging:
   Trades are logged in ``on_order_event`` using actual fill prices and
@@ -30,9 +41,9 @@ Trade logging:
   next-bar-open fills, so statistics computed from it match the
   portfolio's net profit.
 
-  Indicator snapshots (EMA5, EMA10, RSI) are captured at signal time
-  and stashed in ``_pending_entry``, because they describe the decision
-  that triggered the entry — not the state at fill time.
+  Indicator snapshots (fast EMA, slow EMA, RSI) are captured at signal
+  time and stashed in ``_pending_entry``, because they describe the
+  decision that triggered the entry — not the state at fill time.
 """
 
 from __future__ import annotations
@@ -98,14 +109,36 @@ def _finite(name: str, value: Decimal | float) -> Decimal:
     return coerced
 
 
+# The lengths the LEAN reference hardcodes: the validated parity point. Each
+# is a parameter (#2696); at these values every identity this program emits
+# is byte-identical to the fixed-length program's.
+DEFAULT_FAST_PERIOD = 5
+DEFAULT_SLOW_PERIOD = 10
+DEFAULT_HOLD_BARS = 5
+
+
+def _decision_bar_count(name: str, value: int) -> int:
+    """Refuse a length or hold that is not a positive integer.
+
+    ``bool`` is an ``int`` subclass, so it is refused by name: ``True`` would
+    otherwise quietly configure a one-bar EMA. Range bounds beyond ``>= 1``
+    stay in the Pydantic params model, as for the gates above.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an integer, got {value!r}")
+    if value < 1:
+        raise ValueError(f"{name} must be at least 1, got {value}")
+    return value
+
+
 class EmaCrossoverSignalAlgorithm(Strategy):
     """Generate EMA crossover decisions without selecting the traded asset."""
 
     def _gap_is_sufficient(self, ema_fast: Decimal, ema_slow: Decimal) -> bool:
         """Apply both entry floors: absolute price gap and normalized gap.
 
-        ``gap`` is the raw ``EMA(5) - EMA(10)`` dollar spread; ``gap_bps`` is
-        that same spread normalized against EMA(10), which scales with price
+        ``gap`` is the raw ``EMA(fast) - EMA(slow)`` dollar spread; ``gap_bps`` is
+        that same spread normalized against EMA(slow), which scales with price
         level instead of drifting as the underlying moves. Both are *minimums*,
         so ``0`` means that floor imposes no constraint -- there is no sentinel
         value and no mode flag. The validated LEAN-parity point is
@@ -141,6 +174,9 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         rsi_min: Decimal | float = Decimal(50),
         rsi_max: Decimal | float = Decimal(70),
         gap_bps: Decimal | float = Decimal("0"),
+        fast_period: int = DEFAULT_FAST_PERIOD,
+        slow_period: int = DEFAULT_SLOW_PERIOD,
+        hold_bars: int = DEFAULT_HOLD_BARS,
     ) -> None:
         super().__init__()
         # This is the signal stream, not an execution target. The Action Plan
@@ -156,6 +192,14 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         self._gap_bps = _finite("gap_bps", gap_bps)
         self._rsi_min = _finite("rsi_min", rsi_min)
         self._rsi_max = _finite("rsi_max", rsi_max)
+        # EMA lengths and the hold, in 15-minute decision bars.
+        self._fast_period = _decision_bar_count("fast_period", fast_period)
+        self._slow_period = _decision_bar_count("slow_period", slow_period)
+        if self._fast_period >= self._slow_period:
+            raise ValueError(
+                f"fast_period must be less than slow_period, got {fast_period} and {slow_period}"
+            )
+        self._hold_bars = _decision_bar_count("hold_bars", hold_bars)
         self._symbol: str = ""
         self._ema5: ExponentialMovingAverage | None = None
         self._ema10: ExponentialMovingAverage | None = None
@@ -201,9 +245,11 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         assert self.ctx is not None
         self._symbol = self.ctx.add_equity(self._symbol_name)
 
-        # Indicators (updated manually in the handler).
-        self._ema5 = ExponentialMovingAverage("EMA5", 5)
-        self._ema10 = ExponentialMovingAverage("EMA10", 10)
+        # Indicators (updated manually in the handler). ``_ema5``/``_ema10``
+        # hold the configured fast/slow EMA; at the defaults they are the
+        # reference's EMA5/EMA10 by name and period.
+        self._ema5 = ExponentialMovingAverage(f"EMA{self._fast_period}", self._fast_period)
+        self._ema10 = ExponentialMovingAverage(f"EMA{self._slow_period}", self._slow_period)
         self._rsi14 = RelativeStrengthIndex("RSI14", 14)
 
         self._prev_ema5_above_ema10 = False
@@ -243,14 +289,27 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         different intents on the same bar; omitting it gave them one
         ``evaluation_id``, which is also the Clerk ``decision_id``, the
         crash-recovery key, and the receipt identity (#1865 review).
+
+        The EMA lengths and the hold join only when they differ from their
+        defaults (#2696): every ``evaluation_id`` and the golden trace root
+        minted at the 5/10/5 point stay byte-identical, and a non-default
+        value is always present, so two lengths never share an identity.
         """
-        return {
+        settings = {
             "symbol": self._symbol_name,
             "gap": str(self._gap),
             "gap_bps": str(self._gap_bps),
             "rsi_min": str(self._rsi_min),
             "rsi_max": str(self._rsi_max),
         }
+        for name, value, default in (
+            ("fast_period", self._fast_period, DEFAULT_FAST_PERIOD),
+            ("slow_period", self._slow_period, DEFAULT_SLOW_PERIOD),
+            ("hold_bars", self._hold_bars, DEFAULT_HOLD_BARS),
+        ):
+            if value != default:
+                settings[name] = str(value)
+        return settings
 
     # ------------------------------------------------------------------
     # on_minute_bar override — writes to observations.csv when output_dir
@@ -293,6 +352,12 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         assert self._ema5 is not None
         assert self._ema10 is not None
         assert self._rsi14 is not None
+
+        # Read before this bar's update: did the previous bar establish a
+        # fast/slow relation? Only then can this bar's crossover be fresh
+        # (see the module docstring). Always true on a decision bar at the
+        # 5/10 defaults, so the reference behaviour is unchanged.
+        relation_was_known = self._ema5.is_ready and self._ema10.is_ready
 
         # Update indicators with consolidated bar close at EndTime.
         self._ema5.update(bar.end_ms, bar.close)
@@ -355,7 +420,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 self._bars_until_exit = next_countdown
         else:
             # Entry check.
-            fresh_crossover = current_above and not self._prev_ema5_above_ema10
+            fresh_crossover = current_above and relation_was_known and not self._prev_ema5_above_ema10
             gap_ok = self._gap_is_sufficient(ema5_val, ema10_val)
             rsi_lower, rsi_upper = self._rsi_gate_bounds()
             rsi_ok = rsi_lower <= rsi_val <= rsi_upper
@@ -447,26 +512,30 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         self._pending_entry = _PendingEntry(ema5=ema5_val, ema10=ema10_val, rsi=rsi_val)
         self.ctx.emit_signal_intent(intent)
         self._in_position = True
-        self._bars_until_exit = 5
+        # Counted down on decision bars only (evaluate_signal_bar), so a hold
+        # that outlasts the session finishes on the next session's bars.
+        self._bars_until_exit = self._hold_bars
 
         rsi_lower, rsi_upper = self._rsi_gate_bounds()
         rsi_position = (float(rsi_val) - float(rsi_lower)) / (float(rsi_upper) - float(rsi_lower))
         confidence = 0.5 + 0.3 * (1.0 - abs(rsi_position - 0.5))
         ema_gap = ema5_val - ema10_val
+        fast_label = f"EMA{self._fast_period}"
+        slow_label = f"EMA{self._slow_period}"
         self.ctx.emit_insight(
             Insight.price(
                 symbol=self._symbol,
                 direction=InsightDirection.UP,
-                period=timedelta(minutes=15 * 5),
+                period=timedelta(minutes=15 * self._hold_bars),
                 magnitude=float(ema_gap / bar.close),
                 confidence=round(confidence, 4),
-                source_model="EmaCross_5_10_RSI14",
-                tag=f"EMA5={ema5_val:.4f} EMA10={ema10_val:.4f} RSI={rsi_val:.2f} Gap={ema_gap:.4f}",
+                source_model=f"EmaCross_{self._fast_period}_{self._slow_period}_RSI14",
+                tag=f"{fast_label}={ema5_val:.4f} {slow_label}={ema10_val:.4f} RSI={rsi_val:.2f} Gap={ema_gap:.4f}",
             )
         )
         self.ctx.log(
             f"ENTRY SIGNAL: {display_time(bar.end_ms)} Close={bar.close:.2f} "
-            f"EMA5={ema5_val:.4f} EMA10={ema10_val:.4f} Gap={ema_gap:.4f} RSI={rsi_val:.2f}"
+            f"{fast_label}={ema5_val:.4f} {slow_label}={ema10_val:.4f} Gap={ema_gap:.4f} RSI={rsi_val:.2f}"
         )
 
     def rollback_blocked_entry(self) -> None:
@@ -538,8 +607,8 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 self.ctx.log(
                     f"ENTRY: {display_time(event.filled_at_ms)} "
                     f"Price={event.fill_price:.2f} "
-                    f"EMA5={self._open_trade.ema5:.4f} "
-                    f"EMA10={self._open_trade.ema10:.4f} "
+                    f"EMA{self._fast_period}={self._open_trade.ema5:.4f} "
+                    f"EMA{self._slow_period}={self._open_trade.ema10:.4f} "
                     f"RSI={self._open_trade.rsi:.2f}"
                 )
         else:

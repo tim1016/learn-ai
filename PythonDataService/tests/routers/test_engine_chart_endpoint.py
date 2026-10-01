@@ -72,6 +72,20 @@ def test_service_resolves_strategy_recipe_from_validated_parameters(chart_store:
     assert all(spec.strategy_default for spec in response.indicator_specs)
 
 
+def test_service_draws_the_configured_ema_lengths(chart_store: None) -> None:
+    # The EMA lengths are parameters (#2696); the evidence chart must draw the
+    # lines the program trades on, not the reference's 5/10.
+    response = build_engine_chart(
+        _request(parameters={"symbol": "SPY", "fast_period": 3, "slow_period": 20})
+    )
+
+    assert [spec.id for spec in response.indicator_specs] == [
+        "ema-length-3",
+        "ema-length-20",
+        "rsi-length-14",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_endpoint_computes_indicators_on_the_returned_policy_store_bars(
     chart_store: None,
