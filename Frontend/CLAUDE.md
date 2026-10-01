@@ -26,7 +26,7 @@ Frontend tests are **independent** — no backend or database needed.
 - Setup file: `src/test-setup.ts` (stubs ResizeObserver, Canvas, matchMedia)
 - Test behavior, not implementation — assert rendered output, not signal values
 - Spec files co-located: `*.component.spec.ts`, `*.service.spec.ts`
-- Locally, run one exact spec (`npx ng test --include='src/app/<path>/<name>.spec.ts'`); CI runs the rest. To reproduce one CI shard, set `TEST_SHARD_INDEX`/`TEST_SHARD_COUNT` to match `.github/workflows/ci.yml`'s `frontend-test-shard` matrix (e.g. `TEST_SHARD_INDEX=1 TEST_SHARD_COUNT=6 npm test`); `scripts/run-test-budget.cjs` then auto-appends `--runner-config=vitest.ci.config.ts`. Unsharded, `npm test` runs the whole suite and can OOM on a memory-capped container. `NG_BUILD_MAX_WORKERS` defaults to `2` (overridable) either way.
+- Locally, run one exact spec (`npx ng test --include='src/app/<path>/<name>.spec.ts'`); CI runs the rest. To reproduce a failing CI shard, run `TEST_SHARD_INDEX=<n> TEST_SHARD_COUNT=6 npm test` (the `frontend-test-shard` matrix in `.github/workflows/ci.yml`); `scripts/run-test-budget.cjs` then adds `--runner-config=vitest.ci.config.ts`. `NG_BUILD_MAX_WORKERS` defaults to `2` (overridable).
 
 ## Gotchas
 

@@ -45,7 +45,7 @@ ordering across unrelated domains.
 | Agent behavior | This file, then the routed rule file or skill | Surface the conflict |
 | Product or system decision | Accepted ADR, with later explicit supersession winning | Record or ask for an explicit decision |
 | Mathematical port target | Pinned vendored reference, plus the golden fixture and parity test | Surface the conflict; do not silently choose |
-| Engine ownership | `docs/architecture/engine-authority-map.md` | A PR that moves ownership edits the map in the same PR |
+| Engine ownership | `docs/architecture/engine-authority-map.md` | Surface the conflict |
 | Current runtime or wire shape | Manifest/config, generated contract, implementation, and executable tests | Docs describe this evidence; they do not override it |
 | Framework behavior | Installed manifest version and official documentation for that version | Derive the version from the manifest, not a prose cache |
 | Open defect | `docs/known-gaps.md` | Closed findings belong in durable decision history or Git history |
