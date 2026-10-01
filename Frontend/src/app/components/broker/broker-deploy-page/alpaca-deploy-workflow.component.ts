@@ -55,6 +55,7 @@ import {
 } from '../../../fleet/lane-fence';
 import {
   DEPLOY_AGAIN_QUERY_PARAM,
+  GOLDEN_QUALIFICATION_QUERY_PARAM,
   accountWorkspaceBotRoute,
   accountWorkspaceTabRoute,
   type AccountWorkspaceLink,
@@ -99,9 +100,18 @@ import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-pick
 import { mediaQuerySignal } from '../../../shared/media-query';
 
 import { sameAlpacaAccount } from '../../../services/alpaca-account-identity';
+import { GoldenSearchService } from '../../golden-search/golden-search.service';
+import type { QualificationDeployOffer } from '../../golden-search/golden-search.types';
 
 /** A bot id as the backend's path-safe validator admits it (Deploy again's `?from=`). */
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+/** A Golden Search qualification id as a path segment may carry it (`?golden_qualification=`, #2696). */
+const QUALIFICATION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+
+/** What a Golden Search handoff did to the form (#2696). */
+type GoldenHandoff =
+  | { readonly kind: 'applied'; readonly offer: QualificationDeployOffer }
+  | { readonly kind: 'refused'; readonly id: string; readonly reason: string };
 /** A submission key exactly as the backend admits it (`SUBMISSION_KEY_PATTERN`,
  * pinned to the OpenAPI contract by the spec). A `?submission=` outside it is
  * ignored: the backend would refuse every read and Deploy under it (422). */
@@ -270,7 +280,10 @@ type EndCheckAnswer =
  * settles it, so a retry — a double click, a lost response, a reload, an
  * edit — never starts a second bot. The form is kept per
  * account for the session (H9); Deploy again (`?from=<sid>`) pre-fills
- * everything but money and consent.
+ * everything but money and consent. A Golden Search handoff
+ * (`?golden_qualification=<id>`, #2696) applies an approved qualification's
+ * strategy, symbol and exact settings the same way, once, and only while
+ * the qualification is ready.
  */
 @Component({
   selector: 'app-alpaca-deploy-workflow',
@@ -819,6 +832,41 @@ export class AlpacaDeployWorkflowComponent {
     return !view.strategies.some((strategy) => strategy.strategy_key === key);
   });
 
+  // ── Golden Search handoff (#2696) ───────────────────────────────────────
+
+  /** `?golden_qualification=` as it arrived, valid or not; it is cleared once handled. */
+  private readonly goldenParam = computed(() => this.queryParams().get(GOLDEN_QUALIFICATION_QUERY_PARAM));
+  private readonly goldenQualificationId = computed(() => {
+    const id = this.goldenParam();
+    return id !== null && QUALIFICATION_ID_RE.test(id) ? id : null;
+  });
+
+  /** The approved qualification's deploy offer. The research client is resolved
+   * only when a handoff arrives; a Deploy without one never constructs it. */
+  protected readonly goldenOffer = resource({
+    params: () => this.goldenQualificationId() ?? undefined,
+    loader: ({ params }) => this.injector.get(GoldenSearchService).deployOffer(params),
+  });
+
+  /** What the last handoff did; kept after its parameter is cleared. */
+  protected readonly goldenHandoff = signal<GoldenHandoff | null>(null);
+
+  /** The applied golden settings are still exactly what the form holds. */
+  protected readonly goldenStillApplied = computed(() => {
+    const handoff = this.goldenHandoff();
+    if (handoff?.kind !== 'applied') return false;
+    const ticket = this.ticket();
+    return ticket.strategyKey === handoff.offer.program_key && ticket.symbol === handoff.offer.symbol.trim().toUpperCase()
+      && sameParameterValues(ticket.parameters, handoff.offer.parameters);
+  });
+
+  /** The golden configuration's strategy is not one this account offers. */
+  protected readonly goldenStrategyMissing = computed(() => {
+    const handoff = this.goldenHandoff();
+    const view = this.currentView();
+    return handoff?.kind === 'applied' && view !== null && !view.strategies.some((strategy) => strategy.strategy_key === handoff.offer.program_key);
+  });
+
   // ── Submission ────────────────────────────────────────────────────────────
 
   protected readonly submissionReadiness = computed<DeploySubmissionReadiness>(() => {
@@ -1254,6 +1302,31 @@ export class AlpacaDeployWorkflowComponent {
       });
     });
 
+    // A Golden Search handoff applies once: a ready qualification's exact
+    // settings, or the reason a qualification is not offered. Either way the
+    // parameter is cleared, so a reload never re-applies it.
+    effect(() => {
+      const raw = this.goldenParam();
+      if (raw === null) return;
+      const id = this.goldenQualificationId();
+      const error = this.goldenOffer.error();
+      const offer = this.goldenOffer.hasValue() ? this.goldenOffer.value() : null;
+      untracked(() => {
+        if (id === null) {
+          this.goldenHandoff.set({ kind: 'refused', id: raw, reason: 'This link does not name a golden configuration. Nothing was applied.' });
+        } else if (error !== undefined) {
+          this.goldenHandoff.set({ kind: 'refused', id, reason: extractServerMessage(error, 'The golden configuration could not be read. Nothing was applied.') });
+        } else if (offer === null || offer.qualification_id !== id) {
+          return;
+        } else if (offer.status === 'ready') {
+          this.applyGoldenOffer(offer);
+        } else {
+          this.goldenHandoff.set({ kind: 'refused', id, reason: offer.explanation });
+        }
+        void this.clearGoldenParam();
+      });
+    });
+
     // Live's typed phrase proves one review: a new amount, new settings or a
     // new review clears it (PRD #2560 story 60).
     effect(() => {
@@ -1336,6 +1409,44 @@ export class AlpacaDeployWorkflowComponent {
       queryParamsHandling: 'merge',
       replaceUrl: true,
     });
+  }
+
+  /** A ready golden qualification: a fresh draft with its strategy, symbol and
+   * exact parameters, applied together as Deploy again's prefill is. A knob
+   * the canonical parameters leave out is the strategy's schema default, which
+   * the form shows and the Deploy request leaves out the same way. */
+  private applyGoldenOffer(offer: QualificationDeployOffer): void {
+    this.receipt.set(null);
+    this.frozenCommand.set(null);
+    this.clearAdmission();
+    this.submitError.set(null);
+    this.restoreDraft(this.freshDraft({
+      ...EMPTY_DEPLOY_SETTINGS,
+      strategyKey: offer.program_key,
+      symbol: offer.symbol.trim().toUpperCase(),
+      parameters: { ...offer.parameters },
+      ...exitTermSettings(this.currentView()?.default_exit_terms),
+    }));
+    this.goldenHandoff.set({ kind: 'applied', offer });
+  }
+
+  private async clearGoldenParam(): Promise<void> {
+    await this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { [GOLDEN_QUALIFICATION_QUERY_PARAM]: null },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
+  }
+
+  /** Clear: the golden settings leave the form, which starts fresh. */
+  protected async clearGolden(): Promise<void> {
+    this.goldenHandoff.set(null);
+    await this.clearPrefill();
+  }
+
+  protected dismissGolden(): void {
+    this.goldenHandoff.set(null);
   }
 
   /** A changed account abandons the attempt and refreshes the page context. */

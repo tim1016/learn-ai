@@ -4,7 +4,11 @@
     <span class="account-list__count">{{ accounts().length }} registered</span>
   </header>
 
-  @if (deployIntent()) {
+  @if (goldenHandoff()) {
+    <p class="account-list__state" role="status">
+      Choose a ready Paper or Live account below to use the golden configuration.
+    </p>
+  } @else if (deployIntent()) {
     <p class="account-list__state" role="status">
       Choose a ready Paper or Live account below to deploy a strategy.
     </p>

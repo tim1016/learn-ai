@@ -2,13 +2,10 @@ import { ChangeDetectionStrategy, Component, computed, effect, input, output, si
 import { RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 
+import { GOLDEN_DEPLOY_HANDOFF_ROUTE, GOLDEN_QUALIFICATION_QUERY_PARAM } from '../../fleet/account-workspace';
 import { expectedDefault, factualNote, weaknesses, weaknessRequired } from './golden-search-decision';
 import { RETAIN_KINDS } from './golden-search-retain.component';
 import type { ExamView, RetainKind, StudyCommand, StudyDetail } from './golden-search.types';
-
-/** Where "Use in Deploy" lands: the account list, carrying the qualification to the chosen account's Deploy. */
-export const DEPLOY_HANDOFF_ROUTE = '/brokers/alpaca';
-export const GOLDEN_QUALIFICATION_PARAM = 'golden_qualification';
 
 /**
  * The decision panel (#2696): a written reason, the acknowledgement that
@@ -36,7 +33,7 @@ export class GoldenSearchApprovalComponent {
   readonly parityAcknowledged = signal(false);
   readonly weaknessAcknowledged = signal(false);
 
-  protected readonly deployRoute = DEPLOY_HANDOFF_ROUTE;
+  protected readonly deployRoute = GOLDEN_DEPLOY_HANDOFF_ROUTE;
   protected readonly retainKinds = RETAIN_KINDS.filter((option) => option.kind !== 'keep_current');
   protected readonly approved = computed(() => this.study().state === 'approved');
   protected readonly pending = computed(() => this.study().state === 'qualification_pending');
@@ -47,7 +44,7 @@ export class GoldenSearchApprovalComponent {
   protected readonly weaknessText = computed(() => weaknesses(this.exam()).join(' and '));
   protected readonly programVersion = computed(() => this.study().results.qualification?.deploy?.program_version ?? this.study().receipt.program_version ?? 'unversioned');
   protected readonly qualificationId = computed(() => this.study().results.qualification?.qualification_id ?? this.study().qualification_id);
-  protected readonly deployQuery = computed(() => ({ [GOLDEN_QUALIFICATION_PARAM]: this.qualificationId() }));
+  protected readonly deployQuery = computed(() => ({ [GOLDEN_QUALIFICATION_QUERY_PARAM]: this.qualificationId() }));
   protected readonly canApprove = computed(
     () => this.canApproveState() && !this.busy() && this.note().trim() !== '' && this.parityAcknowledged() && (!this.weak() || this.weaknessAcknowledged()),
   );
