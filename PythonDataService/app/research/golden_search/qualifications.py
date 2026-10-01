@@ -444,6 +444,12 @@ async def get_event_by_command(conn: asyncpg.Connection, command_id: str) -> Qua
     return None if row is None else _event(row)
 
 
+async def default_qualification_ids(conn: asyncpg.Connection) -> set[str]:
+    """The qualified versions some (program, stock) default names right now."""
+    rows = await conn.fetch("SELECT qualification_id FROM research_golden_defaults WHERE qualification_id IS NOT NULL")
+    return {row["qualification_id"] for row in rows}
+
+
 async def _lock_default_pointer(conn: asyncpg.Connection, program_key: str, symbol: str) -> None:
     """Serialize every writer of one (program, stock) default until the caller's transaction ends.
 
@@ -930,6 +936,7 @@ __all__ = [
     "QualificationSubject",
     "Revocation",
     "append_event",
+    "default_qualification_ids",
     "events_for",
     "find_qualifications",
     "get_default",

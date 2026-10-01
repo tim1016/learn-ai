@@ -131,10 +131,6 @@ class _DigestCache:
         return self._digests[program_key]
 
 
-async def _default_ids(conn: asyncpg.Connection) -> set[str]:
-    return {item.qualification.id for item in await qualifications.read_default_qualifications(conn)}
-
-
 def _judged(
     rows: Sequence[QualificationRow],
     events: Mapping[str, Sequence[QualificationEvent]],
@@ -159,7 +155,7 @@ async def list_judged(
     async with conn.transaction(isolation="repeatable_read", readonly=True):
         rows = await qualifications.list_qualifications(conn, program_key=program_key, symbol=symbol, limit=limit)
         events = await qualifications.events_for(conn, [row.id for row in rows])
-        default_ids = await _default_ids(conn)
+        default_ids = await qualifications.default_qualification_ids(conn)
     return _judged(rows, events, default_ids, _DigestCache())
 
 
@@ -169,7 +165,7 @@ async def get_judged(conn: asyncpg.Connection, qualification_id: str) -> JudgedQ
         if row is None:
             return None
         events = await qualifications.events_for(conn, [row.id])
-        default_ids = await _default_ids(conn)
+        default_ids = await qualifications.default_qualification_ids(conn)
     return _judged([row], events, default_ids, _DigestCache())[0]
 
 
