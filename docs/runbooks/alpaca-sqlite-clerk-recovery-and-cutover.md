@@ -450,8 +450,4 @@ an interrupted apply can resume from a matching prepared or applied manifest whe
 hash still matches. A changed SQLite revision/registry, changed runner artifact, symlink,
 wrong token, expired fresh plan, or out-of-bound candidate set refuses the operation.
 
-## Qualification evidence
-
-- Invariant mapping: `docs/references/alpaca-sqlite-clerk-invariant-traceability.md`
-
 No command in this runbook enables live-money trading.

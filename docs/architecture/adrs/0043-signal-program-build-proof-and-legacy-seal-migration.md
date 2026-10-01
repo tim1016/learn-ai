@@ -203,7 +203,10 @@ per-run replay receipt that joins the two after each eligible terminal run
 (older historical runs are on-demand only — see that doc's coverage contract). The live-time
 `trace_digest` / `decision_bar_close_ms` those receipts now also carry live in
 the receipt facts, outside the custody transition `row_hash`, so this
-transaction's hash chain and sealed identity are untouched.
+transaction's hash chain and sealed identity are untouched. *(2026-10-01,
+#2763: #2755 cut the per-run replay receipt as write-only output, and its
+reference note went with it; the divergence classifier remains in
+`app/services/run_replay_proof.py`.)*
 
 ## Consequences
 

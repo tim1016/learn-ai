@@ -27,8 +27,8 @@ podman exec -w /app polygon-data-service python -m \
 
 ## Tolerance
 `atol=1e-9, rtol=0` for the regression test — bit-exact against the
-committed output. Regenerating requires justification in
-`docs/references/macd.md`.
+committed output. Regenerating requires justification in the commit
+message.
 
 ## Files
 - `input.csv` — timestamped close series

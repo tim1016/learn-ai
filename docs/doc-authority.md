@@ -147,11 +147,10 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | `docs/architecture/iv-ownership-research.md` | IV tolerances, primary sources and worked examples | The decisions are ADR 0071 |
 | `docs/architecture/options-research.md` | Options vendor facts and the lognormal POP assumption | Outside facts and one documented non-equivalence |
 | `docs/indicator-reliability-methodology.md` | Indicator reliability details | Served in-app at `/docs/indicator-reliability-methodology` from a byte copy the documentation contract checks |
-| `docs/references/alpaca-sqlite-clerk-invariant-traceability.md` | ADR 0035 invariant-to-code/test evidence | Supports ADR 0035 and issue #1395 review |
 | `docs/references/alpaca-sqlite-clerk-recovery-language.md` | Trader/operator action-language matrix | Backend-authored wording contract evidence; operator policy remains in the manuals |
 | `docs/references/alpaca-sqlite-clerk-source-guarantees.md` | Alpaca guarantee-to-implementation matrix | Official-source provenance for adapter constraints |
-| `docs/references/clerk-invariants.md` | Clerk custody invariants (EXIT reducing quantity, fill-quantity tolerance/delta pricing, position-drift tolerance) | Consolidated 2026-09-12 from three per-invariant stubs; defers to the pinned contracts doc |
-| `docs/references/pandas-ta-dispatch.md` | Port attributions for the sixteen pandas-ta pass-through indicators dispatched by Data Lab | Consolidated 2026-09-12 from sixteen per-indicator stubs; ported indicators keep their own notes |
+| `docs/references/clerk-invariants.md` | Clerk custody invariants (EXIT reducing quantity, fill-quantity tolerance/delta pricing, position-drift tolerance) | The rules are ADR 0030 and ADR 0036; this note keeps the tests that pin them and the coverage-set tolerance |
+| `docs/references/pandas-ta-dispatch.md` | Defaults and quirks of the pandas-ta pass-through indicators Data Lab dispatches | Equal to the pinned pandas-ta by reference; no port and no fixture |
 | `docs/math-rigor.md` | Variance-time and FRED rate backing | Cited by the IV and FRED-rate provenance blocks |
 | `docs/options-companion-format.md` | Options companion data format | Operational reference |
 | `docs/spy-lean-output-report.md` | LEAN statistics vs `verify.py`: the accepted divergences | Evidential artifact |
