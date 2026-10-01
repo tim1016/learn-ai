@@ -5,8 +5,7 @@ agent or operator. This is the *only* durable home for open defects; the
 point-in-time audit-finding files they came from (`docs/audits/auto-research/findings/`,
 `docs/audits/vibe-coded-app-research/findings/`, `architecture-investigation-2026-07-02.md`,
 and the auto-research run logs) were deleted on **2026-07-04** after their open
-items were lifted here. The closed findings live in git history and in the
-auto-research ledger (`docs/audits/auto-research/state.json`).
+items were lifted here. The closed findings live in git history.
 
 **Status convention.** Each item carries a severity and a code pointer captured
 on the verification date named with its section — verify the `file:line` against
@@ -110,7 +109,7 @@ not yet provide:
 
 - **Golden-fixture coverage gap** — most canonical math still lacks a registered
   golden fixture; the `iv30/` snapshot sits outside manifest governance.
-  *(was F-0026; deferred in `auto-research/state.json`)*
+  *(was F-0026)*
 - **Temporal wire/storage contracts outside Alpaca V2 remain non-numeric
   (medium).** The 2026-08-18 census confirmed 4 Pydantic, 29 C#, and 22 real
   TypeScript temporal field declarations using strings or native date types
