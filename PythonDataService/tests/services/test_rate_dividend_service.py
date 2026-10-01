@@ -95,6 +95,22 @@ class TestRateAndDividendFacade:
         assert out.dividend_yield == 0.0
         assert out.rate == 0.05
 
+    def test_a_failed_dividend_read_leaves_q_unset(self, monkeypatch):
+        """A Polygon outage is not a non-payer: q is unset, never 0 (#2764)."""
+        monkeypatch.setattr(
+            rate_dividend_service, "get_risk_free_rate_and_source", lambda dte_days, observation_date: (0.05, "FRED")
+        )
+
+        class DownPolygon(FakePolygon):
+            def list_dividends(self, *args: object, **kwargs: object) -> list[dict]:
+                raise RuntimeError("polygon down")
+
+        out = get_rate_and_dividend(
+            ticker="SPY", spot_price=590.0, polygon=DownPolygon([]), dte_days=30, observation_date="2024-12-20"
+        )
+
+        assert out == RateAndDividend(rate=0.05, dividend_yield=None, source_rate="FRED", source_dividend=None)
+
     def test_rate_resolves_when_the_dividend_lookup_cannot_run(self):
         """With no spot the rate still resolves, and a FRED fallback is labelled as the default (#2764)."""
         with patch.object(fred_service, "_fetch_all_tenors", return_value={}):
