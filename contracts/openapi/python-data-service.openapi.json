@@ -13314,7 +13314,7 @@
         "type": "object"
       },
       "DivergenceCategory": {
-        "description": "Categorical divergence types \u2014 see numerical-rigor.md.",
+        "description": "Categorical divergence types \u2014 see ADR 0069 \u00a76.",
         "enum": [
           "fixture_insufficient",
           "decision_mismatch",
@@ -23594,7 +23594,7 @@
       },
       "NumericalProvenanceContract": {
         "additionalProperties": false,
-        "description": "The Math Provenance Contract (CLAUDE.md #2/#5), sealed as program identity.\n\nMirrors the ``Formula``/``Reference``/``Canonical implementation``/\n``Validated against`` block already required by the\n``learn-ai-validation`` skill and present in\n``ema_crossover_signal.py``'s own module docstring; this is that same\nfact, made part of the immutable seal rather than living only in prose\nthat could drift unnoticed. ``tolerance_atol``/``tolerance_rtol`` are\n``None`` at ``equivalence_level=\"bit_exact\"`` \u2014 the trace/decision\nidentity in ``signal_program.py`` is Decimal-exact and SHA-256-compared,\nnot tolerance-compared; the documented ``1e-9`` absolute tolerance in\n``docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md``\napplies one level down, to the EMA/RSI *value* parity against LEAN.",
+        "description": "The Math Provenance Contract (ADR 0068 Decision 2), sealed as program identity.\n\nMirrors the ``Formula``/``Reference``/``Canonical implementation``/\n``Validated against`` block already required by\nADR 0068 Decision 2 and present in\n``ema_crossover_signal.py``'s own module docstring; this is that same\nfact, made part of the immutable seal rather than living only in prose\nthat could drift unnoticed. ``tolerance_atol``/``tolerance_rtol`` are\n``None`` at ``equivalence_level=\"bit_exact\"`` \u2014 the trace/decision\nidentity in ``signal_program.py`` is Decimal-exact and SHA-256-compared,\nnot tolerance-compared; the documented ``1e-9`` absolute tolerance\napplies one level down, to the EMA/RSI *value* parity against LEAN.",
         "properties": {
           "canonical_implementation": {
             "title": "Canonical Implementation",
@@ -24246,7 +24246,7 @@
         "type": "object"
       },
       "OptionsCompanionConfig": {
-        "description": "Optional companion-file config emitted alongside the underlying dataset CSV.\n\nWhen enabled, the ZIP response includes per-slot CSVs under ``calls/``\nand ``puts/`` subfolders (subject to ``include_calls`` / ``include_puts``)\n\u2014 one file per (side, slot) where the slot is a price-ordered offset\nfrom ATM (e.g. ``calls/atm-03.csv``, ``calls/atm.csv``, ``puts/atm+02.csv``).\nEach file is a fixed-schema time series for that slot across all trading\ndays in range; the contract filling the slot rolls daily and is recorded\nas the ``contract_ticker`` row value. See ``docs/options-companion-format.md``\nfor the full spec; computation lives in ``options_companion_service``.",
+        "description": "Optional companion-file config emitted alongside the underlying dataset CSV.\n\nWhen enabled, the ZIP response includes per-slot CSVs under ``calls/``\nand ``puts/`` subfolders (subject to ``include_calls`` / ``include_puts``)\n\u2014 one file per (side, slot) where the slot is a price-ordered offset\nfrom ATM (e.g. ``calls/atm-03.csv``, ``calls/atm.csv``, ``puts/atm+02.csv``).\nEach file is a fixed-schema time series for that slot across all trading\ndays in range; the contract filling the slot rolls daily and is recorded\nas the ``contract_ticker`` row value. Computation lives in\n``options_companion_service``.",
         "properties": {
           "dividend_yield": {
             "default": 0.0,
@@ -26614,7 +26614,7 @@
         "type": "object"
       },
       "ProposedLimitEvaluationResponse": {
-        "description": "What the price the operator proposed does against the Clerk's quote (#2007).\n\nEvery number an operator reads before confirming is computed by the Clerk\nand rendered as-is; the browser never derives one (AGENTS.md \u00a7 \"Python\nowns all math\").",
+        "description": "What the price the operator proposed does against the Clerk's quote (#2007).\n\nEvery number an operator reads before confirming is computed by the Clerk\nand rendered as-is; the browser never derives one (ADR 0068).",
         "properties": {
           "band_cap_bps": {
             "anyOf": [
@@ -31658,7 +31658,7 @@
         "type": "object"
       },
       "SpecTradeResponse": {
-        "description": "Single trade emitted by a spec backtest.\n\nTimestamps are ``int64 ms UTC`` per the repo-wide wire-format rule\n(see ``.claude/rules/numerical-rigor.md`` \u00a7 \"Timestamp rigor\"). UI\ncallers convert to local-time strings at the display boundary; no\nother layer should be reading these fields as strings.",
+        "description": "Single trade emitted by a spec backtest.\n\nTimestamps are ``int64 ms UTC`` on the wire. UI\ncallers convert to local-time strings at the display boundary; no\nother layer should be reading these fields as strings.",
         "properties": {
           "entry_price": {
             "title": "Entry Price",
@@ -35422,7 +35422,7 @@
             "title": "Session"
           },
           "start_ms_utc": {
-            "description": "Inclusive window start as int64 ms since Unix epoch UTC. Per .claude/rules/numerical-rigor.md, every wire timestamp is int64 ms UTC; ISO strings are not accepted.",
+            "description": "Inclusive window start as int64 ms since Unix epoch UTC. Every wire timestamp is int64 ms UTC; ISO strings are not accepted.",
             "maximum": 4102444800000.0,
             "minimum": 1000000000000.0,
             "title": "Start Ms Utc",
@@ -53384,7 +53384,7 @@
     },
     "/api/data-lake/coverage": {
       "get": {
-        "description": "Per-day artifact status for a symbol, keyed by the canonical NYSE calendar.\n\nDays are the calendar's own sessions in the requested window \u2014 weekends\nand holidays are simply absent, never listed and never invented. A session\nwith no matching catalog row is reported honestly as ``status=\"missing\"``\nrather than omitted.\n\nThe window arrives as two ``int64 ms UTC`` values, not ISO dates.\n``.claude/rules/temporal-rigor.md`` allows exactly one wire format for a\ntemporal value and a trading date is not an exception to it \u2014 it is a\ndate-anchored value, carried as the millisecond instant of that session's\nopen and resolved back through ``America/New_York``\n(:func:`trading_date_at_ms`). The response has always spoken ms\n(``CoverageDay.trading_date_ms``); before #1839 the request did not, which\nleft one endpoint with a temporal format in each direction.\n\n``provider`` is not a caller-supplied parameter: it's derived from\n``data_type`` via ``provider_for_data_type`` (the same rule\n``expand_required_artifacts`` uses to write these rows) \u2014 trade bars are\nPolygon's, quote bars are ``learn_ai_derived``. A fixed ``provider=\"polygon\"``\nparameter made quote coverage unfindable, since quote rows are never\ncatalogued under that provider.\n\n``price_adjustment_mode`` has no default (#1890): it used to fall back to\n``\"raw\"`` when a caller omitted it, and for most of the lake's life the\nraw root held zero catalogued rows even when ``polygon_split_adjusted``\nwas fully populated for a symbol \u2014 an unqualified request silently read\n\"missing\" for data that actually existed under the other root. A default\nthat reads empty is indistinguishable from genuinely absent data, so the\ncaller must say which root they mean; FastAPI's own structural 422\n(missing required query parameter) is what an omitted value gets, the\nsame as an omitted ``symbol`` or ``start_trading_date_ms`` already does.",
+        "description": "Per-day artifact status for a symbol, keyed by the canonical NYSE calendar.\n\nDays are the calendar's own sessions in the requested window \u2014 weekends\nand holidays are simply absent, never listed and never invented. A session\nwith no matching catalog row is reported honestly as ``status=\"missing\"``\nrather than omitted.\n\nThe window arrives as two ``int64 ms UTC`` values, not ISO dates.\nADR 0022 (a) allows exactly one wire format for a\ntemporal value and a trading date is not an exception to it \u2014 it is a\ndate-anchored value, carried as the millisecond instant of that session's\nopen and resolved back through ``America/New_York``\n(:func:`trading_date_at_ms`). The response has always spoken ms\n(``CoverageDay.trading_date_ms``); before #1839 the request did not, which\nleft one endpoint with a temporal format in each direction.\n\n``provider`` is not a caller-supplied parameter: it's derived from\n``data_type`` via ``provider_for_data_type`` (the same rule\n``expand_required_artifacts`` uses to write these rows) \u2014 trade bars are\nPolygon's, quote bars are ``learn_ai_derived``. A fixed ``provider=\"polygon\"``\nparameter made quote coverage unfindable, since quote rows are never\ncatalogued under that provider.\n\n``price_adjustment_mode`` has no default (#1890): it used to fall back to\n``\"raw\"`` when a caller omitted it, and for most of the lake's life the\nraw root held zero catalogued rows even when ``polygon_split_adjusted``\nwas fully populated for a symbol \u2014 an unqualified request silently read\n\"missing\" for data that actually existed under the other root. A default\nthat reads empty is indistinguishable from genuinely absent data, so the\ncaller must say which root they mean; FastAPI's own structural 422\n(missing required query parameter) is what an omitted value gets, the\nsame as an omitted ``symbol`` or ``start_trading_date_ms`` already does.",
         "operationId": "get_coverage_api_data_lake_coverage_get",
         "parameters": [
           {
