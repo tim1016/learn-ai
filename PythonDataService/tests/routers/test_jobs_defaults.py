@@ -1,8 +1,8 @@
 """Default-preservation regression tests for jobs.py request models.
 
 The TickerRequest base sets ``multiplier=1`` and ``timespan="minute"``
-as defaults. Two of the four jobs models override ``multiplier=15``
-to preserve their pre-migration default (without the override the
+as defaults. ``SignalEngineJobRequest`` overrides ``multiplier=15``
+to preserve its pre-migration default (without the override the
 inheritance would silently switch every caller to 1-minute bars).
 These tests pin the post-migration default values so any future change
 to the base or to the override surfaces explicitly.
@@ -15,29 +15,8 @@ import pytest
 from app.routers.jobs import (
     CrossSectionalJobRequest,
     FeatureResearchJobRequest,
-    RuleBasedBacktestJobRequest,
     SignalEngineJobRequest,
 )
-
-
-class TestRuleBasedBacktestDefaults:
-    def test_multiplier_defaults_to_15_pre_migration(self) -> None:
-        r = RuleBasedBacktestJobRequest(
-            job_id="t",
-            symbol="SPY",
-            from_date="2025-01-01",
-            to_date="2025-01-31",
-        )
-        assert r.multiplier == 15  # NOT 1 (the base default)
-
-    def test_timespan_defaults_to_minute(self) -> None:
-        r = RuleBasedBacktestJobRequest(
-            job_id="t",
-            symbol="SPY",
-            from_date="2025-01-01",
-            to_date="2025-01-31",
-        )
-        assert r.timespan == "minute"
 
 
 class TestSignalEngineDefaults:
@@ -99,10 +78,11 @@ class TestCamelCaseWire:
         # in camelCase wire format. Verifies the .NET-forwarded shape
         # works after the AliasChoices for legacy snake_case names came
         # off in PR (iii).
-        r = RuleBasedBacktestJobRequest.model_validate(
+        r = SignalEngineJobRequest.model_validate(
             {
                 "jobId": "j1",
                 "symbol": "SPY",
+                "featureName": "rsi",
                 "fromDate": "2025-01-01",
                 "toDate": "2025-01-31",
             }
@@ -117,10 +97,11 @@ class TestCamelCaseWire:
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError) as exc:
-            RuleBasedBacktestJobRequest.model_validate(
+            SignalEngineJobRequest.model_validate(
                 {
                     "jobId": "j1",
                     "ticker": "SPY",  # legacy — no longer accepted
+                    "featureName": "rsi",
                     "fromDate": "2025-01-01",
                     "toDate": "2025-01-31",
                 }

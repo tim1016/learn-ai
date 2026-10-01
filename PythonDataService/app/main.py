@@ -41,7 +41,6 @@ from app.data_lake.catalog_client import CatalogSchemaNotReadyError
 from app.jobs.progress import fail_jobs_without_a_worker
 from app.routers import (
     aggregates,
-    alpaca_bot_control_examples,
     alpaca_clerk_sqlite,
     alpaca_live_graduation,
     backtest_runs,
@@ -63,7 +62,6 @@ from app.routers import (
     golden_validation,
     grid_search,
     indicator_reliability,
-    indicators,
     iv30,
     iv_recorder,
     jobs,
@@ -71,14 +69,11 @@ from app.routers import (
     monte_carlo,
     news,
     options,
-    portfolio,
     quantlib_options,
     recency,
-    research,
     research_divergence,
     research_runs,
     return_distribution,
-    sanitize,
     snapshot,
     spec_strategy,
     strategy,
@@ -1220,15 +1215,12 @@ PROTECTED_DATA_PLANE_READ_DEPENDENCIES = [Depends(require_data_plane_control_sec
 # it (fleet A2 inventory router table).
 if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(aggregates.router, prefix="/api/aggregates", tags=["aggregates"])
-    app.include_router(sanitize.router, prefix="/api", tags=["sanitize"])
-    app.include_router(indicators.router, prefix="/api/indicators", tags=["indicators"])
     app.include_router(options.router, prefix="/api/options", tags=["options"])
     app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
     app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
     app.include_router(news.router, prefix="/api/news", tags=["news"])
     app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
     app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
-    app.include_router(research.router, prefix="/api/research", tags=["research"])
     app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])
     app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs", tags=["research-backtest-runs"])
     app.include_router(
@@ -1277,12 +1269,9 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     # algorithm source. See docs/architecture/lean-sidecar-lab.md.
     app.include_router(lean_sidecar.router, prefix="/api/lean-sidecar", tags=["lean-sidecar"])
     app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
-    # Portfolio scenario / live-Greeks. Phase 2 of numerical-authority migration:
-    # Python becomes canonical for portfolio Greeks; .NET becomes a passthrough.
-    app.include_router(portfolio.router, prefix="/api/portfolio", tags=["portfolio"])
-    # QuantLib option pricing endpoints (/status, /price, /strategy, /compare).
+    # QuantLib option pricing endpoints (/price, /compare).
     # Registration was dropped by 88b48ac (IV-surface refactor) on 2026-04-12;
-    # the four endpoints silently 404'd until pricing-lab surfaced it.
+    # the endpoints silently 404'd until pricing-lab surfaced it.
     app.include_router(quantlib_options.router, prefix="/api/quantlib", tags=["quantlib"])
     # Internal job orchestration (Redis-backed). Mounted under /api/jobs-internal;
     # the public surface is the .NET /api/jobs facade in Backend/Jobs/JobsApi.cs.
@@ -1353,11 +1342,6 @@ if _ROLE_RUNS_CLERK:
         broker_v2_gallery.router,
         dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
     )
-# Static fixture-envelope contract for the unlinked Clerk diagnostic gallery.
-# The Angular example imports these committed documents locally and never calls
-# this read-only OpenAPI anchor.
-if _ROLE_RUNS_CLERK:
-    app.include_router(alpaca_bot_control_examples.router)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])

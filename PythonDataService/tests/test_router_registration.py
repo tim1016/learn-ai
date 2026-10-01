@@ -14,28 +14,10 @@ import pytest
 
 
 @pytest.mark.anyio
-async def test_quantlib_router_is_mounted(client):
-    """Hit a no-body endpoint on the quantlib router and assert it's
-    not 404. /status is the cheapest probe — it returns 200 whether
-    QuantLib is installed or not (the body just reports availability).
-    """
-    response = await client.get("/api/quantlib/status")
-    assert response.status_code != 404, (
-        "GET /api/quantlib/status returned 404 — quantlib_options router "
-        "is missing from app/main.py. See commit 88b48ac for the original "
-        "regression."
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert "available" in body
-    assert "engines" in body
-
-
-@pytest.mark.anyio
 async def test_return_distribution_router_is_mounted(client, monkeypatch):
     """Any typed answer proves the route exists; a missing registration
     would surface as FastAPI's plain {"detail": "Not Found"} 404 instead
-    (same class of bug as the quantlib probe above). The business outcome
+    (the class of bug the module docstring describes). The business outcome
     (200 / 400 INSUFFICIENT_COVERAGE / 404 NOT_CAPTURED) depends on lake
     contents and belongs to tests/routers/test_return_distribution_endpoint.py;
     the capture boundary is stubbed so the probe never reaches the provider."""

@@ -709,8 +709,8 @@ def _sessions_between(first: Date, last: Date) -> tuple[SessionWindow, ...]:
 def resolve_indicator_window(from_date: str, *, max_lookback: int, bar_minutes: int) -> IndicatorWindow:
     """The ONE decision of a picked window's warm-up start and its visible start (#2458).
 
-    The Data Lab chart, the dataset export, the indicator table, the
-    indicator-reliability study and the quality report's indicator step all
+    The Data Lab chart, the dataset export, the indicator-reliability
+    study and the quality report's indicator step all
     size their lead-in here, keyed on the length of the bars their indicators
     actually run on — the chart passes its timeframe's
     ``TIMEFRAME_DEFS`` minutes, a Polygon-bar caller passes
@@ -776,30 +776,6 @@ def resolve_indicator_window(from_date: str, *, max_lookback: int, bar_minutes: 
         if needed_sessions <= len(sessions):
             fetch_from = sessions[-needed_sessions].session_date
     return IndicatorWindow(from_date, fetch_from.isoformat(), window_start_ms, warmup_bars)
-
-
-def indicator_table_params_to_entries(
-    ema_periods: list[int],
-    bb_length: int = 20,
-    bb_std: float = 2.0,
-    supertrend_length: int = 10,
-    supertrend_multiplier: float = 3.0,
-    rsi_length: int = 14,
-    macd_fast: int = 12,
-    macd_slow: int = 26,
-    macd_signal: int = 9,
-    adx_length: int = 14,
-) -> list[dict[str, Any]]:
-    """Convert fixed indicator-table params into dynamic indicator_entries."""
-    entries: list[dict[str, Any]] = []
-    for period in sorted(ema_periods):
-        entries.append({"name": "ema", "params": {"length": period}})
-    entries.append({"name": "bbands", "params": {"length": bb_length, "std": bb_std}})
-    entries.append({"name": "supertrend", "params": {"length": supertrend_length, "multiplier": supertrend_multiplier}})
-    entries.append({"name": "rsi", "params": {"length": rsi_length}})
-    entries.append({"name": "macd", "params": {"fast": macd_fast, "slow": macd_slow, "signal": macd_signal}})
-    entries.append({"name": "adx", "params": {"length": adx_length}})
-    return entries
 
 
 def _tag_session_column(
@@ -972,53 +948,6 @@ def calculate_indicators_then_trim(
     if indicator_entries:
         df, column_meta = calculate_dynamic_indicators(df, indicator_entries)
     return trim_to_window(df, trim_from_ts, trim_to_ts), column_meta
-
-
-def rename_to_indicator_table_columns(
-    df: pd.DataFrame,
-    column_meta: list[dict[str, Any]],
-) -> pd.DataFrame:
-    """Rename pandas-ta raw column names to the indicator-table API contract."""
-    rename_map: dict[str, str] = {}
-    for m in column_meta:
-        col = m["column"]
-        ind = m["indicator"]
-        if ind == "bbands":
-            if col.startswith("bbl"):
-                rename_map[col] = "bb_lower"
-            elif col.startswith("bbm"):
-                rename_map[col] = "bb_basis"
-            elif col.startswith("bbu"):
-                rename_map[col] = "bb_upper"
-        elif ind == "supertrend":
-            if col.startswith("supertl"):
-                rename_map[col] = "supertrend_up"
-            elif col.startswith("superts"):
-                rename_map[col] = "supertrend_down"
-        elif ind == "rsi":
-            rename_map[col] = "rsi"
-        elif ind == "macd":
-            if col.startswith("macdh"):
-                rename_map[col] = "macd_histogram"
-            elif col.startswith("macds"):
-                rename_map[col] = "macd_signal"
-            else:
-                rename_map[col] = "macd"
-        elif ind == "adx":
-            if "dmp" not in col and "dmn" not in col:
-                rename_map[col] = "adx"
-        elif ind == "ema":
-            # calculate_dynamic_indicators produces "ema_length5" → rename to "ema_5"
-            length = m.get("params", "").replace("length=", "")
-            if length:
-                rename_map[col] = f"ema_{length}"
-
-    # Drop columns not in the indicator-table contract (bbb, bbp, supert, supertd, dmp, dmn)
-    keep_cols = set(rename_map.values()) | {"timestamp", "open", "high", "low", "close", "volume"}
-    df = df.rename(columns=rename_map)
-    drop_cols = [c for c in df.columns if c not in keep_cols]
-    df = df.drop(columns=drop_cols, errors="ignore")
-    return df
 
 
 def indicator_params_label(params: dict[str, Any]) -> str:
