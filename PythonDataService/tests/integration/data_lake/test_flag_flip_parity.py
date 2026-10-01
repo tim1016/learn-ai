@@ -66,7 +66,7 @@ def _import_cache_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, symbol
     against (#2456) and what makes the days findable to ``ensure_data``.
     """
     from app.data_lake import catalog_client, root_identity
-    from app.data_lake.cache_import import import_cache_root
+    from app.data_lake.cache_import import ImportReport, import_cache_root
 
     cache_root = _seed_cache(tmp_path / "lean-cache" / "polygon-raw", symbol)
     write_root = tmp_path / "lean-data-writer"
@@ -78,7 +78,7 @@ def _import_cache_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, symbol
     root_identity.init_empty_root(write_root, root_identity.active_root_id())
     _write_cache_provenance(cache_root, symbol)
 
-    async def _import():
+    async def _import() -> ImportReport:
         try:
             return await import_cache_root(cache_root, write_root)
         finally:

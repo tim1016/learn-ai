@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import threading
+from collections.abc import Callable
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -124,7 +125,7 @@ def _spec(symbols: list[str], *, lean_image_digest: str = "sha256:test") -> Data
     )
 
 
-def _polygon_ok_session(ticker: str):
+def _polygon_ok_session(ticker: str) -> Callable[[httpx.Request], httpx.Response]:
     """respx side_effect: 390 minute bars for the one session the request names.
 
     The fetcher asks for one session per call (``.../minute/<day>/<day>``).
