@@ -1,6 +1,7 @@
 # ADR 0029: Live Session Authority Extends Calendar With IBKR Capability
 
-**Status:** Accepted
+**Status:** Superseded 2026-09-30
+**Provenance:** Superseded by [ADR 0059](0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md) Decision 5.2 and the owner's ruling of 2026-09-30 (#2744, option b): the executing broker's declared `extended_window` is now the only proof of an extended session. The capability probe was the only writer of IBKR capability snapshots, and Clean-up 05 (#2753) removed it together with every reader — Start admission, the extended-hours ENTER gate, the session authority's `ibkr_capability` source and the panel's market pulse. Without a declared window the authority proves only what the NYSE calendar proves (RTH or CLOSED), and nothing proves OVERNIGHT. The text below is kept as history.
 
 - **Date:** 2026-07-12
 - **Context:** Issue #1005 Slice 1

@@ -272,12 +272,11 @@ class _CustodyClerk:
         action_plan: ActionPlan,
         quantity: int,
         use_rth: bool = True,
-        capability_account_id: str | None = None,
         retained_source_bar=None,
         decision_evidence=None,
     ) -> EffectOperationReceipt:
         del strategy_instance_id, run_id, decision_id, purpose, action_plan, quantity, use_rth
-        del capability_account_id, retained_source_bar, decision_evidence
+        del retained_source_bar, decision_evidence
         raise AssertionError("custody-only test Clerk cannot execute effects")
 
     async def stop_strategy_run(
@@ -570,11 +569,9 @@ class _FakeClerk:
         action_plan,
         quantity: int,
         use_rth: bool = True,
-        capability_account_id: str | None = None,
         retained_source_bar=None,
         decision_evidence=None,
     ) -> _FakeEffectResult:
-        del capability_account_id
         if self._should_raise is not None:
             raise self._should_raise
 

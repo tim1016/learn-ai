@@ -49,7 +49,6 @@ from app.routers import (
     baselines,
     broker,
     broker_bots,
-    broker_capability,
     broker_configuration,
     broker_v2_gallery,
     broker_v2_panel,
@@ -1329,9 +1328,6 @@ if _ROLE_RUNS_CLERK:
 # Router carries its own /api/broker prefix.
 if _FLEET_ROLE == "combined":
     app.include_router(broker.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
-# IBKR account/session capability probe (issue #1005 Slice 0).
-if _FLEET_ROLE == "combined":
-    app.include_router(broker_capability.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Broker System v2 read surface (/api/brokers/{broker}/...). Broker account,
 # position, order, activity, asset, and clock evidence is sensitive operator
 # data, so every v2 read requires the always-on data-plane control secret.

@@ -50,7 +50,6 @@ from app.marketdata.feed import (
 )
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
-from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, replay_warmup_bars
 from app.services.decision_session import RunDecisionSession
 from app.services.feed_continuity_policy import (
@@ -428,7 +427,6 @@ def require_decision_session(
 
 def _liveness_blocks_entry(
     binding: BrokerBotBinding,
-    capability_account_id: str | None,
     liveness: MarketLivenessFact,
     session: RunDecisionSession,
     feed: MarketDataFeed,
@@ -440,23 +438,14 @@ def _liveness_blocks_entry(
     Clerk's own submission-boundary recheck in ``runtime.py`` — so the two
     can never silently diverge (#1671).
 
-    ``capability_account_id`` must be the market-data feed's own capability
-    account (``bot_start_admission.market_data_capability_account_id``), NOT
-    the Alpaca execution account: Alpaca custody identifies the execution
-    account, which cannot scope an IBKR market-data entitlement. Passing the
-    wrong one means the capability lookup never finds a match and every
-    extended-hours entry is rejected. ``None`` (no capability account
-    resolvable) fails closed — never proven.
-
     ``session.window`` is the executing authority's declared extended session
-    (ADR 0059 D5.2). It is not account-scoped, so when one is declared it
-    proves PRE/POST on its own, with no capability lookup — but a declared
-    schedule is not liveness, so ``feed`` supplies the second half: whether
-    the venue is actually printing bars for this symbol right now.
+    (ADR 0059 D5.2), the only proof of PRE/POST; with none, nothing is
+    proven and a CLOSED clock blocks. A declared schedule is not liveness,
+    so ``feed`` supplies the second half: whether the venue is actually
+    printing bars for this symbol right now.
     """
     policy = MarketEntryPolicy(
-        symbol=binding.symbol, use_rth=binding.use_rth,
-        capability_account_id=capability_account_id, extended_window=session.window,
+        symbol=binding.symbol, use_rth=binding.use_rth, extended_window=session.window,
         clock=now_ms_utc, extended_session_live=lambda: _market_data_live(feed, binding.symbol),
     )
     return policy.refusal(liveness) is not None
@@ -874,11 +863,6 @@ async def run_trade_bot(
     account_id = getattr(clerk, "account_id", None)
     if not isinstance(account_id, str) or not account_id:
         raise RuntimeError("The active SQLite Clerk has no account identity for decision receipts.")
-    # Distinct from `account_id` above: this is the market-data feed's own
-    # capability-scoping identity, not the Alpaca execution account — see
-    # `_liveness_blocks_entry`'s docstring for why the two must never be
-    # conflated.
-    capability_account_id = market_data_capability_account_id(feed)
     repository = getattr(clerk, "repository", None)
     if repository is None:
         raise RuntimeError("The active SQLite Clerk has no repository for decision receipts.")
@@ -972,7 +956,7 @@ async def run_trade_bot(
             # same way for the same reason.
             if intent.kind is SignalIntentKind.ENTER:
                 liveness = market_liveness_fact(binding.symbol, now_ms_utc())
-                if _liveness_blocks_entry(binding, capability_account_id, liveness, session, feed):
+                if _liveness_blocks_entry(binding, liveness, session, feed):
                     # Settle the staged candidate as refused. The strategy has not
                     # taken the position — it mutates position custody only in
                     # ``commit_signal_decision``, which never ran — so DISCARD is
@@ -1027,7 +1011,6 @@ async def run_trade_bot(
                 action_plan=binding.action_plan,
                 quantity=binding.quantity,
                 use_rth=binding.use_rth,
-                capability_account_id=capability_account_id,
                 retained_source_bar=retained,
                 decision_evidence=decision_evidence,
             )
@@ -1426,7 +1409,6 @@ async def run_dry_run_bot(
                 action_plan=binding.action_plan,
                 quantity=binding.quantity,
                 use_rth=binding.use_rth,
-                capability_account_id=market_data_capability_account_id(feed),
                 retained_source_bar=retained,
                 decision_evidence=decision_evidence,
             )

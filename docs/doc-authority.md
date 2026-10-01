@@ -112,7 +112,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | 0026 | Daily bot lifecycle: three states and the single-writer evaluator (§4 and its 2026-07-21 amendment superseded for Alpaca by ADR 0038; §4's derived-projection design was never built — read the banner before implementing) |
 | 0027 | Operator blocker disposition taxonomy |
 | 0028 | Bot Cockpit channel contracts (Clerk authority is superseded by ADR-0030) |
-| 0029 | Live-session authority and IBKR capability |
+| 0029 | Live-session authority and IBKR capability (superseded: ADR 0059 D5.2's declared window is the only proof of extended hours) |
 | 0030 | Account Clerk authority is account-rooted and journal-canonical |
 | 0031 | Cross-stack boundary selection and generated contracts |
 | 0032 | Broker contract v2 and verbatim capture |

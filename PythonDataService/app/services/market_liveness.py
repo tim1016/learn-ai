@@ -29,6 +29,7 @@ from app.schemas.market_liveness import (
     SymbolTradingStatusEvidence,
     TopOfBookQuote,
 )
+from app.services.session_authority import declared_extended_phase_at_ms
 
 # The broker clock is polled on a fixed interval (unlike the transition-only
 # status stream), so wall-clock freshness is still the right check for it.
@@ -322,8 +323,7 @@ def liveness_blocks_entry(
     Exempting that caller needs **two** facts, not one, and both are
     consulted lazily so every other branch resolves without paying for a
     lookup. ``extended_phase_proven`` says the *schedule* puts this instant
-    in PRE or POST — a declared window or a fresh capability snapshot, never
-    a live signal. ``extended_session_live`` says the venue is *actually*
+    in PRE or POST — the broker's declared window, never a live signal. ``extended_session_live`` says the venue is *actually*
     printing bars for this symbol right now. The schedule alone would admit
     new exposure straight through an unscheduled extended-hours closure,
     which the RTH-only clock reports exactly as it reports an ordinary
@@ -349,23 +349,19 @@ class MarketEntryPolicy:
 
     symbol: str
     use_rth: bool
-    capability_account_id: str | None
     extended_window: ExtendedHoursWindow | None
     clock: Callable[[], int]
     extended_session_live: Callable[[], bool]
 
     def refusal(self, liveness: MarketLivenessFact, *, generation: str | None = None) -> str | None:
-        from app.services.market_data_capability_service import extended_phase_proven_at_ms
-
         if generation is not None and (
             liveness.market_data is None or liveness.market_data.generation != generation
         ):
             return "Market-data subscription changed after admission; current evidence must be admitted again."
         if liveness_blocks_entry(
             liveness, use_rth=self.use_rth,
-            extended_phase_proven=lambda: extended_phase_proven_at_ms(
-                now_ms=self.clock(), symbol=self.symbol,
-                account_id=self.capability_account_id, extended_window=self.extended_window,
+            extended_phase_proven=lambda: declared_extended_phase_at_ms(
+                now_ms=self.clock(), extended_window=self.extended_window,
             ),
             extended_session_live=self.extended_session_live,
         ):

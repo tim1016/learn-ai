@@ -62,7 +62,6 @@ All preserved order-related operations are non-transmitting:
 | Capability | Current authority |
 |---|---|
 | Connection and diagnostics | `/api/broker/health`, `/data-plane/health`, `/diagnose`, plus explicit connect/disconnect/reconnect transport controls |
-| Session capability | `/api/broker/capability` and `/capability/probe`; the probe may call IBKR `whatIfOrderAsync` with `whatIf=True` but never `placeOrder` |
 | Account state | `/api/broker/account`, `/positions`, and `/account-truth` |
 | Order evidence | `/api/broker/orders/open`, `/completed`, and `/stream` |
 | Order preview | `POST /api/broker/orders/what-if`; constructs a non-transmitting IBKR what-if request only |

@@ -45,7 +45,6 @@ from app.broker.alpaca.clerk.stream_health import market_data_channel_health
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import FeedHealth
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed
-from app.schemas.broker_capability import SessionCapability, SessionDataCapability
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.market_liveness import (
     MarketClockLivenessEvidence,
@@ -69,7 +68,6 @@ from app.services.bot_start_admission import (
     BotStartAdmission,
     StartRequest,
     market_data_admission_fact,
-    market_data_capability_account_id,
     new_run_binding,
     resolve_start_runtime_fact,
     seal_binding_to_custody_snapshot,
@@ -184,32 +182,6 @@ def _clerk(observed_at_ms: int = _NOW - 500) -> ClerkCustodySnapshot:
         reason_code="CLERK_CUSTODY_PROVEN",
         evidence_refs=("clerk:paper-account:7",),
         observed_at_ms=observed_at_ms,
-    )
-
-
-def _capability(*, account_id: str = "paper-account") -> SessionDataCapability:
-    def session(open_ms: int, close_ms: int) -> SessionCapability:
-        return SessionCapability(
-            window_today_open_ms=open_ms,
-            window_today_close_ms=close_ms,
-            data="live",
-            tradeable="yes",
-            order_eligible_outside_rth=True,
-        )
-
-    return SessionDataCapability(
-        symbol="SPY",
-        con_id=1,
-        account_mode="paper",
-        account_id=account_id,
-        probed_at_ms=_NOW - 1_000,
-        time_zone_id="America/New_York",
-        sessions={
-            "PRE": session(_NOW - 60_000, _NOW + 60_000),
-            "RTH": session(_NOW + 60_000, _NOW + 120_000),
-            "POST": session(_NOW + 120_000, _NOW + 180_000),
-            "OVERNIGHT": session(_NOW + 180_000, _NOW + 240_000),
-        },
     )
 
 
@@ -362,57 +334,36 @@ def test_market_data_admission_fact_available_when_advancing(
     assert fact.state == "AVAILABLE"
 
 
-def test_market_data_admission_carries_matching_capability_phase() -> None:
-    health = FeedHealth(
-        connected=True,
-        stale=False,
-        last_bar_ms=_NOW - 5_000,
-        reason="",
-        active_subscription_count=1,
-        observed_at_ms=_NOW,
-    )
-
-    fact = market_data_admission_fact(
-        _Feed(health),
-        _NOW,
-        symbol="SPY",
-        account_id="paper-account",
-        capability=_capability(),
-        use_rth=False,
-    )
-
-    assert fact.scheduled_phase == "PRE"
-    assert fact.session_authority_source == "ibkr_capability"
-    assert fact.extended_phase_proven is True
-
-
-def test_market_data_admission_marks_extended_phase_unproved_without_matching_capability() -> None:
-    health = FeedHealth(
-        connected=True,
-        stale=False,
-        last_bar_ms=_NOW - 5_000,
-        reason="",
-        active_subscription_count=1,
-        observed_at_ms=_NOW,
-    )
-
-    fact = market_data_admission_fact(
-        _Feed(health),
-        _NOW,
-        symbol="SPY",
-        account_id="other-account",
-        capability=_capability(),
-        use_rth=False,
-    )
-
-    assert fact.session_authority_source == "nyse_calendar"
-    assert fact.extended_phase_proven is False
-
-
 _EIGHTEEN_ET_ON_A_TRADING_DAY = to_ms_utc(
     datetime(2026, 9, 2, 18, 0, tzinfo=ZoneInfo("America/New_York"))
 )
+_SIX_ET_ON_A_TRADING_DAY = to_ms_utc(
+    datetime(2026, 9, 2, 6, 0, tzinfo=ZoneInfo("America/New_York"))
+)
 _DECLARED_WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
+
+
+def test_market_data_admission_resolves_pre_from_a_declared_window() -> None:
+    health = FeedHealth(
+        connected=True,
+        stale=False,
+        last_bar_ms=_SIX_ET_ON_A_TRADING_DAY - 5_000,
+        reason="",
+        active_subscription_count=1,
+        observed_at_ms=_SIX_ET_ON_A_TRADING_DAY,
+    )
+
+    fact = market_data_admission_fact(
+        _Feed(health),
+        _SIX_ET_ON_A_TRADING_DAY,
+        symbol="SPY",
+        use_rth=False,
+        extended_window=_DECLARED_WINDOW,
+    )
+
+    assert fact.scheduled_phase == "PRE"
+    assert fact.session_authority_source == "broker_declared_window"
+    assert fact.extended_phase_proven is True
 
 
 def test_market_data_admission_resolves_post_from_a_declared_window() -> None:
@@ -455,6 +406,8 @@ def test_market_data_admission_without_a_declared_window_cannot_prove_the_same_i
     )
 
     assert fact.state == "UNKNOWN"
+    assert fact.session_authority_source == "nyse_calendar"
+    assert fact.extended_phase_proven is False
 
 
 def test_unproved_extended_phase_blocks_connected_stale_feed_admission(
@@ -478,22 +431,6 @@ def test_unproved_extended_phase_blocks_connected_stale_feed_admission(
     assert fact.extended_phase_proven is False
     assert decision.allowed is False
     assert decision.reason_code == "MARKET_DATA_UNKNOWN"
-
-
-def test_market_data_capability_account_uses_the_feed_source_identity() -> None:
-    feed = _Feed(
-        FeedHealth(
-            connected=True,
-            stale=False,
-            last_bar_ms=None,
-            reason="",
-            active_subscription_count=0,
-            observed_at_ms=_NOW,
-        )
-    )
-    feed.capability_account_id = "DU1234567"  # type: ignore[attr-defined]
-
-    assert market_data_capability_account_id(feed) == "DU1234567"
 
 
 # ── bounded liveness regressions plus the one remaining candidate policy ──
@@ -726,7 +663,6 @@ async def test_start_admission_evaluates_liveness_with_a_post_await_timestamp() 
         runtime_fact=runtime_fact,
         validation_fact=validation_fact,
         activate=activate,
-        session_capability=lambda symbol, account_id: None,
         market_liveness=market_liveness,
     )
     request = StartRequest(
@@ -1042,7 +978,6 @@ async def test_an_unreadable_validation_store_is_named_as_the_cause_not_a_missin
     admission = BotStartAdmission(
         now_ms=now_ms, feed_resolver=lambda: None, custody_guard=custody_guard, process_fact=process_fact,
         runtime_fact=runtime_fact, validation_fact=unreadable_validation, activate=activate,
-        session_capability=lambda symbol, account_id: None,
         market_liveness=lambda symbol, observed_at_ms: compose_market_liveness(
             symbol, now_ms=observed_at_ms,
             market_clock=MarketClockLivenessEvidence(

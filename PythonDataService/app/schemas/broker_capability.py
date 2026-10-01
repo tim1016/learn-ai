@@ -46,15 +46,3 @@ class SessionDataCapability(BaseModel):
         if missing:
             raise ValueError(f"sessions missing required keys: {sorted(missing)}")
         return value
-
-
-class BrokerCapabilityProbeResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    snapshots: list[SessionDataCapability]
-
-
-class BrokerCapabilityReadResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    snapshots: list[SessionDataCapability]

@@ -998,7 +998,6 @@ class SqliteAlpacaClerkFacade:
         action_plan: ActionPlan,
         quantity: int,
         use_rth: bool = True,
-        capability_account_id: str | None = None,
         retained_source_bar: RetainedSourceBar | None = None,
         decision_evidence: EffectDecisionEvidence | None = None,
     ) -> EffectOperationReceipt:
@@ -1023,7 +1022,6 @@ class SqliteAlpacaClerkFacade:
                     action_plan=action_plan,
                     quantity=quantity,
                     use_rth=use_rth,
-                    capability_account_id=capability_account_id,
                     retained_source_bar=retained_source_bar,
                     decision_evidence=decision_evidence,
                 ),
@@ -1070,7 +1068,6 @@ class SqliteAlpacaClerkFacade:
         action_plan: ActionPlan,
         quantity: int,
         use_rth: bool = True,
-        capability_account_id: str | None = None,
         retained_source_bar: RetainedSourceBar | None = None,
         decision_evidence: EffectDecisionEvidence | None = None,
     ) -> EffectOperationReceipt:
@@ -1096,7 +1093,6 @@ class SqliteAlpacaClerkFacade:
                 action_plan=action_plan,
                 quantity=quantity,
                 use_rth=use_rth,
-                capability_account_id=capability_account_id,
                 retained_source_bar=retained_source_bar,
                 decision_evidence=decision_evidence,
                 reading_outcome=reading_outcome,
@@ -1134,7 +1130,6 @@ class SqliteAlpacaClerkFacade:
         action_plan: ActionPlan,
         quantity: int,
         use_rth: bool,
-        capability_account_id: str | None,
         retained_source_bar: RetainedSourceBar | None,
         decision_evidence: EffectDecisionEvidence | None,
         reading_outcome: EntryReadingOutcome | None,
@@ -1293,7 +1288,6 @@ class SqliteAlpacaClerkFacade:
                     liveness = market_liveness_fact(entry.instrument.underlying, self._repo.clock())
                     policy = MarketEntryPolicy(
                         symbol=entry.instrument.underlying, use_rth=use_rth,
-                        capability_account_id=capability_account_id,
                         extended_window=self._program_leg_policy.window, clock=self._repo.clock,
                         extended_session_live=lambda: self._stream_health is not None
                         and self._stream_health.market_data_live(entry.instrument.underlying),

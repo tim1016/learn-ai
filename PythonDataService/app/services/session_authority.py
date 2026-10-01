@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache
-from itertools import pairwise
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -23,15 +22,9 @@ TradingSessionPhase = BarSessionPhase
 #: line watchdog, and proves no session the way ``TradingSessionPhase`` from
 #: ``session_state_at_ms`` does. Every member is a ``BarSessionPhase``.
 ScheduledExchangePhase = Literal["PRE", "RTH", "POST", "CLOSED"]
-SessionAuthoritySource = Literal["ibkr_capability", "nyse_calendar", "broker_declared_window"]
+SessionAuthoritySource = Literal["nyse_calendar", "broker_declared_window"]
 
 _NY = ZoneInfo("America/New_York")
-_SESSION_PRIORITY: tuple[SessionKind, ...] = ("RTH", "PRE", "POST", "OVERNIGHT")
-_DAY_SESSION_SEQUENCE: tuple[SessionKind, ...] = ("PRE", "RTH", "POST")
-# A snapshot publishes one day's per-instrument windows plus an overnight
-# boundary.  Retaining it beyond a day could project yesterday's entitlement
-# onto a new session, so it cannot author an extended phase after this bound.
-CAPABILITY_MAX_AGE_MS = 24 * 60 * 60 * 1_000
 
 # The phase sets this repo asks about, named for what they mean and defined
 # once — they were four definitions with three memberships before the slice-3
@@ -39,7 +32,7 @@ CAPABILITY_MAX_AGE_MS = 24 * 60 * 60 * 1_000
 # "Which phases does an extended run decide on?" is deliberately not among
 # them: that answer is the declared window's span, and
 # ``RunDecisionSession.includes`` reads the bounds rather than a phase set.
-#: Sessions outside the regular one that a *capability probe* can prove.
+#: Sessions outside the regular one.
 EXTENDED_PHASES: frozenset[TradingSessionPhase] = frozenset({"PRE", "POST", "OVERNIGHT"})
 #: Extended sessions a program leg may actually be placed into (ADR 0059 D5.3
 #: shapes a marketable limit for these; OVERNIGHT is a separate venue, R1).
@@ -122,39 +115,20 @@ class SessionAuthorityState:
 def session_state_at_ms(
     *,
     now_ms: int,
-    capability: SessionDataCapability | None = None,
-    symbol: str | None = None,
-    account_id: str | None = None,
     strategy_session_policy: Literal["rth_only"] | None = None,
     allowed_sessions: tuple[SessionKind, ...] | None = None,
     extended_window: ExtendedHoursWindow | None = None,
 ) -> SessionAuthorityState:
-    """Return the scheduled session state for one instrument and account.
+    """Return the scheduled session state at ``now_ms``.
 
-    The canonical NYSE calendar can prove only RTH/CLOSED. PRE and POST can
-    also be proven by the executing broker's declared extended-hours window
-    (``extended_window``), which resolves them by declaration around the
-    calendar's regular session — no probe required. OVERNIGHT still needs a
-    current capability snapshot matched to both the target instrument and
-    account; no caller may infer it from a local clock.
+    The canonical NYSE calendar can prove only RTH/CLOSED. PRE and POST are
+    proven only by the executing broker's declared extended-hours window
+    (``extended_window``, ADR 0059 D5.2), which resolves them by declaration
+    around the calendar's regular session. Nothing proves OVERNIGHT; no
+    caller may infer an extended phase from a local clock.
     """
     if now_ms < 0:
         raise ValueError("now_ms must be non-negative int64 ms UTC")
-    usable = _fresh_matching_capability(
-        capability,
-        now_ms=now_ms,
-        symbol=symbol,
-        account_id=account_id,
-    )
-    if usable is not None:
-        state = _session_from_capability(
-            now_ms=now_ms,
-            capability=usable,
-            strategy_session_policy=strategy_session_policy,
-            allowed_sessions=allowed_sessions,
-        )
-        if state is not None:
-            return state
     if extended_window is not None:
         return _session_from_declared_window(
             now_ms=now_ms,
@@ -167,6 +141,32 @@ def session_state_at_ms(
         strategy_session_policy=strategy_session_policy,
         allowed_sessions=allowed_sessions,
     )
+
+
+def declared_extended_phase_at_ms(*, now_ms: int, extended_window: ExtendedHoursWindow | None) -> bool:
+    """Whether the broker's declared window puts ``now_ms`` in PRE or POST.
+
+    The declared ``extended_window`` (ADR 0059 D5.2) is the only proof of an
+    extended phase: with none, nothing is proven and the answer is ``False``.
+    A resolved ``RTH`` or ``CLOSED`` is not extended either, so a running
+    ``use_rth=False`` bot can never override fresh broker ``CLOSED`` evidence
+    outside the declared window. The ENTER gate and its Clerk-boundary recheck
+    (``market_liveness.MarketEntryPolicy``) and the panel's market pulse share
+    this one predicate (#1671).
+
+    **This answers the schedule, never liveness.** A declared window describes
+    the session that was *supposed* to run at ``now_ms``; it cannot see an
+    unscheduled PRE/POST closure, which Alpaca's RTH-only clock reports as
+    plain ``CLOSED``, exactly as it reports an ordinary extended session. So a
+    ``True`` here is a necessary condition for admitting extended exposure and
+    never a sufficient one: ``market_liveness.liveness_blocks_entry`` pairs it
+    with ``market_data_bars_live`` — the feed actually printing bars for the
+    symbol — and admits only on both (ADR 0022: the calendar owns scheduled
+    structure, the live feed owns liveness).
+    """
+    if extended_window is None:
+        return False
+    return session_state_at_ms(now_ms=now_ms, extended_window=extended_window).phase in EXTENDED_PHASES
 
 
 def order_session_state_at_ms(
@@ -216,14 +216,13 @@ def scheduled_exchange_phase_at_ms(ts_ms: int) -> ScheduledExchangePhase:
     This answers *when the exchange's extended session is scheduled*, which is
     what labels an IBKR bar and what arms the liveness watchdog of a
     ``useRTH=0`` line (#2299, #2313). It grants no strategy permission: that is
-    :func:`session_state_at_ms`, which still needs a declared window or a
-    capability snapshot before it will call an instant PRE or POST. The return
-    type is :data:`ScheduledExchangePhase`, not ``TradingSessionPhase``, so the
-    two answers cannot be mistaken for one another.
+    :func:`session_state_at_ms`, which still needs a declared window before it
+    will call an instant PRE or POST. The return type is
+    :data:`ScheduledExchangePhase`, not ``TradingSessionPhase``, so the two
+    answers cannot be mistaken for one another.
 
     Every bound comes from the calendar's schedule, so a half-day's early close
-    moves the after-hours close with it. OVERNIGHT is never answered here: only
-    a matched capability snapshot can prove that session.
+    moves the after-hours close with it. OVERNIGHT is never answered here.
     """
     if ts_ms < 0:
         raise ValueError("ts_ms must be non-negative int64 ms UTC")
@@ -266,58 +265,6 @@ def scheduled_extended_session_bounds(session_date: date) -> ExtendedSessionBoun
         rth_open_ms=regular.open_ms_utc,
         rth_close_ms=regular.close_ms_utc,
         close_ms=to_ms_utc(row["post"]),
-    )
-
-
-def _session_from_capability(
-    *,
-    now_ms: int,
-    capability: SessionDataCapability,
-    strategy_session_policy: Literal["rth_only"] | None,
-    allowed_sessions: tuple[SessionKind, ...] | None,
-) -> SessionAuthorityState | None:
-    windows = {
-        kind: window
-        for kind in _SESSION_PRIORITY
-        if (window := _window_tuple(capability, kind)) is not None
-    }
-    if not windows:
-        return None
-    min_window = min(open_ms for open_ms, _close_ms in windows.values())
-    max_window = max(close_ms for _open_ms, close_ms in windows.values())
-    if now_ms < min_window or now_ms >= max_window:
-        next_transition = _next_capability_transition(now_ms, windows)
-        if next_transition is None:
-            return None
-        return _state(
-            phase="CLOSED",
-            now_ms=now_ms,
-            next_transition_ms=next_transition,
-            timezone=capability.time_zone_id,
-            source="ibkr_capability",
-            extended_phase_proven=True,
-            strategy_session_policy=strategy_session_policy,
-            allowed_sessions=allowed_sessions,
-        )
-
-    phase: TradingSessionPhase = "CLOSED"
-    for kind in _SESSION_PRIORITY:
-        window = windows.get(kind)
-        if window is None:
-            continue
-        open_ms, close_ms = window
-        if open_ms <= now_ms < close_ms:
-            phase = "OVERNIGHT" if kind == "OVERNIGHT" else kind
-            break
-    return _state(
-        phase=phase,
-        now_ms=now_ms,
-        next_transition_ms=_next_capability_transition(now_ms, windows),
-        timezone=capability.time_zone_id,
-        source="ibkr_capability",
-        extended_phase_proven=True,
-        strategy_session_policy=strategy_session_policy,
-        allowed_sessions=allowed_sessions,
     )
 
 
@@ -374,8 +321,7 @@ def _session_from_declared_window(
     """PRE/RTH/POST from the calendar's regular session and the broker's declared window.
 
     Proven by declaration (the executing broker publishes the window as a
-    capability), which is what ``extended_phase_proven`` means for a broker
-    with no probe-based session capability.
+    capability), which is what ``extended_phase_proven`` means.
     """
     day = _ny_dt(now_ms).date()
 
@@ -429,82 +375,6 @@ def _state(
         as_of_ms=now_ms,
         source=source,
         extended_phase_proven=extended_phase_proven,
-    )
-
-
-def _window_tuple(
-    capability: SessionDataCapability,
-    kind: SessionKind,
-) -> tuple[int, int] | None:
-    session = capability.sessions.get(kind)
-    if session is None:
-        return None
-    if session.window_today_open_ms is None or session.window_today_close_ms is None:
-        return None
-    return session.window_today_open_ms, session.window_today_close_ms
-
-
-def _next_capability_transition(
-    now_ms: int,
-    windows: dict[SessionKind, tuple[int, int]],
-) -> int | None:
-    transitions = sorted(
-        boundary
-        for open_ms, close_ms in windows.values()
-        for boundary in (open_ms, close_ms)
-        if boundary > now_ms
-    )
-    return transitions[0] if transitions else None
-
-
-def _fresh_matching_capability(
-    capability: SessionDataCapability | None,
-    *,
-    now_ms: int,
-    symbol: str | None,
-    account_id: str | None,
-) -> SessionDataCapability | None:
-    """The snapshot if it is current, scoped and structurally valid; else ``None``.
-
-    Returns the capability rather than a bool so the caller reads the proven
-    value instead of re-asserting that the one it already holds is not
-    ``None`` — the assertion the boolean form forced.
-    """
-    if capability is None or symbol is None or account_id is None:
-        return None
-    if capability.symbol != symbol.upper() or capability.account_id != account_id:
-        return None
-    age_ms = now_ms - capability.probed_at_ms
-    if age_ms < 0 or age_ms > CAPABILITY_MAX_AGE_MS:
-        return None
-    if not all(_is_valid_window(capability, kind) for kind in _SESSION_PRIORITY):
-        return None
-    return capability if _has_ordered_day_sessions(capability) else None
-
-
-def _is_valid_window(capability: SessionDataCapability, kind: SessionKind) -> bool:
-    session = capability.sessions.get(kind)
-    if session is None:
-        return False
-    open_ms = session.window_today_open_ms
-    close_ms = session.window_today_close_ms
-    if open_ms is None or close_ms is None:
-        return open_ms is None and close_ms is None
-    return open_ms < close_ms
-
-
-def _has_ordered_day_sessions(capability: SessionDataCapability) -> bool:
-    """Reject overlapping or out-of-order PRE/RTH/POST evidence windows."""
-    windows = [
-        window
-        for kind in _DAY_SESSION_SEQUENCE
-        if (window := _window_tuple(capability, kind)) is not None
-    ]
-    return all(
-        earlier_close_ms <= later_open_ms
-        for (_earlier_open_ms, earlier_close_ms), (later_open_ms, _later_close_ms) in pairwise(
-            windows
-        )
     )
 
 
