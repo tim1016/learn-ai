@@ -53,6 +53,7 @@ from app.research.persistence.db import run_sync, with_connection
 from app.research.sweep.snapshot import DataSnapshot, capture_data_snapshot
 from app.schemas.engine_backtest import EngineBacktestRequest, EngineBacktestResponse
 from app.schemas.run_admission import QUALIFICATION_REVOKED
+from app.services import engine_backtest_service
 from app.services import signal_program_admission as admission_module
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.utils.session_anchors import et_midnight_ms
@@ -392,6 +393,34 @@ async def test_approve_study_after_a_lost_response_answers_with_the_published_ve
 # ---------------------------------------------------------------------------
 # Technical failures publish nothing and keep the prior default
 # ---------------------------------------------------------------------------
+async def test_the_real_engine_saves_a_run_golden_validation_accepts_as_current_evidence(
+    conn: asyncpg.Connection,
+    unique: str,
+    symbol: str,
+    snapshot: DataSnapshot,
+    lake: Path,
+    blobs: BlobStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No stand-in: the saved run is the engine's own, bound to the study's receipted snapshot.
+    monkeypatch.setattr(engine_backtest_service, "_resolve_lean_data_roots", lambda **_: [lake])
+    study_id = f"study-{unique}"
+    await _study(conn, study_id, symbol)
+    caller = _Caller(study_id)
+
+    outcome = await _approve(_request(study_id, symbol, snapshot, lake), caller, blobs)
+
+    assert outcome.status == "approved", outcome.failure_reason
+    row = await get_qualification(conn, outcome.qualification_id or "")
+    assert row is not None
+    dossier = await golden_validation.get_dossier(conn, row.golden_run_id)
+    assert dossier is not None
+    # The run read the receipted lake bytes, so its data convention is recorded, not unknown.
+    assert dossier.evidence_applicability.status == "current"
+    assert dossier.validation_case["evidence_provenance"]["data_contract"] == "lake_complete_sessions/v1"
+    assert dossier.latest_review is not None and dossier.latest_review.decision == "accept"
+
+
 async def test_proof_mismatch_publishes_nothing_and_keeps_the_default(
     conn: asyncpg.Connection,
     unique: str,
