@@ -290,25 +290,36 @@ jobs:
         run: |
           # JUnit XML (pytest, Playwright) and TRX (dotnet) both name each
           # failed test; list them under the jobs that did not succeed.
-          python3 - > failed-tests.md <<'PY'
+          python3 - <<'PY'
           import pathlib
           import xml.etree.ElementTree as ET
 
           TRX = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
-          failed = []
+          failed, unreadable = [], []
           for path in sorted(pathlib.Path("results").rglob("*")):
+              if path.suffix not in (".xml", ".trx"):
+                  continue
+              try:
+                  root = ET.parse(path).getroot()
+              except (ET.ParseError, OSError) as error:
+                  # A truncated result file must not stop the report.
+                  unreadable.append(f"- `{path}`: {error}")
+                  continue
               if path.suffix == ".xml":
-                  for case in ET.parse(path).iter("testcase"):
+                  for case in root.iter("testcase"):
                       if case.find("failure") is not None or case.find("error") is not None:
                           failed.append(f"{case.get('classname')}::{case.get('name')}")
-              elif path.suffix == ".trx":
-                  for result in ET.parse(path).iter(f"{TRX}UnitTestResult"):
+              else:
+                  for result in root.iter(f"{TRX}UnitTestResult"):
                       if result.get("outcome") == "Failed":
                           failed.append(result.get("testName"))
-          print(f"Failed tests ({len(failed)}):")
-          print("\n".join(f"- `{name}`" for name in failed[:200]) or "- none recorded; read the job logs")
+          lines = [f"Failed tests ({len(failed)}):"]
+          lines += [f"- `{name}`" for name in failed[:200]] or ["- none recorded; read the job logs"]
           if len(failed) > 200:
-              print(f"- ... and {len(failed) - 200} more; read the run's test-result artifacts")
+              lines.append(f"- ... and {len(failed) - 200} more; read the run's test-result artifacts")
+          if unreadable:
+              lines += ["", "Unreadable test-result files (read the job logs):", *unreadable]
+          pathlib.Path("failed-tests.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
           PY
           {
             echo "The daily run $RUN_URL is red."
