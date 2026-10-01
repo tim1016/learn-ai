@@ -100,6 +100,23 @@ export class GoldenSearchStudyComponent {
     const detail = this.detail();
     return detail !== null && RESUMABLE_STATUSES.includes(detail.presented_status) ? (detail.action_refusals.finish ?? null) : null;
   });
+  /**
+   * The guidance detail, unless it is the failure reason of a failed
+   * qualification: the Final decision step's proof-failure alert says that,
+   * beside "Retry qualification".
+   */
+  protected readonly guidanceDetail = computed(() => {
+    const detail = this.detail();
+    if (detail === null) return null;
+    return detail.state === 'qualification_failed' && detail.guidance.detail === detail.failure_reason ? null : detail.guidance.detail;
+  });
+  /** The study's failure reason, unless the guidance already says it or the proof-failure alert does. */
+  protected readonly failureReason = computed(() => {
+    const detail = this.detail();
+    const reason = detail?.failure_reason ?? null;
+    if (detail === null || reason === null || detail.state === 'qualification_failed' || detail.guidance.detail === reason) return null;
+    return reason;
+  });
   /** The footer's right-hand line: where the final test and the current default stand. */
   protected readonly footerState = computed(() => {
     const detail = this.detail();

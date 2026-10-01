@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { GoldenSearchStudyComponent } from './golden-search-study.component';
 import { GoldenSearchRefusedError, GoldenSearchService, StageDispatchError, StudyConflictError, type CommandOutcome } from './golden-search.service';
 import type { StudyCommandRequest, StudyDetail } from './golden-search.types';
-import { emaCapability, studyDetail } from './testing/fixtures';
+import { emaCapability, QUALIFICATION_FAILURE, studyDetail } from './testing/fixtures';
 
 interface FakeService {
   get: ReturnType<typeof vi.fn<(id: string) => Promise<StudyDetail>>>;
@@ -90,6 +90,24 @@ describe('GoldenSearchStudyComponent', () => {
 
     expect(screen.queryByRole('button', { name: /^finish$/i })).toBeNull();
     expect(screen.getByText(/finish unavailable — the engine code changed/i)).not.toBeNull();
+  });
+
+  it('a stopped stage whose guidance is its failure reason says the reason once', async () => {
+    const reason = 'The data lake could not be read for 2024-03.';
+    const view = await renderStudy(
+      fakeService(studyDetail('validation_running', { presented_status: 'failed', failure_reason: reason, guidance: { headline: 'This stage stopped before it finished', detail: reason } })),
+    );
+
+    expect(view.container.textContent?.split(reason)).toHaveLength(2);
+  });
+
+  it('qualification failed: the reason appears once, in the proof-failure alert beside Retry qualification', async () => {
+    const view = await renderStudy(fakeService(studyDetail('qualification_failed')));
+
+    expect(view.container.textContent?.split(QUALIFICATION_FAILURE)).toHaveLength(2);
+    expect(screen.getByRole('alert').textContent).toContain(QUALIFICATION_FAILURE);
+    expect(screen.getByRole('heading', { name: 'Qualification failed · current default unchanged' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Retry qualification' })).not.toBeNull();
   });
 
   it('awaiting validation: the Search step shows the procedure and the next action is Test over time', async () => {

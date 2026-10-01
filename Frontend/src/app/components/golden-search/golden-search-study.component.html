@@ -21,14 +21,14 @@
     <app-golden-search-scope-line [scope]="d.scope" />
     <section class="guidance" aria-labelledby="gs-guidance-title">
       <h2 id="gs-guidance-title">{{ d.guidance.headline }}</h2>
-      <p>{{ d.guidance.detail }}</p>
+      @if (guidanceDetail(); as guidanceText) { <p>{{ guidanceText }}</p> }
       @if (d.progress; as progress) {
         <p class="progress" role="status">
           {{ progress.stage | receiptLabel }}: {{ progress.completed | number }} of at most {{ progress.total_max | number }} evaluations
           <progress [value]="progress.completed" [max]="progress.total_max" [attr.aria-label]="(progress.stage | receiptLabel) + ' progress'"></progress>
         </p>
       }
-      @if (d.failure_reason; as reason) { <p class="refusal">{{ reason }}</p> }
+      @if (failureReason(); as reason) { <p class="refusal">{{ reason }}</p> }
       <div aria-live="polite">
         @if (actionRefusal(); as refusal) { <p class="refusal" role="alert"><strong>{{ refusal.code | receiptLabel }}</strong> — {{ refusal.message }}</p> }
         @if (actionMessage(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
