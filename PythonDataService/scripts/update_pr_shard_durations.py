@@ -1,16 +1,18 @@
 """Regenerate scripts/pr_shard_durations.json from a measured full run.
 
-Runs the unsharded PR gate (the same paths, markers, and xdist settings as
+Runs the unsharded PR gate (the same roots, markers, and xdist settings as
 ``scripts.run_fast_tests``) with ``--durations=0`` and records each test's
-combined setup+call+teardown seconds. ``scripts.pytest_shard`` deals those
-measured tests across shards longest-first so no shard approaches the
-120-second budget by hash luck (#2682); tests missing from the file keep
-the hash assignment.
+combined setup+call+teardown seconds. ``scripts.pytest_shard`` sums them by
+test file and deals the files across shards longest-first so no shard
+approaches the 120-second budget by hash luck (#2682); files missing from the
+file keep the hash assignment.
 
 The values jitter a few percent between runs and machines — only their
 relative sizes drive the balance, so regenerate when the shard times
 printed to the CI step summary drift toward the budget, not on every
-change.
+change. Measure with ``PYTEST_XDIST_AUTO_NUM_WORKERS=4``, CI's worker count:
+on a many-core host ``-n auto`` runs so many workers that CPU-bound tests
+slow down while waiting ones do not, which skews the relative sizes.
 """
 
 from __future__ import annotations
@@ -59,7 +61,7 @@ def write_durations(durations: Mapping[str, float]) -> None:
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     completed = subprocess.run(
-        [*pytest_command(()), "--durations=0"],
+        [*pytest_command(), "--durations=0"],
         cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
         text=True,

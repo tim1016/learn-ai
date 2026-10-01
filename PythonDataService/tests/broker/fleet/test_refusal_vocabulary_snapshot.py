@@ -3,9 +3,8 @@
 Decision 9: the reasons do NOT enter the exported OpenAPI contract. The
 frontend's copy map locks against the committed snapshot instead, exactly as
 the broker-v2 panel vocabulary does -- see
-``scripts/regenerate_broker_v2_vocabulary_snapshot.py`` and
-``.github/workflows/ci.yml``'s ``broker-v2-vocabulary-contract`` job for the
-pattern this mirrors.
+``scripts/regenerate_broker_v2_vocabulary_snapshot.py`` for the pattern this
+mirrors.
 
 The live set is derived, not hand-listed: walking ``FleetControlError``'s
 subclass closure means a new refusal family cannot be added without this

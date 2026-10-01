@@ -17,10 +17,11 @@ lock against their own copy:
   will load the Frontend-tree snapshot and assert its copy map covers
   exactly the same code set.
 
-A CI job (``broker-v2-vocabulary-contract``, extended by Task 7d) regenerates
-both files from live source on every PR and diffs them against the committed
-copies, so a hand-edit to either file -- even one applied identically to
-both -- fails CI.
+``test_refusal_vocabulary_snapshot.py`` also regenerates the snapshot from
+live source on every PR, requires the committed Python copy to match it byte
+for byte, and requires the two committed copies to be byte-identical, so a
+hand-edit to either file -- even one applied identically to both -- fails
+CI.
 
 Usage::
 
