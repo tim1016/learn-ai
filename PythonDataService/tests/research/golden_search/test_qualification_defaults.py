@@ -60,6 +60,45 @@ async def test_a_revocation_racing_the_first_default_is_serialized(
     assert await get_default(conn, PROGRAM, symbol) is None
 
 
+async def test_a_revocation_racing_its_own_retry_answers_both_with_one_event(
+    conn: asyncpg.Connection, second_conn: asyncpg.Connection, unique: str, symbol: str
+) -> None:
+    row = await seed_qualification(
+        conn,
+        qualification_id=f"gq-retry-{unique}",
+        symbol=symbol,
+        params=canonical_point(symbol),
+        artifact_digest="1" * 64,
+        make_default=True,
+    )
+    command = f"r-{unique}"
+    async with conn.transaction():
+        first = await revoke_qualification(
+            conn, qualification_id=row.id, reason="Withdrawn.", actor="local:owner", command_id=command, now_ms=5
+        )
+        # The same command, sent again before the first answer arrived (a double submit).
+        retry = asyncio.create_task(
+            revoke_qualification(
+                second_conn,
+                qualification_id=row.id,
+                reason="Withdrawn.",
+                actor="local:owner",
+                command_id=command,
+                now_ms=6,
+            )
+        )
+        await asyncio.sleep(0.3)
+        assert not retry.done()
+
+    replayed = await retry
+    assert replayed.event == first.event
+    assert first.cleared_default is True
+    events = await conn.fetchval(
+        "SELECT count(*) FROM research_golden_qualification_events WHERE qualification_id = $1", row.id
+    )
+    assert events == 1
+
+
 async def test_a_second_revocation_by_another_command_is_refused(
     conn: asyncpg.Connection, unique: str, symbol: str
 ) -> None:

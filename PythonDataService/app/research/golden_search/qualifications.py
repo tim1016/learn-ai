@@ -635,6 +635,9 @@ async def revoke_qualification(
         qualification = await get_qualification(conn, qualification_id)
         if qualification is None:
             raise QualificationNotFoundError(f"Golden Search qualification {qualification_id!r} was not found")
+        # Locked before the replay check, so a same-command request racing this
+        # one reads its committed event as a replay, not as another revocation.
+        await _lock_default_pointer(conn, qualification.program_key, qualification.symbol)
         prior = await get_event_by_command(conn, command_id)
         if prior is not None:
             event = await append_event(
@@ -647,7 +650,6 @@ async def revoke_qualification(
                 reason=reason,
             )
             return Revocation(event=event, cleared_default=False)
-        await _lock_default_pointer(conn, qualification.program_key, qualification.symbol)
         recorded = (await events_for(conn, [qualification_id]))[qualification_id]
         if any(event.kind == "revoked" for event in recorded):
             raise QualificationAlreadyRevokedError(
