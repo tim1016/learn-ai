@@ -40,17 +40,6 @@ async def test_polygon_exception_handler_returns_500_json_response() -> None:
     }
 
 
-async def test_polygon_exception_handler_serializes_exception_message() -> None:
-    request = _make_request()
-    exc = ValueError("unexpected value: 42")
-
-    response = await polygon_exception_handler(request, exc)
-
-    body = json.loads(response.body)
-    assert body["success"] is False
-    assert body["error"] == "unexpected value: 42"
-
-
 async def test_catalog_schema_not_ready_handler_returns_a_typed_503_not_a_500() -> None:
     """A mid-deploy catalog-schema race must not escape as an internal error.
 

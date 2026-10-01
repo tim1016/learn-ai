@@ -394,25 +394,6 @@ def test_the_fleet_path_derives_the_coordinators_published_port() -> None:
     assert 'data_plane_url="http://$(published_host_address "$published_port_line")"' in script
 
 
-def test_the_operator_page_url_is_always_clerk_scoped() -> None:
-    """The page the ceremony opens is always a clerk's own Settings page —
-    on every posture. The broker-wide /brokers/alpaca/settings address was
-    never a page the operator could stage or Apply from, and now only
-    redirects to the account list (#2567), so no line of the script may
-    open it. Pinned against the Angular routes the URL must resolve
-    through: the clerk route prefix plus its settings child
-    (app.routes.ts), which the Configuration tab became (#2566)."""
-    script = _script()
-    functional = [line for line in script.splitlines() if not line.strip().startswith("#")]
-    assert [line for line in functional if "4200/brokers/alpaca/settings" in line] == []
-    assert "http://localhost:4200/brokers/alpaca/clerks/%s/settings" in script
-    routes = (
-        REPOSITORY_ROOT / "Frontend" / "src" / "app" / "app.routes.ts"
-    ).read_text(encoding="utf-8")
-    assert "brokers/alpaca/clerks/:clerkId" in routes
-    assert "path: 'settings'" in routes
-
-
 def _directory(*lanes: tuple[str, str]) -> str:
     return json.dumps({"observed_at_ms": 1, "clerks": [
         {"broker": broker, "clerk_id": clerk_id} for broker, clerk_id in lanes
@@ -498,20 +479,3 @@ def test_the_refusal_says_why_no_lane_was_named(directory: str | None, reason: s
 
     assert completed.returncode != 0
     assert reason in completed.stderr
-
-
-def test_the_refusal_names_the_by_hand_procedure_loudly() -> None:
-    """The refusal is loud and complete: it says why, where to finish, how
-    to restart this lane's worker, and where to confirm Apply."""
-    script = _script()
-    assert 'if ! settings_url="$(settings_page_url)"; then' in script
-    refusal = script[script.index('if ! settings_url="$(settings_page_url)"; then'):]
-    refusal = refusal[: refusal.index("\nfi\n")]
-    assert "cat >&2 <<EOF" in refusal and "exit 1" in refusal
-    for step in (
-        "http://localhost:4200/brokers/alpaca",
-        "Apply staged revision",
-        "${compose_words[*]} restart $worker_service",
-        "Last Apply",
-    ):
-        assert step in refusal

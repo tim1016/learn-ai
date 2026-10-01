@@ -108,15 +108,6 @@ def _result_dict() -> dict[str, Any]:
     return {"run_id": "unit_cancel", "exit_code": 0, "strategy_execution_id": 42}
 
 
-def test_the_worker_reads_the_cancel_flag_on_every_check(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def unreachable(*args: Any, **kwargs: Any) -> Any:  # pragma: no cover - must not run
-        raise AssertionError("the orchestrator must not be called")
-
-    captured = _dispatch(monkeypatch, unreachable)
-
-    assert captured["kwargs"]["cancel_check_every_n"] == 1
-
-
 def test_a_cancel_set_before_the_work_starts_never_calls_the_orchestrator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

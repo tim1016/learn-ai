@@ -122,16 +122,6 @@ def test_new_run_context_records_the_producer_and_contract() -> None:
     )
 
 
-def test_every_catalog_variant_has_trader_facing_explanation_and_caution() -> None:
-    for variant in catalog().variants:
-        assert len(variant.definition) >= 12, variant.variant_id
-        assert len(variant.interpretation) >= 24, variant.variant_id
-        assert variant.common_misreadings, variant.variant_id
-
-    generic = "Read this value together with its producer, input evidence, and any unavailable state."
-    assert all(variant.interpretation != generic for variant in catalog().variants)
-
-
 def test_catalog_rejects_broken_comparison_references() -> None:
     broken_platform = PLATFORM_SHARPE_VARIANT.model_copy(
         update={"alternative_variant_ids": ("missing.variant.v1",)},

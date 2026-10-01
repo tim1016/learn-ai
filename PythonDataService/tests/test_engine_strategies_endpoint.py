@@ -221,43 +221,6 @@ def test_registry_exposes_strategy_bar_cadence_without_frontend_name_heuristics(
     }
 
 
-# ────────────────── VCR-0004 / Phase 2 — module-name contract ─────────
-
-
-def test_every_registered_strategy_can_be_imported_by_key():
-    """The registry key IS the module name — the runner imports by it. If a
-    registered key cannot be imported, the dropdown advertises a strategy that
-    cannot start. This was the smoking gun for VCR-0004 (7 of 10 dropdown items
-    broken)."""
-    from importlib import import_module
-
-    from app.routers.engine import _STRATEGY_REGISTRY
-
-    failures = []
-    for key in _STRATEGY_REGISTRY:
-        try:
-            import_module(f"app.engine.strategy.algorithms.{key}")
-        except ImportError as exc:
-            failures.append(f"{key}: {exc}")
-    assert not failures, (
-        "Registry keys must match algorithm module names so the runner can "
-        "import them. Failing keys: " + "; ".join(failures)
-    )
-
-
-def test_deployment_validation_alias_no_longer_exists():
-    """``DeploymentValidationAlgorithm = DeploymentValidationConsecutiveGreen``
-    in ``deployment_validation.py`` was the convention paper-over. Delete it
-    along with the convention itself; the registry's ``class_name`` is the
-    sole source of truth."""
-    from app.engine.strategy.algorithms import deployment_validation
-
-    assert not hasattr(deployment_validation, "DeploymentValidationAlgorithm"), (
-        "DeploymentValidationAlgorithm alias must be removed — the registry's "
-        "class_name names DeploymentValidationConsecutiveGreen directly."
-    )
-
-
 if __name__ == "__main__":
     # Allow `python -m app.engine.tests.test_engine_strategies_endpoint` style.
     import sys

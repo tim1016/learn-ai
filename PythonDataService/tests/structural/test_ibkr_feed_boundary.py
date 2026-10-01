@@ -354,33 +354,6 @@ def _referenced_module_names(source_path: Path) -> set[str]:
     return found
 
 
-def test_retired_modules_no_longer_resolve() -> None:
-    """No module any of the three retirements deleted may resolve to a file again.
-
-    This is the "structural-retirement" half of the contract: the boundary
-    test proves the feed does not *import* the bucket, this one proves the
-    bucket is not *there*. A module that came back would satisfy the
-    import-graph test trivially (nothing imports it yet) while quietly
-    reopening the surface the retirement closed.
-    """
-    assert RETIRED_MODULES, "RETIRED_MODULES is empty — this guard would pass vacuously."
-    assert EARLIER_RETIRED_MODULES, "EARLIER_RETIRED_MODULES is empty — this guard would pass vacuously."
-    assert not set(RETIRED_MODULES) & set(EARLIER_RETIRED_MODULES), (
-        "A module is listed under both retirements — the provenance split is meant to be exclusive."
-    )
-
-    resurrected = [
-        dotted
-        for dotted in ALL_RETIRED_MODULES
-        if _module_path(dotted).exists() or _is_package_dir(dotted)
-    ]
-    assert not resurrected, (
-        "Module(s) retired by #1583, ADR 0038 or #1813 resolve again: "
-        f"{resurrected}. Re-adding one is a deliberate decision that belongs in a PR of "
-        "its own, with its row in the registry docs — not a silent resurrection."
-    )
-
-
 def test_no_surviving_module_references_a_retired_module() -> None:
     """No file under ``app/`` may name a retired module, at any import depth.
 

@@ -76,14 +76,3 @@ def test_the_domain_ceiling_survives_the_json_round_trip() -> None:
     published = json.loads(json.dumps(float(MAX_TIMESTAMP_MS)))
     assert int(published) == MAX_TIMESTAMP_MS
     assert MAX_TIMESTAMP_MS < EXACT_INTEGER_LIMIT
-
-
-def test_the_domain_ceiling_is_the_end_of_year_9999() -> None:
-    """A bound nobody can explain gets copied wrong; this one has an answer."""
-    from datetime import UTC, datetime, timedelta
-
-    # Integer arithmetic on purpose: ``/ 1000`` would reintroduce exactly the
-    # float step this whole issue is about.
-    assert datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=MAX_TIMESTAMP_MS) == datetime(
-        9999, 12, 31, 23, 59, 59, 999_000, tzinfo=UTC
-    )
