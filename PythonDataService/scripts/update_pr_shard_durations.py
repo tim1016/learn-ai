@@ -10,7 +10,9 @@ file keep the hash assignment.
 The values jitter a few percent between runs and machines — only their
 relative sizes drive the balance, so regenerate when the shard times
 printed to the CI step summary drift toward the budget, not on every
-change.
+change. Measure with ``PYTEST_XDIST_AUTO_NUM_WORKERS=4``, CI's worker count:
+on a many-core host ``-n auto`` runs so many workers that CPU-bound tests
+slow down while waiting ones do not, which skews the relative sizes.
 """
 
 from __future__ import annotations
