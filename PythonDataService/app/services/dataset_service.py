@@ -85,8 +85,6 @@ def assert_canonical_bar_stream(bars: list[dict[str, Any]], symbol: str) -> None
 logger = logging.getLogger(__name__)
 
 _POLYGON_MAX_BARS = 50_000
-_MINUTES_PER_DAY = 450
-_DAYS_PER_CHUNK = _POLYGON_MAX_BARS // _MINUTES_PER_DAY
 _ET = ZoneInfo("US/Eastern")
 
 

@@ -319,14 +319,6 @@ class ProfilesStore:
             (owner.owner_id, owner.display_label, owner.created_at_ms, owner.updated_at_ms),
         )
 
-    def update_owner_label(
-        self, conn: sqlite3.Connection, *, display_label: str, updated_at_ms: int
-    ) -> None:
-        conn.execute(
-            "UPDATE local_owner SET display_label = ?, updated_at_ms = ? WHERE id = 1",
-            (display_label, updated_at_ms),
-        )
-
     # ---- profiles -------------------------------------------------------
 
     def read_profile(self, profile_id: str) -> BrokerProfile | None:

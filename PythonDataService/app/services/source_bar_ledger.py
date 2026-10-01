@@ -981,10 +981,6 @@ class SourceBarLedger:
             ).fetchall()
         return [str(row["provider"]) for row in rows]
 
-    def market_providers_for(self, symbol: str) -> list[str]:
-        """The providers whose streams the market delivered for ``symbol``, without fill evidence."""
-        return [provider for provider in self.providers_for(symbol) if provider not in FILL_EVIDENCE_PROVIDERS]
-
     def checkpoint_wal(self) -> None:
         """Checkpoint and truncate durable evidence after controlled shutdown or backup.
 
