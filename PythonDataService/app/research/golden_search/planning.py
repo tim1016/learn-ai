@@ -2,8 +2,8 @@
 
 Formula (common run-up): the slowest warmup requirement is measured over
 the plan's whole legal search space — every warmup-dependent knob at its
-seed, incumbent, range ends and one neighbor step past the upper end
-(clipped to the domain), in every combination the declared constraints
+seed, incumbent, range ends and one neighbor step past the upper end and
+past the seed (clipped to the domain), in every combination the declared constraints
 allow — by the real program (``app.research.sweep.warmup``). The canonical
 planner (``plan_run_up``) turns it into whole sessions before the
 development start; a plan whose run-up would have to be carved from the
@@ -172,6 +172,8 @@ def _warmup_values(declaration: SearchDeclaration, protocol: GoldenSearchProtoco
         if plan.mode == "search":
             high = to_decimal(plan.high)
             candidates |= {to_decimal(plan.low), high, min(knob.domain_high, high + knob.neighbor_step)}
+            # A seed outside the range stays the winner when no move improves on it; its neighbors are audited too.
+            candidates.add(min(knob.domain_high, seed[knob.name] + knob.neighbor_step))
         else:
             candidates.add(to_decimal(plan.fixed_value))
         values[knob.name] = sorted(candidates)

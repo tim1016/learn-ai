@@ -83,7 +83,21 @@ def test_the_slowest_requirement_reaches_one_neighbor_step_past_the_searched_ran
 
     widest = probe_warmup_samples(EMA, {"symbol": "SPY", "slow_period": 31})
     assert (probe.required_samples, probe.bar_span_ms) == (widest.required_samples, widest.bar_span_ms)
-    assert probed == 4  # seed 10 (= incumbent), low 8, high 30, and 31 for the neighbor audit
+    assert probed == 5  # seed 10 (= incumbent) and its neighbor 11, low 8, high 30, and 31 for the neighbor audit
+
+
+def test_a_seed_above_the_searched_range_is_probed_one_neighbor_step_past_itself() -> None:
+    protocol = protocol_from_request(plan_request("SPY", seed={"symbol": "SPY", "fast_period": 5, "slow_period": 35}))
+    knobs = tuple(
+        KnobPlan(name="slow_period", mode="search", low=8.0, high=30.0, fixed_value=10.0, step=1.0) if plan.name == "slow_period" else plan
+        for plan in protocol.knobs
+    )
+
+    probe, _ = slowest_requirement(replace(protocol, knobs=knobs), _ema())
+
+    # No move beats the seed, so 35 stays the winner and its neighbor audit runs slow 36.
+    widest = probe_warmup_samples(EMA, {"symbol": "SPY", "slow_period": 36})
+    assert (probe.required_samples, probe.bar_span_ms) == (widest.required_samples, widest.bar_span_ms)
 
 
 def test_points_that_break_a_constraint_are_never_probed() -> None:
@@ -95,8 +109,8 @@ def test_points_that_break_a_constraint_are_never_probed() -> None:
 
     probe, probed = slowest_requirement(replace(protocol, knobs=knobs), _ema())
 
-    # fast 12 and 13 are not below the fixed slow length 10, so only fast 3 and 5 (seed) are probed.
-    assert probed == 2
+    # fast 12 and 13 are not below the fixed slow length 10, so only fast 3, 5 (seed) and 6 (its neighbor) are probed.
+    assert probed == 3
     assert probe.required_samples == probe_warmup_samples(EMA, {"symbol": "SPY"}).required_samples
 
 
