@@ -376,7 +376,7 @@ async def option_chain_stream(
 async def option_surface_stream(
     symbol: str,
     expiry_ms: Annotated[
-        list[Annotated[int, Field(gt=0, le=MAX_TIMESTAMP_MS)]] | None,
+        list[Annotated[int, Field(le=MAX_TIMESTAMP_MS)]] | None,
         Query(
             description=(
                 "Expirations to fan over (repeated). Each value is an int64 "

@@ -39732,7 +39732,6 @@
               "anyOf": [
                 {
                   "items": {
-                    "exclusiveMinimum": 0,
                     "maximum": 253402300799999,
                     "type": "integer"
                   },
