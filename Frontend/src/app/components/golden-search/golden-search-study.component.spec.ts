@@ -185,6 +185,54 @@ describe('GoldenSearchStudyComponent', () => {
     expect(screen.queryByRole('button', { name: /start the search/i })).toBeNull();
   });
 
+  it('a command answer older than the revision on screen is dropped', async () => {
+    const service = fakeService(studyDetail('locked'));
+    let answerCommand: (outcome: CommandOutcome) => void = () => undefined;
+    service.command.mockImplementationOnce(() => new Promise<CommandOutcome>((resolve) => (answerCommand = resolve)));
+    const view = await renderStudy(service);
+    fireEvent.click(screen.getByRole('button', { name: /start the search/i }));
+    await waitFor(() => expect(service.command).toHaveBeenCalledOnce());
+    service.get.mockResolvedValueOnce(studyDetail('awaiting_validation', { revision: 5 }));
+    await view.fixture.componentInstance.reload();
+
+    answerCommand({ study: studyDetail('search_running', { revision: 4 }), jobId: null });
+
+    // The command has answered once its busy state clears; the newer study is still the one shown.
+    await waitFor(() => expect((within(guidance(/check whether the search procedure holds up/i)).getByRole('button', { name: /test over time/i }) as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it('a poll answering with a revision older than the one on screen is dropped', async () => {
+    const service = fakeService(studyDetail('search_running', { revision: 4 }));
+    const view = await renderStudy(service);
+    service.get.mockResolvedValueOnce(studyDetail('locked', { revision: 3 }));
+
+    await view.fixture.componentInstance.reload();
+    await view.fixture.whenStable();
+
+    expect(screen.getByRole('heading', { name: /the search is running/i })).not.toBeNull();
+  });
+
+  it('a failed poll keeps the study on screen, says it is retrying, and polls again', async () => {
+    const running = studyDetail('search_running');
+    const service = fakeService(running);
+    let answerRetry: (study: StudyDetail) => void = () => undefined;
+    service.get
+      .mockResolvedValueOnce(running)
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockImplementationOnce(() => new Promise<StudyDetail>((resolve) => (answerRetry = resolve)));
+    await render(GoldenSearchStudyComponent, {
+      inputs: { studyId: 'study-0001-aaaa', capabilities: [emaCapability()], pollMs: 5 },
+      providers: [provideRouter([]), { provide: GoldenSearchService, useValue: service }],
+    });
+
+    expect(await screen.findByText('This study could not be refreshed; retrying.')).not.toBeNull();
+    expect(screen.queryByText('This study could not be loaded.')).toBeNull();
+    expect(screen.getByRole('heading', { name: /the search is running/i })).not.toBeNull();
+    await waitFor(() => expect(service.get).toHaveBeenCalledTimes(3));
+    answerRetry(running);
+    await waitFor(() => expect(screen.queryByText('This study could not be refreshed; retrying.')).toBeNull());
+  });
+
   it('a command with no answer can be retried with the same idempotency key', async () => {
     const service = fakeService(studyDetail('locked'));
     service.command.mockRejectedValueOnce(new Error('network down'));
