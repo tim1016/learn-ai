@@ -1,6 +1,11 @@
+---
+paths:
+  - "PythonDataService/**"
+---
+
 # Python rules
 
-Targets Python 3.12+ (the Dockerfile, CI and ruff `target-version` are all 3.12; PEP 695 generics are in use) with FastAPI, Pydantic v2, pandas. Read when writing or editing code under `PythonDataService/`.
+Targets Python 3.12+ (the Dockerfile, CI and ruff `target-version` are all 3.12; PEP 695 generics are in use) with FastAPI, Pydantic v2, pandas.
 
 **Authoritative references**:
 - https://fastapi.tiangolo.com
@@ -59,7 +64,7 @@ When adding a dep:
   when wall-clock semantics matter; storage, wire, and serialized artifacts
   use `int64 ms UTC`. Never naive datetimes.
 - **Vectorized operations** preferred. Fall back to `.apply()` only when necessary and document why.
-- **Copy-on-write behavior** (pandas 2.x default): be explicit about when you're mutating vs returning a new DataFrame.
+- **Copy-on-write is the default in pandas 3**: be explicit about when you're mutating vs returning a new DataFrame.
 
 ## NumPy and numerical code
 
@@ -87,23 +92,6 @@ When adding a dep:
 - **Custom exception classes** for domain errors (`InsufficientDataError`, `InvalidSymbolError`) that routers translate to `HTTPException`.
 - **Validate at boundaries**: API endpoints, external data ingestion. Internal trusted code doesn't need paranoid guards.
 
-## Testing (see testing.md for cross-stack standards)
-
-- **pytest** with `pytest-asyncio` for async.
-- **Fixtures** scoped narrowly (function-scoped by default for isolation).
-- **`httpx.AsyncClient`** with `ASGITransport(app=app)` for FastAPI endpoint tests. NOT `TestClient` for async routes.
-- **`respx` or `pytest-httpx`** for mocking external HTTP calls.
-- **Name pattern**: `test_<function>_<scenario>`.
-- **Numerical tests**: assert on shapes, dtypes, and value ranges. Use explicit `atol`/`rtol` for float comparisons.
-
 ## Common pitfalls
 
-- Pydantic v1 patterns (`@validator`, `Config` inner class) — this is v2
-- `TestClient` for async routes (use `httpx.AsyncClient` + `ASGITransport`)
-- camelCase response fields (consumer expects snake_case)
 - Naked `dict` responses (use Pydantic models)
-- Silent `except: pass` (explicit exception types only)
-- Bare `httpx` calls without timeout
-- `print()` in committed code
-- `np.allclose(a, b)` with default tolerances (specify explicitly)
-- Naive datetimes (always tz-aware)

@@ -5,55 +5,20 @@
 | Action     | Command                                        |
 |------------|------------------------------------------------|
 | Run        | `podman compose up frontend` (localhost:4200)  |
-| Test       | `podman exec my-frontend npm test`             |
+| Test       | `npx ng test --include='src/app/<path>/<name>.spec.ts'` (host, one exact spec) |
 | Build      | `podman exec my-frontend npx ng build`         |
 | Type-check | `podman exec my-frontend npx tsc --noEmit`     |
-| Lint       | `npx eslint Frontend/src/ --max-warnings 0`    |
+| Lint       | `npx eslint src/` (what CI runs)               |
 | Logs       | `podman logs -f my-frontend`                   |
 
 Frontend tests are **independent** — no backend or database needed.
 
-## File Structure
-
-```
-src/app/
-├── components/          # 23 feature directories
-│   ├── market-data/     # OHLCV dashboard, candlestick charts
-│   ├── portfolio/       # Event-sourced portfolio tracker
-│   ├── options-chain-v2/        # Options chain viewer
-│   ├── options-strategy-lab/    # Multi-leg strategy builder
-│   ├── strategy-lab/            # Strategy backtesting UI
-│   ├── technical-analysis/      # Indicator overlays
-│   ├── pricing-lab/             # Black-Scholes pricer UI
-│   ├── research-lab/            # Research experiment runner
-│   ├── data-quality/            # Data validation dashboards
-│   ├── lean-engine/             # Lean engine integration UI
-│   └── ...                      # ticker-explorer, snapshots, etc.
-├── services/            # 13 injectable services
-│   ├── polygon.service.ts       # Polygon.io REST client
-│   ├── market-data.service.ts   # GraphQL market data queries
-│   ├── portfolio.service.ts     # GraphQL portfolio mutations/queries
-│   ├── replay-engine.service.ts # Backtest replay orchestration
-│   └── ...
-├── graphql/             # Hand-written TS types for the .NET GraphQL responses
-│   ├── types.ts                 # Market data GQL types
-│   ├── portfolio-types.ts       # Portfolio GQL types
-│   └── spec-strategy.models.ts  # Strategy-spec aliases over the OpenAPI types
-├── models/              # Shared TypeScript interfaces
-├── shared/              # Reusable directives, helpers
-└── utils/               # Pure utility functions (black-scholes, date-validation)
-```
-
 ## Key Patterns
 
-- **Standalone components** with `ChangeDetectionStrategy.OnPush`
-- **Signals** for state: `signal()`, `computed()`, `input()`, `output()`, `inject()`
-- **Raw `HttpClient` POSTs** to the .NET GraphQL endpoint (no Apollo) — each service posts `{ query, variables }` itself (only `portfolio.service.ts` wraps that in a local `gql<T>()`); the canonical `GraphQLResponse<T>` / `GraphqlError` types are in `shared/graphql/graphql-error.ts`, response types in `graphql/types.ts`
+- **Raw `HttpClient` POSTs** to the .NET GraphQL endpoint (no Apollo) — each service posts `{ query, variables }` itself; the canonical `GraphQLResponse<T>` / `GraphqlError` types are in `shared/graphql/graphql-error.ts`, response types in `graphql/types.ts`
 - **PrimeNG** for UI components + **Tailwind CSS** for utility styling
 - **TradingView lightweight-charts v5** for OHLCV candlestick charts (`chart.addSeries(CandlestickSeries, options)`)
-- Modern control flow: `@if`, `@for` (with `track`), `@switch`, `@let`
 - API proxy: `/graphql` proxied via the canonical `proxy.conf.js`; it defaults to host loopback targets and Compose overrides those targets with service names.
-- Receipt/evidence identifiers render through the shared `receiptLabel` pipe. Preserve opaque audit tokens such as intent/order IDs, paths, hashes, refs, and URLs exactly. Backend-authored trader/operator prose stays unpiped.
 
 ## Testing
 
@@ -61,11 +26,10 @@ src/app/
 - Setup file: `src/test-setup.ts` (stubs ResizeObserver, Canvas, matchMedia)
 - Test behavior, not implementation — assert rendered output, not signal values
 - Spec files co-located: `*.component.spec.ts`, `*.service.spec.ts`
-- `npm test` (`scripts/run-test-budget.cjs`) runs the full unsharded suite and enforces the 120s budget from `.claude/CLAUDE.md`; on a memory-capped container it can OOM. To run one CI shard's worth locally instead, set `TEST_SHARD_INDEX`/`TEST_SHARD_COUNT` (matching `.github/workflows/ci.yml`'s `frontend-test-shard` matrix, e.g. `TEST_SHARD_INDEX=1 TEST_SHARD_COUNT=6 npm test`) — the script auto-appends `--runner-config=vitest.ci.config.ts`. `NG_BUILD_MAX_WORKERS` defaults to `2` (overridable) either way.
+- Locally, run one exact spec (`npx ng test --include='src/app/<path>/<name>.spec.ts'`); CI runs the rest. To reproduce one CI shard, set `TEST_SHARD_INDEX`/`TEST_SHARD_COUNT` to match `.github/workflows/ci.yml`'s `frontend-test-shard` matrix (e.g. `TEST_SHARD_INDEX=1 TEST_SHARD_COUNT=6 npm test`); `scripts/run-test-budget.cjs` then auto-appends `--runner-config=vitest.ci.config.ts`. Unsharded, `npm test` runs the whole suite and can OOM on a memory-capped container. `NG_BUILD_MAX_WORKERS` defaults to `2` (overridable) either way.
 
 ## Gotchas
 
 - `proxy.conf.js` is the only approved dev proxy configuration. It routes host development to loopback ports by default; Compose sets `BACKEND_PROXY_TARGET` and `DATA_PLANE_PROXY_TARGET` to container service names. Do not replace it with a target-only JSON proxy: that bypasses the data-plane control-header hook. It attaches the Python data-plane control header from `DATA_PLANE_CONTROL_SECRET` only for Angular-marked unsafe control mutations and protected broker-session reads with positive same-origin local-dev browser provenance; metadata-absent local clients are intentionally not given the proxy secret.
-- Some components are large (options-strategy-lab, strategy-builder) — consider extracting child components
 - PrimeNG 22 uses PrimeUI licensing. Set `primeUiLicense` in the gitignored environment override before production use; the checked-in examples show the required field.
 - `tsconfig.json` excludes spec files; `tsconfig.spec.json` includes them for test builds
