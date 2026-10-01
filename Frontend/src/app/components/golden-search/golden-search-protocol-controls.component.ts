@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { InputText } from 'primeng/inputtext';
 
 import { FILL_MODE_OPTIONS, isFillModeName } from '../../models/fill-mode';
 import { etIsoDate } from '../../shared/date/et-midnight';
@@ -50,7 +51,7 @@ interface PairOption {
  */
 @Component({
   selector: 'app-golden-search-protocol-controls',
-  imports: [ReceiptLabelPipe],
+  imports: [InputText, ReceiptLabelPipe],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-protocol-controls.component.html',
   styleUrl: './golden-search-protocol-controls.component.scss',

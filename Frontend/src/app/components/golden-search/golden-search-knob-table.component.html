@@ -1,4 +1,4 @@
-<div class="table-wrap">
+<div class="table-wrap" role="region" tabindex="0" aria-label="Knobs">
   <table class="knobs">
     <caption>Knobs, in search order</caption>
     <thead>
@@ -10,20 +10,24 @@
     <tbody>
       @for (row of rows(); track row.plan.name; let i = $index) {
         <tr [class.fixed-row]="row.plan.mode === 'fixed'">
-          <td class="order">
-            <span>{{ i + 1 }}</span>
-            @if (!readonly()) {
-              <button type="button" class="icon" [disabled]="row.first" [attr.aria-label]="'Search ' + row.label + ' earlier'" (click)="move(row.plan.name, -1)"><i class="pi pi-arrow-up" aria-hidden="true"></i></button>
-              <button type="button" class="icon" [disabled]="row.last" [attr.aria-label]="'Search ' + row.label + ' later'" (click)="move(row.plan.name, 1)"><i class="pi pi-arrow-down" aria-hidden="true"></i></button>
-            }
+          <td>
+            <div class="order">
+              <span>{{ i + 1 }}</span>
+              @if (!readonly()) {
+                <button type="button" class="icon" [disabled]="row.first" [attr.aria-label]="'Search ' + row.label + ' earlier'" (click)="move(row.plan.name, -1)"><i class="pi pi-arrow-up" aria-hidden="true"></i></button>
+                <button type="button" class="icon" [disabled]="row.last" [attr.aria-label]="'Search ' + row.label + ' later'" (click)="move(row.plan.name, 1)"><i class="pi pi-arrow-down" aria-hidden="true"></i></button>
+              }
+            </div>
           </td>
-          <th scope="row" class="knob">
-            <strong>{{ row.label }}</strong> <code>{{ row.plan.name }}</code>
-            @if (row.knob; as k) {
-              <small>{{ k.unit }} · allowed {{ k.domain_low }} – {{ k.domain_high }} · step {{ k.quantum }}</small>
-              @if (k.warmup_dependent) { <small class="tag">Changes warmup</small> }
-              @if (!k.searchable_by_default) { <small>Kept fixed by default.</small> }
-            }
+          <th scope="row">
+            <div class="knob">
+              <span><strong>{{ row.label }}</strong> <code>{{ row.plan.name }}</code></span>
+              @if (row.knob; as k) {
+                <small>{{ k.unit }} · allowed {{ k.domain_low }} – {{ k.domain_high }} · step {{ k.quantum }}</small>
+                @if (k.warmup_dependent) { <small class="tag">Changes warmup</small> }
+                @if (!k.searchable_by_default) { <small>Kept fixed by default.</small> }
+              }
+            </div>
           </th>
           <td>
             @if (readonly()) {
@@ -35,25 +39,27 @@
               </select>
             }
           </td>
-          <td class="values">
+          <td>
+            <div class="values">
             @if (row.plan.mode === 'search') {
               @if (readonly()) {
                 {{ row.plan.low }} – {{ row.plan.high }}
               } @else {
-                <label><span>Low</span><input #low type="number" [step]="row.knob?.quantum ?? 'any'" [min]="row.knob?.domain_low ?? null" [max]="row.knob?.domain_high ?? null" [value]="row.plan.low" [attr.aria-label]="row.label + ' low'" [attr.aria-invalid]="problem(row.plan.name, 'low') !== null" (input)="onNumber(row.plan.name, 'low', low.value)" /></label>
-                <label><span>High</span><input #high type="number" [step]="row.knob?.quantum ?? 'any'" [min]="row.knob?.domain_low ?? null" [max]="row.knob?.domain_high ?? null" [value]="row.plan.high" [attr.aria-label]="row.label + ' high'" [attr.aria-invalid]="problem(row.plan.name, 'high') !== null" (input)="onNumber(row.plan.name, 'high', high.value)" /></label>
+                <label><span>Low</span><input #low pInputText type="number" [step]="row.knob?.quantum ?? 'any'" [min]="row.knob?.domain_low ?? null" [max]="row.knob?.domain_high ?? null" [value]="row.plan.low" [attr.aria-label]="row.label + ' low'" [attr.aria-invalid]="problem(row.plan.name, 'low') !== null" (input)="onNumber(row.plan.name, 'low', low.value)" /></label>
+                <label><span>High</span><input #high pInputText type="number" [step]="row.knob?.quantum ?? 'any'" [min]="row.knob?.domain_low ?? null" [max]="row.knob?.domain_high ?? null" [value]="row.plan.high" [attr.aria-label]="row.label + ' high'" [attr.aria-invalid]="problem(row.plan.name, 'high') !== null" (input)="onNumber(row.plan.name, 'high', high.value)" /></label>
               }
               @if (row.knob; as k) { <small>default {{ k.default_low }} – {{ k.default_high }}</small> }
             } @else {
               @if (readonly()) {
                 {{ row.plan.fixed_value }}
               } @else {
-                <label><span>Fixed at</span><input #fixed type="number" [step]="row.knob?.quantum ?? 'any'" [min]="row.knob?.domain_low ?? null" [max]="row.knob?.domain_high ?? null" [value]="row.plan.fixed_value" [attr.aria-label]="row.label + ' fixed value'" [attr.aria-invalid]="problem(row.plan.name, 'fixed_value') !== null" (input)="onNumber(row.plan.name, 'fixed_value', fixed.value)" /></label>
+                <label><span>Fixed at</span><input #fixed pInputText type="number" [step]="row.knob?.quantum ?? 'any'" [min]="row.knob?.domain_low ?? null" [max]="row.knob?.domain_high ?? null" [value]="row.plan.fixed_value" [attr.aria-label]="row.label + ' fixed value'" [attr.aria-invalid]="problem(row.plan.name, 'fixed_value') !== null" (input)="onNumber(row.plan.name, 'fixed_value', fixed.value)" /></label>
               }
             }
             @for (item of valueProblems(row.plan.name); track item.field) {
               <small class="problem" role="alert">{{ item.label }}: {{ item.message }}</small>
             }
+            </div>
           </td>
           @if (showGridStep()) {
             <td>
@@ -61,7 +67,7 @@
                 @if (readonly()) {
                   {{ row.plan.grid_step ?? '—' }}
                 } @else {
-                  <input #step type="number" [step]="row.knob?.quantum ?? 'any'" min="0" [value]="row.plan.grid_step ?? ''" [attr.aria-label]="row.label + ' grid step'" [attr.aria-invalid]="problem(row.plan.name, 'grid_step') !== null" (input)="onNumber(row.plan.name, 'grid_step', step.value)" />
+                  <input #step pInputText type="number" [step]="row.knob?.quantum ?? 'any'" min="0" [value]="row.plan.grid_step ?? ''" [attr.aria-label]="row.label + ' grid step'" [attr.aria-invalid]="problem(row.plan.name, 'grid_step') !== null" (input)="onNumber(row.plan.name, 'grid_step', step.value)" />
                   @if (problem(row.plan.name, 'grid_step'); as message) { <small class="problem" role="alert">{{ message }}</small> }
                 }
               } @else { <span class="muted">—</span> }
@@ -75,7 +81,7 @@
 
 @if (capability(); as cap) {
   @if (cap.fixed.length > 0) {
-    <ul class="fixed" aria-label="Fixed controls">
+    <ul class="fixed-controls" aria-label="Fixed controls">
       @for (control of cap.fixed; track control.label) {
         <li><strong>{{ control.label }}</strong> {{ control.value }} <span class="muted">— {{ control.reason }}</span></li>
       }

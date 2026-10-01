@@ -16,7 +16,7 @@ p { margin: 0; }
 .guidance h3 { margin: 0; font-size: var(--fs-lg); }
 .guidance > p { font-size: var(--fs-sm); color: var(--text-secondary); }
 .progress { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; font-size: var(--fs-xs); }
-.progress progress { flex: 1 1 160px; max-width: 320px; }
+.progress progress { flex: 1 1 160px; max-width: 320px; accent-color: var(--accent); }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .spacer { flex: 1; }
 .step-body { min-width: 0; }

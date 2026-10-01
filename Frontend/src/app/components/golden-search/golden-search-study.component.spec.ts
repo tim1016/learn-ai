@@ -1,4 +1,5 @@
 import { provideRouter } from '@angular/router';
+import axe from 'axe-core';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -177,5 +178,17 @@ describe('GoldenSearchStudyComponent', () => {
 
     await waitFor(() => expect(hidden).toHaveBeenCalledWith('study-0001-aaaa'));
     expect(service.hide).toHaveBeenCalledWith('study-0001-aaaa');
+  });
+
+  it('passes axe on the Plan, Search and Test over time steps', async () => {
+    const view = await renderStudy(fakeService(studyDetail('awaiting_candidate')));
+    const nav = within(screen.getByRole('navigation', { name: 'Research steps' }));
+
+    for (const step of [/plan/i, /search/i, /test over time/i]) {
+      fireEvent.click(nav.getByRole('button', { name: step }));
+      await view.fixture.whenStable();
+      const results = await axe.run(view.container, { rules: { 'color-contrast': { enabled: false } } });
+      expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
+    }
   });
 });

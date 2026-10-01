@@ -26,7 +26,7 @@
 
   @if (!checking() && preflight(); as plan) {
     @if (plan.estimate; as estimate) {
-      <div class="table-wrap">
+      <div class="table-wrap" role="region" tabindex="0" aria-label="Workload by stage">
         <table class="stages">
           <caption>Workload upper bound — every engine run counts toward the cap</caption>
           <thead><tr><th scope="col">Stage</th><th scope="col" class="num">At most</th></tr></thead>
@@ -52,7 +52,7 @@
       <p class="muted">Warmup: every evaluation is primed with the same {{ runUp.run_up_sessions }} sessions before its window (the slowest setting needs {{ runUp.required_samples }} bars); data from <app-timestamp-display [value]="runUp.data_start_ms" mode="date-et" />.</p>
     }
     @if (plan.folds.length > 0) {
-      <div class="table-wrap">
+      <div class="table-wrap" role="region" tabindex="0" aria-label="Test-over-time folds">
         <table class="folds">
           <caption>Test-over-time folds</caption>
           <thead><tr><th scope="col">Fold</th><th scope="col">Training</th><th scope="col">Test</th></tr></thead>

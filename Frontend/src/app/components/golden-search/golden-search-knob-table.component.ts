@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { InputText } from 'primeng/inputtext';
 
 import { knobProblemKey, type KnobNumberField, type PlanEdit } from './golden-search-plan-draft';
 import type { CapabilityKnob, GoldenSearchMethod, KnobPlan, StrategyCapability } from './golden-search.types';
@@ -26,6 +27,7 @@ interface KnobRow {
  */
 @Component({
   selector: 'app-golden-search-knob-table',
+  imports: [InputText],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-knob-table.component.html',
   styleUrl: './golden-search-knob-table.component.scss',

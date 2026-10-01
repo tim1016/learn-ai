@@ -9,7 +9,7 @@
 .clear:focus-visible { outline: 2px solid var(--accent); }
 .muted { color: var(--text-secondary); font-size: var(--fs-xs); margin: 0; }
 .refusal { color: var(--bear); margin: 0; font-size: var(--fs-sm); }
-.table-wrap { overflow-x: auto; }
+.table-wrap { position: relative; overflow-x: auto; }
 .rows { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
 .rows th, .rows td { padding: var(--space-1) var(--space-2); border-bottom: 1px solid var(--border-light); text-align: left; white-space: nowrap; }
 .rows .num { text-align: right; font-variant-numeric: tabular-nums; }

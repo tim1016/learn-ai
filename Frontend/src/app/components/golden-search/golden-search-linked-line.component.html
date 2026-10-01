@@ -1,5 +1,5 @@
 @if (plot(); as p) {
-  <svg [attr.viewBox]="'0 0 ' + width + ' ' + height" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+  <svg [attr.viewBox]="'0 0 ' + width + ' ' + height" aria-hidden="true" focusable="false">
     <line class="zero" x1="0" [attr.x2]="width" [attr.y1]="p.zeroY" [attr.y2]="p.zeroY" />
     @for (segment of p.segments; track $index) { <path class="line" [attr.d]="segment" /> }
     @for (dot of p.dots; track dot.key) { <circle class="dot" r="2.5" [attr.cx]="dot.x" [attr.cy]="dot.y" /> }

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
+import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import { fakePickerWorld, pickSymbol } from '../../shared/symbol-picker/testing/fake-picker-world';
@@ -201,5 +202,17 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(request.expected_revision).toBe(source.revision);
     expect(request.command === 'revise' ? request.payload.protocol.knobs.find((k) => k.name === 'hold_bars')?.high : null).toBe(10);
     expect(service.createStudy).not.toHaveBeenCalled();
+  });
+
+  it('passes axe with the defaults loaded and a refusal shown', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    service.preflight.mockResolvedValueOnce(preflightFixture({ refusals: [{ code: 'WORKLOAD_LIMIT', field: 'budget_cap', message: 'Over the cap.' }] }));
+    fireEvent.input(screen.getByLabelText(/backtest cap/i), { target: { value: '100' } });
+    await screen.findByRole('list', { name: /cannot be locked/i });
+
+    const results = await axe.run(view.container, { rules: { 'color-contrast': { enabled: false } } });
+    expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
   });
 });

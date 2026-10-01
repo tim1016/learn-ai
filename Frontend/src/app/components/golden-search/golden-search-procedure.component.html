@@ -21,7 +21,7 @@
   </div>
 
   @if (path().length > 0) {
-    <div class="table-wrap">
+    <div class="table-wrap" role="region" tabindex="0" [attr.aria-label]="heading() + ' — search path'">
       <table class="path">
         <caption>Where the search went, round by round</caption>
         <thead>

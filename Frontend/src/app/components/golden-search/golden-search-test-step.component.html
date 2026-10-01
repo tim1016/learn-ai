@@ -16,7 +16,7 @@
       </section>
     }
 
-    <div class="table-wrap">
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Folds">
       <table class="folds">
         <caption>Folds — training winner and its test result</caption>
         <thead>
@@ -45,7 +45,7 @@
       <h3 id="gs-linked-title">The procedure's test history</h3>
       <p class="muted">Test-period returns linked across folds; each fold starts flat with fresh capital. A missing fold breaks the line.</p>
       <app-golden-search-linked-line [points]="v.linked" />
-      <div class="table-wrap">
+      <div class="table-wrap" role="region" tabindex="0" aria-label="Linked test-period return">
         <table class="linked-table">
           <caption>Linked test-period return by fold</caption>
           <thead><tr><th scope="col">Fold</th><th scope="col">Test ends</th><th scope="col" class="num">Linked return</th></tr></thead>
