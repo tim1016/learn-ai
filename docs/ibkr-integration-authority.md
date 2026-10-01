@@ -61,12 +61,11 @@ All preserved order-related operations are non-transmitting:
 
 | Capability | Current authority |
 |---|---|
-| Connection and diagnostics | `/api/broker/health`, `/data-plane/health`, `/diagnose`, plus explicit connect/disconnect/reconnect transport controls |
+| Connection and diagnostics | `/api/broker/health`, `/diagnose`, plus explicit connect/disconnect/reconnect transport controls |
 | Account state | `/api/broker/account`, `/positions`, and `/account-truth` |
 | Order evidence | `/api/broker/orders/open`, `/completed`, and `/stream` |
 | Order preview | `POST /api/broker/orders/what-if`; constructs a non-transmitting IBKR what-if request only |
-| API evidence | `/api/broker/ibkr/evidence` and `/ibkr/evidence/stream`, including historical callback names and error evidence |
-| Market data | symbol/contract discovery, option chain/surface streams, P&L streams, and 5-second/1-minute bar snapshots |
+| Market data | symbol/contract discovery, option chain/surface streams, and P&L streams |
 | Session history | session-mirror snapshots, events, streams, and history; local purge operations affect evidence storage only, never broker orders |
 | Account history | reconciliation receipt, account events, and transaction/history projections over durable evidence |
 | Broker activity | read-only REST/SSE projection of already captured historical broker activity |
@@ -141,8 +140,8 @@ proves:
 4. Frontend production sources contain no orphaned order/recovery clients;
 5. generated OpenAPI/TypeScript contracts omit every retired operation and
    offline replay route; and
-6. the preserved account, position, order/history, what-if, evidence, capability,
-   bars, session-history, reconciliation, event, and transaction reads remain.
+6. the preserved account, position, order/history, what-if, session-history,
+   reconciliation, event, and transaction reads remain.
 
 The paired authority registries are
 `docs/architecture/engine-authority-map.md` and

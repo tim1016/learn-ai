@@ -1,4 +1,4 @@
-"""Broker-neutral bar and bar-snapshot wire models for the IBKR feed.
+"""Broker-neutral bar wire models for the IBKR feed.
 
 Split out of ``app/broker/ibkr/models.py`` (IBKR decommission Slice 0,
 issue #1813) so the live-chart/gallery/bar-aggregator path can depend
@@ -56,18 +56,3 @@ class IbkrMinuteBar(BaseModel):
     spans_interruption: bool = Field(
         default=False, description="Contributions arrived over more than one connection generation."
     )
-
-
-class IbkrBarsSnapshot(BaseModel):
-    """A snapshot of the live 1-min OHLCV ring buffer for one symbol.
-
-    ``status`` reports the aggregator's subscription health so the UI can
-    show "Subscribing…" / "Streaming" / "Error: …" instead of an
-    inscrutable empty chart.
-    """
-
-    symbol: str
-    status: Literal["idle", "subscribing", "streaming", "errored", "resubscribing"]
-    last_error: str | None = None
-    last_bar_ms: int | None = None
-    bars: list[IbkrMinuteBar] = Field(default_factory=list)

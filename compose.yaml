@@ -226,8 +226,7 @@ services:
       - IBKR_LIVE_RUNS_ROOT=/app/artifacts/live_runs
       # PRD #684 — macOS/Podman bind mounts do not propagate inotify
       # reliably into the container. Force watchfiles polling when
-      # ``uvicorn --reload`` is explicitly enabled, and surface the mode
-      # via /api/broker/data-plane/health.
+      # ``uvicorn --reload`` is explicitly enabled.
       - WATCHFILES_FORCE_POLLING=${WATCHFILES_FORCE_POLLING:-true}
       # Default reload off: LEAN stages runnable Python algorithms under
       # /app/artifacts, and WatchFiles can treat those generated files as

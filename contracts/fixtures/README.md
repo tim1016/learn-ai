@@ -9,5 +9,3 @@ the `int64 ms UTC` timestamp convention; they are not golden trading results.
 - `spec-strategy-backtest-response-v1.json` is the Python backtest response
   the Angular spec-strategy runner consumes directly (its .NET bridge was
   retired in #1963).
-- `data-plane-health-v1.json` is a direct FastAPI-to-Angular control-plane
-  response and deliberately has no .NET hop.

@@ -4,8 +4,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.broker.ibkr.api_evidence import IbkrApiEvidenceEvent
-
 SessionKind = Literal["RTH", "PRE", "POST", "OVERNIGHT"]
 CapabilityDataQuality = Literal["live", "delayed", "frozen", "delayed_frozen", "none"]
 CapabilityTradeability = Literal["yes", "needs_enablement", "no"]
@@ -33,7 +31,6 @@ class SessionDataCapability(BaseModel):
     probed_at_ms: int = Field(gt=0)
     time_zone_id: str = Field(min_length=1)
     sessions: dict[str, SessionCapability]
-    raw_evidence: list[IbkrApiEvidenceEvent] = Field(default_factory=list)
 
     @field_validator("sessions")
     @classmethod

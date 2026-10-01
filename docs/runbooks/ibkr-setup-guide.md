@@ -1,7 +1,7 @@
 # IBKR read-only evidence setup
 
 **Scope:** Configure Interactive Brokers only as a read/evidence source for market
-data, account data, completed orders, and capability diagnostics.
+data, account data, and completed orders.
 
 **Not an operator surface:** The IBKR bot launcher, evaluator, Account Clerk, and
 order-actuation paths are retired. Do not use this guide to deploy, start, stop,
@@ -45,7 +45,7 @@ Auto restart is not the complete remedy. It preserves the session across the
 nightly logout, but IBKR still forces a weekly re-login regardless of Auto
 restart (`docs/audits/bot-fleet-stress-2026-08-25.md`, S1 finding, "Root
 cause was not IBKR"). Before the first bot launch after that weekly window,
-confirm the Gateway shows a logged-in session and the clerk's health/capability
+confirm the Gateway shows a logged-in session and the clerk's broker health
 view reports the market-data feed connected — do not assume Auto restart alone
 carried the session through it.
 
@@ -67,10 +67,10 @@ the Gateway-side login/Auto restart setting instead.
 
 ## Verify the evidence path
 
-1. Open the read-only broker health/capability view and confirm it reports the intended
+1. Open the read-only broker health view and confirm it reports the intended
    paper account and connection mode.
-2. Confirm account, positions, open orders, completed orders, or bar snapshots can be
-   read as required by the task.
+2. Confirm account, positions, open orders, or completed orders can be read as
+   required by the task.
 3. When evidence is stale or unavailable, keep the affected downstream action blocked
    and correct the Gateway/TWS connectivity or API settings. Do not manufacture a
    broker write to test the connection.

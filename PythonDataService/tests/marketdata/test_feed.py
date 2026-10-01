@@ -1,4 +1,4 @@
-"""Tests for app.marketdata — MarketDataFeed port, IbkrMarketDataFeed, diagnostics.
+"""Tests for app.marketdata — MarketDataFeed port and IbkrMarketDataFeed.
 
 Covers all acceptance criteria from issue #1259:
 - AC1: No IBKR types at the port boundary.
@@ -8,7 +8,7 @@ Covers all acceptance criteria from issue #1259:
 - AC4: Feed-death raises MarketDataFeedError to all consumers; FeedHealth
        reports unhealthy with a reason; bar gaps are non-fatal.
 - AC5: All temporal fields int64 ms UTC.
-- AC6: Diagnostic endpoint reports connected/stale/last_bar_ms and active
+- AC6: FeedHealth reports connected/stale/last_bar_ms and active
        subscription count.
 - AC7: ruff + focused pytest green (verified externally).
 
@@ -25,9 +25,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
-import httpx
 import pytest
-from httpx import ASGITransport
 
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.ibkr import bars as bars_module
@@ -40,7 +38,7 @@ from app.marketdata.feed import (
     MarketDataFeedError,
     SubstitutionRefusal,
 )
-from app.marketdata.ibkr_feed import IbkrMarketDataFeed, set_market_data_feed
+from app.marketdata.ibkr_feed import IbkrMarketDataFeed
 from app.services.decision_session import RunDecisionSession
 from tests._helpers.ibkr_feed_adversarial import (
     RTH_MINUTE,
@@ -563,58 +561,6 @@ def test_health_ignores_detached_symbol_watermarks(
 
     assert health.stale is False
     assert health.active_subscription_count == 0
-
-
-# ---------------------------------------------------------------------------
-# AC6 — Diagnostic endpoint returns FeedHealth with active_subscription_count
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_health_endpoint_returns_feed_health(monkeypatch: pytest.MonkeyPatch) -> None:
-    """GET /api/market-data-feed/health returns FeedHealth when feed is installed."""
-    from fastapi import FastAPI
-
-    from app.routers.market_data_feed import router
-
-    client_ibkr = _fake_connected_client(connected=True, connection_lost=False)
-    feed = IbkrMarketDataFeed(client_ibkr)
-    feed._state_for("SPY").last_bar_ms = 1_700_000_000_000
-
-    set_market_data_feed(feed)
-    try:
-        test_app = FastAPI()
-        test_app.include_router(router, prefix="/api/market-data-feed")
-
-        async with httpx.AsyncClient(transport=ASGITransport(app=test_app), base_url="http://test") as tc:
-            resp = await tc.get("/api/market-data-feed/health")
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["connected"] is True
-        assert body["stale"] is False
-        assert body["last_bar_ms"] == 1_700_000_000_000
-        assert "active_subscription_count" in body
-        assert isinstance(body["observed_at_ms"], int)
-    finally:
-        set_market_data_feed(None)
-
-
-@pytest.mark.asyncio
-async def test_health_endpoint_503_when_feed_not_installed() -> None:
-    """GET /api/market-data-feed/health returns 503 when feed is not installed."""
-    from fastapi import FastAPI
-
-    from app.routers.market_data_feed import router
-
-    set_market_data_feed(None)
-    test_app = FastAPI()
-    test_app.include_router(router, prefix="/api/market-data-feed")
-
-    async with httpx.AsyncClient(transport=ASGITransport(app=test_app), base_url="http://test") as tc:
-        resp = await tc.get("/api/market-data-feed/health")
-
-    assert resp.status_code == 503
 
 
 def test_health_active_subscription_count_in_response() -> None:

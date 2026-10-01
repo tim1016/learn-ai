@@ -69,7 +69,6 @@ from app.routers import (
     iv_recorder,
     jobs,
     lean_sidecar,
-    market_data_feed,
     market_monitor,
     monte_carlo,
     news,
@@ -1315,15 +1314,6 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     # carries its own prefix so we mount it bare.
     app.include_router(research_divergence.router)
 
-# Shared MarketDataFeed diagnostic surface — read-only feed health + fan-out
-# subscription count. Requires the always-on control secret (GET exposes live
-# broker state: connection status, last bar watermark, subscription count).
-if _ROLE_RUNS_CLERK:
-    app.include_router(
-        market_data_feed.router,
-        prefix="/api/market-data-feed",
-        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-    )
 # Interactive Brokers paper-trading endpoints (Phase 1: read-only chain).
 # Router carries its own /api/broker prefix.
 if _FLEET_ROLE == "combined":

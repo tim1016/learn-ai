@@ -35,11 +35,6 @@ from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Any, Literal, NamedTuple, Protocol, runtime_checkable
 
-from app.broker.ibkr.api_evidence import (
-    evidence_request,
-    evidence_response,
-    get_ibkr_api_evidence_recorder,
-)
 from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.contracts import qualify_underlying
@@ -793,18 +788,6 @@ async def fetch_historical_minute_bars(
     contract = await qualify_underlying(client, symbol)
     sym = symbol.upper()
     venue = _contract_venue(contract)
-    recorder = get_ibkr_api_evidence_recorder()
-    request = evidence_request(
-        "reqHistoricalDataAsync",
-        contract={"conId": int(contract.conId), "symbol": contract.symbol, "secType": contract.secType},
-        endDateTime=end_datetime,
-        durationStr=duration,
-        barSizeSetting="1 min",
-        whatToShow="TRADES",
-        useRTH=use_rth,
-        formatDate=2,
-        keepUpToDate=False,
-    )
     try:
         raw_bars = await asyncio.wait_for(
             client.ib.reqHistoricalDataAsync(
@@ -821,12 +804,6 @@ async def fetch_historical_minute_bars(
         )
     except TimeoutError as exc:
         raise IBKRBarStreamError(f"IBKR historical bars timed out for {symbol}.") from exc
-    recorder.record(
-        source="bars.fetch_historical_minute_bars",
-        symbol=sym,
-        request=request,
-        response=evidence_response("historicalData", fields={"bar_count": len(raw_bars)}),
-    )
 
     out: list[IbkrMinuteBar] = []
     last_start_ms: int | None = None
@@ -891,7 +868,6 @@ async def _iter_leased_raw_bars(
     *,
     use_rth: bool,
     stall_timeout_s: float,
-    evidence_source: str,
     consumer_label: str,
     no_bar_message: str,
     first_bar_message: str,
@@ -903,7 +879,7 @@ async def _iter_leased_raw_bars(
     """Yield raw 5-second bars off one leased ``reqRealTimeBars`` line.
 
     Everything both public streams do around the bar itself lives here: the
-    shared-subscription lease and its evidence, the per-iteration liveness
+    shared-subscription lease, the per-iteration liveness
     gate, the ruling-P10 drain, the no-delivery log, and the release. The
     callers differ only in how they map a raw bar.
 
@@ -946,40 +922,10 @@ async def _iter_leased_raw_bars(
         multiplexed=lease.multiplexed,
         consumer_count=lease.consumer_count,
     )
-    recorder = get_ibkr_api_evidence_recorder()
-    recorder.record(
-        source=f"{evidence_source}.subscribe",
-        symbol=sym,
-        request=evidence_request(
-            "reqRealTimeBars",
-            contract={"conId": int(contract.conId), "symbol": contract.symbol, "secType": contract.secType},
-            barSize=5,
-            whatToShow="TRADES",
-            useRTH=use_rth,
-            realTimeBarsOptions=[],
-            requestIssued=not lease.multiplexed,
-            multiplexed=lease.multiplexed,
-            consumerCount=lease.consumer_count,
-        ),
-        response=evidence_response(
-            "realTimeBarList",
-            fields={
-                "bar_count": len(bars),
-                "start_index": index,
-                "lease_start_index": lease.start_index,
-            },
-        ),
-    )
     last_progress_at = time.monotonic()
 
     def _observe(raw_bar) -> _LeasedBar:
         nonlocal last_progress_at, last_source_ms
-        recorder.record(
-            source=f"{evidence_source}.bar",
-            symbol=sym,
-            request=evidence_request("reqRealTimeBars", barSize=5, whatToShow="TRADES", useRTH=use_rth),
-            response=evidence_response("realTimeBar", objects=[raw_bar]),
-        )
         source_ms = _bar_time_ms(raw_bar)
         if last_source_ms is None or source_ms > last_source_ms:
             delivery_logger.log_first_bar(bar_count=len(bars), message=first_bar_message)
@@ -1076,7 +1022,6 @@ async def stream_raw_5s_bars(
             symbol,
             use_rth=use_rth,
             stall_timeout_s=stall_timeout_s,
-            evidence_source="bars.stream_raw_5s_bars",
             consumer_label="raw 5-second bar",
             no_bar_message="IBKR reqRealTimeBars has not delivered raw 5-second bars",
             first_bar_message="IBKR reqRealTimeBars delivered first raw 5-second bar",
@@ -1142,7 +1087,6 @@ async def stream_minute_bars(
                 symbol,
                 use_rth=use_rth,
                 stall_timeout_s=stall_timeout_s,
-                evidence_source="bars.stream_minute_bars",
                 consumer_label="minute-bar",
                 no_bar_message="IBKR reqRealTimeBars has not delivered 5-second bars",
                 first_bar_message="IBKR reqRealTimeBars delivered first 5-second bar",

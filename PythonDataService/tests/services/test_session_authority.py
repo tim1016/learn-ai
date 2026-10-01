@@ -48,7 +48,6 @@ def _capability() -> SessionDataCapability:
             "POST": session(_ny_ms(2026, 6, 23, 16, 0), _ny_ms(2026, 6, 23, 20, 0)),
             "OVERNIGHT": session(_ny_ms(2026, 6, 23, 20, 0), _ny_ms(2026, 6, 24, 4, 0)),
         },
-        raw_evidence=[],
     )
 
 
