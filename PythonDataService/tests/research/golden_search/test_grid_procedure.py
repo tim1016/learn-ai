@@ -19,7 +19,7 @@ from app.research.golden_search.zoom import BudgetExhausted
 from tests._helpers.golden_search import (
     Landscape,
     declaration,
-    ema_declaration_in_schema,
+    ema_declaration,
     knob,
     metrics,
     plans_for,
@@ -164,7 +164,7 @@ def test_neighbor_probes_step_one_knob_and_flag_the_domain_edge() -> None:
 
 
 def test_run_grid_over_the_registered_ema_knobs_sends_canonical_points() -> None:
-    decl = ema_declaration_in_schema()
+    decl = ema_declaration()
     seed = canonical_point("ema_crossover_signal", "SPY", {})
     plan = dataclasses.replace(
         protocol(decl, seed=seed),
@@ -202,7 +202,7 @@ def test_max_grid_evaluations_is_the_product_of_searched_axes() -> None:
 
 
 def test_pair_grid_around_the_registry_point_uses_the_registered_canonical_form() -> None:
-    decl = ema_declaration_in_schema()
+    decl = ema_declaration()
     center = canonical_point("ema_crossover_signal", "SPY", {})
     plan = dataclasses.replace(protocol(decl, seed=center), strategy_key="ema_crossover_signal")
 

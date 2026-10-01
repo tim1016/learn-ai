@@ -29,7 +29,7 @@ from tests._helpers.golden_search import (
     STRATEGY,
     Landscape,
     declaration,
-    ema_declaration_in_schema,
+    ema_declaration,
     knob,
     metrics,
     plans_for,
@@ -333,7 +333,7 @@ def test_procedure_result_round_trips_through_its_dict() -> None:
 
 
 def test_run_zoom_over_the_registered_ema_knobs_sends_canonical_points_without_float_drift() -> None:
-    decl = ema_declaration_in_schema()
+    decl = ema_declaration()
     seed = canonical_point("ema_crossover_signal", "SPY", {})
     plan = dataclasses.replace(
         protocol(decl, seed=seed),

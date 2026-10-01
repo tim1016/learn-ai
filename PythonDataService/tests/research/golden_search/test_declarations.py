@@ -24,11 +24,6 @@ EMA = "ema_crossover_signal"
 _EMA_DECLARATION = declaration_for(EMA)
 assert _EMA_DECLARATION is not None
 _EMA_SCHEMA = public_params_schema(_STRATEGY_REGISTRY[EMA])["properties"]
-_TRACK_E_ABSENT = "fast_period" not in _EMA_SCHEMA
-_needs_track_e = pytest.mark.skipif(
-    _TRACK_E_ABSENT,
-    reason="the EMA fast/slow/hold parameters (#2696 Track E) are not in this branch's EMA parameter schema",
-)
 
 
 def test_ema_declaration_follows_the_owner_order_and_table() -> None:
@@ -69,8 +64,6 @@ def test_ema_declaration_follows_the_owner_order_and_table() -> None:
 
 @pytest.mark.parametrize("knob", _EMA_DECLARATION.knobs, ids=lambda k: k.name)
 def test_ema_knob_agrees_with_the_registered_parameter_model(knob: SearchKnob) -> None:
-    if knob.name not in _EMA_SCHEMA:
-        pytest.skip(f"{knob.name} is not in this branch's EMA parameter schema (#2696 Track E)")
     schema = _EMA_SCHEMA[knob.name]
 
     assert schema["type"] == ("integer" if knob.kind == "integer" else "number")
@@ -172,7 +165,6 @@ def test_point_hash_ignores_key_order() -> None:
     assert point_hash(EMA, point) != point_hash(EMA, {**point, "symbol": "QQQ"})
 
 
-@_needs_track_e
 def test_canonical_point_types_integer_knobs_and_omits_identity_neutral_defaults() -> None:
     at_defaults = canonical_point(EMA, "SPY", {"fast_period": 5.0, "slow_period": 10, "hold_bars": 5, "gap": 0.2})
     moved = canonical_point(EMA, "SPY", {"fast_period": 7.0, "slow_period": 21, "hold_bars": 5})

@@ -13,7 +13,6 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, public_params_schema
 from app.research.golden_search.declarations import KnobConstraint, SearchDeclaration, SearchKnob, declaration_for
 from app.research.golden_search.protocol import (
     GoldenSearchProtocol,
@@ -69,22 +68,11 @@ def declaration(*knobs: SearchKnob, constraints: Sequence[KnobConstraint] = ()) 
     )
 
 
-def ema_declaration_in_schema() -> SearchDeclaration:
-    """The shipped EMA declaration narrowed to the knobs this branch's EMA parameter model accepts.
-
-    The fast/slow/hold knobs arrive with #2696 Track E; until then a point
-    carrying them would be refused by the model, so registry-backed tests use
-    the knobs that exist and run unchanged once they all do.
-    """
+def ema_declaration() -> SearchDeclaration:
+    """The shipped EMA declaration, for registry-backed tests."""
     full = declaration_for("ema_crossover_signal")
     assert full is not None
-    present = set(public_params_schema(_STRATEGY_REGISTRY["ema_crossover_signal"])["properties"])
-    return dataclasses.replace(
-        full,
-        knobs=tuple(k for k in full.knobs if k.name in present),
-        constraints=tuple(c for c in full.constraints if {c.left, c.right} <= present),
-        default_pair_audits=tuple(pair for pair in full.default_pair_audits if set(pair) <= present),
-    )
+    return full
 
 
 def synthetic_point(values: Mapping[str, object]) -> dict[str, Any]:
