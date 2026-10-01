@@ -434,8 +434,8 @@ def fold_execution_price_conflict(
     refused (``"stale"``) -- a delayed broker frame must neither restate an
     older conflicting price nor clear a newer conflict. A total at least as
     new that agrees again within tolerance drops the order from the episode
-    and ends it when the last order goes. An execution correction clears it
-    the same way once the corrected fills agree with the broker's reported
+    and ends it when the last order goes. A change to the recorded fills
+    clears it the same way once they agree with the broker's reported
     average -- that exit is the sweep's re-derivation,
     :func:`reconcile_execution_price_conflicts`, because a terminal order's
     totals are never re-folded.
@@ -519,12 +519,12 @@ def reconcile_execution_price_conflicts(repo: ClerkSqliteRepository) -> int:
     A terminal order's totals stop being re-folded -- the reconciliation
     sweep reads open orders, and the exact-lookup folds end with their
     effects -- so the clear-on-agreeing-total path alone could strand an
-    episode. This gives the issue's second exit its mechanism: when an
-    identified execution correction changed the recorded fills, the
-    corrected effective average is compared against the broker's last
-    reported average (kept in the cause as evidence), and the order drops
-    out of the episode when they now agree within tolerance. Recorded
-    evidence only, no broker I/O; idempotent through the atomic clear.
+    episode. This gives the issue's second exit its mechanism: when the
+    recorded fills change, their effective average is compared against the
+    broker's last reported average (kept in the cause as evidence), and the
+    order drops out of the episode when they now agree within tolerance.
+    Recorded evidence only, no broker I/O; idempotent through the atomic
+    clear.
 
     The clear is compare-and-clear (#2460 review): the sweep passes the
     ``(uncertainty_id, cause)`` it derived from as the expected episode, and
@@ -566,7 +566,7 @@ def reconcile_execution_price_conflicts(repo: ClerkSqliteRepository) -> int:
                 in {"narrowed", "resolved"}
             ):
                 logger.info(
-                    "Execution correction explained a price conflict; dropping the order",
+                    "Recorded fills now agree with the reported price; dropping the order",
                     extra={
                         "action": "execution_price_conflict_correction_cleared",
                         "order_ref": conflicted.order_ref,

@@ -512,7 +512,7 @@ def test_a_reservation_claims_its_recorded_fee_provision_after_a_fee_model_chang
         repo.close()
 
 
-def test_interleaved_same_symbol_deployments_keep_own_fifo(tmp_path: Path) -> None:
+def test_interleaved_same_symbol_deployments_keep_own_fifo_after_stop(tmp_path: Path) -> None:
     repo = _new_budget_repo(tmp_path)
     try:
         _deploy(repo, "a", 50_000)
@@ -534,6 +534,10 @@ def test_interleaved_same_symbol_deployments_keep_own_fifo(tmp_path: Path) -> No
         assert by_sid["a"].realized_gross == by_sid["b"].realized_gross == 10
         assert by_sid["a"].free == 410 and by_sid["b"].free == 310
         assert projection.available == 0
+        submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a", clock=repo.clock)
+        stopped = repo.account_budget(cash=720, seen_before_ms=NOON + 1)
+        assert stopped.available == 410
+        assert {row.strategy_instance_id: row.position_cost for row in stopped.deployments} == {"a": 100, "b": 200}
     finally:
         repo.close()
 

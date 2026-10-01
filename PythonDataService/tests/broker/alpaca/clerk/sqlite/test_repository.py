@@ -817,8 +817,8 @@ def test_uncertain_orders_is_empty_on_a_fresh_repository(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
-# #1380 primitives: UNCERTAINTY_RAISED/RESOLVED folds + raise_uncertainty_if_
-# none_active/active_uncertainty*/active_holds_for_admission read helpers.
+# #1380 primitives: UNCERTAINTY_RAISED/RESOLVED folds +
+# active_uncertainty*/active_holds_for_admission read helpers.
 # ---------------------------------------------------------------------------
 
 

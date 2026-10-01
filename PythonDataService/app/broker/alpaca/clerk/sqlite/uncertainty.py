@@ -673,8 +673,8 @@ def clear_execution_price_conflict_order(
     Called when the broker's last reported average for ``order_ref`` and the
     recorded effective fills' average agree within tolerance again -- whether
     a later total restated the original price (``source_event_at_ms`` then
-    names that total, and an older one changes nothing), or an identified
-    execution correction changed the recorded fills to match (the
+    names that total, and an older one changes nothing), or a change to the
+    recorded fills made them match (the
     reconciliation sweep's re-derivation,
     :func:`order_evidence.reconcile_execution_price_conflicts`, finds the
     latter from recorded evidence alone, because a terminal order's totals

@@ -54,7 +54,7 @@ committed in the repo.
 | Reconciliation compares the broker's **net** quantity per symbol with the **sum** over subjects. A mismatch is `position_drift` on the symbol and names no bot. | [code] `clerk/sqlite/reconcile.py:154-172,220-232,275-289`; [test] same test (broker 5 vs attributed 8) |
 | A bot's EXIT quantity is its own attributed position, never the broker's. It may only target its own entry order. | [code] `exit_resolution.py:314`; `idempotency.py:104`; [test] `test_each_bots_exit_sells_only_its_own_attributed_shares` (sells 3 of the broker's 8) |
 | An EXIT cancels that bot's own working entries first and re-reads the proven remainder, so partial fills are per bot. A bot cannot cancel another bot's order. | existing tests `test_exit.py::test_resolve_exit_cancels_the_working_entry_before_computing_quantity`, `::test_partial_fill_during_cancel_uses_only_the_clerk_proven_remaining_quantity`, `::test_accept_exit_rejects_an_entry_order_belonging_to_a_different_bot` |
-| Budgets and bot results run FIFO over that bot's fills only. | [code] `clerk/sqlite/budget_projection.py:155,291,405`; existing test `test_budget_claims.py::test_interleaved_same_symbol_deployments_keep_own_fifo` |
+| Budgets and bot results run FIFO over that bot's fills only. | [code] `clerk/sqlite/budget_projection.py:155,291,405`; existing test `test_budget_claims.py::test_interleaved_same_symbol_deployments_keep_own_fifo_after_stop` |
 | The account-wide P&L attribution runs **one** FIFO over every bot's fills. One bot's sale can close the other bot's older lot. | [code] `clerk/sqlite/economic_projection.py:555-620`, `clerk/fifo_pnl.py:238` |
 
 **The two FIFO views disagree on realized P&L; the totals agree.**

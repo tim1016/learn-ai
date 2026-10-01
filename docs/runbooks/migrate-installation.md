@@ -46,7 +46,9 @@ On the **new** Mac:
 
 1. Install Podman and clone the repo. Check out the same commit as the old
    machine, or a newer one. Import refuses older code, and it refuses a commit
-   it does not know, so `git fetch` first.
+   it does not know, so `git fetch` first. A bundle exported before #2757 still
+   lists the retired qualification volume, so newer code refuses it
+   (`bundle_manifest_invalid`); update the old machine and export again.
 2. Set up and log in to IB Gateway exactly as on the old machine
    ([IBKR setup guide](ibkr-setup-guide.md)). Go-live checks that every lane
    gets bars through it.

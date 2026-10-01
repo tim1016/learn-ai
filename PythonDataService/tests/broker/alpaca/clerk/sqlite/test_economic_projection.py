@@ -1027,6 +1027,32 @@ async def test_the_price_conflict_never_blocks_a_reduction(tmp_path: Path) -> No
         repo.close()
 
 
+@pytest.mark.parametrize(("recorded_price", "dropped"), [(90.0, 1), (100.0, 0)])
+def test_the_sweep_clears_a_conflict_only_when_recorded_fills_agree(
+    tmp_path: Path, recorded_price: float, dropped: int
+) -> None:
+    """#2460: a terminal order's totals are never re-folded, so the sweep
+    re-derives each open conflict from the recorded fills and drops the order
+    once they agree with the broker's reported average."""
+    from app.broker.alpaca.clerk.sqlite.order_evidence import reconcile_execution_price_conflicts
+    from app.broker.alpaca.clerk.sqlite.uncertainty import raise_execution_price_conflict_uncertainty
+
+    repo, accepted = _repository(tmp_path)
+    try:
+        _append_slice(repo, accepted, execution_id="fill-1", side="BUY",
+                      quantity=10.0, price=recorded_price, occurred_at_ms=repo.clock())
+        effect = repo.effect_operation(accepted.effect_operation_id)
+        assert effect is not None
+        assert raise_execution_price_conflict_uncertainty(
+            repo, effect=effect, order=_conflict_order(accepted.order_ref, reported=90.0)
+        ) == "raised"
+
+        assert reconcile_execution_price_conflicts(repo) == dropped
+        assert (_recorded_price_conflict_episode(repo) is None) == bool(dropped)
+    finally:
+        repo.close()
+
+
 def _episode_cause(repo: ClerkSqliteRepository):
     from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExecutionPriceConflictCause
 
