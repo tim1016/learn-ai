@@ -158,21 +158,6 @@ here (issues #1666, #1667, #1668) are closed and merged to master as of
 
 ## 7b. Orphans left by the 2026-08-28 signal/asset decoupling sweep
 
-- **`app/engine/options/` has no importers (medium).** Deleting the coupled
-  `spy_ema_crossover_options` strategy removed the last consumer of
-  `chain_resolver.py` and `pricer.py`. Both modules remain in the tree, are
-  imported by nothing, and have no direct test coverage
-  (the pricer's provenance block records `Validated against: NONE`).
-  They were **not** deleted with the strategy because the package is described
-  as live in three architecture documents (`options-math-authorities.md`,
-  `options-research.md`, `engine-authority-map.md`; the routes cleanup record
-  `options-routes-research.md` was pruned to git history 2026-09-12), and retiring a
-  documented canonical math row is a decision with its own doc surface, not a
-  side effect of a strategy deletion. Disposition — delete the package and its
-  rows, or re-point it at a decoupled options Action Plan — is deliberately
-  left open. Until then treat it as dead code: `engine-authority-map.md` marks
-  the row `orphaned 2026-08-28`.
-
 - **`EmaCrossover2BpsStrategyParametersModel` survives in the LEAN sidecar
   (low).** `app/routers/lean_sidecar.py` still defines and uses it (lines ~202,
   298, 413) for the `ema_crossover_2_bps` trusted sample, which remains a valid
