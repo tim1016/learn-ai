@@ -439,10 +439,10 @@ def _validate_knob_plan(plan: KnobPlan, knob: SearchKnob, refusals: _Refusals) -
         refusals.add("RANGE_EMPTY", where, f"{knob.label}: the low end {low} must be below the high end {high}.")
     if not (is_quantized(knob, low) and is_quantized(knob, high)):
         refusals.add("RANGE_NOT_QUANTIZED", where, f"{knob.label}: both ends must be multiples of {knob.quantum}.")
-    _validate_step(plan, knob, refusals)
+    _validate_step(plan, knob, low, high, refusals)
 
 
-def _validate_step(plan: KnobPlan, knob: SearchKnob, refusals: _Refusals) -> None:
+def _validate_step(plan: KnobPlan, knob: SearchKnob, low: Decimal, high: Decimal, refusals: _Refusals) -> None:
     where = f"knobs.{plan.name}.step"
     if plan.step is None:
         refusals.add("STEP_MISSING", where, f"{knob.label}: a searched knob needs its smallest step.")
@@ -453,6 +453,12 @@ def _validate_step(plan: KnobPlan, knob: SearchKnob, refusals: _Refusals) -> Non
     step = to_decimal(plan.step)
     if not is_quantized(knob, step):
         refusals.add("STEP_INVALID", where, f"{knob.label}: the step {step} must be a multiple of {knob.quantum}.")
+    elif low < high and step > high - low:
+        refusals.add(
+            "STEP_INVALID",
+            where,
+            f"{knob.label}: the step {step} is wider than the searched range {low}–{high}, so only {low} would be tested.",
+        )
 
 
 def grid_size(p: GoldenSearchProtocol) -> int | None:
@@ -568,6 +574,9 @@ def _validate_intervals(p: GoldenSearchProtocol, refusals: _Refusals) -> None:
             development_folds(p)
         except FoldPlanError as exc:
             refusals.add("FOLDS_INVALID", "development_end_ms", str(exc))
+        except ValueError:
+            # The planner's month arithmetic left the calendar (a date past year 9999).
+            refusals.add("FOLDS_INVALID", "training_months", "The training and test lengths reach past the calendar; shorten them.")
 
 
 def _validate_policy(p: GoldenSearchProtocol, refusals: _Refusals) -> None:

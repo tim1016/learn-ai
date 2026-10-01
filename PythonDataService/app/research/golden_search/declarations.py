@@ -302,7 +302,8 @@ def snap(knob: SearchKnob, value: Decimal) -> Decimal:
     """``value`` rounded half-even to the knob's quantum, without clamping."""
     steps = (value / knob.quantum).to_integral_value(rounding=ROUND_HALF_EVEN)
     snapped = steps * knob.quantum
-    return snapped.quantize(Decimal(1)) if knob.kind == "integer" else snapped
+    # ``to_integral_value``, not ``quantize``: quantize raises past the context's 28 digits.
+    return snapped.to_integral_value() if knob.kind == "integer" else snapped
 
 
 def quantize(knob: SearchKnob, value: Decimal) -> Decimal:

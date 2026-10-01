@@ -75,12 +75,15 @@ _MUTATIONS: list[tuple[str, Callable[[GoldenSearchProtocol], GoldenSearchProtoco
     ("FIXED_OUTSIDE_DOMAIN", lambda p: _with_knob(p, "z", fixed_value=100.5)),
     ("FIXED_NOT_QUANTIZED", lambda p: _with_knob(p, "z", fixed_value=0.3)),
     ("RANGE_OUTSIDE_DOMAIN", lambda p: _with_knob(p, "x", high=11.0)),
+    ("RANGE_OUTSIDE_DOMAIN", lambda p: _with_knob(p, "x", high=1e300)),  # beyond Decimal's 28 digits
     ("RANGE_EMPTY", lambda p: _with_knob(p, "x", low=5.0, high=5.0)),
     ("RANGE_NOT_QUANTIZED", lambda p: _with_knob(p, "g", low=0.005)),
     ("STEP_MISSING", lambda p: _with_knob(p, "x", step=None)),
     ("STEP_MISSING", lambda p: _grid(p, {"x": 1.0, "y": 1.0})),
     ("STEP_INVALID", lambda p: _with_knob(p, "g", step=0.015)),
     ("STEP_INVALID", lambda p: _grid(p, {"x": 1.0, "y": -1.0, "g": 0.01})),
+    ("STEP_INVALID", lambda p: _with_knob(p, "x", low=2.0, high=4.0, step=3.0)),
+    ("STEP_INVALID", lambda p: _with_knob(p, "x", step=1e300)),
     ("GRID_TOO_LARGE", lambda p: _grid(p, {"x": 1.0, "y": 1.0, "g": 0.01})),
     ("SEED_SYMBOL_MISMATCH", _seed(symbol="QQQ")),
     ("SEED_UNKNOWN_PARAMETER", _seed(w=1)),
@@ -105,6 +108,7 @@ _MUTATIONS: list[tuple[str, Callable[[GoldenSearchProtocol], GoldenSearchProtoco
         "FOLDS_INVALID",
         lambda p: dataclasses.replace(p, development_end_ms=_day(2024, 12, 1), final_start_ms=_day(2024, 12, 1)),
     ),
+    ("FOLDS_INVALID", lambda p: dataclasses.replace(p, training_months=10**6)),
     ("OBJECTIVE_UNKNOWN", lambda p: dataclasses.replace(p, policy=SelectionPolicy(objective="sortino"))),  # type: ignore[arg-type]
     ("POLICY_INVALID", lambda p: dataclasses.replace(p, policy=SelectionPolicy(min_trades=0))),
     ("POLICY_INVALID", lambda p: dataclasses.replace(p, policy=SelectionPolicy(max_drawdown_ceiling=0.0))),

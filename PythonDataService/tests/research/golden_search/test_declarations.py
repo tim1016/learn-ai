@@ -155,6 +155,8 @@ def test_canonical_point_snaps_decimals_and_includes_the_symbol() -> None:
 def test_canonical_point_refuses_out_of_domain_and_unknown_inputs() -> None:
     with pytest.raises(ValueError, match="outside its domain"):
         canonical_point(EMA, "SPY", {"gap": 2.5})
+    with pytest.raises(ValueError, match="outside its domain"):
+        canonical_point(EMA, "SPY", {"rsi_min": 1e300})
     with pytest.raises(ValueError, match="unknown strategy"):
         canonical_point("no_such_program", "SPY", {})
     with pytest.raises(ValueError, match="not a number"):
