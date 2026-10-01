@@ -227,10 +227,11 @@ def _custody_facts(db_path: Path) -> tuple[str, ...]:
       are the account-wide reads. Both admit rows carrying no
       ``strategy_instance_id``, which the bot-scoped union excludes by design,
       so neither is redundant with it.
-    * ``has_nonterminal_manual_order`` catches the manual operation
-      ``reconcilable_effect_operations`` filters out: one whose linked order
-      already reads terminal at the broker while the operation itself has not
-      been settled.
+    * ``has_nonterminal_manual_order`` names an unsettled operator ticket as
+      one. ``reconcilable_effect_operations`` keeps every working manual
+      operation on its worklist too, by kind (#2686), so the same operation
+      is also counted among the unresolved orders; only this read says it is
+      the operator's manual order.
     * ``external_orders`` covers activity the Clerk did not originate. Only the
       unacknowledged ones are outstanding; a reviewed one has been dispositioned
       by an operator.

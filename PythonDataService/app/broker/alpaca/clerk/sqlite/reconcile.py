@@ -427,8 +427,9 @@ async def _reconcile_effect(
             trade=trade,
             off_loop=to_thread,
             # A manual leg ends only on exact executions; the sweep reads the
-            # ones a REST answer reports from account activity (#2686).
-            activities=read if effect.kind == "MANUAL_ORDER" else None,
+            # ones a REST answer reports from account activity. The recovery
+            # acts on a live manual leg's chain head only (#2686).
+            activities=read,
         )
 
     def _verify_after_resolution() -> tuple[EffectOperationResource, OrderResource]:

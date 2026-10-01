@@ -17,7 +17,8 @@ Canonical implementation: this file. :func:`price_increment` is the tick
     rule; the Clerk's price-conflict tolerance reads it too (#2770).
 Validated against:
     tests/broker/alpaca/test_marketable_limit.py::test_marketable_limit_price,
-    tests/broker/alpaca/test_marketable_limit.py::test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price
+    tests/broker/alpaca/test_marketable_limit.py::test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price,
+    tests/broker/alpaca/test_marketable_limit.py::test_price_increment_changes_at_one_dollar
 
 **Why the tick rule exists twice** (a canonical rule may have a
 duplicate only for a real reason, with a parity test naming the canonical

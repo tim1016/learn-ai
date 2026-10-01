@@ -152,37 +152,15 @@ def append_exact_execution_slice(
         )
 
     def _coverage_conflict_transition() -> TransitionInput:
-        conflict_facts = UncertaintyRaisedFacts(
-            severity="error",
-            blocks_new_exposure=True,
-            allows_reduction=False,
-            reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
-            headline=conflict_copy.headline,
-            explanation=conflict_copy.explanation,
-            operator_impact=conflict_copy.operator_impact,
-            next_step=conflict_copy.next_step,
-            evidence_refs=[*extra_conflict_evidence_refs, event.execution_id],
-            cause_facts=ExecutionCoverageConflictCause(
-                order_ref=order_ref,
-                execution_id=event.execution_id,
-            ).to_mapping(),
-        )
-        return TransitionInput(
-            strategy_instance_id=owner.strategy_instance_id,
-            run_id=owner.run_id,
-            command_id=owner.command_id,
-            effect_operation_id=owner.effect_operation_id,
-            order_ref=order_ref,
+        return exact_execution_coverage_conflict(
+            repo,
+            event=event,
             broker_order_id=broker_order_id,
-            transition_kind="UNCERTAINTY_RAISED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="succeeded",
+            order_ref=order_ref,
+            owner=owner,
+            conflict_copy=conflict_copy,
             proof_reference=proof,
-            source_event_at_ms=event.occurred_at_ms,
-            clerk_observed_at_ms=repo.clock(),
-            summary_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
-            facts_json=conflict_facts.to_facts_json(),
+            extra_evidence_refs=extra_conflict_evidence_refs,
         )
 
     return repo.append_execution_slice_if_absent(
@@ -190,4 +168,57 @@ def append_exact_execution_slice(
         order_ref=order_ref,
         build_transition=_execution_transition,
         build_coverage_conflict=_coverage_conflict_transition,
+    )
+
+
+def exact_execution_coverage_conflict(
+    repo: ClerkSqliteRepository,
+    *,
+    event: BrokerOrderEvent,
+    broker_order_id: str,
+    order_ref: str,
+    owner: EffectOperationResource,
+    conflict_copy: ExactExecutionConflictCopy,
+    proof_reference: str,
+    extra_evidence_refs: Sequence[str] = (),
+) -> TransitionInput:
+    """The typed ``EXECUTION_COVERAGE_CONFLICT`` an exact execution that cannot be merged raises.
+
+    The one shape every exact producer raises, whether the append flow
+    refuses the slice or a producer refuses it first (the account-activity
+    recovery's quantity guard, #2686). ``event`` must name its execution.
+    """
+    if event.execution_id is None:
+        raise ValueError("A coverage conflict must name the exact execution it refuses.")
+    conflict_facts = UncertaintyRaisedFacts(
+        severity="error",
+        blocks_new_exposure=True,
+        allows_reduction=False,
+        reason_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+        headline=conflict_copy.headline,
+        explanation=conflict_copy.explanation,
+        operator_impact=conflict_copy.operator_impact,
+        next_step=conflict_copy.next_step,
+        evidence_refs=[*extra_evidence_refs, event.execution_id],
+        cause_facts=ExecutionCoverageConflictCause(
+            order_ref=order_ref,
+            execution_id=event.execution_id,
+        ).to_mapping(),
+    )
+    return TransitionInput(
+        strategy_instance_id=owner.strategy_instance_id,
+        run_id=owner.run_id,
+        command_id=owner.command_id,
+        effect_operation_id=owner.effect_operation_id,
+        order_ref=order_ref,
+        broker_order_id=broker_order_id,
+        transition_kind="UNCERTAINTY_RAISED",
+        custody_owner="ACCOUNT_CLERK",
+        execution_authority="ACCOUNT_CLERK",
+        operation_state="succeeded",
+        proof_reference=proof_reference,
+        source_event_at_ms=event.occurred_at_ms,
+        clerk_observed_at_ms=repo.clock(),
+        summary_code=EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
+        facts_json=conflict_facts.to_facts_json(),
     )

@@ -79,7 +79,11 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reaso
 from app.broker.alpaca.marketable_limit import price_increment
 from app.broker.contract.errors import BrokerError, BrokerOrderNotPermitted
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
-from app.broker.contract.ports import AuthoritativeSubmissionEvidencePort, BrokerReadPort, BrokerTradePort
+from app.broker.contract.ports import (
+    AuthoritativeSubmissionEvidencePort,
+    BrokerActivityEvidencePort,
+    BrokerTradePort,
+)
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
@@ -105,6 +109,8 @@ def total_price_conflict_atol(reported_avg_price: float) -> float:
       one valid increment of the reported price cannot be told from vendor
       rounding and raises nothing; one at or above it is a real economic
       disagreement and is recorded as ``EXECUTION_PRICE_CONFLICT``.
+    Assumes Alpaca reports a sub-dollar ``filled_avg_price`` to at least
+      $0.0001; a coarser report would read its own rounding as a conflict.
     Reference: ADR 0036, 2026-09-30 amendment, item 3; the tick rule is
       Alpaca's price precision (``app/broker/alpaca/marketable_limit.py``).
     Canonical implementation: this function, on
@@ -1449,7 +1455,7 @@ async def resolve_order_submission(
     order_ref: str,
     trade: BrokerTradePort,
     off_loop: OffLoop | None = None,
-    activities: BrokerReadPort | None = None,
+    activities: BrokerActivityEvidencePort | None = None,
 ) -> None:
     """Recover any captured order by its exact client identity.
 
@@ -1461,13 +1467,13 @@ async def resolve_order_submission(
     head by broker id (:func:`follow_manual_replacement_chain`); a head read
     that fails folds this one order uncertain, never the account's pass.
 
-    ``activities`` is the sweep's read port, for a manual leg only. Before
-    each answer of the leg's chain is folded, the executions it reports that
-    the leg has no exact record of are read from Alpaca's account activity
-    and recorded first (:class:`ManualLegExecutionRecovery`, #2686): only
-    exact executions end a filled leg, and a replacement's REST cumulative
-    may leave out its original's fills. A simulated authority has no broker
-    activity to read.
+    ``activities`` is the sweep's read port. Before each answer is folded,
+    a live manual leg's chain head records the executions it reports that
+    the leg has no exact record of, read from Alpaca's account activity
+    (:class:`ManualLegExecutionRecovery`, #2686): only exact executions end
+    a filled leg, and a replacement's REST cumulative may leave out its
+    original's fills. Every other order folds as before, and a simulated
+    authority has no broker activity to read.
 
     ``off_loop`` moves each synchronous repository run onto a worker thread
     (#1993); the default keeps the pre-#1993 inline behavior for every
@@ -1556,26 +1562,28 @@ async def resolve_order_submission(
                     run=guarded,
                 )
             )
-            if executions is not None:
-                await executions.before_fold(order)
-            await guarded(
-                lambda: fold_exact_order_evidence(
-                    repo,
-                    effect_operation_id=effect.effect_operation_id,
-                    order_ref=order_ref,
-                    order=order,
-                    simulated_authority=simulated_authority,
+
+            async def _fold(answer: BrokerOrder) -> None:
+                if executions is not None:
+                    await executions.recover(answer)
+                await guarded(
+                    lambda: fold_exact_order_evidence(
+                        repo,
+                        effect_operation_id=effect.effect_operation_id,
+                        order_ref=order_ref,
+                        order=answer,
+                        simulated_authority=simulated_authority,
+                    )
                 )
-            )
+
+            await _fold(order)
             head = await follow_manual_replacement_chain(
                 repo,
                 broker=broker,
-                effect_operation_id=effect.effect_operation_id,
                 order_ref=order_ref,
                 observed=order,
                 run=guarded,
-                simulated_authority=simulated_authority,
-                before_fold=None if executions is None else executions.before_fold,
+                fold=_fold,
             )
             if not isinstance(head, BrokerOrder):
                 head_failed_why = unobserved_chain_head_why(head)
@@ -1639,12 +1647,10 @@ async def follow_manual_replacement_chain(
     repo: ClerkSqliteRepository,
     *,
     broker: ClaimedBrokerIO,
-    effect_operation_id: str,
     order_ref: str,
     observed: BrokerOrder,
     run: OffLoop,
-    simulated_authority: bool = False,
-    before_fold: Callable[[BrokerOrder], Awaitable[None]] | None = None,
+    fold: Callable[[BrokerOrder], Awaitable[None]],
 ) -> BrokerOrder | BrokerError | None:
     """Fold each later member of a manual leg's chain until its head is the order observed.
 
@@ -1655,8 +1661,8 @@ async def follow_manual_replacement_chain(
     the last answer: the head's observation (``observed`` itself for every
     unreplaced and every bot order), or the error or ``None`` of a head read
     that failed -- which the caller folds as its own uncertainty, never
-    letting it escape the pass. ``before_fold`` runs on each answer before
-    it is folded (the sweep's execution recovery, #2686).
+    letting it escape the pass. ``fold`` is the caller's own fold, the one
+    it folded ``observed`` with, so every member folds alike.
     """
     last: BrokerOrder = observed
     for _ in range(MAX_REPLACEMENT_HOPS_PER_PASS):
@@ -1668,17 +1674,7 @@ async def follow_manual_replacement_chain(
         answer = await broker.observe_broker_order(head_id)
         if not isinstance(answer, BrokerOrder):
             return answer
-        if before_fold is not None:
-            await before_fold(answer)
-        await run(
-            lambda answer=answer: fold_exact_order_evidence(
-                repo,
-                effect_operation_id=effect_operation_id,
-                order_ref=order_ref,
-                order=answer,
-                simulated_authority=simulated_authority,
-            )
-        )
+        await fold(answer)
         last = answer
     logger.info(
         "A manual order's replacement chain is longer than one pass follows",

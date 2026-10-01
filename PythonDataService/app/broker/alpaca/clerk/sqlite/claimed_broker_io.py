@@ -13,13 +13,8 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     OperationClaimError,
 )
 from app.broker.contract.errors import BrokerError
-from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderLeg
-from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
-
-#: Alpaca's account-activity type for an execution, and the page size its
-#: activities endpoint allows at most.
-_FILL_ACTIVITY_TYPE = "FILL"
-_FILL_ACTIVITY_PAGE_SIZE = 100
+from app.broker.contract.models import BrokerActivityEvidence, BrokerOrder, BrokerOrderLeg
+from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerTradePort
 
 
 @dataclass(frozen=True)
@@ -147,26 +142,25 @@ class ClaimedBrokerIO:
             )
         return observed
 
-    async def observe_fill_activities(
-        self, read: BrokerReadPort, *, after_ms: int
-    ) -> list[BrokerActivity] | BrokerError:
-        """The account's ``FILL`` activities since ``after_ms``, or a value-domain error (#2686).
+    async def observe_activity_evidence(
+        self, read: BrokerActivityEvidencePort, *, after_ms: int, page_token: str | None = None
+    ) -> BrokerActivityEvidence | BrokerError:
+        """One bounded read of the account's activity since ``after_ms``, or a value-domain error (#2686).
 
         Read under the claim like every other broker contact of a resolution,
         with :meth:`observe_broker_order`'s shape, so a failed read is the
-        caller's to contain and never escapes the pass. The read is the
-        broker's bounded newest-first walk; it never claims to be complete.
+        caller's to contain and never escapes the pass. The answer says
+        whether it proved the window complete; ``page_token`` resumes an
+        earlier read's ``next_page_token``.
         """
         self._renew()
         try:
-            activities = await read.list_activities(
-                after_ms=after_ms, limit=_FILL_ACTIVITY_PAGE_SIZE, activity_type=_FILL_ACTIVITY_TYPE
-            )
+            evidence = await read.read_activity_evidence(page_token=page_token, after_ms=after_ms)
         except BrokerError as exc:
             self._renew()
             return exc
         self._renew()
-        return activities
+        return evidence
 
     async def observe_exact(
         self, client_order_id: str
