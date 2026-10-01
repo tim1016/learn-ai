@@ -20,13 +20,11 @@ class DatasetPlanResponse(BaseModel):
     ticker: str = Field(..., description="Ticker the plan was resolved for")
     window_start_ms_utc: int = Field(
         ...,
-        ge=0,
         le=MAX_TIMESTAMP_MS,
         description="Resolved half-open window start (int64 ms UTC). Date-only intent resolves to the session open.",
     )
     window_end_ms_utc: int = Field(
         ...,
-        ge=0,
         le=MAX_TIMESTAMP_MS,
         description="Resolved EXCLUSIVE window end (int64 ms UTC). Date-only intent resolves to the next session open.",
     )
@@ -34,7 +32,7 @@ class DatasetPlanResponse(BaseModel):
         ...,
         description="Scheduled exchange session dates inside the requested range (YYYY-MM-DD), ascending.",
     )
-    exchange_session_opens_ms_utc: list[Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]] = Field(
+    exchange_session_opens_ms_utc: list[Annotated[int, Field(le=MAX_TIMESTAMP_MS)]] = Field(
         ...,
         description="Calendar-derived session-open anchor for each entry of exchange_sessions, "
         "in the same order (int64 ms UTC). The canonical wire form of the session list.",

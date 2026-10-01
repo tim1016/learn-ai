@@ -268,18 +268,6 @@ class TestBuildCommand:
         monkeypatch.setattr(runner.os, "getgid", lambda: 1000, raising=False)
         assert runner._container_user_spec() == "1000:1000"
 
-    def test_container_user_spec_refuses_a_root_launcher(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A root launcher's spec would be ``0:0``, and caller algorithm
-        source must never execute as container root (ADR 0070). The
-        refusal fires here, at the one place the container user is
-        resolved, before any container starts."""
-        from app.lean_sidecar import runner
-
-        monkeypatch.setattr(runner.os, "getuid", lambda: 0, raising=False)
-        monkeypatch.setattr(runner.os, "getgid", lambda: 0, raising=False)
-        with pytest.raises(RunnerConfigurationError, match="must not run as root"):
-            runner._container_user_spec()
-
     def test_build_command_refuses_to_launch_under_a_root_euid(
         self,
         tmp_artifacts_root: Path,

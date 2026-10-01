@@ -11451,7 +11451,6 @@
           },
           "end_trading_date_ms": {
             "maximum": 253402300799999.0,
-            "minimum": 0.0,
             "title": "End Trading Date Ms",
             "type": "integer"
           },
@@ -11532,7 +11531,6 @@
           },
           "start_trading_date_ms": {
             "maximum": 253402300799999.0,
-            "minimum": 0.0,
             "title": "Start Trading Date Ms",
             "type": "integer"
           },
@@ -11805,7 +11803,6 @@
             "description": "Calendar-derived session-open anchor for each entry of exchange_sessions, in the same order (int64 ms UTC). The canonical wire form of the session list.",
             "items": {
               "maximum": 253402300799999.0,
-              "minimum": 0.0,
               "type": "integer"
             },
             "title": "Exchange Session Opens Ms Utc",
@@ -11875,14 +11872,12 @@
           "window_end_ms_utc": {
             "description": "Resolved EXCLUSIVE window end (int64 ms UTC). Date-only intent resolves to the next session open.",
             "maximum": 253402300799999.0,
-            "minimum": 0.0,
             "title": "Window End Ms Utc",
             "type": "integer"
           },
           "window_start_ms_utc": {
             "description": "Resolved half-open window start (int64 ms UTC). Date-only intent resolves to the session open.",
             "maximum": 253402300799999.0,
-            "minimum": 0.0,
             "title": "Window Start Ms Utc",
             "type": "integer"
           }
@@ -13984,7 +13979,6 @@
           "missing_session_ms_utc": {
             "items": {
               "maximum": 253402300799999.0,
-              "minimum": 0.0,
               "type": "integer"
             },
             "title": "Missing Session Ms Utc",
@@ -27355,10 +27349,12 @@
             "type": "array"
           },
           "windowEndMs": {
+            "maximum": 253402300799999.0,
             "title": "Windowendms",
             "type": "integer"
           },
           "windowStartMs": {
+            "maximum": 253402300799999.0,
             "title": "Windowstartms",
             "type": "integer"
           }
@@ -29560,7 +29556,6 @@
           },
           "created_at_ms": {
             "maximum": 253402300799999.0,
-            "minimum": 0.0,
             "title": "Created At Ms",
             "type": "integer"
           },
@@ -56501,6 +56496,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 253402300799999,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -56653,6 +56649,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 253402300799999,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -56848,6 +56845,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 253402300799999,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -57075,6 +57073,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 253402300799999,
                   "minimum": 0,
                   "type": "integer"
                 },

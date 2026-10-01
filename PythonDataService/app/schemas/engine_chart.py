@@ -43,7 +43,7 @@ class EngineChartCoverage(BaseModel):
     expected_days: int
     available_days: int
     is_complete: bool
-    missing_session_ms_utc: list[Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]] = Field(default_factory=list)
+    missing_session_ms_utc: list[Annotated[int, Field(le=MAX_TIMESTAMP_MS)]] = Field(default_factory=list)
 
 
 class ResolvedChartIndicator(BaseModel):

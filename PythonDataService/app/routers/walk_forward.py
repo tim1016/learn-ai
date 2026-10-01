@@ -151,15 +151,23 @@ async def create_walk_forward(
         random_seed=request.random_seed,
         parent_run_id=request.parent_run_id,
     )
-    return await to_thread.run_sync(
-        partial(
-            _run_and_persist_walk_forward,
-            wf_request,
-            data_source_factory=data_source_factory,
-            artifacts_root=artifacts_root,
-            parent_run_id=request.parent_run_id,
+    try:
+        return await to_thread.run_sync(
+            partial(
+                _run_and_persist_walk_forward,
+                wf_request,
+                data_source_factory=data_source_factory,
+                artifacts_root=artifacts_root,
+                parent_run_id=request.parent_run_id,
+            )
         )
-    )
+    except ValueError as exc:
+        # A window the runner or the trading calendar cannot serve, e.g. an
+        # admissible end_ms in 9999 whose holiday rules reach year 10000 (#2771).
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
 
 @router.get("/{wf_id}", response_model=WalkForwardResponse)
@@ -195,7 +203,9 @@ async def list_walk_forwards_endpoint(
     spec_hash: str | None = Query(None, description="Filter by ``strategy_spec_hash``"),
     protocol_id: str | None = Query(None, description="Filter by exact protocol identity"),
     protocol_version: str | None = Query(None, description="Filter by exact protocol version"),
-    since_ms: int | None = Query(None, ge=0, description="Only return WFs created at or after this ms-since-epoch"),
+    since_ms: int | None = Query(
+        None, ge=0, le=MAX_TIMESTAMP_MS, description="Only return WFs created at or after this ms-since-epoch"
+    ),
     limit: int | None = Query(None, ge=1, description="Newest-first cap"),
     artifacts_root: Path | None = Depends(get_artifacts_root),
 ) -> WalkForwardListResponse:

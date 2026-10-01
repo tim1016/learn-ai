@@ -277,7 +277,7 @@ class RunLedger(BaseModel):
     metrics_hash: str | None = None
 
     # Lifecycle.
-    created_at_ms: int = Field(default_factory=now_ms_utc, ge=0, le=MAX_TIMESTAMP_MS)
+    created_at_ms: int = Field(default_factory=now_ms_utc, le=MAX_TIMESTAMP_MS)
     completed_at_ms: int | None = None
     status: Literal["running", "completed", "failed"] = "running"
     failure_reason: str | None = None

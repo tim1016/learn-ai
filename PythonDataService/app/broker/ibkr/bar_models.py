@@ -36,8 +36,8 @@ class IbkrMinuteBar(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     symbol: str
-    start_ms: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, description="UTC milliseconds since epoch, inclusive.")
-    end_ms: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, description="UTC milliseconds since epoch, exclusive.")
+    start_ms: int = Field(..., le=MAX_TIMESTAMP_MS, description="UTC milliseconds since epoch, inclusive.")
+    end_ms: int = Field(..., le=MAX_TIMESTAMP_MS, description="UTC milliseconds since epoch, exclusive.")
     open: Decimal
     high: Decimal
     low: Decimal

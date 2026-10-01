@@ -205,12 +205,11 @@ class DataRunSpec(BaseModel):
     # shape a caller may submit. There is no ISO-date compatibility alias
     # (#1877): the pre-#1877 start_trading_date/end_trading_date field names
     # are rejected by model_config's extra="forbid" below, same as any other
-    # unknown field. The signed-int64 range is enforced once, inside
-    # calendar_anchor_ms_to_trading_date (via _validate_calendar_anchor
-    # below) alongside the anchor check itself — not restated here as a
-    # second Field(ge=, le=) constraint on the same invariant.
-    start_trading_date_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
-    end_trading_date_ms: int = Field(strict=True, ge=0, le=MAX_TIMESTAMP_MS)
+    # unknown field. The admissible ceiling is declared on the field
+    # (ADR 0022 (g)); the anchor check stays in _validate_calendar_anchor
+    # below (calendar_anchor_ms_to_trading_date).
+    start_trading_date_ms: int = Field(strict=True, le=MAX_TIMESTAMP_MS)
+    end_trading_date_ms: int = Field(strict=True, le=MAX_TIMESTAMP_MS)
 
     resolution: Literal["minute"] = "minute"
     data_types: list[Literal["trade", "quote"]] = ["trade"]

@@ -9,6 +9,7 @@ reach a worker thread.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 
@@ -18,6 +19,8 @@ from httpx import ASGITransport
 
 from app.main import app
 from app.research.recency import service as recency_service
+from app.research.recency.models import LaunchView
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 def test_window_date_resolves_the_et_calendar_date_not_utc() -> None:
@@ -188,6 +191,66 @@ class TestValidateBeforeDispatch:
         )
         assert response.status_code == 400
         assert "window_start_ms" in response.json()["detail"]
+
+
+class TestWindowCeiling:
+    """The Recency window is an instant pair, so it carries the ADR 0022 (g)
+    ceiling — at the request boundary and when a stored launch is resumed."""
+
+    _STRATEGIES = [{"strategyKey": "ema_crossover_signal", "paramRanges": {"gapBps": {"type": "value_list", "values": [2.0]}}}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("field", ["windowStartMs", "windowEndMs"])
+    async def test_a_window_bound_past_the_ceiling_is_a_422(self, field: str) -> None:
+        body = {"jobId": "job-past-ceiling", "strategies": self._STRATEGIES, "symbols": ["SPY"], "windowStartMs": 0, "windowEndMs": 1}
+        body[field] = MAX_TIMESTAMP_MS + 1
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/jobs-internal/recency-chart", json=body)
+        assert response.status_code == 422, response.text
+
+    @pytest.mark.asyncio
+    async def test_resuming_a_stored_launch_past_the_ceiling_is_not_resumable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A launch stored before the ceiling existed: re-validating its row on
+        # resume must refuse it as NOT_RESUMABLE, not fail with a 500.
+        stored = {
+            "strategies": [{"strategy_key": "ema_crossover_signal", "param_ranges": {"gapBps": {"type": "value_list", "values": [2.0]}}}],
+            "symbols": ["SPY"],
+            "window_start_ms": 0,
+            "window_end_ms": MAX_TIMESTAMP_MS + 1,
+        }
+        launch = LaunchView(
+            launch_id="launch-past-ceiling",
+            status="FAILED",
+            job_id="job-original",
+            attempt=1,
+            expected_runs=1,
+            succeeded_runs=0,
+            failed_runs=1,
+            created_at_ms=0,
+            completed_at_ms=1,
+            deleted_at_ms=None,
+            config_json=json.dumps(stored),
+        )
+
+        async def load_launch(launch_id: str) -> LaunchView | None:
+            return launch if launch_id == launch.launch_id else None
+
+        monkeypatch.setattr(recency_service, "load_launch", load_launch)
+        body = {
+            "jobId": "job-resume",
+            "resumeLaunchId": launch.launch_id,
+            "strategies": self._STRATEGIES,
+            "symbols": ["SPY"],
+            "windowStartMs": 0,
+            "windowEndMs": 1,
+        }
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/jobs-internal/recency-chart", json=body)
+
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+        assert detail["code"] == "NOT_RESUMABLE"
+        assert "window_end_ms" in detail["message"]
 
 
 class TestRecordRecencyAbortState:

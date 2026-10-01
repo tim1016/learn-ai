@@ -174,8 +174,8 @@ class MarketDataBar(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     symbol: str
-    start_ms: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, description="Bar-open boundary, int64 ms UTC, inclusive.")
-    end_ms: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, description="Bar-close boundary, int64 ms UTC, exclusive.")
+    start_ms: int = Field(..., le=MAX_TIMESTAMP_MS, description="Bar-open boundary, int64 ms UTC, inclusive.")
+    end_ms: int = Field(..., le=MAX_TIMESTAMP_MS, description="Bar-close boundary, int64 ms UTC, exclusive.")
     open: Decimal
     high: Decimal
     low: Decimal
@@ -183,7 +183,6 @@ class MarketDataBar(BaseModel):
     volume: int
     fetched_at_ms: int = Field(
         ...,
-        ge=0,
         le=MAX_TIMESTAMP_MS,
         description="Wall-clock at which the bar was assembled, int64 ms UTC.",
     )
@@ -228,7 +227,7 @@ class FeedHealth(BaseModel):
     last_bar_ms: int | None
     reason: str
     active_subscription_count: int
-    observed_at_ms: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, description="Snapshot wall-clock, int64 ms UTC.")
+    observed_at_ms: int = Field(..., le=MAX_TIMESTAMP_MS, description="Snapshot wall-clock, int64 ms UTC.")
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +274,6 @@ class FeedContinuityEvent(BaseModel):
     symbol: str
     observed_at_ms: int = Field(
         ...,
-        ge=0,
         le=MAX_TIMESTAMP_MS,
         description="Wall-clock at which the fact was observed, int64 ms UTC.",
     )
