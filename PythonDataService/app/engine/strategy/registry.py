@@ -608,7 +608,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 ),
                 canonical_implementation=("app/engine/strategy/algorithms/sma_crossover.py::SmaCrossoverAlgorithm"),
                 validated_against=(
-                    "app/engine/tests/test_sma_crossover_parity.py; "
                     "app/engine/strategy/spec/tests/test_spec_sma_parity.py; "
                     "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
                     "[sma_crossover]"
@@ -769,7 +768,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                     "app/engine/strategy/algorithms/rsi_mean_reversion.py::RsiMeanReversionAlgorithm"
                 ),
                 validated_against=(
-                    "app/engine/tests/test_rsi_mean_reversion_parity.py; "
                     "app/engine/strategy/spec/tests/test_spec_rsi_mean_reversion_parity.py; "
                     "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
                     "[rsi_mean_reversion]"

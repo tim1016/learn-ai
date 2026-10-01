@@ -9,10 +9,8 @@ true bit-for-bit trade-log match against the hand-coded twin is the
 appropriate gate.
 
 These helpers build minute-level synthetic bars with predictable 15-
-minute consolidator boundaries (the same trick the existing
-``test_sma_crossover_parity`` and ``test_rsi_mean_reversion_parity``
-scripts use). Each consolidated bar's close equals the corresponding
-synthetic close value.
+minute consolidator boundaries. Each consolidated bar's close equals the
+corresponding synthetic close value.
 """
 
 from __future__ import annotations

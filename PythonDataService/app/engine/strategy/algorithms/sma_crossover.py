@@ -22,10 +22,7 @@ portfolio fill model, so trade logs remain fill-driven.
 The strategy is configurable via constructor kwargs so the registry can build
 it with user-supplied parameters; defaults mirror the legacy strategy's defaults
 (10/30 windows) but with a 15-minute resolution to match the rest of the Phase 1
-data flow. Parity against the legacy strategy is exercised by
-``test_sma_crossover_parity`` using a synthetic bar stream — the contract is
-"same set of winning vs losing trades on the same input data", not bit-exact
-prices.
+data flow.
 """
 
 from __future__ import annotations

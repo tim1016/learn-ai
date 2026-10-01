@@ -11,8 +11,8 @@ already have their own external references:
 | Spec fixture | Hand-coded twin (canonical) | Twin's external reference |
 |---|---|---|
 | `fixtures/spy_ema_crossover.spec.json` | `app/engine/strategy/algorithms/ema_crossover_signal.py::EmaCrossoverSignalAlgorithm` | LEAN `Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs` (bit-exact, see `app/engine/tests/test_spy_validation.py`) |
-| `fixtures/sma_crossover.spec.json` | `app/engine/strategy/algorithms/sma_crossover.py::SmaCrossoverAlgorithm` | LEAN; rule reimplemented inline in `app/engine/tests/test_sma_crossover_parity.py` |
-| `fixtures/rsi_mean_reversion.spec.json` | `app/engine/strategy/algorithms/rsi_mean_reversion.py::RsiMeanReversionAlgorithm` | LEAN; rule reimplemented inline in `app/engine/tests/test_rsi_mean_reversion_parity.py` |
+| `fixtures/sma_crossover.spec.json` | `app/engine/strategy/algorithms/sma_crossover.py::SmaCrossoverAlgorithm` | None: an internal strategy with no external reconciliation |
+| `fixtures/rsi_mean_reversion.spec.json` | `app/engine/strategy/algorithms/rsi_mean_reversion.py::RsiMeanReversionAlgorithm` | A pinned LEAN run, ENG-009 (`tests/integration/reconciliation/test_rsi_mean_reversion_lean_golden.py`) |
 
 The hand-coded twins are math-authority (their provenance blocks).
 The spec layer is parity-pinned secondary; if it ever drifts, the hand-

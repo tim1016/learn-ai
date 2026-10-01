@@ -3,7 +3,7 @@
 Formula: Long-only RSI mean reversion. Entry: RSI(window) drops strictly below `oversold` threshold (typically 30). Exit: RSI(window) rises strictly above `overbought` threshold (typically 70). End-of-run: any open position closed on `on_end_of_algorithm`.
 Reference: Internal strategy retained from the retired pandas-ta service implementation. LEAN inspiration but no line-for-line port.
 Canonical implementation: this file. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `spec/fixtures/rsi_mean_reversion.spec.json` reproduces the hand-coded twin trade-by-trade. Divergence-research-only parallel: `app/research/divergence/strategies/s2_rsi_mean_reversion.py` (vectorized pandas).
-Validated against: PythonDataService/tests/test_strategy_engine.py; spec ↔ hand-coded parity at `app/engine/strategy/spec/tests/test_spec_rsi_mean_reversion_parity.py`; engine-level test `test_rsi_mean_reversion_parity.py` validates trade-set contract against legacy module; `tests/engine/strategy/test_rsi_signal_program.py::test_validated_rsi_mean_reversion_settings_corpus_has_a_pinned_trace_root`.
+Validated against: PythonDataService/tests/test_strategy_engine.py; spec ↔ hand-coded parity at `app/engine/strategy/spec/tests/test_spec_rsi_mean_reversion_parity.py`; `tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[rsi_mean_reversion]`.
 
 Historical source: retired pandas-ta service implementation
 
@@ -12,11 +12,9 @@ Rule set (unchanged from the pandas-ta reference):
     * **Exit**          — when RSI(window) rises **strictly above** ``overbought``.
     * **End of run**    — any open position is closed on ``on_end_of_algorithm``.
 
-The legacy strategy consumes a pre-computed DataFrame and enters/exits at the
+The legacy strategy consumed a pre-computed DataFrame and entered/exited at the
 bar's close. The new engine emits instrument-free ENTER/EXIT intents from a
 ``TradeBarConsolidator`` and binds them to the configured execution adapter.
-The trade-set contract — same entries, exits, and WIN/LOSS verdicts on the same
-input data — is validated by ``test_rsi_mean_reversion_parity``.
 
 Parameters are constructor kwargs so the router's strategy registry can build
 instances from a user-supplied ``RsiMeanReversionParams`` Pydantic model.
