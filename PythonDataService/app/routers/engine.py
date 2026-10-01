@@ -160,7 +160,7 @@ async def get_engine_chart(request: EngineChartRequest) -> EngineChartResponse:
     """Render exact strategy bars and indicators from one policy-store read."""
     try:
         return await asyncio.to_thread(build_engine_chart, request)
-    except (ValueError, ValidationError) as exc:
+    except (ValueError, OverflowError, ValidationError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 

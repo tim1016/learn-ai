@@ -464,3 +464,13 @@ async def test_walk_forward_path_does_not_clash_with_run_id_route(client):
     # with a ``walk_forwards`` envelope.
     assert response.status_code == 200
     assert "walk_forwards" in response.json()
+
+
+async def test_engine_chart_to_ms_at_ceiling_is_a_400_not_a_500(client):
+    """``to_ms_utc == MAX_TIMESTAMP_MS`` passes the schema, but a window ending
+    in 9999 cannot become a nanosecond timestamp: a request the service cannot
+    serve, refused as a 400 rather than a raw overflow 500 (#2771)."""
+    body = _engine_chart_body()
+    body["to_ms_utc"] = MAX_TIMESTAMP_MS
+    response = await client.post(_ENGINE_CHART, json=body)
+    assert response.status_code == 400, response.text
