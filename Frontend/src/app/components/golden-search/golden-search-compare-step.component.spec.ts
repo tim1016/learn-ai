@@ -167,7 +167,38 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(first).toMatch(/2025-12-23/);
     expect(first).toContain('Entry at $590.10 · RSI 58.2');
     expect(first).toContain('Hold Complete · Exit at $592.50');
-    expect(first).toContain('+$243');
+    // The server's trade P&L is price change times quantity: it is labelled before fees, never net.
+    expect(within(trades).getByRole('columnheader', { name: 'P&L before fees' })).toBeTruthy();
+    expect(within(trades).queryByRole('columnheader', { name: /net p&l/i })).toBeNull();
+    expect(first).toContain('+$243.00');
+  });
+
+  it('a trade worth less than a dollar keeps its cents, and a month without a defined return reads — with no bar', async () => {
+    const service = fakeService();
+    service.candidate.mockImplementation(async (_id: string, key: CandidateKey) => {
+      const detail = candidateDetail(key);
+      const development = detail.development;
+      if (development === null) return detail;
+      return {
+        ...detail,
+        development: {
+          ...development,
+          monthly: [{ month_start_ms: development.monthly[0].month_start_ms, net_profit: -40, return_fraction: null, trades: 1 }],
+          trades: [{ ...development.trades[0], quantity: 1, pnl: 0.4 }],
+        },
+      };
+    });
+    await renderStep(studyDetail('awaiting_candidate'), service);
+
+    fireEvent.click(evidenceTab('By month'));
+    const months = await screen.findByRole('table', { name: /net result by month for all-period fit/i });
+    const month = within(months).getAllByRole('row')[1];
+    expect(month.textContent).toMatch(/2025-11-01\s*—\s*-\$40\s*1/);
+    expect(month.querySelector<HTMLElement>('.bar')?.style.width).toBe('0%');
+
+    fireEvent.click(evidenceTab('Trades'));
+    const trades = screen.getByRole('table', { name: /development trades of all-period fit/i });
+    expect(within(trades).getAllByRole('row')[1].textContent).toContain('+$0.40');
   });
 
   it('a detail read that fails says so and can be retried', async () => {

@@ -661,7 +661,8 @@ export interface DrawdownPoint {
 export interface MonthlyResult {
   month_start_ms: number;
   net_profit: number;
-  return_fraction: number;
+  /** Null when the month started without positive equity to divide by. */
+  return_fraction: number | null;
   trades: number;
 }
 
@@ -671,6 +672,7 @@ export interface CandidateTrade {
   entry_price: number;
   exit_price: number;
   quantity: number;
+  /** Price change times filled quantity, before fees. */
   pnl: number;
   pnl_pct: number;
   indicators: Readonly<Record<string, number | null>>;
@@ -701,7 +703,8 @@ export interface CandidateDetail {
   exam: CandidateRunDetail | null;
 }
 
-export type QualificationStatus = 'ready' | 'stale' | 'revoked';
+/** Only `ready` may be applied; `unverifiable` means its status could not be read. */
+export type QualificationStatus = 'ready' | 'stale' | 'revoked' | 'unverifiable';
 
 /** `GET /api/research/golden-qualifications/{id}/deploy-offer`; `parameters` is canonical without `symbol`. */
 export interface QualificationDeployOffer {

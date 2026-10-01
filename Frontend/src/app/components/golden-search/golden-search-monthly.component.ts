@@ -33,14 +33,15 @@ export class GoldenSearchMonthlyComponent {
 
   protected readonly rows = computed<MonthRow[]>(() => {
     const months = this.monthly();
-    const largest = Math.max(0, ...months.map((m) => Math.abs(m.return_fraction)));
+    const largest = Math.max(0, ...months.map((m) => Math.abs(m.return_fraction ?? 0)));
     return months.map((m) => ({
       month_start_ms: m.month_start_ms,
       returnText: signedPercentText(m.return_fraction),
       profitText: signedUsdText(m.net_profit),
       trades: m.trades,
-      loss: m.return_fraction < 0,
-      barPercent: largest > 0 ? (Math.abs(m.return_fraction) / largest) * 100 : 0,
+      loss: m.net_profit < 0,
+      // A month without a defined return draws no bar rather than a zero one.
+      barPercent: m.return_fraction !== null && largest > 0 ? (Math.abs(m.return_fraction) / largest) * 100 : 0,
     }));
   });
 }

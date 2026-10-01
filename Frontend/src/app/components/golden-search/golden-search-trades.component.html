@@ -4,7 +4,7 @@
   <div class="table-wrap" role="region" tabindex="0" [attr.aria-label]="'Trades of ' + candidateLabel()">
     <table>
       <caption class="sr-only">Development trades of {{ candidateLabel() }}</caption>
-      <thead><tr><th scope="col">Session date (ET)</th><th scope="col">Entry decision</th><th scope="col">Exit decision</th><th scope="col" class="num">Net P&amp;L</th></tr></thead>
+      <thead><tr><th scope="col">Session date (ET)</th><th scope="col">Entry decision</th><th scope="col">Exit decision</th><th scope="col" class="num">P&amp;L before fees</th></tr></thead>
       <tbody>
         @for (row of rows(); track row.key) {
           <tr>
