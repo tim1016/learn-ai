@@ -10,8 +10,7 @@ import { GraphqlError, type GraphQLErrorPayload } from '../graphql/graphql-error
  *
  * ``mathRef`` is the optional deep-link the error drawer renders
  * when a numeric divergence is the culprit. It's filled only when
- * the backend explicitly supplies it (see resolver guidance in
- * ``docs/math-sources-of-truth.md``); the frontend never pattern-
+ * the backend explicitly supplies it; the frontend never pattern-
  * matches messages to guess one.
  */
 export interface ErrorCatalogEntry {

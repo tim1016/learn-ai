@@ -22,9 +22,7 @@ namespace Backend.Services.Implementation;
 ///   accounting lives in .NET because (a) the data lives in EF/Postgres,
 ///   (b) it operates on persisted lot records via DbContext transactions,
 ///   and (c) round-tripping every trade through Python would be gratuitous
-///   without simplifying anything. Documented in
-///   docs/math-sources-of-truth.md § Portfolio / valuation as
-///   canonical-in-dotnet-justified per finding F-0010 (closed 2026-05-06).
+///   without simplifying anything.
 /// Validated against: Backend.Tests/Unit/Services/PositionEngineTests.cs
 ///   (FIFO determinism, mark-to-market, cost basis after partials);
 ///   PortfolioValidationService.cs runtime suite Test1_FifoAccounting.

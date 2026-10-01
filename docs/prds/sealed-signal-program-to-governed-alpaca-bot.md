@@ -1185,9 +1185,9 @@ Before an authority-changing implementation slice:
 2. Amend ADR 0034's Dry Run sentence to say “no real-account custody; isolated
    synthetic account authority,” without changing its validation policy.
 3. Add the new terms and identity invariants to the live domain glossary.
-4. Update `docs/architecture/engine-authority-map.md` and
-   `docs/math-sources-of-truth.md` in the same PR that moves or promotes an
-   engine/math authority.
+4. Update `docs/architecture/engine-authority-map.md` and the affected
+   provenance blocks in the same PR that moves or promotes an engine/math
+   authority.
 5. Add any still-open observed implementation defect to `docs/known-gaps.md`;
    do not use this PRD as the defect backlog after implementation starts.
 6. Prune this PRD to Git history once shipped decisions are absorbed by
@@ -1247,7 +1247,6 @@ General agreement is not useful. Name the first authority edge that breaks.
 - [SQLite Clerk authority — ADR 0035](../architecture/adrs/0035-alpaca-clerk-sqlite-event-sourced-authority.md)
 - [SQLite sole Alpaca custody authority — ADR 0037](../architecture/adrs/0037-sqlite-sole-alpaca-custody-authority.md)
 - [One Alpaca runner control plane — ADR 0038](../architecture/adrs/0038-alpaca-sole-bot-control-plane.md)
-- [Math sources of truth](../math-sources-of-truth.md)
 - [Known implementation gaps](../known-gaps.md)
 - `PythonDataService/app/engine/strategy/registry.py`
 - `PythonDataService/app/engine/strategy/algorithms/ema_crossover_signal.py`

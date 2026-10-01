@@ -3,8 +3,7 @@
 These are the numbers the Angular swimlane renders but never computes:
 per-trade dollar PnL, holding-session count (calendar-derived), a combo's
 windowed total PnL (the hero-selection metric), and a combo's Sharpe (the
-opacity-encoding metric). Every formula is defined here and documented in
-docs/math-sources-of-truth.md.
+opacity-encoding metric). Every formula is defined here.
 """
 
 from __future__ import annotations

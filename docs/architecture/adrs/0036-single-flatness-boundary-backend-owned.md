@@ -82,7 +82,7 @@ needs a regression test that fails before and passes after, per `CLAUDE.md`.
    `journal-exposure-projection` golden fixture with it — deleted alongside the
    code they proved, not regenerated. The flatness primitive that survives is
    `app/broker/alpaca/clerk/sqlite/folds.py::position_quantity_is_nonzero`,
-   registered in `docs/math-sources-of-truth.md`; the conformance obligation
+   whose provenance block names it canonical; the conformance obligation
    this consequence created now attaches there. The original text above is left
    unedited as the historical record.
 
@@ -98,7 +98,8 @@ needs a regression test that fails before and passes after, per `CLAUDE.md`.
    reads the already-normalized record. Changing them would add a round-trip for
    no correctness gain.
 
-6. **`math-sources-of-truth.md` row 95 needs widening.** It records that "Angular
+6. **The math index's flatness row needed widening** (the index was cut in #2750).
+   It recorded that "Angular
    renders the Python-authored plan and performs no closing-quantity
    calculation" — true, but narrower than Decision 2, which bars Angular from
    *any* flatness classification, not only closing quantities.

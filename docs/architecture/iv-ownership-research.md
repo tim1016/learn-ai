@@ -1694,8 +1694,6 @@ Listed because the temptation to do them will recur:
   synthesis philosophy.
 - `.claude/rules/python.md`, `.claude/rules/dotnet.md`, `.claude/rules/angular.md`
   — stack conventions.
-- `docs/math-sources-of-truth.md` — registry of canonical math implementations
-  and parity-test status.
 - `tests/fixtures/golden/iv30/spy-2024-12-20-chain.{parquet,meta.json}` —
   anchor-fixture attribution.
 

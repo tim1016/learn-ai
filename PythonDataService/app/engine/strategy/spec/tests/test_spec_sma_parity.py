@@ -11,10 +11,9 @@ logs match trade-by-trade on:
   * WIN/LOSS verdict
   * indicator-snapshot values
 
-The hand-coded twin is the canonical implementation per
-``docs/math-sources-of-truth.md``; ``SpecAlgorithm`` is the parity-pinned
-secondary. If this test ever fails, the spec layer has drifted and the
-hand-coded version is the authority.
+The hand-coded twin is the canonical implementation; ``SpecAlgorithm`` is
+the parity-pinned secondary. If this test ever fails, the spec layer has
+drifted and the hand-coded version is the authority.
 """
 
 from __future__ import annotations
