@@ -7,6 +7,9 @@ Reference: PRD #1543 stories 19 and 33; issues #1554 and #1557.
 Canonical implementation: execution_coverage.prove_execution_coverage_set.
 Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
   test_folds_execution.py::test_many_to_many_coverage_supersession_preserves_exact_provenance_and_replay.
+
+The chain-total fold below (#2786) is the one supersession that moves the
+position; its own docstring carries its provenance.
 """
 
 from __future__ import annotations
@@ -19,15 +22,20 @@ from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     PRICE_ATOL,
     QTY_ATOL,
+    ChainTotalCoverageEvidence,
+    ExecutionCoverageChainTotalProvenFacts,
     ExecutionCoverageIdentity,
     ExecutionCoverageSetProofSuccess,
     ExecutionCoverageSupersededFacts,
     active_execution_coverage_conflicts,
+    chain_total_proves_coverage,
     cumulative_recovery_fills_for_order,
     prove_execution_coverage_set,
+    validate_execution_coverage_chain_total_proven_facts,
     validate_execution_coverage_superseded_facts,
 )
 from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import (
+    chain_total_coverage_plan,
     effective_exact_execution_ids_for_order,
     execution_coverage_candidate,
     order_total_retained_exact_provenance,
@@ -195,6 +203,123 @@ def fold_execution_coverage_superseded(
             (payload["recorded_at_ms"], facts.resolved_uncertainty_id),
         )
     complete_manual_order(conn, payload=payload, order_ref=facts.order_ref)
+
+
+class PositionDeltaApplier(Protocol):
+    """The fold registry's one attributed-position write, shared with the fill folds."""
+
+    def __call__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        payload: dict[str, Any],
+        symbol: str,
+        side: str,
+        quantity: float,
+    ) -> None: ...
+
+
+def fold_execution_coverage_chain_total_proven(
+    conn: sqlite3.Connection,
+    payload: dict[str, Any],
+    *,
+    apply_position_delta: PositionDeltaApplier,
+) -> None:
+    """Replace a filled manual chain's cumulative coverage with its exact executions (#2786).
+
+    Formula: Δposition = fsum(q_exact) − fsum(q_effective_before), applied
+      with the leg's side; every cumulative-recovery row is deleted and every
+      quarantined exact becomes an effective fill with its original clocks.
+    Reference: Project-authored chain-total coverage proof for issue #2786;
+      ADR 0036, 2026-10-01 amendment.
+    Canonical implementation: execution_coverage.chain_total_proves_coverage,
+      over execution_coverage_evidence.chain_total_coverage_plan.
+    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
+      test_manual_order_chain_total_proof.py.
+
+    Only ``head_quantity`` comes from the facts alone: it is the head's own
+    requested quantity, which no other durable row holds. Every other figure
+    is re-read from current rows through the planner's own reader and must
+    equal the record, and the order must still be the live manual leg whose
+    head the record names, ``filled`` -- so a replay against a ledger that
+    diverged fails instead of moving the position.
+    """
+    facts = ExecutionCoverageChainTotalProvenFacts.from_facts_json(payload["facts_json"])
+    validate_execution_coverage_chain_total_proven_facts(facts)
+    if payload["order_ref"] != facts.order_ref or payload["authority_generation"] != facts.authority_generation:
+        raise ValueError("chain-total coverage transition does not match its typed evidence")
+    meta = reads.control_meta_snapshot(conn)
+    if (
+        facts.account_id != meta.account_id
+        or facts.authority_generation != meta.authority_generation
+        or facts.db_identity_token != meta.db_identity_token
+        or facts.expected_control_revision != meta.control_revision
+    ):
+        raise ValueError("chain-total coverage binding does not match the current Clerk authority")
+    leg = conn.execute(
+        "SELECT order_row.broker_order_id, order_row.broker_state, effect.kind, effect.state, "
+        "effect.effect_operation_id, effect.command_id FROM orders order_row "
+        "JOIN effect_operations effect ON effect.effect_operation_id = order_row.effect_operation_id "
+        "WHERE order_row.order_ref = ?",
+        (facts.order_ref,),
+    ).fetchone()
+    if (
+        leg is None
+        or leg["kind"] != "MANUAL_ORDER"
+        or leg["state"] in {"succeeded", "failed", "rejected"}
+        or leg["broker_order_id"] != facts.head_broker_order_id
+        or (leg["broker_state"] or "").lower() != "filled"
+        or leg["effect_operation_id"] != payload["effect_operation_id"]
+        or leg["command_id"] != payload["command_id"]
+    ):
+        raise ValueError("chain-total coverage does not name the live manual leg's filled head")
+    plan = chain_total_coverage_plan(conn, order_ref=facts.order_ref)
+    if (
+        plan is None
+        or plan.symbol != facts.symbol.upper()
+        or plan.side != facts.side
+        or plan.superseded_cumulative_fill_ids != tuple(facts.superseded_cumulative_fill_ids)
+        or plan.effective_exact_execution_ids != tuple(facts.effective_exact_execution_ids)
+        or plan.made_effective != tuple(facts.made_effective_exact_observations)
+        or plan.exact_quantity != facts.exact_quantity
+        or plan.prior_effective_quantity != facts.prior_effective_quantity
+        or plan.resolved_uncertainty_id != facts.resolved_uncertainty_id
+    ):
+        raise ValueError("chain-total coverage plan no longer matches the leg's immutable evidence")
+    if not chain_total_proves_coverage(
+        ChainTotalCoverageEvidence(
+            head_state=leg["broker_state"],
+            head_quantity=facts.head_quantity,
+            exact_quantities=plan.exact_quantities,
+        )
+    ):
+        raise ValueError("chain-total coverage proof no longer holds")
+    conn.executemany(
+        "DELETE FROM fills WHERE fill_id = ?",
+        ((fill_id,) for fill_id in facts.superseded_cumulative_fill_ids),
+    )
+    for item in facts.made_effective_exact_observations:
+        _insert_coverage_superseded_exact_fill(
+            conn,
+            order_ref=facts.order_ref,
+            exact=item.exact_execution,
+            clerk_observed_at_ms=item.clerk_observed_at_ms,
+            recorded_at_ms=item.recorded_at_ms,
+            recorded_transition_sequence=item.recorded_transition_sequence,
+        )
+    apply_position_delta(
+        conn,
+        payload=payload,
+        symbol=facts.symbol,
+        side=facts.side,
+        quantity=facts.position_delta,
+    )
+    if facts.resolved_uncertainty_id is not None:
+        conn.execute(
+            "UPDATE uncertainties SET resolved_at_ms = ? WHERE uncertainty_id = ? "
+            "AND reason_code = 'EXECUTION_COVERAGE_CONFLICT' AND resolved_at_ms IS NULL",
+            (payload["recorded_at_ms"], facts.resolved_uncertainty_id),
+        )
 
 
 def _insert_coverage_superseded_exact_fill(

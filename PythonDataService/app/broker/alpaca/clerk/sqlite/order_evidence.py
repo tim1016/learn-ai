@@ -796,6 +796,15 @@ def fold_order_acknowledgement(
                 ).to_facts_json(),
             )
         )
+    # A filled chain head whose exact executions cover its quantity proves
+    # the chain's total, superseding a cumulative that may under-credit it
+    # (#2786), before the completion check reads the exact total.
+    repo.prove_manual_chain_total_coverage(
+        order_ref=order_ref,
+        head_broker_order_id=order.order_id,
+        head_state=order.status,
+        head_quantity=order.quantity,
+    )
     if (
         manual_order_has_exact_terminal_coverage(
             repo,

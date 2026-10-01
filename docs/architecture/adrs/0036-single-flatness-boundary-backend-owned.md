@@ -176,3 +176,23 @@ is unchanged.
    already lost in historical SQLite REAL values cannot be recovered, and
    none is claimed. ADR 0059's budget amendment ("whole-cent dollar
    commitment") rests on this rule.
+
+## Amendment 2026-10-01 — a manual chain's total, on its head's quantity (#2786)
+
+1. **A filled manual chain's exact executions set its position.** When the
+   chain head reports `filled` and the chain's distinct exact executions
+   satisfy `|fsum(q_exact) − Q_head| < QTY_ATOL` (`1e-9` shares, `rtol=0`),
+   `EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN` replaces every cumulative-recovery
+   row of the leg with them and moves its position by
+   `fsum(q_exact) − fsum(q_effective)`
+   (`execution_coverage.py::chain_total_proves_coverage`). It is the one
+   coverage proof that may move the position: a replacement's `filled_qty`
+   can leave out its original's fills, so a cumulative folded from it
+   under-credits the chain, while the head's `qty` is the chain's whole
+   total. Only the head's observation carries `Q_head`; the transition
+   records it and the fold re-reads everything else. An unreplaced leg is a
+   chain of one.
+2. **A replaced manual leg completes only against its head's quantity.** No
+   row a fold reads holds it, so the coverage folds no longer complete a
+   replaced leg against the accepted quantity, which could end a raised leg
+   early; the head's next acknowledgement completes it.
