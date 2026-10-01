@@ -150,11 +150,8 @@ def test_snapshot_signal_progression_enter_then_hold_then_exit() -> None:
     strategy, ctx = _make_strategy()
     captured: list[DecisionSnapshot] = []
 
-    # Wire a tap that observes the snapshot after each consolidated bar.
-    # ctx._pre_handler_hook fires BEFORE the strategy handler, so we
-    # instead piggyback on the consolidator's on_data_consolidated (which
-    # is set up to call the handler last). Easiest: monkey-wrap the
-    # bar handler to capture after it returns.
+    # Wire a tap that observes the snapshot after each consolidated bar:
+    # wrap the bar handler and capture after it returns.
     original_handler = strategy._on_fifteen_minute_bar
 
     def tap(bar: TradeBar) -> None:

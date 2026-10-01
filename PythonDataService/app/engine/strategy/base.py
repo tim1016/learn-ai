@@ -130,12 +130,6 @@ class StrategyContext:
     collect_consolidated_bars: bool = True
     # Insight manager — tracks structured predictions and scores them.
     insight_manager: InsightManager = field(default_factory=InsightManager)
-    # Engine-owned hook invoked on every fired consolidated bar BEFORE the
-    # strategy's own handler runs. Used by the BacktestEngine to evaluate
-    # active TP/SL brackets intrabar so the strategy sees the correct
-    # position state when its ``on_bar`` runs. ``None`` on strategies
-    # unit-tested without the engine.
-    _pre_handler_hook: Callable[[TradeBar], None] | None = None
     # Engine-owned execution policy for an instrument-free strategy decision.
     # BacktestEngine binds the single signal stream explicitly after initialize.
     _signal_intent_executor: SignalIntentExecutor | None = None
@@ -165,8 +159,6 @@ class StrategyContext:
             consolidator._last_fired_bar = bar  # type: ignore[attr-defined]
             if ctx.collect_consolidated_bars:
                 ctx.consolidated_bars.append(bar)
-            if ctx._pre_handler_hook is not None:
-                ctx._pre_handler_hook(bar)
             handler(bar)
 
         consolidator.on_data_consolidated = _on_emit
@@ -188,26 +180,6 @@ class StrategyContext:
     def liquidate(self, symbol: str) -> None:
         assert self.current_time_ms is not None
         self.portfolio.liquidate(symbol.upper(), self.current_time_ms)
-
-    def market_order(self, symbol: str, quantity: int, tag: str = "") -> None:
-        """Submit a fixed-quantity market order (signed: + buy, − sell).
-
-        For strategies that size by a fixed share count rather than a
-        portfolio fraction (e.g. the VWAP-reversion port, which mirrors a
-        fixed-quantity reference). Delegates to the portfolio's
-        ``submit_market_order``.
-
-        The live context passes its own explicit-call marker for the
-        order-surface guard. The offline portfolio has no such guard and
-        accepts only the pure backtest order shape.
-        """
-        assert self.current_time_ms is not None
-        self.portfolio.submit_market_order(
-            symbol.upper(),
-            quantity,
-            self.current_time_ms,
-            tag,
-        )
 
     def set_signal_intent_executor(self, executor: SignalIntentExecutor) -> None:
         """Bind the engine-owned execution policy for asset-free decisions."""
