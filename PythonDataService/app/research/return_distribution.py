@@ -20,8 +20,7 @@ Reference:
   Management" (2e) §2.2–2.3 (empirical quantile and tail-expectation
   estimators). Normal CDF via erf, identical to
   app/engine/results/lean_statistics.py::_normal_cdf.
-Canonical implementation: this file (registered in docs/math-sources-of-truth.md
-  as "Daily return distribution from minute bars").
+Canonical implementation: this file.
 Validated against: tests/research/test_return_distribution.py and the golden
   fixture tests/fixtures/golden/return-distribution/RD-001 (scipy.stats oracle).
 

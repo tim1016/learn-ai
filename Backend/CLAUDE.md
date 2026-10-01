@@ -12,8 +12,10 @@
 | Logs         | `podman logs -f my-backend`                                                |
 | DB shell     | `podman exec -it my-postgres psql -U postgres`                             |
 
+There is no `dotnet` on the owner's Mac: CI runs the test and lint commands above, and Build runs in the container.
+
 Backend depends on **db** and **python-service** containers (health-checked).
-Tests run locally using InMemory EF Core — no containers needed.
+Tests use InMemory EF Core — no containers needed.
 
 ## File Structure
 
@@ -29,8 +31,8 @@ Backend/
 │   ├── DataLabMutation.cs        # Data lab mutations (type extension)
 │   └── Types/                    # GraphQL result/payload types
 ├── Services/
-│   ├── Interfaces/               # 14 service interfaces (IMarketDataService, IPolygonService, etc.)
-│   └── Implementation/           # 14 implementations
+│   ├── Interfaces/               # Service interfaces (IMarketDataService, IPolygonService, etc.)
+│   └── Implementation/           # Their implementations
 ├── Models/
 │   ├── MarketData/               # StockAggregate, Trade, Ticker, TechnicalIndicator, etc.
 │   ├── Portfolio/                # Account, Position, PositionLot, Order, OptionContract, etc.
@@ -44,23 +46,16 @@ Backend/
 
 ## Key Patterns
 
-- **Hot Chocolate v15** GraphQL — always use `[GraphQLName("fieldName")]` (HC strips "Get" prefix)
 - **Type extensions** for domain separation: `[ExtendObjectType(typeof(Query))]`
 - **Interface-based DI** with scoped lifetime — all services registered in `Program.cs`
 - **Polly** retry + circuit-breaker on HttpClient calls to Python service
-- **Structured logging**: `logger.LogInformation("[STEP X] ...")`
-- **EF Core 10** with PostgreSQL — `AsNoTracking()` for read-only queries
-- **`JsonNamingPolicy.SnakeCaseLower`** when deserializing Python service responses
 - Container uses SDK image with `dotnet watch run` — `Dockerfile` is for production builds only
 
 ## Testing (Backend.Tests/)
 
-- **xUnit** with `[Fact]` and `[Theory, InlineData(...)]`
 - **Moq** for interface mocking
-- Arrange / Act / Assert pattern
 - `FakeHttpMessageHandler` for HTTP call mocking
 - `TestDbContextFactory` for InMemory EF Core
-- Name pattern: `MethodName_Scenario_ExpectedResult`
 
 ## Gotchas
 

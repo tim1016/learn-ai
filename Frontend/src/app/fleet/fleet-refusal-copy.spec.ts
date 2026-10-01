@@ -4,8 +4,7 @@
  * `fleet-refusal-copy.ts` is a client-authored safety net, not the primary
  * copy source (`FleetControlError.detail()`'s `message`/`next_step` always
  * win — see that module's docstring). This test proves the net actually
- * covers the closed vocabulary it is locked to, mirroring
- * `broker-v2-copy-contract.spec.ts`'s pattern for the sibling vocabulary:
+ * covers the closed vocabulary it is locked to:
  *
  * 1. **Snapshot -> fallback parity** — every code in the committed
  *    `fleet-refusal-vocabulary.snapshot.json` has an entry in

@@ -34,7 +34,6 @@ EXACT_DOCUMENT_CLASSES = {
     "docs/doc-authority.md": "canonical",
     "docs/ibkr-integration-authority.md": "canonical",
     "docs/known-gaps.md": "canonical",
-    "docs/math-sources-of-truth.md": "protected-canonical",
 }
 
 RETIRED_DOCUMENTS = (

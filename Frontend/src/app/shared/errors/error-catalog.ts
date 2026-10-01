@@ -5,8 +5,8 @@ import { GraphqlError, type GraphQLErrorPayload } from '../graphql/graphql-error
  *
  * The backend assigns ``extensions.code`` on every domain error;
  * the catalog turns that code into the *what / try / details* trio
- * the three error components render. Adding a new code is a
- * one-line edit here — the components don't need to change.
+ * the section error component renders. Adding a new code is a
+ * one-line edit here — the component doesn't need to change.
  */
 export interface ErrorCatalogEntry {
   /** Single-sentence statement of what failed, in user-facing prose. */

@@ -57,7 +57,7 @@ export interface RevisionContent {
  * fleet operation catalog snapshot (#2109) — the same catalog-derived
  * builder `operation-url.ts` gives `BrokersService`, `BrokerV2PanelService`,
  * and `GalleryLiveStore` (#2132) — rather than concatenating onto a
- * free-form `laneUrl` prefix, so a call site naming a route the catalog does
+ * free-form path prefix, so a call site naming a route the catalog does
  * not declare fails loudly instead of reaching the coordinator as a silent
  * 404.
  */

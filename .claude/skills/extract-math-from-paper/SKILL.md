@@ -22,7 +22,7 @@ Transcribe equations from a PDF paper (academic, quantitative finance, or techni
 
 ### PHASE 1: Read the paper properly
 
-Use the `pdf-reading` skill to read the PDF. Do not skim.
+Read the whole PDF (for a long paper, page range by page range). Do not skim.
 
 1. **Read the full methodology section**, not just the equation. Equations in isolation are often under-specified; the surrounding prose defines variable domains, assumptions, edge cases, and conventions.
 2. **Note the variable nomenclature section** if one exists. Papers almost always define variables in a glossary or at first use — respect those names.
@@ -65,9 +65,9 @@ Papers usually state boundary conditions even when they don't state tests. Extra
 
 ### PHASE 4: Document for the next port
 
-Even if the next step is immediate use (not a further port), leave notes for future re-derivation.
+Even if the next step is immediate use (not a further port), leave notes for future re-derivation in the module docstring — not in a separate doc.
 
-1. **Create `docs/references/<method-name>.md`** with: paper citation (full), section and equation numbers used, any ambiguities and how they were resolved, any deviations from the paper and why.
+1. **Record the source**: paper citation (full), section and equation numbers used, any ambiguities and how they were resolved, any deviations from the paper and why.
 2. **Note what's NOT implemented.** If the paper describes a generalized method and we implemented the constant-sigma special case, say so. Future work will want to know.
 
 ## Output

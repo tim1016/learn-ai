@@ -137,9 +137,8 @@ export type ToleranceBand = 'green' | 'yellow' | 'red';
 /**
  * Map an absolute delta disagreement to a tolerance band. Thresholds
  * picked so an at-the-money disagreement of 50 bps (delta ~0.5 → 0.005
- * absolute) is yellow and 200 bps (0.02 absolute) is red — same
- * semantics as ``toleranceBand`` at the center of the curve, but
- * stable in the wings where delta is small.
+ * absolute) is yellow and 200 bps (0.02 absolute) is red, and the
+ * band stays stable in the wings where delta is small.
  */
 export function deltaAbsBand(diff: number | null): ToleranceBand | null {
   if (diff === null) return null;
