@@ -2,8 +2,8 @@
 
 Formula: Long-only EMA(5)/EMA(10) crossover on 15-minute signal bars with an RSI(14) filter. Entry: fresh EMA5 > EMA10 crossover AND (EMA5 - EMA10) >= 0.20 AND 50 <= RSI <= 70. Exit: 5 consolidated bars (75 minutes) after entry.
 Reference: Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs (Apr 2026 revision); TradingView Pine validation `docs/validation/SPY_EMA_Crossover_RSI.pine`; validation report `docs/validation/SPY_EMA_Crossover_Validation_Report.pdf`.
-Canonical implementation: this file. The legacy `spy_ema_crossover` module is a compatibility wrapper for prior run ledgers. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json` reproduces the default-SPY signal sequence trade-by-trade (Phase 1 acceptance gate, 2026-05-04).
-Validated against: `tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py`; the historical LEAN/TradingView/spec suite, including `app/engine/strategy/spec/tests/test_spec_spy_ema_parity.py`; and the SPY/QQQ three- and six-month LEAN cells recorded in `docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md`.
+Canonical implementation: this file. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json` reproduces the default-SPY signal sequence trade-by-trade (Phase 1 acceptance gate, 2026-05-04).
+Validated against: `tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py`; the historical LEAN/TradingView/spec suite, including `app/engine/strategy/spec/tests/test_spec_spy_ema_parity.py`; and the SPY/QQQ three- and six-month LEAN cells under `tests/fixtures/golden/cross-engine-studies/cells/`.
 
 Line-for-line port of
 ``Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs`` (Apr 2026 revision).
@@ -43,10 +43,6 @@ from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from app.engine.live.indicator_state import ValidationResult
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
@@ -104,9 +100,6 @@ def _finite(name: str, value: Decimal | float) -> Decimal:
 
 class EmaCrossoverSignalAlgorithm(Strategy):
     """Generate EMA crossover decisions without selecting the traded asset."""
-
-    STRATEGY_KEY = "ema_crossover_signal"
-    CONSOLIDATOR_PERIOD_MIN = 15
 
     def _gap_is_sufficient(self, ema_fast: Decimal, ema_slow: Decimal) -> bool:
         """Apply both entry floors: absolute price gap and normalized gap.
@@ -378,9 +371,8 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         # Update the crossover state for the next bar.
         self._prev_ema5_above_ema10 = current_above
 
-        # Publish the per-bar decision snapshot (observability only —
-        # live engine reads this to populate decisions.parquet; backtest
-        # paths and unit tests that don't observe it see no change).
+        # Publish the per-bar decision snapshot (observation only; see
+        # DecisionSnapshot).
         self.last_decision_snapshot = DecisionSnapshot(
             bar_close_ms=bar.end_ms,
             ema5=float(ema5_val),
@@ -605,88 +597,3 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         if self._state_fp is not None:
             self._state_fp.close()  # type: ignore[union-attr]
             self._state_fp = None
-
-    # ---- Indicator-state persistence hooks (PR1) ----
-
-    def report_state_for_persistence(self) -> dict | None:
-        """Return the strategy's persistable state, or None if not restorable.
-
-        Returns None when any of:
-          * indicators not all is_ready (the restored state would be
-            sub-warmup and the validation ladder would reject it)
-          * position not flat (we'd be hydrating into an open trade
-            tomorrow with no way to reconcile entry context)
-          * pending entry / open trade bookkeeping is mid-flight
-
-        On the happy path returns a dict with ema5/ema10/rsi14 indicator
-        states (via to_state_dict), the prev-cross flag, and a lifecycle
-        block proving the strategy is flat.
-        """
-        if self._ema5 is None or self._ema10 is None or self._rsi14 is None:
-            return None
-        if not (self._ema5.is_ready and self._ema10.is_ready and self._rsi14.is_ready):
-            return None
-        if self._in_position:
-            return None
-        if self._pending_entry is not None or self._open_trade is not None:
-            return None
-        return {
-            "ema5": self._ema5.to_state_dict(),
-            "ema10": self._ema10.to_state_dict(),
-            "rsi14": self._rsi14.to_state_dict(),
-            "_prev_ema5_above_ema10": self._prev_ema5_above_ema10,
-            "lifecycle": {
-                "position_qty": 0,
-                "pending_orders_count": 0,
-                "open_insights": 0,
-                "last_signal_kind": None,
-                "last_signal_bar_end_ms": None,
-            },
-        }
-
-    def restore_state_from_persistence(self, payload: dict) -> None:
-        """Rehydrate indicator internals + _prev_ema5_above_ema10 from payload.
-
-        Caller (LiveContext.hydrate_indicator_state) guarantees that
-        ``validate_state_payload(payload)`` has already passed, and
-        that this is called immediately after ``initialize()`` while
-        indicators are fresh-constructed and unfed.
-        """
-        assert self._ema5 is not None
-        assert self._ema10 is not None
-        assert self._rsi14 is not None
-        self._ema5.restore_state(payload["ema5"])
-        self._ema10.restore_state(payload["ema10"])
-        self._rsi14.restore_state(payload["rsi14"])
-        prev_above = payload["_prev_ema5_above_ema10"]
-        if not isinstance(prev_above, bool):
-            raise ValueError("payload_mismatch: _prev_ema5_above_ema10 must be bool")
-        self._prev_ema5_above_ema10 = prev_above
-
-    def validate_state_payload(self, payload: dict) -> ValidationResult:
-        """Shape-check the payload for this strategy. Returns a ValidationResult.
-
-        Imports ValidationResult locally to avoid a module-level
-        cycle (indicator_state -> strategy is not desirable; this
-        method is rarely called in hot paths).
-        """
-        from app.engine.live.indicator_state import ValidationResult
-
-        required_top = {"ema5", "ema10", "rsi14", "_prev_ema5_above_ema10", "lifecycle"}
-        if not isinstance(payload, dict) or not required_top.issubset(payload.keys()):
-            return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
-        if not isinstance(payload["_prev_ema5_above_ema10"], bool):
-            return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
-        if not isinstance(payload["lifecycle"], dict):
-            return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
-        required_lifecycle = {"position_qty", "pending_orders_count", "open_insights"}
-        if not required_lifecycle.issubset(payload["lifecycle"].keys()):
-            return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
-        # Lifecycle counters must be strict ints (bool is a subclass of int in Python;
-        # exclude it to prevent True/False sneaking in where 0/1 is expected).
-        if any(
-            not isinstance(payload["lifecycle"][k], int) or isinstance(payload["lifecycle"][k], bool)
-            for k in required_lifecycle
-        ):
-            return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
-        return ValidationResult.all_passed()

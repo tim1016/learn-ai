@@ -38,10 +38,9 @@ def synthetic_package(tmp_path: Path) -> Path:
 
 
 def test_closure_helper_follows_deferred_function_local_imports(synthetic_package: Path) -> None:
-    """The production case this guards: ``app/engine/live/indicator_state.py``
-    imports ``app.lean_sidecar.trading_calendar`` only inside a function body.
-    A closure walker that only looked at module-top imports would silently
-    miss it — and miss the real defect 2 gap it represents."""
+    """A deferred import still executes and its bytes still ship. A closure
+    walker that only looked at module-top imports would silently miss such a
+    member -- the issue #1728 defect 2 gap."""
     closure = signal_decision_import_closure(roots=["app/root.py"], service_root=synthetic_package)
 
     assert closure == {"app/root.py", "app/helper.py", "app/sibling.py", "app/leaf.py"}

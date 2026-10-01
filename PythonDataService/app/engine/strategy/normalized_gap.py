@@ -1,7 +1,8 @@
 """Normalized (basis-point) gap between two price-scale quantities.
 
 Formula: ``difference_bps(left, right) = 10,000 * (left - right) / right``.
-Reference: ``docs/math-sources-of-truth.md`` ("Relative operand difference in basis points" row).
+Reference: the SEC Investor.gov basis-point definition (one basis point is
+0.01 percentage point), which fixes the 10,000 scale factor.
 Canonical implementation: this file. ``app.engine.strategy.spec.primitives``
 re-exports it so the spec evaluator's ``DifferenceBps`` operand and the
 hand-coded ``EmaCrossoverSignalAlgorithm`` gate share one implementation

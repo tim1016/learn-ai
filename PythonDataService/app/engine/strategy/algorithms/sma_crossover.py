@@ -2,8 +2,8 @@
 
 Formula: Long-only golden cross / death cross. Enter long when short SMA crosses above long SMA; exit when short SMA crosses below long SMA. Default periods follow `_rsi_range_base.py` conventions (50/200 for the divergence-research s3 variant; new engine accepts arbitrary).
 Reference: Internal strategy retained from the retired pandas-ta service implementation. LEAN inspiration but no line-for-line port.
-Canonical implementation: this file. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `spec/fixtures/sma_crossover.spec.json` reproduces the hand-coded twin trade-by-trade. Divergence-research-only parallel: `app/research/divergence/strategies/s3_sma_crossover.py` (vectorized pandas).
-Validated against: PythonDataService/tests/test_strategy_engine.py; spec ↔ hand-coded parity at `app/engine/strategy/spec/tests/test_spec_sma_parity.py`; `tests/engine/strategy/test_sma_signal_program.py::test_validated_sma_settings_corpus_has_a_pinned_trace_root`.
+Canonical implementation: this file. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `spec/fixtures/sma_crossover.spec.json` reproduces the hand-coded twin trade-by-trade.
+Validated against: PythonDataService/tests/test_strategy_engine.py; spec ↔ hand-coded parity at `app/engine/strategy/spec/tests/test_spec_sma_parity.py`; `tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[sma_crossover]`.
 
 Golden-cross / death-cross rule lifted from
 the retired pandas-ta service implementation:
@@ -22,10 +22,7 @@ portfolio fill model, so trade logs remain fill-driven.
 The strategy is configurable via constructor kwargs so the registry can build
 it with user-supplied parameters; defaults mirror the legacy strategy's defaults
 (10/30 windows) but with a 15-minute resolution to match the rest of the Phase 1
-data flow. Parity against the legacy strategy is exercised by
-``test_sma_crossover_parity`` using a synthetic bar stream — the contract is
-"same set of winning vs losing trades on the same input data", not bit-exact
-prices.
+data flow.
 """
 
 from __future__ import annotations
@@ -220,8 +217,13 @@ class SmaCrossoverAlgorithm(Strategy):
             # which is a level, and the contract already seals it as
             # `exit_eligibility.rule = "level_true"`. Edge-triggering made a
             # refused EXIT unrecoverable and needed two compensating
-            # restores; the level needs none. Trace-equivalent on the
-            # qualified corpus -- see docs/references/sma-crossover-signal.md.
+            # restores; the level needs none. The two forms are
+            # trace-equivalent on the qualified corpus (golden_trace_root
+            # b0a136f7... is unchanged across the switch): a position opens
+            # only on a golden cross, so the first in-position bar whose
+            # level is false is the fresh death cross. They can diverge only
+            # on a bar the edge form never reaches -- the refused-exit retry
+            # this change exists to fix.
             if not current_above:
                 intent = SignalIntent(kind=SignalIntentKind.EXIT, bar_close_ms=bar.end_ms, intended_price=bar.close)
                 bar_signal = "EXIT"

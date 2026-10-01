@@ -592,8 +592,8 @@ account overview (then called the Broker Desk) and the Bot Gallery.
   controls attached* — the thing we are correcting.
 - **Readiness gate** ("can this strategy act on the next bar?") — an
   **instance-scoped** composite verdict computed from: current run binding,
-  desired state, process state, broker-observed state, safety flags, hydrate
-  status, and artifact freshness. (Detailed inputs tracked in the design, not
+  desired state, process state, broker-observed state, safety flags, and
+  artifact freshness. (Detailed inputs tracked in the design, not
   here.)
 - **Operator top-strip ladder** — `INSTANCE / PROCESS / CURRENT RUN / DESIRED /
   BROKER`. Reads as an instance being operated, not a run being viewed.
