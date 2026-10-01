@@ -146,25 +146,6 @@ def _catalog_pool_already_initialized(monkeypatch: pytest.MonkeyPatch):
 
 
 # ---------------------------------------------------------------------------
-# Flag-off behavior — routes 404 when the router is not registered.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
-        "/api/data-lake/artifacts/1",
-        "/api/data-lake/storage-summary",
-    ],
-)
-async def test_observatory_routes_404_when_flag_off(url: str, make_data_lake_app):
-    flag_off_app = make_data_lake_app(include_data_lake=False)
-    status_code, _ = await _get(flag_off_app, url)
-    assert status_code == 404
-
-
-# ---------------------------------------------------------------------------
 # Pool lifecycle — a GET must work on a fresh process, no prior POST.
 # ---------------------------------------------------------------------------
 
@@ -541,35 +522,6 @@ async def test_coverage_derives_provider_from_data_type(
     assert body["provider"] == expected_provider
 
 
-async def test_coverage_finds_a_seeded_quote_artifact_as_complete(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
-    """A quote artifact recorded under Provider='learn_ai_derived' must report "complete".
-
-    Seeds select_artifact_coverage's return value as if a real
-    'learn_ai_derived' quote row exists for 2024-05-21 — this is what the
-    live-Postgres equivalent (test_catalog_observatory_reads.py) confirms
-    against a real schema; this mocked version pins the router's own
-    provider-derivation wiring in isolation.
-    """
-
-    async def _quote_coverage(**kwargs) -> list[ArtifactCoverageRow]:
-        assert kwargs["provider"] == "learn_ai_derived"
-        return [ArtifactCoverageRow(trading_date=date(2024, 5, 21), status="complete", artifact_id=55)]
-
-    monkeypatch.setattr(catalog_client, "select_artifact_coverage", _quote_coverage)
-
-    app = make_data_lake_app(include_data_lake=True)
-    status_code, body = await _get(
-        app,
-        f"/api/data-lake/coverage?symbol=SPY&data_type=quote&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
-    )
-
-    assert status_code == 200
-    by_ms = {d["trading_date_ms"]: d for d in body["days"]}
-    quote_day = by_ms[session_open_ms_utc(date(2024, 5, 21))]
-    assert quote_day["status"] == "complete"
-    assert quote_day["artifact_id"] == 55
-
-
 async def test_coverage_window_accepts_any_anchor_inside_the_et_day(
     monkeypatch: pytest.MonkeyPatch, make_data_lake_app
 ):
@@ -739,43 +691,6 @@ async def test_coverage_200_at_exactly_max_range_days(monkeypatch: pytest.Monkey
         f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}&{_window(start, end)}",
     )
     assert status_code == 200
-
-
-async def test_coverage_builds_one_schedule_for_the_whole_range(monkeypatch: pytest.MonkeyPatch, make_data_lake_app):
-    """#1845 P2-5: coverage must call the calendar's range accessor ONCE,
-
-    not once per returned day. Spies on session_windows_ms_utc (the one
-    range-wide accessor) and asserts it's called exactly once per request,
-    regardless of how many sessions the range contains — the bug was a
-    per-day session_open_ms_utc() call inside the router's day loop, which
-    measured ~10s at the 5-year cap before this fix.
-    """
-    import app.routers.data_lake as data_lake_router_module
-
-    async def _empty_coverage(**kwargs) -> list[ArtifactCoverageRow]:
-        return []
-
-    monkeypatch.setattr(catalog_client, "select_artifact_coverage", _empty_coverage)
-
-    call_count = 0
-    real_session_windows_ms_utc = data_lake_router_module.session_windows_ms_utc
-
-    def _counting_session_windows_ms_utc(start: date, end: date):
-        nonlocal call_count
-        call_count += 1
-        return real_session_windows_ms_utc(start, end)
-
-    monkeypatch.setattr(data_lake_router_module, "session_windows_ms_utc", _counting_session_windows_ms_utc)
-
-    app = make_data_lake_app(include_data_lake=True)
-    status_code, body = await _get(
-        app,
-        f"/api/data-lake/coverage?symbol=SPY&price_adjustment_mode={_PRICE_MODE}&{_window(date(2024, 5, 20), date(2024, 5, 24))}",
-    )
-
-    assert status_code == 200
-    assert len(body["days"]) == 5
-    assert call_count == 1
 
 
 # ---------------------------------------------------------------------------

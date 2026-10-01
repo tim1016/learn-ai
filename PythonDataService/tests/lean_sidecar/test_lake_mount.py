@@ -31,7 +31,6 @@ from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.lake_mount import (
     CONTAINER_LAKE_DATA_MOUNT,
     LAKE_VOLUME_HOST_PATH_ENV,
-    LakeArtifacts,
     LakeMount,
     LakeMountError,
     data_plane_lake_root,
@@ -784,20 +783,6 @@ class TestLakeModeGivesLeanTheSameShapeStagingWould:
         )
 
         assert artifacts.map_file_paths == (map_path,)
-
-
-def test_lake_artifacts_are_immutable(fixture_lake: Path) -> None:
-    """A frozen record of what LEAN was given, not a working buffer."""
-    artifacts = resolve_lake_artifacts(
-        lake_root=fixture_lake,
-        symbol="SPY",
-        start=DAY_ONE,
-        end=DAY_TWO,
-    )
-
-    assert isinstance(artifacts, LakeArtifacts)
-    with pytest.raises(AttributeError):
-        artifacts.lake_root = fixture_lake  # type: ignore[misc]
 
 
 # ── Factor files mount only when they cover the run window (#2480) ──

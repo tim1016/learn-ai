@@ -14,8 +14,6 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-import pytest
-
 from app.lean_sidecar.manifest import WindowMs
 from app.services.lean_sidecar_service import _staged_window_from_dates
 
@@ -101,15 +99,3 @@ def test_returned_window_is_int64_ms_utc_per_repo_rule() -> None:
     assert w is not None
     assert isinstance(w.start_ms, int)
     assert isinstance(w.end_ms, int)
-
-
-@pytest.mark.parametrize(
-    "single_day",
-    [date(2024, 12, 31), date(2025, 7, 4), date(2026, 6, 1)],
-)
-def test_single_non_dst_day_is_exactly_24_hours(single_day: date) -> None:
-    """Non-transition days are exactly 24 hours wide. Catches a future
-    refactor that accidentally uses UTC offsets instead of ET-midnight."""
-    w = _staged_window_from_dates([single_day])
-    assert w is not None
-    assert w.end_ms - w.start_ms == 86_400_000

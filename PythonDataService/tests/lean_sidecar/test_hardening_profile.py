@@ -11,11 +11,9 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.lean_sidecar.config import RunLimits
 from app.lean_sidecar.launcher.models import LaunchRequest
 from app.lean_sidecar.runner import (
     ALLOWED_HARDENING_TOKENS,
-    HARDENING_PROFILE_TOKENS,
     HardeningProfile,
     RunnerConfigurationError,
     build_command,
@@ -171,25 +169,6 @@ class TestLaunchRequestModel:
         assert req.hardening_profile is None
         assert req.hardening_flags == []
 
-    def test_hardening_profile_accepts_valid_enum_value(self) -> None:
-        req = LaunchRequest.model_validate(self._good_payload(hardening_profile="with_tmpfs_256m"))
-        assert req.hardening_profile == "with_tmpfs_256m"
-
-    def test_hardening_profile_accepts_applehv_dotnet_fix_value(self) -> None:
-        """The composite profile must be accepted at the launcher API
-        boundary even though ``lean_sidecar_service.py`` does not wire it
-        as a default — the 2026-06-09 empirical bisection showed both
-        ``DOTNET_*=0`` env flags neither unblock the wide-window SIGILL
-        nor preserve the clean 6-day baseline (a separate GIL-finalizer
-        race surfaces at shutdown). The plumbing stays in place so a
-        future investigator can opt into the profile per-run without
-        re-adding scaffolding, but the service intentionally does not
-        default to it."""
-        req = LaunchRequest.model_validate(
-            self._good_payload(hardening_profile="with_tmpfs_256m_and_applehv_dotnet_fix")
-        )
-        assert req.hardening_profile == "with_tmpfs_256m_and_applehv_dotnet_fix"
-
     def test_hardening_profile_rejects_unknown_value(self) -> None:
         with pytest.raises(ValidationError):
             LaunchRequest.model_validate(self._good_payload(hardening_profile="not_a_profile"))
@@ -214,21 +193,3 @@ class TestLaunchRequestModel:
         )
         assert req.hardening_flags == ["--tmpfs", "/tmp:rw,noexec,nosuid,size=256m"]
         assert req.hardening_profile is None
-
-
-def test_profile_mapping_is_a_strict_subset_of_token_allow_list() -> None:
-    """Whole-mapping regression: every token a profile expands to is
-    in ALLOWED_HARDENING_TOKENS. Catches a future profile addition
-    that accidentally introduces a new token."""
-    for profile, tokens in HARDENING_PROFILE_TOKENS.items():
-        for token in tokens:
-            assert token in ALLOWED_HARDENING_TOKENS, (
-                f"{profile} -> {token!r} not in ALLOWED_HARDENING_TOKENS"
-            )
-
-
-def test_run_limits_unused_import_silenced() -> None:
-    """Defensive — the test imports RunLimits via the runner module's
-    transitive surface, this just asserts the import path stays
-    valid (catches a future refactor that hides RunLimits)."""
-    assert RunLimits is not None

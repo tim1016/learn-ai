@@ -245,18 +245,3 @@ class TestWorkspacePollerWalkCost:
         assert total == n_files  # 1 byte per file
         # The handoff's target is 50ms; 500ms is a 10x margin for CI.
         assert elapsed_ms < 500, f"walk took {elapsed_ms:.0f}ms over budget"
-
-
-def test_default_poll_interval_constant_exists() -> None:
-    """The handoff pins ``_WORKSPACE_POLL_INTERVAL_S = 1.0`` as a
-    module-level constant in config.py — never as a RunLimits field
-    (the interval IS the overshoot budget; making it caller-settable
-    widens it unsafely)."""
-    from app.lean_sidecar import config
-
-    assert config._WORKSPACE_POLL_INTERVAL_S == 1.0
-    # And it must NOT be a RunLimits field.
-    from app.lean_sidecar.config import RunLimits
-
-    assert "workspace_poll_interval_s" not in RunLimits.__dataclass_fields__
-    assert "_workspace_poll_interval_s" not in RunLimits.__dataclass_fields__

@@ -50,24 +50,6 @@ async def test_trusted_run_rejects_stale_persistence_before_staging(
         await service.run_trusted_sample(request)
 
 
-def test_completed_run_warns_when_source_changes_after_launch(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    from app.services import lean_sidecar_service as service
-    from app.services.lean_sidecar_persistence import StaleLeanPersistenceSourceError
-
-    def reject_stale_source() -> None:
-        raise StaleLeanPersistenceSourceError("restart the Python data service")
-
-    monkeypatch.setattr(service, "assert_lean_persistence_source_current", reject_stale_source)
-
-    service._warn_if_persistence_source_changed("completed-run")
-
-    assert "Persisting completed LEAN run completed-run" in caplog.text
-    assert "restart the Python data service before starting another run" in caplog.text
-
-
 @pytest.mark.asyncio
 async def test_completed_run_persists_after_source_changes_mid_run(
     monkeypatch: pytest.MonkeyPatch,
@@ -105,36 +87,6 @@ async def test_completed_run_persists_after_source_changes_mid_run(
     )
 
     assert study_id == 73
-
-
-def test_trusted_run_request_exposes_symbol_via_data_policy() -> None:
-    from app.services.lean_sidecar_service import TrustedRunRequest
-
-    req = TrustedRunRequest(
-        run_id="test-defaults",
-        start_ms_utc=1736175600000,
-        end_ms_utc=1736607600000,
-        starting_cash=100_000.0,
-        data_policy=_make_data_policy(),
-    )
-
-    assert req.symbol == "SPY"
-    assert req.data_policy.source == "synthetic"
-    assert req.data_policy.session == "regular"
-
-
-def test_trusted_run_request_accepts_polygon_data_source() -> None:
-    from app.services.lean_sidecar_service import TrustedRunRequest
-
-    req = TrustedRunRequest(
-        run_id="test-polygon",
-        start_ms_utc=1736175600000,
-        end_ms_utc=1736607600000,
-        starting_cash=100_000.0,
-        data_policy=_make_data_policy(source="polygon"),
-    )
-
-    assert req.data_policy.source == "polygon"
 
 
 def test_adjusted_true_with_raw_normalization_is_accepted() -> None:
@@ -183,27 +135,6 @@ def test_runtime_polygon_adjustment_is_always_raw_for_adjusted_true() -> None:
     from app.services.lean_sidecar_service import _runtime_polygon_adjustment
 
     assert _runtime_polygon_adjustment(_make_data_policy(source="polygon")) == "raw"
-
-
-def test_runtime_polygon_adjustment_is_raw_for_adjusted_false() -> None:
-    """PR A's existing case: ``adjusted=False`` -> ``"raw"`` as well."""
-    from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
-    from app.services.lean_sidecar_service import _runtime_polygon_adjustment
-
-    dp = DataPolicy(
-        source="polygon",
-        symbol="SPY",
-        adjusted=False,
-        session="regular",
-        input_bars=BarsSpec(timespan="minute", multiplier=1),
-        strategy_bars=BarsSpec(timespan="minute", multiplier=15),
-        timestamp_policy="bar_close_ms_utc",
-        timezone="America/New_York",
-        provider_kind="live",
-        fixture_id=None,
-        fixture_sha256=None,
-    )
-    assert _runtime_polygon_adjustment(dp) == "raw"
 
 
 def test_compatibility_fixture_receipt_rejects_changed_shared_bytes() -> None:

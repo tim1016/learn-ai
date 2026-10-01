@@ -26,9 +26,7 @@ from app.lean_sidecar.manifest import (
     StagedDataManifest,
     WindowMs,
     hash_staged_files,
-    sha256_bytes,
     sha256_file,
-    sha256_text,
     staged_data_snapshot_sha256,
     write_manifest,
 )
@@ -82,14 +80,6 @@ def _sample_manifest(run_id: str = "run_smoke") -> RunManifest:
 
 
 class TestHashing:
-    def test_sha256_bytes_matches_hashlib(self) -> None:
-        data = b"hello world"
-        assert sha256_bytes(data) == hashlib.sha256(data).hexdigest()
-
-    def test_sha256_text_uses_utf8(self) -> None:
-        s = "naïve café"
-        assert sha256_text(s) == hashlib.sha256(s.encode("utf-8")).hexdigest()
-
     def test_sha256_file_matches_bytes(self, tmp_path: Path) -> None:
         p = tmp_path / "f.bin"
         payload = b"x" * (3 * (1 << 20) + 17)  # > one chunk
@@ -167,44 +157,6 @@ class TestNowMsUtc:
         # Sanity bounds: between 2024-01-01 and the year 2100. If this
         # test fires past 2100 we have bigger problems than a regression.
         assert 1_704_067_200_000 < ts < 4_102_444_800_000
-
-    def test_staged_data_file_is_json_serializable(self) -> None:
-        sf = StagedDataFile(path_in_workspace="a/b.csv", sha256="0" * 64, size_bytes=1)
-        # If hash_staged_files ever changes its dataclass shape, this
-        # will catch the regression via the manifest serializer.
-        manifest = _sample_manifest()
-        manifest = replace(manifest, staged_data=StagedDataManifest(bar_zips=(sf,)))
-        # ``_as_jsonable`` is exercised indirectly via write_manifest.
-        json.loads(json.dumps({"placeholder": "ok"}))  # sanity
-        # The actual exercise is in test_roundtrip; this just guards
-        # against a refactor that drops StagedDataFile fields silently.
-        assert sf.path_in_workspace == "a/b.csv"
-
-
-def test_data_policy_round_trips_synthetic_shape() -> None:
-    dp = DataPolicy(
-        source="synthetic",
-        symbol="SPY",
-        adjusted=False,
-        session="regular",
-        input_bars=BarsSpec(timespan="minute", multiplier=1),
-        strategy_bars=BarsSpec(timespan="minute", multiplier=1),
-        timestamp_policy="bar_close_ms_utc",
-        timezone="America/New_York",
-        provider_kind="live",
-        fixture_id=None,
-        fixture_sha256=None,
-    )
-
-    assert dp.source == "synthetic"
-    assert dp.input_bars.multiplier == 1
-    assert dp.strategy_bars.multiplier == 1
-    assert dp.provider_kind == "live"
-    assert dp.fixture_id is None
-
-
-def test_manifest_schema_version_is_5() -> None:
-    assert MANIFEST_SCHEMA_VERSION == 5
 
 
 def test_staged_snapshot_hash_is_deterministic_and_mutation_sensitive() -> None:

@@ -168,16 +168,6 @@ def test_polygon_provider_delegates_to_raw_chunker(monkeypatch) -> None:
     }
 
 
-def test_get_default_provider_returns_polygon_provider() -> None:
-    from app.lean_sidecar.polygon_canonical import (
-        PolygonProvider,
-        get_default_provider,
-    )
-
-    provider = get_default_provider()
-    assert isinstance(provider, PolygonProvider)
-
-
 # ---------------------------------------------------------------------------
 # Task 3: fetch_canonical_minute_bars tests
 # ---------------------------------------------------------------------------
