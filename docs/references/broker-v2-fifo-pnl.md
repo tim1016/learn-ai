@@ -75,11 +75,8 @@ Today's realized and open-change figures
 (`tests/broker/alpaca/clerk/sqlite/test_fee_attribution_view.py::test_today_shows_fifos_exact_gains_at_a_whole_cent_boundary`)
 and the simulated account's equity and open P&L on the money view
 (`tests/broker/alpaca/clerk/sqlite/test_simulated_account.py`).
-`test_no_normalize_money_call_names_a_fifo_float_view_attribute` is only a
-tripwire: it flags `normalize_money(<x>.<float view>)` written directly, and
-cannot follow a float view through a variable or parameter; the guarantee is
-the `Decimal`-typed renderers and `display_cents`' refusal of a float
-(`tests/broker/alpaca/clerk/test_money.py`).
+The guarantee is the `Decimal`-typed renderers and `display_cents`' refusal
+of a float (`tests/broker/alpaca/clerk/test_money.py`).
 
 ## Golden fixture location
 

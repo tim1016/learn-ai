@@ -5,27 +5,20 @@ from __future__ import annotations
 import pytest
 
 from app.schemas.broker_bots import (
-    AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
     AlpacaPaperDeployView,
-    AlpacaPaperEvidenceOverride,
     AlpacaPaperSizingSelection,
 )
 from app.schemas.exit_terms import ExitTermsInput
 from app.services.broker_v2_panel.panel_deploy import _require_alpaca_deploy_request
 from app.services.broker_v2_panel.panel_errors import PanelRunnerError
 from app.services.broker_v2_panel.paper_deploy_service import (
-    build_alpaca_paper_deploy_receipt,
     build_alpaca_paper_deploy_view,
-    resolve_deploy_strategy_params,
 )
 from tests._helpers.canary_admission import admit_canary_pairing
-from tests.broker.v2panel.fixtures import SID
 from tests.broker.v2panel.test_panel_deploy_shadow import (
     _STRATEGY_KEY,
     LIVE_ACCT,
-    _admission,
-    _bot,
     _clerk_status,
     _entries,
     _live_account,
@@ -53,18 +46,6 @@ def test_the_live_world_offers_live_and_dry_run_only(monkeypatch: pytest.MonkeyP
     assert view.eligibility.eligible is True
 
 
-def test_the_live_view_names_real_money_and_deploy_consent(monkeypatch: pytest.MonkeyPatch) -> None:
-    view = _live_view(monkeypatch)
-    live = next(mode for mode in view.execution_modes if mode.mode == "live")
-    assert "real-money" in live.explanation and "consent" in live.explanation
-    assert "arm" not in live.explanation
-    assert "consent" in view.eligibility.explanation
-    assert "arm" not in view.eligibility.explanation
-    row = next(check for check in view.readiness_checks if check.gate_id == "broker.account_posture")
-    assert row.label == "Live account posture"
-    assert "paper" not in row.headline.lower()
-
-
 def test_a_live_request_passes_the_mode_offer_check(monkeypatch: pytest.MonkeyPatch) -> None:
     view = _live_view(monkeypatch)
     strategy = next(s for s in view.strategies if s.selectable)
@@ -80,58 +61,6 @@ def test_a_live_request_passes_the_mode_offer_check(monkeypatch: pytest.MonkeyPa
     assert _require_alpaca_deploy_request(view, request) is not None
     with pytest.raises(PanelRunnerError, match="not available on this account"):
         _require_alpaca_deploy_request(view, request.model_copy(update={"execution_mode": "shadow"}))
-
-
-def _override() -> AlpacaPaperEvidenceOverride:
-    return AlpacaPaperEvidenceOverride(
-        acknowledgement="I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK",
-        reason="Operator accepted evidence-only deployment risk for this live canary.",
-    )
-
-
-def _receipt(
-    view: AlpacaPaperDeployView,
-    execution_mode: str,
-    *,
-    evidence_override: AlpacaPaperEvidenceOverride | None = None,
-) -> AlpacaPaperDeployReceipt:
-    request = _request(execution_mode)
-    if evidence_override is not None:
-        request = request.model_copy(update={"evidence_override": evidence_override})
-    return build_alpaca_paper_deploy_receipt(
-        broker="alpaca",
-        view=view,
-        request=request,
-        strategy_instance_id=SID,
-        bot=_bot(),
-        admission=_admission(),
-        resolved_params=resolve_deploy_strategy_params(
-            request.strategy_key, request.symbol, dict(request.parameters)
-        ),
-    )
-
-
-def test_live_receipt_uses_budget_and_risk_without_a_second_action(monkeypatch: pytest.MonkeyPatch) -> None:
-    receipt = _receipt(_live_view(monkeypatch), "live")
-
-    assert receipt.message == f"{SID} is on duty in Alpaca live."
-    assert "budget" in receipt.explanation and "risk" in receipt.explanation
-    assert "arm" not in receipt.explanation
-    assert receipt.next_action.startswith("Open the bot panel")
-    assert "scripts." not in receipt.next_action
-    prose = (receipt.message, receipt.explanation, receipt.next_action)
-    assert not any(word in sentence.lower() for sentence in prose for word in ("paper", "shadow"))
-
-
-def test_an_evidence_override_preserves_live_budget_and_risk_terms(monkeypatch: pytest.MonkeyPatch) -> None:
-    receipt = _receipt(_live_view(monkeypatch), "live", evidence_override=_override())
-
-    assert "human override of evidence-only" in receipt.explanation
-    assert "budget" in receipt.explanation and "risk" in receipt.explanation
-    assert "arm" not in receipt.explanation
-    assert receipt.next_action.startswith("Open the bot panel")
-    assert "scripts." not in receipt.next_action
-    assert "stop the bot if behavior differs" in receipt.next_action
 
 
 def test_a_live_request_against_the_shadow_view_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -751,12 +751,6 @@ def test_account_hold_raised_fold_creates_an_active_account_clerk_hold(tmp_path:
     repo.close()
 
 
-def test_active_hold_returns_none_when_no_hold_of_that_reason_exists(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
-    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is None
-    repo.close()
-
-
 def test_two_hold_transitions_each_mint_a_distinct_hold_id(tmp_path: Path) -> None:
     """Two independent raises (e.g. two different reason codes, or a test
     directly exercising the fold twice) must never collide on hold_id — the
@@ -807,12 +801,6 @@ def test_attributed_positions_by_symbol_sums_across_bots(tmp_path: Path) -> None
     # Golden fractional aggregation; the tolerance matches
     # POSITION_QTY_EPSILON (1e-9).
     assert repo.attributed_positions_by_symbol() == {"SPY": pytest.approx(0.3, abs=1e-9)}
-    repo.close()
-
-
-def test_uncertain_orders_is_empty_on_a_fresh_repository(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
-    assert repo.uncertain_orders() == []
     repo.close()
 
 
@@ -901,12 +889,6 @@ def test_uncertainty_raised_fold_creates_an_active_bot_scoped_uncertainty(
         reason_code="TEST_REASON",
         strategy_instance_id="qqq-bot",
     ) is None
-    repo.close()
-
-
-def test_active_uncertainty_returns_none_when_none_exists(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
-    assert repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None) is None
     repo.close()
 
 

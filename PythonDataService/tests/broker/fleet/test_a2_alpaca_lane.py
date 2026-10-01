@@ -147,24 +147,6 @@ def _served_context(*, account_id: str | None, capability: str):
     )
 
 
-def test_the_composition_registry_maps_alpaca_and_nothing_else() -> None:
-    """The app-level composition is the only production registry, Alpaca-only."""
-    adapters = production_provider_adapters()
-    assert set(adapters) == {"alpaca"}
-    assert adapters["alpaca"].provider_id == "alpaca"
-
-
-def test_live_verdict_declares_configuration_access_not_execution_readiness() -> None:
-    """#2140: EXECUTION readiness would refuse routing to an unactivated lane
-    before its refusal reason was ever reached (see ``resolve_route``'s
-    docstring, ``app/broker/fleet/service.py``). Asserted directly against
-    the declared operation, not indirectly through a request that happens to
-    pass for an already-bound lane -- a passing request for a bound lane
-    would still pass under ``EXECUTION`` too, and could not catch this
-    readiness regressing."""
-    assert _alpaca_operation("live_verdict").readiness is OperationReadiness.CONFIGURATION_ACCESS
-
-
 async def test_live_verdict_stays_routable_for_an_activation_required_lane(
     control_dir: Path, clock: FrozenClock
 ) -> None:

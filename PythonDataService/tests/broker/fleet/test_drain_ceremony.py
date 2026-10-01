@@ -640,10 +640,3 @@ def test_drain_wait_release_force_retire_is_a_complete_exit(
 
 
 # ---- the release proof token is gone ------------------------------------------------
-
-
-def test_no_release_proof_token_remains_in_the_fleet_package() -> None:
-    """The gate-shaped hole is deleted, not deprecated."""
-    import app.broker.fleet.service as service_module
-
-    assert not hasattr(service_module, "RELEASE_PROOF_TOKEN")

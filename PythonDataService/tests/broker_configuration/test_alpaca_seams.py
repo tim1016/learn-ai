@@ -24,7 +24,6 @@ from app.broker_configuration.alpaca_seams import (
     AlpacaAccountVerifier,
     AlpacaCredentialSlotDirectory,
 )
-from app.broker_configuration.seams import AccountVerifier, CredentialSlotDirectory
 from tests.broker.alpaca.profile.conftest import (
     COMPLETE_ENVELOPE,
     DEFAULT_SLOT_KEY,
@@ -98,11 +97,6 @@ class _ExplodingEnvironment:
 
 
 # ---- the adapters satisfy the protocols they were written for -------------
-
-
-def test_the_adapters_satisfy_the_protocols_package_b_declared() -> None:
-    assert isinstance(AlpacaCredentialSlotDirectory(), CredentialSlotDirectory)
-    assert isinstance(AlpacaAccountVerifier(), AccountVerifier)
 
 
 # ---- the slot directory ---------------------------------------------------

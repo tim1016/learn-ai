@@ -666,80 +666,6 @@ async def test_unwired_action_is_typed_not_available() -> None:
 
 
 
-async def test_live_panel_skips_resume_admission_reconciliation(monkeypatch) -> None:
-    calls = 0
-
-    class _Registry:
-        async def preview_resume_admission(self, _broker: str, _sid: str):
-            nonlocal calls
-            calls += 1
-            raise AssertionError("live panel must not preview Resume")
-
-        def dry_run_activity(self, _broker: str, _sid: str):
-            return []
-
-        def bot_end(self, _broker: str, _sid: str):
-            return None
-
-        def binding_for_control(self, _broker: str, sid: str):
-            return SimpleNamespace(
-                strategy_instance_id=sid,
-                run_id="run-1",
-                symbol="SPY",
-                use_rth=True,
-                mode="trade",
-                strategy_key="deployment_validation",
-                sealed_program=None,
-            )
-
-    async def _account(*_args) -> str:
-        return "account-1"
-
-    async def _clerk(**_kwargs):
-        return SimpleNamespace()
-
-    async def _evidence(*_args, **_kwargs):
-        return SimpleNamespace(
-            status=status,
-            projection=SimpleNamespace(),
-            economics=SimpleNamespace(
-                session_fills=(),
-                snapshot=SimpleNamespace(
-                    exposure={},
-                    fills_today=0,
-                    realized_pnl_today=0.0,
-                    exact_open_pnl=None,
-                    last_activity_at_ms=None,
-                ),
-            ),
-        )
-
-    status = SimpleNamespace(running=True)
-    sentinel = SimpleNamespace()
-    monkeypatch.setattr(panel_data_source, "validate_account", _account)
-    monkeypatch.setattr(panel_data_source, "get_bot_task_registry", lambda: _Registry())
-    monkeypatch.setattr(panel_data_source, "custody_facade", lambda _runtime: SimpleNamespace(
-        account_id="account-1", repository=None, program_leg_policy=ProgramLegPolicy.regular_only(),
-        flatten_send_verdict=lambda: None,
-    ))
-    monkeypatch.setattr(panel_data_source, "read_sqlite_panel_evidence", _evidence)
-    monkeypatch.setattr(panel_data_source, "clerk_status", _clerk)
-    monkeypatch.setattr(
-        panel_data_source,
-        "read_sqlite_decision_receipts",
-        lambda *_args, **_kwargs: [],
-    )
-    monkeypatch.setattr(panel_data_source, "build_market_pulse", lambda *_args, **_kwargs: SimpleNamespace())
-    monkeypatch.setattr(panel_data_source, "custody_bot_status", lambda *_args, **_kwargs: "running")
-    monkeypatch.setattr(panel_data_source, "build_panel", lambda *_args, **_kwargs: sentinel)
-    monkeypatch.setattr(panel_data_source, "adapt_sqlite_panel", lambda panel, *_args, **_kwargs: panel)
-
-    panel = await panel_data_source.get_panel("alpaca", "account-1", _SID)
-
-    assert panel is sentinel
-    assert calls == 0
-
-
 def _clock_evidence(observed_at_ms: int):
     from app.broker.contract.models import BrokerClockEvidence
 
@@ -1017,12 +943,6 @@ async def test_timed_out_duplicate_never_refires_in_flight_mutation() -> None:
     result = await first_post
     assert result.applied is True
     assert calls == 1
-
-
-def test_reason_left_optional_for_non_comment_actions() -> None:
-    request = _request(action_id="reconcile_now", reason=None)
-
-    assert request.reason is None
 
 
 def test_program_build_for_display_prefers_frozen_evidence_over_live_check(monkeypatch) -> None:

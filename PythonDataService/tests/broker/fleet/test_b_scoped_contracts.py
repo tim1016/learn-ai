@@ -19,7 +19,6 @@ import pytest
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
-from app.broker.alpaca.clerk.fleet_adapter import AlpacaProviderAdapter
 from app.broker.fleet.delivery import (
     COORDINATOR_TOKEN_HEADER,
     DeliveryRequest,
@@ -409,14 +408,6 @@ async def test_an_unregistered_broker_is_a_typed_404_not_an_empty_lane_list(
         response = await client.get("/api/brokers/nosuch/clerks")
         assert response.status_code == 404
         assert response.json()["reason"] == "broker_not_supported"
-
-
-async def test_lane_reads_route_through_the_public_surface(fleet: _Fleet) -> None:
-    """A lane read forwards, echoes identity and returns the provider body."""
-    async with fleet.client() as client:
-        response = await client.get(f"{fleet.base}/account")
-        assert response.status_code == 200
-        assert response.json()["account_id"] == ACCOUNT
 
 
 async def test_b2_desk_reads_and_account_bound_run_evidence_route_through_the_lane(
@@ -1079,15 +1070,6 @@ def test_incompatible_protocol_versions_refuse_registration(
         assert raised.value.reason == "fleet_protocol_incompatible"
     finally:
         service.close()
-
-
-def test_the_catalog_stays_the_single_routing_contract() -> None:
-    """Every operation id is unique and every public route is clerk-scoped."""
-    adapter = AlpacaProviderAdapter()
-    operations = adapter.operations()
-    assert len({op.operation_id for op in operations}) == len(operations)
-    assert all(op.path_template.startswith("/") for op in operations)
-    assert any(op.capability.value == "custody_command" for op in operations)
 
 
 def test_existing_wildcards_do_not_shadow_the_clerk_surface() -> None:

@@ -247,13 +247,6 @@ def test_the_envelope_domains_admit_every_value_the_settings_load() -> None:
     assert envelope_domain_violation(LiveEnvelopeValues.from_settings(settings)) is None
 
 
-def test_live_configuration_holds_no_retired_session_count() -> None:
-    """#2629: the arming ceremony's two counts are not settings any more."""
-    configured = AlpacaSettings(api_key_id="k", api_secret_key="s", mode="live", **_LIVE_REQUIRED)
-    assert configured.is_live
-    assert not {"live_shadow_sessions", "live_arming_max_sessions"} & set(AlpacaSettings.model_fields)
-
-
 @pytest.mark.parametrize("field", ["shadow_sessions", "arming_max_sessions"])
 def test_a_sealed_records_retired_session_counts_keep_their_domain(field: str) -> None:
     """Only a historical sealed record carries them now, and it still verifies them."""

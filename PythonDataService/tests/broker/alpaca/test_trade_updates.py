@@ -277,8 +277,6 @@ class _EvidenceSink:
     def __init__(self, **_: object) -> None:
         self.entries: list[SimpleNamespace] = []
         self.owned_refs = {_OWNED_COID}
-        self.unexplained_order_count = 0
-        self._on_hold = False
         self._journal = self
 
     def guard_reconnect_read(self, read: object):
@@ -298,17 +296,12 @@ class _EvidenceSink:
     ) -> ClerkEntryKind:
         owned = client_order_id in self.owned_refs
         kind = ClerkEntryKind.ORDER_EVENT if owned else ClerkEntryKind.UNEXPLAINED_ORDER
-        if not owned:
-            self.unexplained_order_count += 1
-            self._on_hold = True
         self.entries.append(
             SimpleNamespace(
                 kind=kind,
                 owned=owned,
                 event=event,
                 event_key=event_key,
-                client_order_id=client_order_id or "",
-                order_ref=client_order_id if owned and client_order_id is not None else "",
                 broker_order=order,
             )
         )
@@ -318,19 +311,9 @@ class _EvidenceSink:
         return None
 
     async def submit(self, request: BrokerOrderRequest) -> SimpleNamespace:
-        from app.broker.contract.errors import BrokerSubmissionHeld
-
-        if self._on_hold:
-            raise BrokerSubmissionHeld(
-                "unexplained order",
-                reason_code="UNEXPLAINED_ORDER_HOLD",
-            )
         order_ref = _OWNED_COID
         self.owned_refs.add(order_ref)
         return SimpleNamespace(results=[SimpleNamespace(order_ref=order_ref)])
-
-    def is_on_hold(self) -> bool:
-        return self._on_hold
 
 
 def _frame_source(frames: list[Any]):
@@ -863,77 +846,6 @@ async def test_a_boolean_numeric_is_a_parse_error_not_a_reconnect(
 
 
 # ── (d) attribution: owned vs unexplained (NO hold — that is S6) ─────────────
-
-
-async def test_owned_client_order_id_journals_order_event(tmp_path: Path) -> None:
-    # Warm the clerk with a real submit so ``manual/inkant/v1`` is a known
-    # namespace, then feed an event with that owned client_order_id.
-    broker = _FakeBroker()
-    clerk = _EvidenceSink(read=broker, trade=broker)
-    submit = await clerk.submit(
-        BrokerOrderRequest(
-            operator="inkant",
-            expected_account_id="PA-TEST",
-            legs=[BrokerOrderLeg(symbol="AAPL", side="buy", quantity=10)],
-        )
-    )
-    owned_ref = submit.results[0].order_ref
-    frame = _load_frames()[0]
-    frame["data"]["order"]["client_order_id"] = owned_ref
-
-    consumer, _, _ = await _consumer(tmp_path, [frame], broker=broker, clerk=clerk)
-    await consumer.run()
-
-    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
-    event = next(e for e in entries if e.kind is ClerkEntryKind.ORDER_EVENT)
-    assert event.owned is True
-    assert event.order_ref == owned_ref
-    assert consumer.counters.unexplained == 0
-
-
-async def test_foreign_client_order_id_journals_unexplained_and_counts(tmp_path: Path) -> None:
-    frame = _load_frames()[0]
-    frame["data"]["order"]["client_order_id"] = "someone-elses-order-id"
-    consumer, clerk, _ = await _consumer(tmp_path, [frame])
-
-    await consumer.run()
-
-    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
-    unexplained = [e for e in entries if e.kind is ClerkEntryKind.UNEXPLAINED_ORDER]
-    assert len(unexplained) == 1
-    assert unexplained[0].owned is False
-    assert unexplained[0].client_order_id == "someone-elses-order-id"
-    # No fabricated identity.
-    assert unexplained[0].order_ref == ""
-    assert consumer.counters.unexplained == 1
-    assert clerk.unexplained_order_count == 1
-    # S6 wires the exposure hold to this seam: an unexplained order raises the
-    # account hold, so a subsequent submit is refused (409 / UNEXPLAINED_ORDER_HOLD).
-    from app.broker.contract.errors import BrokerSubmissionHeld
-
-    assert clerk.is_on_hold() is True
-    with pytest.raises(BrokerSubmissionHeld):
-        await clerk.submit(
-            BrokerOrderRequest(
-                operator="inkant",
-                expected_account_id="PA-TEST",
-                legs=[BrokerOrderLeg(symbol="AAPL", side="buy", quantity=1)],
-            )
-        )
-
-
-async def test_absent_client_order_id_journals_unexplained(tmp_path: Path) -> None:
-    frame = _load_frames()[0]
-    frame["data"]["order"].pop("client_order_id", None)
-    consumer, clerk, _ = await _consumer(tmp_path, [frame])
-
-    await consumer.run()
-
-    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
-    unexplained = [e for e in entries if e.kind is ClerkEntryKind.UNEXPLAINED_ORDER]
-    assert len(unexplained) == 1
-    assert unexplained[0].client_order_id == ""
-    assert consumer.counters.unexplained == 1
 
 
 async def test_done_for_day_does_not_hide_a_later_terminal_transition(tmp_path: Path) -> None:

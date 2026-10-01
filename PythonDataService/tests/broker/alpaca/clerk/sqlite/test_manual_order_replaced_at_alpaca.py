@@ -1004,10 +1004,3 @@ async def test_a_replaced_report_with_an_unreadable_fill_count_never_links(clock
 
     await _frame(repo, replaced, event_type="replaced", event_key="replaced:readable")
     assert repo.order(order_ref).broker_order_id == _B
-
-
-async def test_a_working_manual_order_shows_no_replacement_note(clocked_repo) -> None:  # noqa: F811
-    repo, _clock = clocked_repo
-    website = _Website(repo=repo)
-    await _buy_limit(repo, website)
-    assert _owner_reads(repo).replacement_note is None

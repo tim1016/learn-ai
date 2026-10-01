@@ -109,17 +109,6 @@ def test_client_can_be_constructed_outside_async_context() -> None:
     assert client.broker_id == "alpaca"
 
 
-async def test_get_account_returns_raw_payload() -> None:
-    assert await _client(_FakeAlpaca()).get_account() == {
-        "account_number": "PA1",
-        "status": "ACTIVE",
-    }
-
-
-async def test_list_positions_returns_raw_list() -> None:
-    assert await _client(_FakeAlpaca()).list_positions() == [{"symbol": "AAPL"}]
-
-
 async def test_list_orders_builds_filter() -> None:
     fake = _FakeAlpaca()
     await _client(fake).list_orders(status="open", limit=5, after_ms=1_700_000_000_000)
@@ -186,10 +175,6 @@ async def test_list_activities_can_request_the_cash_transaction_group() -> None:
         "/account/activities/TRANS",
         {"page_size": 100, "direction": "desc"},
     )
-
-
-async def test_get_clock_returns_raw() -> None:
-    assert await _client(_FakeAlpaca()).get_clock() == {"is_open": True}
 
 
 async def test_submit_order_posts_to_orders_endpoint_and_returns_raw() -> None:

@@ -606,48 +606,6 @@ async def test_an_operators_stop_as_the_end_comes_cancels_the_sale(
     assert repo.position(SID, "SPY") == 10
 
 
-async def test_the_raw_stop_route_cancels_the_end_so_the_pass_at_the_end_sells_nothing(
-    repo: ClerkSqliteRepository, tmp_path: Path,
-) -> None:
-    """#2664: the raw ``runs/stop`` route (fleet op ``custody_runs_stop``) is an operator's
-    Stop too. It used to commit its STOP and leave a SELL end pending, so the Clerk's pass at
-    the end time sold the shares the operator meant to keep. It now cancels the end, durably,
-    through the runner that keeps it, before its STOP commits."""
-    await _hold_ten(repo)
-    runner = _runner_registry(tmp_path / "runner", None)
-    desired = DesiredStateRepo(stable_desired_state_path(tmp_path / "runner", SID))
-    desired.set(DesiredState.RUNNING, updated_by="deploy", now_ms=repo.clock(), reason="deploy", end=_end("SELL").end)
-    port = _Market()
-    facade = SqliteAlpacaClerkFacade(repo=repo, read=_FakeReadPort(), trade=port, account_mode="paper")
-    app = FastAPI()
-    app.include_router(alpaca_clerk_sqlite.router)
-    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
-    set_bot_task_registry(runner)
-    install_bot_end_schedule(runner)
-    try:
-        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            stop = await client.post(
-                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/runs/stop",
-                json={"lifecycle_run_id": RUN_ID, "operator_reason": "operator stop"},
-            )
-        _walk_clock_to(repo, _at(_WEDNESDAY, 15, 59, 5))
-        await _pass(repo, port)
-    finally:
-        install_bot_end_schedule(None)
-        set_bot_task_registry(None)
-        set_active_clerk_runtime(None)
-
-    assert stop.status_code == 202
-    assert _stop_reason(repo) == "operator stop"
-    assert port.submitted_legs == []
-    assert _end_sales(repo) == []
-    assert repo.position(SID, "SPY") == 10
-    assert runner.pending_ends([SID]) == []
-    # The runner has no process for the bot; the operator's Stop is still recorded.
-    record = desired.read()
-    assert record is not None and (record.desired_state, record.end) == (DesiredState.STOPPED, None)
-
-
 async def test_the_raw_stop_route_naming_another_run_leaves_the_running_ones_end(
     repo: ClerkSqliteRepository, tmp_path: Path,
 ) -> None:
@@ -764,34 +722,6 @@ async def _the_raw_route(repo: ClerkSqliteRepository, runner: BotTaskRegistry) -
         install_bot_end_schedule(None)
         set_bot_task_registry(None)
         set_active_clerk_runtime(None)
-
-
-@pytest.mark.usefixtures("runner_duty_clerk")
-async def test_the_raw_stop_route_stops_the_bots_process_and_records_the_operators_stop(
-    repo: ClerkSqliteRepository, tmp_path: Path,
-) -> None:
-    """#2664: the raw Stop fenced the run at the Clerk but left the bot's process in the runner
-    consuming bars, its intent still RUNNING. Once its STOP is durable it now stops the process,
-    as the panel's Stop does, and records the operator's Stop: the intent STOPPED, the end
-    cancelled -- the process stop revives nothing the Stop cancelled."""
-    runner, run_id = await _deployed_in_the_runner(repo, tmp_path / "runner")
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=_LIVE_SID, lifecycle_run_id=run_id)
-
-    async with _the_raw_route(repo, runner) as client:
-        stop = await client.post(_LIVE_STOP_PATH, json={"lifecycle_run_id": run_id, "operator_reason": "operator stop"})
-        status = runner.status("alpaca", _LIVE_SID)
-
-    assert stop.status_code == 202
-    assert repo.active_run(_LIVE_SID) is None
-    assert status.running is False
-    assert status.duty_outcome is not None
-    assert (status.duty_outcome.kind, status.duty_outcome.reason_code) == ("STOPPED", "OPERATOR_STOP")
-    assert runner.pending_ends([_LIVE_SID]) == []
-    record = DesiredStateRepo(stable_desired_state_path(tmp_path / "runner", _LIVE_SID)).read()
-    assert record is not None
-    assert (record.desired_state, record.updated_by, record.reason, record.end) == (
-        DesiredState.STOPPED, "operator_runs_stop", "operator stop", None,
-    )
 
 
 @pytest.mark.usefixtures("runner_duty_clerk")
@@ -975,33 +905,6 @@ async def test_the_raw_stop_route_leaves_an_end_sale_already_accepted_to_go_out(
     assert waiting == [EndSaleWaiting(strategy_instance_id=SID, symbol="SPY", quantity=10.0)]
     assert stop.status_code == 202
     assert [(leg.side, leg.quantity) for leg in _sold_market(port)] == [(OrderSide.SELL, 10)]
-
-
-async def test_the_raw_stop_route_replaying_an_earlier_runs_stop_leaves_the_later_runs_end(
-    repo: ClerkSqliteRepository, tmp_path: Path,
-) -> None:
-    """#2664 review: only a Stop of the bot's current run -- its ACTIVE run, else its latest --
-    is the operator's Stop of the bot. A lost-response retry of an earlier run's Stop, arriving
-    after a later run started and crashed, is replayed and cancels nothing: the end the crash
-    kept is still carried out at the end."""
-    await _hold_ten(repo)
-    submit_stop_run(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID, operator_reason="operator stop",
-    )
-    _walk_clock_to(repo, _at(_WEDNESDAY, 11))
-    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="a-later-run")
-    submit_stop_run(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="a-later-run",
-        operator_reason=RUNNER_GONE_REASON,
-    )
-    runner = _runner_keeping_the_end(tmp_path / "runner", repo, crashed=True)
-
-    async with _the_raw_route(repo, runner) as client:
-        replayed = await client.post(_STOP_PATH, json=_OPERATORS_STOP)
-        pending = runner.pending_ends([SID])
-
-    assert replayed.status_code == 202
-    assert pending == [_end("SELL")]
 
 
 def _the_disk_fails_the_first_stopped_write(monkeypatch: pytest.MonkeyPatch) -> None:

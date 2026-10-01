@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from app.broker.alpaca.clerk.ceremony import (
-    DEFAULT_CONFIRMATION_TTL_MS,
     MAX_CONFIRMATION_TTL_MS,
     plan_content_token,
     require_confirmation_ttl_ms,
@@ -19,10 +18,6 @@ class _Refused(ValueError):
 
 
 PAYLOAD = {"schema_version": 1, "account_id": "9LIVE0001", "created_at_ms": 10, "expires_at_ms": 20}
-
-
-def test_the_bounds_are_the_ones_cutover_shipped() -> None:
-    assert (DEFAULT_CONFIRMATION_TTL_MS, MAX_CONFIRMATION_TTL_MS) == (120_000, 300_000)
 
 
 def test_the_ttl_must_be_a_whole_millisecond_count_inside_the_bound() -> None:

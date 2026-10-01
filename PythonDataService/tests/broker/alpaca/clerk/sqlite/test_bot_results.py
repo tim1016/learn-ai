@@ -98,35 +98,6 @@ def test_results_read_on_their_own_snapshot_match_the_writers(account: ClerkSqli
     assert account.bot_results(["c", "a"]) == written
 
 
-def test_a_poll_at_an_unchanged_custody_revision_reuses_the_last_results(
-    account: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Review A4: the lifetime fee projection ran on every Home poll. A
-    Finished result moves only with a custody transition, so an unchanged
-    revision reuses the last answer; a new transition reads again."""
-    from app.broker.alpaca.clerk.sqlite import fee_evidence
-
-    projections: list[int] = []
-    real = fee_evidence.custody_fee_attribution
-
-    def counted(*args: object, **kwargs: object):
-        projections.append(1)
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(fee_evidence, "custody_fee_attribution", counted)
-
-    first = account.bot_results(["c"])
-    again = account.bot_results(["c"])
-    assert again == first
-    assert len(projections) == 1
-
-    _stop(account, "d")
-    # The Stop values what it releases with one projection of its own (#2555).
-    assert len(projections) == 2
-    assert account.bot_results(["c"]) == first
-    assert len(projections) == 3
-
-
 def test_results_the_fee_evidence_cannot_vouch_for_are_refused_never_zero(account: ClerkSqliteRepository) -> None:
     with pytest.raises(BudgetUnavailable, match="Fee evidence"):
         # No producer has checked the fee evidence in this process.

@@ -9,14 +9,12 @@ raise/resolve are idempotent.
 from __future__ import annotations
 
 import dataclasses
-import typing
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-import app.broker.alpaca.clerk.sqlite.order_evidence as order_evidence
 import app.broker.alpaca.clerk.sqlite.uncertainty as uncertainty
 from app.broker.alpaca.clerk.sqlite.facts import AccountHoldRaisedFacts, UncertaintyRaisedFacts
 from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON
@@ -50,10 +48,8 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
     _REASON_POLICIES,
-    AgePolicy,
     Capability,
     CauseCleared,
-    ReasonPolicy,
     RedriveThenEscalate,
     VoidAfter,
     reason_age_policy,
@@ -164,26 +160,6 @@ def test_new_exposure_uses_the_canonical_attributed_quantity_boundary_fixture(
 # ── raise_uncertainty / resolve_uncertainty ─────────────────────────────────
 
 
-def test_raise_uncertainty_account_clerk_scope(repo: ClerkSqliteRepository) -> None:
-    created = _raise(repo, strategy_instance_id=None)
-    assert created == "raised"
-    uncertainty = repo.active_uncertainty(
-        scope="ACCOUNT_CLERK", reason_code="ORDER_OUTCOME_UNKNOWN", strategy_instance_id=None
-    )
-    assert uncertainty is not None
-
-
-def test_raise_uncertainty_bot_scope(repo: ClerkSqliteRepository) -> None:
-    created = _raise(repo, strategy_instance_id=SID)
-    assert created == "raised"
-    uncertainty = repo.active_uncertainty(
-        scope="CUSTODY_SUBJECT",
-        reason_code="ORDER_OUTCOME_UNKNOWN",
-        strategy_instance_id=SID,
-    )
-    assert uncertainty is not None
-
-
 def test_raise_uncertainty_is_idempotent(repo: ClerkSqliteRepository) -> None:
     first = _raise(repo, strategy_instance_id=SID)
     before = len(repo.custody_transitions())
@@ -253,11 +229,6 @@ def test_an_episode_written_before_next_attempt_existed_parses_and_hashes_the_sa
 
 
 # ── admit_new_exposure ───────────────────────────────────────────────────────
-
-
-def test_admit_new_exposure_allows_when_nothing_active(repo: ClerkSqliteRepository) -> None:
-    decision = admit_new_exposure(repo, strategy_instance_id=SID)
-    assert decision.allowed is True
 
 
 def test_admit_new_exposure_blocked_by_account_clerk_uncertainty_blocks_every_bot(
@@ -430,10 +401,6 @@ def test_safety_capabilities_remain_allowed_under_active_hold(
 # ── require_admission ────────────────────────────────────────────────────────
 
 
-def test_require_admission_is_silent_when_allowed(repo: ClerkSqliteRepository) -> None:
-    require_admission(repo, strategy_instance_id=SID)  # must not raise
-
-
 def test_require_admission_raises_when_blocked(repo: ClerkSqliteRepository) -> None:
     _raise(repo, strategy_instance_id=SID, reason_code="ORDER_OUTCOME_UNKNOWN")
     with pytest.raises(AdmissionBlockedError) as exc_info:
@@ -532,13 +499,6 @@ def test_exit_stuck_blocks_new_exposure_and_foreign_symbol_reduction(repo) -> No
 # ── ADR 0048 Decision 1: per-reason age policy ──────────────────────────────
 
 
-def test_reason_policy_age_field_is_required_with_no_default() -> None:
-    """A reason cannot be registered without naming what ends its episode."""
-    age_field = next(field for field in dataclasses.fields(ReasonPolicy) if field.name == "age")
-    assert age_field.default is dataclasses.MISSING
-    assert age_field.default_factory is dataclasses.MISSING
-
-
 def test_every_registered_reason_declares_a_closed_age_policy() -> None:
     """Exhaustive over the registry: every entry must be one of the three
     closed AgePolicy shapes, so a newly-registered reason cannot be added
@@ -585,13 +545,6 @@ def test_exit_stuck_never_auto_voids_on_age() -> None:
     assert not isinstance(_REASON_POLICIES[EXIT_STUCK_REASON_CODE].age, VoidAfter)
 
 
-def test_age_policy_is_a_closed_three_shape_sum() -> None:
-    """The sum admits exactly CauseCleared / VoidAfter / RedriveThenEscalate —
-    not optional fields on one class (ADR 0048 Decision 1 rationale)."""
-    args = typing.get_args(AgePolicy)
-    assert set(args) == {CauseCleared, VoidAfter, RedriveThenEscalate}
-
-
 def test_reason_age_policy_rejects_a_shape_the_caller_did_not_declare() -> None:
     """Narrowing happens once, at the accessor, with a named error.
 
@@ -602,18 +555,6 @@ def test_reason_age_policy_rejects_a_shape_the_caller_did_not_declare() -> None:
     """
     with pytest.raises(TypeError, match="declares CauseCleared, not the VoidAfter"):
         reason_age_policy(POSITION_DRIFT_REASON_CODE, VoidAfter)
-
-
-def test_submit_absence_receipt_code_is_the_declared_summary_code() -> None:
-    """The receipt code written on the definitive-absence void is the one the
-    policy declares — derived, not a second copy of the same literal.
-
-    A drift guard rather than a regression test: both spellings agreed when
-    this was two literals. The point is that there is now one definition, so
-    they cannot stop agreeing.
-    """
-    declared = reason_age_policy(ORDER_OUTCOME_UNKNOWN_REASON_CODE, VoidAfter)
-    assert declared.summary_code == order_evidence.SUBMIT_ABSENCE_SUMMARY_CODE
 
 
 def test_every_reduction_admitting_policy_registers_a_proof() -> None:

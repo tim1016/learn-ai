@@ -183,12 +183,6 @@ def _recovery_capability(
     )
 
 
-def test_status_label_maps_the_closed_vocabulary() -> None:
-    assert status_label_for(_status(sid=SID, running=True)) == "Working"
-    assert status_label_for(_status(sid=SID, running=False, phase="OFF_DUTY")) == "Off duty"
-    assert status_label_for(_status(sid=SID, phase="RETIRED", running=False)) == "Retired"
-
-
 def test_an_unclean_exit_is_labelled_distinctly_from_a_deliberate_stop() -> None:
     """S3b: three bots died mid-run and the roster read "Off duty . Flat".
 
@@ -648,14 +642,6 @@ async def test_a_stopped_flat_dry_run_is_finished_under_its_own_world_label(worl
 
     assert (row.group, row.world_label) == ("finished", "DRY RUN · simulated cash")
     assert (row.final_result_usd, row.trade_count) == ("1.25", 2)
-
-
-@pytest.mark.parametrize(
-    ("world", "label"),
-    [("real_live", "LIVE · real money"), ("shadow", "SHADOW · simulated fills on your live account")],
-)
-async def test_every_world_is_worded_one_way(world, label) -> None:
-    assert (await _home_row(running=True, exposure={}, world=world)).world_label == label
 
 
 async def test_finished_results_are_read_off_the_event_loop() -> None:

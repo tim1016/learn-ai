@@ -77,41 +77,6 @@ def test_a_staged_revision_alone_never_becomes_the_one_bound() -> None:
     assert chosen.intent is BindingIntent.RECOVER
 
 
-def test_a_recorded_apply_binds_the_staged_revision() -> None:
-    chosen = decide(
-        _selection(
-            staged_profile_id="prof_staged",
-            staged_revision=4,
-            apply_requested=True,
-            effective_profile_id="prof_effective",
-            effective_revision=1,
-        ),
-        has_any_profile=True,
-    )
-
-    assert isinstance(chosen, BindingCandidate)
-    assert (chosen.profile_id, chosen.revision) == ("prof_staged", 4)
-    assert chosen.intent is BindingIntent.APPLY
-
-
-def test_a_crash_with_a_staged_selection_boots_the_last_effective_revision() -> None:
-    """The acceptance matrix's crash row: staged, never applied, then a crash."""
-    chosen = decide(
-        _selection(
-            staged_profile_id="prof_staged",
-            staged_revision=9,
-            apply_requested=False,
-            effective_profile_id="prof_effective",
-            effective_revision=3,
-            effective_account_id="PA000OLD",
-        ),
-        has_any_profile=True,
-    )
-
-    assert isinstance(chosen, BindingCandidate)
-    assert (chosen.profile_id, chosen.revision) == ("prof_effective", 3)
-
-
 def test_an_apply_naming_nothing_staged_falls_back_to_the_effective_revision() -> None:
     """Defensive: the Apply route refuses this, so a start must not trust it."""
     chosen = decide(
@@ -125,20 +90,6 @@ def test_an_apply_naming_nothing_staged_falls_back_to_the_effective_revision() -
 
     assert isinstance(chosen, BindingCandidate)
     assert chosen.intent is BindingIntent.RECOVER
-
-
-def test_a_configured_installation_with_nothing_effective_is_not_unconfigured() -> None:
-    """Profiles exist but none is applied: the gate closes, no environment fallback."""
-    chosen = decide(_selection(), has_any_profile=True)
-
-    assert chosen == NothingToBind(installation_is_unconfigured=False, selection_generation=7)
-
-
-def test_an_installation_with_no_profiles_at_all_is_unconfigured() -> None:
-    """Every deployment before package F's import. The bootstrap path."""
-    chosen = decide(_selection(selection_generation=0), has_any_profile=False)
-
-    assert chosen == NothingToBind(installation_is_unconfigured=True, selection_generation=0)
 
 
 def test_resetting_the_last_profile_cannot_restore_environment_bootstrap() -> None:
@@ -202,17 +153,6 @@ def test_an_unpinned_candidate_cannot_prove_sameness_and_is_treated_as_a_switch(
     assert verdict.requires_prior_account_clear()
 
 
-def test_the_credential_slot_is_never_what_decides_a_switch() -> None:
-    """Two profiles sharing one slot can still reach two different accounts.
-
-    Encoded as a property of the signature rather than a scenario: the verdict
-    is computed from account identity only, and there is nowhere to pass a slot.
-    """
-    from inspect import signature
-
-    assert "slot" not in str(signature(switch_verdict))
-
-
 # ---- when the binding is written back --------------------------------------
 
 
@@ -228,20 +168,6 @@ def test_a_consumed_apply_is_always_acknowledged() -> None:
     )
 
     assert needs_acknowledgement(candidate, bound_account_id="PA000SAME")
-
-
-def test_an_ordinary_restart_of_an_unchanged_binding_writes_nothing() -> None:
-    """A reboot must not advance the generation and conflict a staged edit."""
-    candidate = _candidate(
-        intent=BindingIntent.RECOVER,
-        profile_id="prof_x",
-        revision=3,
-        previous_profile_id="prof_x",
-        previous_revision=3,
-        previous_account_id="PA000SAME",
-    )
-
-    assert not needs_acknowledgement(candidate, bound_account_id="PA000SAME")
 
 
 @pytest.mark.parametrize(

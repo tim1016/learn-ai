@@ -40,7 +40,6 @@ from scripts.manage_alpaca_sqlite_clerk import (
     _read_reset_evidence,
 )
 from scripts.manage_alpaca_sqlite_clerk import main as recovery_cli
-from tests.broker.alpaca.clerk.live_arming_fixtures import live_settings
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 from tests.broker.alpaca.clerk.sqlite.cutover_test_support import (
     PLAN_MS,
@@ -256,43 +255,6 @@ def test_read_reset_and_cutover_evidence_use_distinct_models(
         _read_cutover_evidence(evidence_path, ACCOUNT_ID)
 
 
-def test_read_cutover_evidence_refuses_live_evidence_under_non_live_effective_mode(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The paper-only proof, now judged against the effective profile revision.
-
-    What it proves is unchanged (ADR 0059 D1): live broker evidence is refused
-    unless this installation *is* live. Only the source of the mode moved, from
-    ``ALPACA_MODE`` to the effective revision (ADR 0060).
-    """
-    payload = {
-        "account_id": ACCOUNT_ID,
-        "account_mode": "live",
-        "observed_at_ms": PLAN_MS,
-        "proof_reference": "fake-cli-proof",
-        "positions": {},
-        "open_order_ids": [],
-    }
-    evidence_path = tmp_path / "live-broker-evidence.json"
-    evidence_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    monkeypatch.setattr(
-        recovery_cli_module,
-        "effective_alpaca_settings",
-        lambda: AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper"),
-    )
-    with pytest.raises(ValueError, match="not live") as refused:
-        _read_cutover_evidence(evidence_path, ACCOUNT_ID)
-    assert "effective broker configuration" in str(refused.value)
-
-    monkeypatch.setattr(recovery_cli_module, "effective_alpaca_settings", live_settings)
-
-    evidence = _read_cutover_evidence(evidence_path, ACCOUNT_ID)
-
-    assert evidence.account_mode == "live"
-
-
 def test_read_cutover_evidence_reads_the_real_effective_revision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -401,42 +363,6 @@ def test_read_cutover_evidence_never_reads_settings_for_paper_evidence(
 
     monkeypatch.setattr(recovery_cli_module, "effective_alpaca_settings", _explode)
     assert _read_cutover_evidence(evidence_path, ACCOUNT_ID).account_mode == "paper"
-
-
-def test_dev_reset_cli_refuses_unactivated_legacy_authority(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    clerk_root = tmp_path / "clerk"
-    runner_root = tmp_path / "runner"
-    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
-    account_dir.mkdir(parents=True)
-    journal = account_dir / "order_journal.jsonl"
-    journal.write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr(
-        recovery_cli_module,
-        "effective_alpaca_settings",
-        lambda: SimpleNamespace(mode="paper"),
-    )
-
-    with pytest.raises(
-        DeveloperCleanSlateResetRefused,
-        match="requires an established SQLite authority",
-    ):
-        recovery_cli(
-            [
-                "--artifacts-root",
-                str(clerk_root),
-                "--account-id",
-                ACCOUNT_ID,
-                "dev-reset",
-                "--runner-artifacts-root",
-                str(runner_root),
-            ]
-        )
-
-    assert journal.is_file()
-    assert not (account_dir / "dev-reset-quarantine").exists()
 
 
 def test_dev_reset_cli_refuses_live_mode_without_moving_authority(

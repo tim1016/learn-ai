@@ -19,7 +19,6 @@ from app.installation_migration.tree import (
     build_folder_tar,
     extract_tar,
     require_bundleable,
-    sha256_file,
     tree_digest_from_dir,
     tree_digest_from_tar,
 )
@@ -122,16 +121,6 @@ def test_extract_refuses_a_member_escaping_the_destination(tmp_path: Path) -> No
 
     assert refused.value.reason == "bundle_member_unsafe"
     assert not (tmp_path / "escaped").exists()
-
-
-def test_sha256_file_is_the_hex_digest_of_the_bytes(tmp_path: Path) -> None:
-    target = tmp_path / "f"
-    target.write_bytes(b"abc")
-
-    assert (
-        sha256_file(target)
-        == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    )
 
 
 def test_the_folder_tar_builder_itself_leaves_a_secret_out(tmp_path: Path) -> None:

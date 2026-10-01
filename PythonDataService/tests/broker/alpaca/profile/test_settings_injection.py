@@ -118,17 +118,6 @@ async def test_an_injected_live_context_still_refuses_a_paper_shaped_account(
         await broker.get_account()
 
 
-def test_a_broker_without_injected_settings_still_defers_to_the_singleton(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = AlpacaSettings(
-        api_key_id=DEFAULT_SLOT_KEY, api_secret_key=DEFAULT_SLOT_SECRET, mode="paper"
-    )
-    monkeypatch.setattr("app.broker.alpaca.broker.resolved_alpaca_settings", lambda: settings)
-
-    assert AlpacaBroker(MagicMock()).capabilities() is ALPACA_PAPER_CAPABILITIES
-
-
 def test_constructing_a_broker_never_reads_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

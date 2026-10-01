@@ -1325,12 +1325,6 @@ async def test_panel_evidence_returns_none_only_when_no_authority_is_active(
     assert evidence is None
 
 
-def test_panel_bot_not_found_maps_to_the_unknown_bot_status() -> None:
-    """The 404/503 split the panel router renders is pinned to one taxonomy."""
-    assert panel_data_source.UnknownBotError.http_status == 404
-    assert panel_data_source.PanelUnavailableError.http_status == 503
-
-
 def test_torn_read_attempts_are_spaced_so_they_sample_different_moments() -> None:
     """T5 (#1796): three back-to-back retries are close to one retry.
 

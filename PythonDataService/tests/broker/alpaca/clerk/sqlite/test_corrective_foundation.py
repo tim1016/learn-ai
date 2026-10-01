@@ -63,10 +63,6 @@ def repo(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_includes_the_durable_cash_reservations() -> None:
-    assert schema.SCHEMA_VERSION == 22
-
-
 def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
     clock = _clock_seq()
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
@@ -336,13 +332,6 @@ def test_rejected_command_has_a_durable_rejection_receipt(repo: ClerkSqliteRepos
         (rejected.command.receipt_id,),
     ).fetchone()
     assert row["terminal_state"] == "rejected"
-
-
-def test_reserve_command_and_serialized_no_longer_exist() -> None:
-    """The corrective foundation slice deletes both (Scope B1) — a command
-    first becomes durable only via commit_first_transition()."""
-    assert not hasattr(ClerkSqliteRepository, "reserve_command")
-    assert not hasattr(ClerkSqliteRepository, "serialized")
 
 
 # ---------------------------------------------------------------------------

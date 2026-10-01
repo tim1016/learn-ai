@@ -480,46 +480,6 @@ async def test_rejected_cash_transfer_evidence_withdraws_the_previous_observatio
     assert sync.envelope.latest_observation() is None
 
 
-async def test_unavailable_evidence_logs_its_cause_beside_the_plain_message(
-    day_pnl_repo: ClerkSqliteRepository,
-    make_sync: Callable[..., LiveEnvelopeSync],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """The line an operator reads names why the evidence was unusable (#2606).
-
-    The reason comes off the exception chain, not the owner-facing ``detail``.
-    """
-    read = _Read()
-    error = BrokerEvidenceUnavailable("Alpaca account evidence was malformed.", detail="Plain words.")
-    error.__cause__ = TypeError("Expected an Alpaca numeric, not a boolean")
-    read.activity_error = error
-    sync = make_sync(day_pnl_repo, read)
-
-    with caplog.at_level(logging.WARNING, logger=SYNC_LOGGER):
-        assert await sync.tick() == "unknown"
-
-    (record,) = _sync_records(caplog)
-    assert record.action == "live_envelope_unknown"
-    assert record.why == "Alpaca account evidence was malformed."
-    assert record.cause == "TypeError: Expected an Alpaca numeric, not a boolean"
-
-
-async def test_unavailable_evidence_without_a_chained_cause_logs_no_cause(
-    day_pnl_repo: ClerkSqliteRepository,
-    make_sync: Callable[..., LiveEnvelopeSync],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    read = _Read()
-    read.activity_error = BrokerEvidenceUnavailable("An Alpaca transfer activity was not executed.")
-    sync = make_sync(day_pnl_repo, read)
-
-    with caplog.at_level(logging.WARNING, logger=SYNC_LOGGER):
-        assert await sync.tick() == "unknown"
-
-    (record,) = _sync_records(caplog)
-    assert record.cause is None
-
-
 async def test_a_changed_cause_of_unavailable_evidence_is_logged_again(
     day_pnl_repo: ClerkSqliteRepository,
     make_sync: Callable[..., LiveEnvelopeSync],

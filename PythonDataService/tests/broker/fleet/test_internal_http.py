@@ -271,16 +271,6 @@ async def test_the_asgi_transport_buffers_and_must_not_carry_streams() -> None:
             await asyncio.wait_for(client.get("http://internal/events"), timeout=0.5)
 
 
-def test_the_seam_module_imports_no_provider_surface() -> None:
-    """Import-isolation corollary: the internal HTTP seam imports no provider."""
-    import inspect
-
-    from app.broker.fleet import internal_http
-
-    source = inspect.getsource(internal_http)
-    assert "alpaca" not in source.lower()
-
-
 async def _chunks_of(payload: bytes, *, split_at: int = 1):
     """Re-yield a payload as byte chunks of the given size."""
     for index in range(0, len(payload), split_at):

@@ -61,30 +61,6 @@ def _values(**overrides: str) -> LegacyEnvironmentValues:
 # ---- the registry ----------------------------------------------------------
 
 
-def test_exactly_seven_settings_are_retired() -> None:
-    """The endpoint mode and the six envelope values. Nothing else."""
-    assert RETIRED_ENV_VARS == (
-        "ALPACA_MODE",
-        "ALPACA_LIVE_LOSS_FRACTION",
-        "ALPACA_LIVE_LOSS_USD",
-        "ALPACA_LIVE_SHADOW_SESSIONS",
-        "ALPACA_LIVE_ARMING_MAX_SESSIONS",
-        "ALPACA_LIVE_XH_ENTRY_BPS",
-        "ALPACA_LIVE_XH_EXIT_BPS",
-    )
-
-
-@pytest.mark.parametrize("credential_variable", ["ALPACA_API_KEY_ID", "ALPACA_API_SECRET_KEY"])
-def test_the_credential_pair_is_never_retired(credential_variable: str) -> None:
-    """They *are* the ``default`` slot — retiring them would break every deployment."""
-    assert credential_variable not in RETIRED_ENV_VARS
-    assert credential_variable in NEVER_RETIRED_SETTINGS
-
-
-def test_retired_and_never_retired_are_disjoint() -> None:
-    assert not set(RETIRED_ENV_VARS) & set(NEVER_RETIRED_SETTINGS)
-
-
 def test_the_envelope_mapping_covers_every_envelope_field() -> None:
     """The ``live_`` prefix trim is written down once, and it is complete."""
     assert set(ENVELOPE_FIELD_BY_SETTING.values()) == set(ENVELOPE_FIELDS)

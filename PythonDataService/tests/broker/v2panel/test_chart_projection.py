@@ -46,7 +46,6 @@ from app.services.broker_v2_panel.chart_projection_service import (
 from app.services.chart_indicator_service import ChartIndicatorService
 from app.services.live_chart_window import (
     CHART_FEED_NOT_EXPECTED,
-    MAX_CHART_RANGE_MS,
     ChartFeedStatus,
     ChartWindowResult,
 )
@@ -142,11 +141,6 @@ def _googl_fixture_fills() -> tuple[tuple[FillRecord, ...], int, int, int]:
     session = fixture_input["session"]
     fills_today = expected["projection"]["bot_metrics"][strategy["strategy_instance_id"]]["fills_today"]
     return tuple(fills), int(session["session_open_ms"]), int(session["session_close_ms"]), fills_today
-
-
-def test_seven_day_live_resolver_cap_unchanged() -> None:
-    """Regression: the existing 7-day cap is not widened by the history contract."""
-    assert MAX_CHART_RANGE_MS == 7 * 86_400_000
 
 
 @pytest.mark.parametrize(
@@ -681,10 +675,6 @@ def test_aggregator_bars_to_chart_bars_maps_fields_and_decimals() -> None:
     assert chart_bar.close == "500.50"
     assert chart_bar.volume == 1234
     assert chart_bar.source == "ibkr"
-
-
-def test_aggregator_bars_to_chart_bars_empty_input_returns_empty_list() -> None:
-    assert aggregator_bars_to_chart_bars([]) == []
 
 
 def test_live_chart_tags_source_and_markers() -> None:

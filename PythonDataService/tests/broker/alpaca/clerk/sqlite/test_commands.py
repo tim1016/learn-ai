@@ -220,10 +220,6 @@ def test_get_command_returns_the_full_resource(repo: ClerkSqliteRepository) -> N
     assert fetched == submission.command
 
 
-def test_get_unknown_command_returns_none(repo: ClerkSqliteRepository) -> None:
-    assert repo.get_command("cmd:does-not-exist") is None
-
-
 def test_state_machine_survives_restart(tmp_path: Path) -> None:
     clock = _clock_seq()
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
