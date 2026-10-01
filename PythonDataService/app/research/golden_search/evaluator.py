@@ -247,6 +247,7 @@ def detail_payload(response: EngineBacktestResponse, initial_cash: float) -> dic
 
 def project_response(request: EvaluationRequest, response: EngineBacktestResponse, *, strategy_key: str, initial_cash: float) -> EvaluationResult:
     """Grid Search's statistics mapping (``engine_adapter.cell_from_response``), plus the detail payload when asked."""
+    # The adapter imports the engine service; only a real projection needs it.
     from app.research.grid_search.engine_adapter import cell_from_response
 
     symbol = str(request.point["symbol"])
@@ -275,6 +276,7 @@ def engine_executor(
     """The production engine call: ``execute_engine_backtest`` with reads bound to the receipted snapshot."""
 
     def _execute(request: EvaluationRequest) -> EvaluationResult:
+        # Loaded when an evaluation really runs, so planning and reads never import the engine service.
         from app.services.engine_backtest_service import execute_engine_backtest
 
         response = execute_engine_backtest(

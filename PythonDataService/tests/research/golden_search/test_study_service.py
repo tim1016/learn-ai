@@ -48,7 +48,8 @@ def lake(tmp_path: Path, symbol: str) -> Path:
 
 
 @pytest.fixture
-def driver(lake: Path, monkeypatch: pytest.MonkeyPatch) -> Driver:
+def driver(lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection) -> Driver:
+    # ``conn`` skips the suite unless an ephemeral database is attested; the study schema is ensured through it.
     # Finish re-hashes the receipted artifacts from the roots the receipt names.
     monkeypatch.setattr(lifecycle, "roots_for", lambda row: [lake])
     return Driver(roots=[lake])

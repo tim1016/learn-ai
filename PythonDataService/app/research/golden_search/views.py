@@ -61,7 +61,7 @@ def study_summary(row: StudyRow, *, presented: str) -> dict[str, Any]:
         "created_at_ms": row.created_at_ms,
         "updated_at_ms": row.updated_at_ms,
         "protocol_hash": row.protocol_hash,
-        "method": row.protocol["method"],
+        "method": row.protocol.get("method"),
         "consumed_evaluations": row.consumed_evaluations,
         "budget_cap": row.budget_cap,
         "cache_hits": row.cache_hits,
