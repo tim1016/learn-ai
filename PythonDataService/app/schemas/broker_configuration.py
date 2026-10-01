@@ -54,14 +54,12 @@ from app.broker_configuration.records import (
     AccountNickname,
     AlpacaDeskState,
     BrokerProfile,
-    ConfigurationEvent,
     CredentialSlotStatus,
     DeskAccountChoice,
     DeskAction,
     DeskLifecycleStep,
     DeskSelectionSummary,
     InstallationSelection,
-    LocalOwner,
     ObservedAccount,
     ProfileRevision,
 )
@@ -141,26 +139,6 @@ class PaperXhAllowancesPayload(BaseModel):
         cls, allowances: ValidatedPaperAllowances | None
     ) -> PaperXhAllowancesPayload | None:
         return None if allowances is None else cls(**allowances.to_mapping())
-
-
-class OwnerResponse(_Response):
-    owner_id: str
-    display_label: str
-    created_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-    updated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-
-    @classmethod
-    def from_record(cls, owner: LocalOwner) -> OwnerResponse:
-        return cls(
-            owner_id=owner.owner_id,
-            display_label=owner.display_label,
-            created_at_ms=owner.created_at_ms,
-            updated_at_ms=owner.updated_at_ms,
-        )
-
-
-class OwnerPatchRequest(_ClosedRequest):
-    display_label: str = _NAME
 
 
 class CredentialSlotResponse(_Response):
@@ -537,44 +515,12 @@ class ApplyRequest(_ClosedRequest):
     expected_selection_generation: int = Field(ge=0)
 
 
-class ConfigurationEventResponse(_Response):
-    event_id: str
-    actor_owner_id: str
-    action: str
-    profile_id: str | None
-    revision: int | None
-    previous_ref: str | None
-    next_ref: str | None
-    result: str
-    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-
-    @classmethod
-    def from_record(cls, event: ConfigurationEvent) -> ConfigurationEventResponse:
-        return cls(
-            event_id=event.event_id,
-            actor_owner_id=event.actor_owner_id,
-            action=event.action,
-            profile_id=event.profile_id,
-            revision=event.revision,
-            previous_ref=event.previous_ref,
-            next_ref=event.next_ref,
-            result=event.result,
-            recorded_at_ms=event.recorded_at_ms,
-        )
-
-
-class ConfigurationEventListResponse(_Response):
-    events: tuple[ConfigurationEventResponse, ...]
-
-
 __all__ = [
     "SERVER_RESOLVED_FIELDS",
     "AccountPinRequest",
     "AccountVerificationResponse",
     "AlpacaDeskStateResponse",
     "ApplyRequest",
-    "ConfigurationEventListResponse",
-    "ConfigurationEventResponse",
     "CredentialSlotResponse",
     "CredentialSlotsResponse",
     "LiveEnvelopePayload",
@@ -582,8 +528,6 @@ __all__ = [
     "NicknamePutRequest",
     "NicknameResponse",
     "ObservedAccountResponse",
-    "OwnerPatchRequest",
-    "OwnerResponse",
     "PaperXhAllowancesPayload",
     "ProfileCloneRequest",
     "ProfileCreateRequest",

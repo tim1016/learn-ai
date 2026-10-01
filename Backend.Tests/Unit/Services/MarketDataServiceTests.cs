@@ -92,8 +92,8 @@ public class MarketDataServiceTests
         var result = await service.GetOrFetchAggregatesAsync(
             "AAPL", 1, "day", "2026-01-01", "2026-01-31");
 
-        Assert.Single(result.Aggregates);
-        Assert.Equal(150m, result.Aggregates[0].Open);
+        Assert.Single(result);
+        Assert.Equal(150m, result[0].Open);
         // Should NOT have called the polygon service
         _polygonServiceMock.Verify(
             p => p.FetchAggregatesAsync(It.IsAny<string>(), It.IsAny<int>(),
@@ -105,117 +105,6 @@ public class MarketDataServiceTests
     #endregion
 
     #region FetchAndStoreAggregatesAsync — Upsert Logic
-
-    [Fact]
-    public async Task FetchAndStoreAggregatesAsync_NewData_InsertsAggregates()
-    {
-        var context = TestDbContextFactory.Create();
-        var service = new MarketDataService(context, _polygonServiceMock.Object, _loggerMock.Object);
-
-        var aggregateResponse = new AggregateResponse
-        {
-            Success = true,
-            Ticker = "AAPL",
-            DataType = "aggregates",
-            Data =
-            [
-                new AggregateData
-                {
-                    Timestamp = 1768435200000L,
-                    Open = 150m, High = 155m, Low = 148m, Close = 153m,
-                    Volume = 1_000_000m, Vwap = 151.5m, Transactions = 5000
-                },
-                new AggregateData
-                {
-                    Timestamp = 1768521600000L,
-                    Open = 153m, High = 158m, Low = 151m, Close = 156m,
-                    Volume = 1_200_000m, Vwap = 154m, Transactions = 6000
-                }
-            ],
-            Summary = new DataSummary
-            {
-                OriginalCount = 2,
-                CleanedCount = 2,
-                RemovedCount = 0
-            }
-        };
-
-        _polygonServiceMock
-            .Setup(p => p.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-15", "2026-01-16",
-                It.IsAny<bool>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(aggregateResponse);
-
-        var result = await service.FetchAndStoreAggregatesAsync(
-            "AAPL", 1, "day", "2026-01-15", "2026-01-16");
-
-        Assert.Equal(2, result.Count);
-        Assert.Equal(150m, result[0].Open);
-        Assert.Equal(153m, result[1].Open);
-
-        // Verify persisted to DB
-        var dbCount = context.StockAggregates.Count();
-        Assert.Equal(2, dbCount);
-    }
-
-    [Fact]
-    public async Task FetchAndStoreAggregatesAsync_ExistingData_UpdatesInPlace()
-    {
-        var context = TestDbContextFactory.Create();
-        var service = new MarketDataService(context, _polygonServiceMock.Object, _loggerMock.Object);
-
-        // Pre-seed ticker and an old aggregate
-        var ticker = new Ticker { Symbol = "AAPL", Name = "AAPL", Market = "stocks" };
-        context.Tickers.Add(ticker);
-        await context.SaveChangesAsync();
-
-        var existingAggregate = new StockAggregate
-        {
-            TickerId = ticker.Id,
-            Open = 100m,
-            High = 105m,
-            Low = 98m,
-            Close = 102m,
-            Volume = 500_000m,
-            Timespan = "day",
-            Multiplier = 1,
-            Timestamp = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc)
-        };
-        context.StockAggregates.Add(existingAggregate);
-        await context.SaveChangesAsync();
-
-        // Now fetch "new" data for the same timestamp with updated prices
-        var aggregateResponse = new AggregateResponse
-        {
-            Success = true,
-            Ticker = "AAPL",
-            DataType = "aggregates",
-            Data =
-            [
-                new AggregateData
-                {
-                    Timestamp = 1768435200000L,
-                    Open = 150m, High = 155m, Low = 148m, Close = 153m,
-                    Volume = 1_000_000m, Vwap = 151.5m, Transactions = 5000
-                }
-            ],
-            Summary = new DataSummary { OriginalCount = 1, CleanedCount = 1, RemovedCount = 0 }
-        };
-
-        _polygonServiceMock
-            .Setup(p => p.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-15", "2026-01-15",
-                It.IsAny<bool>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(aggregateResponse);
-
-        var result = await service.FetchAndStoreAggregatesAsync(
-            "AAPL", 1, "day", "2026-01-15", "2026-01-15");
-
-        // Should update, not duplicate
-        Assert.Single(result);
-        Assert.Equal(150m, result[0].Open); // updated value
-
-        var dbCount = context.StockAggregates.Count();
-        Assert.Equal(1, dbCount); // no duplicate
-    }
 
     [Fact]
     public async Task FetchAndStoreAggregatesAsync_EmptyResponse_ReturnsEmptyList()
@@ -412,8 +301,8 @@ public class MarketDataServiceTests
                 It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Once);
 
-        Assert.Single(result.Aggregates);
-        Assert.Equal(200m, result.Aggregates[0].Open); // fresh data
+        Assert.Single(result);
+        Assert.Equal(200m, result[0].Open); // fresh data
     }
 
     #endregion
@@ -452,8 +341,8 @@ public class MarketDataServiceTests
         var result = await service.GetOrFetchAggregatesAsync(
             "NVDA", 1, "day", "2026-01-15", "2026-01-15");
 
-        Assert.Single(result.Aggregates);
-        Assert.Equal(800m, result.Aggregates[0].Open);
+        Assert.Single(result);
+        Assert.Equal(800m, result[0].Open);
 
         _polygonServiceMock.Verify(
             p => p.FetchAggregatesAsync("NVDA", 1, "day", "2026-01-15", "2026-01-15",
@@ -489,21 +378,6 @@ public class MarketDataServiceTests
             "AAPL", 1, "day", "2026-01-15", "2026-01-16");
 
         Assert.Empty(result);
-    }
-
-    [Fact]
-    public async Task GetOrFetchAggregatesAsync_CancellationRequested_ThrowsOperationCanceled()
-    {
-        var context = TestDbContextFactory.Create();
-        var service = new MarketDataService(context, _polygonServiceMock.Object, _loggerMock.Object);
-
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            service.GetOrFetchAggregatesAsync(
-                "AAPL", 1, "day", "2026-01-01", "2026-01-31",
-                cancellationToken: cts.Token));
     }
 
     [Fact]

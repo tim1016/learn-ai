@@ -133,8 +133,8 @@ export class RunDockComponent {
     // the host page can reserve bottom padding equal to whatever the
     // dock is occupying right now (expanded 320 px vs collapsed 36 px).
     // Otherwise the last form controls hide under the dock. The variable
-    // is retracted with the dock, so a page without one (an IDE-grid page
-    // reached from here, say) never sizes against a dock that is gone.
+    // is retracted with the dock, so a page without one never sizes against
+    // a dock that is gone.
     effect(() => {
       const height = this.expanded() ? '320px' : '36px';
       document.documentElement.style.setProperty('--run-dock-height', height);

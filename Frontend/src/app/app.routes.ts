@@ -66,13 +66,6 @@ export const routes: Routes = [
   { path: "", redirectTo: "/data-lab", pathMatch: "full" },
   { path: "lean-lab", redirectTo: "strategy-lab", pathMatch: "full" },
   {
-    path: "jobs-demo",
-    loadComponent: () =>
-      import("./components/jobs/backtest-job-page.component").then(
-        (m) => m.BacktestJobPageComponent
-      ),
-  },
-  {
     path: "strategy-docs",
     loadComponent: () =>
       import("./components/strategy-docs/strategy-docs.component").then(
@@ -130,20 +123,6 @@ export const routes: Routes = [
     loadComponent: () =>
       import("./components/pricing-lab/pricing-lab.component").then(
         (m) => m.PricingLabComponent
-      ),
-  },
-  {
-    path: "tracked-instruments",
-    loadComponent: () =>
-      import(
-        "./components/tracked-instruments/tracked-instruments.component"
-      ).then((m) => m.TrackedInstrumentsComponent),
-  },
-  {
-    path: "portfolio",
-    loadComponent: () =>
-      import("./components/portfolio/portfolio.component").then(
-        (m) => m.PortfolioComponent
       ),
   },
   {
@@ -287,27 +266,12 @@ export const routes: Routes = [
     heading: "Signal Engine — Methodology",
     src: "/assets/docs/signal-engine-methodology.md",
   }),
-  // Operator-facing copy of docs/runbooks/ibkr-setup-guide.md. The two have
-  // drifted apart, so this pair is not yet in the parity list.
-  markdownDocRoute("docs/ibkr-setup-guide", {
-    heading: "IBKR Setup Guide",
-    src: "/assets/docs/ibkr-setup-guide.md",
-  }),
   {
     path: "legal/notices",
     loadComponent: () =>
       import(
         "./components/legal/legal-notices-page/legal-notices-page.component"
       ).then((m) => m.LegalNoticesPageComponent),
-  },
-  {
-    // Unlinked, fixture-only review surface. It imports committed contracts
-    // locally and deliberately has no data service or mutation path.
-    path: "examples/alpaca-bot-control",
-    loadComponent: () =>
-      import(
-        "./components/examples/alpaca-bot-control/alpaca-bot-control-example.component"
-      ).then((m) => m.AlpacaBotControlExampleComponent),
   },
   // Deploy bookmarks lack a clerk identity. They stay visible as an explicit
   // failure rather than silently opening the newly selected lane's drawer.
@@ -550,13 +514,6 @@ export const routes: Routes = [
       import(
         "./components/golden-fixtures/golden-fixtures-catalog.component"
       ).then((m) => m.GoldenFixturesCatalogComponent),
-  },
-  {
-    path: "_ide-sandbox",
-    loadComponent: () =>
-      import(
-        "./components/_ide-sandbox/ide-sandbox.component"
-      ).then((m) => m.IdeSandboxComponent),
   },
   {
     // Broker v2 panel — account-scoped bots list: the canonical roster route

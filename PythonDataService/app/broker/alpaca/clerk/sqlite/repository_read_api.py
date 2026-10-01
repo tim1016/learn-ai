@@ -20,7 +20,6 @@ from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     CommandResource,
     ControlMetaSnapshot,
-    DecisionReceiptPageResource,
     DecisionReceiptResource,
     EffectOperationResource,
     ExternalOrderResource,
@@ -417,32 +416,6 @@ class ClerkSqliteRepositoryReadApi:
                 limit=limit,
             )
 
-    def decision_receipts_by_transaction(
-        self: ClerkSqliteRepository,
-        *,
-        strategy_instance_id: str,
-        transaction_ref: str,
-        limit: int,
-    ) -> list[DecisionReceiptResource]:
-        with self._write_lock:
-            return reads.decision_receipts_by_transaction(
-                self._conn,
-                strategy_instance_id=strategy_instance_id,
-                transaction_ref=transaction_ref,
-                limit=limit,
-            )
-
-    def decision_receipt_page(
-        self: ClerkSqliteRepository, *, strategy_instance_id: str,
-        after_seq: int, through_seq: int | None, limit: int,
-    ) -> DecisionReceiptPageResource:
-        """Read receipt rows, identity and watermark under the writer coordinator."""
-        with self._write_lock:
-            return reads.decision_receipt_page(
-                self._conn, strategy_instance_id=strategy_instance_id,
-                after_seq=after_seq, through_seq=through_seq, limit=limit, observed_at_ms=self._clock(),
-            )
-
     def external_order(
         self: ClerkSqliteRepository,
         external_order_id: str,
@@ -484,11 +457,6 @@ class ClerkSqliteRepositoryReadApi:
         """Retained external evidence, including current lifecycle proof for reconciliation."""
         with self._write_lock:
             return tuple(reads.external_orders(self._conn))
-
-    def external_orders_observed_since(self: ClerkSqliteRepository, *, since_ms: int) -> int:
-        """Count foreign orders observed at or after ``since_ms`` (ADR 0059 D4)."""
-        with self._write_lock:
-            return reads.external_orders_observed_since(self._conn, since_ms=since_ms)
 
     def effect_operation(
         self: ClerkSqliteRepository,

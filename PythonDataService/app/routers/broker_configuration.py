@@ -51,7 +51,7 @@ from app.broker_configuration.envelope import ValidatedLiveEnvelope, ValidatedPa
 from app.broker_configuration.errors import BrokerConfigurationError
 from app.broker_configuration.records import ProfileWithRevision
 from app.broker_configuration.runtime import get_broker_configuration_service
-from app.broker_configuration.service import MAX_EVENT_PAGE, BrokerConfigurationService
+from app.broker_configuration.service import BrokerConfigurationService
 from app.schemas.broker_configuration import (
     SERVER_RESOLVED_FIELDS,
     AccountPinRequest,
@@ -61,16 +61,12 @@ from app.schemas.broker_configuration import (
     AccountVerificationResponse,
     AlpacaDeskStateResponse,
     ApplyRequest,
-    ConfigurationEventListResponse,
-    ConfigurationEventResponse,
     CredentialSlotResponse,
     CredentialSlotsResponse,
     NicknameListResponse,
     NicknamePutRequest,
     NicknameResponse,
     ObservedAccountResponse,
-    OwnerPatchRequest,
-    OwnerResponse,
     ProfileCloneRequest,
     ProfileCreateRequest,
     ProfileDetailResponse,
@@ -175,20 +171,6 @@ def _detail(record: ProfileWithRevision) -> ProfileDetailResponse:
             else RevisionResponse.from_record(record.latest_revision)
         ),
     )
-
-
-# ---- owner ---------------------------------------------------------------
-
-
-@router.get("/owner", response_model=OwnerResponse, dependencies=READ_DEPENDENCIES)
-async def read_owner(service: ServiceDep) -> OwnerResponse:
-    return OwnerResponse.from_record(await asyncio.to_thread(service.owner))
-
-
-@router.patch("/owner", response_model=OwnerResponse, dependencies=WRITE_DEPENDENCIES)
-async def patch_owner(service: ServiceDep, body: OwnerPatchRequest) -> OwnerResponse:
-    owner = await asyncio.to_thread(service.rename_owner, display_label=body.display_label)
-    return OwnerResponse.from_record(owner)
 
 
 # ---- credential slots ----------------------------------------------------
@@ -435,27 +417,6 @@ async def apply_selection(service: ServiceDep, body: ApplyRequest) -> SelectionR
         expected_selection_generation=body.expected_selection_generation,
     )
     return SelectionResponse.from_record(requested)
-
-
-# ---- audit ---------------------------------------------------------------
-
-
-@router.get(
-    "/events",
-    response_model=ConfigurationEventListResponse,
-    dependencies=READ_DEPENDENCIES,
-)
-async def list_events(
-    service: ServiceDep,
-    limit: int = Query(default=50, ge=1, le=MAX_EVENT_PAGE),
-    before_event_id: str | None = Query(default=None, min_length=1, max_length=120),
-) -> ConfigurationEventListResponse:
-    events = await asyncio.to_thread(
-        service.events, limit=limit, before_event_id=before_event_id
-    )
-    return ConfigurationEventListResponse(
-        events=tuple(ConfigurationEventResponse.from_record(event) for event in events)
-    )
 
 
 __all__ = [

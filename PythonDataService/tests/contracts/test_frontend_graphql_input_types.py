@@ -56,7 +56,7 @@ def test_frontend_graphql_variable_types_exist_in_schema() -> None:
 
 
 def test_scan_sees_the_known_input_types() -> None:
-    """The scan must reach the two services #1971 and #1972 repaired, or a regression would pass silently."""
+    """The scan must reach the Data Lab service #1971 repaired and the market-data service, or a regression would pass silently."""
     used = _frontend_variable_types()
     assert "DataLabSessionInput" in used
-    assert "PriceInput" in used
+    assert "StrategyLegInput" in used

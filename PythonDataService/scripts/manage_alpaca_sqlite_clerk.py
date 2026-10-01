@@ -6,8 +6,7 @@ evidence unless the installation is live (ADR 0059 D1). Both now read that mode
 off the installation's **effective** profile revision (ADR 0060) through the one
 resolver the three ``manage_alpaca_*`` CLIs share, instead of ``ALPACA_MODE``
 directly. Neither check is relaxed by the change: an installation before
-package F's import still resolves to the environment, so isolated qualification
-tooling that sets ``ALPACA_MODE=paper`` proves exactly what it proved before.
+package F's import still resolves to the environment.
 
 Both reads stay where they are -- inside the branch that needs them -- so paper
 evidence still touches no settings at all.
@@ -41,10 +40,6 @@ from app.broker.alpaca.clerk.sqlite.dev_reset import (
     developer_clean_slate_reset,
     persisted_developer_reset_mode,
 )
-from app.broker.alpaca.clerk.sqlite.offline_v9_upgrade import (
-    rollback_v9_upgrade_offline,
-    upgrade_v8_authority_offline,
-)
 from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
 from app.broker.alpaca.clerk.sqlite.recovery import (
     ProcessStopProof,
@@ -73,16 +68,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     _add_process_stop_evidence_arguments(restore)
     rebuild = subparsers.add_parser("rebuild")
     _add_process_stop_evidence_arguments(rebuild)
-    upgrade_v9 = subparsers.add_parser(
-        "upgrade-v9",
-        help="Run the verified offline v8-to-v9 custody-subject ceremony.",
-    )
-    _add_process_stop_evidence_arguments(upgrade_v9)
-    rollback_v9 = subparsers.add_parser(
-        "rollback-v9",
-        help="Restore only the verified v8 backup recorded by a v9-upgrade receipt.",
-    )
-    _add_process_stop_evidence_arguments(rollback_v9)
 
     reset = subparsers.add_parser("reset")
     _add_reset_evidence_arguments(reset)
@@ -168,24 +153,6 @@ def main(argv: list[str] | None = None) -> int:
         result = preserve_and_rebuild_from_mirror(
             **common,
             process_stop_proof=_read_process_stop_evidence(
-                args.process_stop_evidence,
-                args.account_id,
-            ),
-            max_process_stop_proof_age_ms=args.max_process_stop_evidence_age_ms,
-        )
-    elif args.operation == "upgrade-v9":
-        result = upgrade_v8_authority_offline(
-            **common,
-            process_stop_proof=_require_process_stop_evidence(
-                args.process_stop_evidence,
-                args.account_id,
-            ),
-            max_process_stop_proof_age_ms=args.max_process_stop_evidence_age_ms,
-        )
-    elif args.operation == "rollback-v9":
-        result = rollback_v9_upgrade_offline(
-            **common,
-            process_stop_proof=_require_process_stop_evidence(
                 args.process_stop_evidence,
                 args.account_id,
             ),
@@ -341,14 +308,6 @@ def _read_process_stop_evidence(
         observed_at_ms=payload["observed_at_ms"],
         proof_reference=payload["proof_reference"],
     )
-
-
-def _require_process_stop_evidence(path: Path | None, account_id: str) -> ProcessStopProof:
-    """Require fresh independent stop evidence for a schema publication."""
-    proof = _read_process_stop_evidence(path, account_id)
-    if proof is None:
-        raise ValueError("this offline v9 ceremony requires --process-stop-evidence")
-    return proof
 
 
 def _read_plan(path: Path) -> CutoverPlan:

@@ -80,12 +80,6 @@ class AlpacaEffectOperation(BaseModel):
             raise ValueError("Alpaca effect operations require one matching close_leg exit")
         return self
 
-    @property
-    def entry_leg(self) -> StockEntryLeg:
-        entry = self.action_plan.on_enter[0]
-        assert isinstance(entry, StockEntryLeg)
-        return entry
-
 
 class EffectOperationReceipt(BaseModel):
     """Backend-authored effect progress for trader/operator projections."""
@@ -165,17 +159,6 @@ AccountFreezeCategory: TypeAlias = Literal[  # noqa: UP040
     "ACCOUNT_STATE_UNATTRIBUTABLE",
     "ACCOUNT_STATE_UNPROVABLE",
 ]
-
-# The reason code stamped on the exposure hold raised by an unexplained order.
-# Rendered code-like through the frontend ``receiptLabel`` pipe.
-UNEXPLAINED_ORDER_HOLD_CODE = "UNEXPLAINED_ORDER_HOLD"
-
-# The reason code stamped on the hold raised by the dual-health submission
-# gate (S4, #1262): the shared market-data feed or the Alpaca execution
-# channel is unhealthy. A peer of ``UNEXPLAINED_ORDER_HOLD_CODE``; same hold
-# semantics (blocks new submissions, never reductions/cancels, journal-derived,
-# clearable — never auto-cleared).
-STREAM_HEALTH_HOLD_CODE = "STREAM_HEALTH_HOLD"
 
 
 class ChannelHealth(BaseModel):
@@ -290,54 +273,6 @@ class OrderJournalEntry(BaseModel):
     # decision id below, preserving their existing order identity shape.
     effect_receipt: EffectOperationReceipt | None = None
     effect_operation_id: str | None = None
-
-    @classmethod
-    def attributed_from(
-        cls,
-        owner: OrderJournalEntry | None,
-        *,
-        kind: ClerkEntryKind,
-        account_id: str,
-        client_order_id: str,
-        recorded_at_ms: int,
-        broker_order_id: str | None = None,
-        owned: bool | None = None,
-        order: BrokerOrder | None = None,
-        error_message: str | None = None,
-        error_detail: str | None = None,
-        event: BrokerOrderEvent | None = None,
-        event_key: str | None = None,
-        recovery_source: str | None = None,
-        recovery_window_limit: int | None = None,
-        activity: BrokerActivity | None = None,
-    ) -> OrderJournalEntry:
-        """Build a line with honest identity copied from its durable owner.
-
-        Unowned broker evidence passes ``owner=None`` and therefore receives
-        empty identity fields. Callers must supply the wire
-        ``client_order_id`` separately because unexplained lifecycle events
-        preserve that evidence without claiming it as an owned ``order_ref``.
-        """
-        return cls(
-            kind=kind,
-            account_id=account_id,
-            operator=owner.operator if owner is not None else "",
-            intent_id=owner.intent_id if owner is not None else "",
-            order_ref=owner.order_ref if owner is not None else "",
-            client_order_id=client_order_id,
-            leg=owner.leg if owner is not None else None,
-            broker_order_id=broker_order_id,
-            owned=owned,
-            recorded_at_ms=recorded_at_ms,
-            order=order,
-            error_message=error_message,
-            error_detail=error_detail,
-            event=event,
-            event_key=event_key,
-            recovery_source=recovery_source,
-            recovery_window_limit=recovery_window_limit,
-            activity=activity,
-        )
 
     @model_validator(mode="after")
     def _kind_requires_fields(self) -> OrderJournalEntry:

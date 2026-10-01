@@ -107,13 +107,6 @@ EXTERNAL_REPOSITORY_WRITER_CENSUS = (
     ),
     ExternalRepositoryWriter(
         path="app/routers/alpaca_clerk_sqlite.py",
-        owner="reconcile_now",
-        call="reconcile_account",
-        classification=RepositoryWriterClassification.FACADE_WORKFLOW,
-        rationale="The HTTP route verifies broker account identity, then delegates the full write workflow to the active facade.",
-    ),
-    ExternalRepositoryWriter(
-        path="app/routers/alpaca_clerk_sqlite.py",
         owner="_execute_presented_recovery_action",
         call="execute_recovery_action",
         classification=RepositoryWriterClassification.FACADE_WORKFLOW,
@@ -139,20 +132,6 @@ EXTERNAL_REPOSITORY_WRITER_CENSUS = (
         call="execute_recovery_action",
         classification=RepositoryWriterClassification.FACADE_WORKFLOW,
         rationale="The panel recovery dispatcher passes the bot's selected facade (the account's, or a Dry Run's own sim: authority) through the same typed recovery-action boundary as HTTP.",
-    ),
-    ExternalRepositoryWriter(
-        path="app/services/alpaca_sqlite_synthetic_drill_support.py",
-        owner="new_repo",
-        call="register_strategy_instance",
-        classification=RepositoryWriterClassification.ATOMIC,
-        rationale="Synthetic setup registers one instance through the repository's write coordinator.",
-    ),
-    ExternalRepositoryWriter(
-        path="app/services/alpaca_sqlite_synthetic_drill_support.py",
-        owner="new_repo",
-        call="submit_start_run",
-        classification=RepositoryWriterClassification.ATOMIC,
-        rationale="Synthetic setup admits one run through commit_first_transition's atomic idempotency path.",
     ),
     ExternalRepositoryWriter(
         path="app/services/sqlite_clerk_transaction_projection.py",

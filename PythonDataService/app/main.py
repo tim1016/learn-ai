@@ -40,9 +40,7 @@ from app.config import fleet_settings, settings
 from app.data_lake.catalog_client import CatalogSchemaNotReadyError
 from app.jobs.progress import fail_jobs_without_a_worker
 from app.routers import (
-    account_pnl_attribution,
     aggregates,
-    alpaca_bot_control_examples,
     alpaca_clerk_sqlite,
     alpaca_live_graduation,
     backtest_runs,
@@ -64,30 +62,23 @@ from app.routers import (
     golden_validation,
     grid_search,
     indicator_reliability,
-    indicators,
     iv30,
     iv_recorder,
     jobs,
     lean_sidecar,
-    market_monitor,
     monte_carlo,
     news,
     options,
-    portfolio,
     quantlib_options,
     recency,
-    research,
     research_divergence,
     research_runs,
     return_distribution,
-    run_replay,
-    sanitize,
     snapshot,
     spec_strategy,
     strategy,
     strategy_validation,
     tickers,
-    volatility,
     walk_forward,
     walk_forward_study,
 )
@@ -1105,11 +1096,6 @@ async def _service_lifespan(
         set_active_clerk_runtime(None)
         if installed_alpaca_runtime is not None:
             await installed_alpaca_runtime.close()
-        from app.broker.alpaca.clerk.sqlite.process_repositories import (
-            close_all_repositories,
-        )
-
-        close_all_repositories()
         from app.services.broker_v2_panel.live_projection import stop_live_projection_hubs
 
         await stop_live_projection_hubs()
@@ -1224,16 +1210,12 @@ PROTECTED_DATA_PLANE_READ_DEPENDENCIES = [Depends(require_data_plane_control_sec
 # it (fleet A2 inventory router table).
 if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(aggregates.router, prefix="/api/aggregates", tags=["aggregates"])
-    app.include_router(sanitize.router, prefix="/api", tags=["sanitize"])
-    app.include_router(indicators.router, prefix="/api/indicators", tags=["indicators"])
     app.include_router(options.router, prefix="/api/options", tags=["options"])
     app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
-    app.include_router(market_monitor.router, prefix="/api/market", tags=["market"])
     app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
     app.include_router(news.router, prefix="/api/news", tags=["news"])
     app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
     app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
-    app.include_router(research.router, prefix="/api/research", tags=["research"])
     app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])
     app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs", tags=["research-backtest-runs"])
     app.include_router(
@@ -1274,30 +1256,17 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     )
     # Research-pipeline run ledger (Phase A of build-alpha-style features 1-8).
     app.include_router(research_runs.router, prefix="/api/research/strategy-runs", tags=["research-runs"])
-    # Trading-calendar preview — sibling endpoint under ``/api/research`` so
-    # the date-picker UI can surface skipped sessions before a run is
-    # submitted. Lives in a separate ``APIRouter`` instance from the
-    # strategy-runs router because their prefixes differ.
-    app.include_router(
-        research_runs.calendar_router,
-        prefix="/api/research",
-        tags=["research-trading-calendar"],
-    )
     app.include_router(dataset.router, prefix="/api/dataset", tags=["dataset"])
     app.include_router(data_quality.router, prefix="/api/data-quality", tags=["data-quality"])
-    app.include_router(volatility.router, prefix="/api/volatility", tags=["volatility"])
     app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
     # LEAN Sidecar Lab — data-plane API in front of the launcher service.
     # Phase 2a exposes only the trusted sample; Phase 3+ unlocks user
     # algorithm source. See docs/architecture/lean-sidecar-lab.md.
     app.include_router(lean_sidecar.router, prefix="/api/lean-sidecar", tags=["lean-sidecar"])
     app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
-    # Portfolio scenario / live-Greeks. Phase 2 of numerical-authority migration:
-    # Python becomes canonical for portfolio Greeks; .NET becomes a passthrough.
-    app.include_router(portfolio.router, prefix="/api/portfolio", tags=["portfolio"])
-    # QuantLib option pricing endpoints (/status, /price, /strategy, /compare).
+    # QuantLib option pricing endpoints (/price, /compare).
     # Registration was dropped by 88b48ac (IV-surface refactor) on 2026-04-12;
-    # the four endpoints silently 404'd until pricing-lab surfaced it.
+    # the endpoints silently 404'd until pricing-lab surfaced it.
     app.include_router(quantlib_options.router, prefix="/api/quantlib", tags=["quantlib"])
     # Internal job orchestration (Redis-backed). Mounted under /api/jobs-internal;
     # the public surface is the .NET /api/jobs facade in Backend/Jobs/JobsApi.cs.
@@ -1343,13 +1312,6 @@ if _ROLE_RUNS_CLERK:
         broker_bots.router,
         dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
     )
-# Per-run replay-parity receipts (Direction 2). Reads + recompute over live
-# broker evidence — always-on data-plane control secret, like broker_bots.
-if _ROLE_RUNS_CLERK:
-    app.include_router(
-        run_replay.router,
-        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-    )
 # Broker-v2 bot control panel contracts + projections (S1 — #1297).
 # panel-profile / catalog / panel / presented-actions / chart (live + bounded
 # history). Account-scoped reads and control actions on live broker state, so
@@ -1375,11 +1337,6 @@ if _ROLE_RUNS_CLERK:
         broker_v2_gallery.router,
         dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
     )
-# Static fixture-envelope contract for the unlinked Clerk diagnostic gallery.
-# The Angular example imports these committed documents locally and never calls
-# this read-only OpenAPI anchor.
-if _ROLE_RUNS_CLERK:
-    app.include_router(alpaca_bot_control_examples.router)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])
@@ -1391,7 +1348,6 @@ app.include_router(
 )
 if _ROLE_RUNS_CLERK:
     app.include_router(clerk_transactions.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
-    app.include_router(account_pnl_attribution.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 # Activation-selected SQLite Alpaca Clerk command and projection surface.
 # The active-authority selector fails closed instead of falling back to JSONL.
 # PROTECTED_DATA_PLANE_READ_DEPENDENCIES (not the mutating-only DEPENDENCIES
@@ -1425,23 +1381,6 @@ if _ROLE_RUNS_CLERK:
 if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(data_lake_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 
-
-# Dev-only broker fault-injection seam (PRD #1354) — gated by
-# ALPACA_FAULT_INJECTION_ENABLED. When disabled the prefix has no registered
-# routes (clients get 404); the seam ALSO refuses to arm off a paper posture.
-# Registered behind the always-on data-plane control secret like every broker
-# control route. Never enable in a live/production path.
-if settings.ALPACA_FAULT_INJECTION_ENABLED:
-    from app.routers import alpaca_fault_injection as alpaca_fault_injection_router
-
-    app.include_router(
-        alpaca_fault_injection_router.router,
-        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-    )
-    logger.warning(
-        "ALPACA FAULT INJECTION seam ENABLED (dev only, paper-only). "
-        "Never enable this in a live/production path."
-    )
 
 if _FLEET_COORDINATOR_SURFACE:
     from app.routers import internal_fleet as internal_fleet_router
@@ -1520,8 +1459,8 @@ if _FLEET_COORDINATOR_SURFACE:
     app.include_router(broker_clerks.router)
 
 # The production coordinator is the browser ingress during the narrow
-# unscoped-read compatibility window.  It deliberately receives only these
-# two read aliases; no agent, generic broker router, or mutation surface is
+# unscoped-read compatibility window.  It deliberately receives only this
+# one read alias; no agent, generic broker router, or mutation surface is
 # exposed by that compatibility bridge.
 if _FLEET_ROLE == "fleet_coordinator":
     app.include_router(

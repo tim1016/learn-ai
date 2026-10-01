@@ -60,11 +60,9 @@ from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
     FillPage,
     FillWindowProjection,
     MarketMark,
-    MissingExitExecutionEvidence,
-    OrderDecisionIdentity,
     SessionEconomicProjection,
 )
-from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot, RunResource
+from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PARAMS,
@@ -202,7 +200,6 @@ class SqliteEconomicProjectionReader:
         authority_generation: int,
         db_identity_token: str,
     ) -> None:
-        self._db_path = db_path
         self._account_id = account_id
         self._authority_generation = authority_generation
         self._db_identity_token = db_identity_token
@@ -226,35 +223,6 @@ class SqliteEconomicProjectionReader:
             account_id=meta.account_id,
             authority_generation=meta.authority_generation,
             db_identity_token=meta.db_identity_token,
-        )
-
-    @classmethod
-    def from_database_path(cls, db_path: Path) -> SqliteEconomicProjectionReader:
-        """Open one authority's database read-only by path — a foreign one's included.
-
-        The paper twin's process holds that database's execution lease; this
-        reader never takes it (``mode=ro``, ``query_only``), so the twin
-        reconciliation can read it while the twin runs.
-        """
-        probe = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
-        try:
-            row = probe.execute(
-                "SELECT account_id, authority_generation, db_identity_token "
-                "FROM control_meta WHERE id = 1"
-            ).fetchone()
-        except sqlite3.DatabaseError as exc:
-            raise EconomicProjectionUnavailable(
-                f"{db_path} is not a readable clerk database: {exc}"
-            ) from exc
-        finally:
-            probe.close()
-        if row is None:
-            raise EconomicProjectionUnavailable(f"{db_path} has no control_meta row")
-        return cls(
-            db_path=db_path,
-            account_id=row[0],
-            authority_generation=row[1],
-            db_identity_token=row[2],
         )
 
     def close(self) -> None:
@@ -369,130 +337,6 @@ class SqliteEconomicProjectionReader:
                 control_revision=meta.control_revision,
                 fills=fills,
             )
-
-    def account_fill_window(
-        self,
-        *,
-        from_ms: int,
-        to_ms: int,
-        limit: int = DEFAULT_CHART_FILL_WINDOW_LIMIT,
-    ) -> tuple[FillRecord, ...]:
-        """Every effective account fill in the window, or raise ``EconomicProjectionUnavailable``.
-
-        The account-wide sibling of :meth:`bot_fill_window`: bot, manual and S2
-        fills alike, identified by their custody subject because a manual fill
-        has no ``strategy_instance_id`` and still belongs to the account's
-        economics.  Filtering is on the root's economic time, not the
-        correction's audit-arrival time.  This method never returns a fill set
-        it cannot vouch for: more rows than ``limit`` raises (the
-        FillWindowProjection contract), and so does incomplete fill evidence —
-        cumulative-recovery evidence inside the window, an unresolved
-        execution-conflict uncertainty (coverage or price), or a filled external order
-        (mirrors the completeness gate in :meth:`account_pnl_attribution`).
-        """
-        _validate_window(from_ms=from_ms, to_ms=to_ms)
-        limit = _bounded_chart_fill_window_limit(limit)
-        with self._read_transaction():
-            self._verified_meta()
-            rows = self._effective_fill_rows(
-                strategy_instance_ids=None,
-                from_ms=from_ms,
-                to_ms=to_ms,
-                cursor_key=None,
-                limit=limit,
-            )
-            if len(rows) > limit:
-                raise EconomicProjectionUnavailable(
-                    "SQLite account fill window limit exceeded; narrow the requested range."
-                )
-            coverage = self._account_execution_coverage(rows)
-            external_fill_exists = self._conn.execute(
-                "SELECT 1 FROM external_orders "
-                "WHERE filled_avg_price IS NOT NULL AND ABS(qty) >= 1e-9 LIMIT 1"
-            ).fetchone() is not None
-            if coverage != "complete" or external_fill_exists:
-                causes: list[str] = []
-                if any(row["evidence_source"] == "cumulative_recovery" for row in rows):
-                    causes.append("cumulative-recovery evidence")
-                if self._conn.execute(
-                    f"SELECT 1 FROM uncertainties WHERE reason_code "
-                    f"IN ({EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PLACEHOLDERS}) "
-                    "AND resolved_at_ms IS NULL LIMIT 1",
-                    EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PARAMS,
-                ).fetchone() is not None:
-                    causes.append("an unresolved execution-conflict uncertainty")
-                if external_fill_exists:
-                    causes.append("a filled external order")
-                raise EconomicProjectionUnavailable(
-                    "SQLite account fill evidence is incomplete for this window: "
-                    + " / ".join(causes)
-                )
-            return tuple(
-                sorted(
-                    (
-                        _to_fill_record(
-                            row,
-                            account_id=self._account_id,
-                            custody_subject_identity=True,
-                        )
-                        for row in rows
-                    ),
-                    key=lambda record: (record.filled_at_ms, record.ledger_sequence),
-                )
-            )
-
-    def order_decisions(self, strategy_instance_id: str) -> dict[str, OrderDecisionIdentity]:
-        """Semantic program decisions shared by twins; never correlate opaque order ids."""
-        with self._read_transaction():
-            self._verify_identity()
-            rows = self._conn.execute(
-                "SELECT o.order_ref, e.kind, t.facts_json FROM orders o "
-                "JOIN effect_operations e ON e.effect_operation_id=o.effect_operation_id "
-                "JOIN custody_transitions t ON t.effect_operation_id=e.effect_operation_id "
-                "AND t.transition_kind IN ('ENTER_ACCEPTED', 'EXIT_ACCEPTED') "
-                "WHERE e.strategy_instance_id = ?", (strategy_instance_id,),
-            ).fetchall()
-        return {row["order_ref"]: OrderDecisionIdentity(row["kind"], json.loads(row["facts_json"])["decision_id"]) for row in rows}
-
-    def missing_exit_execution_evidence(
-        self, *, strategy_instance_id: str, from_ms: int, to_ms: int,
-    ) -> tuple[MissingExitExecutionEvidence, ...]:
-        return tuple(evidence for stamp, evidence in self.exit_execution_evidence(strategy_instance_id)
-                     if from_ms <= stamp < to_ms)
-
-    def exit_execution_evidence(self, strategy_instance_id: str) -> tuple[tuple[int, MissingExitExecutionEvidence], ...]:
-        """One lifetime evidence read, reused across the days of one shadow evaluation."""
-        from app.broker.alpaca.clerk.synthesized_orders import SynthesizedOrderLedger
-
-        decisions = self.order_decisions(strategy_instance_id)
-        if not decisions:
-            return ()
-        try:
-            latest = SynthesizedOrderLedger.read_latest_beside_database(account_id=self._account_id, db_path=self._db_path)
-        except (OSError, RuntimeError, ValueError) as exc:
-            raise EconomicProjectionUnavailable(f"Shadow execution evidence is unreadable: {exc}") from exc
-        missing = [ref for ref, decision in decisions.items() if decision.kind == "EXIT" and ref not in latest]
-        if missing:
-            raise EconomicProjectionUnavailable("Shadow execution evidence is missing orders: " + ", ".join(sorted(missing)))
-        return tuple(
-            (row.anchor.decision_bar_end_ms, MissingExitExecutionEvidence(ref, decision.decision_id, row.order.symbol, str(row.order.side), row.order.quantity))
-            for ref, decision in sorted(decisions.items()) if decision.kind == "EXIT"
-            and (row := latest.get(ref)) is not None
-            and row.order.status == "canceled" and row.anchor is not None
-            and row.anchor.unfilled_reason == "no_evidence"
-        )
-
-    def runs_for_strategy(self, strategy_instance_id: str) -> tuple[RunResource, ...]:
-        """Every run the authority recorded for one instance, oldest first."""
-        with self._read_transaction():
-            self._verify_identity()
-            rows = self._conn.execute(
-                "SELECT run_id, strategy_instance_id, lifecycle_run_id, state, started_at_ms, "
-                "stopped_at_ms FROM runs WHERE strategy_instance_id = ? "
-                "ORDER BY started_at_ms ASC, run_id ASC",
-                (strategy_instance_id,),
-            ).fetchall()
-        return tuple(RunResource(**dict(row)) for row in rows)
 
     def account_executions(
         self,
@@ -670,42 +514,6 @@ class SqliteEconomicProjectionReader:
                 if lot.symbol in marks_by_symbol
             },
         )
-
-    def account_net_cash_spent_usd(self) -> float:
-        """Σ BUY notional − Σ SELL notional over every effective fill, lifetime.
-
-        The cash the Clerk's own fills would have taken from the account.
-        Under simulated custody (ADR 0059 D2) the broker's cash never moved,
-        so the envelope subtracts this to rehearse the cash bound honestly
-        (plan R2); under real custody the broker's cash already reflects it.
-
-        Formula: ``net_cash_spent = Σ(quantity × fill_price over effective BUY
-          fills) − Σ(quantity × fill_price over effective SELL fills), over
-          every owned custody subject, lifetime.``
-        Reference: ADR 0059 Decision 4; slice-5 plan ruling R2 (shadow cash =
-          broker cash − net cash the Clerk's own fills would have spent).
-        Canonical implementation: this method — the only place the Clerk's
-          net cash spent is computed.
-        Validated against:
-          ``tests/broker/alpaca/clerk/sqlite/test_day_pnl.py::test_net_cash_spent_is_buys_less_sells_over_every_subject``.
-        """
-        with self._read_transaction():
-            self._verified_meta()
-            rows = self._effective_fill_rows(
-                strategy_instance_ids=None,
-                from_ms=None,
-                to_ms=None,
-                cursor_key=None,
-                limit=None,
-            )
-        total = 0.0
-        for record in (
-            _to_fill_record(row, account_id=self._account_id, custody_subject_identity=True)
-            for row in rows
-        ):
-            notional = record.quantity * record.fill_price
-            total += notional if record.side is OrderSide.BUY else -notional
-        return total
 
     def effective_execution_summaries(
         self,

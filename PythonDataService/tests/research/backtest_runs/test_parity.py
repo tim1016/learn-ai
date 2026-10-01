@@ -90,7 +90,6 @@ def _run(run_id: int, source: str, **overrides) -> RunDetail:
                 "compatibility_profile": "us-equity-raw-ibkr-v1",
                 "warmup_from_date": None,
                 "slippage_per_share": 0.0,
-                "limit_penetration": 0.0,
             }
         ),
         symbol="SPY",

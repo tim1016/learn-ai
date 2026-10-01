@@ -33,7 +33,6 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     HOLD_SUBJECT_COMPATIBILITY_DDL,
     HOLDS_COMPATIBILITY_VIEW_DDL,
     MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL,
-    MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_STATEMENTS,
     MANUAL_LEG_IDENTITY_V11_DDL,
     MANUAL_LEG_SUBJECT_COMPATIBILITY_V10_DDL,
     MANUAL_TICKET_SUBJECT_COMPATIBILITY_DDL,
@@ -41,10 +40,8 @@ from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
     SCHEMA_V13_STATEMENTS,
     UNCERTAINTY_SUBJECT_COMPATIBILITY_DDL,
 )
-from app.broker.alpaca.clerk.sqlite.hold_migration import backfill_holds_into_uncertainties
 from app.broker.alpaca.clerk.sqlite.simulated_execution_schema import SCHEMA_V14_STATEMENTS
 
-OFFLINE_V9_SCHEMA_VERSION = 9
 SCHEMA_VERSION = 22
 
 PRAGMA_STATEMENTS: tuple[str, ...] = (
@@ -634,18 +631,6 @@ CREATE UNIQUE INDEX ux_manual_order_legs_sequence
     ON manual_order_legs(ticket_id, sequence_index);
 DROP TRIGGER trg_manual_order_leg_identity_immutable;
 """ + MANUAL_LEG_IDENTITY_V11_DDL
-_MANUAL_LEG_SEQUENCE_V11_MIGRATION_STATEMENTS: tuple[str, ...] = (
-    "ALTER TABLE manual_order_legs ADD COLUMN sequence_index INTEGER NOT NULL DEFAULT 0",
-    "UPDATE manual_order_legs AS leg SET sequence_index = ("
-    "SELECT COUNT(*) FROM manual_order_legs AS earlier "
-    "WHERE earlier.ticket_id = leg.ticket_id AND ("
-    "earlier.created_at_ms < leg.created_at_ms OR ("
-    "earlier.created_at_ms = leg.created_at_ms AND earlier.leg_id < leg.leg_id)))",
-    "CREATE UNIQUE INDEX ux_manual_order_legs_sequence "
-    "ON manual_order_legs(ticket_id, sequence_index)",
-    "DROP TRIGGER trg_manual_order_leg_identity_immutable",
-    MANUAL_LEG_IDENTITY_V11_DDL,
-)
 SCHEMA_V11_DDL = _MANUAL_LEG_SEQUENCE_V11_DDL
 
 # v12 retires the ``holds`` table and republishes its name as a read-only view
@@ -653,14 +638,9 @@ SCHEMA_V11_DDL = _MANUAL_LEG_SEQUENCE_V11_DDL
 #
 # A fresh v12 file therefore creates the v9 table and drops it moments later.
 # That is deliberate and is how every version in this module layers: each
-# historical block stays byte-frozen so ``apply_v9_schema`` keeps reproducing a
-# real v9 file for the offline ceremony, and the current shape is the sum of
-# the blocks. The alternative — editing the v9 block — would silently rewrite
-# the schema the upgrade ceremony and every migration-chain test start from.
-#
-# These are the same statements ``SCHEMA_MIGRATIONS[11]`` applies, so a fresh
-# file and an upgraded one converge on one shape by construction rather than by
-# two hand-kept lists agreeing.
+# historical block stays byte-frozen and the current shape is the sum of the
+# blocks. The alternative — editing the v9 block — would silently rewrite the
+# v13 baseline every migration-chain test starts from.
 _V11_TO_V12_STATEMENTS: tuple[str, ...] = (
     # The subject-compatibility triggers go first: they are defined ON holds,
     # and SQLite refuses to drop a table while a trigger references it.
@@ -684,8 +664,7 @@ SCHEMA_V12_DDL = "\n".join(
 # v13 adds the durable cash reservation one accepted ENTER claims until its
 # fills are observed (ADR 0059 D4), indexes the ``external_orders`` column the
 # day-P&L rule filters on every tick, and re-publishes the ``holds`` view for
-# the reason the fragment module states. Same statements as
-# ``SCHEMA_MIGRATIONS[12]``.
+# the reason the fragment module states.
 SCHEMA_V13_DDL = "\n".join(
     statement if statement.endswith(";") or "\n" in statement else f"{statement};"
     for statement in SCHEMA_V13_STATEMENTS
@@ -780,206 +759,14 @@ def apply_schema(conn: sqlite3.Connection) -> None:
 
 
 def apply_v9_schema(conn: sqlite3.Connection) -> None:
-    """Create the historical v9 custody schema for the verified offline ceremony."""
+    """Create the historical v9 custody schema, the first block of ``SCHEMA_DDL``."""
     conn.executescript(SCHEMA_V9_DDL)
 
 
-# Registered upgrades keyed by the ``schema_version`` they start from, each an
-# additive-only DDL block (never a column/table rewrite) taking that exact
-# prior version to the next. #1396 review: the v4 SCHEMA_VERSION bump shipped
-# with no upgrade path, so an account initialized on v4 could no longer be
-# opened or pass cutover-plan's exact-match check. v4 -> v5 is index-only
-# (byte-for-byte the CREATE INDEX statements the v5 bump added over v4 — see
-# docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md §3's history);
-# ``IF NOT EXISTS`` makes every statement safe to replay.
-#
-# v6 -> v7 is intentionally narrower than the historical index-only upgrades:
-# it adds the execution-ledger columns and tables only after proving that the
-# authority contains no operational rows. A data-bearing v6 authority cannot
-# be made truthful by assigning synthetic execution provenance, so it fails
-# closed and remains untouched for the fresh-generation cutover.
-_V6_OPERATIONAL_TABLES: tuple[str, ...] = (
-    "strategy_instances",
-    "runs",
-    "commands",
-    "effect_operations",
-    "orders",
-    "operation_order_links",
-    "fills",
-    "positions",
-    "holds",
-    "uncertainties",
-    "reconciliations",
-    "receipts",
-    "custody_transitions",
-    "mirror_fence",
-)
-
-
-def v6_operational_tables_with_rows(conn: sqlite3.Connection) -> tuple[str, ...]:
-    """Return occupied v6 operational tables without changing authority state."""
-    return tuple(
-        table
-        for table in _V6_OPERATIONAL_TABLES
-        if conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is not None
-    )
-
-
-def _require_empty_v6_authority(conn: sqlite3.Connection) -> None:
-    """Reject a v6 upgrade unless every operational projection is empty.
-
-    ``control_meta`` is deliberately excluded: its singleton establishes the
-    authority identity and is required to advance its schema version. Every
-    other v6 table is an operational fact or its materialized projection;
-    checking all of them, rather than only ``fills`` or the control revision,
-    makes an empty claim durable and tamper-resistant enough for this bounded
-    additive migration.
-    """
-    occupied = v6_operational_tables_with_rows(conn)
-    if occupied:
-        raise ValueError(
-            "v6 -> v7 migration requires an empty authority; operational rows exist in "
-            + ", ".join(occupied)
-        )
-
-
-_V6_TO_V7_STATEMENTS: tuple[str, ...] = (
-    "ALTER TABLE fills ADD COLUMN execution_id TEXT",
-    "ALTER TABLE fills ADD COLUMN evidence_source TEXT NOT NULL "
-    "DEFAULT 'cumulative_recovery' CHECK "
-    "(evidence_source IN ('websocket','activity_recovery','cumulative_recovery'))",
-    "ALTER TABLE fills ADD COLUMN event_kind TEXT NOT NULL DEFAULT 'fill' "
-    "CHECK (event_kind IN ('fill','correction'))",
-    "ALTER TABLE fills ADD COLUMN superseded_execution_ref TEXT",
-    "ALTER TABLE fills ADD COLUMN fee REAL",
-    "ALTER TABLE fills ADD COLUMN fee_fidelity TEXT NOT NULL DEFAULT 'not_reported' "
-    "CHECK (fee_fidelity IN ('reported','not_reported'))",
-    "CREATE UNIQUE INDEX ux_fills_execution_id ON fills(execution_id) "
-    "WHERE execution_id IS NOT NULL",
-    """CREATE TABLE external_orders (
-        external_order_id        TEXT PRIMARY KEY,
-        broker_order_id          TEXT NOT NULL,
-        client_order_id          TEXT NOT NULL,
-        symbol                   TEXT NOT NULL,
-        side                     TEXT NOT NULL CHECK (side IN ('BUY','SELL')),
-        qty                      REAL NOT NULL,
-        price                    REAL,
-        observed_at_ms           INTEGER NOT NULL,
-        acknowledged_at_ms       INTEGER,
-        ack_operator             TEXT,
-        evidence_refs_json       TEXT NOT NULL
-    )""",
-    "CREATE UNIQUE INDEX ux_external_orders_broker_order_id "
-    "ON external_orders(broker_order_id)",
-    """CREATE TABLE bot_config (
-        strategy_instance_id     TEXT PRIMARY KEY REFERENCES strategy_instances(strategy_instance_id),
-        strategy_key             TEXT NOT NULL,
-        display_name             TEXT NOT NULL,
-        config_json              TEXT NOT NULL,
-        config_hash              TEXT NOT NULL,
-        created_at_ms            INTEGER NOT NULL
-    )""",
-    """CREATE TABLE decision_receipts (
-        strategy_instance_id     TEXT NOT NULL REFERENCES strategy_instances(strategy_instance_id),
-        seq                      INTEGER NOT NULL,
-        outcome                  TEXT NOT NULL,
-        symbol                   TEXT,
-        intent_id                TEXT,
-        order_ref                TEXT REFERENCES orders(order_ref),
-        observed_at_ms           INTEGER NOT NULL,
-        facts_json               TEXT NOT NULL,
-        PRIMARY KEY (strategy_instance_id, seq)
-    )""",
-    "CREATE INDEX ix_decision_receipts_strategy_observed_at "
-    "ON decision_receipts(strategy_instance_id, observed_at_ms DESC, seq DESC)",
-)
-
-
-
+# Registered upgrades keyed by the ``schema_version`` they start from, each
+# taking that exact prior version to the next. v13 is the floor: no store at a
+# lower version can still be upgraded (census #2736), so the chain starts there.
 SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
-    4: (
-        "CREATE INDEX IF NOT EXISTS ix_runs_started_at ON runs(started_at_ms DESC)",
-        "CREATE INDEX IF NOT EXISTS ix_runs_strategy_started_at "
-        "ON runs(strategy_instance_id, started_at_ms DESC)",
-        "CREATE INDEX IF NOT EXISTS ix_commands_updated_at "
-        "ON commands(updated_at_ms DESC, command_id DESC)",
-        "CREATE INDEX IF NOT EXISTS ix_commands_strategy_updated_at "
-        "ON commands(strategy_instance_id, updated_at_ms DESC, command_id DESC)",
-        "CREATE INDEX IF NOT EXISTS ix_effect_operations_updated_at "
-        "ON effect_operations(updated_at_ms DESC, effect_operation_id DESC)",
-        "CREATE INDEX IF NOT EXISTS ix_effect_operations_strategy_updated_at "
-        "ON effect_operations(strategy_instance_id, updated_at_ms DESC, effect_operation_id DESC)",
-        "CREATE INDEX IF NOT EXISTS ix_orders_effect_operation_id ON orders(effect_operation_id)",
-        "CREATE INDEX IF NOT EXISTS ix_holds_active_strategy_opened_at "
-        "ON holds(strategy_instance_id, opened_at_ms DESC) WHERE state = 'ACTIVE'",
-        "CREATE INDEX IF NOT EXISTS ix_uncertainties_active_strategy_observed_at "
-        "ON uncertainties(strategy_instance_id, observed_at_ms DESC) WHERE resolved_at_ms IS NULL",
-        "CREATE INDEX IF NOT EXISTS ix_reconciliations_attempted_at "
-        "ON reconciliations(attempted_at_ms DESC)",
-        "CREATE INDEX IF NOT EXISTS ix_reconciliations_effect_attempted_at "
-        "ON reconciliations(effect_operation_id, attempted_at_ms DESC)",
-        "CREATE INDEX IF NOT EXISTS ix_receipts_recorded_at ON receipts(recorded_at_ms DESC)",
-        "CREATE INDEX IF NOT EXISTS ix_receipts_command_recorded_at "
-        "ON receipts(command_id, recorded_at_ms DESC)",
-        "CREATE INDEX IF NOT EXISTS ix_custody_transitions_strategy_sequence "
-        "ON custody_transitions(strategy_instance_id, sequence DESC)",
-        "CREATE INDEX IF NOT EXISTS ix_custody_transitions_effect_sequence "
-        "ON custody_transitions(effect_operation_id, sequence DESC)",
-    ),
-    # v5 -> v6: operation_page's keyset pagination moved to the immutable
-    # created_at_ms (#1396 P2 — updated_at_ms could move a not-yet-paged row
-    # above the anchor mid-traversal); these indexes keep that query covered.
-    5: (
-        "CREATE INDEX IF NOT EXISTS ix_effect_operations_created_at "
-        "ON effect_operations(created_at_ms DESC, effect_operation_id DESC)",
-        "CREATE INDEX IF NOT EXISTS ix_effect_operations_strategy_created_at "
-        "ON effect_operations(strategy_instance_id, created_at_ms DESC, effect_operation_id DESC)",
-    ),
-    6: _V6_TO_V7_STATEMENTS,
-    # v7 -> v8: retain the immutable custody transition that materialized each
-    # execution and split external instruction prices from execution averages.
-    # The new fills column is nullable on migrated files because SQLite cannot
-    # add a NOT NULL column without a synthetic default. Legacy rows are
-    # backfilled only when their transition facts name one exact execution;
-    # unprovable sequence order remains unavailable rather than fabricated.
-    7: (
-        "ALTER TABLE fills ADD COLUMN recorded_transition_sequence INTEGER",
-        "UPDATE fills SET recorded_transition_sequence = ("
-        "SELECT ct.sequence FROM custody_transitions ct "
-        "WHERE ct.order_ref = fills.order_ref "
-        "AND fills.execution_id IS NOT NULL "
-        "AND json_extract(ct.facts_json, '$.execution_id') = fills.execution_id "
-        "ORDER BY ct.sequence ASC LIMIT 1)",
-        "ALTER TABLE external_orders ADD COLUMN order_type TEXT",
-        "ALTER TABLE external_orders ADD COLUMN limit_price REAL",
-        "ALTER TABLE external_orders ADD COLUMN stop_price REAL",
-        "ALTER TABLE external_orders ADD COLUMN filled_avg_price REAL",
-    ),
-    # v9 -> v10: manual cancellation is a new durable resource. The old v9
-    # effect-subject triggers are replaced before the new CANCEL effect can
-    # exist, and every DDL statement is committed with the version advance.
-    9: (
-        _MANUAL_ORDER_CANCELLATION_TABLE_DDL,
-        _MANUAL_ORDER_CANCELLATION_INDEX_DDL,
-        *EFFECT_SUBJECT_COMPATIBILITY_V10_MIGRATION_STATEMENTS,
-        *MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_STATEMENTS,
-    ),
-    # v10 -> v11: an ordered ticket must retain the sequence explicitly. A
-    # deterministic created-at/leg-id backfill makes every pre-v11 ticket
-    # unique before the per-ticket fence exists. Replacing this narrow identity
-    # trigger then makes the ordering as immutable as the ticket/leg identities.
-    10: _MANUAL_LEG_SEQUENCE_V11_MIGRATION_STATEMENTS,
-    # v11 -> v12: holds were uncertainties with nowhere to declare a policy
-    # (ADR 0048 Decision 2). Every row moves into ``uncertainties`` under the
-    # wire spelling of its cause, and the table is replaced by a read-only
-    # view of the same shape so no reader changes. The rows are carried across
-    # by ``backfill_holds_into_uncertainties`` immediately before these
-    # statements run — the envelope each migrated row needs is authored in
-    # Python, not restatable as SQL without duplicating operator copy.
-    11: _V11_TO_V12_STATEMENTS,
-    # v12 -> v13: the cash an accepted ENTER claims becomes durable (ADR 0059
-    # D4). Same statements as the fresh v13 block above.
-    12: SCHEMA_V13_STATEMENTS,
     # v13 -> v14: simulated fills keep their exact execution identity (#2178).
     # Same statements as the fresh v14 block above, including the shadow-only
     # re-tag of persisted cumulative rows; ``simulated_execution_schema`` owns
@@ -1000,10 +787,6 @@ SCHEMA_MIGRATIONS: dict[int, tuple[str, ...]] = {
 }
 
 
-class OfflineSchemaUpgradeRequired(ValueError):
-    """A data-bearing authority needs the verified v8-to-v9 ceremony."""
-
-
 def is_upgradable_to_current(version: int) -> bool:
     """Whether a registered, chained migration path reaches ``SCHEMA_VERSION``.
 
@@ -1014,10 +797,6 @@ def is_upgradable_to_current(version: int) -> bool:
     """
     seen = version
     while seen < SCHEMA_VERSION:
-        if seen == 8:
-            # Verification and backup may inspect v8, but only the offline
-            # mirror-rebuild ceremony may publish v9.
-            return True
         if seen not in SCHEMA_MIGRATIONS:
             return False
         seen += 1
@@ -1034,27 +813,14 @@ def migrate_schema(conn: sqlite3.Connection, *, from_version: int) -> None:
     fail-closed default for anything not proven safe here.
     """
     version = from_version
-    if version == 8:
-        raise OfflineSchemaUpgradeRequired(
-            "schema v8 requires the verified offline v8-to-v9 upgrade ceremony"
-        )
     conn.execute("BEGIN IMMEDIATE")
     try:
         while version < SCHEMA_VERSION:
-            if version == 8:
-                raise OfflineSchemaUpgradeRequired(
-                    "schema v8 requires the verified offline v8-to-v9 upgrade ceremony"
-                )
             statements = SCHEMA_MIGRATIONS.get(version)
             if statements is None:
                 raise ValueError(
                     f"no registered migration from schema_version={version} to {version + 1}"
                 )
-            if version == 6:
-                _require_empty_v6_authority(conn)
-            if version == 11:
-                # Must precede the statements: they drop the table it reads.
-                backfill_holds_into_uncertainties(conn)
             for statement in statements:
                 conn.execute(statement)
             version += 1

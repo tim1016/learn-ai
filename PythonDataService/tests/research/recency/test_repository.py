@@ -73,16 +73,6 @@ async def test_the_same_launch_id_with_a_different_configuration_is_refused(conn
     assert stored == "{}"
 
 
-async def test_a_snapshot_for_a_tombstoned_launch_is_a_no_op(conn, unique: str) -> None:
-    launch_id = await _launch(conn, unique)
-    await repo.set_launch_deleted(conn, launch_id, deleted=True)
-
-    outcome = await _persist(conn, _snapshot(launch_id, symbol=unique, trades=[_trade(f"{unique}-a", entry_ms=100, exit_ms=200)]))
-
-    assert outcome == repo.PersistOutcome(recency_run_id=None, skipped=True)
-    assert await conn.fetchval('SELECT COUNT(*) FROM "RecencyRuns" WHERE "RecencyLaunchId" = $1', launch_id) == 0
-
-
 async def test_a_snapshot_for_an_unknown_launch_is_refused(conn, unique: str) -> None:
     with pytest.raises(repo.LaunchNotFoundError):
         await _persist(conn, _snapshot(f"never-{unique}", symbol=unique, trades=[]))
@@ -223,11 +213,3 @@ async def test_recorded_identities_match_the_persistence_dedupe_even_when_soft_d
     # persist_snapshot dedupes by identity regardless of the run's tombstone,
     # so a resume skips exactly the cells whose persistence would be a no-op.
     assert identities == {(unique, "sma_crossover", "h1")}
-
-
-async def test_soft_delete_and_restore_report_whether_the_row_existed(conn, unique: str) -> None:
-    launch = await _launch(conn, unique)
-    assert await repo.set_launch_deleted(conn, launch, deleted=True) is True
-    assert await repo.set_launch_deleted(conn, launch, deleted=False) is True
-    assert await repo.set_launch_deleted(conn, f"missing-{unique}", deleted=True) is False
-    assert await repo.set_run_deleted(conn, 2_147_000_000, deleted=True) is False

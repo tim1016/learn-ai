@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite import process_repositories, repository_lifecycle
+from app.broker.alpaca.clerk.sqlite import repository_lifecycle
 from app.broker.alpaca.clerk.sqlite.facts import (
     UncertaintyRaisedFacts,
     UncertaintyResolvedFacts,
@@ -56,36 +56,6 @@ def _clock_seq():
         return counter["t"]
 
     return clock
-
-
-def test_process_repository_shutdown_closes_every_cached_handle_after_one_failure(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    closed: list[str] = []
-
-    class FakeRepository:
-        def __init__(self, account_id: str, *, fail: bool = False) -> None:
-            self.account_id = account_id
-            self.fail = fail
-
-        def close(self) -> None:
-            closed.append(self.account_id)
-            if self.fail:
-                raise OSError("close failed")
-
-    with process_repositories._lock:
-        process_repositories._repositories.update(
-            {
-                "PA-FAIL": FakeRepository("PA-FAIL", fail=True),
-                "PA-OK": FakeRepository("PA-OK"),
-            }
-        )
-
-    process_repositories.close_all_repositories()
-
-    assert closed == ["PA-FAIL", "PA-OK"]
-    assert process_repositories._repositories == {}
-    assert "failed to close cached SQLite Alpaca Clerk repository" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -847,8 +817,8 @@ def test_uncertain_orders_is_empty_on_a_fresh_repository(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
-# #1380 primitives: UNCERTAINTY_RAISED/RESOLVED folds + raise_uncertainty_if_
-# none_active/active_uncertainty*/active_holds_for_admission read helpers.
+# #1380 primitives: UNCERTAINTY_RAISED/RESOLVED folds +
+# active_uncertainty*/active_holds_for_admission read helpers.
 # ---------------------------------------------------------------------------
 
 
@@ -937,27 +907,6 @@ def test_uncertainty_raised_fold_creates_an_active_bot_scoped_uncertainty(
 def test_active_uncertainty_returns_none_when_none_exists(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     assert repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None) is None
-    repo.close()
-
-
-def test_raise_uncertainty_if_none_active_is_idempotent(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
-    first = repo.raise_uncertainty_if_none_active(
-        scope="ACCOUNT_CLERK",
-        reason_code="TEST_REASON",
-        strategy_instance_id=None,
-        build_transition=lambda: _uncertainty_transition(strategy_instance_id=None),
-    )
-    before = len(repo.custody_transitions())
-    second = repo.raise_uncertainty_if_none_active(
-        scope="ACCOUNT_CLERK",
-        reason_code="TEST_REASON",
-        strategy_instance_id=None,
-        build_transition=lambda: _uncertainty_transition(strategy_instance_id=None),
-    )
-    assert first is True
-    assert second is False
-    assert len(repo.custody_transitions()) == before  # no second raise
     repo.close()
 
 

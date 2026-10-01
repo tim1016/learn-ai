@@ -270,8 +270,8 @@ export class BatchRunnerComponent {
 
   // ─── Verdict helpers (new schema only) ───────────────────────────
 
-  /** Stage 0/1/2/3 from the new SSE-driven response. ``null`` for the
-   *  legacy GraphQL path that doesn't populate ``stageInfo``. */
+  /** Stage 0/1/2/3 from the SSE-driven response. ``null`` when the
+   *  response doesn't populate ``stageInfo``. */
   readonly stage = computed<0 | 1 | 2 | 3 | null>(
     () => this.result()?.stageInfo?.stage ?? null,
   );

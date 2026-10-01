@@ -1,14 +1,9 @@
 
 using Backend.Data;
 using Backend.GraphQL.Types;
-using Backend.Models.DTOs;
-using Backend.Models.MarketData;
-using Backend.Models.DTOs.PolygonResponses;
-using Backend.Services.Implementation;
 using Backend.Services.Interfaces;
 using Backend.Temporal;
 using HotChocolate;
-using HotChocolate.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace Backend.GraphQL;
@@ -18,119 +13,7 @@ public class Query
     #region Market Data Queries
 
     /// <summary>
-    /// Get all tickers
-    /// Supports filtering, sorting, and projections
-    /// Testable: DbContext injected, can use in-memory DB
-    /// </summary>
-    [UseProjection]
-    [UseFiltering]
-    [UseSorting]
-    public IQueryable<Ticker> GetTickers(AppDbContext context)
-        => context.Tickers;
-
-    /// <summary>
-    /// Get stock aggregates with filtering and sorting
-    /// Example: Filter by ticker symbol, date range
-    /// </summary>
-    [UseProjection]
-    [UseFiltering]
-    [UseSorting]
-    public IQueryable<StockAggregate> GetStockAggregates(AppDbContext context)
-        => context.StockAggregates;
-
-    [GraphQLName("stockAggregateStats")]
-    public async Task<StockAggregateStatsType> GetStockAggregateStats(
-        AppDbContext context,
-        string symbol,
-        CancellationToken cancellationToken)
-    {
-        var normalizedSymbol = symbol.ToUpperInvariant();
-        var query = context.StockAggregates
-            .AsNoTracking()
-            .Where(a => a.Ticker != null && a.Ticker.Symbol == normalizedSymbol);
-
-        var count = await query.CountAsync(cancellationToken);
-        if (count == 0)
-        {
-            return new StockAggregateStatsType
-            {
-                Count = 0,
-                Earliest = null,
-                Latest = null,
-            };
-        }
-
-        var earliest = await query
-            .OrderBy(a => a.Timestamp)
-            .Select(a => a.Timestamp)
-            .FirstAsync(cancellationToken);
-        var latest = await query
-            .OrderByDescending(a => a.Timestamp)
-            .Select(a => a.Timestamp)
-            .FirstAsync(cancellationToken);
-
-        return new StockAggregateStatsType
-        {
-            Count = count,
-            Earliest = UnixMs.FromUtc(earliest),
-            Latest = UnixMs.FromUtc(latest),
-        };
-    }
-
-    /// <summary>
-    /// Get trades with filtering
-    /// </summary>
-    [UseProjection]
-    [UseFiltering]
-    [UseSorting]
-    public IQueryable<Trade> GetTrades(AppDbContext context)
-        => context.Trades;
-
-    /// <summary>
-    /// Get quotes with filtering
-    /// </summary>
-    [UseProjection]
-    [UseFiltering]
-    [UseSorting]
-    public IQueryable<Quote> GetQuotes(AppDbContext context)
-        => context.Quotes;
-
-    /// <summary>
-    /// Get technical indicators
-    /// </summary>
-    [UseProjection]
-    [UseFiltering]
-    [UseSorting]
-    public IQueryable<TechnicalIndicator> GetTechnicalIndicators(AppDbContext context)
-        => context.TechnicalIndicators;
-
-    /// <summary>
-    /// Get a specific ticker by symbol
-    /// </summary>
-    [UseFirstOrDefault]
-    [UseProjection]
-    public IQueryable<Ticker?> GetTickerBySymbol(AppDbContext context, string symbol)
-        => context.Tickers.Where(t => t.Symbol == symbol);
-
-    [GraphQLName("getFetchProgress")]
-    public FetchProgressInfo? GetFetchProgress(string ticker)
-    {
-        var progress = MarketDataService.GetProgress(ticker.ToUpper());
-        if (progress == null) return null;
-        return new FetchProgressInfo
-        {
-            Ticker = progress.Ticker,
-            TotalWindows = progress.TotalWindows,
-            CompletedWindows = progress.CompletedWindows,
-            BarsFetched = progress.BarsFetched,
-            CurrentWindow = progress.CurrentWindow,
-            Status = progress.Status,
-        };
-    }
-
-    /// <summary>
     /// Smart query: returns cached data if available, fetches from Polygon if not.
-    /// Computes summary statistics server-side.
     /// </summary>
     [GraphQLName("getOrFetchStockAggregates")]
     public async Task<SmartAggregatesResult> GetOrFetchStockAggregates(
@@ -149,9 +32,8 @@ public class Query
             "[STEP 3 - GraphQL] Query received: ticker={Ticker}, from={From}, to={To}, timespan={Timespan}, multiplier={Multiplier}, forceRefresh={ForceRefresh}, adjusted={Adjusted}",
             ticker, fromDate, toDate, timespan, multiplier, forceRefresh, adjusted);
 
-        var fetchResult = await marketDataService.GetOrFetchAggregatesAsync(
+        var aggregates = await marketDataService.GetOrFetchAggregatesAsync(
             ticker, multiplier, timespan, fromDate, toDate, forceRefresh, adjusted);
-        var aggregates = fetchResult.Aggregates;
 
         logger.LogInformation(
             "[STEP 4 - GraphQL] MarketDataService returned {Count} aggregates for {Ticker}",
@@ -182,370 +64,13 @@ public class Query
             Ticker = ticker.ToUpper(),
             Aggregates = bars,
             SanitizationSummary = tickerEntity?.SanitizationSummary,
-            GapDetection = fetchResult.GapDetection is { } gap ? new GapDetectionInfo
-            {
-                TotalWeekdays = gap.TotalWeekdays,
-                DaysWithData = gap.DaysWithData,
-                MissingDays = gap.MissingDays,
-                PartialDays = gap.PartialDays,
-                CoveragePercent = gap.CoveragePercent,
-                ExpectedBars = gap.ExpectedBars,
-                ActualBars = gap.ActualBars,
-                MissingDates = gap.MissingDates,
-                PartialDates = gap.PartialDates,
-            } : null,
         };
 
-        if (bars.Count > 0)
-        {
-            result.Summary = new AggregatesSummary
-            {
-                PeriodHigh = bars.Max(a => a.High),
-                PeriodLow = bars.Min(a => a.Low),
-                AverageVolume = bars.Average(a => a.Volume),
-                AverageVwap = bars
-                    .Where(a => a.VolumeWeightedAveragePrice.HasValue)
-                    .Select(a => a.VolumeWeightedAveragePrice!.Value)
-                    .DefaultIfEmpty(0)
-                    .Average(),
-                OpenPrice = bars.First().Open,
-                ClosePrice = bars.Last().Close,
-                PriceChange = bars.Last().Close - bars.First().Open,
-                PriceChangePercent = bars.First().Open != 0
-                    ? (bars.Last().Close - bars.First().Open) / bars.First().Open * 100
-                    : 0,
-                TotalBars = bars.Count
-            };
-        }
-
         logger.LogInformation(
-            "[STEP 5 - GraphQL] Returning result: ticker={Ticker}, bars={Bars}, hasSummary={HasSummary}",
-            result.Ticker, result.Aggregates.Count, result.Summary != null);
+            "[STEP 5 - GraphQL] Returning result: ticker={Ticker}, bars={Bars}",
+            result.Ticker, result.Aggregates.Count);
 
         return result;
-    }
-
-    /// <summary>
-    /// Calculate technical indicators for a ticker's existing aggregate data.
-    /// Reads OHLCV from DB, sends to Python pandas-ta service.
-    /// </summary>
-    [GraphQLName("calculateIndicators")]
-    public async Task<CalculateIndicatorsResult> CalculateIndicators(
-        [Service] ITechnicalAnalysisService taService,
-        [Service] ILogger<Query> logger,
-        AppDbContext context,
-        string ticker,
-        string fromDate,
-        string toDate,
-        List<IndicatorConfigInput> indicators,
-        string timespan = "day",
-        int multiplier = 1)
-    {
-        try
-        {
-            var from = DateOnly.ParseExact(fromDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-            var to = DateOnly.ParseExact(toDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddDays(1).AddTicks(-1);
-            var symbol = ticker.ToUpper();
-
-            var tickerEntity = await context.Tickers
-                .FirstOrDefaultAsync(t => t.Symbol == symbol && t.Market == "stocks");
-
-            if (tickerEntity == null)
-            {
-                return new CalculateIndicatorsResult
-                {
-                    Success = false,
-                    Ticker = symbol,
-                    Error = $"No data found for {symbol}. Fetch market data first."
-                };
-            }
-
-            var aggregates = await context.StockAggregates
-                .Where(a => a.TickerId == tickerEntity.Id
-                         && a.Timespan == timespan
-                         && a.Multiplier == multiplier
-                         && a.Timestamp >= from
-                         && a.Timestamp <= to)
-                .OrderBy(a => a.Timestamp)
-                .ToListAsync();
-
-            if (aggregates.Count == 0)
-            {
-                return new CalculateIndicatorsResult
-                {
-                    Success = false,
-                    Ticker = symbol,
-                    Error = $"No aggregate data in DB for {symbol}. Fetch market data first."
-                };
-            }
-
-            logger.LogInformation(
-                "[TA] Calculating indicators for {Ticker}: {Count} bars, {Indicators} indicators",
-                symbol, aggregates.Count, indicators.Count);
-
-            var bars = aggregates.Select(a => new OhlcvBarDto(
-                UnixMs.FromUtc(a.Timestamp),
-                a.Open, a.High, a.Low, a.Close, a.Volume
-            )).ToList();
-
-            var indicatorConfigs = indicators.Select(i =>
-                new IndicatorConfigDto(i.Name, i.Window)).ToList();
-
-            var response = await taService.CalculateIndicatorsAsync(
-                symbol, bars, indicatorConfigs);
-
-            return new CalculateIndicatorsResult
-            {
-                Success = response.Success,
-                Ticker = symbol,
-                Indicators = response.Indicators.Select(ind => new IndicatorSeriesResult
-                {
-                    Name = ind.Name,
-                    Window = ind.Window,
-                    Data = ind.Data.Select(d => new IndicatorPoint
-                    {
-                        Timestamp = d.Timestamp,
-                        Value = d.Value,
-                        Signal = d.Signal,
-                        Histogram = d.Histogram,
-                        Upper = d.Upper,
-                        Lower = d.Lower
-                    }).ToList()
-                }).ToList(),
-                // Surface Python's error field directly — was dropped when the GraphQL
-                // output was named Message while the DTO was Error (audit § 3.3).
-                Error = response.Error
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[TA] Error calculating indicators for {Ticker}", ticker);
-            return new CalculateIndicatorsResult
-            {
-                Success = false,
-                Ticker = ticker.ToUpper(),
-                Error = ex.Message
-            };
-        }
-    }
-
-    /// <summary>
-    /// Generate a full indicator table from Polygon minute data.
-    /// Returns OHLCV + EMAs, BB, Supertrend, RSI, MACD, ADX in a tabular format.
-    /// </summary>
-    [GraphQLName("generateIndicatorTable")]
-    public async Task<IndicatorTableResult> GenerateIndicatorTable(
-        [Service] ITechnicalAnalysisService taService,
-        [Service] ILogger<Query> logger,
-        string ticker,
-        string fromDate,
-        string toDate,
-        int multiplier = 1,
-        string timespan = "minute",
-        List<int>? emaPeriods = null,
-        int bbLength = 20,
-        double bbStd = 2.0,
-        int supertrendLength = 10,
-        double supertrendMultiplier = 3.0,
-        int rsiLength = 14,
-        int rsiMaLength = 14,
-        int macdFast = 12,
-        int macdSlow = 26,
-        int macdSignal = 9,
-        int adxLength = 14)
-    {
-        try
-        {
-            var request = new IndicatorTableRequestDto(
-                Symbol: ticker.ToUpper(),
-                FromDate: fromDate,
-                ToDate: toDate,
-                Multiplier: multiplier,
-                Timespan: timespan,
-                EmaPeriods: emaPeriods ?? [5, 10, 20, 30, 40, 50, 100, 200],
-                BbLength: bbLength,
-                BbStd: bbStd,
-                SupertrendLength: supertrendLength,
-                SupertrendMultiplier: supertrendMultiplier,
-                RsiLength: rsiLength,
-                RsiMaLength: rsiMaLength,
-                MacdFast: macdFast,
-                MacdSlow: macdSlow,
-                MacdSignal: macdSignal,
-                AdxLength: adxLength
-            );
-
-            var response = await taService.GenerateIndicatorTableAsync(request);
-
-            // Serialize each row dict to JSON string for GraphQL transport
-            var jsonRows = response.Rows
-                .Select(row => System.Text.Json.JsonSerializer.Serialize(row))
-                .ToList();
-
-            return new IndicatorTableResult
-            {
-                Success = true,
-                Ticker = ticker.ToUpper(),
-                RowCount = response.RowCount,
-                Columns = response.Columns,
-                Rows = jsonRows,
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[TA-TABLE] Error generating indicator table for {Ticker}", ticker);
-            return new IndicatorTableResult
-            {
-                Success = false,
-                Ticker = ticker.ToUpper(),
-                Error = ex.Message,
-            };
-        }
-    }
-
-    /// <summary>
-    /// List all available pandas-ta indicators grouped by category.
-    /// </summary>
-    [GraphQLName("availableIndicators")]
-    public async Task<AvailableIndicatorsResult> AvailableIndicators(
-        [Service] ITechnicalAnalysisService taService,
-        [Service] ILogger<Query> logger)
-    {
-        try
-        {
-            var response = await taService.GetAvailableIndicatorsAsync();
-
-            var categories = response.Categories.Select(kv => new IndicatorCategory
-            {
-                Name = kv.Key,
-                Indicators = kv.Value.Select(i => new IndicatorInfoItem
-                {
-                    Name = i.Name,
-                    Category = i.Category,
-                    Description = i.Description,
-                }).ToList(),
-            }).ToList();
-
-            return new AvailableIndicatorsResult
-            {
-                Success = true,
-                Categories = categories,
-                Total = response.Total,
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error fetching available indicators");
-            return new AvailableIndicatorsResult
-            {
-                Success = false,
-                Error = ex.Message,
-            };
-        }
-    }
-
-    /// <summary>
-    /// Check which date ranges already have cached data in the database.
-    /// Used by the frontend to show cached vs. uncached chunks before fetching.
-    /// </summary>
-    [GraphQLName("checkCachedRanges")]
-    public async Task<List<CachedRangeResult>> CheckCachedRanges(
-        AppDbContext context,
-        string ticker,
-        List<DateRangeInput> ranges,
-        string timespan = "day",
-        int multiplier = 1)
-    {
-        var symbol = ticker.ToUpper();
-        var cachedMarket = symbol.StartsWith("O:") ? "options" : "stocks";
-        var tickerEntity = await context.Tickers
-            .FirstOrDefaultAsync(t => t.Symbol == symbol && t.Market == cachedMarket);
-
-        var results = new List<CachedRangeResult>();
-
-        foreach (var range in ranges)
-        {
-            var isCached = false;
-            if (tickerEntity != null)
-            {
-                var from = DateOnly.ParseExact(range.FromDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-                var to = DateOnly.ParseExact(range.ToDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc).AddDays(1).AddTicks(-1);
-
-                isCached = await context.StockAggregates.AnyAsync(
-                    a => a.TickerId == tickerEntity.Id
-                      && a.Timespan == timespan
-                      && a.Multiplier == multiplier
-                      && a.Timestamp >= from
-                      && a.Timestamp <= to);
-            }
-
-            results.Add(new CachedRangeResult
-            {
-                FromDate = range.FromDate,
-                ToDate = range.ToDate,
-                IsCached = isCached,
-            });
-        }
-
-        return results;
-    }
-
-    /// <summary>
-    /// List options contracts from Polygon.io for a given underlying ticker.
-    /// Used by frontend to discover ATM ± N strike contracts.
-    /// </summary>
-    [GraphQLName("getOptionsContracts")]
-    public async Task<OptionsContractsResult> GetOptionsContracts(
-        [Service] IPolygonService polygonService,
-        [Service] ILogger<Query> logger,
-        string underlyingTicker,
-        string? asOfDate = null,
-        string? contractType = null,
-        decimal? strikePriceGte = null,
-        decimal? strikePriceLte = null,
-        string? expirationDate = null,
-        string? expirationDateGte = null,
-        string? expirationDateLte = null,
-        int limit = 100)
-    {
-        try
-        {
-            logger.LogInformation(
-                "[Options] Query: underlying={Underlying}, asOf={AsOf}, type={Type}, strike=[{Gte},{Lte}]",
-                underlyingTicker, asOfDate, contractType, strikePriceGte, strikePriceLte);
-
-            var response = await polygonService.FetchOptionsContractsAsync(
-                underlyingTicker, asOfDate, contractType,
-                strikePriceGte, strikePriceLte,
-                expirationDate, expirationDateGte, expirationDateLte,
-                limit);
-
-            var contracts = response.Contracts.Select(c => new OptionsContractResult
-            {
-                Ticker = c.Ticker,
-                UnderlyingTicker = c.UnderlyingTicker,
-                ContractType = c.ContractType,
-                StrikePrice = c.StrikePrice,
-                ExpirationDate = c.ExpirationDate,
-                ExerciseStyle = c.ExerciseStyle,
-            }).ToList();
-
-            return new OptionsContractsResult
-            {
-                Success = true,
-                Contracts = contracts,
-                Count = contracts.Count,
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[Options] Error fetching contracts for {Underlying}", underlyingTicker);
-            return new OptionsContractsResult
-            {
-                Success = false,
-                Error = ex.Message,
-            };
-        }
     }
 
     /// <summary>
@@ -717,118 +242,6 @@ public class Query
         }
     }
 
-    /// <summary>
-    /// Fetch snapshots for multiple stock tickers.
-    /// If no tickers provided, returns all available snapshots.
-    /// </summary>
-    [GraphQLName("getStockSnapshots")]
-    public async Task<StockSnapshotsResult> GetStockSnapshots(
-        [Service] IPolygonService polygonService,
-        [Service] ILogger<Query> logger,
-        List<string>? tickers = null)
-    {
-        try
-        {
-            logger.LogInformation("[Snapshot] Query: tickers={Tickers}",
-                tickers != null ? string.Join(",", tickers) : "all");
-
-            var response = await polygonService.FetchStockSnapshotsAsync(tickers);
-
-            return new StockSnapshotsResult
-            {
-                Success = response.Success,
-                Snapshots = response.Snapshots.Select(MapTickerSnapshot).ToList(),
-                Count = response.Count,
-                Error = response.Error,
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[Snapshot] Error fetching stock snapshots");
-            return new StockSnapshotsResult { Success = false, Error = ex.Message };
-        }
-    }
-
-    /// <summary>
-    /// Fetch top market movers — gainers or losers.
-    /// </summary>
-    [GraphQLName("getMarketMovers")]
-    public async Task<MarketMoversResult> GetMarketMovers(
-        [Service] IPolygonService polygonService,
-        [Service] ILogger<Query> logger,
-        string direction)
-    {
-        try
-        {
-            logger.LogInformation("[Snapshot] Query: movers direction={Direction}", direction);
-
-            var response = await polygonService.FetchMarketMoversAsync(direction);
-
-            return new MarketMoversResult
-            {
-                Success = response.Success,
-                Tickers = response.Tickers.Select(MapTickerSnapshot).ToList(),
-                Count = response.Count,
-                Error = response.Error,
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[Snapshot] Error fetching market movers ({Direction})", direction);
-            return new MarketMoversResult { Success = false, Error = ex.Message };
-        }
-    }
-
-    /// <summary>
-    /// Fetch unified v3 snapshots with flexible filtering.
-    /// </summary>
-    [GraphQLName("getUnifiedSnapshot")]
-    public async Task<UnifiedSnapshotResult> GetUnifiedSnapshot(
-        [Service] IPolygonService polygonService,
-        [Service] ILogger<Query> logger,
-        List<string>? tickers = null,
-        int limit = 10)
-    {
-        try
-        {
-            logger.LogInformation("[Snapshot] Query: unified tickers={Tickers}, limit={Limit}",
-                tickers != null ? string.Join(",", tickers) : "none", limit);
-
-            var response = await polygonService.FetchUnifiedSnapshotAsync(tickers, limit);
-
-            return new UnifiedSnapshotResult
-            {
-                Success = response.Success,
-                Results = response.Results.Select(r => new UnifiedSnapshotItemResult
-                {
-                    Ticker = r.Ticker,
-                    Type = r.Type,
-                    MarketStatus = r.MarketStatus,
-                    Name = r.Name,
-                    Session = r.Session != null ? new UnifiedSessionResult
-                    {
-                        Price = r.Session.Price,
-                        Change = r.Session.Change,
-                        ChangePercent = r.Session.ChangePercent,
-                        Open = r.Session.Open,
-                        Close = r.Session.Close,
-                        High = r.Session.High,
-                        Low = r.Session.Low,
-                        PreviousClose = r.Session.PreviousClose,
-                        Volume = r.Session.Volume,
-                    } : null,
-                }).ToList(),
-                Count = response.Count,
-                Error = response.Error,
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[Snapshot] Error fetching unified snapshots");
-            return new UnifiedSnapshotResult { Success = false, Error = ex.Message };
-        }
-    }
-
     private static StockTickerSnapshotResult MapTickerSnapshot(
         Backend.Models.DTOs.PolygonResponses.StockTickerSnapshotDto dto) => new()
         {
@@ -974,126 +387,6 @@ public class Query
 
     #endregion
 
-    #region Ticker Reference Queries
-
-    /// <summary>
-    /// Fetch basic info for a batch of stock tickers from Polygon reference API.
-    /// </summary>
-    [GraphQLName("getTrackedTickers")]
-    public async Task<TrackedTickersResult> GetTrackedTickers(
-        [Service] IPolygonService polygonService,
-        [Service] ILogger<Query> logger,
-        List<string> tickers)
-    {
-        try
-        {
-            logger.LogInformation("[Tickers] Query: {Count} tickers requested", tickers.Count);
-
-            var response = await polygonService.FetchTickerListAsync(tickers);
-
-            var items = response.Tickers.Select(t => new TickerInfoResult
-            {
-                Ticker = t.Ticker,
-                Name = t.Name,
-                Market = t.Market,
-                Type = t.Type,
-                Active = t.Active,
-                PrimaryExchange = t.PrimaryExchange,
-                CurrencyName = t.CurrencyName,
-            }).ToList();
-
-            return new TrackedTickersResult
-            {
-                Success = true,
-                Tickers = items,
-                Count = items.Count,
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[Tickers] Error fetching tracked tickers");
-            return new TrackedTickersResult { Success = false, Error = ex.Message };
-        }
-    }
-
-    /// <summary>
-    /// Fetch detailed overview for a single ticker from Polygon reference API.
-    /// </summary>
-    [GraphQLName("getTickerDetails")]
-    public async Task<TickerDetailResult> GetTickerDetails(
-        [Service] IPolygonService polygonService,
-        [Service] ILogger<Query> logger,
-        string ticker)
-    {
-        try
-        {
-            logger.LogInformation("[Tickers] Details query: {Ticker}", ticker);
-
-            var response = await polygonService.FetchTickerDetailsAsync(ticker);
-
-            return new TickerDetailResult
-            {
-                Success = response.Success,
-                Ticker = response.Ticker,
-                Name = response.Name,
-                Description = response.Description,
-                MarketCap = response.MarketCap,
-                HomepageUrl = response.HomepageUrl,
-                TotalEmployees = response.TotalEmployees,
-                ListDate = response.ListDate,
-                SicDescription = response.SicDescription,
-                PrimaryExchange = response.PrimaryExchange,
-                Type = response.Type,
-                WeightedSharesOutstanding = response.WeightedSharesOutstanding,
-                Address = response.Address != null ? new TickerAddressResult
-                {
-                    Address1 = response.Address.Address1,
-                    City = response.Address.City,
-                    State = response.Address.State,
-                    PostalCode = response.Address.PostalCode,
-                } : null,
-                Error = response.Error,
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[Tickers] Error fetching details for {Ticker}", ticker);
-            return new TickerDetailResult { Success = false, Ticker = ticker, Error = ex.Message };
-        }
-    }
-
-    /// <summary>
-    /// Fetch related company tickers for a given stock from Polygon.
-    /// </summary>
-    [GraphQLName("getRelatedTickers")]
-    public async Task<RelatedTickersResult> GetRelatedTickers(
-        [Service] IPolygonService polygonService,
-        [Service] ILogger<Query> logger,
-        string ticker)
-    {
-        try
-        {
-            logger.LogInformation("[Tickers] Related query: {Ticker}", ticker);
-
-            var response = await polygonService.FetchRelatedTickersAsync(ticker);
-
-            return new RelatedTickersResult
-            {
-                Success = response.Success,
-                Ticker = response.Ticker,
-                Related = response.Related,
-                Error = response.Error,
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[Tickers] Error fetching related tickers for {Ticker}", ticker);
-            return new RelatedTickersResult { Success = false, Ticker = ticker, Error = ex.Message };
-        }
-    }
-
-    #endregion
-
     #region Research Lab Queries
 
     [GraphQLName("getResearchExperiments")]
@@ -1122,35 +415,6 @@ public class Query
             IsMonotonic = e.IsMonotonic,
             CreatedAt = e.CreatedAt,
         }).ToList();
-    }
-
-    [GraphQLName("getResearchExperiment")]
-    public async Task<ResearchExperimentType?> GetResearchExperiment(
-        [Service] IResearchService researchService,
-        int id)
-    {
-        var experiment = await researchService.GetExperimentAsync(id);
-        if (experiment is null) return null;
-
-        return new ResearchExperimentType
-        {
-            Id = experiment.Id,
-            Ticker = experiment.Ticker,
-            FeatureName = experiment.FeatureName,
-            StartDate = experiment.StartDate,
-            EndDate = experiment.EndDate,
-            BarsUsed = experiment.BarsUsed,
-            MeanIC = experiment.MeanIC,
-            ICTStat = experiment.ICTStat,
-            ICPValue = experiment.ICPValue,
-            AdfPValue = experiment.AdfPValue,
-            KpssPValue = experiment.KpssPValue,
-            IsStationary = experiment.IsStationary,
-            PassedValidation = experiment.PassedValidation,
-            MonotonicityRatio = experiment.MonotonicityRatio,
-            IsMonotonic = experiment.IsMonotonic,
-            CreatedAt = experiment.CreatedAt,
-        };
     }
 
     [GraphQLName("getSignalExperiments")]
@@ -1196,31 +460,6 @@ public class Query
     #region QuantLib Validation Queries
 
     /// <summary>
-    /// Check QuantLib availability and list supported pricing engines.
-    /// </summary>
-    [GraphQLName("quantlibStatus")]
-    public async Task<QuantLibStatusResult> QuantLibStatus(
-        [Service] IPolygonService polygonService,
-        [Service] ILogger<Query> logger)
-    {
-        try
-        {
-            var response = await polygonService.QuantLibStatusAsync();
-            return new QuantLibStatusResult
-            {
-                Available = response.Available,
-                Version = response.Version,
-                Engines = response.Engines,
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[QuantLib] Error checking status");
-            return new QuantLibStatusResult { Available = false };
-        }
-    }
-
-    /// <summary>
     /// Price a single option via QuantLib for validation against legacy BS.
     /// Returns theoretical price and all five Greeks.
     /// </summary>
@@ -1263,59 +502,6 @@ public class Query
         {
             logger.LogError(ex, "[QuantLib] Error pricing option");
             return new QuantLibPriceResult { Success = false, Error = ex.Message };
-        }
-    }
-
-    /// <summary>
-    /// Price a multi-leg strategy via QuantLib for validation.
-    /// </summary>
-    [GraphQLName("quantlibStrategy")]
-    public async Task<QuantLibStrategyResult> QuantLibStrategy(
-        [Service] IPolygonService polygonService,
-        [Service] ILogger<Query> logger,
-        decimal spot,
-        List<StrategyLegInput> legs,
-        string expirationDate,
-        decimal riskFreeRate = 0.05m,
-        string? evaluationDate = null,
-        decimal dividendYield = 0m,
-        string engine = "analytic_bs")
-    {
-        try
-        {
-            var response = await polygonService.QuantLibStrategyAsync(
-                spot, legs, expirationDate, riskFreeRate,
-                evaluationDate, dividendYield, engine);
-
-            return new QuantLibStrategyResult
-            {
-                Success = response.Success,
-                Engine = response.Engine,
-                NetPrice = response.NetPrice,
-                NetDelta = response.NetDelta,
-                NetGamma = response.NetGamma,
-                NetTheta = response.NetTheta,
-                NetVega = response.NetVega,
-                NetRho = response.NetRho,
-                Legs = response.Legs.Select(l => new QuantLibLegResultGql
-                {
-                    Engine = l.Engine,
-                    Price = l.Price,
-                    Delta = l.Delta,
-                    Gamma = l.Gamma,
-                    Theta = l.Theta,
-                    Vega = l.Vega,
-                    Rho = l.Rho,
-                    D1 = l.D1,
-                    D2 = l.D2,
-                }).ToList(),
-                Error = response.Error,
-            };
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "[QuantLib] Error pricing strategy");
-            return new QuantLibStrategyResult { Success = false, Error = ex.Message };
         }
     }
 
@@ -1382,13 +568,6 @@ public class Query
     }
 
     #endregion
-}
-
-public sealed class StockAggregateStatsType
-{
-    public int Count { get; init; }
-    public long? Earliest { get; init; }
-    public long? Latest { get; init; }
 }
 
 public class OptionsChainSnapshotResult
@@ -1463,49 +642,12 @@ public class LastQuoteResult
     public string? Timeframe { get; set; }
 }
 
-public class OptionsContractsResult
-{
-    public bool Success { get; set; }
-    public List<OptionsContractResult> Contracts { get; set; } = [];
-    public int Count { get; set; }
-    public string? Error { get; set; }
-}
-
-public class OptionsContractResult
-{
-    public required string Ticker { get; set; }
-    public string? UnderlyingTicker { get; set; }
-    public string? ContractType { get; set; }
-    public decimal? StrikePrice { get; set; }
-    public string? ExpirationDate { get; set; }
-    public string? ExerciseStyle { get; set; }
-}
-
 public class OptionsExpirationsResult
 {
     public bool Success { get; set; }
     public List<string> Expirations { get; set; } = [];
     public int Count { get; set; }
     public string? Error { get; set; }
-}
-
-public class DateRangeInput
-{
-    public required string FromDate { get; set; }
-    public required string ToDate { get; set; }
-}
-
-public class CachedRangeResult
-{
-    public required string FromDate { get; set; }
-    public required string ToDate { get; set; }
-    public bool IsCached { get; set; }
-}
-
-public class IndicatorConfigInput
-{
-    public required string Name { get; set; }
-    public int Window { get; set; } = 14;
 }
 
 // ------------------------------------------------------------------
@@ -1546,108 +688,9 @@ public class StockSnapshotResult
     public string? Error { get; set; }
 }
 
-public class StockSnapshotsResult
-{
-    public bool Success { get; set; }
-    public List<StockTickerSnapshotResult> Snapshots { get; set; } = [];
-    public int Count { get; set; }
-    public string? Error { get; set; }
-}
-
-public class MarketMoversResult
-{
-    public bool Success { get; set; }
-    public List<StockTickerSnapshotResult> Tickers { get; set; } = [];
-    public int Count { get; set; }
-    public string? Error { get; set; }
-}
-
-public class UnifiedSessionResult
-{
-    public decimal? Price { get; set; }
-    public decimal? Change { get; set; }
-    public decimal? ChangePercent { get; set; }
-    public decimal? Open { get; set; }
-    public decimal? Close { get; set; }
-    public decimal? High { get; set; }
-    public decimal? Low { get; set; }
-    public decimal? PreviousClose { get; set; }
-    public decimal? Volume { get; set; }
-}
-
-public class UnifiedSnapshotItemResult
-{
-    public string? Ticker { get; set; }
-    public string? Type { get; set; }
-    public string? MarketStatus { get; set; }
-    public string? Name { get; set; }
-    public UnifiedSessionResult? Session { get; set; }
-}
-
-public class UnifiedSnapshotResult
-{
-    public bool Success { get; set; }
-    public List<UnifiedSnapshotItemResult> Results { get; set; } = [];
-    public int Count { get; set; }
-    public string? Error { get; set; }
-}
-
 // ------------------------------------------------------------------
 // Ticker Reference result types
 // ------------------------------------------------------------------
-
-public class TickerInfoResult
-{
-    public string Ticker { get; set; } = "";
-    public string Name { get; set; } = "";
-    public string Market { get; set; } = "";
-    public string Type { get; set; } = "";
-    public bool Active { get; set; }
-    public string? PrimaryExchange { get; set; }
-    public string? CurrencyName { get; set; }
-}
-
-public class TrackedTickersResult
-{
-    public bool Success { get; set; }
-    public List<TickerInfoResult> Tickers { get; set; } = [];
-    public int Count { get; set; }
-    public string? Error { get; set; }
-}
-
-public class TickerAddressResult
-{
-    public string? Address1 { get; set; }
-    public string? City { get; set; }
-    public string? State { get; set; }
-    public string? PostalCode { get; set; }
-}
-
-public class TickerDetailResult
-{
-    public bool Success { get; set; }
-    public string Ticker { get; set; } = "";
-    public string Name { get; set; } = "";
-    public string? Description { get; set; }
-    public double? MarketCap { get; set; }
-    public string? HomepageUrl { get; set; }
-    public int? TotalEmployees { get; set; }
-    public string? ListDate { get; set; }
-    public string? SicDescription { get; set; }
-    public string? PrimaryExchange { get; set; }
-    public string? Type { get; set; }
-    public double? WeightedSharesOutstanding { get; set; }
-    public TickerAddressResult? Address { get; set; }
-    public string? Error { get; set; }
-}
-
-public class RelatedTickersResult
-{
-    public bool Success { get; set; }
-    public string Ticker { get; set; } = "";
-    public List<string> Related { get; set; } = [];
-    public string? Error { get; set; }
-}
 
 // ------------------------------------------------------------------
 // Options Strategy Analysis result types
@@ -1740,13 +783,6 @@ public class LegDiagnosticResult
 // QuantLib Validation result types
 // ------------------------------------------------------------------
 
-public class QuantLibStatusResult
-{
-    public bool Available { get; set; }
-    public string? Version { get; set; }
-    public List<string> Engines { get; set; } = [];
-}
-
 public class QuantLibPriceResult
 {
     public bool Success { get; set; }
@@ -1759,33 +795,6 @@ public class QuantLibPriceResult
     public decimal Rho { get; set; }
     public decimal? D1 { get; set; }
     public decimal? D2 { get; set; }
-    public string? Error { get; set; }
-}
-
-public class QuantLibLegResultGql
-{
-    public string Engine { get; set; } = "";
-    public decimal Price { get; set; }
-    public decimal Delta { get; set; }
-    public decimal Gamma { get; set; }
-    public decimal Theta { get; set; }
-    public decimal Vega { get; set; }
-    public decimal Rho { get; set; }
-    public decimal? D1 { get; set; }
-    public decimal? D2 { get; set; }
-}
-
-public class QuantLibStrategyResult
-{
-    public bool Success { get; set; }
-    public string Engine { get; set; } = "";
-    public decimal NetPrice { get; set; }
-    public decimal NetDelta { get; set; }
-    public decimal NetGamma { get; set; }
-    public decimal NetTheta { get; set; }
-    public decimal NetVega { get; set; }
-    public decimal NetRho { get; set; }
-    public List<QuantLibLegResultGql> Legs { get; set; } = [];
     public string? Error { get; set; }
 }
 

@@ -179,7 +179,7 @@ def resume_refusal(launch: LaunchView, *, live: bool | None) -> str | None:
     conservatively, as everywhere a live record is asked.
     """
     if launch.deleted_at_ms is not None:
-        return "the launch is deleted; restore it before resuming"
+        return "the launch is deleted"
     if launch.status == "COMPLETED":
         return "the Recency launch is complete"
     if launch.status == "RUNNING" and live is not False:

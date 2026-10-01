@@ -1,7 +1,5 @@
 """Pydantic response schemas"""
 
-from typing import Any
-
 from pydantic import BaseModel, Field
 
 
@@ -35,56 +33,6 @@ class SanitizedDataResponse(BaseModel):
     summary: SanitizationSummary
     ticker: str
     data_type: str
-    error: str | None = None
-
-
-class SanitizeResponse(BaseModel):
-    """Response schema for the standalone /api/sanitize endpoint"""
-
-    success: bool
-    data: list[dict[str, Any]]
-    summary: dict[str, Any]
-    error: str | None = None
-
-
-class IndicatorDataPoint(BaseModel):
-    """A single indicator value at a timestamp"""
-
-    timestamp: int
-    value: float | None = None
-    signal: float | None = None
-    histogram: float | None = None
-    upper: float | None = None
-    lower: float | None = None
-
-
-class IndicatorResult(BaseModel):
-    """Result for a single indicator calculation"""
-
-    name: str
-    window: int
-    data: list[IndicatorDataPoint]
-
-
-class OptionsContractItem(BaseModel):
-    """A single options contract"""
-
-    ticker: str
-    underlying_ticker: str | None = None
-    contract_type: str | None = None
-    strike_price: float | None = None
-    expiration_date: str | None = None
-    exercise_style: str | None = None
-    shares_per_contract: float | None = None
-    primary_exchange: str | None = None
-
-
-class OptionsContractsResponse(BaseModel):
-    """Response schema for options contracts listing"""
-
-    success: bool
-    contracts: list[OptionsContractItem] = []
-    count: int = 0
     error: str | None = None
 
 
@@ -185,17 +133,8 @@ class OptionsChainSnapshotResponse(BaseModel):
     error: str | None = None
 
 
-class CalculateIndicatorsResponse(BaseModel):
-    """Response from indicator calculation"""
-
-    success: bool
-    ticker: str
-    indicators: list[IndicatorResult] = []
-    error: str | None = None
-
-
 # ------------------------------------------------------------------
-# Stock Snapshot responses (v2 & v3)
+# Stock Snapshot responses (v2)
 # ------------------------------------------------------------------
 
 
@@ -237,189 +176,9 @@ class StockSnapshotResponse(BaseModel):
     error: str | None = None
 
 
-class StockSnapshotsResponse(BaseModel):
-    """Response for multiple stock ticker snapshots"""
-
-    success: bool
-    snapshots: list[StockTickerSnapshot] = []
-    count: int = 0
-    error: str | None = None
-
-
-class MarketMoversResponse(BaseModel):
-    """Response for top market movers (gainers/losers)"""
-
-    success: bool
-    tickers: list[StockTickerSnapshot] = []
-    count: int = 0
-    error: str | None = None
-
-
-class UnifiedSnapshotSession(BaseModel):
-    """Session data from unified v3 snapshot"""
-
-    price: float | None = None
-    change: float | None = None
-    change_percent: float | None = None
-    open: float | None = None
-    close: float | None = None
-    high: float | None = None
-    low: float | None = None
-    previous_close: float | None = None
-    volume: float | None = None
-
-
-class UnifiedSnapshotItem(BaseModel):
-    """A single item from the unified v3 snapshot"""
-
-    ticker: str | None = None
-    type: str | None = None
-    market_status: str | None = None
-    name: str | None = None
-    session: UnifiedSnapshotSession | None = None
-
-
-class UnifiedSnapshotResponse(BaseModel):
-    """Response for unified v3 snapshots"""
-
-    success: bool
-    results: list[UnifiedSnapshotItem] = []
-    count: int = 0
-    error: str | None = None
-
-
-# ------------------------------------------------------------------
-# Market Monitor responses
-# ------------------------------------------------------------------
-
-
-class ExchangeStatus(BaseModel):
-    """Status of individual exchanges"""
-
-    nyse: str | None = None
-    nasdaq: str | None = None
-    otc: str | None = None
-
-
-class MarketStatusResponse(BaseModel):
-    """Current market status response"""
-
-    success: bool
-    market: str = "unknown"
-    exchanges: ExchangeStatus = ExchangeStatus()
-    early_hours: bool = False
-    after_hours: bool = False
-    server_time: str = ""
-    server_time_readable: str = "N/A"
-    error: str | None = None
-
-
-class MarketHolidayEvent(BaseModel):
-    """A single upcoming market holiday event"""
-
-    date: str | None = None
-    name: str | None = None
-    status: str | None = None
-    open: str | None = None
-    close: str | None = None
-    exchanges: list[str] = []
-
-
-class MarketHolidaysResponse(BaseModel):
-    """Upcoming market holidays response"""
-
-    success: bool
-    events: list[MarketHolidayEvent] = []
-    count: int = 0
-    error: str | None = None
-
-
-class MarketDashboardResponse(BaseModel):
-    """Combined market status + holidays for the dashboard"""
-
-    success: bool
-    status: MarketStatusResponse | None = None
-    holidays: MarketHolidaysResponse | None = None
-    error: str | None = None
-
-
-# ------------------------------------------------------------------
-# Ticker Reference responses
-# ------------------------------------------------------------------
-
-
-class TickerInfo(BaseModel):
-    """Basic ticker info from the reference API"""
-
-    ticker: str
-    name: str = ""
-    market: str = ""
-    type: str = ""
-    active: bool = True
-    primary_exchange: str | None = None
-    currency_name: str | None = None
-
-
-class TickerListResponse(BaseModel):
-    """Response for batch ticker info lookup"""
-
-    success: bool
-    tickers: list[TickerInfo] = []
-    count: int = 0
-    error: str | None = None
-
-
-class TickerAddress(BaseModel):
-    """Company address from ticker details"""
-
-    address1: str | None = None
-    city: str | None = None
-    state: str | None = None
-    postal_code: str | None = None
-
-
-class TickerDetailResponse(BaseModel):
-    """Response for detailed ticker overview"""
-
-    success: bool
-    ticker: str = ""
-    name: str = ""
-    description: str | None = None
-    market_cap: float | None = None
-    homepage_url: str | None = None
-    total_employees: int | None = None
-    list_date: str | None = None
-    sic_description: str | None = None
-    primary_exchange: str | None = None
-    type: str | None = None
-    weighted_shares_outstanding: float | None = None
-    address: TickerAddress | None = None
-    error: str | None = None
-
-
-class RelatedTickersResponse(BaseModel):
-    """Response for related companies lookup"""
-
-    success: bool
-    ticker: str = ""
-    related: list[str] = []
-    error: str | None = None
-
-
 # ------------------------------------------------------------------
 # Indicator Table responses (TradingView-style)
 # ------------------------------------------------------------------
-
-
-class IndicatorTableResponse(BaseModel):
-    """Response containing the full indicator table"""
-
-    success: bool
-    ticker: str
-    row_count: int = 0
-    columns: list[str] = []
-    rows: list[dict[str, Any]] = []
-    error: str | None = None
 
 
 # ---------------------------------------------------------------------------

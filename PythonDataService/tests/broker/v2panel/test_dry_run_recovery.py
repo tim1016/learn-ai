@@ -492,15 +492,10 @@ async def test_a_dry_run_whose_deploy_crashed_before_its_binding_is_served_by_it
         assert facade.account_id == SIM_ACCOUNT
 
     snapshot = await alpaca_clerk_sqlite.get_bot_snapshot(ACCT, SID)
-    timeline = await alpaca_clerk_sqlite.get_bot_timeline(
-        ACCT, SID, cursor=None, page_size=25, order_ref=None, effect_operation_id=None, uncertainty_id=None,
-        execution_id=None, transition_kind=None, sequence=None,
-    )
     money = await budget_deploy.budget_view(ACCT, SID)
 
     assert (snapshot.account_id, snapshot.strategy_instance_id) == (SIM_ACCOUNT, SID)
     assert [(position.symbol, position.attributed_qty) for position in snapshot.positions] == [("SPY", 1.0)]
-    assert timeline.account_id == SIM_ACCOUNT and timeline.entries
     assert (money.world, money.headline) == ("synthetic", "Stopped · still holds shares")
     # Recovery is judged in the simulator, which knows the bot and asks for its
     # own reconciliation first -- the real account never heard of it (a 404).

@@ -1,15 +1,9 @@
 """``WindowSummary`` — calendar breakdown for a backtest window.
 
 Surfaces which calendar dates inside ``[start, end)`` are tradeable
-sessions vs blocked dates (weekends, US-equity holidays). Two
-consumers:
-
-  * ``GET /api/research/trading-calendar`` — date-picker preview so
-    the UI can warn before a run is submitted (e.g., Memorial Day
-    silently truncating a "last 7 days" backtest).
-  * Stamped onto every persisted :class:`RunLedger` so a completed
-    run is self-describing about *which* days the engine actually
-    saw.
+sessions vs blocked dates (weekends, US-equity holidays). It is
+stamped onto every persisted :class:`RunLedger` so a completed run is
+self-describing about *which* days the engine actually saw.
 
 The calendar source is :mod:`app.lean_sidecar.trading_calendar`
 (NYSE via ``pandas_market_calendars``). It lives under

@@ -20,8 +20,7 @@ removes them. Any caller still sending legacy names produces a clear
 Per-route default preservation: routes whose pre-migration default for
 ``multiplier`` / ``timespan`` / ``session`` differs from this base
 **must override the inherited field explicitly** to preserve current
-behavior. See e.g. ``SignalEngineJobRequest`` (multiplier=15) or
-``IndicatorTableRequest`` (session="extended").
+behavior. See e.g. ``SignalEngineJobRequest`` (multiplier=15).
 """
 
 from __future__ import annotations

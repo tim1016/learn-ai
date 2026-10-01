@@ -33,7 +33,6 @@ The result is a positive fraction (0 → 1 range), not signed. This matches Baco
 
 - **Canonical Python**: `PythonDataService/app/engine/results/statistics.py::_max_drawdown` — called by `compute_statistics()` which packages it into `PerformanceStats.max_drawdown_pct`.
 - **Legacy .NET duplicate (pending migration)**: `Backend/Services/Implementation/BacktestService.cs::CalculateMaxDrawdown` — scheduled for removal in Phase 3.2 of the numerical-authority migration plan. `BacktestService.cs:449` also contains a `(decimal)Math.Sqrt((double)variance)` round-trip that introduces a precision floor; this is absorbed by the Python canonical once Phase 3.2 ships.
-- **Live-portfolio variant (pending migration)**: `Backend/Services/Implementation/SnapshotService.cs::ComputeDrawdownSeries` — tracked in finding F-0011.
 
 ## Notes on assumptions
 

@@ -17,11 +17,6 @@
       "path_template": "/account",
       "requires_account": false
     },
-    "activities_read": {
-      "method": "GET",
-      "path_template": "/activities",
-      "requires_account": false
-    },
     "activity_period_read": {
       "method": "GET",
       "path_template": "/activities/period",
@@ -35,11 +30,6 @@
     "bot_admission_plan": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/bots/admission",
-      "requires_account": true
-    },
-    "bot_authority_facts": {
-      "method": "GET",
-      "path_template": "/accounts/{account_id}/bots/{sid}/authority-facts",
       "requires_account": true
     },
     "bot_budget_preview": {
@@ -57,11 +47,6 @@
       "path_template": "/accounts/{account_id}/bots/{sid}/chart/history",
       "requires_account": true
     },
-    "bot_chart_live": {
-      "method": "GET",
-      "path_template": "/accounts/{account_id}/bots/{sid}/chart/live",
-      "requires_account": true
-    },
     "bot_cohort_flatten": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/bots/cohort-flatten",
@@ -75,11 +60,6 @@
     "bot_create": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/bots",
-      "requires_account": true
-    },
-    "bot_decision_evidence": {
-      "method": "GET",
-      "path_template": "/accounts/{account_id}/bots/{sid}/decision-evidence",
       "requires_account": true
     },
     "bot_deploy_prefill_read": {
@@ -187,11 +167,6 @@
       "path_template": "/configuration/desk-state",
       "requires_account": false
     },
-    "configuration_events": {
-      "method": "GET",
-      "path_template": "/configuration/events",
-      "requires_account": false
-    },
     "configuration_nicknames_read": {
       "method": "GET",
       "path_template": "/configuration/account-nicknames",
@@ -200,16 +175,6 @@
     "configuration_nicknames_set": {
       "method": "PUT",
       "path_template": "/configuration/account-nicknames/{account_id}",
-      "requires_account": false
-    },
-    "configuration_owner_read": {
-      "method": "GET",
-      "path_template": "/configuration/owner",
-      "requires_account": false
-    },
-    "configuration_owner_update": {
-      "method": "PATCH",
-      "path_template": "/configuration/owner",
       "requires_account": false
     },
     "configuration_profile_clone": {
@@ -307,21 +272,6 @@
       "path_template": "/accounts/{account_id}/custody/bots/{sid}/recovery-actions/execute",
       "requires_account": true
     },
-    "custody_bot_snapshot": {
-      "method": "GET",
-      "path_template": "/accounts/{account_id}/custody/bots/{sid}/snapshot",
-      "requires_account": true
-    },
-    "custody_bot_timeline": {
-      "method": "GET",
-      "path_template": "/accounts/{account_id}/custody/bots/{sid}/timeline",
-      "requires_account": true
-    },
-    "custody_command_read": {
-      "method": "GET",
-      "path_template": "/accounts/{account_id}/custody/commands/{command_id}",
-      "requires_account": true
-    },
     "custody_diagnosis_read": {
       "method": "GET",
       "path_template": "/clerk/custody-diagnosis",
@@ -340,16 +290,6 @@
     "custody_historical_recovery_prepare": {
       "method": "POST",
       "path_template": "/accounts/{account_id}/custody/bots/{sid}/historical-execution-recovery/prepare",
-      "requires_account": true
-    },
-    "custody_pnl_attribution": {
-      "method": "GET",
-      "path_template": "/accounts/{account_id}/custody/pnl-attribution",
-      "requires_account": true
-    },
-    "custody_reconcile": {
-      "method": "POST",
-      "path_template": "/accounts/{account_id}/custody/reconcile",
       "requires_account": true
     },
     "custody_recovery_check": {

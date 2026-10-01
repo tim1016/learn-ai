@@ -88,8 +88,7 @@ def _record_activation(
 ) -> None:
     """Append the cutover's activation evidence for an existing database.
 
-    The same ceremony ``tests/broker/alpaca/clerk/sqlite/test_activation_inventory.py``
-    performs. ``db_identity_token`` overrides the observed one so a test can
+    ``db_identity_token`` overrides the observed one so a test can
     describe an activation record that contradicts the database it names.
     """
     database = verify_database(_db_path(clerk_dir, account_id), expected_account_id=account_id)

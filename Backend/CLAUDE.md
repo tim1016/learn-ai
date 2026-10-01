@@ -24,9 +24,7 @@ Backend/
 ├── Program.cs                    # Composition root — service registration, middleware
 ├── GraphQL/
 │   ├── Query.cs                  # Root market data queries
-│   ├── Mutation.cs               # Root mutations
-│   ├── PortfolioQuery.cs         # Portfolio queries (type extension)
-│   ├── PortfolioMutation.cs      # Portfolio mutations (type extension)
+│   ├── Mutation.cs               # Root mutation type (fields come from extensions)
 │   ├── DataLabQuery.cs           # Data lab queries (type extension)
 │   ├── DataLabMutation.cs        # Data lab mutations (type extension)
 │   └── Types/                    # GraphQL result/payload types
@@ -34,8 +32,8 @@ Backend/
 │   ├── Interfaces/               # Service interfaces (IMarketDataService, IPolygonService, etc.)
 │   └── Implementation/           # Their implementations
 ├── Models/
-│   ├── MarketData/               # StockAggregate, Trade, Ticker, TechnicalIndicator, etc.
-│   ├── Portfolio/                # Account, Position, PositionLot, Order, OptionContract, etc.
+│   ├── MarketData/               # StockAggregate, Ticker, research experiments, DataLakeArtifact
+│   ├── Portfolio/                # Paper-ledger entities (Account, Position, Order, ...); kept as money records
 │   ├── DataLab/                  # DataLabSession
 │   └── DTOs/                     # Request/response DTOs, PolygonResponses/
 ├── Data/

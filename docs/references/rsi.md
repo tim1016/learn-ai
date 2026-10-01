@@ -58,9 +58,8 @@ v0.4.71b0.
   recursion. Cross-checking the two implementations on an identical
   input series should yield equality at `atol=1e-9, rtol=0` after the
   initial `length` warmup bars.
-- The Data Lab path does **not** apply a 3×length warmup mask the way
-  `services/ta_service.py` does for its own RSI route; raw pandas-ta
-  output is emitted starting at bar `length`.
+- The Data Lab path does **not** apply a 3×length warmup mask; raw
+  pandas-ta output is emitted starting at bar `length`.
 
 ## Tests
 - Data Lab path: covered by dataset-generation integration tests.

@@ -14,11 +14,6 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any, Literal
 
-from app.engine.pine_generators import (
-    generate_strategy_a_pine,
-    generate_strategy_b_pine,
-    generate_strategy_c_pine,
-)
 from app.engine.strategy.base import Strategy
 from app.engine.strategy.params import (
     StrategyParamsBase,
@@ -216,10 +211,6 @@ class StrategyRegistration:
     # ticker / strategy combination. Each entry is one short paragraph
     # or bullet; render as a list on the frontend.
     gotchas: list[str] = dc_field(default_factory=list)
-    # Optional Pine v6 generator — takes validated params, returns a
-    # complete Pine script. When present, the frontend can download the
-    # script via ``GET /api/engine/strategies/{name}/pine``.
-    pine_generator: Callable[[StrategyParamsBase], str] | None = None
     # Fields accepted only by non-Engine-Lab construction paths. They remain in
     # ``param_schema`` so the live runner can validate its internal injection,
     # but are hidden from ``GET /strategies`` and rejected by normal backtests.
@@ -1287,7 +1278,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             StrategyChartIndicator("adx", {"length": ChartParamRef("adx_period")}),
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
-        pine_generator=generate_strategy_a_pine,
         build=lambda p: build_spy_strategy_a_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_spy_strategy_a_signal_program,
         instrument_surface="policy",
@@ -1506,7 +1496,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             StrategyChartIndicator("adx", {"length": ChartParamRef("adx_period")}),
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
-        pine_generator=generate_strategy_b_pine,
         build=lambda p: build_spy_strategy_b_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_spy_strategy_b_signal_program,
         instrument_surface="policy",
@@ -1688,7 +1677,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             StrategyChartIndicator("adx", {"length": ChartParamRef("adx_period")}),
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
-        pine_generator=generate_strategy_c_pine,
         build=lambda p: build_spy_strategy_c_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_spy_strategy_c_signal_program,
         instrument_surface="policy",

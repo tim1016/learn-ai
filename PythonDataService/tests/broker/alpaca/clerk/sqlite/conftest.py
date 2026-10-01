@@ -13,6 +13,7 @@ import pytest
 
 from app.broker.alpaca.clerk.live_envelope import AccountObservation, LiveEnvelopeGate
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
+from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.account_risk import AccountRiskPolicy, append_risk_policy
 from app.broker.alpaca.clerk.sqlite.budget_authority import commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.budget_commands import submit_budgeted_deploy
@@ -81,6 +82,29 @@ def remove_budget_schema_for_legacy_fixture(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE envelope_reservations DROP COLUMN fee_provision_cents")
     conn.execute("DROP TRIGGER trg_budget_authority_monotonic")
     conn.execute("ALTER TABLE control_meta DROP COLUMN authorization_version")
+
+
+def build_v13_authority(conn: sqlite3.Connection, *, account_id: str) -> None:
+    """A real v13 file, the oldest schema a store can still migrate from.
+
+    Built from the fresh v9..v13 DDL blocks, the same statements a fresh
+    authority runs before its later blocks.
+    """
+    schema.apply_v9_schema(conn)
+    conn.executescript(
+        "\n\n".join(
+            (schema.SCHEMA_V10_DDL, schema.SCHEMA_V11_DDL, schema.SCHEMA_V12_DDL, schema.SCHEMA_V13_DDL)
+        )
+    )
+    conn.execute(
+        "INSERT INTO control_meta "
+        "(id, schema_version, broker, account_id, db_identity_token, authority_generation, "
+        "control_revision, created_at_ms, last_open_at_ms, reset_provenance_json, "
+        "execution_lease_owner, execution_lease_expires_at_ms) "
+        "VALUES (1, 13, 'alpaca', ?, 'identity', 1, 0, 1, 1, NULL, NULL, NULL)",
+        (account_id,),
+    )
+    conn.commit()
 
 
 def _clock_at(start_ms: int) -> _TestClock:

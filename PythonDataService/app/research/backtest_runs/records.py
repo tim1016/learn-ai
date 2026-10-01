@@ -201,7 +201,6 @@ def persisted_execution_configuration(
     compatibility_profile: str | None,
     warmup_from_date: str | None,
     slippage_per_share: float,
-    limit_penetration: float,
 ) -> dict[str, Any]:
     """Freeze a run's execution settings in the one receipt shape both engines persist.
 
@@ -213,7 +212,6 @@ def persisted_execution_configuration(
         "compatibility_profile": compatibility_profile,
         "warmup_from_date": warmup_from_date,
         "slippage_per_share": slippage_per_share,
-        "limit_penetration": limit_penetration,
     }
 
 

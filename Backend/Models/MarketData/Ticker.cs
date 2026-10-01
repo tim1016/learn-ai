@@ -36,7 +36,4 @@ public class Ticker
 
     // Navigation properties
     public List<StockAggregate> Aggregates { get; set; } = [];
-    public List<Trade> Trades { get; set; } = [];
-    public List<Quote> Quotes { get; set; } = [];
-    public List<TechnicalIndicator> Indicators { get; set; } = [];
 }

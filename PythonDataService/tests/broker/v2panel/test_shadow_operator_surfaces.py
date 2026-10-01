@@ -41,7 +41,6 @@ from app.broker.contract.registry import (
 from app.config import settings
 from app.routers.broker_v2_panel import router as panel_router
 from app.routers.brokers import router as brokers_router
-from app.schemas.broker_bots import BotProcessFact
 from app.schemas.broker_v2_panel import PanelActionRequest
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
@@ -210,23 +209,13 @@ async def test_shadow_runner_can_deploy_stop_and_deploy_fresh(
     shadow_registry: BotTaskRegistry,
 ) -> None:
     """A real Shadow launch must cross the SQLite-to-runner projection boundary."""
-    app, runtime = shadow_app
+    _app, runtime = shadow_app
     deployed = await shadow_registry.deploy(
         exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=SID, symbol="SPY", mode="trade"
     )
     assert deployed.running is True
     assert deployed.phase == "ON_DUTY"
     assert runtime.sqlite_repository.active_run(SID).lifecycle_run_id == deployed.active_run_id
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.get(
-            f"/api/brokers/alpaca/accounts/{LIVE_ACCT}/bots/{SID}/authority-facts"
-        )
-    assert response.status_code == 200, response.text
-    assert response.json()["process"]["state"] == "RUNNING"
-    assert response.json()["clerk"]["account_id"] == SHADOW_ACCT
 
     stopped = await shadow_registry.stop("alpaca", SID)
     assert stopped.phase == "OFF_DUTY"
@@ -303,40 +292,6 @@ async def test_shadow_failed_activation_recovers_without_reusing_the_existing_bi
     failed_run = shadow_registry.current_run("alpaca", SID)
     assert failed_run.run_id == failed_binding.run_id
     assert failed_run.terminal_outcome.reason_code == "INTERRUPTED_BY_RESTART"
-
-
-@pytest.mark.parametrize("route_account", [LIVE_ACCT, "9LIVE9999", SHADOW_ACCT])
-async def test_shadow_authority_facts_preserve_public_route_account_scope(
-    shadow_app: tuple[FastAPI, ActiveClerkRuntime],
-    monkeypatch: pytest.MonkeyPatch,
-    route_account: str,
-) -> None:
-    """The public account maps to its Shadow custody; other route ids stay refused."""
-    app, runtime = shadow_app
-    _register_instance(runtime.clerk)
-    monkeypatch.setattr(
-        "app.services.broker_v2_panel.panel_data_source.bot_process_fact",
-        lambda _broker, _sid: BotProcessFact(
-            strategy_instance_id=SID,
-            run_id="run-1",
-            process_identity=None,
-            state="UNKNOWN",
-            registry_generation="test-registry",
-            observed_at_ms=NOW_MS,
-        ),
-    )
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.get(
-            f"/api/brokers/alpaca/accounts/{route_account}/bots/{SID}/authority-facts"
-        )
-    if route_account == LIVE_ACCT:
-        assert response.status_code == 200, response.text
-        assert response.json()["clerk"]["account_id"] == SHADOW_ACCT
-        assert response.json()["process"]["state"] == "UNKNOWN"
-    else:
-        assert response.status_code == 404, response.text
 
 
 @pytest.mark.parametrize(
@@ -616,14 +571,14 @@ async def test_the_bots_catalog_is_reachable_over_http_on_a_shadow_authority(
     assert rows[0]["account_id"] == SHADOW_ACCT
 
 
-async def test_both_chart_reads_answer_their_typed_state_on_a_shadow_authority(
+async def test_the_chart_history_read_answers_its_typed_state_on_a_shadow_authority(
     shadow_app: tuple[FastAPI, ActiveClerkRuntime],
 ) -> None:
-    """(g) The two ``panel_chart_data_source`` readers translate the same way.
+    """(g) The ``panel_chart_data_source`` history reader translates the same way.
 
-    No instance is registered, so each endpoint answers the same typed state a
+    No instance is registered, so the endpoint answers the same typed state a
     real-paper authority answers for a bot it does not carry. Before the
-    translation both raised the readers' bare ``ValueError`` -- a 500 -- from
+    translation it raised the reader's bare ``ValueError`` -- a 500 -- from
     the account guard, which sits above every "no such bot" branch.
     """
     app, _runtime = shadow_app
@@ -631,16 +586,11 @@ async def test_both_chart_reads_answer_their_typed_state_on_a_shadow_authority(
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        live = await client.get(
-            f"/api/brokers/alpaca/accounts/{LIVE_ACCT}/bots/{SID}/chart/live",
-            params={"resolution": "1m"},
-        )
         history = await client.get(
             f"/api/brokers/alpaca/accounts/{LIVE_ACCT}/bots/{SID}/chart/history",
             params={"timeframe": "1d"},
         )
 
-    assert live.status_code == 404, live.text
     assert history.status_code == 503, history.text
 
 

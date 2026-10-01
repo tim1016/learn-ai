@@ -43,18 +43,14 @@ from datetime import UTC, date, datetime
 from functools import cache
 from typing import Any
 
-import httpx
 import numpy as np
 import pandas as pd
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport
 
 from app.data_lake.polygon_fetcher import polygon_history_floor
 from app.lean_sidecar.trading_calendar import expected_sessions, session_windows_ms_utc
 from app.models.requests import DatasetGenerationRequest
 from app.routers import dataset as dataset_router
-from app.routers import indicators as indicators_router
 from app.schemas.chart import ChartDataResponse
 from app.services import chart_service, dataset_service
 from app.services.dataset_plan_service import prepare_generation_request
@@ -841,33 +837,3 @@ def test_an_export_bar_is_as_long_as_the_chart_bar_of_the_same_span(
     timespan: str, multiplier: int, timeframe: str
 ) -> None:
     assert bar_minutes_for(timespan, multiplier) == chart_service.TIMEFRAME_DEFS[timeframe]["minutes"]
-
-
-# ── The indicator table trims at the same window start ──────────
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("server_time_zone", ["Asia/Tokyo", "Pacific/Honolulu"], indirect=True)
-async def test_the_indicator_table_window_ignores_the_server_time_zone(
-    monkeypatch: pytest.MonkeyPatch, server_time_zone: str
-) -> None:
-    """``/generate-table`` trimmed its lead-in at the server's local midnight:
-    east of ET that kept the prior session's afternoon, west of it that cut the
-    picked day's pre-market. It trims at the resolver's ET-midnight start now."""
-    monkeypatch.setattr(
-        indicators_router.polygon_client,
-        "fetch_aggregates",
-        lambda *, from_date, to_date, **_kwargs: _provider(from_date, to_date),
-    )
-    api = FastAPI()
-    api.include_router(indicators_router.router, prefix="/api/indicators")
-
-    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
-        response = await client.post(
-            "/api/indicators/generate-table",
-            json={"symbol": "SPY", "from_date": _FROM, "to_date": _TO, "session": "extended"},
-        )
-
-    assert response.status_code == 200
-    rows = response.json()["rows"]
-    assert [row["time"] for row in rows] == [bar["timestamp"] for bar in _provider(_FROM, _TO)]

@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -121,63 +120,4 @@ class DataSanitizer:
 
         except Exception as e:
             logger.error(f"Error sanitizing aggregates: {e!s}")
-            raise
-
-    @staticmethod
-    def sanitize_generic(raw_data: list[dict[str, Any]], quantile: float = 0.99) -> dict[str, Any]:
-        """Sanitize arbitrary market data.
-        Used by the standalone /api/sanitize endpoint."""
-        try:
-            if not raw_data:
-                return {"data": [], "summary": {"original_count": 0, "cleaned_count": 0}}
-
-            df = pd.DataFrame(raw_data)
-            original_count = len(df)
-
-            logger.info(f"Generic sanitization on {original_count} records (quantile={quantile})")
-
-            # Handle timestamp column if present — preserve original Unix ms untouched.
-            # Historically this round-tripped through pd.to_datetime and back with //10**6,
-            # which in pandas 3.0 returns microseconds (not ns), collapsing every
-            # timestamp by a factor of 10**6 (e.g. 1704067200000 → 1704067 → 1970-01-20).
-            has_timestamp = "timestamp" in df.columns
-            original_timestamps = None
-            if has_timestamp:
-                original_timestamps = df["timestamp"].copy()
-                df = df.drop(columns=["timestamp"])
-
-            # Handle symbol/string columns
-            string_cols = df.select_dtypes(include=["object"]).columns.tolist()
-            string_data = df[string_cols].copy() if string_cols else None
-            if string_cols:
-                df = df.drop(columns=string_cols)
-
-            cleaned = _clean_numeric(df, quantile=quantile)
-
-            # Reassemble
-            if string_data is not None:
-                for col in string_cols:
-                    cleaned[col] = string_data[col].loc[cleaned.index].values
-
-            if has_timestamp and original_timestamps is not None:
-                # Return the original ms values untouched — no tz math, no collapse.
-                cleaned["timestamp"] = original_timestamps.loc[cleaned.index].astype(np.int64)
-
-            cleaned_count = len(cleaned)
-
-            return {
-                "data": cleaned.to_dict("records"),
-                "summary": {
-                    "original_count": original_count,
-                    "cleaned_count": cleaned_count,
-                    "removed_count": original_count - cleaned_count,
-                    "removal_percentage": round(((original_count - cleaned_count) / original_count) * 100, 2)
-                    if original_count > 0
-                    else 0,
-                    "columns_processed": list(df.columns),
-                },
-            }
-
-        except Exception as e:
-            logger.error(f"Error in generic sanitization: {e!s}")
             raise

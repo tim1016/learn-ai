@@ -60,7 +60,6 @@ from app.broker.alpaca.clerk.program_leg import (
     ProgramLegRefused,
 )
 from app.broker.alpaca.marketable_limit import (
-    DEFAULT_EXIT_BAND_MULTIPLE,
     DEFAULT_EXIT_SPREAD_CAP_BPS,
     marketable_limit_price,
 )
@@ -115,17 +114,6 @@ def send_arrival_ms(now_ms: int) -> int:
     """The latest instant a leg sent at ``now_ms`` may reach the broker (:data:`EXIT_SEND_GUARD_BAND_MS`)."""
     return now_ms + EXIT_SEND_GUARD_BAND_MS
 
-
-RECOVERY_BAND_ALLOWANCE_MULTIPLE = DEFAULT_EXIT_BAND_MULTIPLE
-"""The declared default band multiple: how far through the book a confirmed
-limit may go, in multiples of the sealed exit allowance.
-
-Owner decision 2026-09-19: refuse a price more than twice the allowance past
-the bid (sell) or ask (cover), so a typo cannot sweep a thin after-hours book.
-The deploy form pre-fills this value; each bot seals its explicit choice.
-Runtime recovery reads that immutable seal. The legacy environment override
-is consulted only during the one-time upgrade of existing registrations.
-"""
 
 RECOVERY_SPREAD_WARNING_BPS = int(DEFAULT_EXIT_SPREAD_CAP_BPS)
 """A bid-ask spread wider than this, in bps of the mid, is flagged before sending.
@@ -951,7 +939,6 @@ def _extended_phase(state: SessionAuthorityState) -> ExtendedPhase:
 
 __all__ = [
     "EXIT_SEND_GUARD_BAND_MS",
-    "RECOVERY_BAND_ALLOWANCE_MULTIPLE",
     "RECOVERY_LIMIT_OUTSIDE_BAND",
     "RECOVERY_LIMIT_SESSION_ENDED",
     "RECOVERY_MARKET_WAIT_ENDED",

@@ -3,9 +3,6 @@
 The fleet's own transport is the *account-scoped* surface: every route here
 had no catalog operation resolving to it, no frontend caller (Frontend builds
 every mutation URL through fleet/clerk-scoped-url.ts) and no script caller.
-The two unscoped mutations that remain — the replay-receipt recompute and the
-loss-hold clear — are deliberately retained: they are operator routes with no
-fleet successor, tracked as stranded in docs/design/fleet-b-route-inventory.md.
 """
 
 from __future__ import annotations
@@ -23,11 +20,6 @@ RETIRED_UNSCOPED_BOT_MUTATIONS = {
     ("POST", "/api/brokers/{broker}/bots"),
     ("POST", "/api/brokers/{broker}/bots/{strategy_instance_id}/stop"),
     ("POST", "/api/brokers/{broker}/bots/{sid}/actions"),
-}
-
-RETAINED_STRANDED_UNSCOPED_MUTATIONS = {
-    ("POST", "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/{run_id}/replay-receipt"),
-    ("POST", "/api/brokers/{broker}/live-envelope/loss-hold/clear"),
 }
 
 SUCCESSOR_ACCOUNT_SCOPED_MUTATIONS = {
@@ -56,7 +48,6 @@ def test_unscoped_bot_mutation_routes_are_absent() -> None:
 
     assert registered.isdisjoint(RETIRED_UNSCOPED_BOT_MUTATIONS)
     assert registered >= SUCCESSOR_ACCOUNT_SCOPED_MUTATIONS
-    assert registered >= RETAINED_STRANDED_UNSCOPED_MUTATIONS
 
 
 def test_retired_unscoped_deploy_and_stop_bodies_are_absent() -> None:

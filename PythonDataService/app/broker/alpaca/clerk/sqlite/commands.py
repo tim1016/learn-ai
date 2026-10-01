@@ -74,8 +74,6 @@ INTENDED_END_STATE_ACTIVE = "ACTIVE"
 INTENDED_END_STATE_STOPPED = "STOPPED"
 INTENDED_END_STATE_RETIRED = "RETIRED"
 
-_ALREADY_ACTIVE_REASON = "This bot already has an active run; stop it before starting a new one."
-
 
 @dataclass(frozen=True)
 class CommandSubmission:

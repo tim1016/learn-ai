@@ -1,11 +1,10 @@
 """Serve consolidated bars from the shared policy-keyed bar store.
 
-Backs ``GET /api/engine/bars``: the UI's way to chart exactly the bytes
+Backs ``POST /api/engine/chart``: the UI's way to chart exactly the bytes
 a backtest consumed. Reads through the same readers and the same
 consolidator the engine itself uses, so for a given
 ``(roots, symbol, window, session, strategy timeframe)`` the output is
-identical to the ``chart_bars`` a live run reported — pinned by the
-golden equality test in ``tests/routers/test_engine_bars_endpoint.py``.
+identical to the ``chart_bars`` a live run reported.
 
 Formula: LEAN period-consolidation semantics (floor-rounded bar start,
 fire on next-period arrival, end-of-data scan flush).
@@ -14,7 +13,9 @@ Reference: ``app/engine/consolidators/trade_bar_consolidator.py``
 flush at ``app/engine/engine.py`` ("End-of-data consolidator flush").
 Canonical implementation: this module composes the canonical reader and
 consolidator; it defines no new math.
-Validated against: golden equality test vs ``EngineBacktestResponse.chart_bars``.
+Validated against: NONE — the golden equality test vs
+``EngineBacktestResponse.chart_bars`` went with the cut ``GET /api/engine/bars``
+route (#2755); the reader and consolidator it composes keep their own tests.
 """
 
 from __future__ import annotations

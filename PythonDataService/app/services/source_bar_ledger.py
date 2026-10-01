@@ -27,7 +27,6 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
-from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import (
     ContinuityEventRef,
     FeedContinuityEvent,
@@ -765,7 +764,9 @@ class SourceBarLedger:
         must not silently reinterpret a finished run, and a replay generated
         on demand or during boot repair must not depend on any authority being
         active at all. It belongs beside the bars and continuity facts it
-        governs, in this run's own evidence.
+        governs, in this run's own evidence. No reader remains since the
+        replay-proof service was cut (#2755); the row is kept as write-once
+        evidence of the window the run decided under.
 
         Write-once and idempotent: a re-entered run (a resumed stream, a
         second runner pass) records the same session and is a no-op, while a
@@ -808,33 +809,6 @@ class SourceBarLedger:
                 f"run {run_id!r} already decided under {stored['kind']!r} "
                 f"{stored['window_open_minute_et']}-{stored['window_close_minute_et']}"
             )
-
-    def decision_session(self, *, run_id: str) -> RunDecisionSession | None:
-        """The session recorded for one run, or ``None`` when it recorded none.
-
-        ``None`` is not "regular hours": a run that predates this record, or
-        one that never opened a retained feed, simply left no statement. Only
-        the caller knows whether its binding makes that absence answerable —
-        an ``rth`` binding needs no record, a ``use_rth=False`` one cannot be
-        replayed without it.
-        """
-        with self._lock:
-            row = self._conn.execute(
-                "SELECT kind, window_open_minute_et, window_close_minute_et "
-                "FROM source_run_decision_session WHERE run_id = ?",
-                (run_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        window = (
-            None
-            if row["window_open_minute_et"] is None
-            else ExtendedHoursWindow(
-                open_minute_et=int(row["window_open_minute_et"]),
-                close_minute_et=int(row["window_close_minute_et"]),
-            )
-        )
-        return RunDecisionSession(kind=row["kind"], window=window)
 
     def events(
         self,
@@ -980,10 +954,6 @@ class SourceBarLedger:
                 (symbol,),
             ).fetchall()
         return [str(row["provider"]) for row in rows]
-
-    def market_providers_for(self, symbol: str) -> list[str]:
-        """The providers whose streams the market delivered for ``symbol``, without fill evidence."""
-        return [provider for provider in self.providers_for(symbol) if provider not in FILL_EVIDENCE_PROVIDERS]
 
     def checkpoint_wal(self) -> None:
         """Checkpoint and truncate durable evidence after controlled shutdown or backup.

@@ -33,8 +33,7 @@ from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from ._support import _RTH_MS, _WIN_START_MS, _bar, _green_bar, _red_bar, _wait_for
 
 # The evidence namespace a trade-mode run's source-bar ledger is opened
-# under (``run_replay_proof.ledger_account_id_for``), and so the prefix
-# of every retained bar's stable ``bar_ref``.
+# under, and so the prefix of every retained bar's stable ``bar_ref``.
 _LEDGER_ACCOUNT_ID = paper_evidence_account_id_for_strategy(_SID)
 
 

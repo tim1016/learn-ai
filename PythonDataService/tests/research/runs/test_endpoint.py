@@ -373,69 +373,6 @@ async def test_list_limit_truncates(client):
 
 
 # ---------------------------------------------------------------------------
-# GET /api/research/trading-calendar — date-picker preview endpoint.
-# ---------------------------------------------------------------------------
-async def test_trading_calendar_returns_memorial_day_breakdown(client):
-    """Happy path: the motivating bug case (Memorial Day 2026 week)."""
-    response = await client.get(
-        "/api/research/trading-calendar",
-        params={"start": "2026-05-19", "end": "2026-05-26"},
-    )
-    assert response.status_code == 200, response.text
-
-    body = response.json()
-    assert body["requested_start_date"] == "2026-05-19"
-    assert body["requested_end_date"] == "2026-05-26"
-    # end is inclusive — 5/26 is the fifth session (5/25 is Memorial Day).
-    assert body["sessions_included"] == [
-        "2026-05-19",
-        "2026-05-20",
-        "2026-05-21",
-        "2026-05-22",
-        "2026-05-26",
-    ]
-    excluded_by_date = {ex["date"]: ex for ex in body["sessions_excluded"]}
-    assert excluded_by_date["2026-05-25"] == {
-        "date": "2026-05-25",
-        "reason": "holiday",
-        "name": "Memorial Day",
-    }
-    assert excluded_by_date["2026-05-23"]["reason"] == "weekend"
-    assert excluded_by_date["2026-05-23"]["name"] is None
-    assert excluded_by_date["2026-05-24"]["reason"] == "weekend"
-
-
-async def test_trading_calendar_rejects_invalid_date(client):
-    response = await client.get(
-        "/api/research/trading-calendar",
-        params={"start": "not-a-date", "end": "2026-05-26"},
-    )
-    assert response.status_code == 400
-    assert "start" in response.json()["detail"]
-
-
-async def test_trading_calendar_accepts_same_day(client):
-    """start == end is a valid single-day inclusive window."""
-    response = await client.get(
-        "/api/research/trading-calendar",
-        params={"start": "2026-05-26", "end": "2026-05-26"},
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["sessions_included"] == ["2026-05-26"]
-    assert body["sessions_excluded"] == []
-
-
-async def test_trading_calendar_rejects_end_before_start(client):
-    response = await client.get(
-        "/api/research/trading-calendar",
-        params={"start": "2026-05-26", "end": "2026-05-19"},
-    )
-    assert response.status_code == 400
-    assert "on or after" in response.json()["detail"]
-
-
-# ---------------------------------------------------------------------------
 # RunLedger.window_summary — stamped on every persisted run.
 # ---------------------------------------------------------------------------
 async def test_post_ledger_carries_window_summary(client):

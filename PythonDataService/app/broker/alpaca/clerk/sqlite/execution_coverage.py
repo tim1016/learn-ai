@@ -917,32 +917,6 @@ def cumulative_recovery_fills_for_order(
     )
 
 
-def direct_cumulative_recovery_fill_for_order(
-    conn: sqlite3.Connection,
-    *,
-    order_ref: str,
-) -> CumulativeRecoveryFill | None:
-    """Return one isolated aggregate row eligible for direct replacement.
-
-    #1554 is deliberately narrower than the set proof: automatic admission
-    is allowed only while this order's effective economics consist of exactly
-    one cumulative-recovery row. Any other effective fill must retain the
-    established fail-closed coverage path until the accumulated-set slice can
-    account for it.
-    """
-    cumulative = cumulative_recovery_fills_for_order(conn, order_ref=order_ref)
-    if len(cumulative) != 1:
-        return None
-    other_effective = conn.execute(
-        "SELECT 1 FROM fills f WHERE f.order_ref = ? "
-        "AND f.evidence_source != 'cumulative_recovery' "
-        "AND NOT EXISTS (SELECT 1 FROM fills successor "
-        "WHERE successor.superseded_execution_ref = f.execution_id) LIMIT 1",
-        (order_ref,),
-    ).fetchone()
-    return None if other_effective is not None else cumulative[0]
-
-
 def exact_replaces_cumulative(
     *,
     exact: ExecutionSliceFilledFacts,

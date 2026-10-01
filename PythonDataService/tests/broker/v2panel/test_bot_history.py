@@ -334,14 +334,13 @@ async def test_an_old_shadow_database_no_clerk_migrated_is_read_through_the_cler
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "version", [3, 8, SCHEMA_VERSION + 1], ids=["no_registered_path", "offline_v8_ceremony", "newer_build"],
+    "version", [3, 12, SCHEMA_VERSION + 1], ids=["no_registered_path", "below_the_v13_floor", "newer_build"],
 )
 async def test_a_world_in_a_record_format_no_migration_reaches_is_named_as_such(
     lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch, version: int,
 ) -> None:
     """A file no migration brings forward is named for what it is -- and
-    never fails the account's whole read (a v8 file's refusal used to escape
-    as a ``ValueError``)."""
+    never fails the account's whole read."""
     path = _shadow_rehearsal(lane, monkeypatch)
     conn = sqlite3.connect(path)
     conn.execute("UPDATE control_meta SET schema_version = ? WHERE id = 1", (version,))

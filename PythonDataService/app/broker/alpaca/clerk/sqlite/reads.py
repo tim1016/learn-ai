@@ -23,7 +23,6 @@ from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     CommandResource,
     ControlMetaSnapshot,
-    DecisionReceiptPageResource,
     DecisionReceiptResource,
     EffectOperationResource,
     ExternalOrderResource,
@@ -279,58 +278,6 @@ def decision_receipt_tail(
     return [DecisionReceiptResource(**dict(row)) for row in reversed(rows)]
 
 
-def decision_receipts_by_transaction(
-    conn: sqlite3.Connection,
-    *,
-    strategy_instance_id: str,
-    transaction_ref: str,
-    limit: int,
-) -> list[DecisionReceiptResource]:
-    rows = conn.execute(
-        f"SELECT {', '.join(_DECISION_RECEIPT_COLUMNS)} FROM decision_receipts "
-        "WHERE strategy_instance_id = ? AND (intent_id = ? OR order_ref = ?) "
-        "ORDER BY seq DESC LIMIT ?",
-        (strategy_instance_id, transaction_ref, transaction_ref, limit),
-    ).fetchall()
-    return [DecisionReceiptResource(**dict(row)) for row in reversed(rows)]
-
-
-def decision_receipt_page(
-    conn: sqlite3.Connection, *, strategy_instance_id: str, after_seq: int,
-    through_seq: int | None, limit: int, observed_at_ms: int,
-) -> DecisionReceiptPageResource:
-    """Walk retained evidence from the oldest row, including protected history.
-
-    ``through_seq`` freezes a walk's upper sequence while new decisions arrive.
-    Each page is a committed read; the walk is not a historical database snapshot.
-    A new walk starts at zero so revisions to old receipts remain observable.
-    """
-    instance = strategy_instance(conn, strategy_instance_id)
-    if instance is None:
-        raise KeyError(strategy_instance_id)
-    latest = conn.execute(
-        "SELECT COALESCE(MAX(seq), 0) FROM decision_receipts WHERE strategy_instance_id = ?",
-        (strategy_instance_id,),
-    ).fetchone()[0]
-    highest = latest if through_seq is None else through_seq
-    if highest > latest:
-        raise ValueError("The source receipt watermark moved backwards")
-    if after_seq > highest:
-        raise ValueError("The receipt cursor exceeds the requested source watermark")
-    rows = conn.execute(
-        f"SELECT {', '.join(_DECISION_RECEIPT_COLUMNS)} FROM decision_receipts "
-        "WHERE strategy_instance_id = ? AND seq > ? AND seq <= ? ORDER BY seq LIMIT ?",
-        (strategy_instance_id, after_seq, highest, limit + 1),
-    ).fetchall()
-    receipts = tuple(DecisionReceiptResource(**dict(row)) for row in rows[:limit])
-    return DecisionReceiptPageResource(
-        meta=control_meta_snapshot(conn), strategy_instance_id=strategy_instance_id,
-        config_hash=instance["config_hash"], observed_at_ms=observed_at_ms,
-        after_seq=after_seq, highest_seq=highest,
-        next_after_seq=receipts[-1].seq if len(rows) > limit else None, receipts=receipts,
-    )
-
-
 def _external_order_resource(row: sqlite3.Row) -> ExternalOrderResource:
     values = {column: row[column] for column in _EXTERNAL_ORDER_COLUMNS}
     evidence_refs = json.loads(values.pop("evidence_refs_json"))
@@ -377,68 +324,6 @@ def external_orders(conn: sqlite3.Connection) -> list[ExternalOrderResource]:
         "ORDER BY eo.observed_at_ms DESC, eo.external_order_id DESC"
     ).fetchall()
     return [_external_order_resource(row) for row in rows]
-
-
-def external_order_page(
-    conn: sqlite3.Connection,
-    *,
-    observation_sequence_before: int | None,
-    external_order_id_before: str | None,
-    lifecycle_state: str | None,
-    limit: int,
-) -> list[ExternalOrderResource]:
-    if (observation_sequence_before is None) != (external_order_id_before is None):
-        raise ValueError("external-order cursor must include both keyset fields")
-    lifecycle_predicate = {
-        None: "",
-        "review_required": "eo.acknowledged_at_ms IS NULL",
-        "reviewed": "eo.acknowledged_at_ms IS NOT NULL",
-    }.get(lifecycle_state)
-    if lifecycle_predicate is None:
-        raise ValueError("external-order lifecycle_state is invalid")
-    params: tuple[object, ...]
-    where_clauses: list[str] = []
-    observation_sequence = (
-        "(SELECT MIN(ct.sequence) FROM custody_transitions ct "
-        "WHERE ct.broker_order_id = eo.broker_order_id "
-        "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED')"
-    )
-    if observation_sequence_before is None:
-        params = (limit,)
-    else:
-        where_clauses.append(
-            f"({observation_sequence} < ? OR ({observation_sequence} = ? AND eo.external_order_id < ?))"
-        )
-        params = (
-            observation_sequence_before,
-            observation_sequence_before,
-            external_order_id_before,
-            limit,
-        )
-    if lifecycle_predicate:
-        where_clauses.append(lifecycle_predicate)
-    where = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
-    rows = conn.execute(
-        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo {where}"
-        f"ORDER BY {observation_sequence} DESC, eo.external_order_id DESC LIMIT ?",
-        params,
-    ).fetchall()
-    return [_external_order_resource(row) for row in rows]
-
-
-def external_orders_observed_since(conn: sqlite3.Connection, *, since_ms: int) -> int:
-    """How many foreign orders were observed at or after ``since_ms``.
-
-    The day-P&L fact reads this to decide whether it can vouch for the day at
-    all: an order the Clerk did not place has no journaled fills, so its P&L
-    is not in the FIFO and the day's number would be quietly wrong.
-    """
-    return int(
-        conn.execute(
-            "SELECT COUNT(*) FROM external_orders WHERE observed_at_ms >= ?",
-            (since_ms,),
-        ).fetchone()[0]
-    )
 
 
 UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED_SUMMARY_CODE = "UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED"
@@ -508,8 +393,8 @@ def unfoldable_broker_orders_active_since(
 ) -> int:
     """How many distinct unfoldable broker orders showed activity at or after ``since_ms``.
 
-    The day-P&L fact's companion to :func:`external_orders_observed_since`:
-    an order the Clerk could not record has no journaled fills either.
+    The day-P&L fact reads it because an order the Clerk could not record
+    has no journaled fills.
     Activity is the first observation or any later change of the order's
     broker state, so an order first seen yesterday that fills today counts
     today. Every episode row is read, resolved or not, so an acknowledged
@@ -1224,7 +1109,7 @@ def effective_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) ->
     for fills with no successor naming their ``execution_id`` as superseded.
     Reference: PRD #1441 S1.2 execution corrections.
     Canonical implementation: this query, reused by cumulative recovery.
-    Validated against: ``test_cumulative_recovery_fill_is_explicitly_tagged``.
+    Validated against: ``test_one_exact_auto_supersedes_many_cumulative_recovery_rows``.
     """
     return _effective_fill_totals_for_order(conn, order_ref)
 

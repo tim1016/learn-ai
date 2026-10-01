@@ -102,13 +102,6 @@ class StopRunRequest(BaseModel):
     operator_reason: str | None = None
 
 
-class DurableConflictResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    reason: str
-    existing_command: CommandResponse
-
-
 class ReconciliationResponse(BaseModel):
     """Backend-authored result of an operator reconciliation pass."""
 

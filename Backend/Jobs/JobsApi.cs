@@ -1,6 +1,5 @@
 using System.Net.Http.Json;
 using System.Text;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Backend.Services.Interfaces;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -24,11 +23,6 @@ public static class JobsApi
 {
     private const int JobTtlSeconds = 60 * 60 * 24;
 
-    private static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
-
     /// <summary>
     /// Map of public job type → Python-internal route. Add a row here
     /// when introducing a new job kind; everything else (state, events,
@@ -36,7 +30,6 @@ public static class JobsApi
     /// </summary>
     private static readonly Dictionary<string, string> JobTypeRoutes = new()
     {
-        ["backtest"] = "/api/jobs-internal/backtest",
         ["dataset-zip"] = "/api/jobs-internal/dataset-zip",
         ["engine_backtest"] = "/api/jobs-internal/engine-backtest",
         ["lean_engine_run"] = "/api/jobs-internal/lean-engine-run",

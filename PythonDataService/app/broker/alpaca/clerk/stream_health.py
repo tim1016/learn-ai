@@ -27,7 +27,7 @@ from app.marketdata.feed import FeedHealth
 from app.services.market_liveness import market_data_bars_live
 
 ChannelHealthProvider = Callable[[], ChannelHealth]
-# Same wire value as the legacy Clerk's STREAM_HEALTH_HOLD_CODE (S4, #1262)
+# Same wire value as the legacy Clerk's stream-health hold code (S4, #1262)
 # so evidence surfaces that key off the reason code read identically across
 # both authorities. Lives here because both the entry-time refusal that
 # quotes it and the sync that owns the hold already depend on this module.

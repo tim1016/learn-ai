@@ -166,10 +166,3 @@ def test_served_documents_fail_when_a_diagram_class_has_no_style(tmp_path: Path)
 
     assert any("diagram class .dg-renamed is not defined" in error for error in errors)
     assert not any(".dg-box " in error or ".dg-live " in error for error in errors)
-
-
-def test_the_served_ibkr_guide_carries_no_retired_order_capable_guidance() -> None:
-    checker = _checker_module()
-    served = (REPOSITORY_ROOT / "Frontend/src/assets/docs/ibkr-setup-guide.md").read_text(encoding="utf-8")
-    for retired in checker.FORBIDDEN_CURRENT_GUIDANCE:
-        assert retired not in served

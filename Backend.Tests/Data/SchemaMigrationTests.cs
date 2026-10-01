@@ -39,16 +39,6 @@ public class SchemaMigrationTests
     }
 
     [Fact]
-    public void ProductionStartup_UsesMigrationInitializer()
-    {
-        var programPath = FindRepositoryFile("Backend", "Program.cs");
-        var startupSource = File.ReadAllText(programPath);
-
-        Assert.Contains("DatabaseInitializer.MigrateAsync(", startupSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("Database.EnsureCreated", startupSource, StringComparison.Ordinal);
-    }
-
-    [Fact]
     public async Task DatabaseInitializer_TransientFailure_RetriesOnce()
     {
         var attempts = 0;
@@ -309,7 +299,16 @@ public class SchemaMigrationTests
         // went with the run table.
         "StrategyExecutions",
         "BacktestTrades",
-        "ParityVerdicts"
+        "ParityVerdicts",
+
+        // DropUnwrittenMarketDataTables (#2756): nothing wrote these market
+        // data tables once their GraphQL readers and the research
+        // mutations went.
+        "Trades",
+        "Quotes",
+        "TechnicalIndicators",
+        "ReferenceData",
+        "OptionsIvSnapshots"
     ];
 
     // ck_raw_only_for_canonical_data_root is deliberately absent: migration
@@ -465,22 +464,5 @@ public class SchemaMigrationTests
         command.Parameters.AddWithValue("relationName", relationName);
 
         Assert.True(await command.ExecuteScalarAsync() is null or DBNull);
-    }
-
-    private static string FindRepositoryFile(params string[] relativePathSegments)
-    {
-        foreach (var startingDirectory in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
-        {
-            for (var directory = new DirectoryInfo(startingDirectory); directory is not null; directory = directory.Parent)
-            {
-                var candidate = Path.Combine([directory.FullName, .. relativePathSegments]);
-                if (File.Exists(candidate))
-                {
-                    return candidate;
-                }
-            }
-        }
-
-        throw new FileNotFoundException($"Could not locate {Path.Combine(relativePathSegments)} from the test runtime directories.");
     }
 }

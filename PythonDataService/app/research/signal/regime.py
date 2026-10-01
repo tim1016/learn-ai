@@ -1,7 +1,7 @@
 """Bar-level regime classification for signal gating.
 
 Formula: vol regime = rolling_std(log_return, 20) vs vol_low_pct / vol_high_pct percentiles; trend regime = sign(MA_20 − MA_20.shift(5)); joint (vol, trend) label = (vol_bin, trend_sign).
-Reference: Internal — overlaps with app/engine/edge/regime_clustering.py (resolution owed per registry note; verify whether one calls the other or duplicates).
+Reference: Internal — no external reference.
 Canonical implementation: app/research/signal/regime.py
 Validated against: NONE — pending (pending-fixture per registry)
 """

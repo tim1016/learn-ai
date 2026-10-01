@@ -65,22 +65,9 @@ A second review (Codex, PR #2135) found three more:
    as findings 1-2, a guarantee reading broader than what runs.
    ``CHECKED_ROLES`` is now derived from that ``Literal`` directly.
 
-A third review (task A2 fix round 1, 2026-09-15) found a sixth: A2 retired
-the coordinator's unscoped live-verdict compatibility read -- it now always
-answers ``410`` (#2140) -- but the handler kept its return annotation as
-``AlpacaLiveVerdict`` specifically so the coordinator's document kept
-*falsely* agreeing with the committed contract's ``200`` response, which is
-exactly the failure shape this module exists to catch, deliberately
-preserved to keep this module green. The handler
-(``app/routers/fleet_compatibility_reads.py``) is now annotated to match
-what it actually returns, and ``EXPECTED_RESPONSE_SHAPE_DIVERGENCES`` below
-is this module's one narrow, checked exception to the response-shape
-comparison: pinned, not waived.
-``test_coordinator_live_verdict_pin_declares_the_410_refusal`` asserts the
-exact divergence the pin permits, so an un-retired route answering ``200``
-again fails it; ``test_shared_operations_agree_with_the_committed_contract``
-fails loudly, rather than silently waiving nothing, if the pinned triple
-stops being a path+method the role and the committed contract share at all.
+The coordinator's unscoped live-verdict compatibility read, which A2
+retired to an unconditional ``410`` (#2140), was cut with the other dead
+routes (#2755); panel-profile is the one compatibility read left.
 """
 
 from __future__ import annotations
@@ -131,36 +118,14 @@ COMMITTED_CONTRACT_PATH = REPOSITORY_ROOT / "contracts" / "openapi" / "python-da
 _DECLARED_ROLES = frozenset(get_args(FleetSettings.model_fields["ROLE"].annotation))
 CHECKED_ROLES = tuple(sorted(_DECLARED_ROLES - {"combined"}))
 
-#: The two compatibility reads this test exists because of. Asserting their
+#: The compatibility read this test exists because of. Asserting its
 #: presence directly (rather than only asserting "coordinator paths are a
 #: subset of committed") is what stops an empty or gutted compatibility
 #: router from passing this test vacuously -- a coordinator serving zero
 #: paths is trivially a subset of anything.
 EXPECTED_COORDINATOR_COMPAT_ROUTES = frozenset(
     {
-        ("/api/brokers/{broker}/live-verdict", "get"),
         ("/api/brokers/{broker}/panel-profile", "get"),
-    }
-)
-
-#: The one ``(role, path, method)`` triple whose response shape is expected,
-#: permanently and on purpose, to diverge from the committed contract (see
-#: the module docstring's sixth finding). The coordinator's live-verdict
-#: compatibility read has no clerk runtime to answer from on a standalone
-#: coordinator process -- there is no topology where it could ever correctly
-#: serve the committed contract's ``200: AlpacaLiveVerdict``, so it always
-#: answers ``410`` (``app/routers/fleet_compatibility_reads.py``). This is a
-#: PIN, not a waiver: it only suppresses the response-shape comparison for
-#: this exact triple in ``test_shared_operations_agree_with_the_committed_contract``
-#: -- that test still fails loudly if the triple stops being a path+method
-#: the role shares with the committed contract at all (route deleted, path
-#: renamed, compat window closed) -- and
-#: ``test_coordinator_live_verdict_pin_declares_the_410_refusal`` separately
-#: asserts the exact divergence this pin permits, so it goes red the moment
-#: the route is un-retired and starts answering 200 again.
-EXPECTED_RESPONSE_SHAPE_DIVERGENCES = frozenset(
-    {
-        ("fleet_coordinator", "/api/brokers/{broker}/live-verdict", "get"),
     }
 )
 
@@ -310,7 +275,7 @@ def _dereferenced(fragment: Any, document: dict[str, Any], visiting: frozenset[s
 
 def _operation_wire_shape_mismatches(
     *, role: str, path: str, method: str, role_operation: dict[str, Any], role_document: dict[str, Any],
-    committed_operation: dict[str, Any], committed_document: dict[str, Any], compare_responses: bool = True,
+    committed_operation: dict[str, Any], committed_document: dict[str, Any],
 ) -> list[str]:
     """Every disagreement between one shared path+method's wire contract in
     ``role_document`` and in ``committed_document``: every response's media
@@ -321,29 +286,21 @@ def _operation_wire_shape_mismatches(
     handler and its router grouping, which legitimately differ between a
     compat alias and the canonical route it delegates to, and carry no
     information a caller of the API observes.
-
-    ``compare_responses`` is ``False`` for exactly the one pinned triple in
-    ``EXPECTED_RESPONSE_SHAPE_DIVERGENCES`` (see its docstring and the
-    module docstring's sixth finding): the response-shape comparison is
-    skipped for that triple only, while ``parameters`` and ``requestBody``
-    are still compared unconditionally below, so the pin cannot hide any
-    other kind of divergence on the same path.
     """
     mismatches: list[str] = []
 
-    if compare_responses:
-        role_responses = role_operation.get("responses", {})
-        committed_responses = committed_operation.get("responses", {})
-        for status_code in sorted(set(role_responses) | set(committed_responses)):
-            role_media = _dereferenced(_response_media_schemas(role_responses.get(status_code, {})), role_document)
-            committed_media = _dereferenced(
-                _response_media_schemas(committed_responses.get(status_code, {})), committed_document
+    role_responses = role_operation.get("responses", {})
+    committed_responses = committed_operation.get("responses", {})
+    for status_code in sorted(set(role_responses) | set(committed_responses)):
+        role_media = _dereferenced(_response_media_schemas(role_responses.get(status_code, {})), role_document)
+        committed_media = _dereferenced(
+            _response_media_schemas(committed_responses.get(status_code, {})), committed_document
+        )
+        if role_media != committed_media:
+            mismatches.append(
+                f"{method.upper()} {path} [{status_code}] response media types: "
+                f"FLEET_ROLE={role} resolved={role_media!r} != committed resolved={committed_media!r}"
             )
-            if role_media != committed_media:
-                mismatches.append(
-                    f"{method.upper()} {path} [{status_code}] response media types: "
-                    f"FLEET_ROLE={role} resolved={role_media!r} != committed resolved={committed_media!r}"
-                )
 
     role_parameters = _dereferenced(role_operation.get("parameters", []), role_document)
     committed_parameters = _dereferenced(committed_operation.get("parameters", []), committed_document)
@@ -387,7 +344,7 @@ def test_role_documents_are_nonempty_and_the_coordinator_serves_its_compat_route
     zero paths would trivially satisfy "is a subset of the committed
     contract" -- this asserts each role actually served a real, non-trivial
     surface, and specifically that the coordinator's document contains the
-    two compatibility reads this test exists to pin (removing a route from
+    compatibility read this test exists to pin (removing a route from
     ``fleet_compatibility_reads.router`` must fail this, not just shrink a
     subset check that would still pass)."""
     for role, document in role_openapi_documents.items():
@@ -439,42 +396,20 @@ def test_shared_operations_agree_with_the_committed_contract(
     Deliberately narrow to that wire contract, not whole operation objects.
     ``operationId``, ``summary``, ``description`` and ``tags`` are
     legitimately different between a compat alias
-    (``get_legacy_live_verdict``, tagged ``fleet-compatibility-reads``) and
-    the canonical route it delegates to (``get_live_verdict``, tagged
-    ``brokers-v2``) -- different function names and different router tags
+    (``get_legacy_panel_profile``, tagged ``fleet-compatibility-reads``) and
+    the canonical route it delegates to (``get_panel_profile``, tagged
+    ``broker-v2-panel``) -- different function names and different router tags
     are not divergence, they are two names for the same wire contract.
     Comparing whole operation objects would make this test permanently red
     for exactly the routes it exists to protect. Responses, parameters, and
     the request body are what the frontend's codegen actually consumes.
-
-    One narrow, pinned exception: the response-shape comparison is skipped
-    for each triple in ``EXPECTED_RESPONSE_SHAPE_DIVERGENCES`` (see its
-    docstring). Parameters and requestBody on that same path are still
-    compared unconditionally, and a pinned triple that is no longer a
-    path+method the role actually shares with the committed contract fails
-    this test loudly below -- the pin is a fact about a real, live
-    divergence, not a standing waiver that can quietly stop applying to
-    anything.
     """
     committed_ops = _operations_by_path_method(committed_contract)
-
-    pinned_by_role: dict[str, set[tuple[str, str]]] = {}
-    for pinned_role, pinned_path, pinned_method in EXPECTED_RESPONSE_SHAPE_DIVERGENCES:
-        pinned_by_role.setdefault(pinned_role, set()).add((pinned_path, pinned_method))
 
     for role, document in role_openapi_documents.items():
         role_ops = _operations_by_path_method(document)
         shared = set(role_ops) & set(committed_ops)
         assert shared, f"FLEET_ROLE={role} shares no path+method with the committed contract"
-
-        stale_pins = pinned_by_role.get(role, set()) - shared
-        assert not stale_pins, (
-            f"EXPECTED_RESPONSE_SHAPE_DIVERGENCES pins {sorted(stale_pins)} for "
-            f"FLEET_ROLE={role}, but that path+method is no longer shared between the role "
-            "and the committed contract -- the pin has outlived its subject (route deleted, "
-            "path renamed, or the compat window closed). Remove the stale entry from "
-            "EXPECTED_RESPONSE_SHAPE_DIVERGENCES."
-        )
 
         mismatches: list[str] = []
         for path, method in sorted(shared):
@@ -487,43 +422,7 @@ def test_shared_operations_agree_with_the_committed_contract(
                     role_document=document,
                     committed_operation=committed_ops[(path, method)],
                     committed_document=committed_contract,
-                    compare_responses=(role, path, method) not in EXPECTED_RESPONSE_SHAPE_DIVERGENCES,
                 )
             )
 
         assert not mismatches, "\n".join(mismatches)
-
-
-def test_coordinator_live_verdict_pin_declares_the_410_refusal(
-    role_openapi_documents: dict[str, dict[str, Any]],
-) -> None:
-    """The pin, made load-bearing in the other direction: for every triple in
-    ``EXPECTED_RESPONSE_SHAPE_DIVERGENCES``, the role's own document must
-    still declare exactly the divergence the pin permits -- a ``410``
-    response, and no ``200`` response -- not merely *some* difference from
-    the committed contract.
-    ``test_shared_operations_agree_with_the_committed_contract`` only ever
-    suppresses the response-shape comparison for these triples; it does not
-    check what the divergence actually is. Without this test, un-retiring
-    the coordinator's live-verdict compatibility read (making it answer
-    ``200: AlpacaLiveVerdict`` again, the exact lie this module exists to
-    catch) would pass silently, because the pin would keep suppressing the
-    comparison that would otherwise have caught it.
-    """
-    for role, path, method in EXPECTED_RESPONSE_SHAPE_DIVERGENCES:
-        operation = _operations_by_path_method(role_openapi_documents[role])[(path, method)]
-        responses = operation.get("responses", {})
-
-        assert "410" in responses, (
-            f"{method.upper()} {path} on FLEET_ROLE={role} no longer declares a 410 response -- "
-            "has the route stopped refusing? If so, remove its entry from "
-            "EXPECTED_RESPONSE_SHAPE_DIVERGENCES so the parity test covers it again."
-        )
-
-        two_hundred_media = _response_media_schemas(responses.get("200", {}))
-        assert not two_hundred_media, (
-            f"{method.upper()} {path} on FLEET_ROLE={role} now declares a 200 response "
-            f"({two_hundred_media!r}) -- the route may have been un-retired. If so, remove "
-            "its entry from EXPECTED_RESPONSE_SHAPE_DIVERGENCES so the parity test covers it "
-            "again instead of pinning a divergence that no longer exists."
-        )

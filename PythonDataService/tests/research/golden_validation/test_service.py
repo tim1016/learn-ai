@@ -322,95 +322,6 @@ async def test_rejected_review_cannot_authorize_a_program_version(conn, unique: 
         )
 
 
-async def test_designation_locks_landed_companion_until_protection_is_visible(
-    conn,
-    second_conn,
-    unique: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    group = f"lock-pg-{unique}"
-    left = await _run(
-        conn,
-        engine_payload(
-            symbol=unique,
-            parity_group_id=group,
-            requested_engine="both",
-            program_version="ema-signal-v1",
-        ),
-    )
-    right = await _run(conn, lean_payload(f"lean-{group}", symbol=unique, parity_group_id=group))
-    await backtest_repo.freeze_parity_verdict(
-        conn,
-        parity_group_id=group,
-        left_run_id=left,
-        right_run_id=right,
-        status="agree",
-        verdict_json=json.dumps(_certificate_payload(group=group, left=left, right=right, status="agree")),
-    )
-    locked = asyncio.Event()
-    release = asyncio.Event()
-    original_lock = golden_repo.lock_paired_evidence_for_golden_case
-
-    async def pause_after_lock(connection, parity_group_id: str):
-        verdict = await original_lock(connection, parity_group_id)
-        locked.set()
-        await release.wait()
-        return verdict
-
-    monkeypatch.setattr(golden_repo, "lock_paired_evidence_for_golden_case", pause_after_lock)
-    designation = asyncio.create_task(_designate(conn, left, unique))
-    await locked.wait()
-    deletion = asyncio.create_task(backtest_repo.delete_run(second_conn, right))
-    await asyncio.sleep(0.05)
-    assert deletion.done() is False
-
-    release.set()
-    designated = await designation
-
-    assert designated.golden_run.source_run_id == left
-    assert await deletion == "golden_validation_evidence"
-
-
-async def test_designation_locks_a_landed_companion_before_its_verdict_exists(
-    conn,
-    second_conn,
-    unique: str,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    group = f"landed-before-verdict-{unique}"
-    left = await _run(
-        conn,
-        engine_payload(
-            symbol=unique,
-            parity_group_id=group,
-            requested_engine="both",
-            program_version="ema-signal-v1",
-        ),
-    )
-    right = await _run(conn, lean_payload(f"lean-{group}", symbol=unique, parity_group_id=group))
-    locked = asyncio.Event()
-    release = asyncio.Event()
-    original_lock = golden_repo.lock_paired_evidence_for_golden_case
-
-    async def pause_after_lock(connection, parity_group_id: str):
-        verdict = await original_lock(connection, parity_group_id)
-        locked.set()
-        await release.wait()
-        return verdict
-
-    monkeypatch.setattr(golden_repo, "lock_paired_evidence_for_golden_case", pause_after_lock)
-    designation = asyncio.create_task(_designate(conn, left, unique))
-    await locked.wait()
-    deletion = asyncio.create_task(backtest_repo.delete_run(second_conn, right))
-    await asyncio.sleep(0.05)
-    assert deletion.done() is False
-
-    release.set()
-    await designation
-
-    assert await deletion == "golden_validation_evidence"
-
-
 async def test_designation_refuses_without_waiting_when_companion_delete_owns_run_lock(
     conn,
     second_conn,
@@ -445,26 +356,6 @@ async def test_designation_refuses_without_waiting_when_companion_delete_owns_ru
             await asyncio.wait_for(_designate(conn, left, unique), timeout=1.0)
 
     assert await golden_repo.get_golden_run_by_source(conn, left) is None
-
-
-async def test_companion_landing_after_designation_is_protected_before_a_verdict_exists(
-    conn,
-    unique: str,
-) -> None:
-    group = f"pending-companion-{unique}"
-    left = await _run(
-        conn,
-        engine_payload(
-            symbol=unique,
-            parity_group_id=group,
-            requested_engine="both",
-            program_version="ema-signal-v1",
-        ),
-    )
-    await _designate(conn, left, unique)
-    right = await _run(conn, lean_payload(f"lean-{group}", symbol=unique, parity_group_id=group))
-
-    assert await backtest_repo.delete_run(conn, right) == "golden_validation_evidence"
 
 
 @pytest.mark.parametrize(
@@ -586,7 +477,6 @@ async def test_only_python_runs_can_be_designated_and_linked_runs_are_retained(c
         await _designate(conn, right, f"lean-{unique}")
 
     designated = await _designate(conn, left, unique)
-    assert await backtest_repo.delete_run(conn, right) == "golden_validation_evidence"
     accepted = await service.review(
         conn,
         golden_run_id=designated.golden_run.id,
@@ -599,8 +489,6 @@ async def test_only_python_runs_can_be_designated_and_linked_runs_are_retained(c
         actor="local:reviewer",
     )
     assert accepted.state == "accepted_engine_agreement"
-    assert await backtest_repo.delete_run(conn, left) == "golden_validation_evidence"
-    assert await backtest_repo.delete_run(conn, right) == "golden_validation_evidence"
 
 
 @pytest.mark.parametrize("provenance", [None, {

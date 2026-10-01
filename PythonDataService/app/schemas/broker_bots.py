@@ -13,7 +13,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
-from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.schemas.action_plan import ActionPlan
 from app.schemas.bot_end import BotEndInput, BotEndView, refuse_explicit_null_end
@@ -72,15 +71,6 @@ class BotProcessFact(BaseModel):
     state: Literal["RUNNING", "STOPPING", "EXITED", "UNKNOWN"]
     registry_generation: str
     observed_at_ms: int = Field(ge=0)
-
-
-class BotControlAuthorityFacts(BaseModel):
-    """Independent process and Clerk facts for one bot control decision."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    process: BotProcessFact
-    clerk: ClerkCustodySnapshot
 
 
 def normalized_symbol(value: str) -> str:
@@ -495,42 +485,6 @@ class BotRunView(BaseModel):
     started_at_ms: int = Field(ge=0)
     process: BotProcessFact
     terminal_outcome: BotRunTerminalOutcomeView | None
-
-
-class BotRunReadBrokerErrorDetail(BaseModel):
-    """Broker-registry failure detail returned by a bot-run read."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    broker: str
-    message: str
-    why: str | None
-
-
-class BotRunReadRunnerErrorDetail(BaseModel):
-    """Runner failure detail returned by a bot-run read."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    message: str
-    why: str | None
-    admission: RunAdmissionDecision | None
-
-
-class BotRunReadNotFoundResponse(BaseModel):
-    """404 envelope for an unknown broker or strategy-instance run."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    detail: BotRunReadBrokerErrorDetail | BotRunReadRunnerErrorDetail
-
-
-class BotRunReadRunnerErrorResponse(BaseModel):
-    """422 envelope emitted by the bot runner for an invalid run read."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    detail: BotRunReadRunnerErrorDetail
 
 
 class AlpacaPaperDeployReceipt(BaseModel):

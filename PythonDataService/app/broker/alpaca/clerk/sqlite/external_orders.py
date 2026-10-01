@@ -8,17 +8,9 @@ be misattributed to a bot's economics.
 
 from __future__ import annotations
 
-import base64
-import binascii
-import json
 import logging
 import math
-import sqlite3
-import threading
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Literal
 
 from app.broker.alpaca.clerk.sqlite import reads
@@ -49,23 +41,6 @@ logger = logging.getLogger(__name__)
 
 class ExternalOrderObservationError(ValueError):
     """The broker supplied insufficient evidence for a truthful observation."""
-
-
-class InvalidExternalOrderCursor(ValueError):
-    """A page cursor is malformed or belongs to another SQLite authority."""
-
-
-ExternalOrderLifecycleState = Literal["review_required", "reviewed"]
-
-
-@dataclass(frozen=True)
-class ExternalOrderPage:
-    """One bounded external-order page from a single SQLite read snapshot."""
-
-    orders: tuple[ExternalOrderResource, ...]
-    next_cursor: str | None
-    authority_generation: int
-    control_revision: int
 
 
 def observe_external_order(
@@ -405,154 +380,6 @@ def acknowledge_external_order(
     )
 
 
-class SqliteExternalOrderReader:
-    """Read-only, identity-bound access to the external-order fold table."""
-
-    def __init__(
-        self,
-        *,
-        db_path: Path,
-        account_id: str,
-        authority_generation: int,
-        db_identity_token: str,
-    ) -> None:
-        self._db_path = db_path
-        self._account_id = account_id
-        self._authority_generation = authority_generation
-        self._db_identity_token = db_identity_token
-        self._lock = threading.Lock()
-        self._conn = sqlite3.connect(
-            f"{db_path.resolve().as_uri()}?mode=ro",
-            uri=True,
-            check_same_thread=False,
-        )
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA query_only = ON")
-        with self._read_transaction():
-            self._verify_identity()
-
-    @classmethod
-    def from_repository(
-        cls,
-        repository: ClerkSqliteRepository,
-    ) -> SqliteExternalOrderReader:
-        meta = repository.control_meta_snapshot()
-        return cls(
-            db_path=repository.db_path,
-            account_id=meta.account_id,
-            authority_generation=meta.authority_generation,
-            db_identity_token=meta.db_identity_token,
-        )
-
-    @contextmanager
-    def _read_transaction(self) -> Iterator[None]:
-        with self._lock:
-            self._conn.execute("BEGIN")
-            try:
-                yield
-            except BaseException:
-                self._conn.execute("ROLLBACK")
-                raise
-            else:
-                self._conn.execute("COMMIT")
-
-    def close(self) -> None:
-        with self._lock:
-            self._conn.close()
-
-    def external_orders(
-        self,
-        *,
-        cursor: str | None = None,
-        page_size: int = 50,
-        lifecycle_state: ExternalOrderLifecycleState | None = None,
-    ) -> ExternalOrderPage:
-        if not 1 <= page_size <= 100:
-            raise ValueError("external-order page_size must be between 1 and 100")
-        anchor = (
-            self._decode_cursor(cursor, lifecycle_state=lifecycle_state)
-            if cursor is not None
-            else None
-        )
-        with self._read_transaction():
-            meta = self._verify_identity()
-            rows = reads.external_order_page(
-                self._conn,
-                observation_sequence_before=(anchor[0] if anchor is not None else None),
-                external_order_id_before=(anchor[1] if anchor is not None else None),
-                lifecycle_state=lifecycle_state,
-                limit=page_size + 1,
-            )
-        visible = tuple(rows[:page_size])
-        next_cursor = (
-            self._encode_cursor(visible[-1], lifecycle_state=lifecycle_state)
-            if len(rows) > page_size and visible
-            else None
-        )
-        return ExternalOrderPage(
-            orders=visible,
-            next_cursor=next_cursor,
-            authority_generation=self._authority_generation,
-            control_revision=meta["control_revision"],
-        )
-
-    def _verify_identity(self) -> sqlite3.Row:
-        row = self._conn.execute(
-            "SELECT account_id, authority_generation, db_identity_token, control_revision "
-            "FROM control_meta WHERE id = 1"
-        ).fetchone()
-        if row is None or (
-            row["account_id"] != self._account_id
-            or row["authority_generation"] != self._authority_generation
-            or row["db_identity_token"] != self._db_identity_token
-        ):
-            raise InvalidExternalOrderCursor("external-order reader authority identity changed")
-        return row
-
-    def _encode_cursor(
-        self,
-        order: ExternalOrderResource,
-        *,
-        lifecycle_state: ExternalOrderLifecycleState | None,
-    ) -> str:
-        payload = {
-            "account_id": self._account_id,
-            "authority_generation": self._authority_generation,
-            "db_identity_token": self._db_identity_token,
-            "external_order_id": order.external_order_id,
-            "lifecycle_state": lifecycle_state,
-            "observation_sequence": order.observation_sequence,
-        }
-        return base64.urlsafe_b64encode(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).decode("ascii")
-
-    def _decode_cursor(
-        self,
-        cursor: str,
-        *,
-        lifecycle_state: ExternalOrderLifecycleState | None,
-    ) -> tuple[int, str]:
-        try:
-            payload = json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")))
-        except (binascii.Error, UnicodeEncodeError, ValueError, json.JSONDecodeError) as exc:
-            raise InvalidExternalOrderCursor("external-order cursor is invalid") from exc
-        if (
-            not isinstance(payload, dict)
-            or payload.get("account_id") != self._account_id
-            or payload.get("authority_generation") != self._authority_generation
-            or payload.get("db_identity_token") != self._db_identity_token
-            or payload.get("lifecycle_state") != lifecycle_state
-            or not isinstance(payload.get("observation_sequence"), int)
-            or not isinstance(payload.get("external_order_id"), str)
-            or not payload["external_order_id"]
-        ):
-            raise InvalidExternalOrderCursor(
-                "external-order cursor has a different authority or filter scope"
-            )
-        return payload["observation_sequence"], payload["external_order_id"]
-
-
 def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
     # Ahead of every other check, so the recorded reason names the real
     # cause: the adapter reads a value it could not parse as absent and names
@@ -622,11 +449,7 @@ def _observation_from_broker_order(order: BrokerOrder) -> ExternalOrderResource:
 
 __all__ = [
     "UNIDENTIFIED_BROKER_ORDER_ID",
-    "ExternalOrderLifecycleState",
     "ExternalOrderObservationError",
-    "ExternalOrderPage",
-    "InvalidExternalOrderCursor",
-    "SqliteExternalOrderReader",
     "UnfoldableBrokerOrderAcknowledgement",
     "acknowledge_external_order",
     "acknowledge_unfoldable_broker_order",

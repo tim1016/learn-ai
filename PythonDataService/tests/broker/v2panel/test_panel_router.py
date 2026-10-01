@@ -1190,59 +1190,14 @@ async def test_flatten_and_stop_is_refused_before_anything_stops_while_the_bot_h
     assert trade.submit_calls == []
 
 
-async def test_live_chart_accepts_five_second_resolution(
-    api,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    app, _repo = api
-    observed: list[str] = []
-
-    async def live_chart(
-        broker: str,
-        account_id: str,
-        sid: str,
-        *,
-        resolution: str,
-    ) -> dict[str, object]:
-        observed.append(resolution)
-        return {
-            "strategy_instance_id": sid,
-            "symbol": "SPY",
-            "trading_date_open_ms": _T0,
-            "trading_date_close_ms": _T0 + 60_000,
-            "resolution": resolution,
-            "bars": [],
-            "fill_markers": [],
-            "overlay_notices": [],
-            "feed": chart_feed_view(CHART_FEED_NOT_EXPECTED).model_dump(),
-            "as_of_ms": _T0,
-        }
-
-    monkeypatch.setattr("app.routers.broker_v2_panel.ds.get_live_chart", live_chart)
-    async with _client(app) as client:
-        response = await client.get(
-            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/chart/live",
-            params={"resolution": "5s"},
-        )
-
-    assert response.status_code == 200
-    assert response.json()["resolution"] == "5s"
-    assert observed == ["5s"]
-
-
-async def test_chart_contract_rejects_unknown_resolution_and_timeframe(api) -> None:
+async def test_chart_contract_rejects_unknown_timeframe(api) -> None:
     app, _repo = api
     async with _client(app) as client:
-        live = await client.get(
-            f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/chart/live",
-            params={"resolution": "15s"},
-        )
         history = await client.get(
             f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/chart/history",
             params={"timeframe": "5m"},
         )
 
-    assert live.status_code == 422
     assert history.status_code == 422
 
 

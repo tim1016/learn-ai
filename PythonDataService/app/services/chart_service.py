@@ -345,7 +345,7 @@ def resolve_range_presets(now_ms: int, *, session: str = "rth") -> list[dict[str
 
     Pure calendar arithmetic: one ``expected_sessions`` call covers the
     deepest preset, and per-preset bar estimates come from the same
-    estimator ``/allowed-timeframes`` uses. No fetching.
+    estimator ``get_allowed_timeframes`` uses. No fetching.
     """
     ny_today = pd.Timestamp(now_ms, unit="ms", tz="UTC").tz_convert(_ET).date()
     end_date: date | None = None

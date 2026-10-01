@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 from app.broker.alpaca.clerk.sqlite.database_verification import (
     DatabaseVerification,
@@ -189,86 +187,6 @@ def verify_empty_generation_mirror(
     if mirror_rows:
         raise CutoverRefused(f"cutover requires an empty {generation_label} mirror")
     return hashlib.sha256(encoded).hexdigest()
-
-
-def require_completed_initialization(
-    *,
-    account_id: str,
-    account_dir: Path,
-    database: DatabaseVerification,
-) -> CutoverInitializationEvidence:
-    """Verify the pre-init intent and its database-bound completion receipt."""
-    evidence_dir = cutover_evidence_directory(account_dir, create=False)
-    intent = read_initialization_record(
-        initialization_intent_path(
-            evidence_dir,
-            authority_generation=database.authority_generation,
-        ),
-        label="cutover initialization intent",
-    )
-    intent_id = intent.get("initialization_intent_id")
-    intent_evidence = {
-        key: value
-        for key, value in intent.items()
-        if key != "initialization_intent_id"
-    }
-    expected_intent_id = hashlib.sha256(
-        canonical_json_bytes(intent_evidence)
-    ).hexdigest()
-    if (
-        intent.get("schema_version") != 1
-        or intent.get("operation") != "CUTOVER_INITIALIZATION_INTENT"
-        or intent.get("account_id") != account_id
-        or intent.get("authority_generation") != database.authority_generation
-        or intent_id != expected_intent_id
-    ):
-        raise CutoverRefused("cutover initialization intent does not verify")
-
-    receipt_path = (
-        evidence_dir
-        / f"initialization-g{database.authority_generation}-{database.db_identity_token}.json"
-    )
-    receipt = read_initialization_record(
-        receipt_path,
-        label="cutover initialization receipt",
-    )
-    if (
-        receipt.get("schema_version") != 1
-        or receipt.get("operation") != "CUTOVER_INITIALIZE"
-        or receipt.get("account_id") != account_id
-        or receipt.get("initialization_intent_id") != intent_id
-        or receipt.get("database") != asdict(database)
-        or receipt.get("broker_evidence") != intent.get("broker_evidence")
-        or receipt.get("runner_roster") != intent.get("runner_roster")
-        or receipt.get("legacy_artifacts") != intent.get("legacy_artifacts")
-    ):
-        raise CutoverRefused(
-            "cutover initialization receipt does not match its intent and database"
-        )
-    mirror_sha256 = verify_empty_generation_mirror(
-        account_id=account_id,
-        account_dir=account_dir,
-        authority_generation=database.authority_generation,
-        db_identity_token=database.db_identity_token,
-    )
-    return CutoverInitializationEvidence(
-        initialization_intent_id=expected_intent_id,
-        receipt_sha256=hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
-        mirror_sha256=mirror_sha256,
-    )
-
-
-def read_initialization_record(path: Path, *, label: str) -> dict[str, Any]:
-    """Read one regular JSON evidence artifact into an object."""
-    if path.is_symlink() or not path.is_file():
-        raise CutoverRefused(f"{label} must be a regular non-symbolic-link file")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise CutoverRefused(f"{label} is unreadable: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise CutoverRefused(f"{label} must contain a JSON object")
-    return payload
 
 
 def require_checkpointed_database(account_dir: Path) -> None:

@@ -3,8 +3,8 @@
 ``GET /trades`` serves what the chart draws (trades overlapping the window
 with a live membership), ``GET /hero`` the visible-window winners (trades
 that *entered* inside the window), ``GET /launches`` the recent launches
-with their presented status and resume gate (#1938), and the four
-soft-delete / restore verbs replace the GraphQL mutations. Storage is the
+with their presented status and resume gate (#1938), and the run
+soft-delete verb replaces the GraphQL mutation. Storage is the
 four tables adopted from EF (ADR 0057); the numerical selection stays in
 ``app.research.recency.stats``.
 """
@@ -23,7 +23,6 @@ from app.research.recency.stats import select_window_heroes
 from app.schemas.recency import (
     RecencyHeroResponse,
     RecencyHeroResponseItem,
-    RecencyLaunchMutationResponse,
     RecencyLaunchResponse,
     RecencyRunMutationResponse,
     RecencyTradeResponse,
@@ -100,24 +99,3 @@ async def soft_delete_recency_run(run_id: int) -> RecencyRunMutationResponse:
     if not await with_connection(repo.set_run_deleted, run_id, deleted=True):
         raise _not_found("RECENCY_RUN_NOT_FOUND", f"RecencyRun {run_id} not found")
     return RecencyRunMutationResponse(recency_run_id=run_id)
-
-
-@router.post("/runs/{run_id}/restore", response_model=RecencyRunMutationResponse)
-async def restore_recency_run(run_id: int) -> RecencyRunMutationResponse:
-    if not await with_connection(repo.set_run_deleted, run_id, deleted=False):
-        raise _not_found("RECENCY_RUN_NOT_FOUND", f"RecencyRun {run_id} not found")
-    return RecencyRunMutationResponse(recency_run_id=run_id)
-
-
-@router.post("/launches/{launch_id}/soft-delete", response_model=RecencyLaunchMutationResponse)
-async def soft_delete_recency_launch(launch_id: str) -> RecencyLaunchMutationResponse:
-    if not await with_connection(repo.set_launch_deleted, launch_id, deleted=True):
-        raise _not_found("RECENCY_LAUNCH_NOT_FOUND", f"RecencyLaunch {launch_id} not found")
-    return RecencyLaunchMutationResponse(launch_id=launch_id)
-
-
-@router.post("/launches/{launch_id}/restore", response_model=RecencyLaunchMutationResponse)
-async def restore_recency_launch(launch_id: str) -> RecencyLaunchMutationResponse:
-    if not await with_connection(repo.set_launch_deleted, launch_id, deleted=False):
-        raise _not_found("RECENCY_LAUNCH_NOT_FOUND", f"RecencyLaunch {launch_id} not found")
-    return RecencyLaunchMutationResponse(launch_id=launch_id)

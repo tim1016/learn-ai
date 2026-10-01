@@ -585,7 +585,6 @@ def build_persist_payload(
                 compatibility_profile=COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1,
                 warmup_from_date=None,
                 slippage_per_share=0.0,
-                limit_penetration=0.0,
             ),
             sort_keys=True,
         )

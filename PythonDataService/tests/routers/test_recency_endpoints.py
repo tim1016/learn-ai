@@ -63,23 +63,15 @@ async def test_trades_and_hero_read_back_as_json_numbers_and_the_hero_honours_en
         assert oversized.status_code == 422  # beyond int64: refused at the edge, not an asyncpg error inside the read
 
 
-async def test_soft_delete_and_restore_verbs_replace_the_graphql_mutations(client) -> None:
+async def test_the_soft_delete_verb_replaces_the_graphql_mutation(client) -> None:
     _requires_ephemeral_db()
     symbol = f"T{uuid.uuid4().hex[:6].upper()}"
-    launch_id, run_id = await _seed(symbol)
+    _, run_id = await _seed(symbol)
 
     async with client as c:
         deleted = await c.post(f"/api/research/recency/runs/{run_id}/soft-delete")
         assert deleted.status_code == 200 and deleted.json() == {"recency_run_id": run_id}
         assert (await c.get("/api/research/recency/trades", params={"from_ms": 0, "to_ms": 5_000, "symbols": [symbol]})).json() == []
-        restored = await c.post(f"/api/research/recency/runs/{run_id}/restore")
-        assert restored.status_code == 200
-        assert len((await c.get("/api/research/recency/trades", params={"from_ms": 0, "to_ms": 5_000, "symbols": [symbol]})).json()) == 1
-
-        launch_gone = await c.post(f"/api/research/recency/launches/{launch_id}/soft-delete")
-        assert launch_gone.json() == {"launch_id": launch_id}
-        assert (await c.get("/api/research/recency/trades", params={"from_ms": 0, "to_ms": 5_000, "symbols": [symbol]})).json() == []
-        assert (await c.post(f"/api/research/recency/launches/{launch_id}/restore")).status_code == 200
 
         missing = await c.post("/api/research/recency/runs/2147000000/soft-delete")
         assert missing.status_code == 404 and missing.json()["detail"]["code"] == "RECENCY_RUN_NOT_FOUND"
@@ -133,7 +125,7 @@ def _stored_spec_json() -> str:
     )
 
 
-async def _seed_launch(unique: str, *, status: str = "FAILED", deleted: bool = False) -> str:
+async def _seed_launch(unique: str, *, status: str = "FAILED") -> str:
     """A durable launch, created and claimed the way the worker does, then closed as ``status``."""
     launch_id = f"launch-{unique}"
     await with_connection(repo.create_launch, launch_id=launch_id, config_json=_stored_spec_json(), expected_runs=1)
@@ -142,8 +134,6 @@ async def _seed_launch(unique: str, *, status: str = "FAILED", deleted: bool = F
         await with_connection(repo.set_terminal_status, launch_id, status="COMPLETED", attempt=1, succeeded_runs=1, failed_runs=0)
     elif status == "FAILED":
         await with_connection(repo.set_terminal_status, launch_id, status="FAILED", attempt=1, succeeded_runs=0, failed_runs=1)
-    if deleted:
-        await with_connection(repo.set_launch_deleted, launch_id, deleted=True)
     return launch_id
 
 
@@ -179,12 +169,11 @@ async def test_a_resume_binds_a_new_job_to_the_existing_launch(client, monkeypat
     assert (row.attempt, row.job_id, row.status) == (1, f"job-{unique}", "FAILED")  # the worker's claim does the rebinding
 
 
-async def test_a_resume_is_refused_for_an_unknown_completed_running_or_deleted_launch(client, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_resume_is_refused_for_an_unknown_completed_or_running_launch(client, monkeypatch: pytest.MonkeyPatch) -> None:
     _requires_ephemeral_db()
     unique = uuid.uuid4().hex[:10]
     completed = await _seed_launch(f"{unique}c", status="COMPLETED")
     running = await _seed_launch(f"{unique}r", status="RUNNING")
-    deleted = await _seed_launch(f"{unique}d", status="FAILED", deleted=True)
     monkeypatch.setattr("app.routers.jobs.run_in_thread", lambda job_id, work, **kwargs: None)
     live: list[bool | None] = [True]
     monkeypatch.setattr(lifecycle, "job_is_live", lambda job_id: live[0])
@@ -202,11 +191,6 @@ async def test_a_resume_is_refused_for_an_unknown_completed_running_or_deleted_l
         done = await c.post("/api/jobs-internal/recency-chart", json=_resume_body(f"job-{unique}c", completed))
         assert done.status_code == 409, done.text
         assert "complete" in done.json()["detail"]["message"]
-
-        gone = await c.post("/api/jobs-internal/recency-chart", json=_resume_body(f"job-{unique}d", deleted))
-        assert gone.status_code == 409, gone.text
-        assert "restore" in gone.json()["detail"]["message"]
-        assert gone.json()["detail"]["code"] == "NOT_RESUMABLE"
 
 
 async def test_the_launches_list_presents_status_and_the_resume_gate(client, monkeypatch: pytest.MonkeyPatch) -> None:
