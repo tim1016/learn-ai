@@ -8,6 +8,7 @@ does.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -270,6 +271,26 @@ async def test_reprove_appends_fresh_evidence_once(
     assert reproved.json()["status"] == "ready"
     assert replayed.status_code == 200
     assert len(replayed.json()["events"]) == 1
+
+
+async def test_reprove_brings_a_stale_version_back_to_ready_for_the_running_build(
+    client: httpx.AsyncClient, symbol: str, proven: tuple[ProofRecord, BlobStore]
+) -> None:
+    record, _blobs = proven
+    # Approved under an earlier build of the program: its proof names other bytes.
+    earlier = dataclasses.replace(record, artifact_digest="0" * 64, wiring_digest="0" * 64)
+    row = await _seed(symbol, artifact_digest=earlier.artifact_digest, proof=earlier.as_dict(), params=earlier.params)
+    before = await client.get(f"{BASE}/{row.id}")
+    assert (before.json()["status"], before.json()["status_explanation"]) == ("stale", QUALIFICATION_STALE)
+
+    reproved = await client.post(f"{BASE}/{row.id}/reprove", json={"idempotency_key": f"reprove-{symbol}"})
+
+    assert reproved.status_code == 200, reproved.text
+    assert reproved.json()["status"] == "ready"
+    (event,) = reproved.json()["events"]
+    assert (event["artifact_digest"], event["wiring_digest"]) == running_build_digests(CONTRACT)
+    # The approval's own record is untouched: the re-proof is appended evidence.
+    assert reproved.json()["artifact_digest"] == "0" * 64
 
 
 async def test_reprove_refuses_a_corrupted_input(
