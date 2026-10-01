@@ -2,25 +2,17 @@
 <section class="procedure" [attr.aria-labelledby]="headingId()">
   <header class="procedure__header">
     <h3 [id]="headingId()">{{ heading() }}</h3>
+    <span class="counts">{{ method() === 'zoom' ? 'Zoom Search' : 'Grid Search' }} · {{ p.counts.evaluated | number }} evaluated · {{ p.counts.cached | number }} cached · {{ p.counts.invalid | number }} invalid</span>
     @if (p.incomplete) { <span class="tag tag--warn">Incomplete — stopped before the plan finished</span> }
   </header>
   <p class="muted">{{ description() }}</p>
 
-  <p class="stop"><strong>Stopped: {{ p.stop_reason | receiptLabel }}.</strong> {{ p.stop_explanation }}</p>
-  @for (label of edgeHits(); track label) {
-    <p class="edge" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i> {{ label }} ended at the edge of its searched range — a better setting may lie outside it.</p>
-  }
-  <p class="muted">
-    {{ p.counts.evaluated | number }} evaluated · {{ p.counts.cached | number }} cached · {{ p.counts.invalid | number }} invalid
-    @if (method() === 'zoom') { · {{ p.passes_completed }} {{ p.passes_completed === 1 ? 'pass' : 'passes' }} completed }
-  </p>
-
   @if (p.knob_summary.length > 0) {
     <div class="table-wrap" role="region" tabindex="0" [attr.aria-label]="heading() + ' — each knob'">
       <table class="path">
-        <caption>Each searched knob: where it started, the value kept, and why it stopped</caption>
+        <caption>Each searched knob: where it started, the value retained, and why it stopped</caption>
         <thead>
-          <tr><th scope="col">Knob</th><th scope="col">Started at</th><th scope="col">Kept</th><th scope="col">Why it stopped</th></tr>
+          <tr><th scope="col">Knob</th><th scope="col">Starting value</th><th scope="col">Retained value</th><th scope="col">Why it stopped</th></tr>
         </thead>
         <tbody>
           @for (row of p.knob_summary; track row.knob) {
@@ -35,6 +27,14 @@
       </table>
     </div>
   }
+  @if (method() === 'zoom') {
+    <p class="muted">{{ passes() }} “No improvement” describes the moves tested, not the best configuration everywhere.</p>
+  }
+
+  <p class="stop"><strong>Stopped: {{ p.stop_reason | receiptLabel }}.</strong> {{ p.stop_explanation }}</p>
+  @for (label of edgeHits(); track label) {
+    <p class="edge" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i> {{ label }} ended at the edge of its searched range — a better setting may lie outside it.</p>
+  }
 
   <div class="winner">
     <h4>Retained settings</h4>
@@ -45,40 +45,11 @@
     <p class="muted">Development data, used to choose these settings.</p>
   </div>
 
-  @if (path().length > 0) {
-    <div class="table-wrap" role="region" tabindex="0" [attr.aria-label]="heading() + ' — search path'">
-      <table class="path">
-        <caption>Where the search went, round by round</caption>
-        <thead>
-          <tr>
-            <th scope="col">Pass</th><th scope="col">Knob</th><th scope="col">Round</th><th scope="col">Searched</th>
-            <th scope="col">Started at</th><th scope="col">Values tried</th><th scope="col">Skipped (invalid)</th><th scope="col">Kept</th>
-          </tr>
-        </thead>
-        <tbody>
-          @for (row of path(); track row.key) {
-            <tr>
-              <td>{{ row.pass }}</td>
-              <th scope="row">{{ row.knob }}</th>
-              <td>{{ row.round }}</td>
-              <td class="num">{{ row.low }} – {{ row.high }}</td>
-              <td class="num">{{ row.startedAt }}</td>
-              <td>
-                <ul class="tried">
-                  @for (item of row.tried; track item.value) {
-                    <li [class.chosen]="item.chosen">{{ item.value }} <small>{{ item.ineligibility === null ? 'eligible' : (item.ineligibility | receiptLabel) }}</small></li>
-                  }
-                </ul>
-              </td>
-              <td>
-                @for (item of row.skipped; track item.value) { <span class="skipped">{{ item.value }} <small>{{ item.reason }}</small></span> } @empty { <span class="muted">—</span> }
-              </td>
-              <td><strong>{{ row.chosen }}</strong> <small>{{ row.moved ? 'moved' : 'kept current' }}</small></td>
-            </tr>
-          }
-        </tbody>
-      </table>
-    </div>
+  @if (p.rounds.length > 0) {
+    <details>
+      <summary>Round-by-round path</summary>
+      <app-golden-search-procedure-path [rounds]="p.rounds" [capability]="capability()" [label]="heading() + ' — search path'" />
+    </details>
   } @else if (method() === 'grid') {
     <p class="muted">Grid evaluates every listed combination, so there is no path to show.</p>
   }

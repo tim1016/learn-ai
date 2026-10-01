@@ -1,18 +1,11 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { DecimalPipe, PercentPipe } from '@angular/common';
 
-import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { entryText, pointDifferences } from './golden-search-display';
+import { GoldenSearchFoldTableComponent, type FoldRow } from './golden-search-fold-table.component';
 import { GoldenSearchLinkedLineComponent } from './golden-search-linked-line.component';
-import { GoldenSearchMetricsComponent } from './golden-search-metrics.component';
-import type { LinkedFoldReturn, StrategyCapability, StudyDetail, ValidationFold } from './golden-search.types';
-
-interface FoldRow {
-  readonly fold: ValidationFold;
-  /** The fold winner's settings that differ from the frozen starting point, or null when no winner was chosen. */
-  readonly changes: string | null;
-}
+import type { LinkedFoldReturn, StrategyCapability, StudyDetail } from './golden-search.types';
 
 interface LinkedRow extends LinkedFoldReturn {
   /** The frozen incumbent's linked return through the same fold; null once its line is broken. */
@@ -30,7 +23,7 @@ interface LinkedRow extends LinkedFoldReturn {
  */
 @Component({
   selector: 'app-golden-search-test-step',
-  imports: [DecimalPipe, GoldenSearchLinkedLineComponent, GoldenSearchMetricsComponent, PercentPipe, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [DecimalPipe, GoldenSearchFoldTableComponent, GoldenSearchLinkedLineComponent, PercentPipe, TimestampDisplayComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-test-step.component.html',
   styleUrl: './golden-search-test-step.component.scss',

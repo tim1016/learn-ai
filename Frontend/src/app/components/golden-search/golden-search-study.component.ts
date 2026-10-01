@@ -75,6 +75,8 @@ export class GoldenSearchStudyComponent {
   readonly actionRefusal = signal<GridSearchRefusal | null>(null);
   readonly busy = signal(false);
   readonly selectedStep = signal<StudyStep>('search');
+  /** The server's guidance, announced once when the study moves to a new state (never on the first load or a poll that changes nothing). */
+  readonly announcement = signal('');
 
   protected readonly progressText = PROGRESS_TEXT;
   protected readonly capability = computed(() => {
@@ -115,6 +117,7 @@ export class GoldenSearchStudyComponent {
       const id = this.studyId();
       untracked(() => {
         this.detail.set(null);
+        this.announcement.set('');
         this.stateStep = null;
         this.awaitingClaimPolls = 0;
         void this.reload(id);
@@ -168,10 +171,19 @@ export class GoldenSearchStudyComponent {
     }
   }
 
-  /** Sends one command against the revision on screen; a retry after no answer reuses its idempotency key. */
-  async runCommand(command: StudyCommand): Promise<void> {
+  /** A step's own action; locking a candidate moves on to the step where its final test is opened. */
+  async onStepCommand(command: StudyCommand): Promise<void> {
+    const accepted = await this.runCommand(command);
+    if (accepted && command.command === 'select_candidate') this.selectStep('decision');
+  }
+
+  /**
+   * Sends one command against the revision on screen; a retry after no answer
+   * reuses its idempotency key. Resolves true when the server accepted it.
+   */
+  async runCommand(command: StudyCommand): Promise<boolean> {
     const detail = this.detail();
-    if (detail === null || this.busy()) return;
+    if (detail === null || this.busy()) return false;
     const request: StudyCommandRequest = { ...command, expected_revision: detail.revision, idempotency_key: this.keys.keyFor(JSON.stringify([detail.id, detail.revision, command])) };
     this.busy.set(true);
     this.clearFeedback();
@@ -180,8 +192,10 @@ export class GoldenSearchStudyComponent {
       this.keys.settle();
       if (outcome.jobId !== null) this.awaitingClaimPolls = AWAIT_CLAIM_POLLS;
       this.applyAnswer(outcome.study);
+      return true;
     } catch (error) {
       this.onCommandFailure(error);
+      return error instanceof StageDispatchError;
     } finally {
       this.busy.set(false);
     }
@@ -223,6 +237,10 @@ export class GoldenSearchStudyComponent {
 
   /** Shows a study; moves to the step holding its decision whenever that step changes. */
   private apply(detail: StudyDetail): void {
+    const previous = this.detail();
+    if (previous !== null && previous.id === detail.id && previous.state !== detail.state) {
+      this.announcement.set(`${detail.guidance.headline}. ${detail.guidance.detail}`);
+    }
     this.detail.set(detail);
     const step = stepForState(detail.state);
     if (step !== this.stateStep) {

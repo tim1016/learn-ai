@@ -1,70 +1,51 @@
 @let p = protocol();
-<div class="controls">
-  <fieldset>
-    <legend>Selection rules</legend>
-    <label class="field"><span>Rank by</span>
-      <select (change)="onObjective($event)" aria-label="Rank by">
+<section class="panel" aria-labelledby="gs-reject-title">
+  <h3 id="gs-reject-title">What would make you reject a candidate?</h3>
+  <div class="fields">
+    <label class="field"><span>Primary objective</span>
+      <select (change)="onObjective($event)" aria-label="Primary objective">
         @for (measure of measures; track measure) { <option [value]="measure" [selected]="measure === p.policy.objective">{{ measure | receiptLabel }}</option> }
       </select>
     </label>
-    <label class="field"><span>Minimum trades per training winner</span><input #minTrades pInputText type="number" min="1" step="1" [value]="p.policy.min_trades" [attr.aria-invalid]="numberInvalid('min_trades')" (input)="onNumber('min_trades', minTrades.value)" /></label>
-    <label class="field"><span>Drawdown ceiling (% of peak equity)</span><input #ceiling pInputText type="number" min="0" max="100" step="0.5" [value]="drawdownPercent()" [attr.aria-invalid]="numberInvalid('drawdown_percent')" (input)="onNumber('drawdown_percent', ceiling.value)" /></label>
-    <label class="check"><input type="checkbox" [checked]="p.policy.require_positive_net" (change)="onFlag('require_positive_net', $event)" /><span>Require a positive net result</span></label>
-  </fieldset>
-
-  <fieldset>
-    <legend>Execution assumptions</legend>
-    <label class="field"><span>Fill mode</span>
-      <select (change)="onFillMode($event)" aria-label="Fill mode">
-        @for (option of fillModes; track option.value) { <option [value]="option.value" [selected]="option.value === p.execution.fill_mode">{{ option.label }}</option> }
-      </select>
-    </label>
-    <label class="field"><span>Commission per order ($)</span><input #commission pInputText type="number" min="0" step="0.01" [value]="p.execution.commission_per_order" [attr.aria-invalid]="numberInvalid('commission_per_order')" (input)="onNumber('commission_per_order', commission.value)" /></label>
-    <label class="field"><span>Slippage per share ($)</span><input #slippage pInputText type="number" min="0" step="0.01" [value]="p.execution.slippage_per_share" [attr.aria-invalid]="numberInvalid('slippage_per_share')" (input)="onNumber('slippage_per_share', slippage.value)" /></label>
-    <label class="field"><span>Starting capital ($)</span><input #cash pInputText type="number" min="0" step="1000" [value]="p.execution.initial_cash" [attr.aria-invalid]="numberInvalid('initial_cash')" (input)="onNumber('initial_cash', cash.value)" /></label>
-  </fieldset>
-
-  <fieldset>
-    <legend>Dates (ET)</legend>
-    <label class="field"><span>Development from</span><input #devStart pInputText type="date" [value]="dates().development_start" [attr.aria-invalid]="dateInvalid('development_start')" (input)="onDate('development_start', devStart.value)" /></label>
-    <label class="field"><span>Final test from (development ends the day before)</span><input #finalStart pInputText type="date" [value]="dates().final_start" [attr.aria-invalid]="dateInvalid('final_start')" (input)="onDate('final_start', finalStart.value)" /></label>
-    <label class="field"><span>Final test through</span><input #finalEnd pInputText type="date" [value]="dates().final_end" [attr.aria-invalid]="dateInvalid('final_end')" (input)="onDate('final_end', finalEnd.value)" /></label>
-    <p class="hint">The final-test dates are fixed when you lock the plan; they cannot be extended after a result is seen.</p>
-  </fieldset>
-
-  <fieldset>
-    <legend>Test over time</legend>
-    <label class="field"><span>Training months per fold</span><input #training pInputText type="number" min="1" step="1" [value]="p.training_months" [attr.aria-invalid]="numberInvalid('training_months')" (input)="onNumber('training_months', training.value)" /></label>
-    <label class="field"><span>Test months per fold</span><input #testing pInputText type="number" min="1" step="1" [value]="p.test_months" [attr.aria-invalid]="numberInvalid('test_months')" (input)="onNumber('test_months', testing.value)" /></label>
-    <label class="check"><input type="checkbox" [checked]="p.recent_window" (change)="onFlag('recent_window', $event)" /><span>Also fit a recent-window candidate on the last training months</span></label>
-  </fieldset>
-
-  @if (p.method === 'zoom') {
-    <fieldset>
-      <legend>Zoom settings</legend>
-      <label class="field"><span>Points per round</span><input #points pInputText type="number" min="3" max="9" step="1" [value]="p.zoom.points" [attr.aria-invalid]="numberInvalid('zoom_points')" (input)="onNumber('zoom_points', points.value)" /></label>
-      <label class="field"><span>Refinements per knob</span><input #refinements pInputText type="number" min="0" max="4" step="1" [value]="p.zoom.refinements" [attr.aria-invalid]="numberInvalid('zoom_refinements')" (input)="onNumber('zoom_refinements', refinements.value)" /></label>
-      <label class="field"><span>Passes over the knobs</span><input #passes pInputText type="number" min="1" max="5" step="1" [value]="p.zoom.passes" [attr.aria-invalid]="numberInvalid('zoom_passes')" (input)="onNumber('zoom_passes', passes.value)" /></label>
-    </fieldset>
-  }
-
-  <fieldset>
-    <legend>Audits</legend>
-    @for (option of pairOptions(); track option.label) {
-      <label class="check"><input type="checkbox" [checked]="option.included" (change)="onPair(option.pair, $event)" /><span>Pair grid: {{ option.label }}</span></label>
-    }
-    <label class="check"><input type="checkbox" [checked]="p.neighbor_audit" (change)="onFlag('neighbor_audit', $event)" /><span>Neighbor audit (each searched knob one step either side)</span></label>
-    <ul class="stress" aria-label="Stress scenarios">
-      @for (scenario of p.stress; track scenario.key) { <li>Stress: {{ scenario.label }}</li> }
-    </ul>
-  </fieldset>
-
-  <fieldset>
-    <legend>Final test and workload</legend>
+    <label class="field"><span>Maximum drawdown (% of peak equity)</span><input #ceiling pInputText type="number" min="0" max="100" step="0.5" [value]="drawdownPercent()" [attr.aria-invalid]="numberInvalid('drawdown_percent')" (input)="onNumber('drawdown_percent', ceiling.value)" /></label>
+    <label class="field"><span>Minimum completed trades</span><input #minTrades pInputText type="number" min="1" step="1" [value]="p.policy.min_trades" [attr.aria-invalid]="numberInvalid('min_trades')" (input)="onNumber('min_trades', minTrades.value)" /></label>
+    <label class="field"><span>Training window (months)</span><input #training pInputText type="number" min="1" step="1" [value]="p.training_months" [attr.aria-invalid]="numberInvalid('training_months')" (input)="onNumber('training_months', training.value)" /></label>
+    <label class="field"><span>Test window (months)</span><input #testing pInputText type="number" min="1" step="1" [value]="p.test_months" [attr.aria-invalid]="numberInvalid('test_months')" (input)="onNumber('test_months', testing.value)" /></label>
+    <label class="field"><span>Final test (months)</span><input #finalMonthsInput pInputText type="number" min="1" step="1" placeholder="as dated" [value]="finalMonths() ?? ''" [attr.aria-invalid]="numberInvalid('final_months')" (input)="onNumber('final_months', finalMonthsInput.value)" /></label>
     <label class="field"><span>Minimum final-test trades</span><input #examTrades pInputText type="number" min="1" step="1" [value]="p.exam_min_trades" [attr.aria-invalid]="numberInvalid('exam_min_trades')" (input)="onNumber('exam_min_trades', examTrades.value)" /></label>
-    <label class="field"><span>Backtest cap (at most 5,000)</span><input #cap pInputText type="number" min="1" max="5000" step="1" [value]="p.budget_cap" [attr.aria-invalid]="numberInvalid('budget_cap')" (input)="onNumber('budget_cap', cap.value)" /></label>
-  </fieldset>
-</div>
+  </div>
+  <label class="check"><input type="checkbox" [checked]="p.policy.require_positive_net" (change)="onFlag('require_positive_net', $event)" /><span>Require a positive net result</span></label>
+  <label class="check"><input type="checkbox" [checked]="p.recent_window" (change)="onFlag('recent_window', $event)" /><span>Also fit a recent-window candidate on the last training months</span></label>
+  <p class="hint">{{ p.policy.min_trades }} trades is a starting policy, not a guarantee of statistical confidence. A sparse final test can end as “not enough evidence.” Changing a month count lays the dates out again on the server.</p>
+
+  <details>
+    <summary>Capital, fills and trading costs</summary>
+    <div class="fields">
+      <label class="field"><span>Starting capital ($)</span><input #cash pInputText type="number" min="0" step="1000" [value]="p.execution.initial_cash" [attr.aria-invalid]="numberInvalid('initial_cash')" (input)="onNumber('initial_cash', cash.value)" /></label>
+      <label class="field"><span>Fill assumption</span>
+        <select (change)="onFillMode($event)" aria-label="Fill assumption">
+          @for (option of fillModes; track option.value) { <option [value]="option.value" [selected]="option.value === p.execution.fill_mode">{{ option.label }}</option> }
+        </select>
+      </label>
+      <label class="field"><span>Flat fee per order ($)</span><input #commission pInputText type="number" min="0" step="0.01" [value]="p.execution.commission_per_order" [attr.aria-invalid]="numberInvalid('commission_per_order')" (input)="onNumber('commission_per_order', commission.value)" /></label>
+      <label class="field"><span>Slippage per share ($)</span><input #slippage pInputText type="number" min="0" step="0.01" [value]="p.execution.slippage_per_share" [attr.aria-invalid]="numberInvalid('slippage_per_share')" (input)="onNumber('slippage_per_share', slippage.value)" /></label>
+    </div>
+    <ul class="stress" aria-label="Stress scenarios">
+      @for (scenario of p.stress; track scenario.key) { <li>Cost stress: {{ scenario.label }}</li> }
+    </ul>
+    <p class="hint">Flat costs, not a historical broker fee schedule. Live data comes from IBKR; Alpaca handles orders.</p>
+  </details>
+
+  <details>
+    <summary>Dates (ET)</summary>
+    <div class="fields">
+      <label class="field"><span>Development from</span><input #devStart pInputText type="date" [value]="dates().development_start" [attr.aria-invalid]="dateInvalid('development_start')" (input)="onDate('development_start', devStart.value)" /></label>
+      <label class="field"><span>Final test from (development ends the day before)</span><input #finalStart pInputText type="date" [value]="dates().final_start" [attr.aria-invalid]="dateInvalid('final_start')" (input)="onDate('final_start', finalStart.value)" /></label>
+      <label class="field"><span>Final test through</span><input #finalEnd pInputText type="date" [value]="dates().final_end" [attr.aria-invalid]="dateInvalid('final_end')" (input)="onDate('final_end', finalEnd.value)" /></label>
+    </div>
+    <p class="hint">The final-test dates are fixed when you lock the plan; they cannot be extended after a result is seen. Dates typed here replace the month count.</p>
+  </details>
+</section>
 @if (fieldProblems().length > 0) {
   <div role="alert">
     <ul class="problems" aria-label="Values to fix">

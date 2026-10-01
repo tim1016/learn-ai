@@ -13,13 +13,13 @@ const METHODS: readonly MethodOption[] = [
   {
     id: 'zoom',
     title: 'Zoom Search',
-    question: 'Can I improve this starting point with fewer runs? Narrows one knob at a time, keeping a move only when it strictly improves the objective.',
+    question: 'Refine one knob at a time, keeping a move only when it strictly improves the objective. Useful for many controls.',
     limitation: 'Local and order-dependent: it can miss settings that only work when two knobs change together. It never claims a global best.',
   },
   {
     id: 'grid',
     title: 'Grid Search',
-    question: 'What happens across all these combinations? Runs every combination of the listed values.',
+    question: 'Try every listed combination. Best for small domains or a focused two-knob comparison.',
     limitation: 'Tests only the listed values, and the work grows as their product. Keep it to a few searched knobs.',
   },
 ];

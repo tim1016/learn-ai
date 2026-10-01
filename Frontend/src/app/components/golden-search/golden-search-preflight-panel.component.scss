@@ -17,3 +17,6 @@ th, td { padding: var(--space-1) var(--space-2); border-bottom: 1px solid var(--
 th[scope='row'] { font-weight: var(--fw-regular); }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.budget { display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--space-3); padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); background: var(--bg-elevated); font-size: var(--fs-sm); }
+.budget p { color: var(--text-secondary); font-size: var(--fs-xs); }
+.budget--over strong:first-child { color: var(--warn); }

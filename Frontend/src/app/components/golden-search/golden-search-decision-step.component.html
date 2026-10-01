@@ -1,0 +1,44 @@
+@let s = study();
+@switch (view()) {
+  @case ('before') {
+    <div class="pending">
+      <p role="status">The final decision follows Compare: lock one candidate there, then open its one final test here.</p>
+      <button pButton type="button" severity="secondary" [outlined]="true" (click)="goTo.emit('compare')"><span>Return to candidates</span></button>
+    </div>
+  }
+  @case ('lock') {
+    <app-golden-search-lockbox [study]="s" [candidate]="candidate()" [busy]="busy()" (studyCommand)="studyCommand.emit($event)" (goTo)="goTo.emit($event)" />
+  }
+  @case ('running') {
+    <section class="running" aria-label="Final test running">
+      <p role="status">Only <strong>{{ candidateLabel() }}</strong> and the frozen incumbent run on <app-timestamp-display [value]="s.scope.final_start_ms" mode="date-et" /> – <app-timestamp-display [value]="s.scope.final_end_ms - 1" mode="date-et" />. The result appears here once, when they finish.</p>
+    </section>
+  }
+  @case ('review') {
+    @if (s.results.exam; as exam) {
+      <div class="review">
+        <app-golden-search-tuple [study]="s" [capability]="capability()" [candidate]="candidate()" [incumbent]="incumbent()" />
+        <app-golden-search-exam-result [study]="s" [exam]="exam" [candidateLabel]="candidateLabel()" />
+        <app-golden-search-approval [study]="s" [exam]="exam" [busy]="busy()" (studyCommand)="studyCommand.emit($event)" />
+      </div>
+    }
+  }
+  @case ('finished') {
+    <div class="review">
+      <section class="finished" aria-label="Recorded decision">
+        <span class="icon" aria-hidden="true"><i class="pi pi-check"></i></span>
+        <div class="body">
+          <span class="badge">Research decision recorded</span>
+          @if (s.decision; as decision) {
+            <p><strong>{{ decisionLabel() ?? (decision.kind | receiptLabel) }}</strong> · <app-timestamp-display [value]="decision.at_ms" mode="local" /></p>
+            @if (decision.note) { <p class="note">{{ decision.note }}</p> }
+          }
+          <button pButton type="button" severity="secondary" [outlined]="true" (click)="goTo.emit('compare')"><span>Return to evidence</span></button>
+        </div>
+      </section>
+      @if (s.results.exam; as exam) {
+        @if (exam.outcome !== null) { <app-golden-search-exam-result [study]="s" [exam]="exam" [candidateLabel]="candidateLabel()" /> }
+      }
+    </div>
+  }
+}

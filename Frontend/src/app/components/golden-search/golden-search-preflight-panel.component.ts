@@ -4,7 +4,7 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { durationRangeText, EXPOSURE_CLAIMS, EXPOSURE_LABELS } from './golden-search-display';
-import type { GoldenSearchPreflight } from './golden-search.types';
+import type { GoldenSearchMethod, GoldenSearchPreflight } from './golden-search.types';
 
 /**
  * The server's answer to the current plan (#2696): every refusal, the
@@ -24,8 +24,9 @@ export class GoldenSearchPreflightPanelComponent {
   readonly checking = input(false);
   /** Why the plan could not be checked (a failed request). */
   readonly error = input<string | null>(null);
-  /** Why the plan is not being checked yet (unreadable inputs). */
+  /** Why the plan is not being checked yet (unreadable inputs, dates still being laid out). */
   readonly blocked = input<string | null>(null);
+  readonly method = input<GoldenSearchMethod>('zoom');
 
   protected readonly exposureLabels = EXPOSURE_LABELS;
   protected readonly exposureClaims = EXPOSURE_CLAIMS;

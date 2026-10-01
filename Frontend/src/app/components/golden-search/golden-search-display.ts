@@ -90,3 +90,48 @@ export function durationRangeText(lowSeconds: number, highSeconds: number): stri
 export function percentInputValue(fraction: number): number {
   return Number((fraction * 100).toPrecision(12));
 }
+
+/**
+ * Every declared knob of `point` in the declaration's order, then any other
+ * parameter by name, without `symbol`. A canonical point omits a knob at its
+ * identity-neutral default, so an absent declared knob reads as that default
+ * (`isDefault`); nothing else is filled in.
+ */
+export function fullPointEntries(point: Point, capability: StrategyCapability | null): (PointEntry & { readonly isDefault: boolean })[] {
+  const knobs = capability?.knobs ?? [];
+  const declared = knobs.map((knob) => {
+    const present = Object.hasOwn(point, knob.name);
+    return { name: knob.name, label: knob.label, unit: knob.unit, value: present ? point[knob.name] : knob.default_value, isDefault: !present };
+  });
+  const names = new Set(knobs.map((knob) => knob.name));
+  const others = Object.keys(point)
+    .filter((name) => name !== 'symbol' && !names.has(name))
+    .sort()
+    .map((name) => ({ name, label: name, unit: null, value: point[name], isDefault: false }));
+  return [...declared, ...others];
+}
+
+const SIGNED_PERCENT = new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1, signDisplay: 'exceptZero' });
+const PERCENT = new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const RATIO = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const SIGNED_USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0, signDisplay: 'exceptZero' });
+
+/** A server fraction as a signed percent (`0.087` → `+8.7%`); undefined reads "—", never zero. */
+export function signedPercentText(fraction: number | null | undefined): string {
+  return fraction === null || fraction === undefined ? '—' : SIGNED_PERCENT.format(fraction);
+}
+
+/** A server fraction as an unsigned percent (`0.064` → `6.4%`), e.g. a drawdown. */
+export function percentText(fraction: number | null | undefined): string {
+  return fraction === null || fraction === undefined ? '—' : PERCENT.format(fraction);
+}
+
+/** A ratio such as Sharpe to two places. */
+export function ratioText(value: number | null | undefined): string {
+  return value === null || value === undefined ? '—' : RATIO.format(value);
+}
+
+/** A dollar result with its sign (`+$186`, `−$92`). */
+export function signedUsdText(value: number | null | undefined): string {
+  return value === null || value === undefined ? '—' : SIGNED_USD.format(value);
+}

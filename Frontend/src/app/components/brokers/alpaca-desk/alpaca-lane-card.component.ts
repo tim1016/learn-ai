@@ -159,10 +159,11 @@ export class AlpacaLaneCardComponent {
   });
 
   /** Merged only while an intent is being carried: the hand-off arrives as
-   * `?deploy=&strategy=…`, and `strategy` is the Deploy tab's own deep link to
-   * read — but `deploy` itself is stripped, since Deploy is a path now, not a
-   * query param. Without an intent nothing from this URL belongs on the
-   * next one. */
+   * `?deploy=&strategy=…` (or Golden Search's `?golden_qualification=…`,
+   * #2696), and `strategy` and `golden_qualification` are the Deploy tab's own
+   * deep links to read — but `deploy` itself is stripped, since Deploy is a
+   * path now, not a query param. Without an intent nothing from this URL
+   * belongs on the next one. */
   protected readonly openQuery = computed(() => (this.deployIntent() ? { deploy: null } : {}));
 
   protected readonly openQueryHandling = computed<QueryParamsHandling>(() =>

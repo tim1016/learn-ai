@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { etMidnightMs } from '../../shared/date/et-midnight';
-import { applyPlanEdit, knobProblemKey, numberProblemKey, type PlanDraft } from './golden-search-plan-draft';
+import { applyPlanEdit, draftMonths, knobProblemKey, numberProblemKey, withServerDates, type PlanDraft } from './golden-search-plan-draft';
 import { emaCapability, protocol } from './testing/fixtures';
 
 function draft(): PlanDraft {
@@ -83,5 +83,37 @@ describe('applyPlanEdit', () => {
 
     const again = applyPlanEdit(draft(), { kind: 'pair', pair: ['fast_period', 'slow_period'], included: true }, emaCapability());
     expect(again.protocol.pair_audits).toHaveLength(2);
+  });
+
+  it('keeps the final-test month count through other edits and asks for the dates of all three counts', () => {
+    const counted: PlanDraft = { ...draft(), finalMonths: 3 };
+    const edited = applyPlanEdit(applyPlanEdit(counted, { kind: 'number', field: 'final_months', raw: '4' }, emaCapability()), { kind: 'number', field: 'test_months', raw: '3' }, emaCapability());
+
+    expect(edited.finalMonths).toBe(4);
+    expect(draftMonths(edited)).toEqual({ final_months: 4, training_months: 6, test_months: 3 });
+    expect(applyPlanEdit(edited, { kind: 'number', field: 'final_months', raw: '2.5' }, emaCapability()).problems.get(numberProblemKey('final_months'))).toBe('Enter a whole number.');
+    expect(draftMonths(applyPlanEdit(edited, { kind: 'number', field: 'training_months', raw: '' }, emaCapability()))).toBeNull();
+  });
+
+  it('a date typed by hand drops the month count instead of letting it contradict the dates', () => {
+    const counted: PlanDraft = { ...draft(), finalMonths: 3 };
+    const dated = applyPlanEdit(counted, { kind: 'date', field: 'final_end', raw: '2026-05-31' }, emaCapability());
+
+    expect(dated.finalMonths).toBeUndefined();
+    expect(draftMonths(dated)).toBeNull();
+  });
+
+  it('takes only the dates and fold months from the server and keeps every other edit', () => {
+    const edited = applyPlanEdit({ ...draft(), finalMonths: 4 }, { kind: 'knob-number', name: 'fast_period', field: 'low', raw: '4' }, emaCapability());
+    const laidOut = protocol({ development_start_ms: etMidnightMs('2023-07-01'), development_end_ms: etMidnightMs('2025-12-01'), final_start_ms: etMidnightMs('2025-12-01'), final_end_ms: etMidnightMs('2026-04-01'), training_months: 7, test_months: 2, budget_cap: 1 });
+
+    const merged = withServerDates(edited, laidOut);
+
+    expect(merged.protocol.final_start_ms).toBe(etMidnightMs('2025-12-01'));
+    expect(merged.protocol.development_start_ms).toBe(etMidnightMs('2023-07-01'));
+    expect(merged.protocol.knobs.find((k) => k.name === 'fast_period')?.low).toBe(4);
+    expect(merged.protocol.budget_cap).toBe(5000);
+    expect(merged.protocol.training_months).toBe(6);
+    expect(merged.finalMonths).toBe(4);
   });
 });

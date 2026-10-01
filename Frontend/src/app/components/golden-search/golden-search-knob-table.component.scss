@@ -20,6 +20,9 @@
 .icon:focus-visible { outline: 2px solid var(--accent); }
 .icon:disabled { cursor: default; opacity: 0.35; }
 .fixed-row .values { color: var(--text-secondary); }
-.fixed-controls, .constraints { margin: 0; padding-left: var(--space-4); display: grid; gap: var(--space-1); font-size: var(--fs-xs); }
+.constraints { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font-size: var(--fs-xs); color: var(--text-secondary); }
+.fixed-controls { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: var(--space-2); font-size: var(--fs-xxs); }
+.fixed-controls li { padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); background: var(--bg-elevated); color: var(--text-secondary); }
+.fixed-controls strong { color: var(--text-primary); font-weight: var(--fw-medium); }
 .muted { color: var(--text-secondary); }
 .table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

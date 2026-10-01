@@ -3,7 +3,7 @@
     <caption>Knobs, in search order <small>{{ stepHint() }}</small></caption>
     <thead>
       <tr>
-        <th scope="col">Order</th><th scope="col">Knob</th><th scope="col">Mode</th><th scope="col">Value or range</th><th scope="col">Smallest step</th>
+        <th scope="col">Order</th><th scope="col">Control / unit</th><th scope="col">Search</th><th scope="col">From – to, or fixed value</th><th scope="col">Smallest step</th>
       </tr>
     </thead>
     <tbody>
@@ -77,17 +77,17 @@
 </div>
 
 @if (capability(); as cap) {
-  @if (cap.fixed.length > 0) {
-    <ul class="fixed-controls" aria-label="Fixed controls">
-      @for (control of cap.fixed; track control.label) {
-        <li><strong>{{ control.label }}</strong> {{ control.value }} <span class="muted">— {{ control.reason }}</span></li>
-      }
-    </ul>
-  }
   @if (cap.constraints.length > 0) {
     <ul class="constraints" aria-label="Constraints">
       @for (constraint of cap.constraints; track constraint.left + constraint.right) {
         <li>{{ constraint.message }}</li>
+      }
+    </ul>
+  }
+  @if (cap.fixed.length > 0) {
+    <ul class="fixed-controls" aria-label="Fixed controls">
+      @for (control of cap.fixed; track control.label) {
+        <li><strong>{{ control.label }} {{ control.value }}</strong> · fixed <span class="muted">({{ control.reason }})</span></li>
       }
     </ul>
   }

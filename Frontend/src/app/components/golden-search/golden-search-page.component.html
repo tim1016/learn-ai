@@ -4,7 +4,7 @@
   @if (studyId(); as id) {
     <app-golden-search-study [studyId]="id" [capabilities]="capabilities() ?? []" (hidden)="onHidden()" />
   } @else {
-    <p class="intro">Find settings you can explain, then test the reasons to doubt them: search on development data, check the procedure over time, and open one held-back final test.</p>
+    <p class="intro">Find settings you can explain. Test the reasons to doubt them: search on development data, check the procedure over time, and open one held-back final test.</p>
     <p-tabs [value]="activeTab()" (valueChange)="setTab($event)">
       <p-tablist>
         <p-tab value="new"><i class="pi pi-sliders-h" aria-hidden="true"></i> New study</p-tab>

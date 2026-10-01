@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@a
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute } from '@angular/router';
 
+import { GOLDEN_QUALIFICATION_QUERY_PARAM } from '../../../fleet/account-workspace';
 import { FleetDirectoryService } from '../../../fleet/fleet-directory.service';
 import { AlpacaLaneCardComponent } from './alpaca-lane-card.component';
 
@@ -47,9 +48,13 @@ export class AlpacaAccountListPageComponent {
     initialValue: this.route.snapshot.queryParamMap,
   });
 
+  /** A golden configuration on its way to Deploy (#2696): "Use in Deploy"
+   * names no account, so choosing one here is the step it still needs. */
+  protected readonly goldenHandoff = computed(() => this.queryParams().has(GOLDEN_QUALIFICATION_QUERY_PARAM));
+
   /** A broker-wide `?deploy` intent has no lane yet: the list itself is the
-   * deploy entry point's lane-selection step. */
-  protected readonly deployIntent = computed(() => this.queryParams().has('deploy'));
+   * deploy entry point's lane-selection step. A golden handoff is one too. */
+  protected readonly deployIntent = computed(() => this.queryParams().has('deploy') || this.goldenHandoff());
 
   protected readonly accounts = computed(() => this.fleet.lanesOf('alpaca'));
   protected readonly loading = this.fleet.isLoading;

@@ -1,0 +1,13 @@
+@let c = candidate();
+<aside class="aside" aria-labelledby="gs-candidate-aside-title">
+  <div>
+    <h3 id="gs-candidate-aside-title">{{ c.guidance.title }}</h3>
+    <p>{{ c.guidance.text }}</p>
+  </div>
+  <dl class="rules">
+    <div><dt>Your loss ceiling</dt><dd><strong>{{ ceiling() }}</strong></dd></div>
+    <div><dt>Sample floor</dt><dd><strong>{{ policy().min_trades }} trades</strong></dd></div>
+    <div><dt>Final test</dt><dd class="warn">{{ finalState() === 'locked' ? 'Still locked' : 'Already opened' }}</dd></div>
+    <div><dt>Luck adjustment</dt><dd>Not estimable</dd></div>
+  </dl>
+</aside>

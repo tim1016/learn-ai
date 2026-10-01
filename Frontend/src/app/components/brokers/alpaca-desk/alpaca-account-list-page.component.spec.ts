@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/angular';
 import axe from 'axe-core';
-import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
+import { TestBed } from '@angular/core/testing';
+import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
 import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -148,6 +149,17 @@ describe('AlpacaAccountListPageComponent', () => {
     // that account's own Deploy tab rather than a `?deploy=` overlay.
     for (const link of screen.getAllByRole('link')) {
       expect(link.getAttribute('href')).toContain('/deploy');
+    }
+  });
+
+  it('carries a golden configuration from Golden Search to the chosen account’s Deploy (#2696)', async () => {
+    const view = await renderList({ golden_qualification: 'gq-0001-aaaa-bbbb' }, twoAccounts());
+    await TestBed.inject(Router).navigateByUrl('/?golden_qualification=gq-0001-aaaa-bbbb');
+    await view.fixture.whenStable();
+
+    expect(screen.getByText(/choose a ready Paper or Live account below to use the golden configuration/i)).toBeTruthy();
+    for (const link of screen.getAllByRole('link')) {
+      expect(link.getAttribute('href')).toMatch(/\/deploy\?golden_qualification=gq-0001-aaaa-bbbb$/);
     }
   });
 

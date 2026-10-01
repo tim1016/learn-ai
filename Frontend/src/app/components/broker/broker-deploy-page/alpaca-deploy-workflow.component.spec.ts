@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, signal, type Provider } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
@@ -35,7 +35,11 @@ import {
   VALIDATION_STRATEGY,
   previewedEnd,
 } from './alpaca-deploy-workflow.fixtures';
+import { GOLDEN_QUALIFICATION_QUERY_PARAM } from '../../../fleet/account-workspace';
 import { provideFleetDirectory } from '../../../fleet/fleet-directory-testing';
+import { GoldenSearchService } from '../../golden-search/golden-search.service';
+import type { QualificationDeployOffer } from '../../golden-search/golden-search.types';
+import { deployOffer as goldenDeployOffer } from '../../golden-search/testing/fixtures';
 import { resourceTarget, withAccount } from '../../../fleet/resource-target';
 import { fakeAccountMoney } from '../../../testing/account-money-fixtures';
 import {
@@ -205,7 +209,7 @@ async function renderWorkflow(service: ServiceDouble = mockService()) {
   return rendered;
 }
 
-async function renderWithQuery(service: ServiceDouble, query: Record<string, string>) {
+async function renderWithQuery(service: ServiceDouble, query: Record<string, string>, extraProviders: Provider[] = []) {
   const initial = convertToParamMap(query);
   const queryParamMap = new BehaviorSubject(initial);
   const rendered = await render(AlpacaDeployWorkflowComponent, {
@@ -216,6 +220,7 @@ async function renderWithQuery(service: ServiceDouble, query: Record<string, str
       provideRouter([]),
       { provide: ActivatedRoute, useValue: { queryParamMap, snapshot: { queryParamMap: initial } } },
       { provide: BrokerV2PanelService, useValue: service },
+      ...extraProviders,
     ],
     componentInputs: { fence: FENCE, target: withAccount(DEPLOY_TARGET, service.accountId), accountId: service.accountId },
   });
@@ -225,8 +230,8 @@ async function renderWithQuery(service: ServiceDouble, query: Record<string, str
 /** The page opened at `query`, as a reload of that address opens it. Its
  * router double merges every rewrite into `url.query`: the address a later
  * reload would open. */
-async function openAt(service: ServiceDouble, query: Record<string, string>) {
-  const rendered = await renderWithQuery(service, query);
+async function openAt(service: ServiceDouble, query: Record<string, string>, extraProviders: Provider[] = []) {
+  const rendered = await renderWithQuery(service, query, extraProviders);
   const url = { query: { ...query } };
   vi.spyOn(rendered.fixture.debugElement.injector.get(Router), 'navigate').mockImplementation(async (_commands, extras) => {
     const merged: Record<string, unknown> = { ...url.query, ...extras?.queryParams };
@@ -1417,6 +1422,152 @@ describe('AlpacaDeployWorkflowComponent — Deploy again', () => {
     const failure = await screen.findByRole('alert', { name: 'Deploy again' });
     expect(within(failure).getByText('No deployed bot spy-gone exists on this account.')).toBeTruthy();
     expect(within(failure).getByRole('button', { name: 'Start from a fresh form' })).toBeTruthy();
+  });
+});
+
+describe('AlpacaDeployWorkflowComponent — Golden Search handoff (#2696)', () => {
+  /** EMA as Deploy describes it once its lengths and hold are parameters. */
+  const EMA_KNOBS_STRATEGY: DeployBotView['strategies'][number] = {
+    ...EMA_STRATEGY,
+    params_schema: {
+      properties: {
+        gap: { type: 'number', default: 0.2, title: 'Crossover gap' },
+        rsi_min: { type: 'number', default: 50, title: 'RSI lower gate' },
+        rsi_max: { type: 'number', default: 70, title: 'RSI upper gate' },
+        fast_period: { type: 'integer', default: 5, title: 'Fast EMA length' },
+        slow_period: { type: 'integer', default: 10, title: 'Slow EMA length' },
+        hold_bars: { type: 'integer', default: 5, title: 'Hold time' },
+      },
+    },
+  };
+  const GOLDEN_VIEW: DeployBotView = { ...DEPLOY_VIEW, strategies: [VALIDATION_STRATEGY, EMA_KNOBS_STRATEGY, SMA_OVERRIDE_STRATEGY] };
+
+  function pendingOffer() {
+    let answer: (offer: QualificationDeployOffer) => void = () => undefined;
+    let refuse: (error: unknown) => void = () => undefined;
+    const deployOffer = vi.fn((_id: string) => new Promise<QualificationDeployOffer>((resolve, reject) => {
+      answer = resolve;
+      refuse = reject;
+    }));
+    return { deployOffer, answer: (offer: QualificationDeployOffer) => answer(offer), refuse: (error: unknown) => refuse(error) };
+  }
+
+  async function openWithHandoff(service: ServiceDouble, id: string, deployOffer: (id: string) => Promise<QualificationDeployOffer>) {
+    return openAt(service, { [GOLDEN_QUALIFICATION_QUERY_PARAM]: id }, [{ provide: GoldenSearchService, useValue: { deployOffer } }]);
+  }
+
+  it('applies a ready qualification’s strategy, symbol and exact settings together, says so, and clears the link', async () => {
+    const service = mockService(GOLDEN_VIEW);
+    const offer = pendingOffer();
+    const page = await openWithHandoff(service, 'gq-0001-aaaa-bbbb', offer.deployOffer);
+    await formShown();
+    offer.answer(goldenDeployOffer());
+
+    const note = await screen.findByRole('region', { name: 'Golden configuration' });
+    expect(note.textContent).toContain('Golden configuration gq-0001- from Golden Search.');
+    expect(note.textContent).toContain('a setting it leaves out is the strategy\'s default');
+    expect(offer.deployOffer).toHaveBeenCalledWith('gq-0001-aaaa-bbbb');
+    await vi.waitFor(() => expect(page.url.query).toEqual({}));
+    await page.fixture.whenStable();
+    await vi.waitFor(() => expect(symbolPicker(page.fixture).symbol()).toBe('QQQ'));
+    await openStep('What');
+    expect((screen.getByLabelText('Deployment strategy') as HTMLSelectElement).value).toBe('ema_crossover_signal');
+    expect((screen.getByRole('textbox', { name: 'Fast EMA length' }) as HTMLInputElement).value).toBe('8');
+    // The canonical tuple leaves hold_bars out: the form shows its schema default.
+    expect((screen.getByRole('textbox', { name: 'Hold time' }) as HTMLInputElement).value).toBe('5');
+
+    await chooseMoney();
+    fireEvent.click(deployButton());
+    await vi.waitFor(() => expect(service.deployBudgetBot).toHaveBeenCalledOnce());
+    expect(submittedBody(service)).toMatchObject({ strategy_key: 'ema_crossover_signal', symbol: 'QQQ' });
+    expect(submittedBody(service).parameters).toEqual({ gap: 0.15, rsi_min: 48, rsi_max: 72, fast_period: 8, slow_period: 21 });
+    expect(submittedBody(service)).not.toHaveProperty('replaces_strategy_instance_id');
+  });
+
+  it('says when the form no longer holds the exact golden settings', async () => {
+    const service = mockService(GOLDEN_VIEW);
+    const offer = pendingOffer();
+    const page = await openWithHandoff(service, 'gq-0001-aaaa-bbbb', offer.deployOffer);
+    await formShown();
+    offer.answer(goldenDeployOffer());
+    await screen.findByRole('region', { name: 'Golden configuration' });
+    await page.fixture.whenStable();
+    await openStep('What');
+
+    const fast = screen.getByRole('textbox', { name: 'Fast EMA length' });
+    fireEvent.change(fast, { target: { value: '9' } });
+
+    await vi.waitFor(() => expect(screen.getByRole('region', { name: 'Golden configuration' }).textContent).toContain('no longer holds the exact golden settings'));
+  });
+
+  it('refuses a qualification that is not ready, with its explanation, and applies nothing', async () => {
+    const service = mockService(GOLDEN_VIEW);
+    const offer = pendingOffer();
+    const page = await openWithHandoff(service, 'gq-0002-stale', offer.deployOffer);
+    await formShown();
+    offer.answer(goldenDeployOffer({ qualification_id: 'gq-0002-stale', status: 'stale', explanation: 'Approved, but the program changed since — re-proof it.' }));
+
+    const refusal = await screen.findByRole('alert', { name: 'Golden configuration' });
+    expect(refusal.textContent).toContain('was not applied.');
+    expect(refusal.textContent).toContain('Approved, but the program changed since — re-proof it.');
+    await vi.waitFor(() => expect(page.url.query).toEqual({}));
+    await vi.waitFor(() => expect(screen.getByText(/^Deployment Validation on SPY/)).toBeTruthy());
+    expect(symbolPicker(page.fixture).symbol()).toBe('SPY');
+  });
+
+  it('says when the qualification cannot be read, and applies nothing', async () => {
+    const service = mockService(GOLDEN_VIEW);
+    const offer = pendingOffer();
+    const page = await openWithHandoff(service, 'gq-gone', offer.deployOffer);
+    await formShown();
+    offer.refuse(new HttpErrorResponse({ status: 404, error: { detail: { message: 'No golden qualification gq-gone exists.' } } }));
+
+    const refusal = await screen.findByRole('alert', { name: 'Golden configuration' });
+    expect(refusal.textContent).toContain('No golden qualification gq-gone exists.');
+    await vi.waitFor(() => expect(page.url.query).toEqual({}));
+    expect(screen.getByText(/^Deployment Validation on SPY/)).toBeTruthy();
+  });
+
+  it('refuses an answer about a different qualification instead of applying it or waiting in silence', async () => {
+    const service = mockService(GOLDEN_VIEW);
+    const offer = pendingOffer();
+    const page = await openWithHandoff(service, 'gq-0001-aaaa-bbbb', offer.deployOffer);
+    await formShown();
+    offer.answer(goldenDeployOffer({ qualification_id: 'gq-9999-other' }));
+
+    const refusal = await screen.findByRole('alert', { name: 'Golden configuration' });
+    expect(refusal.textContent).toContain('gq-0001-');
+    expect(refusal.textContent).toContain('named a different golden configuration. Nothing was applied.');
+    await vi.waitFor(() => expect(page.url.query).toEqual({}));
+    expect(screen.getByText(/^Deployment Validation on SPY/)).toBeTruthy();
+    expect(symbolPicker(page.fixture).symbol()).toBe('SPY');
+  });
+
+  it('a ready qualification whose strategy this account does not offer is flagged, and its settings are not claimed', async () => {
+    const service = mockService(DEPLOY_VIEW);
+    const offer = pendingOffer();
+    await openWithHandoff(service, 'gq-0001-aaaa-bbbb', offer.deployOffer);
+    await formShown();
+    offer.answer(goldenDeployOffer({ program_key: 'not_offered_here' }));
+
+    const note = await screen.findByRole('region', { name: 'Golden configuration' });
+    expect(within(note).getByRole('alert').textContent).toContain('Its strategy is not offered on this account now.');
+    await vi.waitFor(() => expect(note.textContent).toContain('no longer holds the exact golden settings'));
+    expect(note.textContent).not.toContain('exact settings are applied');
+  });
+
+  it('never fetches a link that does not name a qualification', async () => {
+    const service = mockService(GOLDEN_VIEW);
+    const offer = pendingOffer();
+    const page = await openAt(service, {}, [{ provide: GoldenSearchService, useValue: { deployOffer: offer.deployOffer } }]);
+    await formShown();
+
+    arriveAt(page, { [GOLDEN_QUALIFICATION_QUERY_PARAM]: '../accounts' });
+
+    const refusal = await screen.findByRole('alert', { name: 'Golden configuration' });
+    expect(refusal.textContent).toContain('This link does not name a golden configuration.');
+    expect(offer.deployOffer).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(page.url.query).toEqual({}));
   });
 });
 

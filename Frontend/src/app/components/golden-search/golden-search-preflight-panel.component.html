@@ -26,6 +26,16 @@
 
   @if (!checking() && preflight(); as plan) {
     @if (plan.estimate; as estimate) {
+      <div class="budget" [class.budget--over]="estimate.total_max > estimate.budget_cap">
+        <div>
+          <strong>{{ method() === 'zoom' ? 'Zoom' : 'Grid' }} plan: up to {{ estimate.total_max | number }} evaluations</strong>
+          <p>Includes folds, pair audits, full detail, the final test and proof work. Cap: {{ estimate.budget_cap | number }}.</p>
+        </div>
+        <div>
+          <strong>{{ duration() }}</strong>
+          <p>Estimate · serial execution</p>
+        </div>
+      </div>
       <div class="table-wrap" role="region" tabindex="0" aria-label="Workload by stage">
         <table class="stages">
           <caption>Workload upper bound — every engine run counts toward the cap</caption>
@@ -41,7 +51,7 @@
           </tfoot>
         </table>
       </div>
-      <p class="muted">Serial running time {{ duration() }} — an estimate, not a guarantee; queue time is extra.</p>
+      <p class="muted">The running time is an estimate, not a guarantee; queue time is extra.</p>
     }
     @if (plan.exposure; as exposure) {
       <p class="exposure" [attr.data-state]="exposure.state">

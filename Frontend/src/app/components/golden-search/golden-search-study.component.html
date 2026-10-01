@@ -1,6 +1,7 @@
 <section class="study" aria-labelledby="gs-study-title">
   <a class="back" routerLink="/golden-search"><i class="pi pi-arrow-left" aria-hidden="true"></i> All studies</a>
   @if (loadError(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
+  <p class="sr-only" role="status">{{ announcement() }}</p>
 
   @if (detail(); as d) {
     <app-golden-search-study-strip [study]="d" [capability]="capability()" />
@@ -17,8 +18,9 @@
       </ol>
     </nav>
 
+    <app-golden-search-scope-line [scope]="d.scope" />
     <section class="guidance" aria-labelledby="gs-guidance-title">
-      <h3 id="gs-guidance-title">{{ d.guidance.headline }}</h3>
+      <h2 id="gs-guidance-title">{{ d.guidance.headline }}</h2>
       <p>{{ d.guidance.detail }}</p>
       @if (d.progress; as progress) {
         <p class="progress" role="status">
@@ -51,13 +53,12 @@
     </section>
 
     <div class="step-body">
-      <app-golden-search-scope-line [scope]="d.scope" />
       @switch (selectedStep()) {
         @case ('plan') { <app-golden-search-plan-summary [study]="d" [capability]="capability()" /> }
         @case ('search') { <app-golden-search-search-step [study]="d" [capability]="capability()" /> }
         @case ('test') { <app-golden-search-test-step [study]="d" [capability]="capability()" /> }
-        @case ('compare') { <app-golden-search-compare-step [guidance]="d.guidance" /> }
-        @case ('decision') { <app-golden-search-decision-step [guidance]="d.guidance" /> }
+        @case ('compare') { <app-golden-search-compare-step [study]="d" [capability]="capability()" [busy]="busy()" (studyCommand)="onStepCommand($event)" (goTo)="selectStep($event)" /> }
+        @case ('decision') { <app-golden-search-decision-step [study]="d" [capability]="capability()" [busy]="busy()" (studyCommand)="onStepCommand($event)" (goTo)="selectStep($event)" /> }
       }
     </div>
   } @else if (loadError() === null) {

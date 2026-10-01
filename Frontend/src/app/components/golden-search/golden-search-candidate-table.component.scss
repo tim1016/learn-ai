@@ -1,0 +1,31 @@
+:host { display: block; min-width: 0; }
+table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+caption { text-align: left; color: var(--text-secondary); padding: 0 var(--space-2) var(--space-2); }
+th, td { padding: var(--space-3) var(--space-2); border-bottom: 1px solid var(--border-light); text-align: left; vertical-align: top; }
+thead th { color: var(--text-secondary); font-weight: var(--fw-medium); padding-block: var(--space-2); }
+tbody th { font-weight: var(--fw-regular); }
+tr:last-child th, tr:last-child td { border-bottom: 0; }
+tr.selected { background: var(--accent-soft); }
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+small { display: block; color: var(--text-secondary); font-size: var(--fs-xxs); }
+.warn, .warn small { color: var(--warn); }
+.flag { color: var(--warn); margin-top: var(--space-1); }
+.flag--bad { color: var(--bear); }
+.pick { all: unset; display: flex; gap: var(--space-2); align-items: center; cursor: pointer; color: var(--text-primary); }
+.pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--radius-sm); }
+.pick:disabled { cursor: default; }
+.radio { width: 0.95rem; height: 0.95rem; border: 1px solid var(--text-secondary); border-radius: 50%; flex-shrink: 0; }
+.pick[aria-pressed='true'] .radio { border: 4px solid var(--accent); }
+.name strong { font-weight: var(--fw-semi); }
+
+/* Phone width: each candidate reads as labelled lines instead of a wide row. */
+@media (max-width: 680px) {
+  table, tbody, tr, th, td { display: block; }
+  thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  caption { display: block; }
+  tr { padding: var(--space-2) var(--space-1); border-bottom: 1px solid var(--border-light); }
+  th, td { border: 0; padding: var(--space-1) var(--space-1); }
+  td { display: flex; justify-content: space-between; gap: var(--space-2); white-space: normal; text-align: right; }
+  td::before { content: attr(data-label); color: var(--text-secondary); text-align: left; }
+  td small { display: inline; margin-left: var(--space-1); }
+}

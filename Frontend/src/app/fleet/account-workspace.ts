@@ -63,6 +63,15 @@ export const HOME_WALL_VIEW = 'wall';
  * consent. */
 export const DEPLOY_AGAIN_QUERY_PARAM = 'from';
 
+/** Golden Search's handoff (#2696): `?golden_qualification=<id>` carries an
+ * approved qualification from "Use in Deploy" through the account list to
+ * the chosen account's Deploy, which applies its exact settings. */
+export const GOLDEN_QUALIFICATION_QUERY_PARAM = 'golden_qualification';
+
+/** Where "Use in Deploy" lands: the account list, where choosing the account
+ * is the owner's step (#2696). */
+export const GOLDEN_DEPLOY_HANDOFF_ROUTE = '/brokers/alpaca';
+
 type BotHistoryRow = components['schemas']['FleetBotHistoryRow'];
 
 /** History's filters, as its URL carries them (#2574) — the one shape every

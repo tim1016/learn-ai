@@ -1,0 +1,44 @@
+@let s = study();
+<section class="decision" aria-labelledby="gs-decision-title">
+  <h3 id="gs-decision-title">{{ approved() ? 'Your recorded decision' : 'Your decision and the reason behind it' }}</h3>
+  @if (approved()) {
+    <p class="recorded">{{ s.decision?.note ?? '—' }}</p>
+    <p class="caption">@if (weak()) { Research override recorded; the original warning remains. }Manual override acknowledged for program {{ programVersion() }}.</p>
+    @if (qualificationId()) {
+      <div class="actions actions--end">
+        <a pButton [routerLink]="deployRoute" [queryParams]="deployQuery()"><span>Use in Deploy</span><i class="pi pi-arrow-right" aria-hidden="true"></i></a>
+      </div>
+    }
+  } @else if (pending()) {
+    <p class="status" role="status">Building the proof and publishing the version. The current default stays until it is published.</p>
+    @if (s.progress; as progress) {
+      <progress [value]="progress.completed" [max]="progress.total_max" aria-label="Approval progress"></progress>
+    }
+  } @else {
+    <label class="field"><span>Reason for this decision</span>
+      <textarea rows="3" placeholder="Record why you accept this choice and its limitations." [value]="note()" (input)="onNote($event)"></textarea>
+    </label>
+    <label class="check"><input type="checkbox" [checked]="parityAcknowledged()" (change)="onParity($event)" />
+      <span>I accept missing independent engine agreement for program {{ programVersion() }}. Record this Golden review as Manual override.</span></label>
+    @if (weak()) {
+      <label class="check"><input type="checkbox" [checked]="weaknessAcknowledged()" (change)="onWeakness($event)" />
+        <span>I approve despite {{ weaknessText() }}. Preserve this evidence warning and my written reason.</span></label>
+    }
+    <div class="actions">
+      @if (canRetain()) {
+        <button pButton type="button" severity="secondary" [outlined]="true" [disabled]="busy()" (click)="retain('keep_current')"><span>Keep current settings</span></button>
+      }
+      <button pButton type="button" [disabled]="!canApprove()" (click)="approve()"><span>{{ retry() ? 'Retry qualification' : 'Approve golden configuration' }}</span></button>
+    </div>
+    @if (missing(); as reason) { <p class="caption caption--end">{{ reason }}</p> }
+    @if (canRetain()) {
+      <div class="alternatives" role="group" aria-label="Other decisions">
+        <span class="caption">Or finish another way:</span>
+        @for (option of retainKinds; track option.kind) {
+          <button pButton type="button" size="small" severity="secondary" [text]="true" [disabled]="busy()" (click)="retain(option.kind)"><span>{{ option.label }}</span></button>
+        }
+      </div>
+    }
+    <p class="caption">Approval builds and verifies proof, records your review and publishes the exact version. Technical failure preserves the old default.</p>
+  }
+</section>

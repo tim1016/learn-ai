@@ -1,10 +1,19 @@
 import { etMidnightMs } from '../../../shared/date/et-midnight';
 import type {
+  CandidateDetail,
+  CandidateKey,
+  EvidenceCandidate,
+  EvidenceView,
+  ExamView,
   GoldenSearchDefaults,
   GoldenSearchPreflight,
   Metrics,
+  PairMap,
+  PairMapCell,
   ProcedureView,
   ProtocolRequest,
+  QualificationDeployOffer,
+  QualificationView,
   StrategyCapability,
   StudyDetail,
   StudyState,
@@ -237,6 +246,184 @@ export function validationView(overrides: Partial<ValidationView> = {}): Validat
   };
 }
 
+/** The fast × slow landscape around the all-period winner (8/21): fast ≥ slow cells are invalid, one run failed. */
+export function pairMap(overrides: Partial<PairMap> = {}): PairMap {
+  const fast = [5, 8, 10, 13, 15];
+  const slow = [10, 15, 21, 26, 34];
+  const returns = [
+    [-0.008, 0.024, 0.046, 0.041, 0.028],
+    [0.019, 0.068, 0.087, 0.081, 0.057],
+    [null, 0.058, 0.082, 0.077, 0.054],
+    [null, 0.032, 0.065, 0.069, 0.041],
+    [null, null, 0.044, 0.052, 0.032],
+  ];
+  const cells: PairMapCell[] = fast.flatMap((y, row) =>
+    slow.map((x, column): PairMapCell => {
+      const value = returns[row][column];
+      if (value === null) return { x, y, status: 'invalid', metrics: null, reason: 'The fast EMA must be shorter than the slow EMA.' };
+      if (y === 13 && x === 34) return { x, y, status: 'failed', metrics: metrics({ status: 'failed', error: 'engine refused the window', total_return_pct: null, sharpe_ratio: null }), reason: null };
+      return { x, y, status: 'tested', metrics: metrics({ total_return_pct: value, total_trades: 100 + row * 10 + column }), reason: null };
+    }),
+  );
+  return { x_knob: 'slow_period', y_knob: 'fast_period', x_values: slow, y_values: fast, cells, ...overrides };
+}
+
+const ALL_PERIOD_POINT = { gap: 0.15, rsi_min: 48, rsi_max: 72, fast_period: 8, slow_period: 21, hold_bars: 4, symbol: 'SPY' } as const;
+const RECENT_POINT = { gap: 0.1, rsi_min: 45, rsi_max: 70, hold_bars: 3, symbol: 'SPY' } as const;
+
+export function evidenceCandidate(key: CandidateKey, overrides: Partial<EvidenceCandidate> = {}): EvidenceCandidate {
+  const base: Record<CandidateKey, EvidenceCandidate> = {
+    all_period: {
+      key: 'all_period',
+      label: 'All-period fit',
+      point: { ...ALL_PERIOD_POINT },
+      point_hash: 'h-all',
+      same_as: [],
+      development_metrics: metrics({ total_return_pct: 0.087, max_drawdown_pct: 0.064, total_trades: 146, sharpe_ratio: 1.18 }),
+      eligible: true,
+      ineligibility: null,
+      neighbors: [
+        {
+          knob: 'fast_period',
+          rows: [
+            { value: 7, status: 'tested', metrics: metrics({ total_return_pct: 0.052 }) },
+            { value: 8, status: 'center', metrics: metrics({ total_return_pct: 0.087 }) },
+            { value: 9, status: 'invalid', metrics: null, reason: 'untested: outside the legal domain' },
+          ],
+        },
+      ],
+      stress: [{ scenario: 'slippage_1c', label: 'Extra 1¢/share slippage', metrics: metrics({ total_return_pct: 0.041 }) }],
+      guidance: { title: 'Prefer evidence that survives small changes', text: 'Less return than the recent fit, with lower drawdown and several useful neighbors.' },
+      flags: [],
+      params_sentence: 'Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars',
+      fixed_sentence: 'Normalized gap fixed at 0 bps',
+      exam_eligible: true,
+    },
+    recent: {
+      key: 'recent',
+      label: 'Recent fit',
+      point: { ...RECENT_POINT },
+      point_hash: 'h-recent',
+      same_as: [],
+      development_metrics: metrics({ total_return_pct: 0.116, max_drawdown_pct: 0.148, total_trades: 91, sharpe_ratio: 1.43 }),
+      eligible: false,
+      ineligibility: 'DRAWDOWN_ABOVE_CEILING',
+      neighbors: [],
+      stress: [],
+      guidance: { title: 'The extra return comes with a warning', text: 'The largest development return also exceeds your drawdown ceiling.' },
+      flags: [{ code: 'DRAWDOWN_ABOVE_CEILING', text: 'Above 12% limit' }],
+      params_sentence: 'Gap $0.10 · RSI 45–70 · EMA 5/10 · hold 3 bars',
+      fixed_sentence: 'Normalized gap fixed at 0 bps',
+      exam_eligible: true,
+    },
+    incumbent: {
+      key: 'incumbent',
+      label: 'Current settings',
+      point: { ...INCUMBENT_PARAMS },
+      point_hash: 'h-inc',
+      same_as: [],
+      development_metrics: metrics({ total_return_pct: 0.052, max_drawdown_pct: 0.089, total_trades: 158, sharpe_ratio: 0.82 }),
+      eligible: true,
+      ineligibility: null,
+      neighbors: [],
+      stress: [],
+      guidance: { title: 'No change can be the best decision', text: 'Keeping the incumbent is a complete research decision.' },
+      flags: [],
+      params_sentence: 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars',
+      fixed_sentence: 'Normalized gap fixed at 0 bps',
+      exam_eligible: false,
+    },
+  };
+  return { ...base[key], ...overrides };
+}
+
+export function evidenceView(overrides: Partial<EvidenceView> = {}): EvidenceView {
+  return {
+    candidates: [evidenceCandidate('incumbent'), evidenceCandidate('all_period'), evidenceCandidate('recent')],
+    pair_maps: [pairMap()],
+    recommendation: {
+      headline: 'The recent fit earns more in this replay, but nearby settings lose money. Inspect that sensitivity before using your final test.',
+      findings: [{ code: 'RECENT_DIFFERS_FROM_ALL_PERIOD', text: 'The recent fit chose different EMA lengths than the all-period fit.' }],
+    },
+    scope: { window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS }, capital: 100000, costs: { fill_mode: 'decision_minute_open', commission_per_order: 0, slippage_per_share: 0 } },
+    ...overrides,
+  };
+}
+
+export function candidateDetail(key: CandidateKey, overrides: Partial<CandidateDetail> = {}): CandidateDetail {
+  const end = { all_period: 0.087, recent: 0.116, incumbent: 0.052 }[key];
+  const days = [etMidnightMs('2024-01-02'), etMidnightMs('2024-06-03'), etMidnightMs('2025-12-31')];
+  return {
+    candidate_key: key,
+    point: evidenceCandidate(key).point,
+    development: {
+      window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS },
+      metrics: evidenceCandidate(key).development_metrics ?? metrics(),
+      cumulative_return: [
+        { ms: days[0], value: 0 },
+        { ms: days[1], value: end / 2 },
+        { ms: days[2], value: end },
+      ],
+      daily_equity: [],
+      drawdown: [],
+      monthly: [
+        { month_start_ms: etMidnightMs('2025-11-01'), net_profit: 1100, return_fraction: 0.011, trades: 12 },
+        { month_start_ms: etMidnightMs('2025-12-01'), net_profit: -700, return_fraction: -0.007, trades: 9 },
+      ],
+      trades: [
+        { entry_ms: etMidnightMs('2025-12-23') + 15 * 3600_000, exit_ms: etMidnightMs('2025-12-23') + 16 * 3600_000, entry_price: 590.1, exit_price: 592.5, quantity: 77, pnl: 243, pnl_pct: 0.0041, indicators: { rsi: 58.2, ema5: 590, ema10: 589.4 }, exit_reason: 'HOLD_COMPLETE' },
+        { entry_ms: etMidnightMs('2025-12-24') + 15 * 3600_000, exit_ms: etMidnightMs('2025-12-24') + 17 * 3600_000, entry_price: 594, exit_price: 592.8, quantity: 77, pnl: -92, pnl_pct: -0.0015, indicators: { rsi: 54 }, exit_reason: null },
+      ],
+    },
+    exam: null,
+    ...overrides,
+  };
+}
+
+export function examView(overrides: Partial<ExamView> = {}): ExamView {
+  return {
+    candidate_key: 'all_period',
+    candidate_point: { ...ALL_PERIOD_POINT },
+    window: { start_ms: FINAL_START_MS, end_ms: FINAL_END_MS },
+    claim: 'confirmatory',
+    exposure_state: 'not_opened',
+    outcome: 'meets_rules',
+    checks: [
+      { code: 'NET_POSITIVE', label: 'Profit after stated costs', status: 'pass', detail: 'Net profit $1,840.' },
+      { code: 'DRAWDOWN_WITHIN', label: 'Worst drawdown within the ceiling', status: 'pass', detail: '3.1% against 20%.' },
+      { code: 'SAMPLE_FLOOR', label: 'Enough trades', status: 'pass', detail: '36 trades against 30.' },
+      { code: 'BEATS_INCUMBENT', label: 'At least the incumbent', status: 'pass', detail: 'Sharpe 0.91 against 0.54.' },
+    ],
+    retention: 0.61,
+    candidate_metrics: metrics({ total_return_pct: 0.018, max_drawdown_pct: 0.031, total_trades: 36, sharpe_ratio: 0.91 }),
+    incumbent_metrics: metrics({ total_return_pct: 0.009, max_drawdown_pct: 0.042, total_trades: 39, sharpe_ratio: 0.54 }),
+    ...overrides,
+  };
+}
+
+export function qualificationView(overrides: Partial<QualificationView> = {}): QualificationView {
+  return {
+    status: 'ready',
+    qualification_id: 'gq-0001-aaaa-bbbb',
+    failure_reason: null,
+    deploy: { program_key: 'ema_crossover_signal', symbol: 'SPY', parameters: { gap: 0.15, rsi_min: 48, rsi_max: 72, fast_period: 8, slow_period: 21, hold_bars: 4 }, program_version: 'ema-crossover-signal/v3' },
+    ...overrides,
+  };
+}
+
+export function deployOffer(overrides: Partial<QualificationDeployOffer> = {}): QualificationDeployOffer {
+  return {
+    qualification_id: 'gq-0001-aaaa-bbbb',
+    program_key: 'ema_crossover_signal',
+    program_version: 'ema-crossover-signal/v3',
+    symbol: 'QQQ',
+    parameters: { gap: 0.15, rsi_min: 48, rsi_max: 72, fast_period: 8, slow_period: 21 },
+    status: 'ready',
+    explanation: 'Approved in Golden Search study study-00; its proof matches the running program.',
+    ...overrides,
+  };
+}
+
 const GUIDANCE: Readonly<Record<StudyState, { headline: string; detail: string }>> = {
   locked: { headline: 'Start the search when the plan is right', detail: 'The plan is frozen; the search runs on development data only.' },
   search_running: { headline: 'The search is running', detail: 'Results appear when the stage finishes.' },
@@ -253,16 +440,30 @@ const GUIDANCE: Readonly<Record<StudyState, { headline: string; detail: string }
   closed: { headline: 'Study closed', detail: 'The study stays in history.' },
 };
 
+/** States reached only after the final test was opened. */
+const AFTER_EXAM: readonly StudyState[] = ['exam_running', 'awaiting_review', 'qualification_pending', 'approved', 'qualification_failed'];
+
+function qualificationFor(state: StudyState): QualificationView | null {
+  if (state === 'approved') return qualificationView();
+  if (state === 'qualification_pending') return qualificationView({ status: 'pending', qualification_id: null, deploy: null });
+  if (state === 'qualification_failed') {
+    return qualificationView({ status: 'failed', qualification_id: null, deploy: null, failure_reason: 'The restored replay did not match the lake replay (TRACE_MISMATCH).' });
+  }
+  return null;
+}
+
 export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> = {}): StudyDetail {
   const reachedSearch = !['locked', 'search_running'].includes(state);
   const reachedValidation = reachedSearch && !['awaiting_validation', 'validation_running'].includes(state);
+  const examOpened = AFTER_EXAM.includes(state);
+  const examJudged = examOpened && state !== 'exam_running';
   return {
     id: 'study-0001-aaaa',
     parent_study_id: null,
     strategy_key: 'ema_crossover_signal',
     symbol: 'SPY',
     state,
-    presented_status: state.endsWith('_running') ? 'running' : 'idle',
+    presented_status: state.endsWith('_running') || state === 'qualification_pending' ? 'running' : 'idle',
     revision: 3,
     created_at_ms: etMidnightMs('2026-09-30'),
     updated_at_ms: etMidnightMs('2026-09-30'),
@@ -275,9 +476,9 @@ export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> =
     incomplete: false,
     failure_reason: null,
     hidden: false,
-    exposure_claim: null,
-    exam_outcome: null,
-    qualification_id: null,
+    exposure_claim: examOpened ? 'confirmatory' : null,
+    exam_outcome: examJudged ? 'meets_rules' : null,
+    qualification_id: state === 'approved' ? 'gq-0001-aaaa-bbbb' : null,
     protocol: protocol(),
     receipt: {
       data_start_ms: etMidnightMs('2023-12-27'),
@@ -290,31 +491,54 @@ export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> =
       code: { git_revision: '7e43a777aaaabbbb', tree_state: 'clean' },
       program_version: 'ema-crossover-signal/v3',
     },
-    permitted_actions: state === 'locked' || state === 'awaiting_validation' ? ['continue', 'revise', 'close'] : state.endsWith('_running') ? ['cancel'] : ['revise'],
+    permitted_actions: permittedFor(state),
     action_refusals: {},
     guidance: GUIDANCE[state],
-    progress: state.endsWith('_running') ? { stage: state.replace('_running', ''), completed: 120, total_max: 410 } : null,
+    progress: state.endsWith('_running') || state === 'qualification_pending' ? { stage: state === 'qualification_pending' ? 'qualification' : state.replace('_running', ''), completed: 120, total_max: 410 } : null,
     dispatch: null,
     results: {
-      search: reachedSearch ? procedureView() : null,
+      search: reachedSearch ? procedureView({ pair_maps: [pairMap()] }) : null,
       recent: reachedSearch ? procedureView({ winner_hash: 'r1', stop_reason: 'pass_limit', stop_explanation: 'The pass limit was reached while knobs still moved.', edge_hits: [] }) : null,
       validation: reachedValidation ? validationView() : null,
-      evidence: null,
-      exam: null,
-      qualification: null,
+      evidence: reachedValidation ? evidenceView() : null,
+      exam: examJudged ? examView() : examOpened ? examView({ outcome: null, checks: [], retention: null, candidate_metrics: null, incumbent_metrics: null }) : null,
+      qualification: qualificationFor(state),
     },
-    decision: null,
-    candidate_key: null,
-    exam_locked: false,
+    decision: state === 'approved' ? { kind: 'approve', note: 'Accept this exact configuration after reviewing the stated limitations.', at_ms: etMidnightMs('2026-09-30') } : null,
+    candidate_key: examOpened || state === 'candidate_locked' ? 'all_period' : null,
+    exam_locked: examOpened,
     scope: {
       development_label_start_ms: DEVELOPMENT_START_MS,
       development_end_ms: FINAL_START_MS,
       final_start_ms: FINAL_START_MS,
       final_end_ms: FINAL_END_MS,
-      final_state: 'locked',
+      final_state: examOpened ? 'opened_once' : 'locked',
       capital: 100000,
       costs_sentence: 'No commission · no slippage · fills at the decision minute open',
     },
     ...overrides,
   };
+}
+
+/** What the server permits in each state, as the lifecycle table in #2696 lists it. */
+function permittedFor(state: StudyState): StudyDetail['permitted_actions'] {
+  switch (state) {
+    case 'locked':
+      return ['continue', 'revise', 'close'];
+    case 'awaiting_validation':
+      return ['continue', 'retain', 'revise', 'close'];
+    case 'awaiting_candidate':
+    case 'candidate_locked':
+      return state === 'candidate_locked' ? ['select_candidate', 'open_exam', 'retain', 'revise', 'close'] : ['select_candidate', 'retain', 'revise', 'close'];
+    case 'awaiting_review':
+    case 'qualification_failed':
+      return ['approve', 'retain', 'revise'];
+    case 'search_running':
+    case 'validation_running':
+    case 'exam_running':
+    case 'qualification_pending':
+      return ['cancel'];
+    default:
+      return ['revise'];
+  }
 }

@@ -1,11 +1,11 @@
 @if (validation(); as v) {
   <div class="step">
-    <p class="note" role="note"><i class="pi pi-info-circle" aria-hidden="true"></i> Every fold repeats the frozen search on its own training months, from the original ranges and starting point, then tests only its winner on the months that follow. This judges the selection procedure, not any one candidate.</p>
-    <p>{{ v.explanation }}</p>
+    <p class="note note--blue" role="note"><i class="pi pi-shield" aria-hidden="true"></i> Original ranges and starting rules repeat in every fold. The all-period winner never seeds an earlier test.</p>
+    <p class="muted">{{ v.explanation }}</p>
 
     @if (v.verdict; as verdict) {
       <section class="verdict" [attr.data-label]="verdict.label" aria-labelledby="gs-verdict-title">
-        <p class="eyebrow">Legacy verdict · {{ verdict.based_on }}</p>
+        <p class="eyebrow">Legacy verdict · heuristic · {{ verdict.based_on }}</p>
         <h3 id="gs-verdict-title">{{ verdict.label }}</h3>
         <p>{{ verdict.reason }}</p>
         <dl class="facts">
@@ -16,36 +16,16 @@
       </section>
     }
 
-    <div class="table-wrap" role="region" tabindex="0" aria-label="Folds">
-      <table class="folds">
-        <caption>Folds — training winner and its test result</caption>
-        <thead>
-          <tr><th scope="col">Fold</th><th scope="col">Training</th><th scope="col">Test</th><th scope="col">Status</th><th scope="col">Winner vs starting point</th><th scope="col">Training result</th><th scope="col">Test result</th><th scope="col">Current settings, same test</th></tr>
-        </thead>
-        <tbody>
-          @for (row of rows(); track row.fold.fold_index) {
-            <tr [class.failed-row]="row.fold.status === 'failed'">
-              <th scope="row">{{ row.fold.fold_index + 1 }}</th>
-              <td class="dates"><app-timestamp-display [value]="row.fold.train_start_ms" mode="date-et" /> → <app-timestamp-display [value]="row.fold.train_end_ms - 1" mode="date-et" /></td>
-              <td class="dates"><app-timestamp-display [value]="row.fold.test_start_ms" mode="date-et" /> → <app-timestamp-display [value]="row.fold.test_end_ms - 1" mode="date-et" /></td>
-              <td>
-                <span class="tag" [attr.data-status]="row.fold.status">{{ row.fold.status | receiptLabel }}</span>
-                @if (row.fold.failure_reason) { <span class="reason">{{ row.fold.failure_reason | receiptLabel }}</span> }
-              </td>
-              <td>{{ row.changes ?? 'No winner' }}</td>
-              <td><app-golden-search-metrics [metrics]="row.fold.train_metrics" [compact]="true" /></td>
-              <td><app-golden-search-metrics [metrics]="row.fold.test_metrics" [compact]="true" /></td>
-              <td><app-golden-search-metrics [metrics]="row.fold.incumbent_test_metrics" [compact]="true" /></td>
-            </tr>
-          }
-        </tbody>
-      </table>
-    </div>
-
-    <section class="linked" aria-labelledby="gs-linked-title">
-      <h3 id="gs-linked-title">The procedure's test history</h3>
-      <p class="muted">Test-period returns linked across folds; each fold starts flat with fresh capital. A missing fold breaks the line. Dashed: the current settings on the same test months.</p>
+    <section class="panel" aria-labelledby="gs-linked-title">
+      <h3 id="gs-linked-title">Selection procedure · forward test periods</h3>
+      <p class="legend"><span><i class="swatch" aria-hidden="true"></i>Search procedure</span><span><i class="swatch swatch--benchmark" aria-hidden="true"></i>Frozen incumbent, same test months</span></p>
       <app-golden-search-linked-line [points]="v.linked" [benchmark]="v.incumbent_linked" />
+      <ul class="pills" aria-label="Test-over-time summary">
+        <li>{{ v.summary_pills.judged }}</li>
+        <li>{{ v.summary_pills.test_trades | number }} test trades</li>
+        <li>{{ v.summary_pills.median_retention === null ? 'Median retention not available' : (v.summary_pills.median_retention | number: '1.2-2') + ' median retention' }}</li>
+      </ul>
+      <p class="muted">Linked fold returns: each fold starts flat with fresh capital, and a missing fold breaks the line. This is not the fixed candidate's track record.</p>
       <div class="table-wrap" role="region" tabindex="0" aria-label="Linked test-period return">
         <table class="linked-table">
           <caption>Linked test-period return by fold</caption>
@@ -62,7 +42,10 @@
           </tbody>
         </table>
       </div>
+      <app-golden-search-fold-table [rows]="rows()" />
     </section>
+
+    <p class="note" role="note"><i class="pi pi-info-circle" aria-hidden="true"></i> The retained legacy verdict is a rule-of-thumb summary; it is not a probability of future profit.</p>
   </div>
 } @else {
   <p class="pending" role="status">{{ pending() }}</p>
