@@ -266,13 +266,13 @@ async def test_post_start_ms_at_ceiling_passes_the_schema(client):
 
 async def test_post_end_ms_at_ceiling_is_a_400_not_a_500(client):
     """``end_ms == MAX_TIMESTAMP_MS`` passes the schema, but the trading
-    calendar's holiday rules for a window ending in 9999 reach year 10000:
-    that is a request the service cannot serve, refused as a 400 (#2771)."""
+    calendar cannot schedule a window ending in 9999: a request the service
+    cannot serve, refused as a 400 before any schedule is built (#2771)."""
     body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.7})
     body["end_ms"] = MAX_TIMESTAMP_MS
     response = await client.post(_WALK_FORWARD, json=body)
     assert response.status_code == 400, response.text
-    assert "year 10000 is out of range" in response.json()["detail"]
+    assert "cannot schedule past 2262-04-10" in response.json()["detail"]
 
 
 @pytest.mark.parametrize(

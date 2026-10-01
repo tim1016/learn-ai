@@ -65,6 +65,27 @@ def et_date_at_ms(ms: int) -> date:
     return datetime.fromtimestamp(ms / 1000, tz=UTC).astimezone(_NY).date()
 
 
+#: The last date the NYSE calendar can schedule. ``pandas_market_calendars``
+#: builds sessions as nanosecond ``pd.Timestamp``s, which end on 2262-04-11,
+#: so a window past it is one the service cannot serve.
+LAST_SCHEDULABLE_DATE = date(2262, 4, 10)
+
+
+def require_schedulable_end(end_ms: int) -> None:
+    """Refuse a window ending past :data:`LAST_SCHEDULABLE_DATE`, before any schedule is built (#2771).
+
+    A window may end anywhere up to ``MAX_TIMESTAMP_MS``, but asking the
+    calendar for one ending in 9999 spent tens of seconds building ~8,000
+    years of sessions only to overflow; this refusal is immediate.
+    """
+    end = et_date_at_ms(end_ms)
+    if end > LAST_SCHEDULABLE_DATE:
+        raise ValueError(
+            f"The NYSE calendar cannot schedule past {LAST_SCHEDULABLE_DATE.isoformat()}; "
+            f"the window ends {end.isoformat()}."
+        )
+
+
 def calendar_days_to_expiry(expiration_date: str, now_ms: int | None = None) -> int:
     """Calendar days from today's ET date to ``expiration_date`` (``YYYY-MM-DD``), floored at 0.
 

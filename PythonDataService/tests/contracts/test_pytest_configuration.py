@@ -34,12 +34,13 @@ def test_root_conftest_defers_fastapi_app_import() -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_python_pr_suite_has_a_hard_two_minute_budget() -> None:
-    from scripts.run_fast_tests import TEST_BUDGET_SECONDS, pytest_command
+def test_python_pr_suite_targets_two_minutes_and_fails_past_three() -> None:
+    from scripts.run_fast_tests import TEST_BUDGET_SECONDS, TEST_TARGET_SECONDS, pytest_command
 
     command = pytest_command(shard_index=1, shard_count=4)
 
-    assert TEST_BUDGET_SECONDS == 120
+    assert TEST_TARGET_SECONDS == 120
+    assert TEST_BUDGET_SECONDS == 180
     assert command[0:3] == [sys.executable, "-m", "pytest"]
     marker_index = len(command) - 1 - command[::-1].index("-m")
     assert command[marker_index + 1] == "not slow"
@@ -279,7 +280,9 @@ def test_run_fast_tests_returns_the_child_exit_code_and_reports_its_time(
     assert returncode == 3
     line = summary.read_text(encoding="utf-8")
     assert re.fullmatch(
-        r"Python PR tests \(shard 5/16\) took \d+\.\ds of the 120-second budget\n", line
+        r"Python PR tests \(shard 5/16\) took \d+\.\ds of the 120-second target "
+        r"\(180-second limit\)\n",
+        line,
     )
     assert line.strip() in caplog.text
 
@@ -292,6 +295,7 @@ def test_run_fast_tests_kills_an_overrun_and_reports_the_exceeded_budget(
 
     summary = tmp_path / "step-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setattr(runner, "TEST_TARGET_SECONDS", 0)
     monkeypatch.setattr(runner, "TEST_BUDGET_SECONDS", 1)
     monkeypatch.setattr(
         runner,
@@ -301,10 +305,36 @@ def test_run_fast_tests_kills_an_overrun_and_reports_the_exceeded_budget(
 
     assert runner.run_fast_tests() == 124
     assert re.fullmatch(
-        r"Python PR tests \(unsharded\) took \d+\.\ds of the 1-second budget "
-        r"\(exceeded\)\n",
+        r"Python PR tests \(unsharded\) took \d+\.\ds of the 0-second target "
+        r"\(1-second limit\) \(limit exceeded\)\n",
         summary.read_text(encoding="utf-8"),
     )
+
+
+def test_run_fast_tests_passes_a_run_over_target_and_says_so(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    from scripts import run_fast_tests as runner
+
+    summary = tmp_path / "step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setattr(runner, "TEST_TARGET_SECONDS", 0)
+    monkeypatch.setattr(
+        runner, "pytest_command", lambda *_a, **_k: _child_command("raise SystemExit(0)")
+    )
+
+    with caplog.at_level(logging.WARNING, logger="scripts.run_fast_tests"):
+        assert runner.run_fast_tests() == 0
+    assert re.fullmatch(
+        r"Python PR tests \(unsharded\) took \d+\.\ds of the 0-second target "
+        r"\(180-second limit\) \(over target\)\n",
+        summary.read_text(encoding="utf-8"),
+    )
+    assert "(over target)" in caplog.text
 
 
 def test_run_fast_tests_keeps_the_exit_code_when_the_step_summary_is_unwritable(
