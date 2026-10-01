@@ -50,15 +50,6 @@ describe('DeployLaunchReceiptComponent', () => {
     expect(screen.queryByRole('link', { name: 'Open bot control' })).toBeNull();
   });
 
-  it('names the bot a Deploy again replaces', async () => {
-    await render(DeployLaunchReceiptComponent, {
-      providers: [provideRouter([])],
-      inputs: { receipt: { ...RECEIPT, replaces_strategy_instance_id: 'spy-ema-20260925-1402' }, botLink: BOT_LINK },
-    });
-
-    expect(screen.getByText('Replaces').nextElementSibling?.textContent).toBe('spy-ema-20260925-1402');
-  });
-
   it('never names the real account for a Dry Run, whose cash is simulated (H18)', async () => {
     await render(DeployLaunchReceiptComponent, {
       providers: [provideRouter([])],

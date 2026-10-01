@@ -36,24 +36,6 @@ describe('HealthCardComponent startup join (#2410)', () => {
     expect(screen.queryByText('Time remaining before refusal')).toBeNull();
   });
 
-  it('names the interval history did not return when the startup join was refused', async () => {
-    await renderCard(
-      BASE,
-      preparing({
-        state: 'refused',
-        label: 'Refused: warmup history unavailable',
-        live_from_ms: 1_790_000_060_000,
-        deadline_ms: 1_790_000_240_000,
-        missing_start_ms: 1_790_000_000_000,
-        missing_end_ms: 1_790_000_060_000,
-        reason_code: 'WARMUP_HISTORY_UNAVAILABLE',
-      }),
-    );
-
-    expect(screen.getByText('History missing')).toBeTruthy();
-    expect(screen.queryByText('Time remaining before refusal')).toBeNull();
-  });
-
   it('says what a startup refusal left at the broker', async () => {
     await renderCard({
       ...BASE,

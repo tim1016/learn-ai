@@ -484,15 +484,14 @@ Glossary were produced from `app/broker/v2panel/vocabulary.py` and CI-gated with
 `git diff --exit-code` over the source and served copies.
 
 **What retiring it cost, precisely.** The closed-enum invariant does **not** depend on the manual.
-`tests/broker/v2panel/test_vocabulary_snapshot.py` — with committed snapshots on both sides
-(`app/broker/v2panel/vocabulary.snapshot.json` and
-`Frontend/src/app/components/broker/v2-panel/lib/broker-v2-vocabulary.snapshot.json`) and its own
+`tests/broker/v2panel/test_vocabulary_snapshot.py` — with its committed snapshot
+(`app/broker/v2panel/vocabulary.snapshot.json`) and its own
 CI job, which is **not** retired — pins snapshot↔live-set parity, the copy-coverage rule,
 `Literal`↔collection parity across all nine vocabularies, and reconciliation-verdict lockstep with
 the clerk model.
 
-So enum closure, no-phantom-member, no-undocumented-new-member, copy coverage and frontend/backend
-snapshot sync all survive. **What was lost is narrower: the guarantee that the operator-facing
+So enum closure, no-phantom-member, no-undocumented-new-member and copy coverage
+all survive. **What was lost is narrower: the guarantee that the operator-facing
 *prose* listing cannot go stale.** That is now a maintenance obligation on this document rather
 than a CI gate — recorded here so the loss is visible rather than silent.
 

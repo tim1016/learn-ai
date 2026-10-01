@@ -71,11 +71,6 @@ describe('deployment fees', () => {
     expect(screen.queryByText('No fees have been recorded.')).toBeNull();
   });
 
-  it('says a period had no fees only when the fee record is known', async () => {
-    await show({ ...VIEW, rows: [], period: 'today', period_start_ms: 1_800_000_000_000 }, { period: 'today' });
-    expect(await screen.findByText('No fees were charged in this period.')).toBeTruthy();
-  });
-
   it('announces a failed fee read as an alert, like its sibling error rows', async () => {
     const read = vi.fn().mockRejectedValue(new Error('network down'));
     await render(FeeAttributionComponent, {

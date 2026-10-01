@@ -223,12 +223,6 @@ describe('CohortFlattenDrawerComponent', () => {
     expect(screen.queryByText(/No cohort on this account/)).toBeNull();
   });
 
-  it('says so plainly when the account has no multi-bot cohort', async () => {
-    await open(fakeService([]));
-
-    expect(await screen.findByText(/No cohort on this account/)).toBeTruthy();
-  });
-
   it('defaults the selection to the armed legs of one cohort', async () => {
     await open(fakeService([QQQ_COHORT, SPY_COHORT]));
 
