@@ -101,6 +101,14 @@ describe('GoldenSearchStudyComponent', () => {
     expect(view.container.textContent?.split(reason)).toHaveLength(2);
   });
 
+  it('a stopped approval offers Finish beside the retain choices when the server permits both', async () => {
+    await renderStudy(fakeService(studyDetail('qualification_pending', { presented_status: 'interrupted', permitted_actions: ['finish', 'retain', 'revise'] })));
+
+    expect(currentStep()).toMatch(/Final decision/);
+    expect(screen.getByRole('button', { name: /^finish$/i })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Keep current settings' })).not.toBeNull();
+  });
+
   it('qualification failed: the reason appears once, in the proof-failure alert beside Retry qualification', async () => {
     const view = await renderStudy(fakeService(studyDetail('qualification_failed')));
 

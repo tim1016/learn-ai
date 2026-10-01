@@ -232,6 +232,35 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     expect(screen.getByRole('progressbar', { name: 'Approval progress' })).not.toBeNull();
     expect(screen.queryByRole('button', { name: /approve golden configuration/i })).toBeNull();
     expect(screen.getByRole('region', { name: 'Repeatability and coverage' }).textContent).toContain('Building the proof');
+    expect(screen.queryByRole('button', { name: 'Keep current settings' })).toBeNull();
+  });
+
+  it('a stopped approval the server lets you retain offers every way to keep the current settings', async () => {
+    const { commands, view } = await renderStep(studyDetail('qualification_pending', { presented_status: 'interrupted', permitted_actions: ['finish', 'retain', 'revise'] }));
+
+    expect(screen.queryByText(/building the proof and publishing the version/i)).toBeNull();
+    expect(screen.getByText('The approval stopped before publishing anything; the current default stands.')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep current settings' }));
+    const choices = screen.getByRole('group', { name: 'Finish without a new golden configuration' });
+    expect(within(choices).getAllByRole('radio').map((radio) => radio.closest('label')?.querySelector('strong')?.textContent)).toEqual([
+      'Keep current settings',
+      'Wait for fresh data',
+      'Retain as exploration',
+    ]);
+    await noAxeViolations(view.container);
+    fireEvent.click(within(choices).getByRole('radio', { name: /retain as exploration/i }));
+    fireEvent.input(within(choices).getByLabelText(/reason/i), { target: { value: 'Proof kept failing on the lake.' } });
+    fireEvent.click(within(choices).getByRole('button', { name: 'Record decision' }));
+
+    expect(commands).toEqual([{ command: 'retain', payload: { kind: 'retain_exploration', note: 'Proof kept failing on the lake.' } }]);
+    expect(screen.queryByRole('button', { name: /approve golden configuration/i })).toBeNull();
+  });
+
+  it('a stopped approval the server does not let you retain offers no retain choice', async () => {
+    await renderStep(studyDetail('qualification_pending', { presented_status: 'failed', permitted_actions: ['finish'] }));
+
+    expect(screen.queryByRole('button', { name: 'Keep current settings' })).toBeNull();
+    expect(screen.queryByText(/stopped before publishing anything/i)).toBeNull();
   });
 
   it('a proof failure is an alert that override cannot bypass; the retry is the same approval', async () => {
