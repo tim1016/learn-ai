@@ -24,11 +24,7 @@ from app.engine.strategy.signal_intent import SignalIntent
 
 if TYPE_CHECKING:
     from app.engine.execution.signal_intent_executor import SignalIntentExecutor
-    from app.engine.live.indicator_state import ValidationResult
     from app.engine.strategy.signal_program import SignalProgram
-
-    # Type-only: a runtime import would create an indicator_state -> strategy
-    # cycle. The default validate_state_payload imports it locally instead.
 
 
 @dataclass(frozen=True)
@@ -330,70 +326,6 @@ class Strategy(ABC):
         so the next session opens with a clean slate. Default is a
         no-op for strategies that don't opt into the session wrapper.
         """
-
-    # ------------------------------------------------------------------
-    # Indicator-state persistence contract (live engine; #435 follow-up)
-    # ------------------------------------------------------------------
-    # The live engine's hydration ladder and shutdown checkpoint call all
-    # three of these on every strategy. The defaults make a strategy with no
-    # warm-startable state (pure bar-pattern detectors like
-    # deployment_validation, and any not-yet-wired strategy) satisfy the
-    # contract safely instead of raising AttributeError mid-run. Strategies
-    # with indicator state (e.g. spy_ema_crossover) override all three.
-
-    def report_state_for_persistence(self) -> dict | None:
-        """Persistable cross-session state, or ``None`` if not warm-startable.
-
-        Default ``None``: no indicator state to carry across restarts (cold
-        start every session). A strategy that reports no state is not
-        warm-startable (see ``is_warm_startable``), so ``hydrate_policy=require``
-        is vacuous for it — there is nothing to require and nothing to restore.
-        Strategies with warm-startable indicators override this.
-        """
-        return None
-
-    def is_warm_startable(self) -> bool:
-        """Whether this strategy carries cross-session indicator state to warm-start.
-
-        Derived from the persistence contract so the two can never drift: a
-        strategy is warm-startable iff it overrides ``report_state_for_persistence``
-        to return a payload. Pure bar-pattern detectors (e.g.
-        ``deployment_validation``) keep the base ``None`` and are NOT
-        warm-startable — so ``hydrate_policy=require`` is vacuous for them:
-        there is no sidecar to require and nothing to restore. The live engine
-        must therefore not exit 4 demanding a sidecar such a strategy can never
-        write; it cold-starts every session. Strategies with warm-startable
-        indicators (e.g. ``spy_ema_crossover``) override
-        ``report_state_for_persistence`` and so are warm-startable automatically.
-        """
-        return type(self).report_state_for_persistence is not Strategy.report_state_for_persistence
-
-    def restore_state_from_persistence(self, payload: dict) -> None:  # pragma: no cover
-        """Rehydrate from a persisted payload.
-
-        Default raises: the base ``report_state_for_persistence`` returns
-        ``None`` (so no payload is ever produced) and the base
-        ``validate_state_payload`` rejects, so the hydration ladder never
-        reaches restore. Reaching here means a strategy persisted state without
-        also implementing restore — a programming error, not a runtime input.
-        """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not implement restore_state_from_persistence; "
-            "it reports no persistable state"
-        )
-
-    def validate_state_payload(self, payload: dict) -> ValidationResult:
-        """Shape-check a persisted payload for this strategy.
-
-        Default rejects (``payload_mismatch``): a strategy that does not model
-        persistable state cannot vouch for a payload, so a stale/foreign global
-        state file is refused rather than blindly restored. Strategies that
-        persist state override this. Imported locally to avoid an
-        ``indicator_state -> strategy`` module cycle.
-        """
-        from app.engine.live.indicator_state import ValidationResult
-
-        return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
 
     def on_minute_bar(self, bar: TradeBar) -> None:  # pragma: no cover - override in subclass
         """Called for every minute bar consumed by the engine, before consolidator dispatch.

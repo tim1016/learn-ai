@@ -186,16 +186,10 @@ class ExitEligibilityContract(BaseModel):
       unset for this rule.
 
     ``countdown_state_persistable`` records a real, checked fact about
-    today's implementation, not an aspiration. For
-    ``fixed_bar_count_countdown``:
-    ``EmaCrossoverSignalAlgorithm.report_state_for_persistence`` returns
-    ``None`` whenever the strategy is mid-position, so an in-flight countdown
-    cannot currently survive a Pause/Resume — carryover work must either
-    change that or treat mid-countdown Resume as unsupported. For
-    ``level_true`` programs that have not yet implemented the
-    persistence-hook contract at all (e.g. ``sma_crossover`` today), this is
-    ``False`` for the stronger reason that no state -- not just an in-flight
-    exit -- currently survives Pause/Resume.
+    today's implementation, not an aspiration. No strategy persists its
+    state, so nothing -- an in-flight countdown included -- survives a
+    restart, and every program seals ``False``. Carryover work must either
+    add that persistence or treat a mid-countdown Resume as unsupported.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

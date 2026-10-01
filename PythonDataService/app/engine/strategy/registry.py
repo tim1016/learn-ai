@@ -351,9 +351,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             bar_integrity=SignalBarIntegrityContract(),
             # EmaCrossoverSignalAlgorithm.commit_signal_decision hardcodes
             # self._bars_until_exit = 5 at entry (75 minutes on 15-minute
-            # bars); report_state_for_persistence returns None while
-            # _in_position, so a mid-countdown position cannot currently
-            # survive Pause/Resume.
+            # bars). countdown_state_persistable=False: no strategy persists
+            # its state, so a mid-countdown position cannot survive a
+            # restart.
             exit_eligibility=ExitEligibilityContract(
                 countdown_decision_clocks=5,
                 countdown_state_persistable=False,
@@ -585,12 +585,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # code now states the level it always closed
             # (ExitEligibilityContract's second rule, added for this
             # promotion) rather than restating EMA's countdown rule
-            # dishonestly. countdown_state_persistable=False for the
-            # stronger reason that SmaCrossoverAlgorithm has not implemented
-            # report_state_for_persistence/restore_state_from_persistence/
-            # validate_state_payload at all yet -- no state, flat or
-            # otherwise, currently survives a Pause/Resume, not just a
-            # mid-exit one.
+            # dishonestly. countdown_state_persistable=False: no strategy
+            # persists its state, so nothing -- flat or mid-exit -- survives
+            # a restart.
             exit_eligibility=ExitEligibilityContract(
                 rule="level_true",
                 countdown_state_persistable=False,
@@ -748,11 +745,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # so this seals as "level_true" (the same rule sma_crossover
             # uses) rather than restating ema_crossover_signal's fixed 5-bar
             # countdown dishonestly. countdown_state_persistable=False for
-            # the same reason as sma_crossover: RsiMeanReversionAlgorithm has
-            # not implemented report_state_for_persistence/
-            # restore_state_from_persistence/validate_state_payload at all
-            # yet -- no state, flat or otherwise, currently survives a
-            # Pause/Resume.
+            # the same reason as sma_crossover: no strategy persists its
+            # state, so nothing survives a restart.
             exit_eligibility=ExitEligibilityContract(
                 rule="level_true",
                 countdown_state_persistable=False,
@@ -930,14 +924,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # not deferred to on_order_event's fill, which the live adapter
             # never calls; see that method's docstring) to zero across
             # subsequent decision clocks -- a fixed hold, not a level-true
-            # relation. countdown_state_persistable=False: this
-            # strategy has not implemented report_state_for_persistence /
-            # restore_state_from_persistence / validate_state_payload at all
-            # (Strategy's base defaults apply unchanged; see
-            # test_is_not_warm_startable / test_satisfies_live_persistence_contract
-            # in tests/engine/test_deployment_validation_strategy.py), so no
-            # state -- flat or mid-countdown -- currently survives a
-            # Pause/Resume.
+            # relation. countdown_state_persistable=False: no strategy
+            # persists its state, so nothing -- flat or mid-countdown --
+            # survives a restart.
             # Scope, stated because the seal would otherwise imply more than
             # it says: this program has TWO exit paths, and only one of them
             # is describable here. The countdown below is the ordinary exit.
@@ -1128,11 +1117,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # true on a decision clock -- there is no held countdown, so this
             # seals as "level_true" (same rule sma_crossover's promotion
             # added) rather than dishonestly restating EMA's fixed-countdown
-            # rule. countdown_state_persistable=False because
-            # RsiRangeStrategy has not implemented
-            # report_state_for_persistence/restore_state_from_persistence/
-            # validate_state_payload at all -- no state, flat or otherwise,
-            # currently survives a Pause/Resume.
+            # rule. countdown_state_persistable=False: no strategy persists
+            # its state, so nothing survives a restart.
             exit_eligibility=ExitEligibilityContract(
                 rule="level_true",
                 countdown_state_persistable=False,
@@ -1337,11 +1323,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # clock -- there is no held countdown, the same shape as
             # sma_crossover's own death-cross exit, so this seals as
             # "level_true" rather than restating EMA's countdown rule
-            # dishonestly. countdown_state_persistable=False because
-            # RsiRangeStrategy has not implemented
-            # report_state_for_persistence/restore_state_from_persistence/
-            # validate_state_payload at all yet -- no state, flat or
-            # otherwise, currently survives a Pause/Resume.
+            # dishonestly. countdown_state_persistable=False: no strategy
+            # persists its state, so nothing survives a restart.
             exit_eligibility=ExitEligibilityContract(
                 rule="level_true",
                 countdown_state_persistable=False,
@@ -1554,12 +1537,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # decision clock -- there is no held countdown, so this seals
             # as "level_true" (the same rule sma_crossover's own promotion
             # added) rather than restating EMA's fixed-countdown rule
-            # dishonestly. countdown_state_persistable=False because
-            # RsiRangeStrategy has not implemented
-            # report_state_for_persistence/restore_state_from_persistence/
-            # validate_state_payload at all (Strategy's base defaults apply
-            # unchanged) -- no state, flat or otherwise, currently
-            # survives a Pause/Resume, not just a mid-exit one.
+            # dishonestly. countdown_state_persistable=False: no strategy
+            # persists its state, so nothing survives a restart.
             exit_eligibility=ExitEligibilityContract(
                 rule="level_true",
                 countdown_state_persistable=False,

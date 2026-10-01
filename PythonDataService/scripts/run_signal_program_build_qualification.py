@@ -308,10 +308,8 @@ def signal_decision_import_closure(
     """Return the transitive first-party (``app.``) import closure of ``roots``.
 
     Walks the full AST — including deferred, function-local imports — so a
-    closure member reached only inside a function (e.g. the
-    ``app.lean_sidecar.trading_calendar`` import inside
-    ``app/engine/live/indicator_state.py``) is still counted: a deferred
-    import still executes, and its bytes still ship.
+    closure member reached only inside a function is still counted: a
+    deferred import still executes, and its bytes still ship.
     """
     seen: set[str] = set()
     frontier = list(roots)

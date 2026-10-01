@@ -37,10 +37,9 @@ def fsync_parent_dir(child_path: Path) -> None:
 def _file_lock(target_path: Path, *, trusted_root: Path | None = None) -> Iterator[None]:
     """Advisory lock on a sibling .lock file for the duration of the write.
 
-    Ported from indicator_state.py's _file_lock. POSIX uses fcntl.flock,
-    Windows uses msvcrt.locking. Concurrent processes / threads writing
-    the same path serialise here; the lock window is only as long as the
-    atomic write.
+    POSIX uses fcntl.flock, Windows uses msvcrt.locking. Concurrent
+    processes / threads writing the same path serialise here; the lock window
+    is only as long as the atomic write.
     """
     root = target_path.parent if trusted_root is None else trusted_root
     root_real = os.path.realpath(os.fspath(root))
