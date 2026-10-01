@@ -38,12 +38,12 @@ import {
 } from '../data-lab-request-mapper';
 
 /**
- * Data Lab Explore (PRD §7.3).
+ * Data Lab Explore.
  *
  * Chart-first. Fetch triggers are: the explicit **Refresh chart** button, a
  * shell-issued refresh request (preset click / Apply scope — the operator
  * changed the committed scope on purpose and the chart follows; 2026-09-13
- * product decision superseding PRD §14's refresh-only rule), this view's own
+ * product decision superseding the earlier refresh-only rule), this view's own
  * Edit-scope drawer Apply, the one-shot timeframe auto-correct re-fetch, and
  * auto-load on mount when a committed scope already exists. Scope/recipe
  * edits that do NOT commit mark the chart stale and the last good chart
@@ -73,7 +73,7 @@ export class ExploreComponent {
   readonly chartComponent = viewChild<DataLabChartComponent>('chartComponent');
 
   /** Whether the chart has ever been requested — the canvas is hidden via
-   *  @if until the first explicit refresh (PRD §16 empty state). */
+   *  @if until the first explicit refresh (the empty state). */
   readonly chartRendered = signal(false);
   readonly chartRefreshing = signal(false);
   /** True between handing the chart component a fetch and that fetch
@@ -250,7 +250,7 @@ export class ExploreComponent {
 
   readonly canRefresh = computed(() => this.hasCommittedScope() && !this.chartRefreshing());
 
-  /** The one and only chart fetch trigger (FR-003). Bar policy comes from
+  /** The one and only chart fetch trigger. Bar policy comes from
    *  the committed scope, never the draft. */
   refreshChart(): void {
     const scope = this.store.committedScope();
@@ -319,7 +319,7 @@ export class ExploreComponent {
       this.store.markChartStale();
       return;
     }
-    // Server-authored recovery choice (PRD §16): apply the recommendation to
+    // Server-authored recovery choice: apply the recommendation to
     // the draft scope AND commit it — chart fetches read the committed scope,
     // so without the commit the next explicit refresh would resend the just
     // rejected timeframe forever.
@@ -450,7 +450,7 @@ export class ExploreComponent {
     if (!id) return;
     const instance = this.store.indicators().find((i) => i.id === id);
     if (!instance) return;
-    // Marks the chart stale via the store on success (PRD §9). The identity
+    // Marks the chart stale via the store on success. The identity
     // is parameter-aware — follow the instance to its new id.
     const next = this.store.updateIndicator(id, { ...instance.params, [change.name]: change.value });
     if (next) this.configuringInstanceId.set(next);

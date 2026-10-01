@@ -112,7 +112,7 @@ async def resolve_symbol_and_fills(
     Extracted so the bot gallery wall's marker projection
     (``gallery_hub.GalleryHub``) reuses this exact resolution instead of
     re-deriving it, keeping the wall and the single-bot detail chart from ever
-    diverging on fill provenance (CLAUDE.md single-source-of-truth rule).
+    diverging on fill provenance.
     """
     resolved = await validate_account(broker, account_id)
     try:
@@ -135,26 +135,6 @@ async def resolve_symbol_and_fills(
             detail="Restore or reactivate the account-scoped SQLite authority.",
         )
     return evidence.status.symbol, evidence.economics.session_fills
-
-
-async def get_live_chart(
-    broker: str,
-    account_id: str,
-    sid: str,
-    *,
-    resolution: Literal["5s", "1m"] = "1m",
-    now_ms: int | None = None,
-) -> ChartLiveResponse:
-    """Build the LIVE chart from SQLite fill evidence."""
-    observed_at_ms = now_ms_utc() if now_ms is None else now_ms
-    symbol, fills = await resolve_symbol_and_fills(broker, account_id, sid, now_ms=observed_at_ms)
-    return await _build_live_chart_from_fills(
-        sid,
-        symbol,
-        fills,
-        resolution=resolution,
-        now_ms=observed_at_ms,
-    )
 
 
 async def get_live_snapshot_parts(

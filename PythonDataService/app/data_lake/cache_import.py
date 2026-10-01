@@ -126,7 +126,7 @@ explicitly marked ``'failed'`` via ``catalog_client.fail_artifact`` rather
 than left stranded in ``'fetching'`` forever. This importer does not itself
 retry a failed or in-flight row on a later run (it has no lease-stealing
 loop); recovering one requires an external tool calling
-``catalog_client.steal_or_retry_minute_bar`` (or the sweep), the same as any
+``catalog_client.steal_or_retry_minute_bar``, the same as any
 other stuck artifact in the catalog.
 
 Usage::
@@ -451,7 +451,7 @@ def provenance_covers_date(provenance: dict[str, Any], trading_date: date) -> bo
     return False
 
 
-def _import_minute_trade_dch(adjusted: bool) -> str:
+def import_minute_trade_dch(adjusted: bool) -> str:
     return _dch(
         provider="polygon",
         provider_params=_IMPORT_MINUTE_TRADE_PARAMS_ADJUSTED if adjusted else _IMPORT_MINUTE_TRADE_PARAMS_RAW,
@@ -465,7 +465,7 @@ def _fetch_range_anchors_ms(fetch: dict[str, Any]) -> tuple[int, int] | None:
     """Anchor one fetch entry's from_date/to_date to int64 ms UTC via the
     canonical calendar's session-open anchor, or None if unparsable.
 
-    Per .claude/rules/temporal-rigor.md's date-anchored-value convention
+    Per ADR 0022 (a)'s date-anchored-value convention
     ("Trading date -> the session open (09:30 ET) of that date"): a bare
     ISO date is not itself a valid wire/storage format, so it's anchored at
     construction time via app.lean_sidecar.trading_calendar.session_open_ms_utc
@@ -487,7 +487,7 @@ def build_provider_params(cache_root: Path, provenance: dict[str, Any]) -> dict[
 
     * ``fetch_ranges_ms``: first-class, top-level, int64-ms-UTC anchored
       (via the canonical calendar's session-open anchor) fetch ranges --
-      the queryable, wire-legal form per .claude/rules/temporal-rigor.md.
+      the queryable, wire-legal form per ADR 0022 (a).
     * ``original_provenance``: the *entire* original document embedded
       verbatim, ISO date strings and all. This is a preserved, opaque audit
       document -- the evidence of the refetch leak (#1830), not garbage to
@@ -530,7 +530,7 @@ def verify_and_read_zip(zip_path: Path, symbol: str, trading_date: date) -> Veri
     price field (mirrors ``app.data_lake.lean_writer.to_deci_cent``'s refusal
     of negative prices as upstream corruption), a non-strictly-increasing
     timestamp (finite ingestion is fail-fast per
-    .claude/rules/temporal-rigor.md -- a duplicate or out-of-order row is a
+    ADR 0022 (h) -- a duplicate or out-of-order row is a
     signal of upstream corruption, never silently reordered or
     deduplicated), or zero data rows.
     """
@@ -917,7 +917,7 @@ async def _import_one_zip(
         # for it, permanently reporting in_flight_or_incomplete with no way
         # for this tool to recover it (see the module docstring's recovery
         # note). Marking it 'failed' at least makes the row visible to
-        # catalog_client.steal_or_retry_minute_bar / the sweep.
+        # catalog_client.steal_or_retry_minute_bar.
         await catalog_client.fail_artifact(
             artifact_id=claim_result,
             last_error="io_error",
@@ -1092,7 +1092,7 @@ async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
         # creates. See path_policy.
         ensure_lean_readable_layout(lake_dir)
 
-        dch = _import_minute_trade_dch(adjusted)
+        dch = import_minute_trade_dch(adjusted)
         provider_params = build_provider_params(cache_root, provenance)
 
         for ref in covered_refs:

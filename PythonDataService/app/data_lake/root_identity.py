@@ -124,9 +124,6 @@ class RootContext:
     root_id: UUID
     base_root: Path
 
-    def lake_container(self) -> Path:
-        return path_policy.lake_container_within(self.base_root)
-
     def lake_root(self, price_adjustment_mode: PriceAdjustmentMode) -> Path:
         return path_policy.lake_root_within(self.base_root, price_adjustment_mode)
 

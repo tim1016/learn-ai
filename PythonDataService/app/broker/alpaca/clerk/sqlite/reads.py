@@ -4,7 +4,7 @@ Pure ``SELECT`` + row-to-dataclass mapping, no write path, no lock, no fold
 concerns — split out of ``repository.py`` to keep that module under the
 file-size ceiling as new read surfaces accumulate slice over slice.
 ``ClerkSqliteRepository`` methods delegate here; callers outside this package
-still never see a cursor (PRD §9.2) — they go through the repository, which
+still never see a cursor — they go through the repository, which
 happens to forward to this module for these queries.
 """
 
@@ -23,7 +23,6 @@ from app.broker.alpaca.clerk.sqlite.models import (
     BotConfigResource,
     CommandResource,
     ControlMetaSnapshot,
-    DecisionReceiptPageResource,
     DecisionReceiptResource,
     EffectOperationResource,
     ExternalOrderResource,
@@ -109,6 +108,35 @@ _EXTERNAL_ORDER_SELECT = (
     "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED' "
     "ORDER BY ct.sequence DESC LIMIT 1) AS latest_observation_facts"
 )
+
+
+def _manual_chain_order_ref_sql(broker_order_id: str) -> str:
+    """The manual legs whose Alpaca replacement chain holds the broker order ``broker_order_id`` names.
+
+    ``broker_order_id`` is an SQL expression: a parameter, or a column of the
+    enclosing query. The one statement of chain membership (#2656) that
+    :func:`manual_chain_order_ref` and :data:`_OUTSIDE_ORDER_SQL` both read.
+    """
+    return (
+        "SELECT o.order_ref FROM orders o "
+        "JOIN manual_order_legs l ON l.order_ref = o.order_ref "
+        f"WHERE o.broker_order_id = {broker_order_id} "
+        "UNION "
+        "SELECT t.order_ref FROM custody_transitions t "
+        "WHERE t.order_ref IN (SELECT order_ref FROM manual_order_legs WHERE order_ref IS NOT NULL) "
+        "AND t.transition_kind = 'MANUAL_ORDER_REPLACED' "
+        f"AND (t.broker_order_id = {broker_order_id} OR json_extract(t.facts_json, '$.replaces') = {broker_order_id})"
+    )
+
+
+#: Whether the ``external_orders`` row ``eo`` is still an outside order. Only
+#: this module's reads apply it. Alpaca gives a replacement a client id of its
+#: own, so the Clerk can take a replacement for a foreign order before it
+#: knows the manual leg's chain holds it (#2656). From the moment the chain holds it, the order is
+#: the leg's own and its executions are the leg's (#2787): its row stays as
+#: the record of what was observed, but no money read counts it outside the
+#: Clerk again, so its fill is counted once.
+_OUTSIDE_ORDER_SQL = f"NOT EXISTS ({_manual_chain_order_ref_sql('eo.broker_order_id')})"
 
 
 def _row_to_command_resource(row: sqlite3.Row) -> CommandResource:
@@ -279,58 +307,6 @@ def decision_receipt_tail(
     return [DecisionReceiptResource(**dict(row)) for row in reversed(rows)]
 
 
-def decision_receipts_by_transaction(
-    conn: sqlite3.Connection,
-    *,
-    strategy_instance_id: str,
-    transaction_ref: str,
-    limit: int,
-) -> list[DecisionReceiptResource]:
-    rows = conn.execute(
-        f"SELECT {', '.join(_DECISION_RECEIPT_COLUMNS)} FROM decision_receipts "
-        "WHERE strategy_instance_id = ? AND (intent_id = ? OR order_ref = ?) "
-        "ORDER BY seq DESC LIMIT ?",
-        (strategy_instance_id, transaction_ref, transaction_ref, limit),
-    ).fetchall()
-    return [DecisionReceiptResource(**dict(row)) for row in reversed(rows)]
-
-
-def decision_receipt_page(
-    conn: sqlite3.Connection, *, strategy_instance_id: str, after_seq: int,
-    through_seq: int | None, limit: int, observed_at_ms: int,
-) -> DecisionReceiptPageResource:
-    """Walk retained evidence from the oldest row, including protected history.
-
-    ``through_seq`` freezes a walk's upper sequence while new decisions arrive.
-    Each page is a committed read; the walk is not a historical database snapshot.
-    A new walk starts at zero so revisions to old receipts remain observable.
-    """
-    instance = strategy_instance(conn, strategy_instance_id)
-    if instance is None:
-        raise KeyError(strategy_instance_id)
-    latest = conn.execute(
-        "SELECT COALESCE(MAX(seq), 0) FROM decision_receipts WHERE strategy_instance_id = ?",
-        (strategy_instance_id,),
-    ).fetchone()[0]
-    highest = latest if through_seq is None else through_seq
-    if highest > latest:
-        raise ValueError("The source receipt watermark moved backwards")
-    if after_seq > highest:
-        raise ValueError("The receipt cursor exceeds the requested source watermark")
-    rows = conn.execute(
-        f"SELECT {', '.join(_DECISION_RECEIPT_COLUMNS)} FROM decision_receipts "
-        "WHERE strategy_instance_id = ? AND seq > ? AND seq <= ? ORDER BY seq LIMIT ?",
-        (strategy_instance_id, after_seq, highest, limit + 1),
-    ).fetchall()
-    receipts = tuple(DecisionReceiptResource(**dict(row)) for row in rows[:limit])
-    return DecisionReceiptPageResource(
-        meta=control_meta_snapshot(conn), strategy_instance_id=strategy_instance_id,
-        config_hash=instance["config_hash"], observed_at_ms=observed_at_ms,
-        after_seq=after_seq, highest_seq=highest,
-        next_after_seq=receipts[-1].seq if len(rows) > limit else None, receipts=receipts,
-    )
-
-
 def _external_order_resource(row: sqlite3.Row) -> ExternalOrderResource:
     values = {column: row[column] for column in _EXTERNAL_ORDER_COLUMNS}
     evidence_refs = json.loads(values.pop("evidence_refs_json"))
@@ -372,73 +348,28 @@ def external_order_by_broker_order_id(
 
 
 def external_orders(conn: sqlite3.Connection) -> list[ExternalOrderResource]:
+    """Every outside order custody tracks: each ``external_orders`` row a manual chain does not hold (#2787).
+
+    The lookups by identity (:func:`external_order`,
+    :func:`external_order_by_broker_order_id`) still answer for every row:
+    the folds, an acknowledgement and the account's history read the record
+    of what was observed.
+    """
     rows = conn.execute(
         f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo "
+        f"WHERE {_OUTSIDE_ORDER_SQL} "
         "ORDER BY eo.observed_at_ms DESC, eo.external_order_id DESC"
     ).fetchall()
     return [_external_order_resource(row) for row in rows]
 
 
-def external_order_page(
-    conn: sqlite3.Connection,
-    *,
-    observation_sequence_before: int | None,
-    external_order_id_before: str | None,
-    lifecycle_state: str | None,
-    limit: int,
-) -> list[ExternalOrderResource]:
-    if (observation_sequence_before is None) != (external_order_id_before is None):
-        raise ValueError("external-order cursor must include both keyset fields")
-    lifecycle_predicate = {
-        None: "",
-        "review_required": "eo.acknowledged_at_ms IS NULL",
-        "reviewed": "eo.acknowledged_at_ms IS NOT NULL",
-    }.get(lifecycle_state)
-    if lifecycle_predicate is None:
-        raise ValueError("external-order lifecycle_state is invalid")
-    params: tuple[object, ...]
-    where_clauses: list[str] = []
-    observation_sequence = (
-        "(SELECT MIN(ct.sequence) FROM custody_transitions ct "
-        "WHERE ct.broker_order_id = eo.broker_order_id "
-        "AND ct.transition_kind = 'EXTERNAL_ORDER_OBSERVED')"
-    )
-    if observation_sequence_before is None:
-        params = (limit,)
-    else:
-        where_clauses.append(
-            f"({observation_sequence} < ? OR ({observation_sequence} = ? AND eo.external_order_id < ?))"
-        )
-        params = (
-            observation_sequence_before,
-            observation_sequence_before,
-            external_order_id_before,
-            limit,
-        )
-    if lifecycle_predicate:
-        where_clauses.append(lifecycle_predicate)
-    where = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
+def filled_outside_order_ids(conn: sqlite3.Connection) -> frozenset[str]:
+    """The broker ids of every outside order (:func:`external_orders`) that reported a fill."""
     rows = conn.execute(
-        f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo {where}"
-        f"ORDER BY {observation_sequence} DESC, eo.external_order_id DESC LIMIT ?",
-        params,
+        "SELECT eo.broker_order_id FROM external_orders eo "
+        f"WHERE eo.filled_avg_price IS NOT NULL AND ABS(eo.qty) >= 1e-9 AND {_OUTSIDE_ORDER_SQL}"
     ).fetchall()
-    return [_external_order_resource(row) for row in rows]
-
-
-def external_orders_observed_since(conn: sqlite3.Connection, *, since_ms: int) -> int:
-    """How many foreign orders were observed at or after ``since_ms``.
-
-    The day-P&L fact reads this to decide whether it can vouch for the day at
-    all: an order the Clerk did not place has no journaled fills, so its P&L
-    is not in the FIFO and the day's number would be quietly wrong.
-    """
-    return int(
-        conn.execute(
-            "SELECT COUNT(*) FROM external_orders WHERE observed_at_ms >= ?",
-            (since_ms,),
-        ).fetchone()[0]
-    )
+    return frozenset(row[0] for row in rows)
 
 
 UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED_SUMMARY_CODE = "UNFOLDABLE_BROKER_ORDER_ACKNOWLEDGED"
@@ -508,8 +439,8 @@ def unfoldable_broker_orders_active_since(
 ) -> int:
     """How many distinct unfoldable broker orders showed activity at or after ``since_ms``.
 
-    The day-P&L fact's companion to :func:`external_orders_observed_since`:
-    an order the Clerk could not record has no journaled fills either.
+    The day-P&L fact reads it because an order the Clerk could not record
+    has no journaled fills.
     Activity is the first observation or any later change of the order's
     broker state, so an order first seen yesterday that fills today counts
     today. Every episode row is read, resolved or not, so an acknowledged
@@ -799,19 +730,33 @@ def manual_chain_order_ref(conn: sqlite3.Connection, broker_order_id: str) -> st
     ``ux_orders_broker_order_id`` and the link probe through the transitions'
     ``order_ref`` index, scoped to the manual legs.
     """
-    row = conn.execute(
-        "SELECT o.order_ref FROM orders o "
-        "JOIN manual_order_legs l ON l.order_ref = o.order_ref "
-        "WHERE o.broker_order_id = ?1 "
-        "UNION "
-        "SELECT t.order_ref FROM custody_transitions t "
-        "WHERE t.order_ref IN (SELECT order_ref FROM manual_order_legs WHERE order_ref IS NOT NULL) "
-        "AND t.transition_kind = 'MANUAL_ORDER_REPLACED' "
-        "AND (t.broker_order_id = ?1 OR json_extract(t.facts_json, '$.replaces') = ?1) "
-        "LIMIT 1",
-        (broker_order_id,),
-    ).fetchone()
+    row = conn.execute(f"{_manual_chain_order_ref_sql('?1')} LIMIT 1", (broker_order_id,)).fetchone()
     return row["order_ref"] if row is not None else None
+
+
+def manual_chain_member_ids(conn: sqlite3.Connection, order_ref: str) -> frozenset[str]:
+    """Every broker order id in one manual leg's Alpaca replacement chain (#2656, #2686).
+
+    The forward twin of :func:`manual_chain_order_ref`, with the same
+    members: the leg's current head and either end of each durable
+    ``MANUAL_ORDER_REPLACED`` link. Empty for a bot order and for a leg not
+    acknowledged yet.
+    """
+    rows = conn.execute(
+        "SELECT o.broker_order_id AS member FROM orders o "
+        "JOIN manual_order_legs l ON l.order_ref = o.order_ref "
+        "WHERE o.order_ref = ?1 AND o.broker_order_id IS NOT NULL "
+        "UNION "
+        "SELECT t.broker_order_id FROM custody_transitions t "
+        "WHERE t.order_ref = ?1 AND t.transition_kind = 'MANUAL_ORDER_REPLACED' "
+        "AND t.order_ref IN (SELECT order_ref FROM manual_order_legs WHERE order_ref IS NOT NULL) "
+        "UNION "
+        "SELECT json_extract(t.facts_json, '$.replaces') FROM custody_transitions t "
+        "WHERE t.order_ref = ?1 AND t.transition_kind = 'MANUAL_ORDER_REPLACED' "
+        "AND t.order_ref IN (SELECT order_ref FROM manual_order_legs WHERE order_ref IS NOT NULL)",
+        (order_ref,),
+    ).fetchall()
+    return frozenset(row["member"] for row in rows if row["member"])
 
 
 def entry_orders_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> list[OrderResource]:
@@ -959,6 +904,12 @@ def reconcilable_effect_operations(
     ``trade_updates`` slice -- dropped at capture, or executed before the
     first ``listen`` -- is re-derived by the sweep's exact lookup, whose
     cumulative fold then closes the shortfall and drops it off the list.
+
+    A working manual leg stays on it whatever its order's broker state: a
+    filled leg ends only on exact executions, which the sweep reads from
+    account activity until they cover it (#2686). It is named here by kind,
+    like an EXIT and a CANCEL, because a manual order has no
+    ``operation_order_links`` row to read a broker state through.
     """
     subject_clause = "AND e.subject_id = ? " if subject_id is not None else ""
     params: tuple[object, ...] = (subject_id,) if subject_id is not None else ()
@@ -971,7 +922,7 @@ def reconcilable_effect_operations(
         "ON o.order_ref = l.order_ref WHERE e.kind IN ('ENTER','EXIT','MANUAL_ORDER','CANCEL') "
         "AND e.state NOT IN ('succeeded','failed','rejected') "
         + subject_clause +
-        "AND (e.state IN ('accepted','unknown') OR e.kind IN ('EXIT','CANCEL') "
+        "AND (e.state IN ('accepted','unknown') OR e.kind IN ('EXIT','CANCEL','MANUAL_ORDER') "
         "OR o.broker_state IS NULL OR lower(o.broker_state) NOT IN "
         f"({_TERMINAL_BROKER_STATES_SQL}) "
         "OR (lower(o.broker_state) = 'filled' AND NOT EXISTS ("
@@ -1224,7 +1175,7 @@ def effective_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) ->
     for fills with no successor naming their ``execution_id`` as superseded.
     Reference: PRD #1441 S1.2 execution corrections.
     Canonical implementation: this query, reused by cumulative recovery.
-    Validated against: ``test_cumulative_recovery_fill_is_explicitly_tagged``.
+    Validated against: ``test_one_exact_auto_supersedes_many_cumulative_recovery_rows``.
     """
     return _effective_fill_totals_for_order(conn, order_ref)
 
@@ -1309,7 +1260,7 @@ def manual_reduction_available_quantity(
     Formula: ``max(0, folded_manual_long - pending_manual_sell_qty)`` where
     each pending sell quantity is its requested quantity less its current
     effective filled quantity.
-    Reference: docs/prds/2026-08-13-sqlite-clerk-manual-orders.md §8.
+    Reference: none external.
     Canonical implementation: this file.
     Validated against: tests/broker/alpaca/clerk/sqlite/test_manual_orders.py::
       test_manual_sell_reserves_only_its_subject_long_position.

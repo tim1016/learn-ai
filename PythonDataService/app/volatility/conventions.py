@@ -11,7 +11,7 @@ Validated against: NONE — pending (constants validated transitively by surface
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Final
 
 TRADING_DAYS_PER_YEAR: Final[int] = 252
@@ -30,10 +30,10 @@ class SurfaceConventions:
     - Risk-free rate and dividend yield
     """
 
+    rate: float = field(kw_only=True)
     day_count: str = "Actual365Fixed"
     forward_model: str = "bsm"
     discount_model: str = "continuous"
-    rate: float = 0.05
     dividend_yield: float = 0.0
     calendar: str = "NullCalendar"
 

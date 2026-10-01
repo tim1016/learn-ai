@@ -1,8 +1,8 @@
 """The two seams this package declares and does not implement.
 
-Both belong to Package C of the user-owned broker configurations plan: the
+Both belong to Package C of the user-owned broker configurations work: the
 credential-slot allowlist and resolver, and read-only broker account
-verification (contract §7). This package owns the *storage* of what they
+verification. This package owns the *storage* of what they
 produce — an opaque slot string on a revision, and an account pin — so it
 declares the protocols its routes call and ships fail-closed defaults, rather
 than reaching into ``app/broker/alpaca/config.py`` or guessing an allowlist
@@ -18,8 +18,8 @@ purpose.** Contract §3 says a slot outside the allowlist is refused with
 *shape* of that allowlist is ADR 0060 open question 2, unanswered, and package
 C's fork to make. So a slot arrives here as an opaque string and is stored as
 one; the refusal it will produce is declared in ``errors.py``
-(``CredentialSlotUnknown``, ``CredentialSlotUnavailable``) as shared vocabulary
-for C to raise, not left for C to invent. What this package guarantees is
+(``CredentialSlotUnknown``) as shared vocabulary for C to raise, not left for C
+to invent. What this package guarantees is
 narrower and checkable: **it performs no environment lookup at all**, so a slot
 name it stores cannot reach one.
 

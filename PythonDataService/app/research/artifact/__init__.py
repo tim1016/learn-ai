@@ -1,6 +1,5 @@
 """Shared artifact-store seam under the four research-run phases.
 
-See ``docs/architecture/research-artifact-seam.md`` for the design.
 Each phase declares an ``ArtifactDescriptor`` at module level and
 constructs an ``ArtifactStore(descriptor, root=...)`` at the call
 site; the phase's thin ``storage.py`` delegates ``save``/``load``/

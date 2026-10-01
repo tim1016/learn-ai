@@ -20,19 +20,23 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.broker.alpaca.adapter import execution_id_from_activity_id
 from app.broker.alpaca.clerk.money import MoneyInputError, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.custody_subjects import outside_order_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
+from app.broker.alpaca.clerk.sqlite.execution_coverage import order_total_retained_exacts_explain_cumulative
+from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import order_total_retained_exact_provenance
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.reads import external_orders as tracked_external_orders
-from app.broker.alpaca.clerk.sqlite.reads import governing_acknowledgement
+from app.broker.alpaca.clerk.sqlite.reads import filled_outside_order_ids, governing_acknowledgement
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PARAMS,
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PLACEHOLDERS,
 )
 from app.broker.contract.models import BrokerActivity, OrderSide
 from app.services.alpaca_fee_attribution import (
+    CollapsedDeliveries,
     FeeAttribution,
     FeeCharge,
     FeeFill,
@@ -41,7 +45,7 @@ from app.services.alpaca_fee_attribution import (
     attribute_session_fees,
     collapse_activity_deliveries,
 )
-from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, et_midnight_ms
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -63,7 +67,7 @@ class FeeEvidenceFacts(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    checked_at_ms: int = Field(ge=0)
+    checked_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     activities: list[BrokerActivity]
     # Oldest dated row anywhere in the read's newest-first window. Coverage
     # never reads it as reach: a date-only row's midnight stamp may lie long
@@ -308,6 +312,13 @@ def _recorded_evidence(conn: sqlite3.Connection) -> list[FeeEvidenceFacts]:
     ]
 
 
+def retained_activities(conn: sqlite3.Connection) -> CollapsedDeliveries[BrokerActivity]:
+    """Every activity row the recorded evidence retained, each identity once, with any disagreeing copies."""
+    return collapse_activity_deliveries(
+        activity for snapshot in _recorded_evidence(conn) for activity in snapshot.activities
+    )
+
+
 def fold_fee_evidence(_conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Strictly validate historical evidence; money is never materialized here."""
     FeeEvidenceFacts.model_validate_json(payload["facts_json"])
@@ -421,12 +432,7 @@ def _effective_fills(
     account = conn.execute("SELECT account_id FROM control_meta WHERE id = 1").fetchone()[0]
     records = effective_fill_records(conn, account_id=account)
     grouped: dict[date, list[FeeFill]] = defaultdict(list)
-    complete = (
-        conn.execute(
-            "SELECT 1 FROM fills WHERE evidence_source = 'cumulative_recovery' AND NOT EXISTS (SELECT 1 FROM fills successor WHERE successor.superseded_execution_ref = fills.execution_id) LIMIT 1"
-        ).fetchone()
-        is None
-    )
+    complete = True
     # A terminal acknowledgement may arrive before its exact execution. Its
     # missing population cannot become a zero-fee day just because no fill
     # row (or separately raised uncertainty) exists yet. Reuse the existing
@@ -473,6 +479,44 @@ def _effective_fills(
     return grouped, orders, complete and conflicts is None
 
 
+def _witnessed_executions(conn: sqlite3.Connection) -> tuple[frozenset[str], bool]:
+    """Every broker execution custody names, and whether they explain every cumulative-recovery fill.
+
+    A recorded fill names its execution. So does an exact an order-total
+    proof (#2346) kept quarantined: the broker's final total counts it,
+    behind its order's cumulative-recovery fill, though no fill names it
+    (#2791). A cumulative fill names no execution, so it is explained only
+    once its order's retained exacts are every share it holds
+    (:func:`order_total_retained_exacts_explain_cumulative`), and only when
+    they and the cumulative fills all fall on one ET day: the population
+    prices the cumulative fill on its own day, so an execution on another
+    day would be charged under the wrong day's fees.
+    """
+    execution_ids = {row[0] for row in conn.execute("SELECT execution_id FROM fills WHERE execution_id IS NOT NULL")}
+    cumulative: dict[str, list[tuple[float, int]]] = defaultdict(list)
+    for row in conn.execute(
+        "SELECT order_ref, qty, COALESCE(source_event_at_ms, recorded_at_ms) FROM fills "
+        "WHERE evidence_source = 'cumulative_recovery'"
+    ):
+        cumulative[row[0]].append((float(row[1]), int(row[2])))
+    explained = True
+    for order_ref, rows in cumulative.items():
+        retained = order_total_retained_exact_provenance(conn, order_ref=order_ref)
+        execution_ids.update(item.exact_execution.execution_id for item in retained)
+        days = {et_date_at_ms(at_ms) for _quantity, at_ms in rows} | {
+            et_date_at_ms(item.exact_execution.source_event_at_ms) for item in retained
+        }
+        explained = (
+            explained
+            and len(days) == 1
+            and order_total_retained_exacts_explain_cumulative(
+                retained_quantities=tuple(item.exact_execution.slice_qty for item in retained),
+                cumulative_quantities=tuple(quantity for quantity, _at_ms in rows),
+            )
+        )
+    return frozenset(execution_ids), explained
+
+
 @money_context()
 def custody_fee_attribution(
     conn: sqlite3.Connection, *, now_ms: int, evidence_checked_at_ms: int | None = None,
@@ -502,7 +546,7 @@ def custody_fee_attribution(
     a historical population never grants permission to ignore missing facts.
 
     Formula: existing session fee model/apportionment over selected effective fills.
-    Reference: docs/references/alpaca-fee-attribution.md; PRD #2540.
+    Reference: ADR 0059 fee attribution amendment; PRD #2540.
     Canonical implementation: app.services.alpaca_fee_attribution.attribute_session_fees.
     Validated against: tests/broker/alpaca/clerk/sqlite/test_fee_evidence.py.
     """
@@ -513,6 +557,8 @@ def custody_fee_attribution(
     grouped, owned_orders, population_complete = _effective_fills(
         conn, simulated_fill_cutoff_ms=simulated_fill_cutoff_ms
     )
+    execution_ids, cumulative_explained = _witnessed_executions(conn)
+    population_complete = population_complete and cumulative_explained
     snapshots = [] if simulated else _recorded_evidence(conn)
     window = _evidence_window(snapshots)
     by_date: dict[date, dict[str, BrokerActivity]] = defaultdict(dict)
@@ -543,25 +589,20 @@ def custody_fee_attribution(
             by_date[day][activity.activity_id] = activity
         elif activity.activity_type in {"FILL", "PARTIAL_FILL"} and activity.native_order_id in floor.tracked:
             before_floor[activity.activity_id] = activity
-    external_orders = {
-        row[0]
-        for row in conn.execute(
-            "SELECT broker_order_id FROM external_orders WHERE filled_avg_price IS NOT NULL AND ABS(qty) >= 1e-9"
-        )
-    }
+    # A manual chain's member first seen as foreign is the leg's: its
+    # executions are credited to the leg, never awaited as an outside
+    # order's (#2787).
+    external_orders = filled_outside_order_ids(conn)
     witnessed_external: set[str] = set()
     external_fills: list[FeeFill] = []
     pre_custody_quantities: dict[str, Decimal] = defaultdict(Decimal)
-    execution_ids = {row[0] for row in conn.execute("SELECT execution_id FROM fills WHERE execution_id IS NOT NULL")}
-    from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import _execution_id_from_activity_id
-
     # ``None`` marks the pre-floor executions: they open no fee day.
     for day, rows in [*by_date.items(), (None, before_floor)]:
         for row in rows.values():
             if row.activity_type not in {"FILL", "PARTIAL_FILL"}:
                 continue
             if row.native_order_id in owned_orders:
-                if _execution_id_from_activity_id(row.activity_id) not in execution_ids:
+                if execution_id_from_activity_id(row.activity_id) not in execution_ids:
                     population_complete = False
                 continue
             if (

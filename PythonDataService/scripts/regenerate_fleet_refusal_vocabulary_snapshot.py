@@ -5,9 +5,7 @@ Python side in ``app/broker/fleet/refusal_vocabulary.py``
 (``FLEET_REFUSAL_REASONS``). This script writes **two identical** JSON
 snapshot files -- one in the PythonDataService tree, one in the Frontend
 tree -- so the two test containers (which do not share a working tree) each
-lock against their own copy, mirroring the established pattern for the
-broker-v2 panel vocabulary (see
-``scripts/regenerate_broker_v2_vocabulary_snapshot.py``):
+lock against their own copy:
 
 - pytest ``tests/broker/fleet/test_refusal_vocabulary_snapshot.py`` asserts
   the live 28-class ``FleetControlError`` subclass closure plus the 5 codes
@@ -19,10 +17,11 @@ broker-v2 panel vocabulary (see
   will load the Frontend-tree snapshot and assert its copy map covers
   exactly the same code set.
 
-A CI job (``broker-v2-vocabulary-contract``, extended by Task 7d) regenerates
-both files from live source on every PR and diffs them against the committed
-copies, so a hand-edit to either file -- even one applied identically to
-both -- fails CI.
+``test_refusal_vocabulary_snapshot.py`` also regenerates the snapshot from
+live source on every PR, requires the committed Python copy to match it byte
+for byte, and requires the two committed copies to be byte-identical, so a
+hand-edit to either file -- even one applied identically to both -- fails
+CI.
 
 Usage::
 

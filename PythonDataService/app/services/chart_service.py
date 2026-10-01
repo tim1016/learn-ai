@@ -276,7 +276,7 @@ _MS_PER_DAY = 86_400_000
 
 
 def _utc_midnight_ms(d: date) -> int:
-    """UTC-midnight anchor of ``d`` — the window START convention (PRD §12)."""
+    """UTC-midnight anchor of ``d`` — the window START convention."""
     return (d - _UNIX_EPOCH).days * _MS_PER_DAY
 
 
@@ -345,7 +345,7 @@ def resolve_range_presets(now_ms: int, *, session: str = "rth") -> list[dict[str
 
     Pure calendar arithmetic: one ``expected_sessions`` call covers the
     deepest preset, and per-preset bar estimates come from the same
-    estimator ``/allowed-timeframes`` uses. No fetching.
+    estimator ``get_allowed_timeframes`` uses. No fetching.
     """
     ny_today = pd.Timestamp(now_ms, unit="ms", tz="UTC").tz_convert(_ET).date()
     end_date: date | None = None
@@ -1444,7 +1444,7 @@ def get_chart_data(
             uncomputed=uncomputed,
         )
 
-    # ── Build response (vectorized — iterrows was 10-50x slower, audit § 5.4) ──
+    # ── Build response (vectorized — iterrows was 10-50x slower) ──
     df_bars = pd.DataFrame(
         {
             "t": df_resampled["timestamp"].astype("int64"),

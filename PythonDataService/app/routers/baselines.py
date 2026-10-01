@@ -45,6 +45,7 @@ from app.routers.research_runs import (
     get_artifacts_root,
     get_data_source_factory,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -214,7 +215,7 @@ def list_baselines_endpoint(
         None, description="buy_and_hold | random_ema_windows"
     ),
     since_ms: int | None = Query(
-        None, ge=0, description="Only return baselines created at or after this ms"
+        None, ge=0, le=MAX_TIMESTAMP_MS, description="Only return baselines created at or after this ms"
     ),
     limit: int | None = Query(None, ge=1, description="Newest-first cap"),
     artifacts_root: Path | None = Depends(get_artifacts_root),

@@ -2,7 +2,7 @@
 
 :func:`configured_indicator_warmup_bars` covers every catalog-valid recipe at
 its maximum. :func:`requested_indicator_warmup_lookback` sizes the Data Lab
-lead-in (chart, dataset export, indicator table, reliability, quality report)
+lead-in (chart, dataset export, reliability, quality report)
 from the recipes a caller actually asked for (#2611).
 
 Sizing a request (#2611; owner decision 2026-09-30, "reduce the accuracy
@@ -46,7 +46,7 @@ missing parameters filled from the catalog defaults) before
 
 The bound this buys, measured against today's 1,000-bar lead-in: at most
 ~0.01 points on a 0–100 oscillator and ~1e-4 of the value on a price scale
-(``docs/references/data-lab-indicator-warmup.md`` holds the per-indicator
+(an accepted departure, ADR 0069 §8, whose receipt holds the per-indicator
 table and the derivation's check). At its edges:
 
 * Anything the families do not size keeps today's lead-in: an indicator the

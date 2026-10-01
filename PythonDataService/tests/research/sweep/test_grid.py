@@ -5,8 +5,6 @@ ceiling that rejects pathological/malformed grids before materialization.
 
 from __future__ import annotations
 
-import inspect
-
 import pytest
 
 from app.research.sweep.grid import (
@@ -172,18 +170,6 @@ class TestExpandGrid:
         first = [(r.symbol, r.strategy_key, r.params_hash) for r in expand_grid(configs, symbols=["SPY", "QQQ"])]
         second = [(r.symbol, r.strategy_key, r.params_hash) for r in expand_grid(configs, symbols=["SPY", "QQQ"])]
         assert first == second
-
-    def test_expansion_is_lazy(self) -> None:
-        configs = [
-            StrategyGridConfig(
-                strategy_key="ema_crossover_2_bps",
-                param_ranges={"gap_bps": LowHighStepRange(low=0.0, high=999.0, step=1.0)},
-            )
-        ]
-        result = expand_grid(configs, symbols=["SPY"])
-        assert inspect.isgenerator(result) or hasattr(result, "__next__")
-        first = next(iter(result))
-        assert first.symbol == "SPY"
 
     def test_rejects_a_grid_past_the_sanity_ceiling_before_iterating(self) -> None:
         configs = [

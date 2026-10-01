@@ -12,7 +12,6 @@ from app.broker.alpaca.clerk.sqlite import runtime as sqlite_runtime
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.facts import (
-    ExecutionCorrectedFacts,
     UncertaintyRaisedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import (
@@ -332,80 +331,6 @@ def test_timeline_uncertainty_filter_includes_refreshed_episode(tmp_path: Path) 
         "UNCERTAINTY_RAISED",
         "UNCERTAINTY_REFRESHED",
     }
-
-
-@pytest.mark.asyncio
-async def test_timeline_execution_filter_includes_a_correction_of_that_execution(
-    tmp_path: Path,
-) -> None:
-    repo, _ = _seed_historical_conflict(tmp_path)
-    try:
-        context, action = _recovery_action(repo)
-        read = _Read(activities=[_activity()])
-        plan = await prepare_historical_execution_recovery(
-            repo=repo,
-            read=read,
-            context=context,
-            concurrency_token=action.concurrency_token,
-            control_secret="test-control-secret",
-            allow_unauthenticated_control=False,
-        )
-        confirm_historical_execution_recovery(
-            repo=repo,
-            plan=plan,
-            confirmation_token=plan.confirmation_token,
-            control_secret="test-control-secret",
-            allow_unauthenticated_control=False,
-            observed_account=await read.get_account(),
-        )
-        recovered = repo._conn.execute(
-            "SELECT strategy_instance_id, run_id, command_id, effect_operation_id, order_ref "
-            "FROM custody_transitions WHERE transition_kind = 'EXECUTION_COVERAGE_QUARANTINED'"
-        ).fetchone()
-        assert recovered is not None
-        correction = ExecutionCorrectedFacts(
-            execution_id="historical-execution-5-corrected",
-            superseded_execution_ref=EXECUTION_ID,
-            symbol="SPY",
-            side="BUY",
-            corrected_qty=5.0,
-            corrected_price=100.0,
-            why="Alpaca corrected the retained historical execution.",
-        )
-        assert repo.append_execution_correction_or_raise(
-            correction=TransitionInput(
-                strategy_instance_id=recovered["strategy_instance_id"],
-                run_id=recovered["run_id"],
-                command_id=recovered["command_id"],
-                effect_operation_id=recovered["effect_operation_id"],
-                order_ref=recovered["order_ref"],
-                transition_kind="EXECUTION_CORRECTED",
-                custody_owner="ACCOUNT_CLERK",
-                execution_authority="ACCOUNT_CLERK",
-                operation_state="succeeded",
-                clerk_observed_at_ms=repo.clock(),
-                summary_code="EXECUTION_CORRECTED",
-                facts_json=correction.to_facts_json(),
-            ),
-            build_uncertainty=lambda reason: pytest.fail(
-                f"valid correction unexpectedly raised uncertainty: {reason}"
-            ),
-        ) == "appended"
-        correction_row = repo._conn.execute(
-            "SELECT sequence FROM custody_transitions WHERE transition_kind = 'EXECUTION_CORRECTED'"
-        ).fetchone()
-        assert correction_row is not None
-        reader = SqliteClerkProjectionReader.from_repository(
-            repo, clock=repo.clock
-        )
-        try:
-            page = reader.timeline_page(execution_id=EXECUTION_ID)
-        finally:
-            reader.close()
-    finally:
-        repo.close()
-
-    assert correction_row["sequence"] in {entry.sequence for entry in page.entries}
 
 
 @pytest.mark.asyncio

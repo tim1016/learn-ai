@@ -500,47 +500,6 @@ def test_save_rejects_when_id_field_value_fails_pattern(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# log_tag prefixes warnings (PR-4 Q2 resolved).
-# ---------------------------------------------------------------------------
-def test_list_ids_corrupt_warning_uses_descriptor_log_tag(
-    tmp_path: Path, caplog
-):
-    """A skipped corrupt config logs with the descriptor's ``[<log_tag>]`` prefix.
-
-    Preserves the operator grep patterns established by the pre-seam
-    ``[MC] skipping corrupt monte-carlo config in %s: %s`` log line so
-    existing dashboards / alerts that filter on ``[MC]`` keep matching.
-    """
-    descriptor = ArtifactDescriptor(
-        subdir="monte-carlo",
-        id_field="artifact_id",
-        id_pattern=_ID_PATTERN,
-        config_filename="config.json",
-        result_filename="result.json",
-        parent_run_id_extractor=lambda cfg: None,
-        log_tag="MC",
-        not_found_error=_PhaseNotFound,
-        already_exists_error=_PhaseAlreadyExists,
-        corrupt_error=_PhaseCorrupt,
-    )
-    store = ArtifactStore(descriptor, root=tmp_path)
-
-    debris = tmp_path / "monte-carlo" / "corrupt-debris-dir"
-    debris.mkdir(parents=True)
-    (debris / "config.json").write_text("{not valid json")
-
-    with caplog.at_level(logging.WARNING):
-        listed = store.list_ids()
-
-    assert listed == []
-    matching = [rec for rec in caplog.records if rec.message.startswith("[MC]")]
-    assert matching, (
-        "expected a warning prefixed with [MC]; got messages: "
-        f"{[rec.message for rec in caplog.records]}"
-    )
-
-
-# ---------------------------------------------------------------------------
 # subdir="" (the runs-phase shape — PR-4 Q3 resolved).
 #
 # ``runs`` is flat: its artifacts live at ``<root>/<run_id>/`` directly

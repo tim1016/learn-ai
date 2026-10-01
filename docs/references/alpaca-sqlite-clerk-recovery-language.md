@@ -21,15 +21,8 @@ exact; known backend codes shown as receipt evidence pass through the shared
 
 ## Action matrix
 
-| Action ID | Human label | Availability and proof | Effect | Confirmation / retry contract |
-|---|---|---|---|---|
-| `reconcile_now` | Reconcile now | Healthy authority; broker comparison is callable. | Records a fresh account comparison through SQLite custody. | No generic “retry.” The same typed policy is rechecked immediately before execution. |
-| `cancel_verified_working_orders` | Cancel verified working orders | Exact Clerk order reference and Alpaca ID, working state, and fresh broker evidence. | Cancels only the listed identities. | Confirmation lists the proven orders. A stale token has no effect; transport retry returns durable resources. |
-| `prepare_safe_flatten` | Prepare safe flatten | Attributed, finite exposure; no working order in the complete current-state order read; no relevant uncertainty; and a fresh successful account-wide reconciliation at or after every planned position clock. | Produces a read-only plan with one opposite-side, absolute-quantity leg per nonzero attributed position. The envelope binds the plan to the account, authority generation, database identity, control revision, scope, reconciliation, evidence clocks, expiry, and version token. It submits no broker order. | Preparation rechecks current policy. A changed position quantity or evidence timestamp produces a different token. Any future reduction mutation must recheck the action-specific plan; this capability does not execute it. There is no blind flatten. |
-| `stop_bot_decisions` | Stop bot decisions | Bot scope with one active lifecycle run. | Durably stops new decisions while retaining Clerk custody of exposure. | Confirmation warns that exposure is not blindly flattened. Retry returns the existing durable Stop command. |
-| `open_custody_timeline` | Open custody timeline | Always available when any readable projection exists. | Navigation only; selects operation-first evidence with broker/source, Clerk-observation, and durable-record clocks. | Never presented as a mutation. |
-| `rebuild_from_mirror` | Rebuild from mirror | Typed authority failure plus a contiguous, finalized, account/generation/database-bound, hash-verified mirror. | Offline: preserves DB files and rebuilds the same authority generation. | Only shown for authority failure. Requires explicit confirmation and stopped-process precondition. |
-| `reset_authority` | Reset authority | Typed authority failure, every governed bot stopped, fresh matching broker identity, flat finite positions, and no open orders. | Offline: preserves the old generation and creates empty generation `N+1`. | Only shown for authority failure. Confirmation states prior control identities become invalid. |
+The actions, their availability proofs and their confirmation copy are the
+descriptor catalog in `app/broker/alpaca/clerk/sqlite/recovery_policy.py`.
 
 `clear_hold`, blind `retry`, and unproven `flatten` are absent from activated SQLite
 capability. Resolution is an evidence-backed reconciliation, exact cancellation,

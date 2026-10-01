@@ -1,9 +1,9 @@
-"""Delivery B qualification: complete scoped contracts (PRD §10.1–§10.4).
+"""Delivery B qualification: complete scoped contracts.
 
 A real coordinator surface (registry + clerk-scoped router) forwards to a
 real agent process over a real socket — the same qualification posture as
 the A2 lane tests, now through the public routes the frontend will call.
-Every §10.4 refusal family, the §10.3 command envelope, per-event stream
+Every stable refusal family, the command envelope, per-event stream
 provenance and the composed auth policy are pinned here.
 """
 
@@ -19,7 +19,6 @@ import pytest
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
-from app.broker.alpaca.clerk.fleet_adapter import AlpacaProviderAdapter
 from app.broker.fleet.delivery import (
     COORDINATOR_TOKEN_HEADER,
     DeliveryRequest,
@@ -93,10 +92,6 @@ def _build_agent_app(
     async def account() -> JSONResponse:
         return JSONResponse({"account_id": ACCOUNT, "status": "ACTIVE"})
 
-    @agent.get("/api/brokers/alpaca/activities")
-    async def activities() -> JSONResponse:
-        return JSONResponse([{"activity_type": "FILL"}])
-
     @agent.get("/api/brokers/alpaca/portfolio-history")
     async def portfolio_history() -> JSONResponse:
         return JSONResponse({"timestamps": [], "equity": []})
@@ -122,10 +117,6 @@ def _build_agent_app(
     @agent.get("/api/brokers/alpaca/accounts/{account_id}/bot-history")
     async def bot_history(account_id: str) -> JSONResponse:
         return JSONResponse({"account_id": account_id, "bots": [], "gaps": []})
-
-    @agent.get("/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/decision-evidence")
-    async def decision_evidence(account_id: str, sid: str, request: Request) -> JSONResponse:
-        return JSONResponse({"account_id": account_id, "sid": sid, "query": dict(request.query_params)})
 
     @agent.get("/api/brokers/alpaca/configuration/selection")
     async def selection() -> JSONResponse:
@@ -373,7 +364,7 @@ def fleet(tmp_path: Path) -> _Fleet:
 async def test_the_directory_lists_lanes_with_catalog_capabilities(
     fleet: _Fleet,
 ) -> None:
-    """§10.1: the broker-neutral directory derives from the registry."""
+    """The broker-neutral directory derives from the registry."""
     async with fleet.client() as client:
         directory = await client.get("/api/broker-clerks")
         assert directory.status_code == 200
@@ -419,21 +410,12 @@ async def test_an_unregistered_broker_is_a_typed_404_not_an_empty_lane_list(
         assert response.json()["reason"] == "broker_not_supported"
 
 
-async def test_lane_reads_route_through_the_public_surface(fleet: _Fleet) -> None:
-    """A lane read forwards, echoes identity and returns the provider body."""
-    async with fleet.client() as client:
-        response = await client.get(f"{fleet.base}/account")
-        assert response.status_code == 200
-        assert response.json()["account_id"] == ACCOUNT
-
-
 async def test_b2_desk_reads_and_account_bound_run_evidence_route_through_the_lane(
     fleet: _Fleet,
 ) -> None:
     """The C desk's full operational read set stays inside one lane route."""
     async with fleet.client() as client:
         for path in (
-            "/activities?current_session=true",
             "/portfolio-history?range=1D",
             "/portfolio-history-proof?range=1D",
             "/clerk/status",
@@ -452,7 +434,7 @@ async def test_b2_desk_reads_and_account_bound_run_evidence_route_through_the_la
 
 
 async def test_a_wrong_target_account_refuses_without_dispatch(fleet: _Fleet) -> None:
-    """§10.4: the path's account is checked against the confirmed assignment."""
+    """The path's account is checked against the confirmed assignment."""
     async with fleet.client() as client:
         wrong = await client.get(
             f"{fleet.base}/accounts/00000000-0000-0000-0000-000000000000"
@@ -462,20 +444,8 @@ async def test_a_wrong_target_account_refuses_without_dispatch(fleet: _Fleet) ->
         assert wrong.json()["reason"] == "clerk_account_mismatch"
 
 
-async def test_decision_evidence_routes_with_identity_and_sequence_bounds(fleet: _Fleet) -> None:
-    async with fleet.client() as client:
-        response = await client.get(
-            f"{fleet.base}/accounts/{ACCOUNT}/bots/sid-9/decision-evidence?after_seq=2&through_seq=9&limit=3"
-        )
-    assert response.status_code == 200
-    assert response.headers["x-fleet-clerk-id"] == fleet.lane.clerk_id
-    assert response.headers["x-fleet-binding-generation"] == "3"
-    assert response.json() == {"account_id": ACCOUNT, "sid": "sid-9",
-                               "query": {"after_seq": "2", "through_seq": "9", "limit": "3"}}
-
-
 async def test_an_unsupported_broker_or_lane_refuses(fleet: _Fleet) -> None:
-    """§10.4: broker_not_supported and clerk_not_found at their pinned statuses."""
+    """broker_not_supported and clerk_not_found at their pinned statuses."""
     async with fleet.client() as client:
         unsupported = await client.get(
             f"/api/brokers/ibkr/clerks/{fleet.lane.clerk_id}/account"
@@ -491,7 +461,7 @@ async def test_an_unsupported_broker_or_lane_refuses(fleet: _Fleet) -> None:
 
 
 async def test_the_command_envelope_is_required_and_coherent(fleet: _Fleet) -> None:
-    """§10.3: no implicit canonical command — the envelope is the contract."""
+    """No implicit canonical command — the envelope is the contract."""
     actions = f"{fleet.base}/accounts/{ACCOUNT}/bots/sid-9/actions"
     async with fleet.client() as client:
         missing = await client.post(actions, json={"action_id": "arm"})
@@ -554,7 +524,7 @@ async def test_the_command_envelope_is_required_and_coherent(fleet: _Fleet) -> N
 
 
 async def test_a_delivered_command_persists_its_routing_receipt(fleet: _Fleet) -> None:
-    """D11: pinned attempt before dispatch; delivered is terminal with receipt."""
+    """A pinned attempt before dispatch; delivered is terminal with receipt."""
     actions = f"{fleet.base}/accounts/{ACCOUNT}/bots/sid-9/actions"
     async with fleet.client() as client:
         delivered = await client.post(
@@ -605,7 +575,7 @@ async def test_the_manual_order_path_converter_routes(fleet: _Fleet) -> None:
 
 
 async def test_stream_events_carry_and_verify_provenance(fleet: _Fleet) -> None:
-    """FR-076: every event proves its origin; the frames re-emit it publicly."""
+    """Every event proves its origin; the frames re-emit it publicly."""
     async with fleet.client() as client, client.stream(
         "GET", f"{fleet.base}/accounts/{ACCOUNT}/gallery/stream"
     ) as response:
@@ -646,11 +616,11 @@ async def test_a_stale_identity_midstream_closes_the_stream(tmp_path: Path) -> N
 
 
 async def test_commands_without_an_approved_endpoint_refuse(tmp_path: Path) -> None:
-    """A session citing an unapproved endpoint is not routable (§10.4)."""
+    """A session citing an unapproved endpoint is not routable."""
     lane = _Lane(tmp_path / "control2")
     try:
         # A local-presence session cites no endpoint reference; routing it
-        # over HTTP is a delivery-time refusal (§10.4 clerk_unreachable).
+        # over HTTP is a delivery-time refusal (clerk_unreachable).
         session = lane.service.register_agent_session(
             clerk_id=lane.clerk_id,
             worker_key=lane.worker_key,
@@ -932,62 +902,6 @@ async def test_a_spoofed_clerk_id_pin_does_not_bypass_the_mutation_fence() -> No
         server.stop()
 
 
-async def test_a_clerk_agent_still_answers_the_stranded_operator_mutations_unpinned() -> None:
-    """P1-A (Codex review, PR #2115): the fence must not sever operator recovery.
-
-    #2069/#2114 retain ``POST .../live-envelope/loss-hold/clear`` and
-    ``POST .../runs/{run_id}/replay-receipt`` with no coordinator successor
-    — an operator's only way to clear a live loss hold or regenerate a
-    missing receipt is to call the clerk agent directly, unpinned. The
-    mutation fence must exempt exactly these two, not sever them.
-    """
-    from app.config import settings
-    from app.security.data_plane_control import require_data_plane_control_secret
-
-    agent = _build_agent_app(
-        {"broker": "alpaca", "clerk_id": CLERK_ID,
-         "routing_epoch": EPOCH, "binding_generation": 3},
-        refuse_unpinned_mutations=True,
-    )
-
-    @agent.post(
-        "/api/brokers/{broker}/live-envelope/loss-hold/clear",
-        dependencies=[Depends(require_data_plane_control_secret)],
-    )
-    async def _loss_hold_clear(broker: str) -> PlainTextResponse:
-        return PlainTextResponse("ok")
-
-    @agent.post(
-        "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/{run_id}/replay-receipt",
-        dependencies=[Depends(require_data_plane_control_secret)],
-    )
-    async def _replay_receipt(
-        broker: str, strategy_instance_id: str, run_id: str
-    ) -> PlainTextResponse:
-        return PlainTextResponse("ok")
-
-    server = _RealServer(agent)
-    server.start()
-    original_secret = settings.DATA_PLANE_CONTROL_SECRET
-    settings.DATA_PLANE_CONTROL_SECRET = "test-plane-secret"
-    try:
-        async with httpx.AsyncClient(base_url=server.base_url, timeout=5.0) as client:
-            loss_hold = await client.post(
-                "/api/brokers/alpaca/live-envelope/loss-hold/clear",
-                headers={"X-Data-Plane-Control-Secret": "test-plane-secret"},
-            )
-            assert loss_hold.status_code == 200
-
-            replay_receipt = await client.post(
-                "/api/brokers/alpaca/bots/sid-1/runs/run-1/replay-receipt",
-                headers={"X-Data-Plane-Control-Secret": "test-plane-secret"},
-            )
-            assert replay_receipt.status_code == 200
-    finally:
-        settings.DATA_PLANE_CONTROL_SECRET = original_secret
-        server.stop()
-
-
 def test_combined_role_still_serves_an_unpinned_mutation_at_200() -> None:
     """`combined` IS the browser's data plane; #2075's fence must not reach it.
 
@@ -1158,17 +1072,8 @@ def test_incompatible_protocol_versions_refuse_registration(
         service.close()
 
 
-def test_the_catalog_stays_the_single_routing_contract() -> None:
-    """Every operation id is unique and every public route is clerk-scoped."""
-    adapter = AlpacaProviderAdapter()
-    operations = adapter.operations()
-    assert len({op.operation_id for op in operations}) == len(operations)
-    assert all(op.path_template.startswith("/") for op in operations)
-    assert any(op.capability.value == "custody_command" for op in operations)
-
-
 def test_existing_wildcards_do_not_shadow_the_clerk_surface() -> None:
-    """PRD §10.2: a clerk-scoped request resolves to the fleet route, never
+    """A clerk-scoped request resolves to the fleet route, never
     to an unscoped wildcard agent route mounted earlier."""
     import json
     import os
@@ -1223,7 +1128,7 @@ def test_a_broker_without_the_operation_refuses_the_capability(
     from tests.broker.fleet.conftest import fake_alpha
 
     alpaca_ops = production_provider_adapters()["alpaca"].operations()
-    custody = next(op for op in alpaca_ops if op.operation_id == "custody_reconcile")
+    custody = next(op for op in alpaca_ops if op.operation_id == "custody_recovery_check")
     service = FleetControlService(
         store=FleetRegistryStore.open(control_dir=tmp_path / "capability-check"),
         provider_adapters={"fake_alpha": fake_alpha()},
@@ -1309,7 +1214,7 @@ async def test_the_envelope_generation_fence_and_target_are_enforced(
 
 
 async def test_a_settled_attempt_never_redispatches(fleet: _Fleet) -> None:
-    """D11: a retry of a settled key reconciles; it never resubmits."""
+    """A retry of a settled key reconciles; it never resubmits."""
     actions = f"{fleet.base}/accounts/{ACCOUNT}/bots/sid-9/actions"
     payload = {
         "action_id": "arm",
@@ -1398,7 +1303,7 @@ async def test_a_stale_pin_is_refused_before_the_agent_handler(fleet: _Fleet) ->
 async def test_a_lane_serving_a_different_epoch_fails_the_coordinators_echo_check(
     tmp_path: Path,
 ) -> None:
-    """FR-076: the echo is a check, not a formality.
+    """The echo is a check, not a formality.
 
     Reads pass the agent-side pin gate (``_pin_mismatch`` compares epoch only
     for mutations), so a lane serving a stale epoch answers 200 — and the

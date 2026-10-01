@@ -1,7 +1,6 @@
 """Regression tests for the corrective foundation slice.
 
-Covers the required-test matrix in
-``docs/superpowers/plans/2026-08-05-alpaca-clerk-corrective-foundation-slice.md``
+Covers the slice's required-test matrix
 that isn't already exercised by ``test_schema_parity.py``,
 ``test_repository.py``, or ``test_commands.py`` (which were updated in
 place for the behavior changes this slice makes). These tests fail on the
@@ -64,10 +63,6 @@ def repo(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_includes_the_durable_cash_reservations() -> None:
-    assert schema.SCHEMA_VERSION == 22
-
-
 def test_stale_schema_version_fails_closed_on_open(tmp_path: Path) -> None:
     clock = _clock_seq()
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
@@ -101,7 +96,7 @@ def test_v8_authority_fails_closed_on_open_until_offline_upgrade(tmp_path: Path)
     r._conn.commit()
     r.close()
 
-    with pytest.raises(SchemaVersionMismatch, match="offline v8-to-v9 Clerk upgrade"):
+    with pytest.raises(SchemaVersionMismatch, match="no registered migration from schema_version=8"):
         ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
     db_path = tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
@@ -130,7 +125,7 @@ def test_read_only_verification_rejects_a_data_bearing_v6_authority(tmp_path: Pa
     repository.close()
 
     db_path = tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
-    with pytest.raises(DatabaseVerificationFailed, match="data-bearing v6 authority"):
+    with pytest.raises(DatabaseVerificationFailed, match="schema_version=6, expected"):
         verify_database(db_path, expected_account_id=ACCOUNT_ID)
 
 
@@ -164,8 +159,10 @@ def test_read_only_verification_reports_a_malformed_schema_version_as_verificati
 
 def test_is_upgradable_to_current_reflects_the_registered_migration_chain() -> None:
     assert schema.is_upgradable_to_current(schema.SCHEMA_VERSION) is True
-    assert schema.is_upgradable_to_current(6) is True
-    assert schema.is_upgradable_to_current(4) is True
+    assert schema.is_upgradable_to_current(13) is True
+    assert schema.is_upgradable_to_current(12) is False
+    assert schema.is_upgradable_to_current(6) is False
+    assert schema.is_upgradable_to_current(4) is False
     assert schema.is_upgradable_to_current(1) is False
 
 
@@ -194,7 +191,8 @@ def test_fresh_v7_boot_preserves_hash_chain_and_passes_integrity_check(tmp_path:
         reopened.close()
 
 
-def test_migrate_schema_rejects_an_unregistered_version_without_mutating() -> None:
+@pytest.mark.parametrize("version", [1, 6, 8, 12])
+def test_migrate_schema_rejects_an_unregistered_version_without_mutating(version: int) -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     schema.configure_connection(conn)
@@ -202,15 +200,16 @@ def test_migrate_schema_rejects_an_unregistered_version_without_mutating() -> No
     conn.execute(
         "INSERT INTO control_meta (id, schema_version, broker, account_id, "
         "db_identity_token, authority_generation, control_revision, created_at_ms, "
-        "last_open_at_ms) VALUES (1, 1, 'alpaca', 'PA-TEST', 'tok', 1, 0, 1, 1)"
+        "last_open_at_ms) VALUES (1, ?, 'alpaca', 'PA-TEST', 'tok', 1, 0, 1, 1)",
+        (version,),
     )
     conn.commit()
 
     with pytest.raises(ValueError, match="no registered migration"):
-        schema.migrate_schema(conn, from_version=1)
+        schema.migrate_schema(conn, from_version=version)
 
     row = conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()
-    assert row["schema_version"] == 1
+    assert row["schema_version"] == version
 
 
 def test_genesis_prev_hash_column_is_not_null(repo: ClerkSqliteRepository) -> None:
@@ -252,8 +251,8 @@ def test_uncertainties_scope_strategy_instance_coupling(
 
 def test_cross_bot_command_run_link_rejected(repo: ClerkSqliteRepository) -> None:
     """A ``commands`` row cannot claim a ``run_id`` belonging to a different
-    ``strategy_instance_id`` (open-pr-review-2026-08-05.md P2 "Commands/effects
-    may point at another bot's run")."""
+    ``strategy_instance_id``: commands and effects may not point at another
+    bot's run."""
     submission = submit_start_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
@@ -300,11 +299,11 @@ def test_effect_operations_terminal_state_cannot_regress(repo: ClerkSqliteReposi
 
 
 def test_rejected_effect_operation_cannot_regress_either(repo: ClerkSqliteRepository) -> None:
-    """open-pr-review-2026-08-05.md P2 "Treat rejected effects as terminal":
-    'rejected' is part of effect_operations.state's own CHECK vocabulary, so
-    the terminal-state backstop must cover it too, not only succeeded/failed —
-    otherwise a rejected effect could be moved back to accepted/in_progress
-    and become eligible for broker work after rejection."""
+    """Rejected effects are terminal: 'rejected' is part of
+    effect_operations.state's own CHECK vocabulary, so the terminal-state
+    backstop must cover it too, not only succeeded/failed — otherwise a
+    rejected effect could be moved back to accepted/in_progress and become
+    eligible for broker work after rejection."""
     submission = submit_start_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
@@ -333,13 +332,6 @@ def test_rejected_command_has_a_durable_rejection_receipt(repo: ClerkSqliteRepos
         (rejected.command.receipt_id,),
     ).fetchone()
     assert row["terminal_state"] == "rejected"
-
-
-def test_reserve_command_and_serialized_no_longer_exist() -> None:
-    """The corrective foundation slice deletes both (Scope B1) — a command
-    first becomes durable only via commit_first_transition()."""
-    assert not hasattr(ClerkSqliteRepository, "reserve_command")
-    assert not hasattr(ClerkSqliteRepository, "serialized")
 
 
 # ---------------------------------------------------------------------------
@@ -377,11 +369,11 @@ def test_mirror_reconciles_every_committed_sequence_not_only_the_tail(tmp_path: 
 def test_reconcile_fails_closed_when_missing_finalize_has_no_matching_prepare(
     tmp_path: Path,
 ) -> None:
-    """open-pr-review-2026-08-05.md P2 "require PREPARE before catching up
-    FINALIZE": completing a FINALIZE from the committed DB row alone, with
-    no matching PREPARE left in the mirror, would pass startup while leaving
-    the mirror unable to ever reconstruct that row's payload again — a
-    silent loss of the disaster-recovery property R9 exists to guarantee."""
+    """A FINALIZE needs its PREPARE before it can be caught up: completing a
+    FINALIZE from the committed DB row alone, with no matching PREPARE left in
+    the mirror, would pass startup while leaving the mirror unable to ever
+    reconstruct that row's payload again — a silent loss of the
+    disaster-recovery property R9 exists to guarantee."""
     clock = _clock_seq()
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     r.register_strategy_instance(strategy_instance_id=SID_A, symbol="SPY", config_hash="h1")
@@ -402,8 +394,7 @@ def test_reconcile_fails_closed_when_missing_finalize_has_no_matching_prepare(
 
 def test_reconcile_fails_closed_on_conflicting_duplicate_finalize_lines(tmp_path: Path) -> None:
     """Two FINALIZE lines for the same sequence with different hashes is
-    genuine corruption regardless of line order (open-pr-review-2026-08-05.md
-    P2 "Reject conflicting duplicate finalizes"). The bogus record is placed
+    genuine corruption regardless of line order. The bogus record is placed
     *before* the real one so a naive last-wins dict would pick the real
     (matching) one and see nothing wrong — proving detection does not
     depend on which record happens to survive a dict overwrite."""
@@ -456,10 +447,10 @@ def test_conflicting_finalize_record_fails_closed_on_open(tmp_path: Path) -> Non
 
 
 def test_rebuild_fails_closed_on_prepare_finalize_generation_mismatch(tmp_path: Path) -> None:
-    """open-pr-review-2026-08-05.md P2 "require authority-generation
-    equality in the pair": a FINALIZE whose own authority_generation field
-    disagrees with its matching-hash PREPARE's is rejected even though the
-    row_hash itself matches."""
+    """The PREPARE/FINALIZE pair must agree on authority generation: a
+    FINALIZE whose own authority_generation field disagrees with its
+    matching-hash PREPARE's is rejected even though the row_hash itself
+    matches."""
     from app.broker.alpaca.clerk.sqlite.hashchain import GENESIS, canonical_payload, compute_row_hash
     from app.broker.alpaca.clerk.sqlite.mirror import MirrorFile, PendingTransition
 
@@ -780,11 +771,10 @@ def test_operation_claim_blocks_same_owner_overlap_until_attempt_releases(
 def test_operation_claim_fields_must_be_all_null_or_all_complete(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """open-pr-review-2026-08-05.md "Require operation claims to be all-null
-    or complete": a partial claim (e.g. an owner with no token) or an
-    expiry not strictly after its claimed_at_ms would break fencing and
-    recovery — the schema should reject both, not just the application
-    code's own CAS discipline."""
+    """Operation claims are all-null or complete: a partial claim (e.g. an
+    owner with no token) or an expiry not strictly after its claimed_at_ms
+    would break fencing and recovery — the schema should reject both, not just
+    the application code's own CAS discipline."""
     submission = submit_start_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
@@ -850,11 +840,11 @@ def test_claiming_an_unknown_effect_operation_reports_not_found_not_taken(
 def test_get_command_is_synchronized_against_an_in_flight_write(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """open-pr-review-2026-08-05.md P1 "Use a committed-read path for
-    command GETs": get_command() must not run concurrently with an
-    in-flight write on the shared connection — proven here by holding the
-    repository's write coordinator on the main thread and confirming a
-    background get_command() call cannot complete until it is released."""
+    """Command GETs use a committed-read path: get_command() must not run
+    concurrently with an in-flight write on the shared connection — proven here
+    by holding the repository's write coordinator on the main thread and
+    confirming a background get_command() call cannot complete until it is
+    released."""
     submission = submit_start_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID_A, lifecycle_run_id="run-1"
     )
@@ -881,10 +871,10 @@ def test_get_command_is_synchronized_against_an_in_flight_write(
 def test_commit_first_transition_blocks_an_existing_command_retry_when_poisoned(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """open-pr-review-2026-08-05.md P2 "Block retries on poisoned handles":
-    the existing-command short-circuit in commit_first_transition() must
-    also refuse to serve a retry while the handle is poisoned — otherwise a
-    caller gets back an accepted command whose mirror fence is unconfirmed."""
+    """Retries are blocked on poisoned handles: the existing-command
+    short-circuit in commit_first_transition() must also refuse to serve a
+    retry while the handle is poisoned — otherwise a caller gets back an
+    accepted command whose mirror fence is unconfirmed."""
     clock = _clock_seq()
     r = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     r.register_strategy_instance(strategy_instance_id=SID_A, symbol="SPY", config_hash="h1")

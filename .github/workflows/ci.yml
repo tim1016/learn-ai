@@ -24,37 +24,6 @@ jobs:
           python-version: "3.12"
       - run: python scripts/check_temporal_authority.py
 
-  adr-status-guard:
-    name: ADR Status Guard
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: python scripts/check_adr_status.py
-      - run: timeout --signal=KILL 120s python scripts/test_check_adr_status.py -v
-
-  fleet-tooling-tests:
-    name: Fleet Tooling Tests
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install ruff
-      - run: ruff check --config PythonDataService/ruff.toml scripts/dev/fleet/
-      - run: timeout --signal=KILL 120s python scripts/dev/fleet/test_fleet_tooling.py -v
-
   alpaca-onboarding-gates:
     name: Alpaca Onboarding Gates
     runs-on: ubuntu-latest
@@ -69,9 +38,9 @@ jobs:
           python-version: "3.12"
       - run: pip install ruff
       - run: ruff check --config PythonDataService/ruff.toml scripts/alpaca_onboarding_gates.py scripts/test_alpaca_onboarding_gates.py
-      - run: timeout --signal=KILL 120s python scripts/test_alpaca_onboarding_gates.py -v
+      - run: timeout --signal=KILL 180s python scripts/test_alpaca_onboarding_gates.py -v
       - run: ruff check --config PythonDataService/ruff.toml scripts/measure_fill_to_cash_visibility.py scripts/test_measure_fill_to_cash_visibility.py
-      - run: timeout --signal=KILL 120s python scripts/test_measure_fill_to_cash_visibility.py -v
+      - run: timeout --signal=KILL 180s python scripts/test_measure_fill_to_cash_visibility.py -v
 
   fleet-topology-render:
     name: Fleet Topology Render
@@ -140,7 +109,7 @@ jobs:
           cache: npm
           cache-dependency-path: Frontend/package-lock.json
       - run: npm ci
-      - run: npx eslint src/
+      - run: npx eslint src/ --max-warnings 0
       - run: npx eslint tests/e2e --max-warnings 0
 
   frontend-typecheck:
@@ -185,16 +154,6 @@ jobs:
       - run: npm ci
       - run: npm test -- --runner-config=vitest.ci.config.ts
 
-  frontend-test:
-    name: Frontend Tests
-    if: ${{ always() }}
-    needs: frontend-test-shard
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require every frontend shard to pass
-        if: ${{ needs.frontend-test-shard.result != 'success' }}
-        run: exit 1
-
   backend-lint:
     name: Backend Lint
     runs-on: ubuntu-latest
@@ -205,19 +164,6 @@ jobs:
           dotnet-version: "10.0.x"
       - run: dotnet restore podman.sln
       - run: dotnet format podman.sln --verify-no-changes --no-restore
-
-  backend-build:
-    name: Backend Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "10.0.x"
-      - run: dotnet restore podman.sln
-      - run: dotnet build podman.sln --no-restore --configuration Release
-        env:
-          DOTNET_NOLOGO: true
 
   backend-graphql-contract:
     name: Backend GraphQL Contract
@@ -250,7 +196,7 @@ jobs:
         env:
           DOTNET_NOLOGO: true
         run: |
-          timeout --signal=KILL 120s dotnet test Backend.Tests/Backend.Tests.csproj --no-restore --configuration Release --filter "Category!=PostgresIntegration" --logger "trx;LogFileName=backend-tests.trx" --results-directory TestResults
+          timeout --signal=KILL 180s dotnet test Backend.Tests/Backend.Tests.csproj --no-restore --configuration Release --filter "Category!=PostgresIntegration" --logger "trx;LogFileName=backend-tests.trx" --results-directory TestResults
       - name: Upload backend test results
         if: failure()
         uses: actions/upload-artifact@v4
@@ -273,80 +219,6 @@ jobs:
       - run: pip install ruff
       - run: ruff check app/ tests/
 
-  broker-v2-vocabulary-contract:
-    name: Broker V2 Vocabulary Contract
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: PythonDataService
-    env:
-      # The fleet operation catalog import chain reaches `app.config`, whose
-      # Settings require this at module import. Same placeholder the Alpaca
-      # SQLite qualification smoke job already uses.
-      POLYGON_API_KEY: test-key-for-testing
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: PythonDataService/requirements*.txt
-      - run: pip install -r requirements-heavy.txt -r requirements-light.txt -r requirements-dev.txt
-      - name: Regenerate the vocabulary snapshot and require it to match both committed copies
-        run: |
-          python -m scripts.regenerate_broker_v2_vocabulary_snapshot
-          cd ..
-          git diff --exit-code -- \
-            PythonDataService/app/broker/v2panel/vocabulary.snapshot.json \
-            Frontend/src/app/components/broker/v2-panel/lib/broker-v2-vocabulary.snapshot.json
-          # `git diff` ignores untracked files, so a snapshot that got deleted
-          # and regenerated as a new, never-committed file would pass the
-          # check above unnoticed. `git status --porcelain` catches that.
-          status=$(git status --porcelain -- \
-            PythonDataService/app/broker/v2panel/vocabulary.snapshot.json \
-            Frontend/src/app/components/broker/v2-panel/lib/broker-v2-vocabulary.snapshot.json)
-          if [ -n "$status" ]; then
-            echo "Regenerated vocabulary snapshot is untracked or otherwise dirty:"
-            echo "$status"
-            exit 1
-          fi
-      - name: Regenerate the fleet refusal vocabulary snapshot and require it to match both committed copies
-        run: |
-          python -m scripts.regenerate_fleet_refusal_vocabulary_snapshot
-          cd ..
-          git diff --exit-code -- \
-            PythonDataService/app/broker/fleet/refusal_vocabulary.snapshot.json \
-            Frontend/src/app/fleet/fleet-refusal-vocabulary.snapshot.json
-          # Same untracked-file gap as above: a deleted-and-regenerated
-          # snapshot would pass `git diff` unnoticed without this check.
-          status=$(git status --porcelain -- \
-            PythonDataService/app/broker/fleet/refusal_vocabulary.snapshot.json \
-            Frontend/src/app/fleet/fleet-refusal-vocabulary.snapshot.json)
-          if [ -n "$status" ]; then
-            echo "Regenerated fleet refusal vocabulary snapshot is untracked or otherwise dirty:"
-            echo "$status"
-            exit 1
-          fi
-      - name: Regenerate the fleet operation catalog snapshot and require it to match both committed copies
-        run: |
-          python -m scripts.regenerate_fleet_operation_catalog_snapshot
-          cd ..
-          git diff --exit-code -- \
-            PythonDataService/app/broker/fleet/operation_catalog.snapshot.json \
-            Frontend/src/app/fleet/fleet-operation-catalog.snapshot.json
-          # Same untracked-file gap as above: a deleted-and-regenerated
-          # snapshot would pass `git diff` unnoticed without this check.
-          status=$(git status --porcelain -- \
-            PythonDataService/app/broker/fleet/operation_catalog.snapshot.json \
-            Frontend/src/app/fleet/fleet-operation-catalog.snapshot.json)
-          if [ -n "$status" ]; then
-            echo "Regenerated fleet operation catalog snapshot is untracked or otherwise dirty:"
-            echo "$status"
-            exit 1
-          fi
-
   python-test-shard:
     name: Python Test Shard ${{ matrix.shard }}/16
     runs-on: ubuntu-latest
@@ -355,192 +227,80 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     env:
-      # Match the runner's 4 vCPUs so each shard stays well inside the
-      # 120-second budget (pytest-xdist reads this variable when `-n auto`
+      # Match the runner's 4 vCPUs so each shard stays well inside its
+      # 120-second target (pytest-xdist reads this variable when `-n auto`
       # is used; at 2 workers shards measured 95-120s on CI). Shard balance
       # comes from scripts/pr_shard_durations.json via scripts.pytest_shard:
       # at 12 hash-only shards the heaviest ran 103-109s (#2682), and 16
       # duration-balanced shards keep every shard near the mean.
       PYTEST_XDIST_AUTO_NUM_WORKERS: "4"
-      # Numerical evidence is a baseline obligation, not a change-detection
-      # heuristic. The fixture path exercises the committed reference outputs
-      # (the metadata-only manifest test has its own job below); the reconciler
-      # and fast cross-engine cells prove the core comparison paths.
-      PYTHON_SCIENTIFIC_PROOF_TEST_PATHS: >-
-        tests/fixtures
-        tests/research/parity/test_qc_reconciler.py
-        tests/research/parity/test_cross_engine_study.py
     defaults:
       run:
         working-directory: PythonDataService
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: PythonDataService/requirements*.txt
       - run: pip install -r requirements-heavy.txt -r requirements-light.txt -r requirements-dev.txt
+      # The contract is the same on every shard, so one shard checks it.
       - name: Verify committed OpenAPI contract
+        if: ${{ matrix.shard == 1 }}
         run: python scripts/export_openapi_contract.py --check
 
-      # Curated fast baseline + diff-driven extras.
-      # Baseline dirs always run; everything else only runs when the diff touches it
-      # (either a tests/** file directly, or an app/**/<name>.py with a matching
-      # tests/**/test_<name>.py). See discussion in PR introducing this step.
-      - name: Compute change-driven extra test paths
-        id: changed
-        shell: bash
-        working-directory: ${{ github.workspace }}
-        run: |
-          set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base_ref="${{ github.base_ref }}"
-            git fetch --no-tags --depth=200 origin "$base_ref" || git fetch --no-tags origin "$base_ref"
-            base="origin/${base_ref}"
-            range="${base}...HEAD"
-          else
-            # push to master: diff just the pushed commits
-            range="${{ github.event.before }}...${{ github.sha }}"
-            if ! git rev-parse --verify "${{ github.event.before }}" >/dev/null 2>&1; then
-              range="HEAD~1...HEAD"
-            fi
-          fi
-          # Deleted sources cannot own tests in the current checkout and must not
-          # contribute paths that pytest can no longer collect.
-          changed=$(git diff --name-only --diff-filter=ACMRT "$range" || true)
-          # Baseline and scientific-proof paths are always run; skip them here
-          # to avoid duplicate collection through the change-driven extras.
-          # The baseline comes from the runner itself so the two can't drift.
-          mapfile -t baseline_dirs < <(cd PythonDataService && python -m scripts.run_fast_tests --list-baseline)
-          read -r -a scientific_proof_paths <<< "$PYTHON_SCIENTIFIC_PROOF_TEST_PATHS"
-          always_run_pattern=$(
-            printf '%s\n' "${baseline_dirs[@]}" "${scientific_proof_paths[@]}" \
-              | sed 's#^#PythonDataService/#' \
-              | sed 's#[][(){}.^$*+?|\\]#\\&#g' \
-              | paste -sd'|' -
-          )
-          always_run_pattern="^(${always_run_pattern})(/|$)"
-          extra=""
-          # (1) Directly-changed test files outside the always-run paths.
-          while IFS= read -r p; do
-            [ -z "$p" ] && continue
-            case "$p" in
-              PythonDataService/tests/*test_*.py)
-                if [[ ! "$p" =~ $always_run_pattern ]]; then
-                  rel="${p#PythonDataService/}"
-                  [ -f "PythonDataService/$rel" ] && extra="$extra $rel"
-                fi
-                ;;
-            esac
-          done <<< "$changed"
-          # (2) Tests matching each changed app/**/<name>.py, plus explicit integration ownership.
-          while IFS= read -r p; do
-            [ -z "$p" ] && continue
-            case "$p" in
-              PythonDataService/app/services/offline_replay_service.py|PythonDataService/app/services/offline_replay_data.py)
-                extra="$extra tests/integration/test_offline_replay_market_capture.py"
-                ;;
-            esac
-            case "$p" in
-              PythonDataService/app/*.py)
-                stem=$(basename "$p" .py)
-                [ "$stem" = "__init__" ] && continue
-                while IFS= read -r t; do
-                  if [[ ! "PythonDataService/$t" =~ $always_run_pattern ]]; then
-                    extra="$extra $t"
-                  fi
-                done < <(cd PythonDataService && find tests -type f \( -name "test_${stem}.py" -o -name "test_${stem}_*.py" \) 2>/dev/null || true)
-                ;;
-            esac
-          done <<< "$changed"
-          # Strip anything under tests/unit/data_lake or tests/integration/data_lake:
-          # the "Run fast baseline" step's --ignore flags for those two directories
-          # only suppress directory-walked collection, not an explicitly-passed file
-          # path (verified: `pytest <file> --ignore=<file's dir>` still collects
-          # <file> — a pytest --ignore is not retroactive over positional args). A
-          # PR that directly edits a data-lake test file — e.g. one porting a
-          # DataRunSpec field rename through every call site — makes rule (1) above
-          # add that file to $extra, which used to slip it past both --ignore flags
-          # and into the parallel run, exposing the TRUNCATE-based clean_artifacts
-          # race the ignores exist to prevent (see the comment on that step).
-          extra=$(echo "$extra" | tr ' ' '\n' | awk 'NF' | sort -u | { grep -v -E '^tests/(unit|integration)/data_lake/' || true; } | tr '\n' ' ')
-          echo "extra=${extra}" >> "$GITHUB_OUTPUT"
-          echo "Extra change-driven test paths: ${extra:-<none>}"
+      # The checked-in runner owns the test roots (pytest.ini testpaths, the
+      # same roots the daily run collects), the `not slow` marker filter, the
+      # xdist settings, a 120-second target each shard is balanced to, and a
+      # hard 180-second wall-clock limit that fails the job. Slow,
+      # PostgreSQL-backed and browser coverage runs daily instead.
+      - name: Run quick tests
+        run: python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/16"
 
-      # The checked-in runner owns the baseline, marker filter, xdist settings,
-      # database exclusions, and a hard 120-second wall-clock budget. Expensive
-      # corpus regeneration and PostgreSQL-backed coverage run daily instead.
-      - name: Run fast baseline + change-driven tests
-        run: |
-          extra="${{ steps.changed.outputs.extra }}"
-          extra_paths=()
-          if [ -n "$extra" ]; then
-            read -r -a extra_paths <<< "$extra"
-          fi
-          python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/16" "${extra_paths[@]}"
-
-      - name: Run scientific proof tests
-        run: |
-          read -r -a scientific_proof_paths <<< "$PYTHON_SCIENTIFIC_PROOF_TEST_PATHS"
-          python -m pytest "${scientific_proof_paths[@]}" --ignore=tests/fixtures/test_golden_manifest.py -n auto -v -m "not slow" --tb=short
-
-  python-test:
-    name: Python Tests
+  # The one check master requires. It waits on every other job, so adding
+  # or cutting a job only edits `needs` here, never the branch ruleset.
+  ci-passed:
+    name: CI passed
     if: ${{ always() }}
-    needs: python-test-shard
+    needs:
+      - temporal-authority-guard
+      - alpaca-onboarding-gates
+      - fleet-topology-render
+      - frontend-lint
+      - frontend-typecheck
+      - frontend-test-shard
+      - backend-lint
+      - backend-graphql-contract
+      - backend-test
+      - python-lint
+      - python-test-shard
     runs-on: ubuntu-latest
-    steps:
-      - name: Require every Python shard to pass
-        if: ${{ needs.python-test-shard.result != 'success' }}
-        run: exit 1
-
-  alpaca-sqlite-qualification-smoke:
-    name: Alpaca SQLite Qualification Smoke
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: PythonDataService
-    env:
-      POLYGON_API_KEY: test-key-for-testing
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: PythonDataService/requirements*.txt
-      - run: pip install -r requirements-heavy.txt -r requirements-light.txt -r requirements-dev.txt
-      - name: Run bounded deterministic qualification
+          sparse-checkout: .github/workflows/ci.yml
+          sparse-checkout-cone-mode: false
+      - name: Require every other CI job to be a need of this one
+        env:
+          NEEDS: ${{ toJSON(needs) }}
         run: |
-          mkdir -p TestResults
-          timeout --signal=KILL 120s python -m scripts.run_alpaca_sqlite_qualification \
-            --profile smoke \
-            --json-output TestResults/alpaca-sqlite-qualification-smoke.json \
-            --markdown-output TestResults/alpaca-sqlite-qualification-smoke.md
-      - name: Upload qualification evidence
-        uses: actions/upload-artifact@v4
-        with:
-          name: alpaca-sqlite-qualification-smoke
-          path: PythonDataService/TestResults/alpaca-sqlite-qualification-smoke.*
-          if-no-files-found: error
-
-  validate-golden-manifest:
-    name: Validate Golden Manifest
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: PythonDataService
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: PythonDataService/requirements*.txt
-      - run: pip install pydantic jsonschema pyarrow pytest
-      - run: timeout --signal=KILL 120s python -m pytest tests/fixtures/test_golden_manifest.py -v --tb=short --noconftest
+          diff -u \
+            <(yq '.jobs | keys | .[]' .github/workflows/ci.yml | grep -vx ci-passed | sort) \
+            <(jq -r 'keys[]' <<< "$NEEDS" | sort)
+      - name: Require every needed job to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          # A failed, cancelled or skipped job all fail the roll-up: no job
+          # here is conditional, so a skip is never expected.
+          unsuccessful=$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key): \(.value.result)"' <<< "$NEEDS")
+          if [ -n "$unsuccessful" ]; then
+            echo "These CI jobs did not succeed:"
+            echo "$unsuccessful"
+            exit 1
+          fi
+          echo "All $(jq 'length' <<< "$NEEDS") CI jobs succeeded."

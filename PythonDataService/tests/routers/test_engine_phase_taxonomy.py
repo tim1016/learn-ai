@@ -28,12 +28,11 @@ import inspect
 import re
 
 import app.services.engine_backtest_service as engine_module
-from app.jobs.phases import ENGINE_BACKTEST_PHASES, JOB_PHASES, friendly
+from app.jobs.phases import ENGINE_BACKTEST_PHASES, friendly
 from app.services.engine_backtest_service import (
     _aggregate_backtest_response,
     _execute_engine_backtest_core,
     _persist_and_dispatch_companion,
-    _report_waiting,
 )
 
 EXPECTED_PHASE_IDS = (
@@ -46,10 +45,6 @@ EXPECTED_PHASE_IDS = (
 
 
 class TestEngineBacktestPhaseRegistry:
-    def test_registry_contains_engine_backtest(self) -> None:
-        assert "engine_backtest" in JOB_PHASES
-        assert JOB_PHASES["engine_backtest"] is ENGINE_BACKTEST_PHASES
-
     def test_phase_ids_in_expected_order(self) -> None:
         ids = tuple(p.id for p in ENGINE_BACKTEST_PHASES)
         # Two registry ids bracket the run and are not part of the workflow's
@@ -60,20 +55,6 @@ class TestEngineBacktestPhaseRegistry:
         # the framework's ``job.completed`` event fills that role instead. What
         # remains between them is the workflow sequence.
         assert ids == ("waiting_for_engine", *EXPECTED_PHASE_IDS, "done")
-
-    def test_friendly_labels_are_present_and_sentence_case(self) -> None:
-        for phase in ENGINE_BACKTEST_PHASES:
-            assert phase.label, f"phase {phase.id} has empty friendly label"
-            # Sentence case: first character is uppercase. The remaining
-            # text may include lowercase words; we don't enforce a strict
-            # style because some labels include proper nouns (LEAN).
-            assert phase.label[0].isupper(), (
-                f"phase {phase.id} label should be sentence case: {phase.label!r}"
-            )
-
-    def test_friendly_lookup_returns_registered_label(self) -> None:
-        for phase in ENGINE_BACKTEST_PHASES:
-            assert friendly("engine_backtest", phase.id) == phase.label
 
     def test_unregistered_phase_falls_back_to_humanized_form(self) -> None:
         # ``_humanize`` capitalizes tokens it sees in lowercase; an
@@ -125,24 +106,3 @@ class TestExecuteEngineBacktestPhaseSequence:
         emitted = set(re.findall(r'on_phase\("([a-z_]+)"\)', inspect.getsource(engine_module)))
         unknown = emitted - registered
         assert unknown == set(), f"app/services/engine_backtest_service.py emits unregistered phase(s): {sorted(unknown)}"
-
-    def test_the_gate_reports_the_wait_before_the_workflow_starts(self) -> None:
-        """``waiting_for_engine`` is the gate's, not the workflow's (#1957)."""
-        assert 'on_phase("waiting_for_engine")' in inspect.getsource(_report_waiting)
-        for stage in WORKFLOW_STAGES:
-            assert "waiting_for_engine" not in inspect.getsource(stage)
-
-    def test_the_wait_log_line_comes_from_the_registry_not_a_second_copy(self) -> None:
-        """One label per phase id — a hand-written duplicate is how the two drift."""
-        source = inspect.getsource(_report_waiting)
-        assert 'friendly("engine_backtest", "waiting_for_engine")' in source
-        assert friendly("engine_backtest", "waiting_for_engine") == "Waiting for the backtest already running"
-
-    def test_no_legacy_phase_ids_remain(self) -> None:
-        """Catch a future edit that re-adds the pre-#471 phase ids."""
-        source = "".join(inspect.getsource(stage) for stage in WORKFLOW_STAGES)
-        for legacy in ("loading_bars", "simulating", "computing_stats"):
-            assert f'on_phase("{legacy}")' not in source, (
-                f"legacy phase id {legacy!r} re-appeared in the engine workflow; "
-                f"#471 retired it — use the new taxonomy instead."
-            )

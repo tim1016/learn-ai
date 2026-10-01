@@ -63,7 +63,7 @@ export class IndicatorPickerComponent implements AfterViewChecked, AfterViewInit
    *  claiming no indicators exist. */
   readonly loadFailed = input(false);
   readonly allowAdditionalInstances = input(true);
-  /** Opt-in searchable presentation (PRD §9). Off by default so existing
+  /** Opt-in searchable presentation. Off by default so existing
    *  consumers keep their current presentation until migrated. */
   readonly searchable = input(false);
 
@@ -79,7 +79,7 @@ export class IndicatorPickerComponent implements AfterViewChecked, AfterViewInit
   protected readonly hoveredName = signal<string | null>(null);
   private hoverTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // ── Search state (PRD §9) ───────────────────────────────────
+  // ── Search state ────────────────────────────────────────────
   protected readonly searchQuery = signal('');
   /** Flat-result index of the keyboard-highlighted option, or null. */
   protected readonly activeIndex = signal<number | null>(null);
@@ -95,7 +95,7 @@ export class IndicatorPickerComponent implements AfterViewChecked, AfterViewInit
 
   /** Lowercased haystack per indicator — canonical key, reference name,
    *  display name, description, category, pane, aliases, and parameter
-   *  names. Case-insensitive substring match (PRD §9). */
+   *  names. Case-insensitive substring match. */
   private readonly searchHaystacks = computed<Map<string, string>>(() => {
     const map = new Map<string, string>();
     for (const ind of this.allIndicators()) {
@@ -181,7 +181,7 @@ export class IndicatorPickerComponent implements AfterViewChecked, AfterViewInit
     return option ? this.optionIdFor(option) : null;
   }
 
-  /** Announcement text for the polite live region (PRD §9). */
+  /** Announcement text for the polite live region. */
   protected readonly searchAnnouncement = computed(() =>
     this.hasSearch() || this.hasFilter()
       ? `${this.totalVisible()} of ${this.totalCatalog()} indicators match`
@@ -223,12 +223,12 @@ export class IndicatorPickerComponent implements AfterViewChecked, AfterViewInit
   }
 
   ngAfterViewInit(): void {
-    // Opening the searchable presentation focuses search (PRD §9). The
-    // non-searchable presentation has no input to focus, so nothing happens.
+    // Opening the searchable presentation focuses search. The non-searchable
+    // presentation has no input to focus, so nothing happens.
     if (this.searchable()) this.searchInput()?.nativeElement.focus();
   }
 
-  // ── Search (PRD §9) ─────────────────────────────────────────
+  // ── Search ──────────────────────────────────────────────────
   protected onSearchInput(event: Event): void {
     const value = (event.target as HTMLInputElement).value;
     this.searchQuery.set(value);
@@ -322,10 +322,6 @@ export class IndicatorPickerComponent implements AfterViewChecked, AfterViewInit
 
   protected isCatOpen(name: string): boolean {
     return this.openCats().has(name);
-  }
-
-  protected catColorClass(category: string): string {
-    return `ip-cat--${category}`;
   }
 
   protected paneIcon(pane: IndicatorPane): string {

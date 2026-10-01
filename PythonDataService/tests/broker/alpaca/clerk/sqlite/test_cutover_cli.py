@@ -40,7 +40,6 @@ from scripts.manage_alpaca_sqlite_clerk import (
     _read_reset_evidence,
 )
 from scripts.manage_alpaca_sqlite_clerk import main as recovery_cli
-from tests.broker.alpaca.clerk.live_arming_fixtures import live_settings
 from tests.broker.alpaca.clerk.live_envelope_fixtures import TEST_ENVELOPE_VALUES
 from tests.broker.alpaca.clerk.sqlite.cutover_test_support import (
     PLAN_MS,
@@ -256,53 +255,15 @@ def test_read_reset_and_cutover_evidence_use_distinct_models(
         _read_cutover_evidence(evidence_path, ACCOUNT_ID)
 
 
-def test_read_cutover_evidence_refuses_live_evidence_under_non_live_effective_mode(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The paper-only proof, now judged against the effective profile revision.
-
-    What it proves is unchanged (ADR 0059 D1): live broker evidence is refused
-    unless this installation *is* live. Only the source of the mode moved, from
-    ``ALPACA_MODE`` to the effective revision (ADR 0060).
-    """
-    payload = {
-        "account_id": ACCOUNT_ID,
-        "account_mode": "live",
-        "observed_at_ms": PLAN_MS,
-        "proof_reference": "fake-cli-proof",
-        "positions": {},
-        "open_order_ids": [],
-    }
-    evidence_path = tmp_path / "live-broker-evidence.json"
-    evidence_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    monkeypatch.setattr(
-        recovery_cli_module,
-        "effective_alpaca_settings",
-        lambda: AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper"),
-    )
-    with pytest.raises(ValueError, match="not live") as refused:
-        _read_cutover_evidence(evidence_path, ACCOUNT_ID)
-    assert "effective broker configuration" in str(refused.value)
-
-    monkeypatch.setattr(recovery_cli_module, "effective_alpaca_settings", live_settings)
-
-    evidence = _read_cutover_evidence(evidence_path, ACCOUNT_ID)
-
-    assert evidence.account_mode == "live"
-
-
 def test_read_cutover_evidence_reads_the_real_effective_revision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The same proof once, end to end, against a real profiles database.
+    """The paper-only gate, end to end, against a real profiles database.
 
-    The test above patches the resolver by name, which pins the wiring but not
-    what the name resolves *to*. This one applies a paper revision and then a
-    live one for real, so the paper-only gate is demonstrated against the
-    installation's actual effective selection rather than a double of it.
+    This applies a paper revision and then a live one for real, so the gate is
+    demonstrated against the installation's actual effective selection rather
+    than a double of it.
     """
     payload = {
         "account_id": ACCOUNT_ID,
@@ -401,82 +362,6 @@ def test_read_cutover_evidence_never_reads_settings_for_paper_evidence(
 
     monkeypatch.setattr(recovery_cli_module, "effective_alpaca_settings", _explode)
     assert _read_cutover_evidence(evidence_path, ACCOUNT_ID).account_mode == "paper"
-
-
-def test_v9_upgrade_and_rollback_cli_require_account_bound_process_stop_evidence(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    evidence_path = tmp_path / "process-stop.json"
-    evidence_path.write_text(
-        json.dumps(
-            {
-                "account_id": ACCOUNT_ID,
-                "observed_at_ms": PLAN_MS,
-                "proof_reference": "tests/process-stop-proof.json",
-            }
-        ),
-        encoding="utf-8",
-    )
-    captured: list[tuple[str, Any]] = []
-
-    def capture_upgrade(**kwargs: Any) -> Any:
-        captured.append(("upgrade", kwargs["process_stop_proof"]))
-        return kwargs["process_stop_proof"]
-
-    def capture_rollback(**kwargs: Any) -> Any:
-        captured.append(("rollback", kwargs["process_stop_proof"]))
-        return kwargs["process_stop_proof"]
-
-    monkeypatch.setattr(recovery_cli_module, "upgrade_v8_authority_offline", capture_upgrade)
-    monkeypatch.setattr(recovery_cli_module, "rollback_v9_upgrade_offline", capture_rollback)
-    common = ["--artifacts-root", str(tmp_path / "clerk"), "--account-id", ACCOUNT_ID]
-
-    assert recovery_cli([*common, "upgrade-v9", "--process-stop-evidence", str(evidence_path)]) == 0
-    assert recovery_cli([*common, "rollback-v9", "--process-stop-evidence", str(evidence_path)]) == 0
-    assert [(operation, proof.account_id) for operation, proof in captured] == [
-        ("upgrade", ACCOUNT_ID),
-        ("rollback", ACCOUNT_ID),
-    ]
-
-    with pytest.raises(ValueError, match="requires --process-stop-evidence"):
-        recovery_cli([*common, "upgrade-v9"])
-
-
-def test_dev_reset_cli_refuses_unactivated_legacy_authority(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    clerk_root = tmp_path / "clerk"
-    runner_root = tmp_path / "runner"
-    account_dir = clerk_root / "accounts" / "alpaca" / ACCOUNT_ID
-    account_dir.mkdir(parents=True)
-    journal = account_dir / "order_journal.jsonl"
-    journal.write_text("{}\n", encoding="utf-8")
-    monkeypatch.setattr(
-        recovery_cli_module,
-        "effective_alpaca_settings",
-        lambda: SimpleNamespace(mode="paper"),
-    )
-
-    with pytest.raises(
-        DeveloperCleanSlateResetRefused,
-        match="requires an established SQLite authority",
-    ):
-        recovery_cli(
-            [
-                "--artifacts-root",
-                str(clerk_root),
-                "--account-id",
-                ACCOUNT_ID,
-                "dev-reset",
-                "--runner-artifacts-root",
-                str(runner_root),
-            ]
-        )
-
-    assert journal.is_file()
-    assert not (account_dir / "dev-reset-quarantine").exists()
 
 
 def test_dev_reset_cli_refuses_live_mode_without_moving_authority(

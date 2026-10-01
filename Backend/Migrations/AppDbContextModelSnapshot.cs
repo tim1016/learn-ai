@@ -215,161 +215,6 @@ namespace Backend.Migrations
                     b.ToTable("DataLakeArtifacts");
                 });
 
-            modelBuilder.Entity("Backend.Models.MarketData.OptionsIvSnapshot", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int?>("DteHigh")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("DteLow")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal?>("Iv30dAtm")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal?>("Iv30dCall")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal?>("Iv30dPut")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<string>("PriceSource")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.Property<string>("Source")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)");
-
-                    b.Property<decimal?>("StockClose")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<int>("TickerId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("TradingDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TickerId", "TradingDate")
-                        .IsUnique();
-
-                    b.ToTable("OptionsIvSnapshots");
-                });
-
-            modelBuilder.Entity("Backend.Models.MarketData.Quote", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<long?>("AskExchange")
-                        .HasColumnType("bigint");
-
-                    b.Property<decimal>("AskPrice")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal>("AskSize")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<long?>("BidExchange")
-                        .HasColumnType("bigint");
-
-                    b.Property<decimal>("BidPrice")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal>("BidSize")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<long?>("SequenceNumber")
-                        .HasColumnType("bigint");
-
-                    b.Property<int>("TickerId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("Timestamp")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TickerId", "Timestamp");
-
-                    b.ToTable("Quotes");
-                });
-
-            modelBuilder.Entity("Backend.Models.MarketData.ReferenceData", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<decimal?>("CashAmount")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("DataType")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("DeclarationDate")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("EventDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("ExecutionDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("MetadataJson")
-                        .HasColumnType("text");
-
-                    b.Property<decimal?>("SplitFrom")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<decimal?>("SplitTo")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<int>("TickerId")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TickerId", "DataType", "EventDate");
-
-                    b.ToTable("ReferenceData");
-                });
-
             modelBuilder.Entity("Backend.Models.MarketData.ResearchExperiment", b =>
                 {
                     b.Property<int>("Id")
@@ -580,56 +425,6 @@ namespace Backend.Migrations
                     b.ToTable("StockAggregates");
                 });
 
-            modelBuilder.Entity("Backend.Models.MarketData.TechnicalIndicator", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal?>("Histogram")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<string>("IndicatorType")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<decimal?>("Signal")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<int>("TickerId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Timespan")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("Timestamp")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal?>("Value")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<string>("ValuesJson")
-                        .HasColumnType("text");
-
-                    b.Property<int>("Window")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TickerId", "IndicatorType", "Timestamp");
-
-                    b.ToTable("TechnicalIndicators");
-                });
-
             modelBuilder.Entity("Backend.Models.MarketData.Ticker", b =>
                 {
                     b.Property<int>("Id")
@@ -685,50 +480,6 @@ namespace Backend.Migrations
                         .IsUnique();
 
                     b.ToTable("Tickers");
-                });
-
-            modelBuilder.Entity("Backend.Models.MarketData.Trade", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<string>("Conditions")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<long?>("Exchange")
-                        .HasColumnType("bigint");
-
-                    b.Property<decimal>("Price")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<long?>("SequenceNumber")
-                        .HasColumnType("bigint");
-
-                    b.Property<decimal>("Size")
-                        .HasPrecision(18, 8)
-                        .HasColumnType("numeric(18,8)");
-
-                    b.Property<int>("TickerId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("Timestamp")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("TradeId")
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TickerId", "Timestamp");
-
-                    b.ToTable("Trades");
                 });
 
             modelBuilder.Entity("Backend.Models.Portfolio.Account", b =>
@@ -1156,39 +907,6 @@ namespace Backend.Migrations
                     b.ToTable("RiskRules");
                 });
 
-            modelBuilder.Entity("Backend.Models.MarketData.OptionsIvSnapshot", b =>
-                {
-                    b.HasOne("Backend.Models.MarketData.Ticker", "Ticker")
-                        .WithMany()
-                        .HasForeignKey("TickerId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Ticker");
-                });
-
-            modelBuilder.Entity("Backend.Models.MarketData.Quote", b =>
-                {
-                    b.HasOne("Backend.Models.MarketData.Ticker", "Ticker")
-                        .WithMany("Quotes")
-                        .HasForeignKey("TickerId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Ticker");
-                });
-
-            modelBuilder.Entity("Backend.Models.MarketData.ReferenceData", b =>
-                {
-                    b.HasOne("Backend.Models.MarketData.Ticker", "Ticker")
-                        .WithMany()
-                        .HasForeignKey("TickerId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Ticker");
-                });
-
             modelBuilder.Entity("Backend.Models.MarketData.ResearchExperiment", b =>
                 {
                     b.HasOne("Backend.Models.MarketData.Ticker", "Ticker")
@@ -1215,28 +933,6 @@ namespace Backend.Migrations
                 {
                     b.HasOne("Backend.Models.MarketData.Ticker", "Ticker")
                         .WithMany("Aggregates")
-                        .HasForeignKey("TickerId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Ticker");
-                });
-
-            modelBuilder.Entity("Backend.Models.MarketData.TechnicalIndicator", b =>
-                {
-                    b.HasOne("Backend.Models.MarketData.Ticker", "Ticker")
-                        .WithMany("Indicators")
-                        .HasForeignKey("TickerId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Ticker");
-                });
-
-            modelBuilder.Entity("Backend.Models.MarketData.Trade", b =>
-                {
-                    b.HasOne("Backend.Models.MarketData.Ticker", "Ticker")
-                        .WithMany("Trades")
                         .HasForeignKey("TickerId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
@@ -1404,12 +1100,6 @@ namespace Backend.Migrations
             modelBuilder.Entity("Backend.Models.MarketData.Ticker", b =>
                 {
                     b.Navigation("Aggregates");
-
-                    b.Navigation("Indicators");
-
-                    b.Navigation("Quotes");
-
-                    b.Navigation("Trades");
                 });
 
             modelBuilder.Entity("Backend.Models.Portfolio.Account", b =>

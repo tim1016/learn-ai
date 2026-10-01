@@ -2,8 +2,8 @@
 
 **Not a calendar.** The canonical NYSE calendar is
 ``app.lean_sidecar.trading_calendar``, and it is the only place in this repo
-that constructs an ``mcal`` calendar (``.claude/rules/temporal-rigor.md``,
-"Calendar authority"). This module is a thin adapter over it: it answers the
+that constructs an ``mcal`` calendar (ADR 0022 (d),
+one calendar module). This module is a thin adapter over it: it answers the
 same question in the shape the lake's catalog needs — a session list plus a
 :class:`NonSessionRecord` for every skipped day, saying *why* it was skipped.
 

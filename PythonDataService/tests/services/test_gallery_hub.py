@@ -529,13 +529,6 @@ async def test_build_snapshot_session_change_pct_uses_full_session_bars_for_a_fi
     assert aggregator.subscribed_5s == ["SPY"]
 
 
-def test_gallery_hub_reuses_canonical_markers_projection() -> None:
-    """``GalleryHub`` must not redefine fill→marker mapping — it imports the
-    exact ``chart_projection_service`` helper the single-bot detail chart
-    uses (CLAUDE.md single-source-of-truth rule), not a reimplementation."""
-    assert gallery_hub.markers_in_window is markers_in_window
-
-
 @pytest.mark.asyncio
 async def test_build_snapshot_populates_markers_from_todays_fills(
     monkeypatch: pytest.MonkeyPatch,

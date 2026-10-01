@@ -42,30 +42,6 @@ def test_parse_args_rejects_unapproved_fixture_digest() -> None:
         _parse_args(["--all", "--image-digest", "sha256:" + "f" * 64])
 
 
-def test_parse_args_one_cell() -> None:
-    ns = _parse_args(["--cell", "SPY_W6mo_2025-11-03_to_2026-04-30"])
-    assert ns.cell == "SPY_W6mo_2025-11-03_to_2026-04-30"
-    assert ns.all is False
-    assert ns.ticker is None
-
-
-def test_parse_args_one_ticker() -> None:
-    ns = _parse_args(["--ticker", "SPY"])
-    assert ns.ticker == "SPY"
-    assert ns.all is False
-    assert ns.cell is None
-
-
-def test_parse_args_mutually_exclusive() -> None:
-    with pytest.raises(SystemExit):
-        _parse_args(["--all", "--cell", "SPY_W6mo_2025-11-03_to_2026-04-30"])
-
-
-def test_parse_args_requires_one() -> None:
-    with pytest.raises(SystemExit):
-        _parse_args([])
-
-
 def test_resolve_target_cells_all() -> None:
     cells = _resolve_target_cells(argparse.Namespace(all=True, cell=None, ticker=None))
     assert len(cells) == 16

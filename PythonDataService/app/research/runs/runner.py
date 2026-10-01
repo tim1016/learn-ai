@@ -226,7 +226,7 @@ def _summarize_metrics(
     """Project ``statistics.summarize`` output onto the typed ``RunMetrics``.
 
     Formula: exposure_pct = min(1, max(0, bars_held_total * resolution_minutes / total_bars)).
-    Reference: Internal run-ledger metric; see docs/references/run-ledger.md.
+    Reference: Internal run-ledger metric.
     Canonical implementation: this file.
     Validated against: tests/research/runs/test_runner_inmemory.py::test_exposure_uses_consolidated_bar_resolution
 

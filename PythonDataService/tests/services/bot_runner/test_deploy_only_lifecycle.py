@@ -1,8 +1,6 @@
 """#2541: terminal trading needs fresh consent, while custody stays recoverable."""
 import asyncio
-import inspect
 from pathlib import Path
-from typing import get_args
 
 import httpx
 import pytest
@@ -12,11 +10,10 @@ from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.v2panel.vocabulary import ACTION_IDS
 from app.routers import broker_v2_panel
 from app.schemas.broker_v2_panel import PanelActionRequest
-from app.schemas.run_admission import StartRuntimeAdmissionFact
 from app.services import bot_runner
 from app.services.bot_clerk_lifecycle import ActiveClerkUnavailableError
 from app.services.bot_run_evidence import ACTIVATION_FAILED_STOP_REASON_CODE
-from app.services.bot_runner import BotTaskRegistry, RunAdmissionRefusedError
+from app.services.bot_runner import RunAdmissionRefusedError
 from app.services.bot_runner_errors import ActivationFailedCleanupProvenError
 from app.services.broker_v2_panel.outcome_copy import outcome_card_copy, outcome_headline
 from tests._helpers.bot_runner.custody import _SID, _custody_proof, _registry
@@ -48,21 +45,6 @@ async def test_removed_action_cannot_cross_the_command_boundary(
     assert response.status_code == 422
     assert not calls
     assert action_id not in ACTION_IDS
-
-
-def test_registry_has_no_alternate_restart_or_pause_capability() -> None:
-    for method in ('resume_existing', 'resume_existing_with_admission', 'preview_resume_admission', 'pause', 'continue_paused'):
-        assert not hasattr(BotTaskRegistry, method)
-
-
-def test_registry_has_no_restart_intensity_state(tmp_path: Path) -> None:
-    """Every Deploy is a fresh identity with fresh consent and nothing restarts
-    on its own, so no restart remains to throttle: a check that cannot fire."""
-    registry = _registry(tmp_path, _FakeFeed([], mode='hold'))
-    assert 'restart_policy' not in inspect.signature(BotTaskRegistry).parameters
-    for name in ('_start_history', '_restart_policy', '_enforce_restart_intensity', '_projected_start_count', '_starts_in_window'):
-        assert not hasattr(registry, name)
-    assert 'RESTART_INTENSITY_EXCEEDED' not in get_args(StartRuntimeAdmissionFact.model_fields['state'].annotation)
 
 
 async def test_stopped_identity_cannot_redeploy_and_fresh_deploy_keeps_old_receipts(tmp_path: Path) -> None:

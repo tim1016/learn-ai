@@ -12,11 +12,9 @@ import pytest
 from app.broker.alpaca.broker import AlpacaBroker
 from app.broker.alpaca.profile.account_verification import (
     ACCOUNT_VERIFICATION_MAX_AGE_MS,
-    AccountPin,
     AccountVerification,
     ObservedAccount,
     _BrokerAccountDiscovery,
-    pin_observed_account,
     reverify_pinned_account,
     verify_account,
 )
@@ -236,80 +234,6 @@ async def test_a_live_revision_verifies_against_its_own_slot_credentials() -> No
     assert context.settings.api_key_id.get_secret_value() == LIVE_SLOT_KEY
 
 
-# ── Pinning ─────────────────────────────────────────────────────────────────
-
-
-def test_pinning_an_observed_account_records_it_against_the_observed_mode() -> None:
-    pin = pin_observed_account(
-        _verification(),
-        selected_account_id=_PAPER_ACCOUNT_ID,
-        now_ms=_OBSERVED_AT_MS + 1_000,
-    )
-
-    assert pin == AccountPin(
-        account_id=_PAPER_ACCOUNT_ID,
-        endpoint_mode="paper",
-        # When the pin was recorded, not when the account was seen.
-        pinned_at_ms=_OBSERVED_AT_MS + 1_000,
-    )
-
-
-def test_an_account_that_was_not_observed_cannot_be_pinned() -> None:
-    with pytest.raises(AccountVerificationFailed) as info:
-        pin_observed_account(
-            _verification(),
-            selected_account_id=_OTHER_PAPER_ACCOUNT_ID,
-            now_ms=_OBSERVED_AT_MS + 1_000,
-        )
-
-    assert info.value.reason == "account_verification_failed"
-    assert _OTHER_PAPER_ACCOUNT_ID in info.value.message
-
-
-def test_selecting_a_different_account_than_the_pin_refuses_and_keeps_the_pin() -> None:
-    verification = _verification(account_id=_OTHER_PAPER_ACCOUNT_ID)
-
-    with pytest.raises(AccountPinMismatch) as info:
-        pin_observed_account(
-            verification,
-            selected_account_id=_OTHER_PAPER_ACCOUNT_ID,
-            existing_pin=_PAPER_ACCOUNT_ID,
-            now_ms=_OBSERVED_AT_MS + 1_000,
-        )
-
-    assert info.value.pinned_account_id == _PAPER_ACCOUNT_ID
-    assert info.value.contradicting_account_ids == (_OTHER_PAPER_ACCOUNT_ID,)
-    assert "unchanged" in info.value.message
-
-
-def test_reselecting_the_pinned_account_is_idempotent() -> None:
-    pin = pin_observed_account(
-        _verification(),
-        selected_account_id=_PAPER_ACCOUNT_ID,
-        existing_pin=_PAPER_ACCOUNT_ID,
-        now_ms=_OBSERVED_AT_MS + 1_000,
-    )
-
-    assert pin.account_id == _PAPER_ACCOUNT_ID
-
-
-@pytest.mark.parametrize(
-    "now_ms",
-    [
-        _OBSERVED_AT_MS + ACCOUNT_VERIFICATION_MAX_AGE_MS + 1,
-        _OBSERVED_AT_MS - 1,
-    ],
-    ids=["too-old", "dated-after-the-clock"],
-)
-def test_a_stale_verification_cannot_justify_a_pin(now_ms: int) -> None:
-    with pytest.raises(AccountVerificationFailed, match="observation"):
-        pin_observed_account(
-            _verification(),
-            selected_account_id=_PAPER_ACCOUNT_ID,
-            now_ms=now_ms,
-        )
-
-
 # ── Re-verification: rotation versus an account change ──────────────────────
 
 
@@ -319,7 +243,6 @@ def test_reverification_confirms_a_pin_and_returns_only_an_observation() -> None
     )
 
     assert isinstance(observed, ObservedAccount)
-    assert not isinstance(observed, AccountPin)
     assert observed.account_id == _PAPER_ACCOUNT_ID
 
 

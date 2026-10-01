@@ -19,12 +19,11 @@ const VIEW: components['schemas']['DeploymentFeeAttribution'] = {
 
 async function show(
   view = VIEW,
-  strategyInstanceId: string | null = null,
   options: { period?: ActivityPeriod | null; headingLevel?: 2 | 3 } = {},
 ) {
   const read = vi.fn().mockResolvedValue(view);
   await render(FeeAttributionComponent, {
-    inputs: { target: TARGET, strategyInstanceId, ...options },
+    inputs: { target: TARGET, ...options },
     providers: [{ provide: BrokersService, useValue: { getFeeAttribution: read } }],
   });
   return read;
@@ -42,16 +41,6 @@ describe('deployment fees', () => {
     expect(screen.getAllByText('Total')).toHaveLength(2);
   });
 
-  it('asks for the deployment authority and keeps account uncertainty visible on a bot', async () => {
-    const read = await show({ ...VIEW, known: false, account_unattributed_usd: '1.25', messages: ['The complete fee population is unavailable. Reconcile account executions.'] }, 'a');
-    await screen.findByText('Stopped bot A');
-    expect(screen.queryByText('Bot B')).toBeNull();
-    expect(screen.getByText(/Reconcile account executions/)).toBeTruthy();
-    expect(screen.getByText(/Account charges not yet matched to a bot: \$1.25/)).toBeTruthy();
-    expect(read).toHaveBeenCalledWith(TARGET, 'a', null);
-    expect(screen.getByRole('heading', { name: 'Fees', level: 3 })).toBeTruthy();
-  });
-
   it("reads one Activity period's account fees and names an outside order by its order number", async () => {
     const read = await show(
       {
@@ -66,12 +55,11 @@ describe('deployment fees', () => {
           },
         ],
       },
-      null,
       { period: '30d', headingLevel: 2 },
     );
 
     await screen.findByText('Outside order · MSFT');
-    expect(read).toHaveBeenCalledWith(TARGET, null, '30d');
+    expect(read).toHaveBeenCalledWith(TARGET, '30d');
     expect(screen.getByText('ord-7f3a')).toBeTruthy();
     expect(screen.getByText(/Last 30 trading days/)).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Fees', level: 2 })).toBeTruthy();
@@ -83,15 +71,10 @@ describe('deployment fees', () => {
     expect(screen.queryByText('No fees have been recorded.')).toBeNull();
   });
 
-  it('says a period had no fees only when the fee record is known', async () => {
-    await show({ ...VIEW, rows: [], period: 'today', period_start_ms: 1_800_000_000_000 }, null, { period: 'today' });
-    expect(await screen.findByText('No fees were charged in this period.')).toBeTruthy();
-  });
-
   it('announces a failed fee read as an alert, like its sibling error rows', async () => {
     const read = vi.fn().mockRejectedValue(new Error('network down'));
     await render(FeeAttributionComponent, {
-      inputs: { target: TARGET, strategyInstanceId: null },
+      inputs: { target: TARGET },
       providers: [{ provide: BrokersService, useValue: { getFeeAttribution: read } }],
     });
 

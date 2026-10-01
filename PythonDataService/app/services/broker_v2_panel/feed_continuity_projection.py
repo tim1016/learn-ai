@@ -1,4 +1,4 @@
-"""IBKR source-feed continuity projection for the bot control panel (spec §7).
+"""IBKR source-feed continuity projection for the bot control panel.
 
 Split out of ``panel_projection_service`` because it is the only part of that
 module that reasons about the IBKR source stream (``app.services.source_bar_ledger``)

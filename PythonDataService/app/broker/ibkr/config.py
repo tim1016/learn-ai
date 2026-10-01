@@ -121,12 +121,7 @@ class IbkrSettings(BaseSettings):
     # source, not its owner (#2077).
     live_bars_root: str = "/app/artifacts/live_bars"
 
-    # Retention window for the live-bar persistence layer. Files older than
-    # this are removed by the periodic retention sweep; quarantined files
-    # are kept regardless as forensic evidence (see BarPersistence).
-    live_bars_retention_days: int = 30
-
-    # ADR-0028 Stage 3C — one fleet owner polls the daemon's batched
+    # One fleet owner polls the daemon's batched
     # ``/instances`` snapshot. Per-bot hubs consume its stamped observation;
     # they never create their own daemon cadence.
     live_runner_fleet_poll_interval_seconds: float = Field(
@@ -143,14 +138,6 @@ class IbkrSettings(BaseSettings):
         default=30.0,
         gt=0,
         le=300.0,
-    )
-
-    # #1021 atomic authority/rollback seam. Keep Account Truth authoritative
-    # until the versioned Clerk-keyed shadow replay satisfies the promotion
-    # gate. Changing this setting requires a process restart; there is no
-    # per-bot override and therefore no split authority within one deployment.
-    account_gate_authority: Literal["account_truth", "observation_lease"] = (
-        "account_truth"
     )
 
     @model_validator(mode="after")
@@ -204,8 +191,7 @@ def live_artifacts_root() -> Path:
     Identical to ``account_truth_refresh.account_truth_artifacts_root()``
     — same underlying setting, same resolved directory — but lives in
     this already-retained feed config module so its callers don't
-    import an account-bucket module for a path lookup. See
-    ``docs/superpowers/specs/2026-08-26-ibkr-decommission-slice-0-design.md``.
+    import an account-bucket module for a path lookup.
     """
     return Path(get_settings().live_runs_root).parent
 

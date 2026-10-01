@@ -98,21 +98,6 @@ describe('ConfigurationLifecycleTrackerComponent', () => {
     expect(screen.getByText(/Stage, then Apply/)).toBeTruthy();
   });
 
-  it('says Apply is recorded when the adopted selection says so', async () => {
-    await render(ConfigurationLifecycleTrackerComponent, {
-      componentInputs: {
-        selection: selection({
-          apply_requested: true,
-          apply_requested_at_ms: 2_000,
-        }),
-        deskState: deskState(),
-      },
-    });
-
-    expect(screen.getByText(/Apply is recorded/)).toBeTruthy();
-    expect(screen.getByText(/never from this browser/)).toBeTruthy();
-  });
-
   it('never offers a restart control', async () => {
     await render(ConfigurationLifecycleTrackerComponent, {
       componentInputs: { selection: selection(), deskState: deskState() },

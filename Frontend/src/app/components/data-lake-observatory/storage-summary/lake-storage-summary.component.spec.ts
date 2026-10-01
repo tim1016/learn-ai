@@ -52,13 +52,6 @@ describe('LakeStorageSummaryComponent', () => {
     expect(screen.getByText('1.00 MB')).toBeTruthy();
   });
 
-  it('renders artifact kinds as operator language, not raw codes', async () => {
-    await renderSummary(POPULATED);
-
-    expect(screen.getByText('Minute Trade')).toBeTruthy();
-    expect(screen.getByText('Map File')).toBeTruthy();
-  });
-
   it('anchors each coverage span to its ET trading date', async () => {
     const { container } = await renderSummary(POPULATED);
 

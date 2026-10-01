@@ -171,26 +171,6 @@ class _TestDecisionReceiptRepository:
         self._rows[(strategy_instance_id, bar_ref)] = row
         return row
 
-    def update_decision_receipt_for_bar(
-        self,
-        *,
-        strategy_instance_id: str,
-        bar_ref: str,
-        outcome: str,
-        order_ref: str | None,
-        facts_json: str,
-    ) -> DecisionReceiptResource:
-        key = (strategy_instance_id, bar_ref)
-        updated = self._rows[key].model_copy(
-            update={
-                "outcome": outcome,
-                "order_ref": order_ref,
-                "facts_json": facts_json,
-            }
-        )
-        self._rows[key] = updated
-        return updated
-
     def decision_receipt_tail(
         self,
         *,
@@ -200,9 +180,8 @@ class _TestDecisionReceiptRepository:
         """FR-016: warmup replay reads this to reapply known dispositions.
 
         Dict insertion order matches ascending ``seq`` order here (``seq``
-        is assigned once at append; ``update_decision_receipt_for_bar``
-        replaces a row in place without reordering it), mirroring the real
-        repository's "bounded newest suffix in ascending sequence order".
+        is assigned once at append), mirroring the real repository's
+        "bounded newest suffix in ascending sequence order".
         """
         matching = [
             row for (sid, _bar_ref), row in self._rows.items() if sid == strategy_instance_id
@@ -272,12 +251,11 @@ class _CustodyClerk:
         action_plan: ActionPlan,
         quantity: int,
         use_rth: bool = True,
-        capability_account_id: str | None = None,
         retained_source_bar=None,
         decision_evidence=None,
     ) -> EffectOperationReceipt:
         del strategy_instance_id, run_id, decision_id, purpose, action_plan, quantity, use_rth
-        del capability_account_id, retained_source_bar, decision_evidence
+        del retained_source_bar, decision_evidence
         raise AssertionError("custody-only test Clerk cannot execute effects")
 
     async def stop_strategy_run(
@@ -570,11 +548,9 @@ class _FakeClerk:
         action_plan,
         quantity: int,
         use_rth: bool = True,
-        capability_account_id: str | None = None,
         retained_source_bar=None,
         decision_evidence=None,
     ) -> _FakeEffectResult:
-        del capability_account_id
         if self._should_raise is not None:
             raise self._should_raise
 

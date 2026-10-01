@@ -81,8 +81,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
       }
     }
 
-    /* Named container "ide" drives the .ide-grid breakpoints declared in
-       styles.scss. Lives here (outside any per-page component) so
+    /* Inline-size container on <main>, outside any per-page component, so
        container-query measurement is unaffected by tab switches, modal
        mounts, or page-level transforms. */
     .main {

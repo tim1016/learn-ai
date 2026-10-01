@@ -1,4 +1,4 @@
-"""Agent sessions, epoch fencing, route resolution and routing attempts (PRD §9.7–9.8)."""
+"""Agent sessions, epoch fencing, route resolution and routing attempts."""
 
 from __future__ import annotations
 
@@ -108,11 +108,11 @@ def test_route_resolution_verifies_broker_identity_and_epoch_fencing(
     assert assignment is not None
     assert assignment.confirmed_binding_generation == 2
 
-    # Wrong provider on the path: the clerk's broker is immutable (FR-071).
+    # Wrong provider on the path: the clerk's broker is immutable.
     with pytest.raises(ClerkBrokerMismatch):
         fleet_service.resolve_route(broker="fake_beta", clerk_id=lane.clerk_id)
 
-    # A pinned stale epoch refuses instead of silently retargeting (FR-078).
+    # A pinned stale epoch refuses instead of silently retargeting.
     fleet_service.register_agent_session(
         fleet_protocol_version=2,clerk_id=lane.clerk_id, worker_key=lane.worker_key, agent_instance_id="agnt_cccccccccccccccccccccccc"
     )
@@ -142,7 +142,7 @@ def test_a_clerk_without_a_session_is_not_routable(control_dir: Path, fleet_serv
 def test_an_unconfirmed_assignment_is_not_command_routable(
     control_dir: Path, fleet_service
 ) -> None:
-    """FR-064: a session is command-routable only once its assignment carries
+    """A session is command-routable only once its assignment carries
     a confirmed binding observation."""
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="unconfirmed", tmp_path=control_dir.parent
@@ -175,7 +175,7 @@ def test_an_unconfirmed_assignment_is_not_command_routable(
 def test_a_stale_expected_binding_generation_refuses_instead_of_retargeting(
     control_dir: Path, fleet_service
 ) -> None:
-    """FR-073: a command carries the binding generation it was prepared
+    """A command carries the binding generation it was prepared
     against; a mismatch is a typed conflict, never a silent retarget."""
     lane, session = _live_lane(fleet_service, control_dir.parent, "generation")
     fleet_service.confirm_assignment(
@@ -206,7 +206,7 @@ def test_a_stale_expected_binding_generation_refuses_instead_of_retargeting(
 def test_an_expected_account_must_match_the_confirmed_account(
     control_dir: Path, fleet_service
 ) -> None:
-    """An execution route naming a different account refuses (FR-073)."""
+    """An execution route naming a different account refuses."""
     lane, _session = _live_lane(fleet_service, control_dir.parent, "account")
     from app.broker.fleet.errors import ClerkAccountMismatch
 
@@ -227,8 +227,8 @@ def test_an_expected_account_must_match_the_confirmed_account(
 def test_configuration_access_stays_routable_without_a_confirmed_binding(
     control_dir: Path, fleet_service
 ) -> None:
-    """Audit 2026-09-13, finding 6: an unbound lane's configuration surface
-    stays routable so the operator can reach the repair path."""
+    """An unbound lane's configuration surface stays routable so the operator
+    can reach the repair path (ADR 0062 addendum, item 3)."""
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="unbound", tmp_path=control_dir.parent
     )

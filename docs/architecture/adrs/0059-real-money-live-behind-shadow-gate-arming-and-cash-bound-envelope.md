@@ -316,3 +316,79 @@ upgrade rules and per-deployment consent still apply.
 Validated by `tests/services/test_graduation_risk_boundary.py` through real
 cutover, interrupted startup and admission, plus cutover compatibility and
 composed Shadow operator tests.
+
+## 2026-09-30 amendment: Alpaca venue constraints on the money path (#2749)
+
+Two vendor constraints that Decisions 4 and 5 depend on, recorded from the
+code and the measurements behind them (#2745 entry 1).
+
+### Decision 4's cash bound: which observation "can see the fill" (#2441 / #2487)
+
+Decision 4 keeps a recorded fill reserved "until the next broker observation
+that can see the fill". An observation is stamped at the instant its reads are
+issued. A fill the Clerk recorded less than `FILL_VISIBILITY_GRACE_MS` (5 s)
+before that stamp **stays reserved**, even though the broker's cash may
+already include it (`AccountObservation.fills_seen_before_ms`,
+`app/broker/alpaca/clerk/live_envelope.py`).
+
+Why: Alpaca documents no ordering between account cash and the
+`trade_updates` stream. Account values are updated "real-time post trade
+executions", and neither the account endpoint nor the stream states a
+consistency guarantee. `docs/references/alpaca-live-envelope.md` cites each
+vendor page. The two errors are not symmetric. Over-reserving refuses an
+ENTER that would have fit, for at most one 15 s observation. Under-reserving
+admits a second ENTER against cash already spent.
+
+The margin was checked by measurement (#2487). On paper BTC/USD fills on
+2026-09-28 (about 150 observations), cash never lagged a fill's trade update
+by more than one read round trip, and the worst bound was 401 ms (fixture
+`tests/fixtures/alpaca/fill_visibility/paper-btcusd-2026-09-28.json`). It
+stays at 5 s rather than being tightened. The sample is crypto-only, taken on
+a weekend from one idle account. The equity path the envelope gates is
+unmeasured, and the vendor promises nothing.
+`tests/broker/alpaca/clerk/test_live_envelope.py` pins the margin below the
+sync interval and above the measured maximum, plus its cushion.
+
+### Decision 5: an operator's flatten outside the regular session (#2007; owner decisions 2026-09-19)
+
+An operator's safe flatten has no deciding bar, so it is shaped from the send
+instant (`app/broker/alpaca/clerk/recovery_reduction.py`). The session is the
+canonical calendar's regular session, widened by the window the broker
+declares.
+
+- **Regular session:** a market DAY order, as every EXIT is.
+- **Pre-market or after-hours:** an extended-hours DAY limit, priced by the
+  operator from the Clerk's own live IBKR quote, never from Alpaca market
+  data.
+  - The suggested price is one sealed exit allowance through the touch
+    (`marketable_limit_price`).
+  - The operator may change it within the band: the sealed allowance times
+    the bot's sealed `ExitTerms.band_multiple`. Going beyond the band takes
+    an acknowledgement recorded with the EXIT.
+  - Every execution and cost figure the operator reads is computed by the
+    Clerk (ADR 0068).
+- **What the Clerk refuses before it accepts the EXIT:**
+  - a quote more than 10 s old, or newer than the quote the Clerk holds
+    (`RECOVERY_QUOTE_STALE`);
+  - no live quote (`RECOVERY_QUOTE_UNAVAILABLE`);
+  - a price the venue would reject (`RECOVERY_LIMIT_PRICE_INVALID`);
+  - a price outside the band (`RECOVERY_LIMIT_OUTSIDE_BAND`);
+  - the regular session having opened since the price was confirmed
+    (`RECOVERY_SESSION_CHANGED`).
+- **A confirmed price covers exactly the quantity reviewed with it.**
+  Otherwise the EXIT fails as `RECOVERY_LIMIT_QUANTITY_CHANGED`. The price
+  also expires with the session it was confirmed in
+  (`RECOVERY_LIMIT_SESSION_ENDED`). It is never carried into another session
+  and never replaced automatically (ADR 0045).
+- **No session open:** the flatten is refused (`NO_SESSION_OPEN`), and the
+  refusal carries the next open as `available_at_ms`. Nothing is handed to
+  the vendor to queue for the next open. A Clerk that declares no extended
+  window refuses with `EXTENDED_HOURS_PRICING_UNAVAILABLE`.
+
+Why:
+
+- A market order sent outside the session queues to the next open at an
+  unknown price, and an extended-hours order must be a limit (5.1).
+- A client cannot vouch for a quote's freshness that the server cannot see.
+- A price confirmed for one quantity or one session is not consent for
+  another.

@@ -1,5 +1,5 @@
-"""Market-liveness gating on entry: unknown/halted/closed clocks and
-extended-hours capability scoping.
+"""Market-liveness gating on entry: unknown/halted/closed clocks and the
+declared extended-hours window.
 
 Split from ``tests/services/test_bot_runner.py`` (issue #1737, seam 3).
 """
@@ -288,12 +288,11 @@ def test_closed_liveness_with_a_proven_phase_and_fresh_bars_does_not_block_entry
     because the RTH-only clock reports CLOSED."""
     from types import SimpleNamespace
 
-    monkeypatch.setattr("app.services.market_data_capability_service.extended_phase_proven_at_ms", lambda **_kwargs: True)
+    monkeypatch.setattr("app.services.market_liveness.declared_extended_phase_at_ms", lambda **_kwargs: True)
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
 
     blocked = bot_trade_strategy._liveness_blocks_entry(
         binding,
-        "PA-TEST",
         _closed_clock_liveness(),
         _RTH_SESSION,
         _feed_with_health(connected=True, stale=False),
@@ -321,12 +320,11 @@ def test_closed_liveness_with_a_proven_phase_but_no_fresh_bars_blocks_entry(
     """
     from types import SimpleNamespace
 
-    monkeypatch.setattr("app.services.market_data_capability_service.extended_phase_proven_at_ms", lambda **_kwargs: True)
+    monkeypatch.setattr("app.services.market_liveness.declared_extended_phase_at_ms", lambda **_kwargs: True)
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
 
     blocked = bot_trade_strategy._liveness_blocks_entry(
         binding,
-        "PA-TEST",
         _closed_clock_liveness(),
         _RTH_SESSION,
         _feed_with_health(connected=connected, stale=stale),
@@ -344,32 +342,28 @@ def test_closed_liveness_with_an_unreadable_feed_health_blocks_entry(
     def _raise(_symbol: str | None = None):
         raise RuntimeError("probe exploded")
 
-    monkeypatch.setattr("app.services.market_data_capability_service.extended_phase_proven_at_ms", lambda **_kwargs: True)
+    monkeypatch.setattr("app.services.market_liveness.declared_extended_phase_at_ms", lambda **_kwargs: True)
     feed = _FakeFeed([], mode="finite")
     feed.health = _raise  # type: ignore[method-assign]
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
 
     blocked = bot_trade_strategy._liveness_blocks_entry(
-        binding, "PA-TEST", _closed_clock_liveness(), _RTH_SESSION, feed
+        binding, _closed_clock_liveness(), _RTH_SESSION, feed
     )
 
     assert blocked is True
 
 
-def test_closed_liveness_without_extended_phase_proven_still_blocks_entry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Without a fresh, matching capability the calendar can prove only
+def test_closed_liveness_without_a_declared_window_still_blocks_entry() -> None:
+    """Without a declared extended-hours window the calendar can prove only
     RTH/CLOSED — CLOSED must still block a non-RTH binding's entry, however
     healthy the feed is."""
     from types import SimpleNamespace
 
-    monkeypatch.setattr("app.services.market_data_capability_service.extended_phase_proven_at_ms", lambda **_kwargs: False)
     binding = SimpleNamespace(use_rth=False, symbol="SPY")
 
     blocked = bot_trade_strategy._liveness_blocks_entry(
         binding,
-        "PA-TEST",
         _closed_clock_liveness(),
         _RTH_SESSION,
         _feed_with_health(connected=True, stale=False),
@@ -379,7 +373,7 @@ def test_closed_liveness_without_extended_phase_proven_still_blocks_entry(
 
 
 def test_closed_liveness_always_blocks_entry_for_an_rth_only_binding() -> None:
-    """An RTH-only binding never consults extended-phase capability — CLOSED
+    """An RTH-only binding never consults the extended-phase proof — CLOSED
     blocks unconditionally, matching the previous, unambiguous behavior."""
     from types import SimpleNamespace
 
@@ -387,7 +381,6 @@ def test_closed_liveness_always_blocks_entry_for_an_rth_only_binding() -> None:
 
     blocked = bot_trade_strategy._liveness_blocks_entry(
         binding,
-        "PA-TEST",
         _closed_clock_liveness(),
         _RTH_SESSION,
         _feed_with_health(connected=True, stale=False),
@@ -397,20 +390,19 @@ def test_closed_liveness_always_blocks_entry_for_an_rth_only_binding() -> None:
 
 
 @pytest.mark.asyncio
-async def test_extended_hours_entry_uses_the_feeds_capability_account_not_the_alpaca_account(
+async def test_extended_hours_entry_is_proven_by_the_authoritys_declared_window(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression: the Alpaca execution account can never scope an IBKR
-    market-data capability snapshot — passing it into the capability lookup
-    means the snapshot is never found and every extended-hours entry is
-    silently rejected. ``run_trade_bot`` must resolve and pass the market
-    data feed's own ``capability_account_id`` instead.
+    """The per-bar ENTER gate proves an extended phase from the executing
+    authority's declared window (ADR 0059 D5.2) and from nothing else: with
+    the RTH-only clock reporting CLOSED, ``run_trade_bot`` admits the ENTER
+    only because the gate consulted the Clerk's declared window.
 
     Calls ``run_trade_bot`` directly rather than through
     ``BotTaskRegistry.deploy()``: Start admission is a separate gate with
     its own market-data-readiness requirements unrelated to what this test
-    targets (the per-bar ENTER liveness gate's account-scoping)."""
+    targets (the per-bar ENTER liveness gate's window)."""
     repo = ClerkSqliteRepository.initialize(account_id="PA-ALPACA-EXEC", artifacts_root=tmp_path / "clerk")
     repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
     clerk = _FakeClerk(repository=repo)
@@ -439,22 +431,19 @@ async def test_extended_hours_entry_uses_the_feeds_capability_account_not_the_al
         )
 
     monkeypatch.setattr(bot_trade_strategy, "market_liveness_fact", liveness)
-    seen_account_ids: list[str] = []
+    seen_windows: list[object | None] = []
 
-    def fake_extended_phase_proven_at_ms(
-        *, now_ms: int, symbol: str, account_id: str, extended_window: object | None = None
-    ) -> bool:
-        seen_account_ids.append(account_id)
-        return True
+    def fake_declared_extended_phase_at_ms(*, now_ms: int, extended_window: object | None) -> bool:
+        seen_windows.append(extended_window)
+        return extended_window is not None
 
-    monkeypatch.setattr("app.services.market_data_capability_service.extended_phase_proven_at_ms", fake_extended_phase_proven_at_ms)
+    monkeypatch.setattr("app.services.market_liveness.declared_extended_phase_at_ms", fake_declared_extended_phase_at_ms)
 
     bars = [
         _green_bar(_WIN_START_MS + 60_000),
         _green_bar(_WIN_START_MS + 120_000),
     ]
     feed = _FakeFeed(bars, mode="finite")
-    feed.capability_account_id = "IBKR-MKTDATA-ACCT"  # distinct from clerk.account_id above
     binding = BrokerBotBinding(
         exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=_SID,
         strategy_key="deployment_validation",
@@ -474,7 +463,7 @@ async def test_extended_hours_entry_uses_the_feeds_capability_account_not_the_al
         await bot_trade_strategy.run_trade_bot(binding, feed, source_bars=ledger)
 
         assert [call["purpose"] for call in clerk.calls] == ["ENTER"]
-        assert seen_account_ids and all(acct == "IBKR-MKTDATA-ACCT" for acct in seen_account_ids)
+        assert seen_windows and all(window == ALPACA_EXTENDED_HOURS_WINDOW for window in seen_windows)
     finally:
         set_alpaca_clerk(None)
         ledger.close()

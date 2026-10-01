@@ -73,7 +73,6 @@ export class GraduationLadderComponent {
     () => this.stageInfo().advanceCriteria ?? [],
   );
 
-  readonly hasNextStage = computed(() => this.stageInfo().nextStageLabel.length > 0);
   readonly atTop = computed(() => this.stageInfo().stage === 3);
   readonly atBottom = computed(() => this.stageInfo().stage === 0);
 

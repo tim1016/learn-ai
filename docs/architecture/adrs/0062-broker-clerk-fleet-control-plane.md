@@ -10,7 +10,7 @@ The IBKR market-data / Alpaca account-and-order boundary below is unchanged.
 
 
 **Status:** Accepted 2026-09-12
-**Provenance:** The multi-broker clerk PRD [`docs/prds/2026-09-12-multi-broker-clerk-control-plane.md`](../../prds/2026-09-12-multi-broker-clerk-control-plane.md), selected by the two-contestant plan tournament recorded in [`docs/audits/plan-tournament-2026-09-12-multi-broker-multi-clerk.json`](../../audits/plan-tournament-2026-09-12-multi-broker-multi-clerk.json) (Sol plan B winning 89–69 over the GLM plan A, reviewed with no material blockers). The owner resolved the delivery-shaping decisions on 2026-09-12: the first slice is the foundation spine (this ADR plus `app/broker/fleet/` with fake-provider conformance); the fleet runs as Docker Compose named volumes on one private host network; the first real configuration is Alpaca Paper plus Alpaca Live with the provider extension boundary left open for Tradier, Webull and later brokers; and browser-driven enrollment is deferred for the reasons recorded in Decision 8, not banned forever.
+**Provenance:** The multi-broker clerk PRD (2026-09-12; in Git history), selected by a two-contestant plan tournament (Sol plan B winning 89–69 over the GLM plan A, reviewed with no material blockers; its receipt is in Git history). The owner resolved the delivery-shaping decisions on 2026-09-12: the first slice is the foundation spine (this ADR plus `app/broker/fleet/` with fake-provider conformance); the fleet runs as Docker Compose named volumes on one private host network; the first real configuration is Alpaca Paper plus Alpaca Live with the provider extension boundary left open for Tradier, Webull and later brokers; and browser-driven enrollment is deferred for the reasons recorded in Decision 8, not banned forever.
 **Decision drivers:** The Alpaca runtime is intentionally single-clerk — one process-global `ActiveClerkRuntime`, one effective broker configuration, one `ALPACA_CLERK_DIR`, and the `installation_worker()` lock enforces one worker process per installation. Concurrent Paper and Live operation therefore requires separate installations with no shared control plane, no shared routing contract, and no stable clerk identity a browser can address. Separate Clerk volumes alone do not prevent two volumes being configured with credentials for the same external account; only a fleet-level, broker-qualified assignment fence does. And a generic trading clerk would erase provider safety boundaries — Alpaca's account verification, custody, leases, arming and recovery semantics are Alpaca's, and a future Tradier or Webull clerk must own its own rather than inherit Alpaca behaviour by registering a string.
 **Related:** ADR 0035 (SQLite Clerk is the sole custody authority — **unchanged; the coordinator stores no custody**), ADR 0037 (SQLite sole Alpaca custody — unchanged, per clerk), ADR 0042 (one semantic seam, exact-identity selection — the fleet route contract extends this with explicit broker/clerk identity), ADR 0047 (recovery is an offline ceremony — retained per clerk), ADR 0059 (arming and envelope — retained per clerk; its one-live-account-per-installation scope clause extended by this ADR's clerk-per-lane topology), ADR 0060 (configuration profiles on the Clerk volume — Decision 5's no-worker-identity clause superseded here, everything else stands per clerk), ADR 0022 (`int64 ms UTC` — all fleet wire and storage timestamps).
 **Vocabulary:** `CONTEXT.md` § "Broker clerk fleet (resolved 2026-09-12)".
@@ -126,8 +126,6 @@ The fleet spine and fake-provider conformance land first (this ADR plus `app/bro
 
 ## References
 
-- [`docs/prds/2026-09-12-multi-broker-clerk-control-plane.md`](../../prds/2026-09-12-multi-broker-clerk-control-plane.md) — the PRD this ADR accepts; §14 phases, §19 owner decisions, §20 acceptance criteria.
-- [`docs/audits/plan-tournament-2026-09-12-multi-broker-multi-clerk.json`](../../audits/plan-tournament-2026-09-12-multi-broker-multi-clerk.json) — plan tournament receipt.
 - ADR 0060 — superseded in Decision 5 only, as it itself anticipated.
 - ADR 0059 — arming and envelope semantics, retained per clerk.
 - ADR 0035 / ADR 0037 — custody authority, unchanged.
@@ -135,8 +133,7 @@ The fleet spine and fake-provider conformance land first (this ADR plus `app/bro
 
 ## Addendum — protocol hardening accepted 2026-09-13 (delivery A1)
 
-The adversarial review recorded in
-[`docs/design/2026-09-13-clerk-fleet-delivery-review.md`](../../design/2026-09-13-clerk-fleet-delivery-review.md)
+The 2026-09-13 adversarial delivery review (in Git history)
 reproduced four admission gaps in the spine as first delivered and required
 protocol clarifications before any production wiring. Delivery A1 (fleet
 protocol hardening) accepts those clarifications into this ADR's contract;

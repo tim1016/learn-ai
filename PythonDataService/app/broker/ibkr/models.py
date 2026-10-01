@@ -1,7 +1,6 @@
 """Pydantic v2 wire models for IBKR data.
 
-Per ``docs/architecture/iv-ownership-research.md`` and the project
-``numerical-rigor`` rules:
+Conventions (time per ADR 0022 (a)):
 
 * All timestamps are ``int64`` ms since Unix epoch UTC. ib_async returns
   ``datetime`` objects; conversion to ms happens at this seam (the
@@ -101,21 +100,9 @@ def _coerce_size(value: float | int | None) -> int | None:
 
 
 SecType = Literal["STK", "OPT", "FUT", "FOP", "CASH", "BOND", "CFD", "WAR", "IND", "BAG"]
-# These two unions enumerate exactly the IBKR calls this service can still
-# make and the callbacks it can still observe — nothing wider. Both cross the
-# wire: they are emitted into ``contracts/openapi/python-data-service.openapi.json``
-# as enums and regenerated into ``Frontend/src/app/api/broker.types.ts``, so a
-# value here that the service cannot produce is a dead value in the browser's
-# type contract. Adding a name means regenerating both artifacts in the same
-# change.
-#
-# Narrowed by PR-C of #1813 (2026-08-27) from 20 request / 19 callback names to
-# the 9 / 8 that a production ``evidence_request`` / ``evidence_response`` call
-# site actually passes, verified by AST scan rather than grep (there are no
-# non-literal call sites, so the scan is exhaustive). Safe to narrow because
-# ``api_evidence.py::_RECORDER`` is an in-process ring buffer — no durable row
-# survives a restart carrying a retired name, so there is no stored data whose
-# shape these unions describe.
+# The IBKR calls and callbacks that historical IBKR API evidence names. Since
+# the in-process evidence recorder and its routes were removed (#2753), these
+# type only ``IbkrTradeEvidence`` rows read back from IBKR-era journals.
 IbkrApiRequestName = Literal[
     "cancelMktData",
     "qualifyContractsAsync",
@@ -181,30 +168,6 @@ class IbkrApiResponseEvidence(BaseModel):
     callback: IbkrApiCallbackName
     fields: dict[str, JsonValue] = Field(default_factory=dict)
     serializer_warnings: list[IbkrSerializerWarning] = Field(default_factory=list)
-
-
-DataPlaneReloadMode = Literal[
-    "disabled",
-    "watchfiles",
-    "watchfiles-polling",
-    "unknown",
-]
-
-
-class DataPlaneHealth(BaseModel):
-    """Code-liveness metadata for the long-running FastAPI data plane.
-
-    PRD #684 uses this as the operator's fast check for "fixed on disk"
-    versus "actually live in the process". All timestamps are int64 ms UTC.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    service: Literal["polygon-data-service"]
-    code_revision: str
-    process_start_ms: int = Field(gt=0)
-    fetched_at_ms: int = Field(gt=0)
-    reload: DataPlaneReloadMode
 
 
 class IbkrTradeSnapshot(BaseModel):
@@ -506,14 +469,14 @@ class IbkrOrderEvent(BaseModel):
     last_fill_price: float | None = None
     # Broker execution time (``int64 ms UTC``) read from the underlying
     # ib_async ``Execution.time`` — distinct from ``ts_ms`` (wall-clock
-    # observation time). The § 7 outside-mutation check uses this to floor
+    # observation time). The outside-mutation check uses this to floor
     # at session start: IBKR replays the day's prior executions at connect,
     # and a foreign fill whose execution time predates this run's session is
     # pre-existing account history, not concurrent contamination. ``None``
     # for non-fill events or when the broker omits the time.
     exec_time_ms: int | None = None
     # Commission for this fill, read from the polled ``Fill.commissionReport``
-    # (PRD-B). ``None`` when IBKR has not yet reported the commission for this
+    # ``None`` when IBKR has not yet reported the commission for this
     # execId — never a fabricated zero, so a missing fee stays distinguishable
     # from a genuine zero downstream (COMMISSION_MISSING vs COMMISSION_DRIFT).
     fee: float | None = None
@@ -707,8 +670,6 @@ __all__ = [
     "BrokerHealthCondition",
     "BrokerHealthConditionCode",
     "ClientConnectionState",
-    "DataPlaneHealth",
-    "DataPlaneReloadMode",
     "IbkrApiCallbackName",
     "IbkrApiRequestEvidence",
     "IbkrApiRequestName",

@@ -23,12 +23,11 @@ from typing import Any
 
 import pytest
 
-from app.broker.alpaca import adapter
 from app.broker.alpaca.adapter import from_alpaca_trade_update, rfc3339_to_ms
 from tests.broker.alpaca.conftest import AlpacaFixtureLoader
 
-# Broker figures are float display values (contract §money), not ported math, so
-# a tight-but-explicit tolerance pins mapping fidelity without Decimal rigor.
+# Broker figures are float display values, not ported math, so a tight-but-explicit
+# tolerance pins mapping fidelity without Decimal rigor.
 _ATOL = 1e-9
 _RTOL = 0.0
 
@@ -146,10 +145,3 @@ def test_fill_without_a_non_blank_execution_id_fails_fast(execution_id: str | No
                 "execution_id": execution_id,
             }
         )
-
-
-def test_event_names_match_documented_set() -> None:
-    # Pin the documented event vocabulary so a silent drop of a known event surfaces.
-    assert {"new", "fill", "partial_fill", "canceled", "expired", "rejected", "replaced"}.issubset(
-        adapter.ALPACA_TRADE_UPDATE_EVENTS
-    )

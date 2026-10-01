@@ -5,35 +5,18 @@
 ``StrategySpec`` schema + ``SpecAlgorithm`` evaluator.
 
 This is **not a port from an external reference**. It is a parity-pinned
-secondary implementation of three internal canonical algorithms that
-already have their own external references:
+secondary implementation of three internal canonical algorithms. The
+table names each twin's external reference, where it has one:
 
 | Spec fixture | Hand-coded twin (canonical) | Twin's external reference |
 |---|---|---|
-| `fixtures/spy_ema_crossover.spec.json` | `app/engine/strategy/algorithms/spy_ema_crossover.py::SpyEmaCrossoverAlgorithm` | LEAN `Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs` (bit-exact, see `app/engine/tests/test_spy_validation.py`) |
-| `fixtures/sma_crossover.spec.json` | `app/engine/strategy/algorithms/sma_crossover.py::SmaCrossoverAlgorithm` | LEAN; rule reimplemented inline in `app/engine/tests/test_sma_crossover_parity.py` |
-| `fixtures/rsi_mean_reversion.spec.json` | `app/engine/strategy/algorithms/rsi_mean_reversion.py::RsiMeanReversionAlgorithm` | LEAN; rule reimplemented inline in `app/engine/tests/test_rsi_mean_reversion_parity.py` |
+| `fixtures/spy_ema_crossover.spec.json` | `app/engine/strategy/algorithms/ema_crossover_signal.py::EmaCrossoverSignalAlgorithm` | LEAN `Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs` (bit-exact, see `app/engine/tests/test_spy_validation.py`) |
+| `fixtures/sma_crossover.spec.json` | `app/engine/strategy/algorithms/sma_crossover.py::SmaCrossoverAlgorithm` | None: an internal strategy with no external reconciliation |
+| `fixtures/rsi_mean_reversion.spec.json` | `app/engine/strategy/algorithms/rsi_mean_reversion.py::RsiMeanReversionAlgorithm` | A pinned LEAN run, ENG-009 (`tests/integration/reconciliation/test_rsi_mean_reversion_lean_golden.py`) |
 
-The hand-coded twins are math-authority per `docs/math-sources-of-truth.md`.
+The hand-coded twins are math-authority (their provenance blocks).
 The spec layer is parity-pinned secondary; if it ever drifts, the hand-
 coded version is the authority and the spec evaluator is the bug.
-
-## Parity contract
-For each of the three pinned strategies, ``SpecAlgorithm`` (driven by
-the canonical fixture JSON) must produce the **same trade log
-trade-by-trade** as the hand-coded twin when both run against the same
-synthetic minute-bar stream through the same ``BacktestEngine``
-configuration. "Same trade log" means equal:
-
-- entry timestamp, entry price
-- exit timestamp, exit price
-- PnL points, PnL percent
-- WIN / LOSS verdict
-- indicator-snapshot values at signal time
-
-Trade count must also match. The parity tests assert all of the above
-in `assert_trade_logs_match` — see
-`app/engine/strategy/spec/tests/_parity_helpers.py`.
 
 ## Tolerance
 **Strict equality (zero tolerance).** Both implementations consume the
@@ -58,16 +41,6 @@ for the indicators it consumes). Recapturing those outputs as a frozen
 fixture would just create a maintenance burden — when the canonical
 algorithm changes intentionally, the spec parity test catches it
 immediately because they diverge in the same run.
-
-## Test files
-- `app/engine/strategy/spec/tests/test_spec_spy_ema_parity.py`
-- `app/engine/strategy/spec/tests/test_spec_sma_parity.py`
-- `app/engine/strategy/spec/tests/test_spec_rsi_mean_reversion_parity.py`
-- `app/engine/strategy/spec/tests/test_spec_round_trip.py` — schema
-  validation, JSON Schema export, malformed-spec rejection
-- `app/engine/strategy/spec/tests/test_spec_manage_rules.py` —
-  Phase 2.1 manage-layer behavior tests (no parity twin; engineered
-  scenarios with known answers)
 
 ## Lake input authority (#2446)
 
@@ -113,9 +86,3 @@ contract: every primitive accepted by the schema is one the evaluator
 can actually evaluate. `BarField` operands were briefly admitted but
 removed once it became clear the Phase 1 evaluator could not run them
 (see PR #90 review).
-
-## Authority cross-references
-- `docs/math-sources-of-truth.md` § Strategies — declares the spec
-  layer as parity-pinned secondary
-- `docs/architecture/engine-authority-map.md` — declares the spec
-  layer as the canonical owner of "configurable strategy spec" jobs

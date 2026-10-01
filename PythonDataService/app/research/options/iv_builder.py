@@ -1,9 +1,9 @@
 """IV term-structure builder for research options pipeline.
 
-Formula: 30-day constant-maturity IV via linear-in-σ interpolation between the two nearest expiries bracketing 30 calendar days (T1 < 30 ≤ T2). Correct interpolation is variance-time: σ²_30·30 = w·σ²_T1·T1 + (1-w)·σ²_T2·T2 — scheduled upgrade per docs/math-rigor.md Upgrade 1.
-Reference: Internal — docs/math-rigor.md Upgrade 1 (variance interpolation spec, industry standard); CBOE VIX Whitepaper (2019) for variance-time basis.
+Formula: 30-day constant-maturity IV via variance-time interpolation between the two expiries bracketing 30 calendar days (T1 ≤ 30 < T2, chosen by ``contract_finder._find_bracket_expiries``): σ²_30·30 = w·σ²_T1·T1 + (1-w)·σ²_T2·T2, with w = (T2 - 30)/(T2 - T1) and T in calendar days (the code uses DTE/365, so the 365 cancels). If T1 == T2, or the total variance is not positive, the result is the arithmetic mean of the two IVs.
+Reference: CBOE VIX Whitepaper (2019) for the variance-time basis (industry standard).
 Canonical implementation: app/research/options/iv_builder.py
-Validated against: NONE — pending (pending-fixture per registry; current linear-in-σ implementation has known bias per math-rigor.md)
+Validated against: NONE — pending fixture
 """
 from __future__ import annotations
 
@@ -20,10 +20,6 @@ from app.services.fred_service import get_risk_free_rate
 from app.services.polygon_client import PolygonClientService
 from app.volatility.solver import implied_volatility
 
-# Default risk-free rate used only if the FRED-backed lookup hasn't been
-# called yet (every active call site overrides it via ``get_risk_free_rate``).
-DEFAULT_RISK_FREE_RATE = 0.043
-
 logger = logging.getLogger(__name__)
 
 MIN_OPTION_PRICE = 0.05
@@ -31,7 +27,6 @@ MIN_IV = 0.05
 MAX_IV = 3.0
 MIN_DTE_DAYS = 7
 MIN_VOLUME = 50
-MIN_OI = 100
 TARGET_DTE = 30
 MAX_FFILL_DAYS = 2
 
@@ -156,7 +151,7 @@ def _derive_iv_for_contract(
     stock_close: float,
     dte: int,
     option_type: str,
-    risk_free_rate: float = DEFAULT_RISK_FREE_RATE,
+    risk_free_rate: float,
 ) -> tuple[float | None, str]:
     """Derive IV for a single contract from a pre-fetched bar.
 

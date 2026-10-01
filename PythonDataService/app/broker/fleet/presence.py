@@ -20,7 +20,7 @@ calls the in-process control service (single-host deployments, tests), and
 pinned internal client (separate processes). Nothing here authenticates with
 the ``worker_key`` over the wire — registration presents it as durable
 identity, while the transport itself carries the environment-only service
-token (audit 2026-09-13, finding 3).
+token (ADR 0062 addendum, item 5).
 """
 
 from __future__ import annotations
@@ -68,8 +68,8 @@ class FleetPresenceError(FleetControlError):
     typed word about this lane's own identity or admission: a restore
     ceremony's ``fleet_registry_recovery_pending``, or a 4xx carrying no
     fleet reason code at all (a process serving no fleet router). The
-    agent's boot treats this exactly like the coordinator being absent (PRD
-    FR-066): an already-confirmed lane may recover its last-effective
+    agent's boot treats this exactly like the coordinator being absent (ADR 0062
+    Decision 7): an already-confirmed lane may recover its last-effective
     binding; a first assignment, a changed binding and new enrolment refuse.
     The typed lane refusals are ``FleetPresenceRefused`` instead.
     """
@@ -81,7 +81,7 @@ class FleetPresenceError(FleetControlError):
 class FleetPresenceRefused(FleetControlError):
     """A reachable coordinator refused this lane's identity or admission (#2320).
 
-    Deliberately *not* a ``FleetPresenceError``: FR-066's offline fallback
+    Deliberately *not* a ``FleetPresenceError``: the offline fallback
     rides out a coordinator the lane cannot reach, never one that answered.
     Raised only for the typed codes in ``LANE_ADMISSION_REFUSALS`` — an
     unknown clerk, a mixed build refused by the version fences, an identity
@@ -127,7 +127,7 @@ LANE_ADMISSION_REFUSALS: frozenset[str] = frozenset(
 class FleetLaneDraining(FleetControlError):
     """The coordinator refused this call because the lane itself is drained.
 
-    Deliberately *not* a ``FleetPresenceError``: FR-066's offline fallback
+    Deliberately *not* a ``FleetPresenceError``: the offline fallback
     catches that family, and a drained lane that fell into it would boot its
     stale evidence right back up — the exact resurrection #2155 closes. Both
     transports raise this one type whether the coordinator refused over the
@@ -146,7 +146,7 @@ class FleetLaneRetired(FleetControlError):
     not be made quiet may still be running bots. The lane must learn that
     from its next beat — stop its bots, stop re-registering — so the refusal
     is typed on both transports, like ``FleetLaneDraining`` and for the same
-    reason kept out of ``FleetPresenceError``: FR-066's offline fallback
+    reason kept out of ``FleetPresenceError``: the offline fallback
     catches that family, and a retired lane must not boot its binding back.
     """
 
@@ -160,7 +160,7 @@ def _lane_lessons() -> Iterator[None]:
 
     The same translation the wire transport performs on the refusal's reason
     (``RemotePresence._post``): one lane-learnable type per lesson across
-    both transports, neither of them the unavailability family FR-066's
+    both transports, neither of them the unavailability family the
     offline fallback catches.
     """
     try:
@@ -524,7 +524,7 @@ class RemotePresence:
         The coordinator serves the clerk's expected marker facts (nonsecret);
         the agent proves its own mounted root against them locally — the
         coordinator never inspects an agent-local path, and no registration
-        proceeds without this gate having passed (audit 2026-09-13, finding 4).
+        proceeds without this gate having passed (ADR 0062 Decision 2).
         """
         expectation = await self.expectation(clerk_id=clerk_id)
         from app.broker.fleet import volume as volume_module
@@ -699,12 +699,12 @@ def _refusal(response: object, message: str) -> FleetControlError:
     admission refusals (``LANE_ADMISSION_REFUSALS``, #2320) are answers about
     this lane; anything else — a restore's recovery-pending, a bodyless 4xx
     from a process serving no fleet router — stays unavailability, which
-    FR-066 rides out.
+    the offline fallback rides out.
     """
     reason = _error_reason(response)
     detail = _error_detail(response) or str(getattr(response, "status_code", ""))
     if reason == ClerkLaneDraining.reason:
-        # Kept clearly out of the unavailability family: FR-066's offline
+        # Kept clearly out of the unavailability family: the offline
         # fallback would otherwise boot the drained binding right back up.
         return FleetLaneDraining(
             f"{message}: {detail}",
@@ -713,7 +713,7 @@ def _refusal(response: object, message: str) -> FleetControlError:
         )
     if reason == ClerkLaneRetired.reason:
         # The lane stops its bots and its beat rather than falling back to
-        # FR-066's offline boot or re-registering forever.
+        # the offline boot or re-registering forever.
         return FleetLaneRetired(
             f"{message}: {detail}",
             next_step="Nothing re-enrols a retired lane; this lane "

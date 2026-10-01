@@ -1,4 +1,4 @@
-"""Registry store lifecycle, reopen, and the migration machinery (PRD FR-030/031)."""
+"""Registry store lifecycle, reopen, and the migration machinery."""
 
 from __future__ import annotations
 

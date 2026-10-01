@@ -646,7 +646,7 @@ def _execute_engine_backtest_core(
         # Before this was wired, the policy value round-tripped through the
         # response but never reached the reader, and Polygon-sourced caches
         # (which retain pre/post-market by design) silently fed 04:00-20:00 ET
-        # bars to the consolidator. See ``.claude/rules/numerical-rigor.md``
+        # bars to the consolidator. See ADR 0069 §6
         # → ``DECISION_MISMATCH`` and the divergence trace at
         # ``StrategyExecutions`` rows 41/42 (run on 2026-05-21).
         session_mode = "regular"
@@ -661,7 +661,6 @@ def _execute_engine_backtest_core(
         fill_mode=fill_mode,
         commission_per_order=Decimal(str(request.commission_per_order)),
         slippage_per_share=Decimal(str(request.slippage_per_share)),
-        limit_penetration=Decimal(str(request.limit_penetration)),
     )
     engine = _build_backtest_engine(
         reader=reader,
@@ -1186,7 +1185,6 @@ def _persisted_execution_config(request: EngineBacktestRequest) -> dict[str, Any
         compatibility_profile=request.compatibility_profile,
         warmup_from_date=request.warmup_from_date,
         slippage_per_share=request.slippage_per_share,
-        limit_penetration=request.limit_penetration,
     )
 
 

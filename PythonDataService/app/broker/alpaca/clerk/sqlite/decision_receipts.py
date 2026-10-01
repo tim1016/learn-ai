@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -38,8 +39,8 @@ DecisionOutcome = Literal[
     # FR-016: replay recreated a staged candidate with no Clerk disposition
     # -- the process crashed after `SignalSession.advance()` staged it but
     # before intake captured it. DISCARD is applied and no effect is ever
-    # created; see `docs/prds/sealed-signal-program-to-governed-alpaca-bot.md`
-    # section 13.4 and the `CANDIDATE_UNCAPTURED_AT_CRASH` reason code.
+    # created; see ADR 0042 (every staged candidate gets a Clerk disposition)
+    # and the `CANDIDATE_UNCAPTURED_AT_CRASH` reason code.
     "candidate_uncaptured_at_crash",
     # Issue #1827: `SignalSession.advance` refused a decision bar outright
     # (TIMEFRAME_MISMATCH / NON_MONOTONIC_DECISION_CLOCK / UNSETTLED_STAGE),
@@ -65,14 +66,14 @@ class DecisionReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     seq: int = Field(ge=1)
-    ts_ms: int = Field(ge=0)
+    ts_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     bar_ref: str
     outcome: DecisionOutcome
     reason_code: str
     intent_id: str = ""
     order_ref: str = ""
     indicator_snapshot: dict[str, float | int | str | None] = Field(default_factory=dict)
-    # PRD Sec 19 stored causal identity, written by
+    # Stored causal identity, written by
     # ``append_atomic_decision_receipt_row`` in this same module
     # (``decision_id`` == ``evaluation_id``). It belongs on the receipt row
     # it describes, not in a structure paired alongside it. A row with
@@ -182,8 +183,7 @@ def _enrich_atomic_receipt_facts(
     divergence check ``commit_first_transition`` runs before it will ever
     treat a replay as idempotent), and
     :func:`append_competing_decision_receipt_row` (a losing EXIT's own
-    evidence) so the three shapes never drift apart -- CLAUDE.md guiding
-    philosophy #5, one canonical implementation per concept.
+    evidence) so the three shapes never drift apart.
     ``effect_operation_id`` is a causal link either way: whether this
     decision produced that effect itself (``resolved_to_existing_effect``
     False) or lost a race and merely resolved to one that already existed
@@ -393,51 +393,6 @@ def _append_decision_receipt_in_transaction(
     )
 
 
-def update_decision_receipt_for_bar(
-    conn: sqlite3.Connection,
-    *,
-    strategy_instance_id: str,
-    bar_ref: str,
-    outcome: str,
-    order_ref: str | None,
-    facts_json: str,
-) -> DecisionReceiptResource:
-    """Replace the final outcome for an already-recorded closed-bar decision."""
-    if _bar_ref(facts_json) != bar_ref:
-        raise ValueError("final decision receipt facts must preserve the closed bar reference")
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        existing = _receipt_for_bar(
-            conn,
-            strategy_instance_id=strategy_instance_id,
-            bar_ref=bar_ref,
-        )
-        if existing is None:
-            raise DecisionReceiptConflictError(
-                f"closed bar {bar_ref!r} has no decision receipt to update"
-            )
-        conn.execute(
-            "UPDATE decision_receipts SET outcome = ?, order_ref = ?, facts_json = ? "
-            "WHERE strategy_instance_id = ? AND seq = ?",
-            (outcome, order_ref, facts_json, strategy_instance_id, existing.seq),
-        )
-    except Exception:
-        conn.rollback()
-        raise
-    else:
-        conn.commit()
-    return DecisionReceiptResource(
-        strategy_instance_id=existing.strategy_instance_id,
-        seq=existing.seq,
-        outcome=outcome,
-        symbol=existing.symbol,
-        intent_id=existing.intent_id,
-        order_ref=order_ref,
-        observed_at_ms=existing.observed_at_ms,
-        facts_json=facts_json,
-    )
-
-
 def _bar_ref(facts_json: str) -> str | None:
     facts = json.loads(facts_json)
     if not isinstance(facts, dict):
@@ -552,23 +507,6 @@ class SqliteDecisionReceipts:
             facts_json=canonicalize(dict(facts)),
         )
 
-    def update_final_outcome(
-        self,
-        *,
-        bar_ref: str,
-        outcome: DecisionOutcome,
-        facts: Mapping[str, JsonValue],
-        order_ref: str | None = None,
-    ) -> DecisionReceiptResource:
-        """Replace one closed bar's provisional receipt with its final outcome."""
-        return self._repository.update_decision_receipt_for_bar(
-            strategy_instance_id=self._strategy_instance_id,
-            bar_ref=bar_ref,
-            outcome=outcome,
-            order_ref=order_ref,
-            facts_json=canonicalize(dict(facts)),
-        )
-
     def tail(self, n: int) -> list[DecisionReceiptResource]:
         """Return the bounded newest suffix in ascending sequence order."""
         return self._repository.decision_receipt_tail(
@@ -590,21 +528,6 @@ class SqliteDecisionReceipts:
         return self._repository.decision_receipt_tail(
             strategy_instance_id=self._strategy_instance_id,
             limit=MAX_DECISION_RECEIPTS_PER_STRATEGY,
-        )
-
-    def by_transaction(
-        self,
-        transaction_ref: str,
-        *,
-        limit: int = MAX_DECISION_RECEIPT_READ,
-    ) -> list[DecisionReceiptResource]:
-        """Return a bounded receipt suffix matching an intent or order ref."""
-        if not transaction_ref:
-            raise ValueError("transaction_ref must be non-empty")
-        return self._repository.decision_receipts_by_transaction(
-            strategy_instance_id=self._strategy_instance_id,
-            transaction_ref=transaction_ref,
-            limit=_read_limit(limit),
         )
 
 

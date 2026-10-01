@@ -38,7 +38,7 @@ def test_a_refused_transfer_appends_nothing_to_the_released_history(
     """The released row's audited past is append-only and stays that way: a
     successor's reservation on it is a refused transfer (#2157), and a
     refused transfer overwrites nothing and appends nothing. The
-    generations-across-owners half of the original audit — the pointer
+    generations-across-owners half of the original review — the pointer
     moving to a new owner while history keeps every generation — returns
     with #2154's unblocking change, on the ceremony both paths will then
     share."""

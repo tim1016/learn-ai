@@ -1,11 +1,11 @@
-"""Panel data-source facade (spec §3, §5, §7, §8, §11).
+"""Panel data-source facade.
 
 Resolves the live dependencies the account-scoped panel endpoints need — the
 account id, the order journal, the decision journals, the bot roster, the clerk
 status, and the live chart aggregator — and delegates every computation to the
 pure projection functions. The router stays transport-only; this facade is the
 single seam that touches process singletons.
-Account scope (§3): every method validates ``account_id`` against the broker's
+Account scope: every method validates ``account_id`` against the broker's
 real account and raises :class:`AccountMismatchError` (→ 404) on a mismatch, so
 a stale deep link never reads another account's evidence.
 """
@@ -20,7 +20,6 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Literal, NoReturn
 
-from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import (
     account_route_matches_custody,
     evidence_account_id_for,
@@ -43,7 +42,6 @@ from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.ibkr.config import live_artifacts_root
 from app.engine.live.identity import INSTANCE_ID_PATTERN
 from app.schemas.broker_bots import (
-    BotControlAuthorityFacts,
     BotStatusView,
 )
 from app.schemas.broker_v2_panel import (
@@ -67,7 +65,6 @@ from app.services.bot_runner import (
 )
 from app.services.bot_runner_errors import BotRunnerError, InvalidStrategyInstanceIdError
 from app.services.bot_runner_errors import UnknownBotError as RunnerUnknownBotError
-from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_v2_panel.action_execution_service import (
     REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE,
     REVIVAL_OUTCOME_NO_SWEEP,
@@ -100,7 +97,6 @@ from app.services.broker_v2_panel.panel_projection_service import (
     program_build_view_from_run_evidence,
 )
 from app.services.broker_v2_panel.panel_scope import (
-    bot_process_fact,
     clerk_status,
     validate_account,
 )
@@ -117,7 +113,6 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     read_sqlite_decision_receipts,
     read_sqlite_panel_evidence,
 )
-from app.services.market_data_capability_service import get_market_data_capability_service
 from app.services.signal_program_admission import prove_running_program_build
 from app.services.source_bar_ledger import (
     RetainedContinuityEvent,
@@ -202,7 +197,7 @@ def _program_build_for_display(
     *,
     verified_at_ms: int,
 ) -> ProgramBuildAdmissionFact:
-    """PRD Sec 11.3 run evidence: what was actually proven for THIS run.
+    """Run evidence (ADR 0043, 2026-09-30 amendment): what was actually proven for THIS run.
 
     Prefers the durable per-run record written at Start/Resume
     (``BotBindingRepository.read_program_build_evidence``) over a fresh
@@ -287,31 +282,8 @@ def _run_source_evidence_for(binding: BrokerBotBinding) -> RunSourceEvidence | N
         return None
 
 
-async def get_authority_facts(
-    broker: str,
-    account_id: str,
-    sid: str,
-) -> BotControlAuthorityFacts:
-    """Compose owner-authored facts without deriving a control decision."""
-    resolved_account_id = await validate_account(broker, account_id)
-    process = bot_process_fact(broker, sid)
-    clerk = get_alpaca_clerk()
-    if clerk is None:
-        raise PanelUnavailableError(
-            "Alpaca order management is not configured.",
-            detail="The Clerk cannot author current custody facts.",
-        )
-    custody = await clerk.custody_snapshot(sid)
-    if custody.account_id != custody_account_id_for_route(broker, resolved_account_id):
-        raise PanelUnavailableError(
-            "The Clerk custody account does not match the panel account.",
-            detail="Recover the account-scoped Clerk before using control actions.",
-        )
-    return BotControlAuthorityFacts(process=process, clerk=custody)
-
-
 async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
-    """Build the bots-list catalog for one account (§5)."""
+    """Build the bots-list catalog for one account."""
     resolved = await validate_account(broker, account_id)
     try:
         sqlite_catalog = await read_sqlite_catalog(
@@ -453,7 +425,7 @@ async def _get_panel_with_entries_from_authority(
     decision = decisions[-1] if decisions else None
     economics = evidence.economics.snapshot
 
-    # PRD Sec 11.3/11.4 run evidence: prefer the exact build durably recorded
+    # Run evidence (ADR 0043, 2026-09-30 amendment): prefer the exact build durably recorded
     # for THIS run at Start/Resume over a fresh re-check, which can drift
     # from what actually started running if the manifest or artifacts change
     # underfoot afterwards (#1728 Gap 2). Falls back to the same canonical
@@ -464,7 +436,6 @@ async def _get_panel_with_entries_from_authority(
     from app.marketdata.ibkr_feed import get_market_data_feed
 
     market_data_feed = get_market_data_feed()
-    capability_account_id = market_data_capability_account_id(market_data_feed)
     source_evidence = _run_source_evidence_for(binding)
     panel = build_panel(
         status,
@@ -499,15 +470,6 @@ async def _get_panel_with_entries_from_authority(
             # the same reason.
             now_ms=now_ms_utc(),
             symbol=binding.symbol,
-            account_id=capability_account_id,
-            capability=(
-                get_market_data_capability_service().read_latest_for(
-                    symbol=binding.symbol,
-                    account_id=capability_account_id,
-                )
-                if capability_account_id is not None
-                else None
-            ),
             use_rth=binding.use_rth,
             bot_running=status.running,
             extended_window=facade.program_leg_policy.window,
@@ -583,7 +545,7 @@ async def get_panel(
     *,
     transaction_ref: str | None = None,
 ) -> BotPanelView:
-    """Build the current panel projection for one bot (§7)."""
+    """Build the current panel projection for one bot."""
     panel, _entries, _session_fills = await _get_panel_with_entries(
         broker,
         account_id,
@@ -591,26 +553,6 @@ async def get_panel(
         transaction_ref=transaction_ref,
     )
     return panel
-
-
-async def get_live_chart(
-    broker: str,
-    account_id: str,
-    sid: str,
-    *,
-    resolution: Literal["5s", "1m"] = "1m",
-) -> ChartLiveResponse:
-    """Build the LIVE chart pane for one bot (§8)."""
-    from app.services.broker_v2_panel.panel_chart_data_source import (
-        get_live_chart as build_live_chart_response,
-    )
-
-    return await build_live_chart_response(
-        broker,
-        account_id,
-        sid,
-        resolution=resolution,
-    )
 
 
 async def get_live_snapshot_parts(
@@ -641,7 +583,7 @@ async def get_history_chart(
     sid: str,
     timeframe: ChartHistoryTimeframe,
 ) -> ChartHistoryResponse:
-    """Build the bounded HISTORY chart pane for one bot (§8)."""
+    """Build the bounded HISTORY chart pane for one bot."""
     from app.services.broker_v2_panel.panel_chart_data_source import (
         get_history_chart as build_history_chart_response,
     )
@@ -655,7 +597,7 @@ def _action_performers(
     *,
     reconciled: ReconciliationCut | None = None,
 ) -> dict[str, ActionPerformer]:
-    """Map each executable lifecycle action id to the coroutine that performs it (§11, §12).
+    """Map each executable lifecycle action id to the coroutine that performs it.
 
     Only Archive (Clear) reaches this executor: every other presented action
     is the SQLite recovery catalog's and runs through
@@ -700,7 +642,7 @@ async def run_action(
     operator_identity: str,
     reconciled: ReconciliationCut | None = None,
 ) -> PanelActionResult:
-    """Execute one presented action for a bot (§11).
+    """Execute one presented action for a bot.
 
     Recomputes the current panel revision (the guard the POST is checked
     against), then delegates to the execution service. Identity is the

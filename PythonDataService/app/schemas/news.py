@@ -5,17 +5,17 @@ or flattened at this boundary.
 
 Two rules from this repo shape the shapes below.
 
-**Temporal.** ``published_utc_ms`` is the canonical ``int64 ms UTC`` form
-required by ``.claude/rules/temporal-rigor.md``; the conversion happens at
+**Temporal.** ``published_utc_ms`` is the canonical ``int64 ms UTC`` form;
+the conversion happens at
 the vendor ingestion boundary in ``PolygonClientService.list_news``. The
-vendor's RFC3339 string is *not* carried forward — that rule is explicit
-that a vendor time string is snapped to the closest constructible instant
+vendor's RFC3339 string is *not* carried forward — a vendor time string
+is snapped to the closest constructible instant
 and never kept.
 
 **Provenance.** ``insights`` is *vendor-asserted* data, not derived. Polygon
 produces the sentiment label with an unpublished model we cannot reimplement,
 so it can never carry the golden fixture + pinned tolerance that
-``.claude/rules/numerical-rigor.md`` requires of derived math. It is recorded,
+ADR 0069 §1 requires of derived math. It is recorded,
 never validated, and ``NewsResponse.sentiment_provenance`` states that on the
 wire so a consumer cannot mistake it for one of our own computed features.
 

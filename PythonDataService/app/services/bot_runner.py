@@ -22,7 +22,7 @@ Exit taxonomy (typed, durable, artifact-derived — never liveness-inferred):
 Trade mode delegates effects to the Alpaca Clerk; the runner never authors
 broker execution truth.
 
-All temporal fields are ``int64 ms UTC`` per ``.claude/rules/temporal-rigor.md``.
+All temporal fields are ``int64 ms UTC``.
 """
 
 from __future__ import annotations
@@ -85,7 +85,6 @@ from app.schemas.run_admission import (
     RunProcessAdmissionFact,
     StartRuntimeAdmissionFact,
 )
-from app.schemas.run_replay import RunReplayReceipt
 from app.schemas.signal_program_seal import ParameterOrigin
 from app.services.alpaca_bot_identity import AlpacaBotIdentityGuard
 from app.services.alpaca_live_graduation_gate import graduation_mutation_fence
@@ -185,12 +184,9 @@ from app.services.bot_start_admission import (
     refuse_unrestored_dry_run,
     resolve_start_runtime_fact,
 )
-from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
 from app.services.canary_admission import canary_gate_applies, evaluate_canary_rollback
 from app.services.go_live_hold import GoLiveHoldState
-from app.services.market_data_capability_service import get_market_data_capability_service
 from app.services.market_liveness import market_liveness_fact
-from app.services.run_replay_proof import RunReplayProofService, RunReplayUnavailableError
 from app.services.strategy_validation_admission import (
     ValidationFactResolver,
     current_strategy_validation_fact,
@@ -563,7 +559,6 @@ class BotTaskRegistry:
             runtime_fact=self._start_runtime_fact,
             validation_fact=active_validation_fact,
             activate=self._activate_start_binding,
-            session_capability=get_market_data_capability_service().read_latest_for,
             market_liveness=self._market_liveness,
         )
         self._run_evidence = BotRunEvidenceService(
@@ -578,20 +573,6 @@ class BotTaskRegistry:
             run_evidence=self._run_evidence,
             now_ms=self._now_ms,
         )
-        # Direction 2 (run-scoped replay proof): a completed Paper/Dry Run
-        # proves itself against the backtest engine on the way out. This never
-        # gates admission -- the permanent evidence-only Paper override is
-        # untouched. ``run_record_for`` is the canonical ``read_run`` reader.
-        self._replay_proof = RunReplayProofService(
-            artifacts_root=self._artifacts_root,
-            instance_dir_for=self._confined_instance_dir,
-            binding_for=self.binding_for_control,
-            run_record_for=self._bindings.read_run,
-            is_running=self._is_running,
-            run_outcome_for=self._bindings.read_outcome,
-            authority_for=self._authorities.for_binding,
-        )
-        self._replay_receipt_tasks: set[asyncio.Task[None]] = set()
         # #2607: the stops the Clerk asked for at bots' ends, and the watch
         # that asks each running bot's Clerk for a pass when its end comes.
         # One stop at a time per bot; the bots whose end could not be read and
@@ -1315,8 +1296,7 @@ class BotTaskRegistry:
         await self._settle_stopped_run(binding)
 
     async def _settle_stopped_run(self, binding: BrokerBotBinding) -> None:
-        """A stopped run whose outcome is recorded owes its replay receipt and releases its authority."""
-        self._schedule_run_replay_receipt(binding)
+        """A stopped run whose outcome is recorded releases its authority."""
         await self._authority_for(binding).release_after_run_end()
 
     async def stop_every_running_bot(self, *, updated_by: str, reason: str) -> LaneStopOutcome:
@@ -1761,7 +1741,7 @@ class BotTaskRegistry:
 
         While the proof was awaited the bot may have moved on. A later run of
         it began: the outcome is the stopped run's alone, recorded under its
-        run id -- its receipt, and the replay receipt it owes -- and never
+        run id -- its receipt -- and never
         projected over the later run's. Its registration is gone: there is
         nothing to record it in, and the run's outcome stays provisional.
         """
@@ -1981,10 +1961,6 @@ class BotTaskRegistry:
         self._unresolved_intents_probe = unresolved_intents_probe
         self._recovery_evaluation = recovery_evaluation
         self._boot_recovery_report = report
-        # Direction 2: heal replay receipts a dead process owed (orphaned
-        # `pending` or a terminal run that never scheduled). After the sweep so
-        # `_is_running` reflects the recovered fleet.
-        self._resume_pending_replay_receipts()
         return report
 
     async def run_lease_recovery(
@@ -1997,7 +1973,7 @@ class BotTaskRegistry:
         A narrow in-process re-run of the boot scan's repair pass: one
         reconcile pass, then the lifecycle repair that commits the SQLite
         STOPs for runs whose tasks died on the dead handle. Deliberately
-        skips the boot-only steps (Dry Run restoration, replay receipts) —
+        skips the boot-only steps (Dry Run restoration) —
         those belong to a fresh process, not a revived lease.
         Its report is diagnostic only: the start gate keeps the report from
         ``run_boot_recovery`` (a revived lease implies the authority is
@@ -2138,134 +2114,6 @@ class BotTaskRegistry:
             self.process_fact(broker, strategy_instance_id),
         )
 
-    def run_replay_receipt(
-        self, broker: str, strategy_instance_id: str, run_id: str
-    ) -> RunReplayReceipt | None:
-        """Return the durable replay receipt for one run, or an honest None."""
-        del broker  # the receipt file is instance-scoped; the router validated the segment
-        return self._replay_proof.read(strategy_instance_id, run_id)
-
-    async def generate_run_replay_receipt(
-        self, broker: str, strategy_instance_id: str, run_id: str
-    ) -> RunReplayReceipt:
-        """Recompute one completed run's replay receipt on demand."""
-        return await self._replay_proof.generate(broker, strategy_instance_id, run_id)
-
-    def _schedule_run_replay_receipt(self, binding: BrokerBotBinding) -> None:
-        """Direction 2: a stopping run owes a parity receipt. Never blocks Stop."""
-        if binding.mode not in ("trade", "dry_run"):
-            return
-        if binding.strategy_key not in supported_alpaca_paper_strategy_keys():
-            logger.info(
-                "Run replay receipt skipped: no Signal Program",
-                extra={
-                    "action": "run_replay_receipt_skipped",
-                    "strategy_instance_id": binding.strategy_instance_id,
-                    "run_id": binding.run_id,
-                    "strategy_key": binding.strategy_key,
-                },
-            )
-            return
-        try:
-            self._replay_proof.write_pending(binding, binding.run_id)
-        except OSError as error:
-            # An unwritable receipt directory (disk full, path conflict) must
-            # not fail Stop -- and must not abort boot repair for the whole
-            # fleet when scheduled from _resume_pending_replay_receipts (Codex
-            # PR #1769). Skip scheduling; the run's terminal outcome persists,
-            # so the next boot scan re-attempts.
-            logger.warning(
-                "Run replay pending receipt could not be written; skipping generation",
-                extra={
-                    "action": "run_replay_pending_write_failed",
-                    "strategy_instance_id": binding.strategy_instance_id,
-                    "run_id": binding.run_id,
-                    "reason": str(error),
-                },
-            )
-            return
-        task = asyncio.get_running_loop().create_task(
-            self._generate_replay_receipt_in_background(binding)
-        )
-        self._replay_receipt_tasks.add(task)
-        task.add_done_callback(self._replay_receipt_tasks.discard)
-
-    async def _generate_replay_receipt_in_background(self, binding: BrokerBotBinding) -> None:
-        # When scheduled from a terminal branch of the run's own task
-        # (_supervise), that task has not finished yet, so `is_running` would
-        # briefly refuse generation. Wait for the supervised task to settle
-        # first -- bounded by the same timeout Stop uses for cancellation.
-        managed = self._bots.get(binding.strategy_instance_id)
-        if managed is not None and not managed.task.done():
-            await asyncio.wait({managed.task}, timeout=_STOP_TIMEOUT_S)
-        try:
-            await self._replay_proof.generate(
-                binding.broker, binding.strategy_instance_id, binding.run_id
-            )
-        except RunReplayUnavailableError as error:
-            logger.warning(
-                "Run replay receipt unavailable",
-                extra={
-                    "action": "run_replay_receipt_unavailable",
-                    "strategy_instance_id": binding.strategy_instance_id,
-                    "run_id": binding.run_id,
-                    "reason": str(error),
-                },
-            )
-        except (BotRunnerError, ValueError, OSError):
-            # generate() converts compute failures into a durable replay_failed
-            # receipt itself; the failures that can still escape it -- a reaped
-            # binding (BotRunnerError), a corrupt runs/<run_id>.json read
-            # (ValueError), or a failed final receipt write (OSError) -- would
-            # otherwise be lost as an unretrieved-task warning, leaving the
-            # receipt stuck `pending`. Log them structured so they stay
-            # observable and the boot scan can retry (Codex PR #1769).
-            logger.exception(
-                "Run replay background generation failed",
-                extra={
-                    "action": "run_replay_background_failed",
-                    "strategy_instance_id": binding.strategy_instance_id,
-                    "run_id": binding.run_id,
-                },
-            )
-
-    def _resume_pending_replay_receipts(self) -> None:
-        """Boot repair (Direction 2): re-schedule receipts a dead process owed.
-
-        Covers two crash shapes: a `pending` receipt whose in-memory task died
-        with the process, and a terminal run (crashed / stream-ended /
-        service-shutdown) that never reached scheduling at all. Scope is each
-        instance's *current* run -- older runs stay on-demand via POST.
-        Alpaca is the only in-container runner broker (IBKR bots are
-        host-daemon-managed), so the sweep is alpaca-scoped like _supervise.
-        """
-        for binding in self._bindings.list_for_broker("alpaca"):
-            if binding.mode not in ("trade", "dry_run"):
-                continue
-            if binding.strategy_key not in supported_alpaca_paper_strategy_keys():
-                continue
-            if self._is_running(binding.strategy_instance_id):
-                continue
-            try:
-                receipt = self._replay_proof.read(binding.strategy_instance_id, binding.run_id)
-                if receipt is not None and receipt.status != "pending":
-                    continue
-                outcome = self._bindings.read_outcome(binding.strategy_instance_id, binding.run_id)
-            except (ValueError, OSError) as error:
-                logger.warning(
-                    "Boot replay-receipt scan skipped one instance",
-                    extra={
-                        "action": "run_replay_boot_scan_skipped",
-                        "strategy_instance_id": binding.strategy_instance_id,
-                        "run_id": binding.run_id,
-                        "reason": str(error),
-                    },
-                )
-                continue
-            if outcome is None:
-                continue  # not terminal; its own Stop/terminal path will schedule
-            self._schedule_run_replay_receipt(binding)
-
     def dry_run_activity(
         self,
         broker: str,
@@ -2334,7 +2182,6 @@ class BotTaskRegistry:
                     else "FEED_DEATH"
                 ),
             )
-            self._schedule_run_replay_receipt(binding)
         except Exception as exc:
             # Supervision boundary: every crash becomes typed durable evidence
             # plus a logged traceback — deliberately not re-raised, so the
@@ -2348,14 +2195,12 @@ class BotTaskRegistry:
                 exc,
                 reason_code=type(exc).__name__,
             )
-            self._schedule_run_replay_receipt(binding)
         else:
             await self._terminal.finalize_after_authority_stop(
                 binding,
                 kind="EXITED_UNVERIFIED",
                 reason_code="BAR_STREAM_ENDED",
             )
-            self._schedule_run_replay_receipt(binding)
         finally:
             # Preserve the record long enough to distinguish an
             # operator/service STOP from an unexpected task exit. ``reap``
@@ -2427,12 +2272,6 @@ class BotTaskRegistry:
         binding: BrokerBotBinding,
     ) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
         return self._authority_for(binding).start_custody_guard()
-
-    def _start_custody_projection(
-        self,
-        binding: BrokerBotBinding,
-    ) -> AbstractAsyncContextManager[AdmissionCustodyCut]:
-        return self._authority_for(binding).start_custody_projection()
 
     def _lifecycle_projector_for_instance(self, strategy_instance_id: str) -> AlpacaLifecycleProjector:
         binding = self._bindings.read(strategy_instance_id)

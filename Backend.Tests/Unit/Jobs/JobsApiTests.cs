@@ -60,7 +60,6 @@ public class JobsApiTests
     }
 
     [Theory]
-    [InlineData("backtest")]
     [InlineData("engine_backtest")]
     [InlineData("recency_chart")]
     public void ResolveControlSecretHeader_UnprotectedJobType_ReturnsNullEvenWithASecretConfigured(string type)

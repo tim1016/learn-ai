@@ -12,13 +12,10 @@ exists (``command_envelope_invalid``), and two codes written directly as
 JSON on raw-ASGI compatibility-retirement paths (``compatibility_read_retired``,
 ``compatibility_retirement_state_invalid``).
 
-Per decision 9 (docs/superpowers/plans/2026-09-14-fleet-lane-e-frontend-fence-and-refusals.md
-Task 7a) these reasons do **not** enter the exported OpenAPI contract -- the
-frontend's copy map locks against a committed snapshot instead, exactly like
-the broker-v2 panel vocabulary
-(``scripts/regenerate_broker_v2_vocabulary_snapshot.py``,
-``.github/workflows/ci.yml``'s ``broker-v2-vocabulary-contract`` job). This
-module is the Python authority ``build_snapshot()``
+These reasons do **not** enter the exported OpenAPI contract -- the
+frontend's copy map locks against a committed snapshot instead, regenerated
+and compared by ``tests/broker/fleet/test_refusal_vocabulary_snapshot.py``.
+This module is the Python authority ``build_snapshot()``
 (``scripts/regenerate_fleet_refusal_vocabulary_snapshot.py``) reads.
 
 This module is a leaf: it imports nothing but ``errors.py``, which itself
@@ -68,7 +65,7 @@ def _subclass_closure(cls: type[FleetControlError]) -> frozenset[type[FleetContr
 #: here with its mint site so the module remains a complete census.
 _MINTED_OUTSIDE_THE_CLOSURE: Final[frozenset[str]] = frozenset(
     {
-        # app/routers/broker_clerks.py `_envelope_invalid` -- a §10.3 command
+        # app/routers/broker_clerks.py `_envelope_invalid` -- a command
         # envelope failed validation before any routing decision, hence
         # before any FleetControlError could apply.
         "command_envelope_invalid",

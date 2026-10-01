@@ -255,10 +255,6 @@ export class InstrumentCardComponent {
     this.view().retryVendor();
   }
 
-  trackBySymbol(_: number, t: PickerSymbol): string {
-    return t.symbol;
-  }
-
   openDropdown(): void {
     if (this.open()) return;
     this.open.set(true);

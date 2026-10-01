@@ -4,14 +4,12 @@
  * `GalleryFeedView`, `GalleryBotView`, `GallerySymbolBars`, and
  * `GalleryLiveSnapshot` alias the generated OpenAPI schemas below — the
  * snapshot doubles as the REST bootstrap response and the SSE `snapshot`
- * event payload, so it is not an OpenAPI exception. `GalleryLiveUpdate` and
- * `GalleryResetEvent` are genuinely stream-only (no REST response uses
- * them) and stay hand-declared, each pinned to its backend authority — see
- * the comment on each. `ChartBar` and `ChartFillMarker` are reused from the
- * sibling panel types rather than redefined, per the
- * single-canonical-implementation rule.
+ * event payload, so it is not an OpenAPI exception. `GalleryLiveUpdate` is
+ * genuinely stream-only (no REST response uses it) and stays hand-declared,
+ * pinned to its backend authority — see its comment. `ChartBar` and `ChartFillMarker` are reused from the
+ * sibling panel types rather than redefined.
  *
- * Temporal fields are `int64 ms UTC` per `.claude/rules/temporal-rigor.md`.
+ * Temporal fields are `int64 ms UTC`.
  */
 import type { components } from '../../../../../api/broker.types';
 import type { ChartBar, ChartFillMarker } from '../../lib/broker-v2-panel.types';
@@ -88,20 +86,6 @@ export interface GalleryRefusedEvent {
   readonly event: string;
   readonly bytes: number;
   readonly max_bytes: number;
-}
-
-/**
- * The SSE `reset` event payload — the epoch changed; re-bootstrap.
- *
- * No Pydantic model backs this payload; `broker_v2_gallery.py`'s router
- * constructs it inline (`json.dumps({"reason": ..., "cursor": ...})`) and is
- * the sole authority for its shape. Pinned by
- * `tests/routers/test_broker_v2_gallery.py::test_gallery_stream_stale_cursor_emits_reset_first`,
- * which asserts the emitted payload's key set is exactly `{reason, cursor}`.
- */
-export interface GalleryResetEvent {
-  readonly reason: string;
-  readonly cursor: string;
 }
 
 export type GalleryLiveStatus = 'connecting' | 'live' | 'stale' | 'error';

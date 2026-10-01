@@ -401,7 +401,7 @@ async def test_accept_exit_captures_every_same_symbol_sibling_entry(
     """A strategy can no longer *create* two live sibling entries through the
     normal decision path: #1722 fenced a fresh ENTER behind
     ATTRIBUTED_EXPOSURE_EXISTS/ENTER_IN_PROGRESS whenever attributed exposure
-    or a nonterminal ENTER already exists (ADR 0042, PRD §16/FR-020). But
+    or a nonterminal ENTER already exists (ADR 0042). But
     `entry_orders_for_strategy` deliberately does not filter by terminal
     state (see its docstring in reads.py), and `accept_exit` still links
     every same-symbol ENTRY-role order it finds — so a ledger that reached
@@ -747,7 +747,7 @@ async def test_accept_exit_same_decision_id_different_entry_is_a_durable_conflic
     """Same rationale as
     `test_accept_exit_captures_every_same_symbol_sibling_entry`: two live
     entries for one strategy can no longer arise through the fenced decision
-    path (ADR 0042, PRD FR-020), so the second entry needed to exercise
+    path (ADR 0042), so the second entry needed to exercise
     EXIT's own durable-conflict detection is constructed by bypassing the
     fence, modeling a ledger that reached this state before the fence
     existed or through an out-of-band repair.

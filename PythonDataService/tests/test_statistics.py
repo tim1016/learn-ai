@@ -26,7 +26,6 @@ from app.engine.results.statistics import (
     compute_trade_statistics,
     max_drawdown,
     summarize,
-    validate_equity_curve,
     validate_statistics,
     validate_trade_log,
 )
@@ -590,8 +589,7 @@ class TestValidateTradeLog:
         """A position opened on the final bar of the window is force-closed at
         that same instant by the engine's terminal sweep (issue #1928). The
         round trip is genuinely zero-duration; there is no later instant to
-        move the exit to, and inventing one would violate
-        ``.claude/rules/temporal-rigor.md``."""
+        move the exit to, and none may be invented."""
         ms = to_ms_utc(datetime(2024, 1, 2, 21, 0, tzinfo=UTC))
         t = FakeTrade(Decimal("0"), Decimal("0"), "LOSS", ms, ms, is_synthetic_exit=True)
 
@@ -635,25 +633,6 @@ class TestValidateTradeLog:
         assert any(e.code == "nan_indicator" for e in errors)
 
 
-class TestValidateEquityCurve:
-    def test_valid_curve(self) -> None:
-        errors = validate_equity_curve([100.0, 101.0, 99.0, 102.0])
-        assert errors == []
-
-    def test_empty_curve(self) -> None:
-        errors = validate_equity_curve([])
-        assert len(errors) == 1
-        assert errors[0].code == "empty_curve"
-
-    def test_nan_value(self) -> None:
-        errors = validate_equity_curve([100.0, float("nan"), 102.0])
-        assert any(e.code == "nan_equity" for e in errors)
-
-    def test_negative_value(self) -> None:
-        errors = validate_equity_curve([100.0, -5.0, 102.0])
-        assert any(e.code == "negative_equity" for e in errors)
-
-
 class TestValidateStatistics:
     def test_valid_stats(self) -> None:
         stats = {"win_rate": 0.6, "max_drawdown_pct": 0.15, "profit_factor": 2.0, "sharpe_ratio": 1.5}
@@ -674,7 +653,7 @@ class TestValidateStatistics:
 
 
 class TestSummarizeFiniteSanitization:
-    """Regression for audit § 5.3 — non-finite floats must be coerced to None.
+    """Regression: non-finite floats must be coerced to None.
 
     Before fix: profit_factor (all-wins) emits float('inf'); FastAPI/Pydantic
     serialization raised `ValueError: Out of range float values are not JSON

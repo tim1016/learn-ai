@@ -1,6 +1,5 @@
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 import type {
-  ChannelHealthView,
   ClerkCard,
   FeedContinuityView,
   MarketPulseView,
@@ -31,10 +30,4 @@ export class BotConnectionsComponent {
   readonly clerk = input.required<ClerkCard>();
   readonly feedContinuity = input.required<FeedContinuityView>();
   readonly marketPulse = input.required<MarketPulseView>();
-
-  /** Preserve provider names while older clerks roll forward to the new field. */
-  protected channelName(channel: ChannelHealthView): string {
-    return channel.name
-      || (channel.stream === 'market_data' ? 'IBKR market data' : 'Alpaca execution');
-  }
 }

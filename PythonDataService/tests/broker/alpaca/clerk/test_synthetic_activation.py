@@ -76,7 +76,7 @@ def test_synthetic_activation_record_rejects_non_integer_generation(
 
 @pytest.mark.parametrize("activated_at_ms", [2**63, -(2**63) - 1, MAX_TIMESTAMP_MS + 1, -1])
 def test_synthetic_activation_record_rejects_out_of_range_timestamp(activated_at_ms: int) -> None:
-    """The bound is the domain ceiling, not the int64 width (temporal-rigor)."""
+    """The bound is the domain ceiling, not the int64 width (ADR 0022 (g))."""
     payload = _record_payload()
     payload["activated_at_ms"] = activated_at_ms
 

@@ -53,8 +53,8 @@ happens once those sessions agree with one reading.
 
 ## Reconciliation
 
-`GET /api/brokers/{broker}/fees/session-reconciliation?session_open_ms=<int>` (the
-calendar's session open of a trading day, ET-anchored `int64 ms UTC`) prices every
+The session fee reconciliation (its route was cut in #2755; the rule below stands) takes
+the calendar's session open of a trading day, ET-anchored `int64 ms UTC`, and prices every
 *effective* SQLite fill dated that ET calendar day, sums the `FEE` activities Alpaca posted
 for that date, and returns a verdict: `within_tolerance`, `drift`, `pending` (no `FEE`
 posted yet, within 24 h after the day ends), `unobserved` (fills but no `FEE` after the

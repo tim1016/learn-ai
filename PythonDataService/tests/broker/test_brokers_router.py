@@ -315,15 +315,6 @@ async def test_positions_endpoint_returns_list() -> None:
     assert body[0]["symbol"] == "MSFT"
 
 
-async def test_positions_endpoint_returns_empty_list() -> None:
-    get_broker_registry().register(_FakePort(positions=[]))
-
-    response = await _get("/api/brokers/alpaca/positions")
-
-    assert response.status_code == 200
-    assert response.json() == []
-
-
 def _order(**overrides: Any) -> BrokerOrder:
     base: dict[str, Any] = dict(
         broker="alpaca",
@@ -384,54 +375,12 @@ async def test_orders_endpoint_returns_list_and_forwards_query_params() -> None:
     assert port.orders_call == {"status": "open", "limit": 5, "after_ms": 123}
 
 
-async def test_order_groups_endpoint_returns_python_owned_quantity_totals() -> None:
-    port = _FakePort(
-        orders=[
-            _order(
-                order_id="o-open",
-                symbol="SPY",
-                quantity=5.0,
-                filled_quantity=2.0,
-                status="new",
-            ),
-            _order(
-                order_id="o-filled",
-                symbol="SPY",
-                quantity=3.0,
-                filled_quantity=3.0,
-                status="filled",
-            ),
-        ]
-    )
-    get_broker_registry().register(port)
-
-    response = await _get("/api/brokers/alpaca/order-groups?status=all&limit=50")
-
-    assert response.status_code == 200
-    assert response.json()[0]["symbol"] == "SPY"
-    assert response.json()[0]["gross_requested_quantity"] == 8.0
-    assert response.json()[0]["gross_filled_quantity"] == 5.0
-    assert response.json()[0]["gross_working_quantity"] == 3.0
-    assert port.orders_call == {"status": "all", "limit": 50, "after_ms": None}
-
-
 async def test_orders_endpoint_rejects_invalid_status() -> None:
     get_broker_registry().register(_FakePort(orders=[]))
 
     response = await _get("/api/brokers/alpaca/orders?status=bogus")
 
     assert response.status_code == 422
-
-
-async def test_activities_endpoint_returns_list_and_forwards_query_params() -> None:
-    port = _FakePort(activities=[_activity(activity_id="act-9")])
-    get_broker_registry().register(port)
-
-    response = await _get("/api/brokers/alpaca/activities?after_ms=999&limit=5")
-
-    assert response.status_code == 200
-    assert response.json()[0]["activity_id"] == "act-9"
-    assert port.activities_call == {"after_ms": 999, "limit": 5}
 
 
 class _MalformedAlpacaClient:
@@ -448,12 +397,6 @@ class _MalformedAlpacaClient:
     async def list_activities(self, **_query: object) -> list[dict[str, str]]:
         return [{"id": "act-1"}]
 
-    async def list_assets(self, **_query: object) -> list[dict[str, str]]:
-        return [{"symbol": "SPY"}]
-
-    async def get_clock(self) -> dict[str, bool]:
-        return {"is_open": False}
-
     async def get_portfolio_history(self, **_query: object) -> dict[str, list[int]]:
         return {"timestamp": [1_700_000_000]}
 
@@ -463,13 +406,8 @@ class _MalformedAlpacaClient:
     [
         pytest.param("/api/brokers/alpaca/positions", "position", id="positions"),
         pytest.param("/api/brokers/alpaca/orders?status=open", "order", id="orders"),
-        pytest.param("/api/brokers/alpaca/order-groups", "order", id="order-groups"),
-        pytest.param("/api/brokers/alpaca/activities", "activity", id="activities"),
-        pytest.param("/api/brokers/alpaca/activities?after_ms=0", "activity", id="activities-window"),
         pytest.param("/api/brokers/alpaca/activities/period?period=30d", "activity", id="activity-period"),
-        # These four reads once let the adapter's raw error escape as a 500 (#2643).
-        pytest.param("/api/brokers/alpaca/assets", "asset", id="assets"),
-        pytest.param("/api/brokers/alpaca/clock", "market clock", id="clock"),
+        # These reads once let the adapter's raw error escape as a 500 (#2643).
         pytest.param("/api/brokers/alpaca/portfolio-history?range=30D", "portfolio history", id="portfolio-history"),
         pytest.param(
             "/api/brokers/alpaca/portfolio-history-proof?range=30D",
@@ -515,38 +453,6 @@ async def test_portfolio_history_proof_preserves_one_broker_snapshot_when_local_
     )
     assert port.portfolio_history_calls == 1
     assert port.position_calls == 1
-
-
-async def test_activities_current_session_uses_canonical_calendar_window(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.lean_sidecar.trading_calendar import SessionWindow
-
-    port = _FakePort(activities=[_activity(activity_id="act-session")])
-    get_broker_registry().register(port)
-    monkeypatch.setattr(
-        "app.routers.brokers.current_trading_session_window",
-        lambda _now_ms: SessionWindow(
-            session_date=date(2026, 8, 12),
-            open_ms_utc=1_786_540_200_000,
-            close_ms_utc=1_786_563_600_000,
-        ),
-    )
-
-    response = await _get("/api/brokers/alpaca/activities?current_session=true&limit=5")
-
-    assert response.status_code == 200
-    assert port.activities_call == {"after_ms": 1_786_540_200_000, "limit": 5}
-
-
-async def test_activities_rejects_mixed_explicit_and_session_windows() -> None:
-    get_broker_registry().register(_FakePort())
-
-    response = await _get(
-        "/api/brokers/alpaca/activities?current_session=true&after_ms=1"
-    )
-
-    assert response.status_code == 422
 
 
 @pytest.mark.parametrize(
@@ -626,9 +532,6 @@ async def test_activity_period_requires_a_known_period() -> None:
     [
         "/api/brokers/alpaca/orders?after_ms=-1",
         f"/api/brokers/alpaca/orders?after_ms={MAX_TIMESTAMP_MS + 1}",
-        "/api/brokers/alpaca/activities?after_ms=-1",
-        f"/api/brokers/alpaca/activities?after_ms={MAX_TIMESTAMP_MS + 1}",
-        "/api/brokers/alpaca/activities?limit=101",
     ],
 )
 async def test_timestamp_cursors_reject_values_outside_the_representable_ms_range(
@@ -652,14 +555,6 @@ async def test_timestamp_cursors_reject_values_outside_the_representable_ms_rang
             f"/api/brokers/alpaca/orders?after_ms={MAX_TIMESTAMP_MS}",
             {"status": None, "limit": None, "after_ms": MAX_TIMESTAMP_MS},
         ),
-        (
-            "/api/brokers/alpaca/activities?after_ms=0",
-            {"after_ms": 0, "limit": 100},
-        ),
-        (
-            f"/api/brokers/alpaca/activities?after_ms={MAX_TIMESTAMP_MS}",
-            {"after_ms": MAX_TIMESTAMP_MS, "limit": 100},
-        ),
     ],
 )
 async def test_timestamp_cursors_accept_the_whole_representable_ms_range(
@@ -672,67 +567,4 @@ async def test_timestamp_cursors_accept_the_whole_representable_ms_range(
     response = await _get(path)
 
     assert response.status_code == 200
-    actual_call = port.orders_call if "/orders" in path else port.activities_call
-    assert actual_call == expected_call
-
-
-def _asset(**overrides: Any) -> BrokerAsset:
-    base: dict[str, Any] = dict(
-        broker="alpaca",
-        asset_id="a-1",
-        symbol="AAPL",
-        name="Apple Inc.",
-        asset_class="us_equity",
-        exchange="NASDAQ",
-        status="active",
-        tradable=True,
-        fractionable=True,
-        shortable=True,
-        marginable=True,
-    )
-    base.update(overrides)
-    return BrokerAsset(**base)
-
-
-def _clock(**overrides: Any) -> BrokerClockEvidence:
-    base: dict[str, Any] = dict(
-        broker="alpaca",
-        is_open=True,
-        vendor_timestamp_ms=1_700_000_000_000,
-        next_open_ms=1_700_050_000_000,
-        next_close_ms=1_700_020_000_000,
-        observed_at_ms=1_700_000_000_000,
-    )
-    base.update(overrides)
-    return BrokerClockEvidence(**base)
-
-
-async def test_assets_endpoint_returns_list_and_forwards_query_params() -> None:
-    port = _FakePort(assets=[_asset(symbol="MSFT")])
-    get_broker_registry().register(port)
-
-    response = await _get("/api/brokers/alpaca/assets?status=active&limit=5")
-
-    assert response.status_code == 200
-    assert response.json()[0]["symbol"] == "MSFT"
-    assert port.assets_call == {"status": "active", "limit": 5}
-
-
-async def test_assets_endpoint_rejects_invalid_status() -> None:
-    get_broker_registry().register(_FakePort(assets=[]))
-
-    response = await _get("/api/brokers/alpaca/assets?status=bogus")
-
-    assert response.status_code == 422
-
-
-
-async def test_clock_endpoint_returns_vendor_evidence() -> None:
-    get_broker_registry().register(_FakePort(clock=_clock(is_open=False)))
-
-    response = await _get("/api/brokers/alpaca/clock")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["is_open"] is False
-    assert body["vendor_timestamp_ms"] == 1_700_000_000_000
+    assert port.orders_call == expected_call

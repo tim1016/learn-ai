@@ -14,13 +14,6 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any, Literal
 
-from pydantic import Field
-
-from app.engine.pine_generators import (
-    generate_strategy_a_pine,
-    generate_strategy_b_pine,
-    generate_strategy_c_pine,
-)
 from app.engine.strategy.base import Strategy
 from app.engine.strategy.params import (
     StrategyParamsBase,
@@ -91,60 +84,6 @@ from app.schemas.signal_program_seal import (
 from app.schemas.strategy_validation import StrategyCategory
 
 
-class EmaCrossoverOptionsParams(StrategyParamsBase):
-    """EMA crossover options spread strategy parameters.
-
-    Same signal engine as the equity EMA crossover, but trades bull call
-    or bull put spreads on the underlying's option chain instead.
-    """
-
-    # Signal parameters (same defaults as equity strategy)
-    symbol: str = Field("SPY", min_length=1, max_length=20)
-    ema_fast_period: int = Field(5, ge=2, le=200)
-    ema_slow_period: int = Field(10, ge=3, le=500)
-    rsi_period: int = Field(14, ge=2, le=200)
-    ema_gap_min: float = Field(0.20, ge=0)
-    rsi_min: float = Field(50.0, ge=0, lt=100)
-    rsi_max: float = Field(70.0, gt=0, le=100)
-    timeframe_minutes: int = Field(15, ge=1, le=1440)
-    bars_to_hold: int = Field(5, ge=1, le=200)
-
-    # Options parameters
-    spread_type: str = Field(
-        "BULL_CALL",
-        description="BULL_CALL or BULL_PUT",
-    )
-    min_dte: int = Field(7, ge=0, le=365)
-    max_dte: int = Field(30, ge=1, le=365)
-    long_call_delta_target: float = Field(0.60, ge=0, le=1)
-    short_call_delta_target: float = Field(0.30, ge=0, le=1)
-    short_put_delta_target: float = Field(-0.30, ge=-1, le=0)
-    long_put_delta_target: float = Field(-0.15, ge=-1, le=0)
-    min_open_interest: int = Field(100, ge=0)
-    min_volume: int = Field(10, ge=0)
-    max_bid_ask_spread_pct: float = Field(0.20, ge=0, le=1)
-    contracts_per_trade: int = Field(1, ge=1, le=100)
-    max_positions: int = Field(1, ge=1, le=10)
-    contract_multiplier: int = Field(100, ge=1)
-
-    # Pricing parameters
-    pricing_mode: str = Field(
-        "quantlib_only",
-        description="quantlib_only, market_preferred, or market_required",
-    )
-    pricing_engine: str = Field("analytic_bs")
-    risk_free_rate: float = Field(0.05, ge=0, le=1)
-    dividend_yield: float = Field(0.0, ge=0, le=1)
-    default_iv: float = Field(0.20, ge=0.01, le=5.0)
-    half_spread_pct: float = Field(0.01, ge=0, le=0.5)
-
-
-
-
-
-
-
-
 @dataclass(frozen=True, slots=True)
 class ChartParamRef:
     """Reference to one validated strategy parameter in a chart recipe."""
@@ -178,8 +117,8 @@ class SignalProgramContract:
 
     This is the single canonical description of a Signal Program's semantic
     surface (issue #1728 sibling finding: the v2 seal was materially
-    incomplete against PRD §11.1 because half of it had no declared source at
-    all). ``app.services.signal_program_admission.build_start_program_seal``
+    incomplete because half of it had no declared source at all).
+    ``app.services.signal_program_admission.build_start_program_seal``
     copies the ``signals``/``decision_streams``/``bar_integrity``/
     ``exit_eligibility``/``numerical_provenance`` values straight from this
     contract into ``ConfiguredSignalProgramSeal`` — the same objects, not a
@@ -258,13 +197,6 @@ class StrategyRegistration:
     # program's sealed sources: a byte edit there would break every seal.
     # ``None`` for a strategy with nothing to warn about.
     experimental_notice: str | None = None
-    # VCR-0004 / Phase 2 — the algorithm class the runner constructs. The
-    # registry key is the module name (``app.engine.strategy.algorithms.{key}``);
-    # ``class_name`` names the class inside that module. Together they retire
-    # the ``<PascalKey>Algorithm`` convention so a future class rename
-    # (``DeploymentValidationAlgorithm = DeploymentValidationConsecutiveGreen``
-    # was the smoking gun) cannot silently break the runner's class lookup.
-    class_name: str = ""
     # Which data resolutions the strategy can run against. Defaults to
     # minute-only because every currently-ported strategy consolidates
     # minute bars via a ``TradeBarConsolidator``. Daily-native strategies
@@ -279,10 +211,6 @@ class StrategyRegistration:
     # ticker / strategy combination. Each entry is one short paragraph
     # or bullet; render as a list on the frontend.
     gotchas: list[str] = dc_field(default_factory=list)
-    # Optional Pine v6 generator — takes validated params, returns a
-    # complete Pine script. When present, the frontend can download the
-    # script via ``GET /api/engine/strategies/{name}/pine``.
-    pine_generator: Callable[[StrategyParamsBase], str] | None = None
     # Fields accepted only by non-Engine-Lab construction paths. They remain in
     # ``param_schema`` so the live runner can validate its internal injection,
     # but are hidden from ``GET /strategies`` and rejected by normal backtests.
@@ -380,12 +308,10 @@ def hidden_params_present(
     return sorted(hidden.intersection(params))
 
 
-
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     EMA_SIGNAL_PROGRAM_KEY: StrategyRegistration(
         display_name="EMA Crossover Signal",
         deploy_code="ema",
-        class_name="EmaCrossoverSignalAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=EMA_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
@@ -425,9 +351,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             bar_integrity=SignalBarIntegrityContract(),
             # EmaCrossoverSignalAlgorithm.commit_signal_decision hardcodes
             # self._bars_until_exit = 5 at entry (75 minutes on 15-minute
-            # bars); report_state_for_persistence returns None while
-            # _in_position, so a mid-countdown position cannot currently
-            # survive Pause/Resume.
+            # bars). countdown_state_persistable=False: no strategy persists
+            # its state, so a mid-countdown position cannot survive a
+            # restart.
             exit_eligibility=ExitEligibilityContract(
                 countdown_decision_clocks=5,
                 countdown_state_persistable=False,
@@ -615,7 +541,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "sma_crossover": StrategyRegistration(
         display_name="SMA Crossover",
         deploy_code="sma",
-        class_name="SmaCrossoverAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=SMA_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
@@ -660,12 +585,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # code now states the level it always closed
             # (ExitEligibilityContract's second rule, added for this
             # promotion) rather than restating EMA's countdown rule
-            # dishonestly. countdown_state_persistable=False for the
-            # stronger reason that SmaCrossoverAlgorithm has not implemented
-            # report_state_for_persistence/restore_state_from_persistence/
-            # validate_state_payload at all yet -- no state, flat or
-            # otherwise, currently survives a Pause/Resume, not just a
-            # mid-exit one.
+            # dishonestly. countdown_state_persistable=False: no strategy
+            # persists its state, so nothing -- flat or mid-exit -- survives
+            # a restart.
             exit_eligibility=ExitEligibilityContract(
                 rule="level_true",
                 countdown_state_persistable=False,
@@ -686,7 +608,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 ),
                 canonical_implementation=("app/engine/strategy/algorithms/sma_crossover.py::SmaCrossoverAlgorithm"),
                 validated_against=(
-                    "app/engine/tests/test_sma_crossover_parity.py; "
                     "app/engine/strategy/spec/tests/test_spec_sma_parity.py; "
                     "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
                     "[sma_crossover]"
@@ -786,7 +707,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "rsi_mean_reversion": StrategyRegistration(
         display_name="RSI Mean Reversion",
         deploy_code="rsi",
-        class_name="RsiMeanReversionAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
@@ -824,11 +744,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # so this seals as "level_true" (the same rule sma_crossover
             # uses) rather than restating ema_crossover_signal's fixed 5-bar
             # countdown dishonestly. countdown_state_persistable=False for
-            # the same reason as sma_crossover: RsiMeanReversionAlgorithm has
-            # not implemented report_state_for_persistence/
-            # restore_state_from_persistence/validate_state_payload at all
-            # yet -- no state, flat or otherwise, currently survives a
-            # Pause/Resume.
+            # the same reason as sma_crossover: no strategy persists its
+            # state, so nothing survives a restart.
             exit_eligibility=ExitEligibilityContract(
                 rule="level_true",
                 countdown_state_persistable=False,
@@ -851,7 +768,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                     "app/engine/strategy/algorithms/rsi_mean_reversion.py::RsiMeanReversionAlgorithm"
                 ),
                 validated_against=(
-                    "app/engine/tests/test_rsi_mean_reversion_parity.py; "
                     "app/engine/strategy/spec/tests/test_spec_rsi_mean_reversion_parity.py; "
                     "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
                     "[rsi_mean_reversion]"
@@ -956,7 +872,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "deployment_validation": StrategyRegistration(
         display_name="Deployment Validation",
         deploy_code="dv",
-        class_name="DeploymentValidationConsecutiveGreen",
         strategy_category="operational_validation_harness",
         experimental_notice="Experimental validation only — not a trading strategy",
         signal_program_contract=SignalProgramContract(
@@ -978,7 +893,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # the honest figure.
             #
             # But this field governs a second thing: `replay_warmup_bars`
-            # (app/services/bot_trade_strategy_warmup.py) sizes FR-016
+            # (app/services/bot_trade_strategy_warmup.py) sizes
             # crash-candidate recreation from it. At zero the replay has no
             # window to rebuild from: `recent_closed_bars(lookback_days=0)`
             # builds the IBKR duration string "0 D", which is not valid. That
@@ -1007,19 +922,14 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # not deferred to on_order_event's fill, which the live adapter
             # never calls; see that method's docstring) to zero across
             # subsequent decision clocks -- a fixed hold, not a level-true
-            # relation. countdown_state_persistable=False: this
-            # strategy has not implemented report_state_for_persistence /
-            # restore_state_from_persistence / validate_state_payload at all
-            # (Strategy's base defaults apply unchanged; see
-            # test_is_not_warm_startable / test_satisfies_live_persistence_contract
-            # in tests/engine/test_deployment_validation_strategy.py), so no
-            # state -- flat or mid-countdown -- currently survives a
-            # Pause/Resume.
+            # relation. countdown_state_persistable=False: no strategy
+            # persists its state, so nothing -- flat or mid-countdown --
+            # survives a restart.
             # Scope, stated because the seal would otherwise imply more than
             # it says: this program has TWO exit paths, and only one of them
             # is describable here. The countdown below is the ordinary exit.
             # The session stop/flatten barrier is the other, and
-            # `ExitEligibilityContract`'s vocabulary -- built for PRD §17's
+            # `ExitEligibilityContract`'s vocabulary -- built for the
             # "level- or countdown-true" question of when a discarded EXIT
             # must re-emit -- has no word for a session-time barrier.
             #
@@ -1146,7 +1056,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "spy_strategy_a": StrategyRegistration(
         display_name="Strategy A — EMA-gap + MACD + RSI-range",
         deploy_code="sa",
-        class_name="SpyStrategyAAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
@@ -1206,11 +1115,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # true on a decision clock -- there is no held countdown, so this
             # seals as "level_true" (same rule sma_crossover's promotion
             # added) rather than dishonestly restating EMA's fixed-countdown
-            # rule. countdown_state_persistable=False because
-            # RsiRangeStrategy has not implemented
-            # report_state_for_persistence/restore_state_from_persistence/
-            # validate_state_payload at all -- no state, flat or otherwise,
-            # currently survives a Pause/Resume.
+            # rule. countdown_state_persistable=False: no strategy persists
+            # its state, so nothing survives a restart.
             exit_eligibility=ExitEligibilityContract(
                 rule="level_true",
                 countdown_state_persistable=False,
@@ -1356,7 +1262,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             StrategyChartIndicator("adx", {"length": ChartParamRef("adx_period")}),
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
-        pine_generator=generate_strategy_a_pine,
         build=lambda p: build_spy_strategy_a_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_spy_strategy_a_signal_program,
         instrument_surface="policy",
@@ -1366,7 +1271,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "spy_strategy_b": StrategyRegistration(
         display_name="Strategy B — Supertrend + ADX + MACD + RSI-range",
         deploy_code="sb",
-        class_name="SpyStrategyBAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
@@ -1417,11 +1321,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # clock -- there is no held countdown, the same shape as
             # sma_crossover's own death-cross exit, so this seals as
             # "level_true" rather than restating EMA's countdown rule
-            # dishonestly. countdown_state_persistable=False because
-            # RsiRangeStrategy has not implemented
-            # report_state_for_persistence/restore_state_from_persistence/
-            # validate_state_payload at all yet -- no state, flat or
-            # otherwise, currently survives a Pause/Resume.
+            # dishonestly. countdown_state_persistable=False: no strategy
+            # persists its state, so nothing survives a restart.
             exit_eligibility=ExitEligibilityContract(
                 rule="level_true",
                 countdown_state_persistable=False,
@@ -1576,7 +1477,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             StrategyChartIndicator("adx", {"length": ChartParamRef("adx_period")}),
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
-        pine_generator=generate_strategy_b_pine,
         build=lambda p: build_spy_strategy_b_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_spy_strategy_b_signal_program,
         instrument_surface="policy",
@@ -1586,7 +1486,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "spy_strategy_c": StrategyRegistration(
         display_name="Strategy C — ADX-rising + RSI-range",
         deploy_code="sc",
-        class_name="SpyStrategyCAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=SPY_C_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
@@ -1636,12 +1535,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # decision clock -- there is no held countdown, so this seals
             # as "level_true" (the same rule sma_crossover's own promotion
             # added) rather than restating EMA's fixed-countdown rule
-            # dishonestly. countdown_state_persistable=False because
-            # RsiRangeStrategy has not implemented
-            # report_state_for_persistence/restore_state_from_persistence/
-            # validate_state_payload at all (Strategy's base defaults apply
-            # unchanged) -- no state, flat or otherwise, currently
-            # survives a Pause/Resume, not just a mid-exit one.
+            # dishonestly. countdown_state_persistable=False: no strategy
+            # persists its state, so nothing survives a restart.
             exit_eligibility=ExitEligibilityContract(
                 rule="level_true",
                 countdown_state_persistable=False,
@@ -1759,7 +1654,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             StrategyChartIndicator("adx", {"length": ChartParamRef("adx_period")}),
         ),
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
-        pine_generator=generate_strategy_c_pine,
         build=lambda p: build_spy_strategy_c_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_spy_strategy_c_signal_program,
         instrument_surface="policy",

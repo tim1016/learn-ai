@@ -1,4 +1,4 @@
-"""Panel projection — the full 5s-poll bot control panel view (spec §7).
+"""Panel projection — the full 5s-poll bot control panel view.
 
 ``build_panel`` composes the bot-health card, the account/clerk card, the six-
 station transaction rail, the journal-tail reference, and the panel-state
@@ -10,7 +10,7 @@ every served panel passes through (#2635).
 The ``revision`` is a deterministic function of the durable panel state
 (journal length + lifecycle transition + desired state + hold state). A POST
 against a stale revision is a 409; the same revision surviving a no-op re-poll
-lets the idempotency key make double-clicks safe (§11).
+lets the idempotency key make double-clicks safe.
 """
 
 from __future__ import annotations
@@ -350,7 +350,7 @@ def program_build_view_from_run_evidence(
     strategy_key: str,
     evidence: ProgramBuildRunEvidence,
 ) -> ProgramBuildAdmissionFact:
-    """PRD Sec 11.3 run evidence: the exact build proven and durably recorded
+    """Run evidence (ADR 0043, 2026-09-30 amendment): the exact build proven and durably recorded
     when this run passed Start/Resume admission (#1728 Gap 2) — not a fresh
     re-check, which can drift from what is actually running if the
     qualification manifest or artifacts change underfoot after Start. The
@@ -438,7 +438,7 @@ def _recent_activity_views(
     from that Dry-Run-scoped authority (see
     ``sqlite_panel_source.read_sqlite_decision_receipts`` and the synthetic
     facade selected by ``panel_data_source._panel_authority_for_binding``),
-    so PRD Sec 19 causal links (``decision_id``/``effect_operation_id``)
+    so the causal links (``decision_id``/``effect_operation_id``)
     render for Dry Run exactly like Paper whenever that SQLite evidence
     exists. Only a Dry Run instance with no SQLite decision-receipt evidence
     at all — one that never ran under the governed synthetic Clerk — falls
@@ -667,10 +667,10 @@ def build_panel(
     startup_join: RetainedStartupJoin | None = None,
     end: BotEndView | None = None,
 ) -> BotPanelView:
-    """Build the full panel view for one bot (§7).
+    """Build the full panel view for one bot.
 
     ``entries`` is the account order journal (read once). ``selected_transaction_ref``
-    defaults to the bot's most recent transaction (§7.1).
+    defaults to the bot's most recent transaction.
 
     ``authority_account_id`` names the exact Clerk account authority this
     evidence cut (``recent_decisions``/``recent_fills``) was actually read

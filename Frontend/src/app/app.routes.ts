@@ -10,8 +10,9 @@ const loadBrokerLaneUnavailable = () =>
     (module) => module.BrokerLaneUnavailableComponent,
   );
 
-// A served document copies a canonical repo document; the copies listed in
-// `scripts/check_documentation_contract.py` fail CI when the two differ.
+// A served document copies a canonical repo document;
+// `PythonDataService/tests/contracts/test_served_document_copies.py` fails CI
+// when the two differ.
 const loadMarkdownDocPage = () =>
   import('./components/docs/markdown-doc-page.component').then(
     (module) => module.MarkdownDocPageComponent,
@@ -65,13 +66,6 @@ const RETIRED_IBKR_NAVIGATION_ROUTES: Routes = [
 export const routes: Routes = [
   { path: "", redirectTo: "/data-lab", pathMatch: "full" },
   { path: "lean-lab", redirectTo: "strategy-lab", pathMatch: "full" },
-  {
-    path: "jobs-demo",
-    loadComponent: () =>
-      import("./components/jobs/backtest-job-page.component").then(
-        (m) => m.BacktestJobPageComponent
-      ),
-  },
   {
     path: "strategy-docs",
     loadComponent: () =>
@@ -133,20 +127,6 @@ export const routes: Routes = [
       ),
   },
   {
-    path: "tracked-instruments",
-    loadComponent: () =>
-      import(
-        "./components/tracked-instruments/tracked-instruments.component"
-      ).then((m) => m.TrackedInstrumentsComponent),
-  },
-  {
-    path: "portfolio",
-    loadComponent: () =>
-      import("./components/portfolio/portfolio.component").then(
-        (m) => m.PortfolioComponent
-      ),
-  },
-  {
     path: "indicator-docs",
     redirectTo: "data-lab-docs",
     pathMatch: "full",
@@ -154,7 +134,7 @@ export const routes: Routes = [
   {
     // Data Lab shell (explore / export / validate child routes). The route
     // config owns the component-scoped workspace store — see
-    // components/data-lab/data-lab.routes.ts (PRD 2026-09-12 §7.1).
+    // components/data-lab/data-lab.routes.ts.
     path: "data-lab",
     loadChildren: () =>
       import("./components/data-lab/data-lab.routes").then(
@@ -179,7 +159,7 @@ export const routes: Routes = [
       ).then((m) => m.DataLabDocsComponent),
   },
   {
-    // Legacy /data-quality bookmark → the Validate child route (PRD §7.1).
+    // Legacy /data-quality bookmark → the Validate child route.
     // Any query params pass through; the Data Lab shell normalizes legacy
     // query state after landing.
     path: "data-quality",
@@ -287,27 +267,12 @@ export const routes: Routes = [
     heading: "Signal Engine — Methodology",
     src: "/assets/docs/signal-engine-methodology.md",
   }),
-  // Operator-facing copy of docs/runbooks/ibkr-setup-guide.md. The two have
-  // drifted apart, so this pair is not yet in the parity list.
-  markdownDocRoute("docs/ibkr-setup-guide", {
-    heading: "IBKR Setup Guide",
-    src: "/assets/docs/ibkr-setup-guide.md",
-  }),
   {
     path: "legal/notices",
     loadComponent: () =>
       import(
         "./components/legal/legal-notices-page/legal-notices-page.component"
       ).then((m) => m.LegalNoticesPageComponent),
-  },
-  {
-    // Unlinked, fixture-only review surface. It imports committed contracts
-    // locally and deliberately has no data service or mutation path.
-    path: "examples/alpaca-bot-control",
-    loadComponent: () =>
-      import(
-        "./components/examples/alpaca-bot-control/alpaca-bot-control-example.component"
-      ).then((m) => m.AlpacaBotControlExampleComponent),
   },
   // Deploy bookmarks lack a clerk identity. They stay visible as an explicit
   // failure rather than silently opening the newly selected lane's drawer.
@@ -336,7 +301,7 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
-    // ── The account workspace (ADR 0064 Decision 1, PRD §13/FR-092) ─────────
+    // ── The account workspace (ADR 0064 Decision 1, FR-092) ─────────────────
     // One account is one place: the account header and its tabs are this
     // parent, and each tab is a child, so moving between them never
     // re-creates the header or the shared account read. Home is the bare
@@ -550,13 +515,6 @@ export const routes: Routes = [
       import(
         "./components/golden-fixtures/golden-fixtures-catalog.component"
       ).then((m) => m.GoldenFixturesCatalogComponent),
-  },
-  {
-    path: "_ide-sandbox",
-    loadComponent: () =>
-      import(
-        "./components/_ide-sandbox/ide-sandbox.component"
-      ).then((m) => m.IdeSandboxComponent),
   },
   {
     // Broker v2 panel — account-scoped bots list: the canonical roster route

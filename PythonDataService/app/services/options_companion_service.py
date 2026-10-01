@@ -3,15 +3,14 @@
 Emits one CSV per ``(side, slot)`` pair under ``calls/`` and ``puts/`` ZIP
 subfolders, where ``slot`` is a price-ordered offset from ATM (e.g.
 ``atm-03``, ``atm``, ``atm+02``). The contract filling each slot rolls daily
-based on the prior trading day's close; the slot semantic is stable. See
-``docs/options-companion-format.md`` for the full format spec.
+based on the prior trading day's close; the slot semantic is stable.
 
 IV is solved per bar via ``app.volatility.solver.implied_volatility``
 (QuantLib primary, Brent fallback). Greeks are computed via QuantLib's
 ``AnalyticEuropeanEngine`` using the solved IV. Surface-based IV is
 intentionally NOT used as input — it remains a deferred cross-check.
 Per-bar Greek values are pending a formal parity pass against LEAN /
-QuantLib's analytic engine; see ``docs/math-sources-of-truth.md``.
+QuantLib's analytic engine.
 """
 
 from __future__ import annotations
@@ -662,6 +661,9 @@ def build_options_companion_csvs(
         "multiplier": multiplier,
         "dte_distance": config.dte_distance,
         "strikes_each_side": config.strikes_each_side,
+        # The rates every IV and Greek was solved at, after defaults (#2764).
+        "risk_free_rate": config.risk_free_rate,
+        "dividend_yield": config.dividend_yield,
         "calls_rows": total_call_rows,
         "puts_rows": total_put_rows,
         "calls_files": sorted(p for p in slot_files if p.startswith("calls/")),

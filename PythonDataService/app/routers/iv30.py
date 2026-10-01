@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 
 from app.engine.edge.features_realtime.iv30_constructor import iv30_atm_50d
 from app.services.polygon_client import PolygonClientService
-from app.services.rate_dividend_service import get_rate_and_dividend
+from app.services.rate_dividend_service import RateAndDividend, get_rate_and_dividend
 from app.volatility.iv_provenance import IvProvenance
 from app.volatility.price_normalization import (
     NormalizedOptionPrice,
@@ -66,8 +66,8 @@ class IvProvenancePayload(BaseModel):
     variance_contribution_synthetic: float
     strike_coverage_score: float
     # Defaulted because FastAPI response_model filters out fields not declared
-    # on the model — without this, the diagnostic added in research-doc §8.2.5
-    # is silently dropped from /api/edge/iv30/{vix-style,parametric} responses.
+    # on the model — without this, the single-strike-share diagnostic is
+    # silently dropped from /api/edge/iv30/{vix-style,parametric} responses.
     max_single_strike_share: float = 0.0
     per_strike_contributions: list[dict] | None = None
 
@@ -170,6 +170,16 @@ def _pick_straddle_pair(by_expiry: dict[int, list], target_days: int) -> tuple[i
     return max(below), min(above)
 
 
+def _rate_and_dividend(req: Iv30LiveRequest, spot: float) -> RateAndDividend:
+    """(r, q) for a live IV30. The response reports q and the parametric solve uses it, so a missing q fails."""
+    rd = get_rate_and_dividend(
+        ticker=req.symbol, spot_price=spot, polygon=polygon_client, dte_days=req.target_calendar_days
+    )
+    if rd.dividend_yield is None:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Dividend lookup failed for {req.symbol}")
+    return rd
+
+
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 
@@ -177,7 +187,7 @@ def _pick_straddle_pair(by_expiry: dict[int, list], target_days: int) -> tuple[i
 async def iv30_vix_style(req: Iv30LiveRequest) -> Iv30LiveResponse:
     """Live VIX-style IV30 from a fresh Polygon snapshot.
 
-    The acceptance criterion (plan §5.C): on a normal trading day, this
+    The acceptance criterion: on a normal trading day, this
     returns within 50 bps of the published CBOE VIX index value when
     called against SPY. The provenance object reports
     ``variance_contribution_synthetic ≈ 0`` and ``opra_mid`` ≈ 100% mix.
@@ -193,9 +203,7 @@ async def iv30_vix_style(req: Iv30LiveRequest) -> Iv30LiveResponse:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Polygon snapshot returned no contracts for {req.symbol}")
 
     asof = datetime.now(tz=UTC)
-    rd = get_rate_and_dividend(
-        ticker=req.symbol, spot_price=spot, polygon=polygon_client, dte_days=req.target_calendar_days
-    )
+    rd = _rate_and_dividend(req, spot)
 
     by_expiry = _normalized_quotes_by_expiry(contracts, asof)
     if len(by_expiry) < 2:
@@ -253,9 +261,7 @@ async def iv30_parametric(req: Iv30LiveRequest) -> Iv30LiveResponse:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Polygon snapshot returned no contracts for {req.symbol}")
 
     asof = datetime.now(tz=UTC)
-    rd = get_rate_and_dividend(
-        ticker=req.symbol, spot_price=spot, polygon=polygon_client, dte_days=req.target_calendar_days
-    )
+    rd = _rate_and_dividend(req, spot)
 
     by_expiry = _normalized_quotes_by_expiry(contracts, asof)
     if len(by_expiry) < 2:

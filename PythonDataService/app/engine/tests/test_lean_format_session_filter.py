@@ -7,7 +7,7 @@ the consolidator therefore saw 04:00-20:00 ET data while the LEAN sidecar
 (``AddEquity(..., extendedMarketHours=False)``) saw only 09:30-16:00 ET,
 producing entirely different trade plans for the same ``DataPolicy`` value.
 
-See ``.claude/rules/numerical-rigor.md`` → ``DECISION_MISMATCH`` and the
+See ADR 0069 §6 → ``DECISION_MISMATCH`` and the
 divergence trace at ``StrategyExecutions`` rows 41/42 (run on 2026-05-21).
 """
 

@@ -6,8 +6,6 @@ import { environment } from "../../environments/environment";
 import type {
   LeanSidecarErrorEnvelope,
   LeanLauncherDiagnosticReport,
-  TrustedRunRequest,
-  TrustedRunResponse,
 } from "./lean-sidecar.types";
 
 /**
@@ -18,12 +16,6 @@ import type {
  * extracts the launcher's stable ``{reason, message}`` envelope into a
  * ``LeanSidecarApiError`` so the component can branch on the reason
  * label without parsing the raw ``HttpErrorResponse``.
- *
- * PR B.5 (2026-05-19) — surface narrowed to the unified Engine Lab's
- * ``startTrustedRun`` call. The standalone ``/lean-lab`` page's
- * inspection / reconciliation / manifest / log-tail helpers were
- * removed when that page retired; see git history for the prior shape
- * if a future feature needs to revive any of them.
  */
 
 export class LeanSidecarApiError extends Error {
@@ -42,16 +34,6 @@ export class LeanSidecarService {
   private readonly http = inject(HttpClient);
   private readonly base = `${environment.pythonServiceUrl}/api/lean-sidecar`;
 
-  async startTrustedRun(request: TrustedRunRequest): Promise<TrustedRunResponse> {
-    try {
-      return await firstValueFrom(
-        this.http.post<TrustedRunResponse>(`${this.base}/trusted-runs`, request),
-      );
-    } catch (err) {
-      throw this.translate(err);
-    }
-  }
-
   async diagnose(): Promise<LeanLauncherDiagnosticReport> {
     try {
       return await firstValueFrom(
@@ -66,8 +48,8 @@ export class LeanSidecarService {
    * Resolve the next NYSE trading session strictly after ``date`` to
    * its 09:30 ET session-open as int64 ms UTC. The unified Engine Lab
    * uses this to advance the operator's chosen end date to the
-   * half-open window's exclusive ``end_ms_utc`` (per the PR A P2.5
-   * contract; see docs/handoffs/2026-05-18-design-p2-5-date-semantics-v2.md).
+   * half-open window's exclusive ``end_ms_utc`` (a trading date anchored
+   * at its session open, ADR 0022 (a)).
    *
    * Server-side delegation keeps the NYSE calendar (weekends, holidays,
    * MLK / Thanksgiving / Good-Friday skips) in one place — the

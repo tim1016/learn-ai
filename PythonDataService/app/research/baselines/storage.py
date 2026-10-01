@@ -6,8 +6,7 @@ load-and-validate, scan+filter — live in
 specific surface: function signatures the runner and router already
 call, plus the phase-specific ``method`` filter on
 ``list_baselines`` that the artifact store's generic ``list_ids``
-doesn't carry. See
-``docs/architecture/research-artifact-seam.md`` for the design.
+doesn't carry.
 
 On-disk layout (unchanged from pre-seam):
 
@@ -125,21 +124,20 @@ def list_baselines(
         limit=None,
     )
 
-    # Reuse the descriptor's filename and the store's path
-    # construction so we don't duplicate them here.
-    base = store._base()  # thin delegator over our own store; private access is intentional
-
     out: list[BaselineConfig] = []
     for baseline_id in ids:
-        config_path = base / baseline_id / BASELINES_ARTIFACT.config_filename
         try:
+            # Reuse the store's confined path construction (private
+            # access is intentional) and the descriptor's filename so
+            # we don't duplicate them here.
+            config_path = store._artifact_dir(baseline_id) / BASELINES_ARTIFACT.config_filename
             config = BaselineConfig.model_validate_json(
                 config_path.read_text(encoding="utf-8")
             )
         except Exception as exc:
             logger.warning(
-                "[BASELINES] skipping corrupt baseline config at %s: %s",
-                config_path,
+                "[BASELINES] skipping corrupt baseline config for %s: %s",
+                baseline_id,
                 exc,
             )
             continue

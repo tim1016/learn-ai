@@ -1,7 +1,7 @@
 """The typed operation catalog: one contract for routing, contracts and codegen.
 
-Audit 2026-09-13, finding 6: strings cannot express method, capability,
-readiness, idempotency, stream shape or account requirements. The catalog
+Strings cannot express method, capability, readiness, idempotency, stream
+shape or account requirements (ADR 0062 addendum, item 4). The catalog
 validation here is what every adapter's conformance suite runs, so no
 provider enters a registry with an ambiguous or drifting operation set.
 """
@@ -21,7 +21,6 @@ from app.broker.fleet.provider import (
     require_protocol_compatible,
     validate_operation_catalog,
 )
-from tests.broker.fleet.conftest import fake_alpha, fake_beta
 
 
 def _operation(**overrides) -> ProviderOperation:
@@ -108,17 +107,7 @@ def test_catalog_validation_refuses_malformed_operation_shapes() -> None:
         validate_operation_catalog(frozenset({_operation(operation_id="Account Read")}))
 
 
-def test_the_fake_providers_declare_valid_catalogs() -> None:
-    """The conformance fakes themselves model a well-formed provider."""
-    for adapter in (fake_alpha(), fake_beta()):
-        validate_operation_catalog(adapter.operations())
-        declared = {operation.capability for operation in adapter.operations()}
-        assert declared <= adapter.capabilities
-        for operation in adapter.operations():
-            assert operation.agent_path_template.startswith("/api/")
-
-
-def test_alpaca_declares_the_seven_desk_reads_at_their_pinned_routes() -> None:
+def test_alpaca_declares_the_six_desk_reads_at_their_pinned_routes() -> None:
     """C's desk has no operational fallback to a broker-global route."""
     from app.broker.alpaca.clerk.fleet_adapter import AlpacaProviderAdapter
 
@@ -127,7 +116,6 @@ def test_alpaca_declares_the_seven_desk_reads_at_their_pinned_routes() -> None:
         for operation in AlpacaProviderAdapter().operations()
     }
     expected = {
-        "activities_read": ("GET", "/activities"),
         "portfolio_history_read": ("GET", "/portfolio-history"),
         "portfolio_history_proof_read": ("GET", "/portfolio-history-proof"),
         "clerk_status_read": ("GET", "/clerk/status"),

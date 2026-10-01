@@ -31,7 +31,9 @@ Its fee is the provision the entry requirement recorded at admission
 a later rate change cannot move a past claim. While any of the order is
 unfilled, the remainder claims the whole recorded provision -- no share is
 computed, so no money is rounded here (owner decision 2026-09-29); the claim
-ends when the order fills or ends.
+ends when the order fills or ends. Filled shares' fees also sit in the
+canonical fee attribution, so a partly filled entry claims up to its provision
+twice over: conservative headroom of cents, never a shortfall.
 
 Corrections fold at their restated size. Each order contributes its
 *effective* fills — the head of every correction chain, whatever its

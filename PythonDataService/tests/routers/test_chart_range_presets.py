@@ -1,7 +1,7 @@
 """`/api/chart` numeric-window authority and the range-presets endpoint.
 
 The chart request's ``start_ms_utc``/``end_ms_utc`` are declared additive-
-first fields (data-lab workspace redesign PRD §12); these tests pin that the
+first fields; these tests pin that the
 router actually honors them — per-field precedence over the date strings,
 floored to UTC calendar dates, with an inverted numeric window refused as
 ``INVALID_RANGE`` — and that ``GET /api/chart/range-presets`` is a thin,
@@ -147,10 +147,10 @@ async def test_range_presets_endpoint_returns_the_resolver_output(api: FastAPI) 
         assert isinstance(preset["start_ms_utc"], int)
         assert isinstance(preset["end_ms_utc"], int)
         # Temporal wire values are ms-only: no date strings may appear on the
-        # contract (AGENTS.md hard rule on ISO-free wire).
+        # contract.
         assert "start_date" not in preset
         assert "end_date" not in preset
-        # Same estimator /allowed-timeframes uses; a window of all full
+        # Same estimator get_allowed_timeframes uses; a window of all full
         # sessions yields exactly session_count daily bars (rth), an
         # early-close half-day one fewer.
         assert 0 < preset["estimated_bars_per_timeframe"]["1D"] <= preset["session_count"]

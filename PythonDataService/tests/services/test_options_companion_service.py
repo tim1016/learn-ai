@@ -436,6 +436,7 @@ class TestBuildOptionsCompanionTimestampAlignment:
             multiplier=1,
         )
 
+        assert (report["risk_free_rate"], report["dividend_yield"]) == (0.05, 0.0)
         # Counters: 5 + 3 + 3 = 11 raw, 2 pre-RTH dropped on the 709 strike.
         assert report["totals"]["option_bars_raw"] == 11
         assert report["totals"]["option_bars_dropped"] == 2

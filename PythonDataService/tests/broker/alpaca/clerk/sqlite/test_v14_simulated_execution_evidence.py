@@ -21,7 +21,10 @@ from pathlib import Path
 from app.broker.alpaca.clerk.sqlite import reads, schema
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from tests.broker.alpaca.clerk.sqlite.conftest import remove_budget_schema_for_legacy_fixture
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    build_v13_authority,
+    remove_budget_schema_for_legacy_fixture,
+)
 from tests.broker.alpaca.clerk.sqlite.test_folds_execution import (
     _repository_for_strategy,
     _simulated_aggregate,
@@ -33,24 +36,11 @@ _ORDER_REF = "learn-ai/v14-bot/v1:intent-1"
 
 
 def _v13_authority(account_id: str) -> sqlite3.Connection:
-    """A real v13 file: the historical v9 schema plus its registered upgrades."""
+    """A real v13 file (see ``build_v13_authority``)."""
     conn = sqlite3.connect(":memory:")
     schema.configure_connection(conn)
     conn.row_factory = sqlite3.Row
-    schema.apply_v9_schema(conn)
-    conn.execute(
-        "INSERT INTO control_meta "
-        "(id, schema_version, broker, account_id, db_identity_token, authority_generation, "
-        "control_revision, created_at_ms, last_open_at_ms, reset_provenance_json, "
-        "execution_lease_owner, execution_lease_expires_at_ms) "
-        "VALUES (1, 9, 'alpaca', ?, 'identity', 1, 0, 1, 1, NULL, NULL, NULL)",
-        (account_id,),
-    )
-    for version in (9, 10, 11, 12):
-        for statement in schema.SCHEMA_MIGRATIONS[version]:
-            conn.execute(statement)
-    conn.execute("UPDATE control_meta SET schema_version = 13 WHERE id = 1")
-    conn.commit()
+    build_v13_authority(conn, account_id=account_id)
     return conn
 
 
@@ -190,29 +180,6 @@ def test_v14_migration_refuses_to_retag_without_the_durable_shadow_order_identit
         assert _fill(conn, unproven)["evidence_source"] == "cumulative_recovery"
         assert _fill(conn, first)["evidence_source"] == "cumulative_recovery"
         assert _fill(conn, partial)["evidence_source"] == "cumulative_recovery"
-    finally:
-        conn.close()
-
-
-def test_a_fresh_authority_admits_simulated_execution_evidence() -> None:
-    conn = sqlite3.connect(":memory:")
-    try:
-        schema.configure_connection(conn)
-        schema.apply_schema(conn)
-        # The vocabulary check only: the fixture row needs no parent rows.
-        conn.execute("PRAGMA foreign_keys = OFF")
-        conn.execute(
-            "INSERT INTO fills (fill_id, order_ref, qty, price, side, execution_id, "
-            "evidence_source, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
-            "VALUES ('shadow-execution:x', 'ref-x', 1, 1, 'BUY', 'shadow-execution:x', "
-            "'simulated_execution', 1, 1, 0)"
-        )
-        assert (
-            conn.execute(
-                "SELECT evidence_source FROM fills WHERE fill_id = 'shadow-execution:x'"
-            ).fetchone()[0]
-            == "simulated_execution"
-        )
     finally:
         conn.close()
 

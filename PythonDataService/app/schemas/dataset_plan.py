@@ -1,4 +1,4 @@
-"""Response schema for ``POST /api/dataset/plan`` (data-lab workspace redesign §12).
+"""Response schema for ``POST /api/dataset/plan``.
 
 Every numeric or enumerable claim a Data Lab receipt renders is authored
 here in Python — Angular renders it unchanged. Bar counts are estimates
@@ -7,7 +7,11 @@ and are typed as such: assumptions and provenance ship alongside.
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from pydantic import BaseModel, Field
+
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 class DatasetPlanResponse(BaseModel):
@@ -16,17 +20,19 @@ class DatasetPlanResponse(BaseModel):
     ticker: str = Field(..., description="Ticker the plan was resolved for")
     window_start_ms_utc: int = Field(
         ...,
+        le=MAX_TIMESTAMP_MS,
         description="Resolved half-open window start (int64 ms UTC). Date-only intent resolves to the session open.",
     )
     window_end_ms_utc: int = Field(
         ...,
+        le=MAX_TIMESTAMP_MS,
         description="Resolved EXCLUSIVE window end (int64 ms UTC). Date-only intent resolves to the next session open.",
     )
     exchange_sessions: list[str] = Field(
         ...,
         description="Scheduled exchange session dates inside the requested range (YYYY-MM-DD), ascending.",
     )
-    exchange_session_opens_ms_utc: list[int] = Field(
+    exchange_session_opens_ms_utc: list[Annotated[int, Field(le=MAX_TIMESTAMP_MS)]] = Field(
         ...,
         description="Calendar-derived session-open anchor for each entry of exchange_sessions, "
         "in the same order (int64 ms UTC). The canonical wire form of the session list.",

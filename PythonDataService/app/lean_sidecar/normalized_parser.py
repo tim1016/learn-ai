@@ -5,8 +5,7 @@ backtest. This module turns them into a stable, typed surface so the
 Phase 4 frontend renders consistent tables across LEAN versions and
 Phase 5 reconciliation has a deterministic structure to diff against.
 
-Authority: ``docs/architecture/lean-sidecar-lab.md`` §"Normalized output
-parser". Three rules survive every LEAN version bump:
+Three rules survive every LEAN version bump:
 
 1. **All timestamps cross this boundary as int64 ms UTC.** LEAN writes
    unix-seconds (often as float); the parser converts immediately.
@@ -14,7 +13,7 @@ parser". Three rules survive every LEAN version bump:
    stats are version- and definition-sensitive (Sharpe annualization
    constant, sample vs population stdev, benchmark selection). String
    pass-through preserves fidelity; downstream consumers parse when
-   they decide on a convention. See ADR §"Statistics parity scope".
+   they decide on a convention. See ADR 0070 decision 8.
 3. **Unknown fields are tolerated** (Pydantic ``extra="allow"``) so a
    minor LEAN version that adds fields doesn't crash the parser; the
    pinned ``normalized_parser_version`` records exactly what schema
@@ -33,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from app.lean_sidecar.manifest import sha256_file
 from app.lean_sidecar.workspace import Workspace
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 # Bumped any time the parser's output schema changes in a non-additive
 # way. The manifest records this; a different value invalidates
@@ -70,7 +70,7 @@ class NormalizedEquityPoint(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    ms_utc: int = Field(..., description="Timestamp as int64 ms UTC.")
+    ms_utc: int = Field(..., le=MAX_TIMESTAMP_MS, description="Timestamp as int64 ms UTC.")
     value: float = Field(..., description="Equity value (close).")
     open: float
     high: float
@@ -105,6 +105,7 @@ class NormalizedOrderEvent(BaseModel):
     symbol_value: str = Field(..., alias="symbolValue")
     ms_utc: int = Field(
         ...,
+        le=MAX_TIMESTAMP_MS,
         description="Event time as int64 ms UTC (LEAN writes unix seconds).",
     )
     status: str
@@ -209,10 +210,10 @@ class NormalizedResult(BaseModel):
     total_closed_trades: int = 0
     total_rolling_windows: int = 0
     total_analyses: int = 0
-    first_equity_ms_utc: int | None = Field(default=None)
-    last_equity_ms_utc: int | None = Field(default=None)
-    first_summary_equity_ms_utc: int | None = Field(default=None)
-    last_summary_equity_ms_utc: int | None = Field(default=None)
+    first_equity_ms_utc: int | None = Field(default=None, le=MAX_TIMESTAMP_MS)
+    last_equity_ms_utc: int | None = Field(default=None, le=MAX_TIMESTAMP_MS)
+    first_summary_equity_ms_utc: int | None = Field(default=None, le=MAX_TIMESTAMP_MS)
+    last_summary_equity_ms_utc: int | None = Field(default=None, le=MAX_TIMESTAMP_MS)
 
 
 # ---------------------------------------------------------------------------

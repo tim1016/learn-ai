@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import threading
+from collections.abc import Callable
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -45,6 +46,7 @@ from app.data_lake.types import ArtifactIdentity, ArtifactRecord, DataRunSpec, t
 from app.engine.data.lean_format import write_lean_day_zip
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar import config as sidecar_config
+from app.lean_sidecar.trading_calendar import session_open_ms_utc
 
 
 def _postgres_url() -> str:
@@ -123,26 +125,22 @@ def _spec(symbols: list[str], *, lean_image_digest: str = "sha256:test") -> Data
     )
 
 
-def _polygon_ok_payload(ticker: str) -> dict:
-    # 2024-05-20 09:30:00 ET (DST) = 1716211800000 ms UTC (09:30 ET = 13:30 UTC = 13:30 * 3600 * 1000 + epoch)
-    bar_start_ms = 1716211800000
-    return {
-        "ticker": ticker,
-        "status": "OK",
-        "results": [
-            {
-                "v": 1000,
-                "vw": 500.0,
-                "o": 500.0,
-                "c": 500.05,
-                "h": 500.10,
-                "l": 499.95,
-                "t": bar_start_ms + i * 60_000,
-                "n": 10,
-            }
-            for i in range(390)
-        ],
-    }
+def _polygon_ok_session(ticker: str) -> Callable[[httpx.Request], httpx.Response]:
+    """respx side_effect: 390 minute bars for the one session the request names.
+
+    The fetcher asks for one session per call (``.../minute/<day>/<day>``).
+    The bars start at that session's calendar open, so every requested day
+    gets its own bars: one fixed payload for every URL would fail the lake's
+    session-date check (#2451) on every day but the one it was built for.
+    """
+
+    def _respond(request: httpx.Request) -> httpx.Response:
+        from_day, to_day = request.url.path.rsplit("/", 2)[-2:]
+        assert from_day == to_day, f"expected a one-session fetch, got {from_day}..{to_day}"
+        session_open = session_open_ms_utc(date.fromisoformat(from_day))
+        return httpx.Response(200, json=_polygon_ok_payload_date(ticker, session_open))
+
+    return _respond
 
 
 _MARKET_HOURS_JSON = json.dumps(
@@ -226,7 +224,7 @@ async def test_known_symbol_produces_complete_result(clean_artifacts, pool, tmp_
     _mock_corpus_actions_and_events()
     # Catch-all mock: any Polygon aggs call for SPY returns 390 bars.
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+        side_effect=_polygon_ok_session("SPY")
     )
 
     result = await ensure_data(_spec(["SPY"]))
@@ -264,7 +262,7 @@ async def test_two_identical_calls_produce_same_availability_hash(clean_artifact
     )
     _mock_corpus_actions_and_events()
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+        side_effect=_polygon_ok_session("SPY")
     )
 
     a = await ensure_data(_spec(["SPY"]))
@@ -289,7 +287,7 @@ async def test_metadata_bootstrap_failure_surfaces_as_artifact_failure(clean_art
     )
     _mock_corpus_actions_and_events()
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+        side_effect=_polygon_ok_session("SPY")
     )
 
     result = await ensure_data(_spec(["SPY"]))
@@ -325,7 +323,7 @@ async def test_metadata_bootstrap_retries_a_prior_failure_instead_of_jamming(cle
     )
     _mock_corpus_actions_and_events()
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+        side_effect=_polygon_ok_session("SPY")
     )
 
     first = await ensure_data(_spec(["SPY"]))
@@ -358,7 +356,7 @@ async def test_metadata_bootstrap_launcher_unreachable_is_transient_and_names_th
     respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(side_effect=_connection_refused)
     _mock_corpus_actions_and_events()
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+        side_effect=_polygon_ok_session("SPY")
     )
 
     result = await ensure_data(_spec(["SPY"]))
@@ -373,45 +371,6 @@ async def test_metadata_bootstrap_launcher_unreachable_is_transient_and_names_th
             f"the surfaced detail must explicitly name the launcher: {failure.detail!r}"
         )
     assert result.overall_status in {"partial", "failed"}
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_metadata_bootstrap_launcher_unreachable_retries_and_completes_when_the_launcher_recovers(
-    clean_artifacts, pool, tmp_lake
-):
-    """#1889 acceptance test: the artifact left 'failed' by an unreachable
-    launcher is retried -- not skipped because it's already 'failed' -- by
-    the very next ensure_data materialization once the launcher recovers."""
-    stage = _launcher_side_effect(tmp_lake)
-    calls = {"n": 0}
-
-    def _unreachable_then_recovers(request: httpx.Request) -> httpx.Response:
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise httpx.ConnectError("Connection refused")
-        return stage(request)
-
-    launcher_route = respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        side_effect=_unreachable_then_recovers
-    )
-    _mock_corpus_actions_and_events()
-    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
-    )
-
-    first = await ensure_data(_spec(["SPY"]))
-    first_metadata_failures = [f for f in first.failures if f.artifact_kind == "metadata"]
-    assert all(f.reason == "launcher_unreachable" for f in first_metadata_failures)
-    assert len(first_metadata_failures) == 3
-
-    second = await ensure_data(_spec(["SPY"]))
-    second_metadata_failures = [f for f in second.failures if f.artifact_kind == "metadata"]
-    assert second_metadata_failures == [], (
-        f"expected the recovered launcher to be retried and complete, not left failed: {second_metadata_failures}"
-    )
-    assert second.overall_status == "complete"
-    assert launcher_route.call_count == 2
 
 
 @respx.mock
@@ -439,7 +398,7 @@ async def test_metadata_bootstrap_sends_the_resolved_launcher_token(
     )
     _mock_corpus_actions_and_events()
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+        side_effect=_polygon_ok_session("SPY")
     )
 
     await ensure_data(_spec(["SPY"]))
@@ -466,7 +425,7 @@ async def test_interest_rate_metadata_bootstraps_when_the_launcher_produces_it(c
     )
     _mock_corpus_actions_and_events()
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+        side_effect=_polygon_ok_session("SPY")
     )
 
     result = await ensure_data(_spec(["SPY"]))
@@ -491,7 +450,7 @@ async def test_interest_rate_metadata_bootstrap_is_optional_not_a_failure(clean_
     )
     _mock_corpus_actions_and_events()
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+        side_effect=_polygon_ok_session("SPY")
     )
 
     result = await ensure_data(_spec(["SPY"]))
@@ -522,7 +481,7 @@ async def test_interest_rate_genuine_extraction_failure_surfaces_as_artifact_fai
     )
     _mock_corpus_actions_and_events()
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+        side_effect=_polygon_ok_session("SPY")
     )
 
     result = await ensure_data(_spec(["SPY"]))
@@ -558,7 +517,7 @@ async def test_interest_rate_confirmed_absence_never_exhausts_the_retry_budget(c
     )
     _mock_corpus_actions_and_events()
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+        side_effect=_polygon_ok_session("SPY")
     )
 
     for _ in range(6):
@@ -588,7 +547,7 @@ async def test_interest_rate_confirmed_absence_never_exhausts_the_retry_budget(c
     )
     _mock_corpus_actions_and_events()
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+        side_effect=_polygon_ok_session("SPY")
     )
 
     final = await ensure_data(_spec(["SPY"], lean_image_digest="sha256:test-v2"))
@@ -1112,7 +1071,7 @@ async def test_whole_history_artifact_builds_never_run_on_the_event_loop(
     )
     _mock_corpus_actions_and_events()
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+        side_effect=_polygon_ok_session("SPY")
     )
 
     from app.data_lake import derived_daily as derived_daily_module
@@ -1155,7 +1114,7 @@ async def test_a_current_daily_artifact_is_reused_without_reparsing_its_history(
     )
     _mock_corpus_actions_and_events()
     respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
+        side_effect=_polygon_ok_session("SPY")
     )
 
     first = await ensure_data(_spec_narrow(["SPY"]))

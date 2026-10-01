@@ -6,8 +6,7 @@ suitable for Black-Scholes pricing and IV solving. The TTM window is exactly
 
 Pairs with :mod:`app.services.fred_service` to replace the legacy
 ``r=0.043, q=0`` defaults that were hardcoded into pricing-lab,
-options-strategy-lab, and strategy-builder. See the IV-RV alignment plan
-(memory: ``iv_rv_alignment_plan.md``) for context.
+options-strategy-lab, and strategy-builder.
 
 Cache is in-memory, per-(ticker, observation_date) with a 24-hour TTL —
 matching the pattern already used by ``fred_service``.
@@ -42,22 +41,19 @@ def get_trailing_12m_cash_dividends(
 ) -> float:
     """Sum cash dividends with ex-date in the 12-month window ending on observation_date.
 
-    Returns 0.0 for non-payers or on Polygon error (logged, not raised — many
-    underlyings legitimately pay no dividend).
+    Returns 0.0 for a non-payer. A failed Polygon read propagates: a lookup
+    that failed is not a non-payer, so it must never read as q=0 or be cached
+    as one (#2764).
     """
     if observation_date is None:
         observation_date = datetime.now(UTC).date().isoformat()
     end_dt = datetime.strptime(observation_date, "%Y-%m-%d")
     start_dt = end_dt - timedelta(days=365)
-    try:
-        events = polygon.list_dividends(
-            ticker=ticker,
-            ex_dividend_date_gte=start_dt.strftime("%Y-%m-%d"),
-            ex_dividend_date_lte=observation_date,
-        )
-    except Exception as exc:
-        logger.warning("[DIV] Failed to list dividends for %s: %s", ticker, exc)
-        return 0.0
+    events = polygon.list_dividends(
+        ticker=ticker,
+        ex_dividend_date_gte=start_dt.strftime("%Y-%m-%d"),
+        ex_dividend_date_lte=observation_date,
+    )
     total = 0.0
     for ev in events:
         amt = ev.get("cash_amount")

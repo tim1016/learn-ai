@@ -1,7 +1,6 @@
 """Resolve a broker-configuration profile revision into a runtime binding.
 
-Package C of the user-owned broker configurations plan (ADR 0060,
-``docs/architecture/broker-configuration-profile-contract.md`` §3 and §7). This
+Package C of the user-owned broker configurations work (ADR 0060). This
 package owns three things and nothing else:
 
 1. **The credential slot allowlist and resolver** (:mod:`.credentials`) — a
@@ -35,10 +34,8 @@ from __future__ import annotations
 from app.broker.alpaca.profile.account_verification import (
     ACCOUNT_VERIFICATION_MAX_AGE_MS,
     AccountDiscoveryPort,
-    AccountPin,
     AccountVerification,
     ObservedAccount,
-    pin_observed_account,
     reverify_pinned_account,
     verify_account,
 )
@@ -49,7 +46,6 @@ from app.broker.alpaca.profile.credentials import (
     AlpacaCredentialEnvironment,
     CredentialSlotAvailability,
     ResolvedCredentials,
-    credential_slot_available,
     describe_credential_slots,
     is_known_credential_slot,
     require_known_credential_slot,
@@ -78,7 +74,6 @@ __all__ = [
     "LIVE_ENVELOPE_FIELDS",
     "AccountDiscoveryPort",
     "AccountModeDisagreement",
-    "AccountPin",
     "AccountPinMismatch",
     "AccountVerification",
     "AccountVerificationFailed",
@@ -91,10 +86,8 @@ __all__ = [
     "ObservedAccount",
     "ResolvedCredentials",
     "RevisionIncomplete",
-    "credential_slot_available",
     "describe_credential_slots",
     "is_known_credential_slot",
-    "pin_observed_account",
     "require_known_credential_slot",
     "resolve_credentials",
     "resolve_runtime_context",

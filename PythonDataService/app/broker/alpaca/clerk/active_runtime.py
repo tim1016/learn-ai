@@ -461,7 +461,7 @@ async def compose_repository_runtime(
         # it via `start_background_taps()` once the provider exists.
         hold_sync = StreamHealthHoldSync(repo=repository, gate=stream_health_gate)
         if not repository.account_id.startswith(("sim:", "shadow:")):
-            fee_sync = FeeEvidenceSync(repo=repository, read=guarded_read)
+            fee_sync = FeeEvidenceSync(repo=repository, read=guarded_read, intake=intake)
         await asyncio.to_thread(facade.upgrade_legacy_exit_terms, arming_ledger)
         try:
             await asyncio.wait_for(

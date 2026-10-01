@@ -15,7 +15,6 @@ Reference:
     (https://www.sec.gov/rules-regulations/fee-rate-advisories/<year>-2); FINRA
     SR-FINRA-2024-019 fee-adjustment schedule
     (https://www.finra.org/rules-guidance/rule-filings/sr-finra-2024-019/fee-adjustment-schedule).
-    Row-by-row citations: docs/references/alpaca-regulatory-fees.md.
 Canonical implementation: this file.
 Validated against:
     tests/broker/alpaca/test_regulatory_fees.py;
@@ -55,7 +54,7 @@ class TafRate(NamedTuple):
 
 # Each table is ascending by effective date; the latest row on or before the
 # trade date is in force. A trade date before a table's first row has NO pinned
-# rate for that component. Row sources: docs/references/alpaca-regulatory-fees.md.
+# rate for that component.
 _SEC_PER_DOLLAR: tuple[tuple[date, Decimal], ...] = (
     (date(2024, 5, 22), Decimal("0.0000278")),  # $27.80 per $1M — SEC advisory 2024-2
     (date(2025, 5, 14), Decimal("0")),  # $0.00 per $1M — SEC advisory 2025-2

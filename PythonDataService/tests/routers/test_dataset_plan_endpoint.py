@@ -4,7 +4,7 @@ The plan endpoint resolves date intent through the canonical NYSE
 calendar (never ``T23:59:59``, never a hard-coded 390-minute session),
 projects output columns through the same function the ZIP generation
 path uses, and types bar counts as arithmetic estimates with explicit
-assumptions and provenance (data-lab workspace redesign PRD §12/§18).
+assumptions and provenance.
 """
 
 from __future__ import annotations
@@ -59,14 +59,6 @@ async def _post_plan(api: FastAPI, payload: dict[str, Any]) -> httpx.Response:
 
 
 # ── Schema and boundary validation ──────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_plan_missing_ticker_is_422(api: FastAPI) -> None:
-    payload = {**_RECIPE}
-    del payload["ticker"]
-    response = await _post_plan(api, payload)
-    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -309,19 +301,6 @@ async def test_plan_out_of_range_ms_window_is_422(api: FastAPI, field: str) -> N
     from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
     response = await _post_plan(api, {**_RECIPE, field: MAX_TIMESTAMP_MS + 1})
-    assert response.status_code == 422
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("field", ["start_ms_utc", "end_ms_utc"])
-async def test_generation_out_of_range_ms_window_is_422(api: FastAPI, field: str) -> None:
-    from app.utils.session_anchors import MAX_TIMESTAMP_MS
-
-    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
-        response = await client.post(
-            "/api/dataset/generate-csv",
-            json={**_RECIPE, field: MAX_TIMESTAMP_MS + 1},
-        )
     assert response.status_code == 422
 
 

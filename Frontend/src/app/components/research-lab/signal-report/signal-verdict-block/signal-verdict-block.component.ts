@@ -30,10 +30,6 @@ export class SignalVerdictBlockComponent {
     () => this.graduation()?.stageInfo?.label ?? 'Rejected',
   );
 
-  readonly stageDescription = computed<string>(
-    () => this.graduation()?.stageInfo?.description ?? '',
-  );
-
   /** Visual band shared with the engine-lab readiness-score-card so the
    *  page reads consistent across the research-lab and engine-lab. */
   readonly band = computed<'green' | 'amber' | 'red' | 'na'>(() => {

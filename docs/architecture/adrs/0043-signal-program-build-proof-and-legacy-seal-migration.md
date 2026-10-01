@@ -3,9 +3,8 @@
 **Status:** Accepted
 
 - **Date:** 2026-08-21
-- **Context:** Sealed Signal Programs to Governed Alpaca Bots PRD
-  (`docs/prds/sealed-signal-program-to-governed-alpaca-bot.md`), implementation
-  tracker #1723, issue #1728 (PRD Slice 2).
+- **Context:** Sealed Signal Programs to Governed Alpaca Bots PRD (in Git
+  history), implementation tracker #1723, issue #1728 (PRD Slice 2).
 - **Amends:** ADR 0034 (the append-or-clone rule below extends its immutable-
   instance / append-only-run model to the v2 seal); ADR 0042 (adds the seal's
   internal two-level decomposition, settles the running-build-digest source PRD
@@ -204,7 +203,10 @@ per-run replay receipt that joins the two after each eligible terminal run
 (older historical runs are on-demand only — see that doc's coverage contract). The live-time
 `trace_digest` / `decision_bar_close_ms` those receipts now also carry live in
 the receipt facts, outside the custody transition `row_hash`, so this
-transaction's hash chain and sealed identity are untouched.
+transaction's hash chain and sealed identity are untouched. *(2026-10-01,
+#2763: #2755 cut the per-run replay receipt as write-only output, and its
+reference note went with it; the divergence classifier remains in
+`app/services/run_replay_proof.py`.)*
 
 ## Consequences
 
@@ -264,3 +266,37 @@ append-or-clone migration workflow. Existing v1 identity, v2 seals, launch reaso
 and lineage remain readable without rewriting hashes or historical `pause_policy`.
 A new run requires a fresh instance through Deploy with current explicit choices
 and build proof. The orphaned reconstruction and clone writers are removed.
+
+## Amendment — 2026-09-30: per-run build evidence is file-backed run evidence (#2749)
+
+A run's running-build digest and its qualification-receipt identity are
+**dynamic run evidence**. They are not semantic bot identity, and they are
+not part of the seal. They sit alongside admission verdicts, feed health and
+runtime watermarks.
+
+- They are recorded once per run as `ProgramBuildRunEvidence`
+  (`app/services/bot_binding_repository.py`) in
+  `<instance>/program_build_evidence/<run_id>.json`.
+- They are written once and never rewritten.
+- They stay out of SQLite and out of `bot_config.config_json`.
+
+Why: the binding model declares `sealed_program` and `program_build` with
+`Field(exclude=True)`. That keeps build content out of
+`immutable_configuration_payload`, so it can never perturb
+`configuration_hash` or any seal built on it. That is Decision 1, with the v1
+identity left untouched.
+
+The SQLite projection of immutable configuration (mode, quantity, carryover
+policy) answers a different question. No table carries
+`running_artifact_digest` or `qualification_receipt_hash`. The read is honest
+about what it is:
+
+- `ProgramBuildAdmissionFact.state` is `PROVEN`, `UNPROVEN` or
+  `NOT_APPLICABLE`, and it is never fabricated.
+- A build that does not close `PROVEN` writes no file, and a missing file is
+  read as absence, never synthesized.
+- `verification` says whether the value is a fresh live re-proof or a replay
+  of the per-run record.
+
+Moving this evidence into SQLite would mean a new table and a Start write
+path. That is a new decision, not a clean-up.

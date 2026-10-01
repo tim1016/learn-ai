@@ -1,4 +1,4 @@
-"""Independent dollar conservation examples from the owner-approved PRD."""
+"""Independent dollar conservation examples for the budget authority."""
 
 from __future__ import annotations
 

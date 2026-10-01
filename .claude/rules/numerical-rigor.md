@@ -1,12 +1,6 @@
 # Numerical rigor rules
 
-The core scientific standards for this repo. Read before any work that ports, computes, or validates mathematical logic.
-
-This is the authority document for "strict numerical equivalence" in learn-ai.
-
-## The core principle
-
-**A port is not done until it's proven equivalent to its reference.** "Looks right" is not a proof. Equivalence is demonstrated by a golden-fixture test with an explicit tolerance that must be justified.
+**A port is not done until a golden-fixture test with an explicit, justified tolerance proves it equivalent to its reference.** The reasons behind these rules are in [ADR 0069](../../docs/architecture/adrs/0069-numerical-rigor-equivalence-and-tolerances.md).
 
 ## Equivalence levels
 
@@ -28,7 +22,7 @@ A golden fixture is a serialized record of (input, reference output, attribution
 
 - **Input data** (CSV, Parquet, or JSON — depending on size and shape)
 - **Output data** produced by the reference, with full float precision
-- **Attribution file** (`README.md` or `attribution.json`) containing:
+- **Attribution file** (`attribution.md` or `README.md`), registered in `tests/fixtures/golden/manifest.json`, containing:
   - Reference source (URL, repo + commit SHA, or paper citation)
   - Date the fixture was generated
   - Command or script used to regenerate it
@@ -71,7 +65,7 @@ If a test fails at the default, do NOT loosen the tolerance to make it pass. Ins
 1. Classify the divergence using the `reconcile-backtest` taxonomy.
 2. Find and fix the root cause.
 3. Only accept a looser tolerance if the divergence is `precision` (floating-point accumulation) and the magnitude is small relative to the meaningful range of the output.
-4. Document the accepted tolerance and why in the test file and in `docs/references/<construct-name>.md`.
+4. Document the accepted tolerance and why in the test file.
 
 ## Timestamp rigor
 
@@ -91,17 +85,6 @@ The one-line invariant, kept here because numerical work depends on it: **every 
 - **Accumulation order matters.** `(a + b) + c` and `a + (b + c)` can produce different float results. When porting, preserve the reference's accumulation order even if it feels unnatural.
 - **Division before multiplication** to avoid overflow is a reference-specific choice that must be preserved.
 - **Use Kahan summation** (`numpy.sum` uses pairwise; explicit Kahan in `scipy`) if the reference does, not otherwise.
-
-## Reconciliation reports
-
-Every reconciled port produces a report in `docs/references/reconciliations/<n>.md` with:
-
-- What was reconciled (strategy or indicator, version)
-- Against which reference (commit SHA or paper ref)
-- Test window (start, end, symbol, bar resolution)
-- Divergence count by category (using the `reconcile-backtest` taxonomy)
-- Any accepted divergences with cumulative-impact justification
-- Link to the test(s) that encode the reconciliation
 
 ## Trade-level reconciliation taxonomy
 
@@ -137,7 +120,7 @@ when the relevant category has been ruled out as a root cause. The
 specific rule from the Tolerances section above applies here unchanged:
 if a category-classified divergence's magnitude is small relative to
 the meaningful range, document the accepted tolerance and the reasoning
-in the reconciliation report at ``docs/references/reconciliations/<n>.md``.
+in the test.
 
 ## Sovereignty
 
@@ -156,5 +139,5 @@ in the reconciliation report at ``docs/references/reconciliations/<n>.md``.
 - Loosening a tolerance to pass a test that classified as `warmup` or `timestamp`
 - "My engine works, LEAN must be buggy" — no, figure out which is right *per the reference specification*, and document
 - Forward-filling to align mismatched timestamp series
-- ISO-string, `DateTime`, or naive-`datetime` as a wire or storage format for timestamps (see "Canonical format" above — `int64 ms UTC` is the only allowed format)
-- Any of the ban-list items under "Timestamp rigor → Ban list"
+- ISO-string, `DateTime`, or naive-`datetime` as a wire or storage format for timestamps (see `temporal-rigor.md` → "Canonical representation" — `int64 ms UTC` is the only allowed format)
+- Any item on `temporal-rigor.md`'s ban list

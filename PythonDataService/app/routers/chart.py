@@ -9,7 +9,6 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.schemas.chart import (
-    AllowedTimeframesRequest,
     ChartDataRequest,
     ChartDataResponse,
     ChartIndicatorBatchRequest,
@@ -19,13 +18,10 @@ from app.schemas.chart import (
 )
 from app.services.chart_indicator_service import ChartIndicatorService, get_chart_indicator_service
 from app.services.chart_service import (
-    TIMEFRAME_DEFS,
-    get_allowed_timeframes,
     get_chart_data,
     resolve_range_presets,
     resolve_request_dates,
 )
-from app.services.dataset_service import INDICATOR_CONFIGS
 from app.utils.timestamps import now_ms_utc
 
 router = APIRouter()
@@ -82,7 +78,7 @@ async def chart_data(request: ChartDataRequest) -> ChartDataResponse:
         # Convert indicators to dict format
         indicator_dicts = [{"name": ind.name, "params": ind.params} for ind in request.indicators]
 
-        # Numeric window authority (PRD §12): start_ms_utc/end_ms_utc take
+        # Numeric window authority: start_ms_utc/end_ms_utc take
         # per-field precedence over the date strings, resolved to inclusive
         # UTC calendar dates — the inverse of the frontend's utcMsToIsoDate.
         try:
@@ -101,7 +97,7 @@ async def chart_data(request: ChartDataRequest) -> ChartDataResponse:
         # get_chart_data does heavy pandas work (Polygon fetch, resample, RTH
         # filter, indicator compute) — all synchronous. Running it directly in
         # the async handler blocked the event loop for 3-5 s and serialized
-        # every other request on this worker (audit § 5.6 — availability
+        # every other request on this worker (availability
         # checks that normally take 5 ms measured 2.0 s head-of-line).
         # asyncio.to_thread offloads to the default thread pool so the loop
         # stays responsive.
@@ -162,27 +158,6 @@ async def chart_data(request: ChartDataRequest) -> ChartDataResponse:
         )
 
 
-@router.post("/allowed-timeframes")
-async def allowed_timeframes(request: AllowedTimeframesRequest):
-    """
-    Return allowed timeframes for the given date range and session.
-    Frontend should use this as the source of truth for timeframe availability.
-    """
-    try:
-        allowed, estimates, recommended = get_allowed_timeframes(request.from_date, request.to_date, request.session)
-        return {
-            "allowed_timeframes": allowed,
-            "estimated_bars_per_timeframe": estimates,
-            "recommended_timeframe": recommended,
-        }
-    except Exception as e:
-        logger.error(f"[CHART] Allowed timeframes error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error_code": "INTERNAL_ERROR", "detail": str(e)},
-        )
-
-
 @router.get("/range-presets", response_model=ChartRangePresetsResponse)
 async def range_presets(session: Literal["rth", "extended"] = "rth") -> ChartRangePresetsResponse:
     """Calendar-resolved quick ranges ("last N trading sessions") for chart scope UIs.
@@ -207,43 +182,3 @@ async def range_presets(session: Literal["rth", "extended"] = "rth") -> ChartRan
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error_code": "INTERNAL_ERROR", "detail": str(e)},
         )
-
-
-@router.get("/timeframes")
-async def list_timeframes():
-    """Return all supported timeframes with metadata."""
-    return {"timeframes": [{"key": key, "minutes": val["minutes"]} for key, val in TIMEFRAME_DEFS.items()]}
-
-
-@router.get("/available-indicators")
-async def list_chart_indicators():
-    """Return indicators available for chart overlays and panels."""
-    return {
-        "indicators": {
-            name: {
-                "params": configs,
-                "panel": "main"
-                if name
-                in {
-                    "ema",
-                    "sma",
-                    "dema",
-                    "tema",
-                    "wma",
-                    "hma",
-                    "kama",
-                    "zlma",
-                    "rma",
-                    "alma",
-                    "bbands",
-                    "supertrend",
-                    "vwap",
-                    "psar",
-                    "kc",
-                    "donchian",
-                }
-                else name,
-            }
-            for name, configs in INDICATOR_CONFIGS.items()
-        }
-    }

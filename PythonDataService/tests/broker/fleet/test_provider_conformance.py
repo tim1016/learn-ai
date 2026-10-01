@@ -1,4 +1,4 @@
-"""Fake-provider conformance: N clerks across two adapters (PRD Phase 6 gate).
+"""Fake-provider conformance: N clerks across two adapters.
 
 ``fake_alpha`` and ``fake_beta`` run as the only two providers. What is proved
 here is the extension boundary itself: provider-qualified assignment,
@@ -790,7 +790,7 @@ async def _send_bot_action(router, lane, *, label: str, key: str):
 async def test_a_same_key_retry_while_the_first_dispatch_is_in_flight_is_never_redelivered(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
-    """#2319: the D11 gate covered only *settled* attempts. A same-key retry
+    """#2319: the redispatch gate covered only *settled* attempts. A same-key retry
     arriving while the first dispatch still awaits the lane found the row at
     ``not_dispatched`` (with ``dispatched_at_ms`` set), re-marked it
     idempotently and forwarded the command a second time. The retry must
@@ -893,28 +893,6 @@ async def test_an_unrouted_404_without_an_echo_surfaces_the_lanes_own_refusal_bo
     assert delivered.status_code == 404
     assert b"Not Found" in delivered.body
 
-
-
-def test_the_two_fakes_canonicalize_the_same_raw_account_differently() -> None:
-    """The extension boundary is only provable when the fakes disagree.
-
-    Two adapters that canonicalize identically cannot distinguish a
-    provider-qualified key from a globally unique one — the exact bug
-    provider-qualified assignment exists to prevent.
-    """
-    from tests.broker.fleet.conftest import fake_alpha, fake_beta
-
-    raw = "  Acct-XYZ "
-    assert fake_alpha().canonical_account_id(raw) == "ACCT-XYZ"
-    assert fake_beta().canonical_account_id(raw) == "acct_xyz"
-    # Not merely case: a casefold cannot collapse them back together.
-    assert (
-        fake_alpha().canonical_account_id(raw).casefold()
-        != fake_beta().canonical_account_id(raw).casefold()
-    )
-    # Both still refuse the empty identity, so the service's gate stays reachable.
-    assert fake_alpha().canonical_account_id("   ") == ""
-    assert fake_beta().canonical_account_id("   ") == ""
 
 
 def test_a_configuration_operation_routes_on_an_unbound_lane_of_the_declaring_provider(

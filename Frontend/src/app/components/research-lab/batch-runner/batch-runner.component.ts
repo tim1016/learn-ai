@@ -3,7 +3,6 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
-  DestroyRef,
   effect,
   inject,
   signal,
@@ -162,7 +161,6 @@ interface CrossSectionalJobResultRaw {
 })
 export class BatchRunnerComponent {
   private jobsService = inject(JobsService);
-  private destroyRef = inject(DestroyRef);
 
   // Form state
   featureName = signal('iv_rank_60');
@@ -272,8 +270,8 @@ export class BatchRunnerComponent {
 
   // ─── Verdict helpers (new schema only) ───────────────────────────
 
-  /** Stage 0/1/2/3 from the new SSE-driven response. ``null`` for the
-   *  legacy GraphQL path that doesn't populate ``stageInfo``. */
+  /** Stage 0/1/2/3 from the SSE-driven response. ``null`` when the
+   *  response doesn't populate ``stageInfo``. */
   readonly stage = computed<0 | 1 | 2 | 3 | null>(
     () => this.result()?.stageInfo?.stage ?? null,
   );
@@ -439,10 +437,6 @@ export class BatchRunnerComponent {
     this.result.set(null);
     this.error.set(null);
     this.logBuffer.clear();
-  }
-
-  getValidationSeverity(passed: boolean): 'success' | 'danger' {
-    return passed ? 'success' : 'danger';
   }
 
   getIcClass(ic: number): string {

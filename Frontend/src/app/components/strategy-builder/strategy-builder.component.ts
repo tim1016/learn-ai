@@ -62,7 +62,7 @@ interface BuilderChainRow {
 }
 
 /**
- * Chain-density mode per UX-Q2 in `docs/architecture/options-ux-design-prompt.md (pruned 2026-09-12, git history)`.
+ * Chain-density mode.
  * 'quick' shows L · S · Δ · Price · OI · Vol per side (default).
  * 'greeks' adds V · Θ · Γ between L/S and Δ — preserves the full-Greek
  * display from the deleted /options-chain page (D9a).
@@ -294,7 +294,14 @@ export class StrategyBuilderComponent implements OnDestroy {
 
   // ── Analysis ──────────────────────────────────────────────
   analysisResult = signal<StrategyAnalyzeResult | null>(null);
-  riskFreeRate = signal(0.043);
+  /**
+   * Python's rate at the selected expiration's tenor, from that expiration's chain
+   * snapshot (#2789). Null until it arrives: the in-browser curves (ADR 0068
+   * exception 1) never invent a rate of their own (#2764).
+   */
+  riskFreeRate = signal<number | null>(null);
+  /** Counts chain-snapshot fetches; only the latest may write the page (#2789). */
+  private chainRequest = 0;
   priceRangePct = signal(0.05);
   selectedGreek = signal<GreekType>('delta');
 
@@ -615,16 +622,6 @@ export class StrategyBuilderComponent implements OnDestroy {
       }))
   );
 
-  weightedIv = computed(() => {
-    const params = this.enabledLegsParams();
-    if (params.length === 0) return 0.2;
-    const valid = params.filter(l => l.iv > 0);
-    if (valid.length === 0) return 0.2;
-    const totalWeight = valid.reduce((s, l) => s + l.premium * l.quantity, 0);
-    if (totalWeight <= 0) return valid.reduce((s, l) => s + l.iv, 0) / valid.length;
-    return valid.reduce((s, l) => s + l.iv * l.premium * l.quantity, 0) / totalWeight;
-  });
-
   // X-axis center: single-leg → strike, multi-leg → midpoint of min/max strikes.
   chartCenter = computed(() => {
     const enabledStrikes = this.legs()
@@ -712,9 +709,9 @@ export class StrategyBuilderComponent implements OnDestroy {
     const params = this.enabledLegsParams();
     const t = this.timeToExpiry();
     const grid = this.priceGrid();
-    if (grid.length === 0 || params.length === 0 || t <= 0) return [];
-
     const r = this.riskFreeRate();
+    if (grid.length === 0 || params.length === 0 || t <= 0 || r === null) return [];
+
     return grid.map(price => ({
       price,
       pnl: strategyPnlAtPrice(params, price, t, r),
@@ -725,9 +722,9 @@ export class StrategyBuilderComponent implements OnDestroy {
     const params = this.enabledLegsParams();
     const dte = this.daysToExpiry();
     const grid = this.priceGrid();
-    if (grid.length === 0 || params.length === 0) return [];
-
     const r = this.riskFreeRate();
+    if (grid.length === 0 || params.length === 0 || r === null) return [];
+
     return this.whatIfScenarios()
       .filter(s => s.enabled)
       .map(scenario => {
@@ -750,9 +747,9 @@ export class StrategyBuilderComponent implements OnDestroy {
     const params = this.enabledLegsParams();
     const t = this.timeToExpiry();
     const grid = this.priceGrid();
-    if (grid.length === 0 || params.length === 0 || t <= 0) return [];
-
     const r = this.riskFreeRate();
+    if (grid.length === 0 || params.length === 0 || t <= 0 || r === null) return [];
+
     const greek = this.selectedGreek() as GreekName;
     return grid.map(price => ({
       price,
@@ -840,7 +837,7 @@ export class StrategyBuilderComponent implements OnDestroy {
     const t = this.timeToExpiry();
     const spot = this.spotPrice();
     const r = this.riskFreeRate();
-    if (params.length === 0 || t <= 0 || spot <= 0) return null;
+    if (params.length === 0 || t <= 0 || spot <= 0 || r === null) return null;
     return {
       delta: strategyGreekAtPrice(params, spot, t, r, 'delta'),
       gamma: strategyGreekAtPrice(params, spot, t, r, 'gamma'),
@@ -988,13 +985,23 @@ export class StrategyBuilderComponent implements OnDestroy {
   }
 
   async fetchChainSnapshot(ticker: string, expiration: string): Promise<void> {
+    const request = ++this.chainRequest;
+    // A late reply, value or error, for a fetch the user has since moved past
+    // must not touch the current expiration's chain, rate or error (#2789).
+    const current = () => request === this.chainRequest
+      && this.selectedExpiration() === expiration
+      && this.ticker().trim().toUpperCase() === ticker;
     this.chainLoading.set(true);
     this.error.set(null);
+    // The rate belongs to one expiration; never price this one at another's (#2789).
+    this.riskFreeRate.set(null);
 
     try {
       const result = await firstValueFrom(
         this.marketDataService.getOptionsChainSnapshot(ticker, expiration)
       );
+
+      if (!current()) return;
 
       if (!result.success) {
         this.error.set(result.error ?? 'Failed to fetch snapshot');
@@ -1003,17 +1010,18 @@ export class StrategyBuilderComponent implements OnDestroy {
 
       this.underlying.set(result.underlying);
       this.allContracts.set(result.contracts);
-      // Auto-populate riskFreeRate from FRED-sourced rate (Step 8 of IV-RV alignment).
-      // User can still override via UI.
-      if (result.riskFreeRate != null && result.riskFreeRate > 0) {
+      // Python's rate at this expiration's tenor (FRED, or its one default); this
+      // page has no rate input (#2764, #2789).
+      if (result.riskFreeRate != null) {
         this.riskFreeRate.set(result.riskFreeRate);
       }
 
       setTimeout(() => this.scrollToAtm(), 100);
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      if (current()) this.error.set(err instanceof Error ? err.message : String(err));
     } finally {
-      this.chainLoading.set(false);
+      // Only the latest fetch ends the loading state it started.
+      if (request === this.chainRequest) this.chainLoading.set(false);
     }
   }
 
@@ -1160,6 +1168,9 @@ export class StrategyBuilderComponent implements OnDestroy {
           legInputs,
           expiration,
           spot,
+          // The in-browser curves' rate, the selected expiration's, so both sides price
+          // alike; null lets Python fill it (#2764, #2789).
+          this.riskFreeRate(),
         )
       );
 

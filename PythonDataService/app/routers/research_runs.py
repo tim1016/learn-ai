@@ -11,8 +11,7 @@ Three endpoints under ``/api/research/strategy-runs``:
 
 GraphQL passthrough is intentionally not wired here. Phase B (research
 workbench) will decide whether to add one based on whether the UI is
-GraphQL-only or willing to call FastAPI directly. See
-``docs/architecture/build-alpha-style-features-1-8-research-spec.md``.
+GraphQL-only or willing to call FastAPI directly.
 
 The data-source dependency mirrors ``app/routers/spec_strategy.py``:
 production injects a real ``LeanMinuteDataReader``; tests override via
@@ -35,8 +34,7 @@ event loop responsive under concurrent requests. Converting to
 adopting ``aiofiles``) would actively *block* the loop and degrade
 throughput, so the threadpool path is the right one for Phase A. If
 the runner ever grows real async I/O (Phase D's MC could parallelise
-folds), revisit per-handler. See ``.claude/rules/python.md`` § FastAPI
-for the project's general async-by-default rule.
+folds), revisit per-handler.
 """
 
 from __future__ import annotations
@@ -58,23 +56,16 @@ from app.research.runs import (
     RunLedger,
     RunNotFoundError,
     RunRequest,
-    WindowSummary,
     list_runs,
     load_run,
     run_date_to_ms,
     run_strategy_spec,
     save_run,
-    summarize_window,
 )
 from app.services.spec_run_data import SpecDataSourceFactory, materialize_spec_data_source
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter()
-
-# Sibling router for ``/api/research/trading-calendar`` — mounted under
-# ``/api/research`` in ``main.py``. Lives in a separate ``APIRouter`` so
-# the path doesn't collide with this file's ``/{run_id}`` catch-all
-# (which is bound under ``/api/research/strategy-runs``).
-calendar_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
@@ -89,7 +80,7 @@ class StrategyRunRequest(BaseModel):
     own validation layer without ever reaching the runner.
     """
 
-    spec: StrategySpec = Field(..., description="Validated StrategySpec — see /api/spec-strategy/schema")
+    spec: StrategySpec = Field(..., description="Validated StrategySpec")
     start_date: str = Field(..., description="YYYY-MM-DD")
     end_date: str = Field(..., description="YYYY-MM-DD")
     initial_cash: float = Field(100_000.0, ge=0)
@@ -290,29 +281,6 @@ def get_run(
     return StrategyRunResponse(ledger=ledger, result=result)
 
 
-@calendar_router.get("/trading-calendar", response_model=WindowSummary)
-def get_trading_calendar(
-    start: str = Query(..., description="Window start date, YYYY-MM-DD (inclusive)"),
-    end: str = Query(..., description="Window end date, YYYY-MM-DD (inclusive)"),
-) -> WindowSummary:
-    """Return the trading-calendar breakdown for ``[start, end]``.
-
-    Same date semantics as ``POST /api/research/strategy-runs``:
-    ``end`` is inclusive (``StrategyAlgorithm.set_end_date`` runs through
-    23:59:59 of that day). The date-picker UI calls this before submitting
-    a run so the user can see which days will be skipped (weekends,
-    holidays) before discovering the truncation in the result.
-    """
-    start_d = _parse_date(start, "start")
-    end_d = _parse_date(end, "end")
-    if end_d < start_d:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"end must be on or after start (got start={start_d.isoformat()}, end={end_d.isoformat()})",
-        )
-    return summarize_window(start_d, end_d)
-
-
 @router.get("", response_model=StrategyRunListResponse)
 def list_runs_endpoint(
     spec_hash: str | None = Query(None, description="Filter by ``strategy_spec_hash``"),
@@ -324,7 +292,9 @@ def list_runs_endpoint(
     ),
     parent_run_id: str | None = Query(None, description="Filter by lineage — fold/MC/sweep parent"),
     parent_spec_hash: str | None = Query(None, description="Filter by sensitivity-grid parent"),
-    since_ms: int | None = Query(None, ge=0, description="Only return runs created at or after this ``int64 ms UTC``"),
+    since_ms: int | None = Query(
+        None, ge=0, le=MAX_TIMESTAMP_MS, description="Only return runs created at or after this ``int64 ms UTC``"
+    ),
     limit: int | None = Query(None, ge=1, description="Cap result count after sorting newest-first"),
     artifacts_root: Path | None = Depends(get_artifacts_root),
 ) -> StrategyRunListResponse:

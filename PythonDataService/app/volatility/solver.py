@@ -4,7 +4,7 @@ Implied Volatility Solver
 
 Formula: Find σ such that BS(S, K, T, r, q, σ) = market_premium. Three-stage cascade: (1) pure-Python Newton-Raphson with vega step (primary — quadratic convergence, warm-start friendly); (2) QuantLib's ``VanillaOption.impliedVolatility()`` for T ≥ 1 calendar day when NR fails (QuantLib day-count arithmetic cannot resolve sub-day TTM); (3) scipy.optimize.brentq fallback for sub-day TTM or QuantLib non-convergence. Brenner-Subrahmanyam closed-form approximation seeds the initial guess (σ₀ ≈ √(2π/T) · price/S for ATM).
 Reference: Hull §19.11 (implied volatility); Brent (1973) "Algorithms for Minimization Without Derivatives" §4 for Brent's method; Brenner-Subrahmanyam (1988) Financial Analysts Journal for the seed approximation.
-Canonical implementation: this file (the canonical IV solver per docs/math-sources-of-truth.md § Options pricing and Greeks). Companion: `app/services/quantlib_pricer.py::implied_volatility` (QuantLib bisection — second path for callers wanting the QuantLib pricer in the loop). Cross-engine parity is pending-fixture.
+Canonical implementation: this file (the canonical IV solver). Companion: `app/services/quantlib_pricer.py::implied_volatility` (QuantLib bisection — second path for callers wanting the QuantLib pricer in the loop). Cross-engine parity is pending-fixture.
 Validated against: NONE — pending cross-engine parity fixture between this file and the quantlib_pricer.py companion. Behavior tests exist; equivalence proof does not.
 
 Solver order: Newton-Raphson (custom Python) → QuantLib ``impliedVolatility``
@@ -41,9 +41,8 @@ QUANTLIB_MAX_ITER: int = 200
 QUANTLIB_TOLERANCE: float = 1e-8
 # 1 minute, in years. The data-lab companion solves IV per minute on 0DTE
 # contracts where ttm is a fraction of a day; the previous "1 calendar day"
-# floor silently returned EXPIRED for every 0DTE bar (see
-# docs/references/reconciliations/data-lab-spy-2026-04-17-to-2026-04-24.md
-# § Finding 3.1). The Brent fallback handles continuous TTM correctly.
+# floor silently returned EXPIRED for every 0DTE bar.
+# The Brent fallback handles continuous TTM correctly.
 MIN_TIME_TO_EXPIRY: float = 1.0 / (365.0 * 24.0 * 60.0)
 MIN_OPTION_PRICE: float = 0.001  # reject near-zero premiums
 
@@ -124,7 +123,7 @@ def implied_volatility(
     spot: float,
     strike: float,
     ttm: float,
-    rate: float = 0.05,
+    rate: float,
     dividend: float = 0.0,
     is_call: bool = True,
     vol_guess: float = DEFAULT_IV_GUESS,
@@ -404,7 +403,7 @@ def _brent_fallback(
 def solve_iv_chain(
     records: list[dict],
     spot: float,
-    rate: float = 0.05,
+    rate: float,
     dividend: float = 0.0,
 ) -> list[dict]:
     """

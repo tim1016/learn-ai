@@ -39,29 +39,9 @@ import {
   DATA_LAB_WORKSPACE_SCHEMA_VERSION,
 } from './data-lab-workspace-store';
 
-/* Pure helpers kept exported for their existing spec pins
- * (data-lab.auto-bar-timeframe.spec.ts, data-lab.parse-chart-timeframe.spec.ts,
- * data-lab.auto-chunk-readout.spec.ts). They predate the workspace redesign
- * and stay here verbatim so those suites keep passing unchanged. */
-
-/**
- * Auto bar-timeframe heuristic — picks a Polygon bar resolution from the
- * calendar-day span of the range so a fetch returns in a reasonable time
- * without asking the user to think in "bars per day". Locked by product
- * on 2026-04-24:
- *
- *   ≤ 5 days       → 1-minute
- *   5–30 days      → 5-minute
- *   30–120 days    → 15-minute
- *   120–365 days   → 1-hour
- *   > 365 days     → 1-hour (Polygon Starter's cap is 2 years anyway)
- */
-export function pickAutoBarTimeframe(spanDays: number): string {
-  if (spanDays <= 5) return '1m';
-  if (spanDays <= 30) return '5m';
-  if (spanDays <= 120) return '15m';
-  return '1h';
-}
+/* Pure helpers kept exported for their existing spec pin
+ * (data-lab.parse-chart-timeframe.spec.ts). They predate the workspace redesign
+ * and stay here verbatim so that suite keeps passing unchanged. */
 
 export type PolygonTimespan = 'minute' | 'hour' | 'day' | 'week' | 'month';
 
@@ -87,26 +67,6 @@ export function parseChartTimeframe(
     null;
   if (!timespan) return null;
   return { timespan, multiplier };
-}
-
-/**
- * Layman-friendly readout for the Auto Chunk control. Pure helper so the
- * exact wording can be regression-tested without spinning up a component.
- */
-export function formatChunkReadout(
-  bars: number,
-  autoChunk: boolean,
-  polygonLimit: number,
-): string {
-  const limit = Math.max(1, polygonLimit);
-  const chunks = Math.max(1, Math.ceil(bars / limit));
-  if (!autoChunk) {
-    return `Manual: ${polygonLimit.toLocaleString()} bars per request.`;
-  }
-  if (chunks === 1) {
-    return `1 request · ~${bars.toLocaleString()} bars · single response.`;
-  }
-  return `Plan runs ${chunks} requests · ~${bars.toLocaleString()} bars · paced if your plan caps requests/min.`;
 }
 
 /** Bar-timeframe presets shared by the shell's compact scope bar and the
@@ -157,7 +117,7 @@ export function parseYmdMsUtc(s: string): number | null {
 }
 
 /**
- * Data Lab route shell (PRD §7.2).
+ * Data Lab route shell.
  *
  * Owns the compact scope bar (with the calendar-resolved quick-range chips),
  * the three route tabs, the saved-setups drawer, and one RunDockComponent.
@@ -196,13 +156,13 @@ export class DataLabComponent {
 
   readonly barTimeframes = BAR_TIMEFRAMES;
 
-  // ── Legacy URL ingress (PRD §14) ───────────────────────────
+  // ── Legacy URL ingress ─────────────────────────────────────
   /** Warnings surfaced by the ingress adapter, shown in a dismissible banner. */
   readonly ingressWarnings = signal<string[]>([]);
 
   constructor() {
     // Seed the product's thirteen-indicator default recipe into a fresh
-    // workspace (PRD §4 / §7.3). Seeding never fetches anything.
+    // workspace. Seeding never fetches anything.
     if (this.store.indicators().length === 0) {
       for (const entry of DEFAULT_DATA_LAB_INDICATORS) {
         this.store.addIndicator(entry.canonicalKey, entry.params);
@@ -375,7 +335,7 @@ export class DataLabComponent {
   /** Commit the draft scope. Edits before this never trigger fetches. A
    *  successful commit requests a chart refresh — the operator applied a
    *  scope on purpose and expects the chart to follow (2026-09-13 product
-   *  decision, superseding PRD §14's explicit-refresh-only rule). */
+   *  decision, superseding the earlier explicit-refresh-only rule). */
   applyScope(): void {
     const result = this.store.commitScope();
     this.scopeCommitError.set(result.ok ? null : result.error);
@@ -571,7 +531,7 @@ export class DataLabComponent {
     this.sessionName.set(session.name);
     this.store.setSavedSession({ id: session.id, schemaVersion: DATA_LAB_WORKSPACE_SCHEMA_VERSION });
     // Hand the snapshot (if any) to Explore — restoring it renders cached
-    // bars with no HTTP call; the chart is marked stale meanwhile (PRD §16).
+    // bars with no HTTP call; the chart is marked stale meanwhile.
     if (session.chartSnapshot) {
       this.store.setRestoredChartSnapshot(session.chartSnapshot);
     }

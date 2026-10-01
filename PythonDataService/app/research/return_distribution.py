@@ -20,8 +20,7 @@ Reference:
   Management" (2e) §2.2–2.3 (empirical quantile and tail-expectation
   estimators). Normal CDF via erf, identical to
   app/engine/results/lean_statistics.py::_normal_cdf.
-Canonical implementation: this file (registered in docs/math-sources-of-truth.md
-  as "Daily return distribution from minute bars").
+Canonical implementation: this file.
 Validated against: tests/research/test_return_distribution.py and the golden
   fixture tests/fixtures/golden/return-distribution/RD-001 (scipy.stats oracle).
 
@@ -95,24 +94,6 @@ _ET = ZoneInfo("America/New_York")
 ReturnKind = Literal["close_to_close", "session", "overnight"]
 RETURN_KINDS: tuple[ReturnKind, ...] = ("close_to_close", "session", "overnight")
 
-#: The full-24h session segmentation shown in the per-day drill-down, in
-#: chronological order. ``overnight``/``morning``/``afternoon`` are the
-#: RTH-anchored decomposition (overnight + session = close-to-close,
-#: morning + afternoon = session — exact in log space, second-order in the
-#: displayed percent); ``pre_market`` is the portion of the overnight gap
-#: covered by actual pre-market trading (first extended bar open → RTH open)
-#: and ``after_hours`` is the post-close tape (RTH close → last extended
-#: bar close). Both are supplementary: they overlap the overnight and
-#: next-day boundaries by construction, which is documented rather than
-#: hidden.
-SEGMENT_NAMES: tuple[str, ...] = (
-    "overnight",
-    "pre_market",
-    "morning",
-    "afternoon",
-    "after_hours",
-)
-
 
 class NonMonotonicBarError(ValueError):
     """A day's bars did not arrive in chronological order."""
@@ -159,7 +140,11 @@ class DailyReturns:
     """One day's returns in simple percent, plus wire anchors.
 
     Every percentage field is ``None`` when the anchors it needs are absent;
-    the log-space identities that do hold are listed in SEGMENT_NAMES above.
+    the log-space identities that do hold are overnight + session =
+    close-to-close and morning + afternoon = session (exact in log space,
+    second-order in the displayed percent). ``pre_market`` and
+    ``after_hours`` are supplementary: they overlap the overnight and
+    next-day boundaries by construction.
     ``bin_indices`` is filled by ``build_return_distribution`` — the day's
     bin per return kind under the response's geometry (index into the
     histogram's bins tuple, edge bins included; ``None`` when that kind's

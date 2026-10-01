@@ -4,9 +4,9 @@
  * Client-side Black-Scholes pricing and Greeks. Uses the Abramowitz & Stegun
  * (1964) rational approximation for the normal CDF (|error| < 1.5e-7).
  *
- * Phase 1.3 of `docs/architecture/numerical-authority-migration-plan.md`:
- * this module is **not a math authority**. Per `AGENTS.md` § "Python owns
- * all math", canonical Black-Scholes pricing and Greeks live in
+ * ADR 0068 names this module as exception 1 (Strategy Builder latency):
+ * this module is **not a math authority**. Python owns the canonical
+ * math; canonical Black-Scholes pricing and Greeks live in
  * `PythonDataService/app/services/bs_greeks.py` (closed-form) and
  * `app/services/quantlib_pricer.py` (QuantLib). Cross-engine parity at
  * `atol=1e-10` is pinned by `PythonDataService/tests/services/test_bs_cross_engine_parity.py`
@@ -246,23 +246,6 @@ export function bsRho(
     return (strike * t * discount * normCdf(d2)) / 100;
   }
   return (-strike * t * discount * normCdf(-d2)) / 100;
-}
-
-// ---------------------------------------------------------------------------
-// Lognormal CDF — probability that S_T < x
-// ---------------------------------------------------------------------------
-
-export function lognormalCdf(
-  x: number,
-  spot: number,
-  r: number,
-  sigma: number,
-  t: number,
-): number {
-  if (x <= 0 || spot <= 0 || sigma <= 0 || t <= 0) return 0;
-  const d2 = (Math.log(x / spot) - (r - 0.5 * sigma * sigma) * t) /
-    (sigma * Math.sqrt(t));
-  return normCdf(d2);
 }
 
 // ---------------------------------------------------------------------------

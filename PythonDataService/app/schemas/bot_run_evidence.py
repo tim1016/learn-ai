@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.canary_admission import CanaryRollbackDecision
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 CRASH_EXCEPTION_TYPE_MAX_LENGTH = 128
 CRASH_MESSAGE_MAX_LENGTH = 2_048
@@ -30,7 +31,7 @@ class BotRunTerminalOutcomeView(BaseModel):
 
     kind: BotDutyOutcomeKind
     reason_code: str = Field(min_length=1, max_length=128)
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     run_id: str | None = None
     crash_diagnostic: BotCrashDiagnostic | None = None
     # #1729 AC10: the Clerk-proved canary rollback verdict recorded alongside

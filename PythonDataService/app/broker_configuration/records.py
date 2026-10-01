@@ -1,13 +1,12 @@
 """The stored records of the broker-configuration profiles database.
 
-One frozen dataclass per record shape in
-``docs/architecture/broker-configuration-profile-contract.md`` §2. These are
+One frozen dataclass per stored record shape. These are
 the domain values the store reads and writes and the service reasons over; the
 Pydantic DTOs in ``app/schemas/broker_configuration.py`` are built from them
 and never replace them.
 
-Every timestamp is ``int64 ms UTC`` and every such field ends ``_at_ms``
-(`.claude/rules/temporal-rigor.md`). No record carries a secret, a secret
+Every timestamp is ``int64 ms UTC`` and every such field ends ``_at_ms``.
+No record carries a secret, a secret
 fragment, a secret length, or an environment variable name — a profile
 references an opaque credential *slot* and nothing else (contract §3).
 """
@@ -41,11 +40,11 @@ DeskLifecycleKey = Literal[
 DeskLifecycleStatus = Literal["complete", "current", "pending"]
 
 # The only broker this delivery admits. The column exists so a second broker
-# does not need a migration (contract §2.2).
+# does not need a migration.
 ALPACA_BROKER = "alpaca"
 
 # The revision payload's own version, for forward migration of the *content*
-# (contract §2.3 ``schema_version``) — distinct from the database schema
+# (the revision's ``schema_version``) — distinct from the database schema
 # version in ``schema.py``.
 REVISION_SCHEMA_VERSION = 1
 
@@ -119,18 +118,16 @@ class InstallationSelection:
 
     ``apply_requested_generation`` records which generation the one-shot Apply
     was recorded against, so a retried Apply naming that generation is a no-op
-    success rather than a second request (contract §5's idempotency rule). The
-    contract's §2.6 field list does not name it; the alternative was inferring
-    it from ``selection_generation - 1``, which is true only while nothing else
-    can advance the generation.
+    success rather than a second request. The alternative was inferring it from
+    ``selection_generation - 1``, which is true only while nothing else can
+    advance the generation.
 
-    ``selection_generation`` advances on each stage and each apply request, as
-    §2.6 says, **and** on each of the two transitions that consume the one-shot
-    request — the worker's acknowledgement and a recorded refusal. Otherwise a
-    caller still holding the pre-consumption generation could re-arm the Apply
-    that was just refused, or a second worker could overwrite the effective
-    binding; the generation is the only fence, since Decision 5 ships no worker
-    identity.
+    ``selection_generation`` advances on each stage and each apply request **and**
+    on each of the two transitions that consume the one-shot request — the
+    worker's acknowledgement and a recorded refusal. Otherwise a caller still
+    holding the pre-consumption generation could re-arm the Apply that was just
+    refused, or a second worker could overwrite the effective binding; the
+    generation is the only fence, since Decision 5 ships no worker identity.
 
     The worker establishes ``effective_*`` and ``last_apply_*`` only after
     construction succeeds and it owns the required execution lease. Offline

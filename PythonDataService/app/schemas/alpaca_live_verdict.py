@@ -35,7 +35,7 @@ class AlpacaLiveVerdict(BaseModel):
     deployment_readiness: DeploymentReadiness
     loss_hold: LossHoldState
     final_verdict: FinalVerdict
-    # Operator copy is authored here, not in the client (CLAUDE.md hard rule).
+    # Operator copy is authored here, not in the client (ADR 0035 D12).
     headline: str = Field(min_length=1)
     detail: str = Field(min_length=1)
     observed_at_ms: EpochMs

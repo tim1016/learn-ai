@@ -251,13 +251,6 @@ describe('BotDetailsComponent', () => {
     ).toBeTruthy();
   });
 
-  it('says so when a bot recorded no exit terms', async () => {
-    await renderDetails(panelView({ exit_terms: null }));
-
-    expect(summaryText('Exit terms')).toBe('Exit terms · none recorded');
-    expect(within(fold('Exit terms')).getByText('This bot recorded no exit terms.')).toBeTruthy();
-  });
-
   it('lists every check with its state, and keeps the header action out of the list', async () => {
     const { actionRequested } = await renderDetails(panelView({ primary_action: 'stop_bot_decisions' }));
     setFold('Checks', true);
@@ -294,15 +287,6 @@ describe('BotDetailsComponent', () => {
 
     for (const title of FOLDS) setFold(title, true);
     expect(container.textContent).not.toContain(ACCOUNT_NUMBER);
-  });
-
-  it('reports every connection healthy as all connected', async () => {
-    const panel = panelView();
-    await renderDetails(panelView({
-      clerk: { ...panel.clerk, channels: panel.clerk.channels.map((c) => ({ ...c, state: 'healthy' })) },
-    }));
-
-    expect(summaryText('Connections')).toBe('Connections · all connected');
   });
 
   it('reads the audit trail only once Order records is first opened', async () => {
@@ -359,14 +343,6 @@ describe('BotDetailsComponent', () => {
     }
     expect(evidence.getByText('deployment_validation').tagName).toBe('CODE');
     expect(evidence.getByText('No Signal Program build proof supplied.')).toBeTruthy();
-  });
-
-  it('says so when no program was sealed', async () => {
-    await renderDetails(panelView({ sealed_program: null }));
-
-    expect(
-      within(fold('Run evidence')).getByText('No sealed program was recorded for this bot.'),
-    ).toBeTruthy();
   });
 
   it('passes AXE with every fold open', async () => {

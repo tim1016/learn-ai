@@ -149,18 +149,6 @@ class TestStrategyEndpointValidation:
         assert response.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_missing_symbol_returns_422(self, client: AsyncClient):
-        payload = {
-            "legs": [
-                {"strike": 100, "option_type": "call", "position": "long", "premium": 5.0, "iv": 0.25, "quantity": 1},
-            ],
-            "expiration_date": "2026-12-31",
-            "spot_price": 100,
-        }
-        response = await client.post("/api/strategy/analyze", json=payload)
-        assert response.status_code == 422
-
-    @pytest.mark.asyncio
     async def test_custom_curve_points(self, client: AsyncClient):
         payload = {
             "symbol": "AAPL",

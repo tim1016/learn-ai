@@ -1,23 +1,21 @@
-"""Event-sourced SQLite repository spine — PRD Phase 1 / issue #1375, repaired
-by the corrective foundation slice.
+"""Event-sourced SQLite repository spine — issue #1375, repaired by the
+corrective foundation slice.
 
-Implements the pinned contract in
-``docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md``: the
-account-scoped ``clerk.db``, the R9 two-phase mirror fence, the fail-closed
-startup checks, and a durable, renewed per-account execution lease. SQL stays
+Implements ADR 0035 and its binding annex: the account-scoped ``clerk.db``, the
+R9 two-phase mirror fence, the fail-closed startup checks, and a durable,
+renewed per-account execution lease. SQL stays
 private to this storage package (principally ``reads.py``, ``writes.py``, and
-``repository_lifecycle.py``; PRD §9.2) — callers never see a cursor; they call
+``repository_lifecycle.py``) — callers never see a cursor; they call
 :meth:`ClerkSqliteRepository.commit_first_transition` (or
 :meth:`append_transition` for kinds with no idempotent-admission concept, e.g.
 bot registration) and read back typed snapshots.
 
-Corrective foundation slice (see ``docs/audits/open-pr-review-2026-08-05.md``
-and ``docs/superpowers/plans/2026-08-05-alpaca-clerk-corrective-foundation-slice.md``):
+Corrective foundation slice:
 the prior ``reserve_command()`` + public ``serialized()`` design let a command
 become durable as a bare ``commands`` row with no ``custody_transitions``
-insert and no mirror fence — directly contradicting PRD §4 goal 3 and §9.3,
-both of which require reservation, effect creation, transition, fold, and
-revision advance in one SQLite transaction. Both are deleted here.
+insert and no mirror fence — contradicting the rule that reservation, effect
+creation, transition, fold, and revision advance happen in one SQLite
+transaction. Both are deleted here.
 :meth:`commit_first_transition` is the one operation that replaces them: a
 content-addressed lookup and (if fresh) a transition append, held under one
 private write coordinator, whose fold is what creates the command (and, from
@@ -45,7 +43,6 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     append_competing_decision_receipt_row,
     append_decision_receipt_row,
     atomic_decision_receipt_conflicts_with_existing,
-    update_decision_receipt_for_bar,
 )
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     active_execution_coverage_conflicts,
@@ -56,11 +53,9 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import (
     unreadable_quarantine_source_ids_for_order,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
-    ExecutionCorrectedFacts,
     ExecutionCoverageQuarantinedFacts,
     ExecutionSliceFilledFacts,
     UncertaintyRaisedFacts,
-    validate_execution_corrected_facts,
     validate_execution_coverage_quarantined_facts,
     validate_execution_slice_facts,
 )
@@ -122,19 +117,19 @@ class AlreadyInitialized(ClerkSqliteError):
 
 
 class DatabaseMissingAfterEstablishment(ClerkSqliteError):
-    """Startup check 2 (§9): ``clerk.db`` is gone but the registry proves it existed."""
+    """Startup check 2 (annex §9): ``clerk.db`` is gone but the registry proves it existed."""
 
 
 class DatabaseIdentityMismatch(ClerkSqliteError):
-    """Startup check 3-4 (§9): identity token, generation, or account_id does not match."""
+    """Startup check 3-4 (annex §9): identity token, generation, or account_id does not match."""
 
 
 class SchemaVersionMismatch(ClerkSqliteError):
-    """Startup check 5 (§9)."""
+    """Startup check 5 (annex §9)."""
 
 
 class IntegrityCheckFailed(ClerkSqliteError):
-    """Startup check 7 (§9): ``PRAGMA integrity_check`` did not return ``ok``."""
+    """Startup check 7 (annex §9): ``PRAGMA integrity_check`` did not return ``ok``."""
 
 
 class UnsupportedWalFilesystem(ClerkSqliteError):
@@ -142,7 +137,7 @@ class UnsupportedWalFilesystem(ClerkSqliteError):
 
 
 class HashChainBroken(ClerkSqliteError):
-    """Startup check 8 (§9): a stored row's hash disagrees with its recomputation."""
+    """Startup check 8 (annex §9): a stored row's hash disagrees with its recomputation."""
 
 
 class ExecutionLeaseHeld(ClerkSqliteError):
@@ -150,7 +145,7 @@ class ExecutionLeaseHeld(ClerkSqliteError):
 
 
 class ExecutionLeaseLost(ClerkSqliteError):
-    """§9a: this handle's lease expired or was reassigned; it can no longer write.
+    """Annex §9a: this handle's lease expired or was reassigned; it can no longer write.
 
     ``account_id`` names the authority whose lease lapsed. A write path that
     catches this for a bot whose custody lives under an isolated ``sim:``
@@ -180,7 +175,7 @@ class RecoveryInProgress(ClerkSqliteError):
 
 
 class RepositoryPoisoned(ClerkSqliteError):
-    """§9a: a transition committed but its mirror finalize was unconfirmed.
+    """Annex §9a: a transition committed but its mirror finalize was unconfirmed.
 
     No further mutation or operation claim is permitted until
     :meth:`ClerkSqliteRepository.reconcile_poison` (or a fresh ``open()``)
@@ -201,7 +196,7 @@ class ClerkSqliteRepository(
 
     Construct via :meth:`initialize` (a brand-new generation) or
     :meth:`open` (an existing one) — never call ``__init__`` directly, both
-    classmethods run the checks the pinned contract requires before handing
+    classmethods run the checks ADR 0035's binding annex requires before handing
     back a usable instance.
     """
 
@@ -245,8 +240,8 @@ class ClerkSqliteRepository(
         # Home's Finished results at the last custody revision read; created
         # on first use (``bot_results``), process-local like the line above.
         self._bot_results_memo: RevisionMemo[dict[str, BotResult]] | None = None
-        # Pinned contracts doc §2: "one application-owned write coordinator
-        # ... belt-and-suspenders, not a substitute for BEGIN IMMEDIATE."
+        # Annex §4: an application-owned write coordinator sits in front of
+        # BEGIN IMMEDIATE -- belt-and-suspenders, not a substitute for it.
         # BEGIN IMMEDIATE's lock only protects from the point it's acquired;
         # append_transition reads next-sequence/prev_hash/authority_generation
         # before that point, so this lock is what actually closes the window
@@ -285,7 +280,7 @@ class ClerkSqliteRepository(
         """This process's execution-lease identity — the same owner an
         operation claim should be acquired under, since a claim is only
         meaningful as proof that *this* live process is the one about to
-        contact the broker (§2's lease + claim close the same gap)."""
+        contact the broker (the lease + claim close the same gap, ADR 0035 D5)."""
         return self._lease_owner
 
     @property
@@ -352,8 +347,8 @@ class ClerkSqliteRepository(
         established-accounts registry already has an entry for this account
         with no matching database on disk. The only exception is a verified
         paper developer-reset authorization for that exact prior generation;
-        every other missing established database remains PRD §15.4's
-        fail-closed case.
+        every other missing established database stays a fail-closed
+        case (annex §9 check 2).
         """
         from app.broker.alpaca.clerk.sqlite.repository_lifecycle import (
             initialize_repository,
@@ -382,7 +377,7 @@ class ClerkSqliteRepository(
         lease_ttl_ms: int = DEFAULT_LEASE_TTL_MS,
         fold_registry: FoldRegistry = DEFAULT_FOLD_REGISTRY,
     ) -> ClerkSqliteRepository:
-        """Open an existing authority, running all fail-closed checks (§9)."""
+        """Open an existing authority, running all fail-closed checks (annex §9)."""
         from app.broker.alpaca.clerk.sqlite.repository_lifecycle import open_repository
 
         return open_repository(
@@ -398,7 +393,7 @@ class ClerkSqliteRepository(
         )
 
     # ------------------------------------------------------------------
-    # Lease renewal and poison handling (§9a)
+    # Lease renewal and poison handling (annex §9a)
     # ------------------------------------------------------------------
 
     def _renew_execution_lease(self) -> None:
@@ -508,7 +503,7 @@ class ClerkSqliteRepository(
             )
 
     def reconcile_poison(self) -> None:
-        """Re-run the exact §9 check-9 reconciliation; clear the poison flag
+        """Re-run the exact annex §9 check-9 reconciliation; clear the poison flag
         only if it finds the fence consistent."""
         with self._write_lock:
             rows = self.custody_transitions()
@@ -532,7 +527,7 @@ class ClerkSqliteRepository(
         no fold ran (R1: "a failed prepare, SQLite commit, or finalization
         produces no broker call" — this method is the fence that guarantees
         that for every caller above it). A failure *after* the SQLite commit
-        but during the finalize fsync poisons this handle (§9a) rather than
+        but during the finalize fsync poisons this handle (annex §9a) rather than
         leaving it able to accept further writes unaware the fence is
         unconfirmed.
         """
@@ -767,6 +762,32 @@ class ClerkSqliteRepository(
             self.append_transition(transition)
             return "appended"
 
+    def exact_execution_contradicts_record(self, *, order_ref: str, facts: ExecutionSliceFilledFacts) -> bool:
+        """Whether the order holds ``facts``'s execution id with other economics (#2791).
+
+        Held as an effective fill, or as an exact an order-total proof
+        (#2346) kept quarantined, compared as the append flow compares a
+        redelivery (:meth:`_same_slice_economics`). A fill a correction
+        superseded is never compared: its correction's economics stand.
+        """
+        with self._write_lock:
+            existing = reads.effective_execution_slice(self._conn, facts.execution_id)
+            if existing is not None:
+                return not self._same_execution_slice(existing, facts=facts, order_ref=order_ref)
+            if reads.execution_exists(self._conn, facts.execution_id):
+                return False
+            retained = [
+                item.exact_execution
+                for item in order_total_retained_exact_provenance(self._conn, order_ref=order_ref)
+                if item.exact_execution.execution_id == facts.execution_id
+            ]
+            return bool(retained) and not any(
+                self._same_slice_economics(
+                    symbol=item.symbol, side=item.side, qty=item.slice_qty, price=item.slice_price, facts=facts
+                )
+                for item in retained
+            )
+
     def _validated_execution_slice_transition(
         self,
         transition: TransitionInput,
@@ -934,81 +955,6 @@ class ClerkSqliteRepository(
         if cause.order_ref != order_ref or cause.execution_id != execution_id:
             raise ValueError("coverage conflict must identify the order and exact execution")
 
-    def append_execution_correction_or_raise(
-        self,
-        *,
-        correction: TransitionInput,
-        build_uncertainty: Callable[[str], TransitionInput],
-    ) -> str:
-        """Validate and append one correction, or durably raise uncertainty.
-
-        An invalid correction must not enter the hash chain as a correction
-        that did not change the economic fold.  The same atomic lock instead
-        appends a typed ``UNCERTAINTY_RAISED`` transition, leaving admission
-        fail-closed until the broker evidence is reconciled.
-        """
-        if correction.transition_kind != "EXECUTION_CORRECTED":
-            raise ValueError("correction append requires EXECUTION_CORRECTED")
-        facts = ExecutionCorrectedFacts.from_facts_json(correction.facts_json)
-        validate_execution_corrected_facts(facts)
-        with self._write_lock:
-            self._assert_not_poisoned()
-            self._renew_execution_lease()
-            if reads.execution_exists(self._conn, facts.execution_id):
-                return "duplicate"
-            if reads.correction_uncertainty_exists(self._conn, facts.execution_id):
-                return "duplicate"
-            invalid_reason = self._execution_correction_invalid_reason(
-                correction=correction,
-                facts=facts,
-            )
-            if invalid_reason is not None:
-                uncertainty = build_uncertainty(invalid_reason)
-                if uncertainty.transition_kind != "UNCERTAINTY_RAISED":
-                    raise ValueError("invalid correction must raise UNCERTAINTY_RAISED")
-                uncertainty_facts = UncertaintyRaisedFacts.from_facts_json(uncertainty.facts_json)
-                if uncertainty_facts.cause_facts.get("execution_id") != facts.execution_id:
-                    raise ValueError("correction uncertainty must identify the broker execution")
-                self.append_transition(uncertainty)
-                return "invalid"
-            self.append_transition(correction)
-            return "appended"
-
-    def _execution_correction_invalid_reason(
-        self,
-        *,
-        correction: TransitionInput,
-        facts: ExecutionCorrectedFacts,
-    ) -> str | None:
-        if correction.order_ref is None:
-            return "correction transition is missing order identity"
-        try:
-            owner = self._validate_order_effect_ownership(
-                correction,
-                order_ref=correction.order_ref,
-            )
-        except ValueError as exc:
-            return str(exc)
-        target = reads.effective_execution_slice(self._conn, facts.superseded_execution_ref)
-        if target is None:
-            return (
-                f"superseded execution {facts.superseded_execution_ref!r} is missing "
-                "or no longer effective"
-            )
-        if target["order_ref"] != correction.order_ref:
-            return "superseded execution belongs to a different order"
-        if target["subject_id"] != owner["subject_id"]:
-            return "superseded execution belongs to a different custody subject"
-        if target["strategy_instance_id"] != owner["strategy_instance_id"]:
-            return "superseded execution belongs to a different strategy instance"
-        if not isinstance(target["symbol"], str) or not target["symbol"]:
-            return "superseded execution is missing owned symbol evidence"
-        if target["symbol"].upper() != facts.symbol.upper():
-            return "superseded execution has a different symbol"
-        if target["side"] != facts.side:
-            return "superseded execution has a different side"
-        return None
-
     def _commit_transition_row(
         self,
         *,
@@ -1018,7 +964,7 @@ class ClerkSqliteRepository(
         payload: dict,
         decision_receipt: AtomicDecisionReceipt | None = None,
     ) -> int:
-        """Insert order matches the pinned §4 transaction matrix literally:
+        """Insert order matches the annex §4 transaction matrix literally:
         transition insert -> fold -> revision advance -> mirror_fence insert.
         """
         self._conn.execute("BEGIN IMMEDIATE")
@@ -1119,9 +1065,7 @@ class ClerkSqliteRepository(
             # Checked here too, not only inside append_transition: an
             # existing-command retry short-circuits *before* ever calling
             # append_transition, so without this it could return a command
-            # whose mirror fence is unconfirmed while the handle is poisoned
-            # (open-pr-review-2026-08-05.md P2 "Block retries on poisoned
-            # handles").
+            # whose mirror fence is unconfirmed while the handle is poisoned.
             self._assert_not_poisoned()
             authority_generation = self._conn.execute(
                 "SELECT authority_generation FROM control_meta WHERE id = 1"
@@ -1242,9 +1186,9 @@ class ClerkSqliteRepository(
             )
 
     def claim_before_broker_contact(self, effect_operation_id: str) -> OperationClaim:
-        """Claim under this process's own lease identity — pinned contract §2:
-        "a transactionally claimed operation work item ... acquired before any
-        broker contact." A live ``BEGIN IMMEDIATE`` transaction proves
+        """Claim under this process's own lease identity — ADR 0035 D5 and annex
+        §9a: a transactionally claimed operation work item is acquired before
+        any broker contact. A live ``BEGIN IMMEDIATE`` transaction proves
         single-writer-at-the-database; it does not prove single-*process*, so
         an event-loop stall or a slow network call between accepting an
         operation and its next broker call could otherwise let a stale owner
@@ -1322,9 +1266,9 @@ class ClerkSqliteRepository(
         """Insert-once bot registration — needs no command/effect lifecycle.
 
         The active runtime always supplies all immutable configuration fields.
-        The named defaults preserve the repository's narrow fixture and
-        qualification seam while avoiding a product-visible ``unknown``
-        strategy key for direct registrations.
+        The named defaults preserve the repository's narrow fixture seam
+        while avoiding a product-visible ``unknown`` strategy key for direct
+        registrations.
         """
         if not strategy_key:
             raise ValueError("strategy_key must be non-empty")
@@ -1397,34 +1341,6 @@ class ClerkSqliteRepository(
                 facts_json=facts_json,
             )
 
-    def update_decision_receipt_for_bar(
-        self,
-        *,
-        strategy_instance_id: str,
-        bar_ref: str,
-        outcome: str,
-        order_ref: str | None,
-        facts_json: str,
-    ) -> DecisionReceiptResource:
-        """Replace one closed bar's provisional receipt with its final outcome."""
-        if not strategy_instance_id:
-            raise ValueError("strategy_instance_id must be non-empty")
-        if not bar_ref:
-            raise ValueError("bar_ref must be non-empty")
-        if not outcome:
-            raise ValueError("outcome must be non-empty")
-        with self._write_lock:
-            self._assert_not_poisoned()
-            self._renew_execution_lease()
-            return update_decision_receipt_for_bar(
-                self._conn,
-                strategy_instance_id=strategy_instance_id,
-                bar_ref=bar_ref,
-                outcome=outcome,
-                order_ref=order_ref,
-                facts_json=facts_json,
-            )
-
     def capture_decision_against_active_exit(
         self,
         *,
@@ -1476,38 +1392,6 @@ class ClerkSqliteRepository(
     # form of the ADR's claim that a hold was always an uncertainty. Callers
     # reach the same episodes through ``uncertainty.raise_account_hold`` and
     # ``uncertainty.resolve_account_hold``.
-
-    def raise_uncertainty_if_none_active(
-        self,
-        *,
-        scope: str,
-        reason_code: str,
-        strategy_instance_id: str | None,
-        build_transition: Callable[[], TransitionInput],
-    ) -> bool:
-        """Atomic check-then-raise for an uncertainty (#1380) — the same
-        check-then-append-under-one-lock shape
-        :meth:`commit_first_transition` uses for commands, applied here so
-        two genuinely concurrent callers can never both observe "no active
-        uncertainty" for the same ``(scope, reason_code,
-        strategy_instance_id)`` and both append one. Returns ``True`` if a
-        new uncertainty was appended, ``False`` if one was already
-        ``ACTIVE`` (idempotent no-op — bounded growth, the policy the
-        pre-SQLite Alpaca clerk's ``reconcile.py`` used).
-        """
-        with self._write_lock:
-            if (
-                reads.active_uncertainty(
-                    self._conn,
-                    scope=scope,
-                    reason_code=reason_code,
-                    strategy_instance_id=strategy_instance_id,
-                )
-                is not None
-            ):
-                return False
-            self.append_transition(build_transition())
-            return True
 
     def observe_uncertainty(
         self,
@@ -1733,8 +1617,8 @@ class ClerkSqliteRepository(
 
         The corrupt database (if present) is preserved for diagnosis, never
         overwritten in place — this writes a fresh database at the same path
-        only after the caller has moved the old one aside (matching PRD §13:
-        "the DB is preserved for diagnosis, never overwritten"). Callers own
+        only after the caller has moved the old one aside: the DB is
+        preserved for diagnosis, never overwritten. Callers own
         that move; this method assumes ``db_path`` does not exist yet.
         """
         from app.broker.alpaca.clerk.sqlite.rebuild import (

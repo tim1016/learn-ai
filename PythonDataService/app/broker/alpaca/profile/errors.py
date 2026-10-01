@@ -1,7 +1,6 @@
 """Typed profile-resolution errors carrying the contract's ``reason`` codes.
 
-Shapes follow ``docs/architecture/broker-configuration-profile-contract.md``
-§6: a code-like snake_case ``reason``, operator-readable ``message`` prose and
+Each error carries a code-like snake_case ``reason``, operator-readable ``message`` prose and
 a ``next_step``, which a router hands straight to ``HTTPException(detail=...)``
 via :meth:`BrokerProfileError.as_detail`. ``reason`` is the stable code the
 Frontend renders through the shared ``receiptLabel`` pipe; ``message`` and
@@ -35,7 +34,7 @@ from app.broker.contract.errors import BrokerError
 class BrokerProfileError(Exception):
     """Base class for every profile-resolution refusal.
 
-    ``reason`` and ``http_status`` are the contract §6 row for the subclass;
+    ``reason`` and ``http_status`` are the taxonomy row for the subclass;
     ``message`` is the *what* and ``next_step`` the operator's way forward.
 
     Both are declared without a default on purpose. A base-class fallback
@@ -53,7 +52,7 @@ class BrokerProfileError(Exception):
         self.next_step = next_step
 
     def as_detail(self) -> dict[str, str]:
-        """The contract §6 ``detail`` dict for an ``HTTPException``."""
+        """The ``detail`` dict for an ``HTTPException``."""
         return {
             "reason": self.reason,
             "message": self.message,
@@ -147,15 +146,6 @@ class AccountVerificationFailed(BrokerProfileError):
         )
 
     @classmethod
-    def not_observed(cls, *, selected_account_id: str) -> AccountVerificationFailed:
-        """The operator selected an account this verification did not observe."""
-        return cls(
-            f"Account {selected_account_id} was not among the accounts observed for "
-            "this configuration.",
-            next_step="Verify the account again and pin one of the observed accounts.",
-        )
-
-    @classmethod
     def stale(cls, *, age_ms: int, max_age_ms: int) -> AccountVerificationFailed:
         """The observation is too old to act on."""
         return cls(
@@ -208,10 +198,8 @@ class AccountModeDisagreement(BrokerProfileError):
 class AccountPinMismatch(BrokerProfileError):
     """The pin is contradicted. The previous pin is never replaced.
 
-    Two situations reach this, and each authors its own prose: a re-observation
-    that found a different account, and an operator selecting an account other
-    than the one already pinned. Both leave the caller's pin as it was —
-    neither constructor produces a pin value.
+    A re-observation that found a different account reaches this. It leaves
+    the caller's pin as it was — the constructor produces no pin value.
     """
 
     reason: ClassVar[str] = "account_pin_mismatch"
@@ -240,8 +228,8 @@ class AccountPinMismatch(BrokerProfileError):
     ) -> AccountPinMismatch:
         """Re-verification observed accounts, none of them the pinned one.
 
-        Every observed ID is named, not just the first: contract §2.5 keeps
-        exact account IDs in audit evidence, and reporting one of several
+        Every observed ID is named, not just the first: audit evidence keeps
+        exact account IDs, and reporting one of several
         arbitrarily would make that evidence depend on iteration order.
         """
         return cls(
@@ -250,19 +238,6 @@ class AccountPinMismatch(BrokerProfileError):
             "unchanged.",
             pinned_account_id=pinned_account_id,
             contradicting_account_ids=observed_account_ids,
-        )
-
-    @classmethod
-    def on_selection(
-        cls, *, pinned_account_id: str, selected_account_id: str
-    ) -> AccountPinMismatch:
-        """The operator selected an account other than the one already pinned."""
-        return cls(
-            f"This configuration is pinned to account {pinned_account_id}; "
-            f"{selected_account_id} cannot replace it on this revision. The pin is "
-            "unchanged.",
-            pinned_account_id=pinned_account_id,
-            contradicting_account_ids=(selected_account_id,),
         )
 
 

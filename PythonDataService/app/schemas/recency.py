@@ -72,10 +72,6 @@ class RecencyRunMutationResponse(BaseModel):
     recency_run_id: int
 
 
-class RecencyLaunchMutationResponse(BaseModel):
-    launch_id: str
-
-
 class RecencyLaunchResponse(BaseModel):
     """One launch as the launches list serves it (#1938).
 

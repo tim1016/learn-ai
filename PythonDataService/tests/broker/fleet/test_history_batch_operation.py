@@ -532,7 +532,7 @@ async def test_get_history_chart_causes_exactly_one_http_call_despite_widening(
 
 
 async def test_batch_provider_is_awaited_exactly_once_per_build_history_chart_call() -> None:
-    """FR-008: one internal request per public history attempt -- pinned as a
+    """One internal request per public history attempt -- pinned as a
     call-count invariant on the provider itself, for both a healthy batch and
     a notice-only one. A Clerk-side retry-on-notice regression would call the
     provider twice for the notice-only case without necessarily changing any

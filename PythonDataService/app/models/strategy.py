@@ -1,6 +1,6 @@
 """Pydantic models for options strategy analysis.
 
-Phase 1.1 of `docs/architecture/numerical-authority-migration-plan.md` extends
+Phase 1.1 of the Python math-authority move (ADR 0068) extends
 the response with optional current-time fields (current-time P&L curve,
 Greek curves, per-leg diagnostics). These additions are gated behind
 opt-in request flags so existing callers see zero change in payload shape
@@ -10,6 +10,8 @@ or response time.
 from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
+
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 
 
 class StrategyLeg(BaseModel):
@@ -45,7 +47,9 @@ class StrategyAnalyzeRequest(BaseModel):
     legs: list[StrategyLeg] = Field(..., min_length=1, max_length=8, description="Strategy legs")
     expiration_date: str = Field(..., description="Expiration date (YYYY-MM-DD)")
     spot_price: float = Field(..., gt=0, description="Current underlying price")
-    risk_free_rate: float = Field(0.043, ge=0, le=0.5, description="Risk-free rate (default ~4.3%)")
+    risk_free_rate: float = Field(
+        DEFAULT_RISK_FREE_RATE, ge=0, le=0.5, description="Annualized risk-free rate (omit for the Python default)"
+    )
     curve_points: int = Field(300, ge=50, le=1000, description="Number of payoff curve points")
     price_range_pct: float = Field(0.30, gt=0, le=1.0, description="Price range as fraction of spot (±)")
     # ------------------------------------------------------------------

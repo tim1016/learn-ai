@@ -5,7 +5,7 @@ stamped on every bar, whatever produced it. It lives here rather than in
 a broker silo because it is not vendor-specific: ``app.broker.ibkr.bar_models``
 imports it from this module (#1813 PR-C, 2026-08-27).
 
-Design constraints (from ADR 0022 + phase-3 design §4 + #1258 L2):
+Design constraints (from ADR 0022 + #1258 L2):
 
 * No IBKR types escape this module.  The IBKR implementation (ibkr_feed.py)
   translates ``IbkrMinuteBar`` and ``IBKRBarStreamError`` at the boundary.
@@ -31,6 +31,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Literal, Protocol, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 if TYPE_CHECKING:
     # Type-only: ``decision_session`` sits above this port and imports from it
@@ -161,7 +163,7 @@ BarProvenanceTag = Literal["realtime", "realtime_across_reconnect", "historical_
 class MarketDataBar(BaseModel):
     """Broker-neutral closed 1-minute bar.
 
-    All temporal values are ``int64 ms UTC`` per ``.claude/rules/temporal-rigor.md``.
+    All temporal values are ``int64 ms UTC``.
     ``start_ms`` is the bar-open boundary (inclusive); ``end_ms`` is bar-close
     (exclusive), i.e. ``end_ms = start_ms + 60_000``.
 
@@ -172,14 +174,18 @@ class MarketDataBar(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     symbol: str
-    start_ms: int = Field(..., description="Bar-open boundary, int64 ms UTC, inclusive.")
-    end_ms: int = Field(..., description="Bar-close boundary, int64 ms UTC, exclusive.")
+    start_ms: int = Field(..., le=MAX_TIMESTAMP_MS, description="Bar-open boundary, int64 ms UTC, inclusive.")
+    end_ms: int = Field(..., le=MAX_TIMESTAMP_MS, description="Bar-close boundary, int64 ms UTC, exclusive.")
     open: Decimal
     high: Decimal
     low: Decimal
     close: Decimal
     volume: int
-    fetched_at_ms: int = Field(..., description="Wall-clock at which the bar was assembled, int64 ms UTC.")
+    fetched_at_ms: int = Field(
+        ...,
+        le=MAX_TIMESTAMP_MS,
+        description="Wall-clock at which the bar was assembled, int64 ms UTC.",
+    )
     feed_id: str = Field(
         ...,
         description=(
@@ -221,7 +227,7 @@ class FeedHealth(BaseModel):
     last_bar_ms: int | None
     reason: str
     active_subscription_count: int
-    observed_at_ms: int = Field(..., description="Snapshot wall-clock, int64 ms UTC.")
+    observed_at_ms: int = Field(..., le=MAX_TIMESTAMP_MS, description="Snapshot wall-clock, int64 ms UTC.")
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +272,11 @@ class FeedContinuityEvent(BaseModel):
     kind: ContinuityEventKind
     feed_id: str
     symbol: str
-    observed_at_ms: int = Field(..., description="Wall-clock at which the fact was observed, int64 ms UTC.")
+    observed_at_ms: int = Field(
+        ...,
+        le=MAX_TIMESTAMP_MS,
+        description="Wall-clock at which the fact was observed, int64 ms UTC.",
+    )
     cause: InterruptionCause | GapCause | None = Field(
         default=None,
         description=(
@@ -385,7 +395,7 @@ async def record_continuity_event(
 ) -> ContinuityEventRef:
     """Write one continuity fact through the consumer's sink, or fail closed.
 
-    Spec §4.2 rule 9: continuing without the evidence that was promised is
+    Spec #1921 §4.2 rule 9: continuing without the evidence that was promised is
     forbidden. Every writer goes through this one function so a sink failure
     surfaces as the same typed ``CONTINUITY_EVIDENCE_UNWRITABLE`` wherever it
     happens, rather than escaping as whatever the sink's own failure was --
@@ -426,11 +436,6 @@ class MarketDataFeed(Protocol):
     """
 
     feed_id: str
-
-    @property
-    def capability_account_id(self) -> str | None:
-        """Account whose broker capability snapshots authorize this feed."""
-        ...
 
     def stream_bars(
         self,

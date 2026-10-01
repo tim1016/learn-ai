@@ -5,22 +5,14 @@ import { GraphqlError, type GraphQLErrorPayload } from '../graphql/graphql-error
  *
  * The backend assigns ``extensions.code`` on every domain error;
  * the catalog turns that code into the *what / try / details* trio
- * the three error components render. Adding a new code is a
- * one-line edit here — the components don't need to change.
- *
- * ``mathRef`` is the optional deep-link the error drawer renders
- * when a numeric divergence is the culprit. It's filled only when
- * the backend explicitly supplies it (see resolver guidance in
- * ``docs/math-sources-of-truth.md``); the frontend never pattern-
- * matches messages to guess one.
+ * the section error component renders. Adding a new code is a
+ * one-line edit here — the component doesn't need to change.
  */
 export interface ErrorCatalogEntry {
   /** Single-sentence statement of what failed, in user-facing prose. */
   what: string;
   /** Single-sentence next-step instruction. */
   tryCopy: string;
-  /** Optional deep-link to the math sources-of-truth doc. */
-  mathRef?: string;
 }
 
 const FALLBACK: ErrorCatalogEntry = {
@@ -97,35 +89,18 @@ export function resolveErrorCode(err: unknown): string | undefined {
 }
 
 /**
- * Resolve a math-sources deep-link from the error if the backend
- * attached one via ``extensions.mathRef``. Returns ``undefined``
- * when the error did not originate from a math-divergence path —
- * the frontend never invents a link.
- */
-export function resolveMathRef(err: unknown): string | undefined {
-  if (err instanceof GraphqlError) {
-    for (const e of err.errors) {
-      const ref = readMathRef(e);
-      if (ref) return ref;
-    }
-  }
-  return undefined;
-}
-
-/**
  * Build the *what* + *try* pair for a thrown value, applying the
  * catalog when the value carries a known ``extensions.code`` and
  * otherwise echoing the message verbatim as the *what* so that
  * unmapped codes still render meaningfully.
  */
-export function describeError(err: unknown, contextWhat?: string): ErrorCatalogEntry & { mathRef?: string } {
+export function describeError(err: unknown, contextWhat?: string): ErrorCatalogEntry {
   const code = resolveErrorCode(err);
   const fromCatalog = lookupErrorEntry(code);
   const message = err instanceof Error ? err.message : (typeof err === 'string' ? err : '');
   const what = code ? fromCatalog.what : (contextWhat ?? message ?? FALLBACK.what);
   const tryCopy = fromCatalog.tryCopy;
-  const mathRef = resolveMathRef(err) ?? fromCatalog.mathRef;
-  return { what, tryCopy, mathRef };
+  return { what, tryCopy };
 }
 
 function readCode(payload: GraphQLErrorPayload): string | undefined {
@@ -133,11 +108,4 @@ function readCode(payload: GraphQLErrorPayload): string | undefined {
   if (!ext) return undefined;
   const code = (ext as { code?: unknown }).code;
   return typeof code === 'string' ? code : undefined;
-}
-
-function readMathRef(payload: GraphQLErrorPayload): string | undefined {
-  const ext = payload.extensions;
-  if (!ext) return undefined;
-  const ref = (ext as { mathRef?: unknown }).mathRef;
-  return typeof ref === 'string' ? ref : undefined;
 }

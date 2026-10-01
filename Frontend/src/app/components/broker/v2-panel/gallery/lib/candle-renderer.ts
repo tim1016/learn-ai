@@ -3,9 +3,8 @@
  *
  * No Angular imports. Operates only on plain data and a
  * `CanvasRenderingContext2D` so it is directly unit-testable and reusable
- * outside a component (a future `candle-sparkline`, per
- * `docs/superpowers/specs/2026-08-14-bot-gallery-redesign-design.md` §3.1/§3.2
- * risk note). The caller (`home-sparkline.component`) owns the DOM canvas, resize
+ * outside a component.
+ * The caller (`home-sparkline.component`) owns the DOM canvas, resize
  * observer, and pointer events; this module owns math and pixels only.
  *
  * Bars are laid out by index, not by time-scale — every column is the same
@@ -64,8 +63,6 @@ export interface CandleRendererConfig {
   readonly tagHeight: number;
   readonly tagRadius: number;
   readonly guideDash: readonly number[];
-  readonly crosshairColor: string;
-  readonly crosshairDash: readonly number[];
   readonly markerBuyColor: string;
   readonly markerSellColor: string;
   readonly markerSize: number;
@@ -74,7 +71,7 @@ export interface CandleRendererConfig {
    * Whether to paint the floating last-price tag. It is on by default (a
    * sparkline's one glance value); Home's Wall tiles turn it off so the canvas
    * derives no price or session direction of its own — those are server-computed
-   * (single numerical authority, CLAUDE.md #5).
+   * (ADR 0068).
    */
   readonly showLastPriceTag: boolean;
 }
@@ -115,8 +112,6 @@ export const CFG: CandleRendererConfig = Object.freeze({
   tagHeight: 16,
   tagRadius: 3,
   guideDash: [3, 3],
-  crosshairColor: '#6b6f7a', // --text-muted
-  crosshairDash: [2, 3],
   markerBuyColor: '#2962ff', // --accent
   markerSellColor: '#ff9800', // --warn
   markerSize: 5,
@@ -165,15 +160,6 @@ export function computeScale(
     plot,
     tagHalfHeight: cfg.tagHeight / 2,
   };
-}
-
-/** Bar index under `x`, clamped to `[0, barCount - 1]`. */
-export function barIndexAtX(x: number, scale: ChartScale, barCount: number): number {
-  if (barCount <= 0) return 0;
-  const barWidth = scale.plot.width / barCount;
-  if (!Number.isFinite(barWidth) || barWidth <= 0) return 0;
-  const idx = Math.floor((x - scale.plot.left) / barWidth);
-  return Math.min(barCount - 1, Math.max(0, idx));
 }
 
 function priceToY(price: number, scale: ChartScale): number {
@@ -365,28 +351,10 @@ function drawTimeLabels(
   }
 }
 
-function drawCrosshair(
-  ctx: CanvasRenderingContext2D,
-  scale: ChartScale,
-  barWidth: number,
-  hoverIndex: number,
-  cfg: CandleRendererConfig,
-): void {
-  const xCenter = scale.plot.left + hoverIndex * barWidth + barWidth / 2;
-  ctx.strokeStyle = cfg.crosshairColor;
-  ctx.lineWidth = 1;
-  ctx.setLineDash([...cfg.crosshairDash]);
-  ctx.beginPath();
-  ctx.moveTo(xCenter, scale.plot.top);
-  ctx.lineTo(xCenter, scale.plot.top + scale.plot.height);
-  ctx.stroke();
-  ctx.setLineDash([]);
-}
-
 /**
  * The last-price tag reads only `bars[bars.length - 1].close` — never a
  * separately fetched live quote — so the painted value can never disagree
- * with the last drawn candle (temporal-rigor.md display discipline). Session
+ * with the last drawn candle. Session
  * direction (tag colour) compares `bars[0].open` to that same close, not the
  * last bar's own direction.
  */
@@ -428,15 +396,14 @@ function drawLastPriceTag(
 
 /**
  * Full repaint: grid + inside price labels, ghost volume band, candles,
- * fill markers, sparse time labels, crosshair, then — when
- * `cfg.showLastPriceTag` — the floating last-price tag on top.
+ * fill markers, sparse time labels, then — when `cfg.showLastPriceTag` —
+ * the floating last-price tag on top.
  */
 export function draw(
   ctx: CanvasRenderingContext2D,
   bars: readonly ChartBar[],
   markers: readonly ChartFillMarker[],
   scale: ChartScale,
-  hoverIndex: number | null,
   cfg: CandleRendererConfig = CFG,
 ): void {
   ctx.clearRect(0, 0, cfg.width, cfg.height);
@@ -446,8 +413,5 @@ export function draw(
   const barWidth = drawVolumeAndCandles(ctx, bars, scale, cfg);
   drawMarkers(ctx, bars, markers, scale, barWidth, cfg);
   drawTimeLabels(ctx, bars, scale, barWidth, cfg);
-  if (hoverIndex !== null && hoverIndex >= 0 && hoverIndex < bars.length) {
-    drawCrosshair(ctx, scale, barWidth, hoverIndex, cfg);
-  }
   if (cfg.showLastPriceTag) drawLastPriceTag(ctx, bars, scale, cfg);
 }

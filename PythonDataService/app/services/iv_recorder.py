@@ -5,11 +5,9 @@ price-normalization + provenance-aware VIX-style replication, and persists
 the result with full provenance so the historical IV pipeline can be built
 forward-only from the day this recorder ships.
 
-See ``docs/architecture/iv-ownership-research.md`` for the consolidated
-research document covering math, decisions, reviewer feedback, and the
-forward plan. Section §7.5 explains why the .NET host's Quartz scheduler
+ADR 0071 decision 6 explains why the .NET host's Quartz scheduler
 (``AddIvRecorder`` / ``IvRecorderRegistration``) owns the cron, not an
-in-process Python scheduler, and §7.4 explains why this is a JSONL file
+in-process Python scheduler, and decision 8 explains why this is a JSONL file
 store today (Postgres after burn-in).
 
 This module exposes:
@@ -22,7 +20,7 @@ This module exposes:
 **Sovereignty rule:** we store raw bid/ask per contract and the
 *internal-solver* IV. Polygon's IV field is never stored as an
 authoritative IV value — even when it appears in the snapshot response,
-it is dropped here. See research-doc §7.1.
+it is dropped here. See ADR 0071 decision 1.
 """
 
 from __future__ import annotations
@@ -37,9 +35,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.engine.edge.threshold_events import log_iv_dominance_gate
+from app.engine.live.identity import confine_path_to_root
 from app.routers.iv30 import _normalized_quotes_by_expiry, _pick_straddle_pair
 from app.services.polygon_client import PolygonClientService
-from app.services.rate_dividend_service import RateAndDividend, get_rate_and_dividend
+from app.services.rate_dividend_service import get_rate_and_dividend
 from app.volatility.iv30_health import compute_iv30_health_normalized
 from app.volatility.iv_provenance import IvProvenance
 from app.volatility.vix_replication import vix_style_iv30_with_provenance
@@ -51,7 +50,7 @@ SLOT_CHOICES = ("09:35", "12:30", "15:55", "16:00")
 """Daily snapshot slots accepted by the recorder.
 
 15:55 runs alongside 16:00 for the trial-month experiment described in
-research-doc §7.6 / §8.2.3 (compare solver-fail rate, spread width, vcs,
+ADR 0071 decision 7 (compare solver-fail rate, spread width, vcs,
 IV30 stability before deciding whether to swap). All four are persisted;
 the 15:55 vs 16:00 decision is downstream of measurement."""
 
@@ -60,7 +59,7 @@ the 15:55 vs 16:00 decision is downstream of measurement."""
 class RecordedIvSnapshot:
     """One captured slot.
 
-    All scalar timestamps are int64 ms UTC (CLAUDE.md rule). The
+    All scalar timestamps are int64 ms UTC. The
     ``raw_chain`` field is the per-contract bid/ask we ingested, so a
     future solver upgrade can re-derive IV without re-fetching from
     Polygon.
@@ -80,19 +79,12 @@ class RecordedIvSnapshot:
     raw_chain: list[dict]
     error: str | None = None
     # Stability score in [0, 1] computed at write time via the IV30 health
-    # suite (research-doc §4.8). None on error rows and on legacy rows that
+    # suite. None on error rows and on legacy rows that
     # pre-date this field — readers take the drop-health-factor branch in
     # ``_parse_iv_series`` (confidence = 1 - vcs) and surface the missing
     # evidence via ``health_imputed_now``. Defaulted so back-compat JSONL
     # rows reconstruct cleanly via ``RecordedIvSnapshot(**d)``.
     health_score: float | None = None
-
-
-@dataclass
-class _RecorderResult:
-    """Internal carrier — never serialized."""
-
-    snapshot: RecordedIvSnapshot
 
 
 # ── Persistence interface ───────────────────────────────────────────────────
@@ -149,7 +141,7 @@ class InMemoryIvSnapshotStore(IvSnapshotStore):
 class JsonlIvSnapshotStore(IvSnapshotStore):
     """Append-only JSONL file store. One file per ticker.
 
-    Rationale (decisions doc §1 Q3): single Postgres table is the
+    Rationale (ADR 0071 decision 8): single Postgres table is the
     eventual production target, but adding ``asyncpg`` + a migration
     pipeline is heavier than tonight's scope. JSONL gives us the same
     schema, append-only writes, and a reversible upgrade path: the
@@ -167,7 +159,9 @@ class JsonlIvSnapshotStore(IvSnapshotStore):
         # legitimate use.
 
     def _file_for(self, ticker: str) -> Path:
-        return self.base_dir / f"{ticker}.jsonl"
+        # The ticker reaches here from request bodies (edge.py), so a
+        # ``../`` ticker must not read or append outside ``base_dir``.
+        return confine_path_to_root(self.base_dir / f"{ticker}.jsonl", self.base_dir, label="IV recorder ticker")
 
     def write(self, snapshot: RecordedIvSnapshot) -> None:
         self.base_dir.mkdir(parents=True, exist_ok=True)
@@ -277,13 +271,11 @@ def record_iv_snapshot(
             error=f"insufficient_snapshot: spot={spot} contracts={len(contracts)}",
         )
 
-    try:
-        rd = get_rate_and_dividend(
-            ticker=ticker, spot_price=spot, polygon=polygon, dte_days=target_calendar_days
-        )
-    except Exception as exc:
-        logger.warning("[iv-recorder] %s slot=%s rate/div failure: %s", ticker, slot, exc)
-        rd = RateAndDividend(rate=0.0, dividend_yield=0.0, source_rate="unknown", source_dividend="unknown")
+    # The rate always resolves. Rows store a failed dividend lookup as q=0
+    # with source "unknown" (#2764).
+    rd = get_rate_and_dividend(
+        ticker=ticker, spot_price=spot, polygon=polygon, dte_days=target_calendar_days
+    )
 
     by_expiry = _normalized_quotes_by_expiry(contracts, asof)
     iv_vix: float | None = None
@@ -319,7 +311,7 @@ def record_iv_snapshot(
             )
 
         # Health score is computed off the same chain so the recorder
-        # fallback can propagate it downstream (research-doc §4.8 / §9).
+        # fallback can propagate it downstream.
         # ``target_calendar_days`` is threaded through so the score
         # reflects the IV that was actually computed — the recorder
         # accepts 1..180 day requests and a non-default tenor would
@@ -353,9 +345,9 @@ def record_iv_snapshot(
         slot=slot,
         spot=spot,
         rate=rd.rate,
-        dividend_yield=rd.dividend_yield,
+        dividend_yield=0.0 if rd.dividend_yield is None else rd.dividend_yield,
         rate_source=rd.source_rate,
-        dividend_source=rd.source_dividend,
+        dividend_source=rd.source_dividend or "unknown",
         iv30_vix_style=iv_vix,
         iv30_parametric=iv_parametric,
         iv_provenance=prov_dict,

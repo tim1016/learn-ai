@@ -12,7 +12,7 @@ from app.research.signal.regime import (
 )
 
 # Canonical `int64 ms UTC` timestamp for 2024-01-01 09:30 UTC — avoids tz-ambiguity
-# in tests and satisfies the timestamp policy in .claude/rules/numerical-rigor.md.
+# in tests.
 JAN_1_2024_0930_UTC_MS = 1_704_101_400_000
 DAY_MS = 86_400_000
 MINUTE_MS = 60_000

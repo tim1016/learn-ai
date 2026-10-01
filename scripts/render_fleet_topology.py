@@ -11,7 +11,7 @@ renders with `podman compose`. The two engines can disagree on `!override`
 merge order, `deploy.resources` vs top-level `cpus`/`mem_limit`, and `:z`
 relabel suffixes, so `--engine` is a required choice, not a convenience — the
 host migration runbook uses `--engine "podman compose" --check` for exactly
-this reason (see docs/runbooks/fleet-dev-two-lane-posture.md).
+this reason.
 """
 from __future__ import annotations
 

@@ -206,12 +206,12 @@ def _activity_page_oldest_ms(
 
 
 # Alpaca's documented extended session, 04:00–20:00 ET ("Orders at Alpaca" §
-# Extended Hours Trading, verified 2026-09-08; docs/references/alpaca-extended-hours.md).
+# Extended Hours Trading, verified 2026-09-08).
 # The overnight session (20:00–04:00) is a separate venue and is not part of
-# the decision clock in slice 3 (ADR 0059 D5.2; ruling R1 in the slice-3 plan).
+# the decision clock in slice 3 (ADR 0059 D5.2).
 ALPACA_EXTENDED_HOURS_WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
 
-# Alpaca free / paper-account capabilities, verified 2026-07 (spec §3). Honest
+# Alpaca free / paper-account capabilities, verified 2026-07. Honest
 # differences declared as data so callers gate on capability, not identity:
 # IEX gaps on illiquid symbols (bars_may_gap), 30-symbol / 1-connection stream
 # cap, 200 REST calls/min. Upgrading to Algo Trader Plus flips data_feed to
@@ -438,7 +438,7 @@ class AlpacaBroker:
         return activities
 
     async def read_activity_evidence(
-        self, *, page_token: str | None = None, after_ms: int | None = None,
+        self, *, page_token: str | None = None, after_ms: int | None = None, activity_type: str | None = None,
     ) -> BrokerActivityEvidence:
         """Read raw dated evidence with the provider's explicit page completion.
 
@@ -457,17 +457,25 @@ class AlpacaBroker:
         confirms no in-window row sits further back. An undated row on a page
         withholds the proof, so the walk goes on to a short page or its page
         bound, where ``next_page_token`` resumes it.
+
+        ``activity_type`` reads that type's own endpoint
+        (``/v2/account/activities/{activity_type}``), so every row of every
+        page is one of it.
         """
-        return await self._activity_evidence(page_size=100, page_token=page_token, after_ms=after_ms)
+        return await self._activity_evidence(
+            page_size=100, page_token=page_token, after_ms=after_ms, activity_type=activity_type,
+        )
 
     async def _activity_evidence(
         self, *, page_size: int, page_token: str | None, after_ms: int | None = None,
+        activity_type: str | None = None,
     ) -> BrokerActivityEvidence:
+        activity_filter = {} if activity_type is None else {"activity_type": activity_type}
         activities: list[BrokerActivity] = []
         previous_page_oldest_ms: int | None = None
         boundary_crossed_on_previous_page = False
         for _ in range(_ACTIVITY_MAX_PAGES):
-            payloads = await self._client.list_activities(limit=page_size, page_token=page_token)
+            payloads = await self._client.list_activities(limit=page_size, page_token=page_token, **activity_filter)
             page = _mapped_activities(payloads)
             if after_ms is None:
                 activities.extend(page)

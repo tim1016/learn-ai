@@ -854,20 +854,16 @@ async def test_a_stop_at_its_end_proven_after_a_later_run_began_is_recorded_as_t
 ) -> None:
     """#2607 review: while the stop waited for its proof with the lock released, a later run of
     the bot was launched. The proof is the stopped run's: it is recorded under that run's id --
-    its receipt, and the replay receipt it owes -- where it used to leave the run provisional for
+    its receipt -- where it used to leave the run provisional for
     good, and nothing is projected over the later run."""
     caplog.set_level(logging.INFO, logger="app.services.bot_runner")
     registry, clerk, stopped, projected = await _stopped_at_its_end_awaiting_proof(tmp_path, monkeypatch)
-    owed: list[str] = []
-    monkeypatch.setattr(registry, "_schedule_run_replay_receipt", lambda binding: owed.append(binding.run_id))
-
     registry._bindings.record_launch(stopped.model_copy(update={"run_id": "a-later-run"}), launch_reason="deploy")
     clerk.published = True
     await asyncio.gather(*registry._end_stop_tasks.values())
 
     receipt = registry._bindings.read_outcome(_SID, stopped.run_id)
     assert receipt is not None and (receipt.kind, receipt.reason_code) == ("STOPPED", "SCHEDULED_END")
-    assert owed == [stopped.run_id]
     assert projected == []
     assert registry._bindings.read_outcome(_SID, "a-later-run") is None
     assert "bot_end_proof_superseded" in [getattr(record, "action", None) for record in caplog.records]

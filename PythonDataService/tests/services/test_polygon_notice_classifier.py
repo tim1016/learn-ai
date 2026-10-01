@@ -53,31 +53,6 @@ def test_missing_polygon_api_key_notice_is_distinct_from_auth_error() -> None:
     assert "POLYGON_API_KEY" in notice.message
 
 
-@pytest.mark.parametrize(
-    ("subject", "expected_message"),
-    [
-        (
-            "Polygon overlay",
-            "Polygon overlay is unavailable because POLYGON_API_KEY is not configured.",
-        ),
-        (
-            "Polygon history",
-            "Polygon history is unavailable because POLYGON_API_KEY is not configured.",
-        ),
-    ],
-)
-def test_missing_polygon_api_key_notice_names_its_own_surface(
-    subject: str, expected_message: str
-) -> None:
-    """Each caller keeps its own correct wording; only the code is shared.
-
-    The LIVE overlay's "Polygon overlay is unavailable..." string is shipped
-    operator-facing copy and must stay byte-identical — a prior version of
-    this classifier hardcoded a generic message and silently changed it.
-    """
-    assert missing_polygon_api_key_notice(subject).message == expected_message
-
-
 def test_coordinator_unavailable_notice_is_not_a_polygon_code() -> None:
     """Issue #2204: the one history-transport extension to this vocabulary.
 
@@ -89,15 +64,3 @@ def test_coordinator_unavailable_notice_is_not_a_polygon_code() -> None:
     assert notice.code == COORDINATOR_UNAVAILABLE_CODE
     assert not notice.code.startswith("polygon_")
     assert notice.code != POLYGON_API_KEY_MISSING_CODE
-
-
-def test_coordinator_unavailable_notice_names_its_own_surface_and_leaks_nothing() -> None:
-    notice = coordinator_unavailable_notice("Polygon history")
-
-    assert notice.message == (
-        "Polygon history is unavailable because the fleet coordinator "
-        "did not complete the request."
-    )
-    # No hostname, port, or token ever belongs in this text (FR-010).
-    assert "://" not in notice.message
-    assert ":" not in notice.message

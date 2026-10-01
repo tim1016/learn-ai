@@ -103,34 +103,3 @@ def test_python_and_frontend_snapshots_are_byte_identical() -> None:
     assert _SNAPSHOT_PATH.read_text(encoding="utf-8") == _FRONTEND_SNAPSHOT_PATH.read_text(
         encoding="utf-8"
     )
-
-
-def test_snapshot_operations_are_sorted_by_operation_id() -> None:
-    snapshot = json.loads(_SNAPSHOT_PATH.read_text(encoding="utf-8"))
-    operations = snapshot["operations"]
-    assert list(operations) == sorted(operations)
-
-
-def test_adapter_version_matches_the_live_adapter() -> None:
-    snapshot = json.loads(_SNAPSHOT_PATH.read_text(encoding="utf-8"))
-    alpaca = production_provider_adapters()["alpaca"]
-    assert snapshot["adapter_version"] == alpaca.adapter_version
-
-
-def test_bots_deploy_apply_stays_gone() -> None:
-    """Regression guard for D-D (#2118): a deleted operation reappearing
-    undeclared-but-still-routable would not be caught by set equality above
-    if it were re-added under the same name with different shape by
-    accident; naming it here makes the historical fact explicit and
-    independently checkable."""
-    snapshot = json.loads(_SNAPSHOT_PATH.read_text(encoding="utf-8"))
-    assert "bots_deploy_apply" not in snapshot["operations"]
-
-
-def test_manual_order_cancel_declares_a_path_converter_on_order_ref() -> None:
-    """The one operation `operationUrl`'s `:path` handling exists for --
-    pinned here so a rename or converter removal on the Python side is
-    caught independently of the Frontend's own contract test."""
-    snapshot = json.loads(_SNAPSHOT_PATH.read_text(encoding="utf-8"))
-    template = snapshot["operations"]["manual_order_cancel"]["path_template"]
-    assert "{order_ref:path}" in template

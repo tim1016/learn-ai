@@ -29,7 +29,7 @@ order -- ``tests/broker/fleet/test_history_batch_timeouts.py`` pins it.
 Connection, write and pool phases are left at the fleet default in both
 directions; only each hop's *read* timeout (how long to wait for the
 response body once the request is sent) widens -- an unbounded read timeout
-is not permitted for this route either (PRD FR-010).
+is not permitted for this route either.
 """
 
 from __future__ import annotations

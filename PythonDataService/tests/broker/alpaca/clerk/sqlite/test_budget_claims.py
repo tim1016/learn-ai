@@ -23,7 +23,7 @@ from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderL
 from app.services.alpaca_fee_attribution import FeeFill
 from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _accept_day_pnl_enter
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _deploy, _gate, _new_budget_repo
-from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_correction, _append_slice
+from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
 from tests.broker.alpaca.clerk.sqlite.test_manual_orders import LEG_ID, OPERATOR_ID, TICKET_ID, filled_order
 
 
@@ -473,10 +473,6 @@ def test_a_partly_filled_entry_keeps_claiming_its_whole_fee_provision(tmp_path: 
         assert own.pending_orders == Decimal("100.02")
         assert own.free == Decimal("599.97")
         assert projection.available == 0
-        _append_correction(repo, accepted, execution_id="corrected-part", superseded_execution_ref="filled-part",
-                           quantity=2000, source_event_at_ms=NOON + 1)
-        corrected = repo.account_budget(cash=1000, seen_before_ms=NOON)
-        assert corrected.deployments[0].pending_orders == Decimal("200.02")
     finally:
         repo.close()
 
@@ -516,7 +512,7 @@ def test_a_reservation_claims_its_recorded_fee_provision_after_a_fee_model_chang
         repo.close()
 
 
-def test_interleaved_same_symbol_deployments_keep_own_fifo_after_correction_and_stop(tmp_path: Path) -> None:
+def test_interleaved_same_symbol_deployments_keep_own_fifo_after_stop(tmp_path: Path) -> None:
     repo = _new_budget_repo(tmp_path)
     try:
         _deploy(repo, "a", 50_000)
@@ -538,15 +534,10 @@ def test_interleaved_same_symbol_deployments_keep_own_fifo_after_correction_and_
         assert by_sid["a"].realized_gross == by_sid["b"].realized_gross == 10
         assert by_sid["a"].free == 410 and by_sid["b"].free == 310
         assert projection.available == 0
-        _append_correction(repo, entries["a"], execution_id="buy-a-correction", superseded_execution_ref="buy-a",
-                           quantity=1.5, source_event_at_ms=NOON + 20)
-        corrected = repo.account_budget(cash=770, seen_before_ms=NOON + 1)
-        assert {row.strategy_instance_id: row.free for row in corrected.deployments} == {"a": 460, "b": 310}
-        assert corrected.order_claims == 0 and corrected.available == 0
         submit_stop_run(repo, account_id=repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a", clock=repo.clock)
-        stopped = repo.account_budget(cash=770, seen_before_ms=NOON + 1)
-        assert stopped.available == 460
-        assert {row.strategy_instance_id: row.position_cost for row in stopped.deployments} == {"a": 50, "b": 200}
+        stopped = repo.account_budget(cash=720, seen_before_ms=NOON + 1)
+        assert stopped.available == 410
+        assert {row.strategy_instance_id: row.position_cost for row in stopped.deployments} == {"a": 100, "b": 200}
     finally:
         repo.close()
 

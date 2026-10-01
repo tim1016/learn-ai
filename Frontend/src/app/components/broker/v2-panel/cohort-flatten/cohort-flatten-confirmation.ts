@@ -2,9 +2,9 @@
  * The closed operator-copy map for cohort flatten (#1909).
  *
  * Owner decision 2026-09-23: this surface's fixed wording stays in the
- * frontend, but only here — one `as const` map with a closed set of keys, per
- * the CLAUDE.md rule that operator copy arrives "from the backend or from a
- * closed operator-copy map". The cohort-flatten components render copy only
+ * frontend, but only here — one `as const` map with a closed set of keys, so
+ * operator copy arrives only from the backend or from a
+ * closed operator-copy map. The cohort-flatten components render copy only
  * from this map (pinned by `cohort-flatten-confirmation.spec.ts`); the
  * functions in it interpolate backend facts only — account, counts, per-leg
  * attributed exposure, the frozen wave's strategy label and symbol — never
@@ -114,5 +114,3 @@ export const COHORT_FLATTEN_COPY = {
     'changed after it was read. Retrying would re-send the same facts; let the roster ' +
     're-read and start a new wave.',
 } as const;
-
-export type CohortFlattenCopy = typeof COHORT_FLATTEN_COPY;

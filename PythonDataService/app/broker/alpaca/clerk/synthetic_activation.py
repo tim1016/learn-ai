@@ -101,7 +101,7 @@ class IsolatedActivationRecord:
         int_fields = ("schema_version", "authority_generation", "activated_at_ms")
         if any(type(payload[field]) is not int for field in int_fields):
             raise cls.invalid_error(f"{cls.label} record has invalid integer facts")
-        # ``MAX_TIMESTAMP_MS``, not ``2**63 - 1``: temporal-rigor makes the
+        # ``MAX_TIMESTAMP_MS``, not ``2**63 - 1``: ADR 0022 (g) makes the
         # domain ceiling the schema bound and int64 width a representability
         # guard only. Same bound as the sibling sealed record's ``written_at_ms``.
         if not 0 <= payload["activated_at_ms"] <= MAX_TIMESTAMP_MS:

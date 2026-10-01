@@ -75,7 +75,7 @@ def _settings_allowances() -> ExtendedHoursAllowances | LegRefusal:
     Alpaca credentials at all, a paper revision that sets no extended-hours
     offsets, and a binding that was *attempted and refused*. The last is why
     ``BrokerUnbound`` is caught rather than propagated -- an EXIT is never
-    blocked by a broker-configuration refusal (plan §0 D3). Both are logged so
+    blocked by a broker-configuration refusal. Both are logged so
     an operator can see why an extended-hours leg was refused.
     """
     from app.broker.alpaca.active_binding import BrokerUnbound, resolved_alpaca_settings

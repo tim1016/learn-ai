@@ -95,7 +95,7 @@ class ChartIndicatorSupportResponse(BaseModel):
 class ChartDataRequest(BaseModel):
     """Request for chart data with resampled bars and indicators.
 
-    Temporal authority (data-lab workspace redesign PRD §12): the numeric
+    Temporal authority: the numeric
     ``start_ms_utc`` / ``end_ms_utc`` pair is the canonical window form and
     each field takes precedence over its date-string counterpart when
     supplied. Each value resolves by flooring to its UTC calendar date —
@@ -165,7 +165,7 @@ class ChartRangePreset(BaseModel):
     estimated_bars_per_timeframe: dict[str, int] = Field(
         ...,
         description="Calendar-arithmetic bar estimate per timeframe for this window "
-        "(same estimator as /api/chart/allowed-timeframes)",
+        "(same estimator as POST /api/chart/data)",
     )
 
 
@@ -173,15 +173,6 @@ class ChartRangePresetsResponse(BaseModel):
     """Response for GET /api/chart/range-presets."""
 
     presets: list[ChartRangePreset]
-
-
-class AllowedTimeframesRequest(BaseModel):
-    """Request for allowed timeframes given a date range."""
-
-    ticker: str = Field(..., min_length=1, max_length=20)
-    from_date: str = Field(..., description="Start date (YYYY-MM-DD)")
-    to_date: str = Field(..., description="End date (YYYY-MM-DD)")
-    session: str = Field("rth", description="'rth' or 'extended'")
 
 
 class ChartDataBar(BaseModel):

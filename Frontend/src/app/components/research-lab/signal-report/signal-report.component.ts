@@ -166,22 +166,12 @@ export class SignalReportComponent {
     return ['Trending Up', 'Sideways', 'Trending Down'];
   }
 
-  getRegimeCount(regime: string): number {
-    const entry = this.result().regimeCoverage.find(e => e.regime === regime);
-    return entry?.count ?? 0;
-  }
-
-  regimeCovered(regime: string): boolean {
-    return this.getRegimeCount(regime) > 0;
-  }
-
   // ─── Execution Assumptions ──────────────────────────────
 
   /** Execution model as actually implemented in the backtest kernel. The
    *  text was rewritten in this redesign — the previous "Next bar open"
    *  label did not match what the code computes (1-bar lag with
-   *  close-to-close measurement). See ``docs/signal-engine-authority.md``
-   *  § 6 for the full timing model and the realism caveats. */
+   *  close-to-close measurement). */
   get executionAssumptions(): { label: string; value: string; note?: string }[] {
     const r = this.result();
     return [
@@ -273,30 +263,6 @@ export class SignalReportComponent {
     return 'red';
   }
 
-  // ─── Executive Summary ────────────────────────────────────
-
-  get executiveSummary(): string {
-    const r = this.result();
-    const grad = r.graduation;
-    if (!grad) return '';
-
-    const parts: string[] = [];
-    parts.push(`Signal "${r.featureName}" on ${r.ticker} received grade ${grad.overallGrade} (${grad.statusLabel}).`);
-
-    if (r.walkForward?.windows?.length) {
-      const wf = r.walkForward;
-      parts.push(`Mean OOS Sharpe is ${wf.meanOosSharpe.toFixed(2)} across ${wf.windows.length} folds.`);
-    }
-
-    if (this.alphaDecaySignificant) {
-      parts.push('Alpha decay is statistically significant (p < 0.05) — signal edge may be eroding over time.');
-    } else if (this.hasAlphaDecay) {
-      parts.push('Negative Sharpe trend detected but not statistically significant.');
-    }
-
-    return parts.join(' ');
-  }
-
   get oosSharpeDivergence(): number {
     const wf = this.result().walkForward;
     if (!wf) return 0;
@@ -305,10 +271,6 @@ export class SignalReportComponent {
 
   get hasSharpeDivergence(): boolean {
     return this.oosSharpeDivergence > 0.15;
-  }
-
-  get alphaDecaySignificant(): boolean {
-    return (this.result().walkForward?.alphaDecay?.pValue ?? 1) < 0.05;
   }
 
   get skewnessInterpretation(): string {

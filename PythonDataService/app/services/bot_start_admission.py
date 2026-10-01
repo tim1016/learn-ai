@@ -21,7 +21,6 @@ from app.marketdata.feed import MarketDataFeed
 from app.schemas.action_plan import ActionPlan
 from app.schemas.bot_end import BotEnd
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
-from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.deployment_budget import DeployBudgetConsent
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.market_liveness import MarketLivenessFact
@@ -87,7 +86,6 @@ MarketLivenessFactResolver = Callable[[str, int], MarketLivenessFact]
 CustodyBoundActivator = Callable[
     [BrokerBotBinding, MarketDataFeed, int, ClerkCustodySnapshot, BotEnd | None], Awaitable[BotStatusView]
 ]
-SessionCapabilityResolver = Callable[[str, str], SessionDataCapability | None]
 
 
 @dataclass(frozen=True)
@@ -227,19 +225,6 @@ class RunAdmissionInvariantError(RuntimeError):
     Deploy so both admission paths fail the same explicit way
     instead of a bare ``assert`` that ``python -O`` would strip.
     """
-
-
-def market_data_capability_account_id(feed: MarketDataFeed | None) -> str | None:
-    """Return the account that owns the feed's capability evidence.
-
-    Alpaca custody identifies the execution account; it cannot scope an IBKR
-    market-data entitlement.  Only a feed-provided source account may select
-    the capability snapshot that authorizes an extended session phase.
-    """
-    if feed is None:
-        return None
-    account_id = getattr(feed, "capability_account_id", None)
-    return account_id if isinstance(account_id, str) and account_id else None
 
 
 def make_start_request(
@@ -588,7 +573,6 @@ class BotStartAdmission:
         runtime_fact: RuntimeFactResolver,
         validation_fact: ValidationFactResolver = current_strategy_validation_fact,
         activate: CustodyBoundActivator,
-        session_capability: SessionCapabilityResolver,
         market_liveness: MarketLivenessFactResolver = market_liveness_fact,
     ) -> None:
         self._now_ms = now_ms
@@ -598,7 +582,6 @@ class BotStartAdmission:
         self._runtime_fact = runtime_fact
         self._validation_fact = validation_fact
         self._activate = activate
-        self._session_capability = session_capability
         self._market_liveness = market_liveness
 
     async def preview(self, request: StartRequest) -> RunAdmissionDecision:
@@ -648,7 +631,6 @@ class BotStartAdmission:
                 observed_at_ms = self._now_ms()
                 process = self._process_fact(binding, observed_at_ms)
                 feed = self._feed_resolver()
-                capability_account_id = market_data_capability_account_id(feed)
                 validation = await resolve_strategy_validation_fact(
                     self._validation_fact,
                     binding,
@@ -690,12 +672,6 @@ class BotStartAdmission:
                         observed_at_ms,
                         symbol=binding.symbol,
                         use_rth=binding.use_rth,
-                        capability=(
-                            self._session_capability(binding.symbol, capability_account_id)
-                            if capability_account_id is not None
-                            else None
-                        ),
-                        account_id=capability_account_id,
                         extended_window=policy.window,
                     ),
                     market_liveness=self._market_liveness(
@@ -727,17 +703,9 @@ def market_data_admission_fact(
     *,
     symbol: str | None = None,
     use_rth: bool,
-    capability: SessionDataCapability | None = None,
-    account_id: str | None = None,
     extended_window: ExtendedHoursWindow | None = None,
 ) -> MarketDataAdmissionFact:
-    session = session_state_at_ms(
-        now_ms=observed_at_ms,
-        capability=capability,
-        symbol=symbol,
-        account_id=account_id,
-        extended_window=extended_window,
-    )
+    session = session_state_at_ms(now_ms=observed_at_ms, extended_window=extended_window)
     session_fields = {
         "scheduled_phase": session.phase,
         "session_authority_source": session.source,
@@ -768,13 +736,7 @@ def market_data_admission_fact(
             reason="The market-data health probe failed.",
             **session_fields,
         )
-    session = session_state_at_ms(
-        now_ms=health.observed_at_ms,
-        capability=capability,
-        symbol=symbol,
-        account_id=account_id,
-        extended_window=extended_window,
-    )
+    session = session_state_at_ms(now_ms=health.observed_at_ms, extended_window=extended_window)
     session_fields = {
         "scheduled_phase": session.phase,
         "session_authority_source": session.source,
@@ -786,7 +748,10 @@ def market_data_admission_fact(
             feed_id=feed.feed_id,
             last_bar_ms=health.last_bar_ms,
             observed_at_ms=health.observed_at_ms,
-            reason=("The extended-session phase cannot be proven by a fresh market-data capability snapshot."),
+            reason=(
+                "The extended-session phase cannot be proven: the executing authority "
+                "declares no extended-hours window."
+            ),
             connected=health.connected,
             stale=health.stale,
             active_subscription_count=health.active_subscription_count,

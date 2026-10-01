@@ -1,7 +1,7 @@
 """Lake-admission validation for vendor minute bars (#2451).
 
 A vendor minute-bar fetch is validated before anything is published to the
-lake. This is the fail-fast ingestion boundary ``temporal-rigor.md`` requires:
+lake. This is the fail-fast ingestion boundary ADR 0022 (h) requires:
 duplicates, non-monotonic timestamps and corrupt prices are signals about
 upstream corruption and must surface, never be repaired, deduplicated or
 silently dropped. The reader cannot catch these later — the writer stores

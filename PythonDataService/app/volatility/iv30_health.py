@@ -1,7 +1,7 @@
 """IV30 stability / health score (Step 6 of IV-RV alignment).
 
 Formula: health_score = weighted mean of resampling score (exp(-|ΔIV30|/10bps)), strike_grid score (exp(-|ΔIV30|/20bps)), and arb_consistency score (parametric IV30 vs VIX-replication IV30 ratio).
-Reference: Internal — no external reference; docs/math-rigor.md Upgrade 1 (IV30 construction); component weights and thresholds locked by tests/edge/test_iv30_stability.py.
+Reference: Internal — no external reference; component weights and thresholds locked by tests/edge/test_iv30_stability.py.
 Canonical implementation: app/volatility/iv30_health.py
 Validated against: tests/edge/test_iv30_stability.py (component threshold locks); NONE for golden fixture.
 

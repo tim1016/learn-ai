@@ -19,6 +19,7 @@ from app.engine.live.account_artifacts import (
     _safe_account_path_segment,
     account_artifacts_root,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 BINDING_COMMAND_LEDGER_FILENAME = "binding_commands.jsonl"
 ACCOUNT_BINDING_LEDGER_READ_ENABLED_ENV = "ACCOUNT_BINDING_LEDGER_READ_ENABLED"
@@ -48,7 +49,7 @@ class AccountBindingCommand(BaseModel):
     run_id: str = Field(min_length=1, max_length=128)
     bot_order_namespace: str = Field(min_length=1, max_length=256)
     lifecycle_state: Literal["DEPLOYED", "ACTIVE", "RETIRED"]
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     source: str = Field(min_length=1, max_length=256)
     proposal_seq: int | None = Field(default=None, ge=1)
 
@@ -100,26 +101,6 @@ def read_account_binding_commands(artifacts_root: Path, account_id: str) -> list
         return _read_commands_direct(path, account_id)
     except IsADirectoryError as exc:
         raise AccountArtifactError(f"binding command ledger is not a file: {path}") from exc
-
-
-def pending_binding_retirement_proposals(
-    artifacts_root: Path,
-    *,
-    account_id: str,
-    strategy_instance_id: str | None = None,
-) -> tuple[AccountBindingCommand, ...]:
-    """Return unmatched retirement proposals in deterministic ledger order."""
-
-    pending: dict[int, AccountBindingCommand] = {}
-    for command in read_account_binding_commands(artifacts_root, account_id):
-        if command.entry_kind == "retirement_proposal":
-            pending[command.seq] = command
-        elif command.entry_kind == "retirement_folded" and command.proposal_seq is not None:
-            pending.pop(command.proposal_seq, None)
-    proposals = tuple(pending.values())
-    if strategy_instance_id is None:
-        return proposals
-    return tuple(proposal for proposal in proposals if proposal.strategy_instance_id == strategy_instance_id)
 
 
 def binding_ledger_parity(
@@ -194,6 +175,5 @@ __all__ = [
     "account_binding_ledger_read_enabled",
     "binding_command_ledger_path",
     "binding_ledger_parity",
-    "pending_binding_retirement_proposals",
     "read_account_binding_commands",
 ]

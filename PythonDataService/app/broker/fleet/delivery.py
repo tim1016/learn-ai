@@ -1,19 +1,18 @@
 """Lane delivery: one provider-operation path, local or over HTTP.
 
 The coordinator forwards a routed operation to the serving agent through
-exactly this seam (ADR 0062 addendum, item on delivery adapters; audit
-2026-09-13, finding 8): ``HttpLaneDelivery`` talks to a real agent process
+exactly this seam: ``HttpLaneDelivery`` talks to a real agent process
 over the pinned internal client, and ``LocalLaneDelivery`` dispatches to an
 in-process handler — the combined posture — preserving async event streams
 without buffering them to completion, which is why the httpx ASGI transport
 is never used here.
 
 Both adapters deliver the same ``DeliveryRequest`` and both enforce the same
-response-identity contract (FR-076): the serving runtime echoes the broker,
+response-identity contract (ADR 0062 Decision 5): the serving runtime echoes the broker,
 clerk, routing epoch and binding generation it actually served, and a mismatch
 discovered after a possible dispatch is an *uncertain outcome* — the client is
 isolated and the caller must reconcile by command identity, never resubmit
-blindly (audit 2026-09-13, finding 7).
+blindly (ADR 0062 addendum, item 7).
 """
 
 from __future__ import annotations
@@ -216,7 +215,7 @@ def verify_identity_echo(
 
 
 def validate_event_identity(event: SseEvent, request: DeliveryRequest) -> None:
-    """Verify one streamed event's provenance fields (FR-076).
+    """Verify one streamed event's provenance fields.
 
     Every event of a routed stream carries the serving runtime's identity as
     ``x-fleet-*`` fields — validated per event, not just on the response

@@ -344,16 +344,6 @@ async def test_an_unknown_bots_end_edit_is_404(end_app) -> None:
     assert response.status_code == 404
 
 
-async def test_a_bots_end_is_read_with_its_panel_not_on_its_own(end_app) -> None:
-    """#2607 review: the unused ``GET .../end`` is gone; the panel carries the end."""
-    app, _registry = end_app
-
-    async with _client(app) as client:
-        response = await client.get(f"{_BOTS}/end-bot/end")
-
-    assert response.status_code == 405
-
-
 @pytest.mark.parametrize(
     "body",
     [

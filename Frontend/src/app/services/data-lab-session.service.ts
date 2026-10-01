@@ -124,16 +124,6 @@ const UPDATE_SESSION = `
   }
 `;
 
-const UPDATE_CHART_SNAPSHOT = `
-  mutation UpdateDataLabChartSnapshot($id: UUID!, $chartSnapshotJson: String!) {
-    updateDataLabChartSnapshot(id: $id, chartSnapshotJson: $chartSnapshotJson) {
-      success
-      id
-      message
-    }
-  }
-`;
-
 const RENAME_SESSION = `
   mutation RenameDataLabSession($id: UUID!, $name: String!) {
     renameDataLabSession(id: $id, name: $name) {
@@ -261,18 +251,6 @@ export class DataLabSessionService {
       { id, input }
     );
     return resp.updateDataLabSession.success;
-  }
-
-  /** Update only the chart snapshot on an existing session. */
-  async updateChartSnapshot(
-    id: string,
-    snapshot: DataLabSessionChartSnapshot
-  ): Promise<boolean> {
-    const resp = await this.gql<{ updateDataLabChartSnapshot: MutationResult }>(
-      UPDATE_CHART_SNAPSHOT,
-      { id, chartSnapshotJson: JSON.stringify(snapshot) }
-    );
-    return resp.updateDataLabChartSnapshot.success;
   }
 
   /** Rename a session. */

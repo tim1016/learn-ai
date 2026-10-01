@@ -9,7 +9,6 @@ import pytest
 
 from app.broker.alpaca.clerk.live_arming import (
     ARMING_ADMISSION_REASON_CODES,
-    LIVE_MODE_DISAGREEMENT,
     LiveArmingInvalid,
     LiveArmingRecord,
     LiveDisarmRecord,
@@ -18,7 +17,6 @@ from app.broker.alpaca.clerk.live_arming import (
 )
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
-from app.broker.contract.errors import BrokerAccountModeDisagreement
 from app.services.session_authority import et_minute_of_day_ms
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -325,10 +323,6 @@ def test_the_recorded_refusal_codes_are_their_own_names_and_the_set_is_closed() 
 
     for name in ARMING_ADMISSION_REASON_CODES:
         assert getattr(live_arming_module, name) == name
-
-
-def test_the_mode_disagreement_code_is_the_adapters_own() -> None:
-    assert BrokerAccountModeDisagreement("m", broker="alpaca", detail="d").reason_code == LIVE_MODE_DISAGREEMENT
 
 
 def test_the_newest_arming_ignores_revocations() -> None:

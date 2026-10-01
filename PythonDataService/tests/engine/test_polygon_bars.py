@@ -2,7 +2,7 @@
 
 The full export path writes zip files; these tests focus on the pure
 helpers that do UTC → Eastern conversion and trading-day bucketing,
-which is timestamp-critical per .claude/rules/numerical-rigor.md.
+which is timestamp-critical.
 """
 
 from __future__ import annotations

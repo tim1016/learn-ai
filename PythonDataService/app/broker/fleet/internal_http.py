@@ -1,19 +1,19 @@
 """The single seam for internal fleet HTTP traffic.
 
 Every internal client — coordinator to agent, agent to coordinator — is built
-here with the pinned posture (audit 2026-09-13, finding 4): redirects
+here with the pinned posture (ADR 0062 addendum, item 6): redirects
 refused, environment proxy inheritance refused (``trust_env=False``), bounded
 timeouts. No fleet-internal call may construct its own ``httpx`` client any
 other way, and no internal destination ever comes from a request.
 
 The SSE framing utilities turn a streaming response's bytes into validated
 ``SseEvent`` values: per-event size caps, comment tolerance, and no partial
-dispatch. They exist so clerk-scoped streams (FR-076 per-event identity is
+dispatch. They exist so clerk-scoped streams (per-event identity is
 the caller's job) share one hardened parser instead of per-surface ad-hoc
 ones. This module deliberately does **not** use httpx's ASGI transport for
 delivery: the pinned httpx 0.28.1 implementation buffers a response to
 completion before returning it, so a long-lived stream would never deliver
-incremental events (audit 2026-09-13, finding 8) — real sockets only.
+incremental events — real sockets only.
 """
 
 from __future__ import annotations
@@ -109,7 +109,7 @@ class FleetTransportRefused(Exception):
 #: ``TtlCache`` defaults its clock to ``time.monotonic``, which is the right
 #: tool for this: the expiry deadline is local, in-process arithmetic that
 #: is never stored, put on the wire, or serialized, so it sits outside this
-#: repo's temporal authority (``.claude/rules/temporal-rigor.md`` governs
+#: repo's temporal authority (ADR 0022 governs
 #: representation and scheduled session structure, neither of which this
 #: is) — and a wall clock could step backwards under NTP correction or a
 #: DST transition, which would let a TTL stall (never expire) or fire
@@ -144,8 +144,8 @@ def enforce_private_http_target(url: str) -> None:
     Fleet topology places coordinators and agents on a private compose
     network, so ``http://`` is acceptable only for loopback, link-local and
     private (RFC 1918 / unique-local) destinations — the service tokens and
-    worker keys that ride internal calls must never transit a public hop
-    (audit 2026-09-13, finding 4). ``https://`` is accepted anywhere. A host
+    worker keys that ride internal calls must never transit a public hop.
+    ``https://`` is accepted anywhere. A host
     name is resolved and every address it returns must be private; an
     unresolvable host cannot be verified, so it is refused rather than
     trusted. Private verdicts are cached per host for
@@ -192,7 +192,7 @@ class SseEvent:
     """One complete server-sent event frame.
 
     ``identity`` carries the per-event provenance fields a serving agent
-    injects as ``x-fleet-*`` field lines (FR-076): broker, clerk, routing
+    injects as ``x-fleet-*`` field lines: broker, clerk, routing
     epoch, binding generation. Unknown fields stay ignored per the WHATWG
     framing; these are collected so the delivery layer can validate every
     event against the pinned attempt, not just the response headers.

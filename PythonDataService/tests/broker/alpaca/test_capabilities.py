@@ -80,6 +80,6 @@ def test_every_descriptor_declares_the_alpaca_extended_window(capabilities) -> N
 
 
 def test_the_declared_window_is_alpacas_documented_session() -> None:
-    # 04:00–20:00 ET, Alpaca "Orders at Alpaca" § Extended Hours Trading (see docs/references/alpaca-extended-hours.md).
+    # 04:00–20:00 ET, Alpaca "Orders at Alpaca" § Extended Hours Trading.
     assert ALPACA_EXTENDED_HOURS_WINDOW.open_minute_et == 4 * 60
     assert ALPACA_EXTENDED_HOURS_WINDOW.close_minute_et == 20 * 60

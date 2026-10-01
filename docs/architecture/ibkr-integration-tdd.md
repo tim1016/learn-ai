@@ -22,7 +22,7 @@ of any numerical normalization.
 
 The supported integration observes:
 
-- connection and session capability;
+- connection health;
 - account summary, positions, P&L, orders, executions, and history;
 - option contracts, chains, surfaces, quotes, and real-time/historical bars;
 - broker API/error evidence and durable account/order projections.
@@ -76,7 +76,3 @@ No new IBKR submit/cancel abstraction should be designed from this record.
 pins both sides of the boundary: mutation modules/routes/clients/contracts stay
 absent, while account, position, order/history, what-if, capability, evidence,
 bars, reconciliation, event, and transaction reads stay present.
-
-The original May 2026 phase narrative, order-type matrix, risk register, and
-deployment plan remain available in git history and `docs/archive/`. They are
-historical provenance, not current requirements.

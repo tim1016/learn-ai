@@ -14,7 +14,7 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrderLeg, TimeInForce
 
 
-def _accepted_leg(repo: ClerkSqliteRepository, *, order_ref: str) -> BrokerOrderLeg:
+def accepted_manual_leg(repo: ClerkSqliteRepository, *, order_ref: str) -> BrokerOrderLeg:
     """The immutable leg the manual order was accepted with."""
     acceptance = repo.last_order_transition(order_ref=order_ref, transition_kind="MANUAL_ORDER_ACCEPTED")
     if acceptance is None:
@@ -34,7 +34,7 @@ def manual_order_has_exact_terminal_coverage(
     """Whether exact evidence proves one manual tracer leg has fully filled.
 
     Formula: ``abs(exact_effective_qty - governing_qty) <= FILL_QTY_EPSILON``.
-    Reference: docs/references/clerk-invariants.md §2 — an absolute
+    Reference: ADR 0036, 2026-09-30 amendment, item 1 — an absolute
     ``1e-9`` tolerance admits float64 aggregation residue without treating a
     material fractional-share remainder as complete.
     Canonical implementation: this predicate, reused by order evidence.
@@ -64,7 +64,7 @@ def manual_order_has_exact_terminal_coverage(
     governing_quantity = (
         head_quantity
         if repo.has_order_transition(order_ref=order_ref, transition_kind=MANUAL_ORDER_REPLACED_TRANSITION)
-        else _accepted_leg(repo, order_ref=order_ref).quantity
+        else accepted_manual_leg(repo, order_ref=order_ref).quantity
     )
     if governing_quantity is None:
         return False
@@ -120,7 +120,7 @@ def manual_order_ending_copy(repo: ClerkSqliteRepository, *, order: OrderResourc
     Clerk reads as a plain cancel, not as one made at Alpaca. Shares a
     partial fill kept are named, because they stay the owner's position.
     """
-    leg = _accepted_leg(repo, order_ref=order.order_ref)
+    leg = accepted_manual_leg(repo, order_ref=order.order_ref)
     through_clerk = repo.manual_order_cancellation(order_ref=order.order_ref) is not None
     ending = _ENDING_COPY[(order.broker_state or "").lower()](leg, through_clerk)
     filled_quantity, _ = repo.effective_fill_totals_for_order(order.order_ref)
@@ -146,6 +146,7 @@ def manual_order_broker_ending(repo: ClerkSqliteRepository, *, order_ref: str) -
 
 
 __all__ = [
+    "accepted_manual_leg",
     "manual_order_broker_ending",
     "manual_order_ending_copy",
     "manual_order_has_exact_terminal_coverage",

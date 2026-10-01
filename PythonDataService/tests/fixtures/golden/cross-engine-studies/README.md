@@ -2,12 +2,33 @@
 
 12 cells = 4 tickers (SPY, QQQ, AAPL, TSLA) × 3 nested windows (W6mo / W12mo / W24mo, all ending 2026-04-30). Each cell pins LEAN orders.json + state.csv + observations.csv as the reference; Engine Lab runs live at test time.
 
-Authoritative design: `docs/superpowers/specs/2026-05-21-cross-engine-golden-matrix-design.md`.
+The matrix code is `app/lean_sidecar/parity_matrix/`. This README holds the gate order, the tolerances and the regeneration policy.
 
 ## Layout
 
 - `_lean_data_capture/<TICKER>/` — shared 24mo minute capture per ticker (LEAN deci-cent zips). Three cells per ticker read from this single capture.
 - `cells/<CELL_ID>/` — one directory per (ticker, window). Contains `manifest.json`, `attribution.md`, `lean/`, `reconciliation_pinned.json`.
+
+## Gates and tolerances
+
+Three gates run in order: observations, then per-bar state, then trades. A downstream gate is not evaluated when an upstream gate fails. A divergent minute stream upstream of consolidation explains everything downstream, so state and trades would be uninterpretable; a state divergence likewise explains any trade divergence.
+
+**Gate 1 — observations** (`observations.csv`). `ts_ms_utc`, `open`, `high`, `low`, `close` and `volume` (as `Decimal` parsed from string), row count and row order are all exact. Both engines read the same minute zips, so any difference is an input-stream divergence, never a numerical one.
+
+**Gate 2 — per-bar state** (`state.csv`, aligned by `ts_ms_utc`).
+- `ts_ms_utc` is exact: it is the alignment key, and a mismatch fails at once.
+- `close` is exact: both engines consume the same minute zips and consolidate deterministically.
+- `cross_state` and `signal` are exact: they are enums.
+- `ema_fast`, `ema_slow` and `rsi` use `atol=1e-9, rtol=0`, the strict-float default for indicators.
+- Both engines emit state rows only after every indicator is ready, so warmup is excluded by construction and needs no tolerance of its own.
+- State files must carry full-precision numeric strings. If an emitter rounds for display, fix the emitter; do not loosen the tolerance.
+
+**Gate 3 — trades** (`app/lean_sidecar/cross_reconciler.py`).
+- `qty_atol=0`: both engines size off the same cash and the same bar close at signal time.
+- `fill_price_atol=$0.01`: LEAN's `ImmediateFillModel` fills at `bar.EndTime` / `bar.Close`, which Engine Lab's `signal_bar_close` mode matches.
+- `commission_atol=$0.01` with `assert_fees=True` (Branch A): the trusted sample pins IBKR brokerage and the IBKR tiered formula is deterministic, so `COMMISSION_DRIFT` gates.
+
+A cell passes only when all three gates pass.
 
 ## Regeneration
 
@@ -45,4 +66,10 @@ Current state:
   under the same IBKR-margin contract.
 
 The smoke marker covers the four W6mo cells. The W12mo cells are
-slow-marked per the design spec; W24mo cells remain unpinned.
+slow-marked; W24mo cells remain unpinned.
+
+DIA was attempted for W12mo on 2026-06-10 and deferred. Gates 1 and 3 passed,
+but Gate 2 failed on 15 of 6,477 state rows: when the last minute of a
+15-minute window has no trade, LEAN's `TradeBarConsolidator` stamps the bar's
+`EndTime` at the last traded minute, while Engine Lab stamps the clock-aligned
+boundary. Matching it needs an Engine Lab consolidator change.

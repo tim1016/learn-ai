@@ -133,11 +133,6 @@ describe('BaselinesSectionComponent', () => {
     });
   });
 
-  it('shows empty-state copy when no baselines exist', () => {
-    const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('No baselines yet');
-  });
-
   it('runBuyAndHold calls runFromRun with method=buy_and_hold and refreshes', async () => {
     service.listBaselines.mockClear();
     await component.runBuyAndHold();

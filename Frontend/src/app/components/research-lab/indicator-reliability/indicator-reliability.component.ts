@@ -538,13 +538,6 @@ export class IndicatorReliabilityComponent {
     return 'info';
   }
 
-  getRetentionSeverity(retention: number | null): 'success' | 'warn' | 'danger' | 'info' {
-    if (retention === null) return 'info';
-    if (retention >= 0.6) return 'success';
-    if (retention >= 0.4) return 'warn';
-    return 'danger';
-  }
-
   formatIc(ic: number | null): string {
     if (ic === null) return '-';
     return ic.toFixed(4);
@@ -554,11 +547,6 @@ export class IndicatorReliabilityComponent {
     if (p === null) return '-';
     if (p < 0.001) return '<0.001';
     return p.toFixed(3);
-  }
-
-  formatRetention(r: number | null): string {
-    if (r === null) return '-';
-    return `${(r * 100).toFixed(0)}%`;
   }
 
   formatRetentionDelta(delta: number | null): string {
@@ -580,31 +568,6 @@ export class IndicatorReliabilityComponent {
 
   formatSharpe(s: number): string {
     return `${s >= 0 ? '+' : ''}${s.toFixed(2)}`;
-  }
-
-  getSharpeSeverity(s: number): 'success' | 'warn' | 'danger' | 'info' {
-    const abs = Math.abs(s);
-    if (abs >= 1.0) return 'success';
-    if (abs >= 0.5) return 'warn';
-    if (abs >= 0.2) return 'info';
-    return 'danger';
-  }
-
-  getStrengthSeverity(label: StrengthLabel): 'success' | 'warn' | 'danger' | 'info' {
-    if (label === 'Strong') return 'success';
-    if (label === 'Moderate') return 'info';
-    if (label === 'Weak') return 'warn';
-    return 'danger'; // Noise
-  }
-
-  getStabilitySeverity(label: StabilityLabel): 'success' | 'warn' | 'danger' {
-    if (label === 'High') return 'success';
-    if (label === 'Moderate') return 'warn';
-    return 'danger';
-  }
-
-  getDirectionSeverity(label: DirectionLabel): 'info' | 'danger' {
-    return label === 'None' ? 'danger' : 'info';
   }
 
   // ─── Mission-control verdict helpers (T1) ─────────────────
@@ -891,15 +854,6 @@ export class IndicatorReliabilityComponent {
     return { bandLeftPct, bandWidthPct, icPct, center: 50 };
   }
 
-  getTradeabilitySeverity(
-    label: TradeabilityLabel,
-  ): 'success' | 'warn' | 'danger' | 'info' {
-    if (label === 'Likely tradeable') return 'success';
-    if (label === 'Marginal') return 'warn';
-    if (label === 'Unlikely') return 'danger';
-    return 'info';
-  }
-
   getSlopeDecisionSeverity(flag: boolean | null): 'success' | 'danger' | 'info' {
     if (flag === null) return 'info';
     return flag ? 'success' : 'danger';
@@ -908,16 +862,6 @@ export class IndicatorReliabilityComponent {
   formatSlopeDecision(flag: boolean | null): string {
     if (flag === null) return '-';
     return flag ? 'YES' : 'NO';
-  }
-
-  isBestHorizon(horizon: number): boolean {
-    return this.result()?.best_horizon === horizon;
-  }
-
-  getBestRandomZScore(): number {
-    const res = this.result();
-    if (!res) return 0;
-    return Math.max(...res.results.map(r => Math.abs(r.ic_vs_random_zscore)));
   }
 
   getBestRandomResult(): HorizonICResult | null {

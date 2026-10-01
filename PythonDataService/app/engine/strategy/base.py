@@ -24,30 +24,21 @@ from app.engine.strategy.signal_intent import SignalIntent
 
 if TYPE_CHECKING:
     from app.engine.execution.signal_intent_executor import SignalIntentExecutor
-    from app.engine.live.indicator_state import ValidationResult
     from app.engine.strategy.signal_program import SignalProgram
-
-    # Type-only: a runtime import would create an indicator_state -> strategy
-    # cycle. The default validate_state_payload imports it locally instead.
 
 
 @dataclass(frozen=True)
 class DecisionSnapshot:
     """One per-bar decision-time snapshot a Strategy may publish.
 
-    Optional, observability-only: strategies that opt in stash this on
-    ``Strategy.last_decision_snapshot`` after each consolidated bar
-    fires; historical artifact and reconciliation consumers may project it to
-    ``decisions.parquet``. The retired IBKR runtime is no longer a consumer.
+    Observation only: strategies that opt in stash this on
+    ``Strategy.last_decision_snapshot`` after each consolidated bar fires,
+    and no app code reads it. Tests that need each bar's decision without
+    driving a Signal Program read it -- the LEAN-vs-engine parity test
+    compares it with LEAN's ``state.csv``. Strategies that don't publish
+    leave ``last_decision_snapshot=None``; backtest paths are unaffected.
 
-    Strategies that don't care leave ``last_decision_snapshot=None``
-    and nothing reads it. Backtest paths and existing tests are
-    unaffected — there is no behavior change unless an external reader
-    explicitly observes this attribute.
-
-    Schema mirrors ``app.engine.live.artifacts.DECISION_COLUMNS`` so historical
-    writer integrations can convert one-to-one without bookkeeping. ``signal``
-    is the per-bar action the strategy took:
+    ``signal`` is the per-bar action the strategy took:
     ``ENTER`` if it newly entered a position on this bar, ``EXIT`` if
     it newly liquidated, ``HOLD`` for any other state (warmup-skip,
     bars-until-exit countdown, no signal fired). The strategy is
@@ -134,12 +125,6 @@ class StrategyContext:
     collect_consolidated_bars: bool = True
     # Insight manager — tracks structured predictions and scores them.
     insight_manager: InsightManager = field(default_factory=InsightManager)
-    # Engine-owned hook invoked on every fired consolidated bar BEFORE the
-    # strategy's own handler runs. Used by the BacktestEngine to evaluate
-    # active TP/SL brackets intrabar so the strategy sees the correct
-    # position state when its ``on_bar`` runs. ``None`` on strategies
-    # unit-tested without the engine.
-    _pre_handler_hook: Callable[[TradeBar], None] | None = None
     # Engine-owned execution policy for an instrument-free strategy decision.
     # BacktestEngine binds the single signal stream explicitly after initialize.
     _signal_intent_executor: SignalIntentExecutor | None = None
@@ -169,8 +154,6 @@ class StrategyContext:
             consolidator._last_fired_bar = bar  # type: ignore[attr-defined]
             if ctx.collect_consolidated_bars:
                 ctx.consolidated_bars.append(bar)
-            if ctx._pre_handler_hook is not None:
-                ctx._pre_handler_hook(bar)
             handler(bar)
 
         consolidator.on_data_consolidated = _on_emit
@@ -192,26 +175,6 @@ class StrategyContext:
     def liquidate(self, symbol: str) -> None:
         assert self.current_time_ms is not None
         self.portfolio.liquidate(symbol.upper(), self.current_time_ms)
-
-    def market_order(self, symbol: str, quantity: int, tag: str = "") -> None:
-        """Submit a fixed-quantity market order (signed: + buy, − sell).
-
-        For strategies that size by a fixed share count rather than a
-        portfolio fraction (e.g. the VWAP-reversion port, which mirrors a
-        fixed-quantity reference). Delegates to the portfolio's
-        ``submit_market_order``.
-
-        The live context passes its own explicit-call marker for the
-        order-surface guard. The offline portfolio has no such guard and
-        accepts only the pure backtest order shape.
-        """
-        assert self.current_time_ms is not None
-        self.portfolio.submit_market_order(
-            symbol.upper(),
-            quantity,
-            self.current_time_ms,
-            tag,
-        )
 
     def set_signal_intent_executor(self, executor: SignalIntentExecutor) -> None:
         """Bind the engine-owned execution policy for asset-free decisions."""
@@ -259,10 +222,8 @@ class Strategy(ABC):
         self.start_date: datetime | None = None
         self.end_date: datetime | None = None
         self.initial_cash: Decimal = Decimal(100000)
-        # Optional per-bar snapshot subclasses may publish for
-        # downstream observers (the live runtime's DecisionWriter).
-        # Default None — strategies opt in by setting this from inside
-        # their bar handler. See DecisionSnapshot.
+        # Optional per-bar snapshot a subclass may publish from inside its
+        # bar handler; see DecisionSnapshot. Default None.
         self.last_decision_snapshot: DecisionSnapshot | None = None
 
     # ------------------------------------------------------------------
@@ -330,70 +291,6 @@ class Strategy(ABC):
         so the next session opens with a clean slate. Default is a
         no-op for strategies that don't opt into the session wrapper.
         """
-
-    # ------------------------------------------------------------------
-    # Indicator-state persistence contract (live engine; #435 follow-up)
-    # ------------------------------------------------------------------
-    # The live engine's hydration ladder and shutdown checkpoint call all
-    # three of these on every strategy. The defaults make a strategy with no
-    # warm-startable state (pure bar-pattern detectors like
-    # deployment_validation, and any not-yet-wired strategy) satisfy the
-    # contract safely instead of raising AttributeError mid-run. Strategies
-    # with indicator state (e.g. spy_ema_crossover) override all three.
-
-    def report_state_for_persistence(self) -> dict | None:
-        """Persistable cross-session state, or ``None`` if not warm-startable.
-
-        Default ``None``: no indicator state to carry across restarts (cold
-        start every session). A strategy that reports no state is not
-        warm-startable (see ``is_warm_startable``), so ``hydrate_policy=require``
-        is vacuous for it — there is nothing to require and nothing to restore.
-        Strategies with warm-startable indicators override this.
-        """
-        return None
-
-    def is_warm_startable(self) -> bool:
-        """Whether this strategy carries cross-session indicator state to warm-start.
-
-        Derived from the persistence contract so the two can never drift: a
-        strategy is warm-startable iff it overrides ``report_state_for_persistence``
-        to return a payload. Pure bar-pattern detectors (e.g.
-        ``deployment_validation``) keep the base ``None`` and are NOT
-        warm-startable — so ``hydrate_policy=require`` is vacuous for them:
-        there is no sidecar to require and nothing to restore. The live engine
-        must therefore not exit 4 demanding a sidecar such a strategy can never
-        write; it cold-starts every session. Strategies with warm-startable
-        indicators (e.g. ``spy_ema_crossover``) override
-        ``report_state_for_persistence`` and so are warm-startable automatically.
-        """
-        return type(self).report_state_for_persistence is not Strategy.report_state_for_persistence
-
-    def restore_state_from_persistence(self, payload: dict) -> None:  # pragma: no cover
-        """Rehydrate from a persisted payload.
-
-        Default raises: the base ``report_state_for_persistence`` returns
-        ``None`` (so no payload is ever produced) and the base
-        ``validate_state_payload`` rejects, so the hydration ladder never
-        reaches restore. Reaching here means a strategy persisted state without
-        also implementing restore — a programming error, not a runtime input.
-        """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not implement restore_state_from_persistence; "
-            "it reports no persistable state"
-        )
-
-    def validate_state_payload(self, payload: dict) -> ValidationResult:
-        """Shape-check a persisted payload for this strategy.
-
-        Default rejects (``payload_mismatch``): a strategy that does not model
-        persistable state cannot vouch for a payload, so a stale/foreign global
-        state file is refused rather than blindly restored. Strategies that
-        persist state override this. Imported locally to avoid an
-        ``indicator_state -> strategy`` module cycle.
-        """
-        from app.engine.live.indicator_state import ValidationResult
-
-        return ValidationResult.failed("payload_mismatch", payload_shape_ok=False)
 
     def on_minute_bar(self, bar: TradeBar) -> None:  # pragma: no cover - override in subclass
         """Called for every minute bar consumed by the engine, before consolidator dispatch.

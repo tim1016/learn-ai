@@ -2,7 +2,7 @@
  * Pure geometry/color computation for the Recency Chart swimlane. No
  * Angular, no DOM — the component consumes SwimlaneLayout and only maps
  * it to SVG attribute bindings, so every branch here is independently
- * unit-testable (design spec §5.1, D6-D10).
+ * unit-testable.
  *
  * pnlColor / sharpeToOpacity stops are a first-cut CMYK-family diverging
  * scale (cyan loss / gray breakeven / magenta gain) chosen for
@@ -16,7 +16,7 @@ export interface RecencySwimlaneTrade {
   strategyKey: string;
   paramsHash: string;
   /** Raw JSON of the combo's parameter assignment; optional so existing
-   * fixtures/tests that predate the focus panel (design spec §4, D4)
+   * fixtures/tests that predate the focus panel
    * don't need updating. Missing/empty means "unknown" to the panel. */
   paramsJson?: string;
   fingerprint: string;
@@ -97,7 +97,7 @@ interface PackedTrade {
 /**
  * Greedy interval packing: highest-pnl trade first, into the topmost
  * sub-row with no time overlap. Bars are never nudged along the time
- * axis — only which sub-row a bar occupies changes (design spec D7).
+ * axis — only which sub-row a bar occupies changes.
  */
 export function packLane(trades: RecencySwimlaneTrade[]): PackedTrade[] {
   const sorted = [...trades].sort((a, b) => b.pnl - a.pnl || a.entryMs - b.entryMs);

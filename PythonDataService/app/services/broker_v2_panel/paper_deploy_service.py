@@ -112,7 +112,7 @@ def resolve_deploy_strategy_params(
     always deploy-authoritative, never a submittable tunable, regardless of
     whether the registration itself declares it in ``hidden_params``.
 
-    Resolution is the exact three-tier precedence PRD Sec 10.3 requires,
+    Resolution is the exact three-tier precedence ADR 0043 decision 1 requires,
     applied once here at deploy time and then sealed: registered program
     defaults, then ``symbol_profile`` (a desk's per-``(strategy_key, symbol)``
     tuning, when the caller has one), then ``requested_parameters`` (the

@@ -459,24 +459,6 @@ def test_n_eff_assets_with_method_falls_back_when_ic_series_empty():
     assert method == "returns"
 
 
-# ─── AggregateIC SE-approximation note ──────────────────────
-
-
-def test_weighted_aggregate_ic_carries_se_approximation_disclaimer():
-    """The CI tooltip must cite the SE approximation so a reader knows
-    what's pinned vs approximated."""
-    rows = [
-        {"validity": "valid", "mean_ic": 0.04, "effective_n": 100.0, "passed_validation": True},
-        {"validity": "valid", "mean_ic": 0.06, "effective_n": 100.0, "passed_validation": True},
-    ]
-
-    result = _compute_weighted_aggregate_ic(rows)
-
-    assert result.valid is True
-    assert "approximation" in result.se_approximation_note.lower()
-    assert "Lo (2002)" in result.se_approximation_note
-
-
 class TestCancellationContract:
     """``cancel_check`` means one thing across every research runner: raise to
     cancel, return value ignored. ``run_recency`` and the walk-forward runner

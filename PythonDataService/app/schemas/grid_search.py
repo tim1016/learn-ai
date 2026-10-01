@@ -1,6 +1,6 @@
 """HTTP contracts for Grid Search (PRD #1926).
 
-Every temporal value on the wire is ``int64 ms UTC`` (temporal-rigor.md).
+Every temporal value on the wire is ``int64 ms UTC``.
 The researcher's window is half-open ``[start_ms, end_ms)``; the engine
 boundary takes inclusive ET trading dates, and one rule converts between
 them (``app.research.grid_search.service.window_dates``): the start date is

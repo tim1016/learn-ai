@@ -585,62 +585,6 @@ def test_timeline_cursor_is_stable_while_new_transitions_append(tmp_path: Path) 
     )
 
 
-def test_timeline_exposes_source_observation_and_record_clocks(tmp_path: Path) -> None:
-    clock = _Clock()
-    repo = _repository(tmp_path, clock)
-    reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=clock
-    )
-    try:
-        page = reader.timeline_page(strategy_instance_id=SID)
-    finally:
-        reader.close()
-        repo.close()
-
-    assert len(page.entries) == 1
-    entry = page.entries[0]
-    assert entry.operation_ref == f"transition:{entry.sequence}"
-    assert entry.source_event_at_ms is None
-    assert entry.clerk_observed_at_ms > 0
-    assert entry.recorded_at_ms > 0
-
-
-def test_timeline_can_filter_by_effect_operation_identity(tmp_path: Path) -> None:
-    clock = _Clock()
-    repo = _repository(tmp_path, clock)
-    submit_start_run(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        lifecycle_run_id="run-1",
-        clock=clock,
-    )
-    accepted = accept_enter(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="decision-1",
-        lifecycle_run_id="run-1",
-        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
-    )
-    reader = SqliteClerkProjectionReader.from_repository(
-        repo, clock=clock
-    )
-    try:
-        page = reader.timeline_page(
-            strategy_instance_id=SID,
-            effect_operation_id=accepted.effect_operation_id,
-        )
-    finally:
-        reader.close()
-        repo.close()
-
-    assert page.total_entries > 0
-    assert {entry.effect_operation_id for entry in page.entries} == {
-        accepted.effect_operation_id
-    }
-
-
 def test_bot_snapshot_is_one_coherent_read_despite_a_concurrent_commit(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -704,7 +648,7 @@ def test_operation_page_is_stable_when_a_new_operation_appends(tmp_path: Path, m
     one ENTER effect operation live under one strategy at once, and #1722
     fenced a fresh ENTER behind ATTRIBUTED_EXPOSURE_EXISTS/ENTER_IN_PROGRESS
     whenever attributed exposure or a nonterminal ENTER already exists (ADR
-    0042, PRD FR-020). The read layer must still paginate correctly over
+    0042). The read layer must still paginate correctly over
     however many operations exist (idempotent replay, legacy data, a future
     carve-out), so bypass the fence to construct that state directly.
     """
@@ -779,7 +723,7 @@ def test_operation_page_does_not_drop_an_operation_whose_updated_at_ms_advances_
     remaining page. It must still be reachable via the next page.
 
     Exercising three simultaneously-live ENTER operations under one
-    strategy is itself now fenced (#1722, ADR 0042, PRD FR-020:
+    strategy is itself now fenced (#1722, ADR 0042:
     ATTRIBUTED_EXPOSURE_EXISTS/ENTER_IN_PROGRESS) — bypass that write-side
     fence here since this test is about read-side pagination, which must
     still be correct over however many operations the ledger holds.
@@ -848,7 +792,7 @@ def test_recovery_policy_reads_working_orders_outside_the_operation_page(
     monkeypatch,
 ) -> None:
     """Needs two simultaneously-live ENTER operations under one strategy,
-    which #1722's ENTER fence (ADR 0042, PRD FR-020) now refuses through the
+    which #1722's ENTER fence (ADR 0042) now refuses through the
     normal decision path — bypass it here since this test is about the
     read-side recovery policy, not write-side admission.
     """

@@ -29,7 +29,6 @@ from app.engine.live.order_identity import (
     order_ref_namespace_matches,
     parse_order_ref,
     validate_broker_owned_instance_id,
-    validate_order_ref_components,
 )
 
 
@@ -90,12 +89,6 @@ def test_parse_rejects_malformed() -> None:
         parse_order_ref("ns:")
     with pytest.raises(OrderRefParseError):
         parse_order_ref(":iid")
-
-
-def test_validate_components_equality() -> None:
-    ns, iid = "learn-ai/foo/v1", mint_intent_id()
-    assert validate_order_ref_components(f"{ns}:{iid}", ns, iid)
-    assert not validate_order_ref_components(f"{ns}:other", ns, iid)
 
 
 def test_build_order_ref_fails_closed_over_cap() -> None:

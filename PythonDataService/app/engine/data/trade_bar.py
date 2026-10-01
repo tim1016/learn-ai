@@ -73,7 +73,3 @@ class TradeBar:
         object.__setattr__(self, "low", low)
         object.__setattr__(self, "close", close)
         object.__setattr__(self, "volume", volume)
-
-    @property
-    def period_seconds(self) -> float:
-        return (self.end_ms - self.start_ms) / 1000

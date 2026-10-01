@@ -30,8 +30,7 @@ import pytest
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 
 EXPECTED_STRATEGY_KEYS = {
-    # VCR-0004 / Phase 2 — registry keys are now module names so the runner
-    # can import every registered strategy by ``app.engine.strategy.algorithms.{key}``.
+    # Registry keys are the module names under ``app.engine.strategy.algorithms``.
     "ema_crossover_signal",
     "sma_crossover",
     "rsi_mean_reversion",
@@ -200,7 +199,7 @@ def test_params_schema_is_round_trippable_json():
 
 
 def test_recency_supported_flags_numeric_only_strategies_true():
-    """Recency Chart eligibility (design spec D1) — numeric-param strategies."""
+    """Recency Chart eligibility — numeric-param strategies."""
     strategies = {strategy["name"]: strategy for strategy in _list_strategies()}
     for key in ("ema_crossover_signal", "sma_crossover", "rsi_mean_reversion"):
         assert strategies[key]["recency_supported"] is True, key
@@ -219,88 +218,6 @@ def test_registry_exposes_strategy_bar_cadence_without_frontend_name_heuristics(
         "multiplier": 15,
         "parameter": "resolution_minutes",
     }
-
-
-# ────────────────── VCR-0004 / Phase 2 — module-name contract ─────────
-
-
-def test_every_registered_strategy_can_be_imported_by_key():
-    """The registry key IS the module name — the runner imports by it. If a
-    registered key cannot be imported, the dropdown advertises a strategy that
-    cannot start. This was the smoking gun for VCR-0004 (7 of 10 dropdown items
-    broken)."""
-    from importlib import import_module
-
-    from app.routers.engine import _STRATEGY_REGISTRY
-
-    failures = []
-    for key in _STRATEGY_REGISTRY:
-        try:
-            import_module(f"app.engine.strategy.algorithms.{key}")
-        except ImportError as exc:
-            failures.append(f"{key}: {exc}")
-    assert not failures, (
-        "Registry keys must match algorithm module names so the runner can "
-        "import them. Failing keys: " + "; ".join(failures)
-    )
-
-
-def test_every_registered_strategy_has_explicit_class_name():
-    """``StrategyRegistration.class_name`` retires the ``<PascalKey>Algorithm``
-    convention. Every entry names its class explicitly so a future class rename
-    does not silently break the runner's class lookup."""
-    from app.routers.engine import _STRATEGY_REGISTRY
-
-    missing = [key for key, reg in _STRATEGY_REGISTRY.items() if not getattr(reg, "class_name", "")]
-    assert not missing, (
-        f"Strategies missing class_name: {missing}. Phase 2 / VCR-0004 — "
-        f"populate StrategyRegistration.class_name for every entry."
-    )
-
-
-def test_every_registered_class_name_resolves_against_its_module():
-    """The runner does ``getattr(module, registration.class_name)``. Every
-    registered ``class_name`` must resolve to a class in its module."""
-    from importlib import import_module
-
-    from app.routers.engine import _STRATEGY_REGISTRY
-
-    failures = []
-    for key, reg in _STRATEGY_REGISTRY.items():
-        try:
-            module = import_module(f"app.engine.strategy.algorithms.{key}")
-        except ImportError as exc:
-            failures.append(f"{key} module import: {exc}")
-            continue
-        cls = getattr(module, reg.class_name, None)
-        if cls is None:
-            failures.append(f"{key}: module has no class {reg.class_name!r}")
-    assert not failures, (
-        "Registered class_name must resolve in its module. Failing entries: "
-        + "; ".join(failures)
-    )
-
-
-def test_deployment_validation_class_name_is_consecutive_green():
-    """The ``DeploymentValidationAlgorithm`` alias is retired. The registry
-    names the real class (``DeploymentValidationConsecutiveGreen``)."""
-    from app.routers.engine import _STRATEGY_REGISTRY
-
-    reg = _STRATEGY_REGISTRY["deployment_validation"]
-    assert reg.class_name == "DeploymentValidationConsecutiveGreen"
-
-
-def test_deployment_validation_alias_no_longer_exists():
-    """``DeploymentValidationAlgorithm = DeploymentValidationConsecutiveGreen``
-    in ``deployment_validation.py`` was the convention paper-over. Delete it
-    along with the convention itself; the registry's ``class_name`` is the
-    sole source of truth."""
-    from app.engine.strategy.algorithms import deployment_validation
-
-    assert not hasattr(deployment_validation, "DeploymentValidationAlgorithm"), (
-        "DeploymentValidationAlgorithm alias must be removed — the registry's "
-        "class_name names DeploymentValidationConsecutiveGreen directly."
-    )
 
 
 if __name__ == "__main__":

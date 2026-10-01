@@ -1,11 +1,11 @@
 """The Alpaca provider adapter — the first production fleet provider.
 
-Provider-owned declarations only (PRD FR-003/004): the immutable provider
-identity, the typed operation catalog the Alpaca clerk serves, account ID
-canonicalization, and the provider-authored summary projection. Every
-execution, custody, arming and recovery decision stays in the existing Alpaca
-authority machinery this adapter never imports — the fleet spine routes and
-verifies, it does not trade (ADR 0062 Decision 6).
+Provider-owned declarations only: the immutable provider identity, the typed
+operation catalog the Alpaca clerk serves, account ID canonicalization, and the
+provider-authored summary projection. Every execution, custody, arming and
+recovery decision stays in the existing Alpaca authority machinery this adapter
+never imports — the fleet spine routes and verifies, it does not trade (ADR 0062
+Decision 6).
 """
 
 from __future__ import annotations
@@ -80,8 +80,6 @@ def _op(
 
 
 _CONFIGURATION = OperationReadiness.CONFIGURATION_ACCESS
-_EXECUTE = OperationReadiness.EXECUTION
-_READ = OperationIdempotency.READ
 _DURABLE = OperationIdempotency.DURABLE_KEY
 _ONE_SHOT = OperationIdempotency.ONE_SHOT
 #: A mutation that only stops a bot or reduces exposure, so a draining lane
@@ -89,15 +87,14 @@ _ONE_SHOT = OperationIdempotency.ONE_SHOT
 #: quiet. Declared on exactly the stop, cancel and flatten operations below.
 _QUIESCE = OperationDrainAdmission.QUIESCE
 
-#: The complete Alpaca operation catalog (delivery B, PRD §10.2). The catalog
+#: The complete Alpaca operation catalog (delivery B). The catalog
 #: is the single routing contract (ADR 0062 addendum, item 4): the
 #: coordinator's forwarding allowlist, the public clerk-scoped routes, the
 #: exported contract and the frontend builders all derive from these
 #: declarations, and the catalog grows only by reviewed change. Public paths
 #: are clerk-scope-relative (the coordinator prefixes
 #: ``/api/brokers/{broker}/clerks/{clerk_id}``); agent paths are what the
-#: agent process serves today. See docs/design/fleet-b-route-inventory.md for
-#: the per-operation dispositions and the retained-legacy surface.
+#: agent process serves today.
 ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
     {
         # ── Lane reads ────────────────────────────────────────────────────
@@ -109,13 +106,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
         # ``/api/brokers/alpaca``.  These declarations are the one migration
         # seam: the coordinator pins broker, clerk, epoch and binding before
         # forwarding to that established handler.
-        _op(
-            "activities_read",
-            "GET",
-            "/activities",
-            capability=Capability.ACCOUNT_READ,
-            agent_path="/api/brokers/alpaca/activities",
-        ),
         _op(
             "fee_attribution_read",
             "GET",
@@ -248,21 +238,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             "GET",
             "/configuration/desk-state",
             capability=Capability.CONFIGURATION_MANAGE,
-            readiness=_CONFIGURATION,
-        ),
-        _op(
-            "configuration_owner_read",
-            "GET",
-            "/configuration/owner",
-            capability=Capability.CONFIGURATION_MANAGE,
-            readiness=_CONFIGURATION,
-        ),
-        _op(
-            "configuration_owner_update",
-            "PATCH",
-            "/configuration/owner",
-            capability=Capability.CONFIGURATION_MANAGE,
-            idempotency=_ONE_SHOT,
             readiness=_CONFIGURATION,
         ),
         _op(
@@ -400,13 +375,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
         ),
         _op("configuration_budget_authority_read", "GET", "/configuration/budget-authority", capability=Capability.CONFIGURATION_MANAGE, readiness=_CONFIGURATION),
         _op("configuration_budget_authority_apply", "POST", "/configuration/budget-authority/apply", capability=Capability.CONFIGURATION_MANAGE, idempotency=_ONE_SHOT, readiness=_CONFIGURATION),
-        _op(
-            "configuration_events",
-            "GET",
-            "/configuration/events",
-            capability=Capability.CONFIGURATION_MANAGE,
-            readiness=_CONFIGURATION,
-        ),
         # ── Bot panel family (account-scoped execution) ──────────────────
         _op(
             "bots_catalog_read",
@@ -503,14 +471,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             account=True,
         ),
         _op(
-            "bot_decision_evidence",
-            "GET",
-            "/accounts/{account_id}/bots/{sid}/decision-evidence",
-            capability=Capability.CUSTODY_READ,
-            account=True,
-            agent_path="/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/decision-evidence",
-        ),
-        _op(
             "bot_panel_action",
             "POST",
             "/accounts/{account_id}/bots/{sid}/actions",
@@ -539,13 +499,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             drain_admission=_QUIESCE,
         ),
         _op(
-            "bot_authority_facts",
-            "GET",
-            "/accounts/{account_id}/bots/{sid}/authority-facts",
-            capability=Capability.BOT_PANEL_READ,
-            account=True,
-        ),
-        _op(
             "bot_chart_history",
             "GET",
             "/accounts/{account_id}/bots/{sid}/chart/history",
@@ -560,13 +513,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             # or the outer request expires first and discards the
             # coordinator's completed work.
             read_timeout_s=HISTORY_BATCH_OUTER_TIMEOUT_S,
-        ),
-        _op(
-            "bot_chart_live",
-            "GET",
-            "/accounts/{account_id}/bots/{sid}/chart/live",
-            capability=Capability.BOT_PANEL_READ,
-            account=True,
         ),
         _op(
             "bot_evidence",
@@ -677,36 +623,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             agent_path="/api/alpaca-clerk-sqlite/accounts/{account_id}/timeline",
         ),
         _op(
-            "custody_bot_snapshot",
-            "GET",
-            "/accounts/{account_id}/custody/bots/{sid}/snapshot",
-            capability=Capability.CUSTODY_READ,
-            account=True,
-            agent_path=(
-                "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/snapshot"
-            ),
-        ),
-        _op(
-            "custody_bot_timeline",
-            "GET",
-            "/accounts/{account_id}/custody/bots/{sid}/timeline",
-            capability=Capability.CUSTODY_READ,
-            account=True,
-            agent_path=(
-                "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/timeline"
-            ),
-        ),
-        _op(
-            "custody_command_read",
-            "GET",
-            "/accounts/{account_id}/custody/commands/{command_id}",
-            capability=Capability.CUSTODY_READ,
-            account=True,
-            agent_path=(
-                "/api/alpaca-clerk-sqlite/accounts/{account_id}/commands/{command_id}"
-            ),
-        ),
-        _op(
             "custody_runs_stop",
             "POST",
             "/accounts/{account_id}/custody/bots/{sid}/runs/stop",
@@ -717,15 +633,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
                 "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/runs/stop"
             ),
             drain_admission=_QUIESCE,
-        ),
-        _op(
-            "custody_reconcile",
-            "POST",
-            "/accounts/{account_id}/custody/reconcile",
-            capability=Capability.CUSTODY_COMMAND,
-            idempotency=_DURABLE,
-            account=True,
-            agent_path="/api/alpaca-clerk-sqlite/accounts/{account_id}/reconcile",
         ),
         _op(
             "custody_recovery_check",
@@ -824,14 +731,6 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
                 "{external_order_id}/acknowledge"
             ),
         ),
-        _op(
-            "custody_pnl_attribution",
-            "GET",
-            "/accounts/{account_id}/custody/pnl-attribution",
-            capability=Capability.CUSTODY_READ,
-            account=True,
-            agent_path="/api/accounts/{account_id}/pnl-attribution",
-        ),
         # ── Manual orders family ──────────────────────────────────────────
         _op(
             "manual_orders_capability",
@@ -928,7 +827,7 @@ class AlpacaProviderAdapter:
         lowercase, so `` ABC123 `` and ``abc123`` are one broker-qualified
         account. No shape is required or checked here — the registry treats
         the result as opaque and provider verification owns real account
-        discovery (PRD FR-051).
+        discovery.
         """
         return canonical_alpaca_account_id(external_account_id)
 

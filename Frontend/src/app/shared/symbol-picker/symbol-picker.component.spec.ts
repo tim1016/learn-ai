@@ -72,12 +72,6 @@ describe('SymbolPickerComponent', () => {
     fixture.componentRef.setInput('symbol', 'SPY');
   });
 
-
-  it('renders the bound symbol', () => {
-    fixture.detectChanges();
-    expect(fixture.nativeElement.textContent).toContain('SPY');
-  });
-
   it('offers the joined universe — a listed-but-unheld symbol is on the menu', () => {
     fixture.detectChanges();
     openDropdown(fixture);

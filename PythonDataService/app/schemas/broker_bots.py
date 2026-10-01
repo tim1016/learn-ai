@@ -13,7 +13,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
-from app.broker.alpaca.clerk.models import ClerkCustodySnapshot
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256
 from app.schemas.action_plan import ActionPlan
 from app.schemas.bot_end import BotEndInput, BotEndView, refuse_explicit_null_end
@@ -51,7 +50,7 @@ def _validated_catalog_strategy_key(value: str) -> str:
 
 
 #: Canonical equity/ETF symbol shape, shared by every schema that accepts a
-#: raw ticker at a wire boundary (CLAUDE.md guiding philosophy #5 — do not
+#: raw ticker at a wire boundary (do not
 #: write a second regex). ``app.schemas.fleet_history_batch`` reuses this
 #: exact pattern rather than defining its own.
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,11}$")
@@ -71,16 +70,7 @@ class BotProcessFact(BaseModel):
     process_identity: str | None
     state: Literal["RUNNING", "STOPPING", "EXITED", "UNKNOWN"]
     registry_generation: str
-    observed_at_ms: int = Field(ge=0)
-
-
-class BotControlAuthorityFacts(BaseModel):
-    """Independent process and Clerk facts for one bot control decision."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    process: BotProcessFact
-    clerk: ClerkCustodySnapshot
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 def normalized_symbol(value: str) -> str:
@@ -433,7 +423,7 @@ class AlpacaPaperDeployView(BaseModel):
     account_id: str
     account_mode: Literal["paper", "live"]
     account_label: str
-    evaluated_at_ms: int = Field(ge=0)
+    evaluated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     # Paper eligibility (name kept as-is: renaming would ripple across the
     # existing test suite for no behavioral gain). `dry_run_eligibility`
     # (#1702) is the parallel, deliberately narrower verdict for the Dry Run
@@ -492,45 +482,9 @@ class BotRunView(BaseModel):
     run_id: str
     configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     launch_reason: Literal["deploy", "resume", "legacy"]
-    started_at_ms: int = Field(ge=0)
+    started_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     process: BotProcessFact
     terminal_outcome: BotRunTerminalOutcomeView | None
-
-
-class BotRunReadBrokerErrorDetail(BaseModel):
-    """Broker-registry failure detail returned by a bot-run read."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    broker: str
-    message: str
-    why: str | None
-
-
-class BotRunReadRunnerErrorDetail(BaseModel):
-    """Runner failure detail returned by a bot-run read."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    message: str
-    why: str | None
-    admission: RunAdmissionDecision | None
-
-
-class BotRunReadNotFoundResponse(BaseModel):
-    """404 envelope for an unknown broker or strategy-instance run."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    detail: BotRunReadBrokerErrorDetail | BotRunReadRunnerErrorDetail
-
-
-class BotRunReadRunnerErrorResponse(BaseModel):
-    """422 envelope emitted by the bot runner for an invalid run read."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    detail: BotRunReadRunnerErrorDetail
 
 
 class AlpacaPaperDeployReceipt(BaseModel):
@@ -541,7 +495,7 @@ class AlpacaPaperDeployReceipt(BaseModel):
     status: Literal["deployed"]
     outcome: Literal["success"] = "success"
     receipt_id: str
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     message: str
     explanation: str
     next_action: str

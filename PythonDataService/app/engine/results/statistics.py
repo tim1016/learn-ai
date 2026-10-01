@@ -2,7 +2,7 @@
 
 Formula: Sharpe = mean(daily_returns)/stddev(daily_returns) · √252; MaxDrawdown = max_t(running_peak_t - equity_t); per-trade win rate, profit factor, expected value, average winning/losing trade duration. All annualized with TRADING_DAYS_PER_YEAR=252.
 Reference: Sharpe (1994) "The Sharpe Ratio", Journal of Portfolio Management 21(1) §IV; Bacon, *Practical Portfolio Performance Measurement* (2e), §8.2 for max drawdown; standard portfolio statistics.
-Canonical implementation: this file. The former .NET backtest duplicates were removed in Phase 3. The .NET `SnapshotService.cs::ComputeMetrics` is legacy-ok-pending-parity for the separate live-portfolio path (finding F-0011).
+Canonical implementation: this file. The former .NET backtest duplicates were removed in Phase 3, and the .NET portfolio snapshot metrics in #2756.
 Validated against: `PythonDataService/tests/test_statistics.py::TestMaxDrawdown` and
 `PythonDataService/tests/fixtures/test_engine_stats_extended_fixtures.py::TestENG002MaxDrawdown`.
 
@@ -431,7 +431,7 @@ def _fill_times_are_admissible(trade: _TradeLike) -> bool:
     ``on_end_of_algorithm`` emits its exit at ``ctx.current_time_ms``). The
     round trip really did last no time: price P&L is zero and fees are
     charged. Nothing later exists to price the exit at, and fabricating a
-    timestamp would violate ``.claude/rules/temporal-rigor.md``.
+    timestamp would record an instant that never happened.
 
     The exemption is keyed on the engine's own forced-close label, so an equal
     pair reached any other way stays an error, and an *inverted* pair — an
@@ -487,34 +487,6 @@ def validate_trade_log(trades: Sequence[_TradeLike]) -> list[ValidationError]:
                 ValidationError(
                     code="invalid_win_rate",
                     message=f"Computed win_rate {win_rate} not in [0, 1]",
-                )
-            )
-    return errors
-
-
-def validate_equity_curve(curve: Sequence[float]) -> list[ValidationError]:
-    errors: list[ValidationError] = []
-    if len(curve) < 1:
-        errors.append(
-            ValidationError(
-                code="empty_curve",
-                message="Equity curve has no points",
-            )
-        )
-        return errors
-    for i, value in enumerate(curve):
-        if math.isnan(value):
-            errors.append(
-                ValidationError(
-                    code="nan_equity",
-                    message=f"Equity point {i}: value is NaN",
-                )
-            )
-        if value < 0:
-            errors.append(
-                ValidationError(
-                    code="negative_equity",
-                    message=f"Equity point {i}: value is negative ({value})",
                 )
             )
     return errors

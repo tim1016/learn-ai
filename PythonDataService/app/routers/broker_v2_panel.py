@@ -1,16 +1,15 @@
 """Broker-v2 bot control panel routes (transport only).
 
-``/api/brokers/{broker}/...`` — the panel contract surface (spec §3-§8, §11).
+``/api/brokers/{broker}/...`` — the panel contract surface.
 The router validates/parses the HTTP request, calls the panel data-source
 facade, and translates typed panel errors to HTTP. No business logic lives here
 (router-freeze discipline).
 
-Account scope (§3): read/projection/action endpoints are account-scoped
+Account scope: read/projection/action endpoints are account-scoped
 (``/accounts/{account_id}/...``) and validate ``account_id`` against the
-broker's account (mismatch → 404). The unscoped forms are kept as aliases for
-the single-account case — no breaking rename.
+broker's account (mismatch → 404).
 
-Identity (§14): control mutations authenticate via the always-on data-plane
+Identity: control mutations authenticate via the always-on data-plane
 control secret (the router prefix carries it); the server attaches the
 configured ``PANEL_OPERATOR_IDENTITY`` — operator identity is never a request
 field.
@@ -39,7 +38,6 @@ from app.schemas.broker_bots import (
     AlpacaPaperDeployReceipt,
     AlpacaPaperDeployRequest,
     AlpacaPaperDeployView,
-    BotControlAuthorityFacts,
     BotDeployPrefill,
 )
 from app.schemas.broker_v2_evidence import EvidencePage
@@ -50,7 +48,6 @@ from app.schemas.broker_v2_panel import (
     BotPanelView,
     ChartHistoryResponse,
     ChartHistoryTimeframe,
-    ChartLiveResponse,
     CohortActionResult,
     CohortFlattenRequest,
     CohortFlattenView,
@@ -239,7 +236,7 @@ def _raise_action_error(error: ActionExecutionError, request: PanelActionRequest
     )
 
 
-# ── §4 Panel capability profile (broker-level) ───────────────────────────────
+# ── Panel capability profile (broker-level) ──────────────────────────────────
 
 
 @router.get(
@@ -260,7 +257,7 @@ async def get_panel_profile(broker: str) -> PanelProfile:
     return profile
 
 
-# ── §5 Catalog (account-scoped + unscoped alias) ─────────────────────────────
+# ── Catalog (account-scoped) ─────────────────────────────────────────────────
 
 
 async def _catalog(broker: str, account_id: str) -> list[BotCatalogView]:
@@ -279,17 +276,7 @@ async def get_catalog_scoped(broker: str, account_id: str) -> list[BotCatalogVie
     return await _catalog(broker, account_id)
 
 
-@router.get(
-    "/{broker}/bots/catalog",
-    response_model=list[BotCatalogView],
-    summary="Bots-list roster (single-account alias of the scoped route) (§5)",
-)
-async def get_catalog_unscoped(broker: str) -> list[BotCatalogView]:
-    account_id = await _resolve_default_account(broker)
-    return await _catalog(broker, account_id)
-
-
-# ── §5 Deploy (account-scoped alias of the bot-runner deploy route) ──────────
+# ── Deploy (account-scoped alias of the bot-runner deploy route) ─────────────
 
 
 @router.get(
@@ -536,23 +523,7 @@ async def deploy_bot_scoped(
         _raise_alpaca_deploy_error(error)
 
 
-# ── §7 Panel projection (account-scoped + unscoped alias) ────────────────────
-
-
-@router.get(
-    "/{broker}/accounts/{account_id}/bots/{sid}/authority-facts",
-    response_model=BotControlAuthorityFacts,
-    summary="Independent process and Clerk custody facts for one bot",
-)
-async def get_authority_facts_scoped(
-    broker: str,
-    account_id: str,
-    sid: str,
-) -> BotControlAuthorityFacts:
-    try:
-        return await ds.get_authority_facts(broker, account_id, sid)
-    except panel_errors.PanelDataError as error:
-        _raise_panel_error(error)
+# ── Panel projection (account-scoped) ────────────────────────────────────────
 
 
 async def _panel(broker: str, account_id: str, sid: str, transaction_ref: str | None) -> BotPanelView:
@@ -573,20 +544,6 @@ async def get_panel_scoped(
     sid: str,
     transaction_ref: str | None = Query(default=None, max_length=256),
 ) -> BotPanelView:
-    return await _panel(broker, account_id, sid, transaction_ref)
-
-
-@router.get(
-    "/{broker}/bots/{sid}/panel",
-    response_model=BotPanelView,
-    summary="Panel projection (single-account alias) (§7)",
-)
-async def get_panel_unscoped(
-    broker: str,
-    sid: str,
-    transaction_ref: str | None = Query(default=None, max_length=256),
-) -> BotPanelView:
-    account_id = await _resolve_default_account(broker)
     return await _panel(broker, account_id, sid, transaction_ref)
 
 
@@ -798,7 +755,7 @@ def _live_stream_frame(
     )
 
 
-# ── §11 Presented-action execution (account-scoped + unscoped alias) ─────────
+# ── Presented-action execution (account-scoped + unscoped alias) ─────────────
 
 
 async def _run_action(broker: str, account_id: str, sid: str, request: PanelActionRequest) -> PanelActionResult:
@@ -859,7 +816,7 @@ async def run_quiesce_action_scoped(
     return await _run_action(broker, account_id, sid, request)
 
 
-# ── §11b Cohort flatten (ADR 0051, #1802) ────────────────────────────────────
+# ── Cohort flatten (ADR 0051, #1802) ─────────────────────────────────────────
 
 
 @router.get(
@@ -897,7 +854,7 @@ async def run_cohort_flatten_scoped(
     return result
 
 
-# ── §11c Clear finished bots (owner decision 2026-09-28, ADR 0052 §4) ────────
+# ── Clear finished bots (owner decision 2026-09-28, ADR 0052 §4) ─────────────
 
 
 @router.post(
@@ -923,52 +880,7 @@ async def clear_bots_scoped(
     return result
 
 
-# ── §8 Chart endpoints (account-scoped + unscoped alias) ─────────────────────
-
-
-async def _live_chart(
-    broker: str,
-    account_id: str,
-    sid: str,
-    resolution: Literal["5s", "1m"],
-) -> ChartLiveResponse:
-    try:
-        return await ds.get_live_chart(
-            broker,
-            account_id,
-            sid,
-            resolution=resolution,
-        )
-    except panel_errors.PanelDataError as error:
-        _raise_panel_error(error)
-
-
-@router.get(
-    "/{broker}/accounts/{account_id}/bots/{sid}/chart/live",
-    response_model=ChartLiveResponse,
-    summary="LIVE chart pane: today's IBKR bars + fill markers (§8)",
-)
-async def get_live_chart_scoped(
-    broker: str,
-    account_id: str,
-    sid: str,
-    resolution: Literal["5s", "1m"] = Query("1m"),
-) -> ChartLiveResponse:
-    return await _live_chart(broker, account_id, sid, resolution)
-
-
-@router.get(
-    "/{broker}/bots/{sid}/chart/live",
-    response_model=ChartLiveResponse,
-    summary="LIVE chart pane (single-account alias) (§8)",
-)
-async def get_live_chart_unscoped(
-    broker: str,
-    sid: str,
-    resolution: Literal["5s", "1m"] = Query("1m"),
-) -> ChartLiveResponse:
-    account_id = await _resolve_default_account(broker)
-    return await _live_chart(broker, account_id, sid, resolution)
+# ── Chart endpoints (account-scoped) ─────────────────────────────────────────
 
 
 async def _history_chart(
@@ -1003,21 +915,7 @@ async def get_history_chart_scoped(
     return await _history_chart(broker, account_id, sid, timeframe)
 
 
-@router.get(
-    "/{broker}/bots/{sid}/chart/history",
-    response_model=ChartHistoryResponse,
-    summary="Polygon chart (single-account alias) (§8)",
-)
-async def get_history_chart_unscoped(
-    broker: str,
-    sid: str,
-    timeframe: ChartHistoryTimeframe = Query(...),
-) -> ChartHistoryResponse:
-    account_id = await _resolve_default_account(broker)
-    return await _history_chart(broker, account_id, sid, timeframe)
-
-
-# ── §14 Operator-gated evidence (account-scoped + unscoped alias) ─────────────
+# ── Operator-gated evidence (account-scoped) ─────────────────────────────────
 
 
 async def _read_evidence(
@@ -1062,38 +960,6 @@ async def get_evidence_scoped(
     client_hint: str | None = Query(default=None, max_length=256),
 ) -> EvidencePage:
     return await _read_evidence(broker, account_id, sid, transaction_ref, cursor, page_size, client_hint)
-
-
-@router.get(
-    "/{broker}/bots/{sid}/evidence",
-    response_model=EvidencePage,
-    summary="Operator-gated raw evidence (single-account alias) (§14)",
-)
-async def get_evidence_unscoped(
-    broker: str,
-    sid: str,
-    transaction_ref: str | None = Query(default=None, max_length=256),
-    cursor: str | None = Query(default=None, max_length=1024),
-    page_size: int = Query(default=PAGE_SIZE_DEFAULT, ge=1),
-    client_hint: str | None = Query(default=None, max_length=256),
-) -> EvidencePage:
-    account_id = await _resolve_default_account(broker)
-    return await _read_evidence(broker, account_id, sid, transaction_ref, cursor, page_size, client_hint)
-
-
-# ── Shared helpers ───────────────────────────────────────────────────────────
-
-
-async def _resolve_default_account(broker: str) -> str:
-    """Resolve the broker's single account for the unscoped alias routes.
-
-    The unscoped forms serve the single-account case (§3); they resolve the
-    real account and then delegate to the same validated path.
-    """
-    try:
-        return await panel_scope.resolve_account_id(broker)
-    except panel_errors.PanelDataError as error:
-        _raise_panel_error(error)
 
 
 # Re-export ``PanelAction`` for the OpenAPI schema (nested inside BotPanelView).

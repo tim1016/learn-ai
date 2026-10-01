@@ -1,11 +1,9 @@
 """The shared DTOs for ``/api/brokers/alpaca/configuration``.
 
-Package B owns these and the generated OpenAPI artifacts until handoff (plan
-§6 dependency schedule); packages C, D and E build against them rather than
-each declaring their own. The shapes come from
-``docs/architecture/broker-configuration-profile-contract.md`` §2 and §4.
+Package B owns these and the generated OpenAPI artifacts until handoff;
+packages C, D and E build against them rather than each declaring their own.
 
-**This surface is provisional while ADR 0060 is Proposed** (contract §4): its
+**This surface is provisional while ADR 0060 is Proposed**: its
 open questions 2 and 5 can still change ``/credential-slots`` and the ``PATCH``
 semantics. The committed OpenAPI snapshot is regenerated with this change like
 any other endpoint addition and asserts nothing about permanence.
@@ -14,26 +12,25 @@ Conventions that are not negotiable here:
 
 * Every timestamp is ``int64 ms UTC`` and every such field ends ``_at_ms``,
   bounded by ``MAX_TIMESTAMP_MS`` — never ``2**63 - 1``
-  (`.claude/rules/temporal-rigor.md`).
+  (ADR 0022 (g)).
 * Every mutating request model is closed (``extra="forbid"``). Owner and actor
   are server-resolved; a body naming them is refused with
   ``owner_field_not_accepted``, never silently dropped.
 * No field carries a secret, a secret fragment, a secret length, or an
   environment-variable name. ``credential_slot`` is an opaque slot label.
 
-Two shapes here go beyond the contract's enumerated fields, both recorded
-rather than assumed:
+Two shapes here are recorded rather than assumed:
 
 * ``SelectionResponse.apply_requested_generation`` — which generation the
-  one-shot Apply was recorded against, so contract §5's "a repeated apply
-  against an already-recorded generation is a no-op success" has something to
-  compare. The alternative was inferring it from ``selection_generation - 1``.
-* ``ApplyRequest.expected_selection_generation`` — §5 names the fence only on
-  ``PUT /selection``; an Apply that names no generation cannot be idempotent
+  one-shot Apply was recorded against, so a repeated apply against an
+  already-recorded generation can be a no-op success. The alternative was
+  inferring it from ``selection_generation - 1``.
+* ``ApplyRequest.expected_selection_generation`` — ``PUT /selection`` carries
+  the generation fence; an Apply that names no generation cannot be idempotent
   or fenced, so it carries the same field.
 
-Three refusal reasons also go beyond §6's table, each documented at its
-definition in ``app/broker_configuration/errors.py``:
+Three refusal reasons are each documented at their definition in
+``app/broker_configuration/errors.py``:
 ``display_name_conflict`` (409), ``live_envelope_invalid`` (422) and
 ``paper_allowances_invalid`` (422).
 """
@@ -54,14 +51,12 @@ from app.broker_configuration.records import (
     AccountNickname,
     AlpacaDeskState,
     BrokerProfile,
-    ConfigurationEvent,
     CredentialSlotStatus,
     DeskAccountChoice,
     DeskAction,
     DeskLifecycleStep,
     DeskSelectionSummary,
     InstallationSelection,
-    LocalOwner,
     ObservedAccount,
     ProfileRevision,
 )
@@ -141,26 +136,6 @@ class PaperXhAllowancesPayload(BaseModel):
         cls, allowances: ValidatedPaperAllowances | None
     ) -> PaperXhAllowancesPayload | None:
         return None if allowances is None else cls(**allowances.to_mapping())
-
-
-class OwnerResponse(_Response):
-    owner_id: str
-    display_label: str
-    created_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-    updated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-
-    @classmethod
-    def from_record(cls, owner: LocalOwner) -> OwnerResponse:
-        return cls(
-            owner_id=owner.owner_id,
-            display_label=owner.display_label,
-            created_at_ms=owner.created_at_ms,
-            updated_at_ms=owner.updated_at_ms,
-        )
-
-
-class OwnerPatchRequest(_ClosedRequest):
-    display_label: str = _NAME
 
 
 class CredentialSlotResponse(_Response):
@@ -488,7 +463,7 @@ class NicknamePutRequest(_ClosedRequest):
 
 
 class SelectionResponse(_Response):
-    """Staged **and** effective, always both (contract §4).
+    """Staged **and** effective, always both.
 
     ``effective_acknowledged_at_ms`` is a historical acknowledgement: it says a
     worker once bound this revision, never that one is running now.
@@ -537,44 +512,12 @@ class ApplyRequest(_ClosedRequest):
     expected_selection_generation: int = Field(ge=0)
 
 
-class ConfigurationEventResponse(_Response):
-    event_id: str
-    actor_owner_id: str
-    action: str
-    profile_id: str | None
-    revision: int | None
-    previous_ref: str | None
-    next_ref: str | None
-    result: str
-    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-
-    @classmethod
-    def from_record(cls, event: ConfigurationEvent) -> ConfigurationEventResponse:
-        return cls(
-            event_id=event.event_id,
-            actor_owner_id=event.actor_owner_id,
-            action=event.action,
-            profile_id=event.profile_id,
-            revision=event.revision,
-            previous_ref=event.previous_ref,
-            next_ref=event.next_ref,
-            result=event.result,
-            recorded_at_ms=event.recorded_at_ms,
-        )
-
-
-class ConfigurationEventListResponse(_Response):
-    events: tuple[ConfigurationEventResponse, ...]
-
-
 __all__ = [
     "SERVER_RESOLVED_FIELDS",
     "AccountPinRequest",
     "AccountVerificationResponse",
     "AlpacaDeskStateResponse",
     "ApplyRequest",
-    "ConfigurationEventListResponse",
-    "ConfigurationEventResponse",
     "CredentialSlotResponse",
     "CredentialSlotsResponse",
     "LiveEnvelopePayload",
@@ -582,8 +525,6 @@ __all__ = [
     "NicknamePutRequest",
     "NicknameResponse",
     "ObservedAccountResponse",
-    "OwnerPatchRequest",
-    "OwnerResponse",
     "PaperXhAllowancesPayload",
     "ProfileCloneRequest",
     "ProfileCreateRequest",

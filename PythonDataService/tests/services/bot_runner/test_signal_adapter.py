@@ -116,18 +116,17 @@ async def test_human_override_strategies_emit_canonical_live_intents(
       (``TIMEFRAME_MISMATCH``) -- see ``_strategy_signal_bars``'s
       ``bar_minutes`` docstring. Every strategy this test currently covers
       that IS a Signal Program needs ``bar_minutes=15``; strategies not yet
-      promoted (PRD Slice 5 has not reached them) keep the cheaper
+      promoted (issue #1730 Slice 5 has not reached them) keep the cheaper
       1-minute default.
     * Settlement: a Signal Program leaves its stage pending until a runner
       reports an explicit disposition (``evaluation.settle_stage`` is
       non-``None``, mirroring
       ``test_ema_live_adapter_exposes_and_settles_signal_program_stages``'s
       pattern) — an unsettled stage would otherwise quarantine every later
-      decision clock (``UNSETTLED_STAGE``). Immediately committing each
-      staged evaluation matches ``strategy_intents``' own "no custody seam,
-      therefore immediate commit" semantics; it is a no-op for
-      compatibility strategies, whose evaluations never carry a stage to
-      settle.
+      decision clock (``UNSETTLED_STAGE``). This read-only stream has no
+      custody seam, so it commits each staged evaluation immediately; that
+      is a no-op for compatibility strategies, whose evaluations never
+      carry a stage to settle.
     """
     binding = BrokerBotBinding(
         strategy_instance_id=f"{strategy_key}-live-test",

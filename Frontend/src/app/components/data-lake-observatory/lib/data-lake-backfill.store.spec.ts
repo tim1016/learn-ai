@@ -364,21 +364,6 @@ describe('DataLakeBackfillStore', () => {
     expect(store.phase()).toBe('idle');
   });
 
-  // ── JobsService.onEvent wiring (#1856) — no second EventSource ──────
-
-  it('start() rides JobsService.onEvent() instead of opening its own stream', async () => {
-    const startJob = vi.fn().mockResolvedValue('job-1');
-    const onEvent = vi.fn().mockReturnValue(vi.fn());
-    const store = makeStore({
-      startJob,
-      onEvent,
-    } as unknown as Partial<JobsService>);
-
-    await store.start(SPEC);
-
-    expect(onEvent).toHaveBeenCalledWith('job-1', expect.any(Function));
-  });
-
   it('a frame delivered through the registered handler folds the same as a direct ingestEvent() call', async () => {
     let handler: ((event: { type: string } & Record<string, unknown>) => void) | undefined;
     const startJob = vi.fn().mockResolvedValue('job-1');
@@ -414,14 +399,5 @@ describe('DataLakeBackfillStore', () => {
     handler?.({ type: 'job.completed' });
 
     expect(unsubscribe).toHaveBeenCalledTimes(1);
-  });
-
-  it('reattach() also rides JobsService.onEvent() for the adopted job', () => {
-    const onEvent = vi.fn().mockReturnValue(vi.fn());
-    const store = makeStore({ onEvent } as unknown as Partial<JobsService>);
-
-    store.reattach('job-live');
-
-    expect(onEvent).toHaveBeenCalledWith('job-live', expect.any(Function));
   });
 });

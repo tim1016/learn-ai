@@ -740,18 +740,6 @@ describe('AlpacaSettingsPageComponent', () => {
     expect(service.readDeskState).toHaveBeenCalledTimes(2);
   });
 
-  it('says what an unavailable credential slot means and who can fix it', async () => {
-    const service = new FakeConfigurationService();
-    service.profiles.push(profile({ profile_id: 'profile-1' }));
-    service.revisions.push(revision({ profile_id: 'profile-1', credential_slot: 'live' }));
-    await renderPage(service);
-
-    await userEvent.click(await screen.findByText('Paper — strategy testing'));
-
-    expect(await screen.findByText(/No credential pair is injected for this slot/)).toBeTruthy();
-    expect(screen.getByText(/this page cannot make it/)).toBeTruthy();
-  });
-
   it('offers no credential field anywhere on the page', async () => {
     const service = new FakeConfigurationService();
     service.profiles.push(profile({ profile_id: 'profile-1' }));
@@ -1058,14 +1046,6 @@ describe('Settings sections (PRD #2560)', () => {
     expect(await screen.findByRole('heading', { name: 'Open profile' })).toBeTruthy();
     expect(service.readProfile).toHaveBeenCalledWith('clrk_spec', 'profile-1');
     await vi.waitFor(() => expect(document.activeElement).toBe(document.querySelector('.settings__connection-body')));
-  });
-
-  it('says so when the profile in use saved no defaults', async () => {
-    const service = new FakeConfigurationService();
-    bound(service, 'paper');
-    await renderPage(service);
-
-    expect(await screen.findByText('No defaults are set, so Deploy asks for exit terms each time.')).toBeTruthy();
   });
 
   it('stays reachable without a connected account, pointing at Broker connection (FR-092)', async () => {

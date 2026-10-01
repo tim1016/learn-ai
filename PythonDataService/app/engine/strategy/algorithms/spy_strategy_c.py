@@ -8,8 +8,8 @@ Validated against: app/engine/tests/ (gate-wiring unit tests); golden fixture EN
     (tests/fixtures/test_strategy_parity_fixtures.py) pins trade_log self-equivalence
     at registered defaults — the base class's #1700 port to SignalIntent emission
     reproduces this trade_log unchanged, per that fixture's #1699 pre-port receipt;
-    tests/engine/strategy/test_spy_strategy_c_signal_program.py::
-    test_validated_spy_strategy_c_settings_corpus_has_a_pinned_trace_root (issue #1730 Slice 5).
+    tests/engine/strategy/test_signal_program_qualification_matrix.py::
+    test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_c] (issue #1730).
 
 Entry gates (all evaluated each bar while flat):
     * ``rsi_low_gate <= RSI <= rsi_high_gate``.

@@ -3,8 +3,7 @@
 This module owns the `podman run` command construction and execution. It
 is the only place in the codebase that may spawn a container that
 executes user-supplied source. Every flag in the constructed command
-maps back to a row in ``docs/architecture/lean-sidecar-lab.md``
-§"Container execution boundary".
+maps back to a boundary in ADR 0070 decision 4.
 
 The runner is intentionally a thin, testable function on top of
 ``subprocess``: the launcher service wraps it with request validation,
@@ -197,9 +196,22 @@ def _container_user_spec() -> str:
     ``10001:10001`` fallback works. The fixed UID is non-root
     (covers the "don't run as container root" requirement) and is
     explicit in the launcher.log for audit.
+
+    A root launcher is refused (ADR 0070): its spec would be ``0:0``,
+    and caller algorithm source must never execute as container root.
+    ``build_command`` raises before any container starts, and the
+    launcher answers with a ``runner_configuration_error`` rejection
+    instead of a launch.
     """
     if hasattr(os, "getuid") and hasattr(os, "getgid"):
-        return f"{os.getuid()}:{os.getgid()}"
+        uid, gid = os.getuid(), os.getgid()
+        if uid == 0:
+            raise RunnerConfigurationError(
+                "the LEAN launcher must not run as root: the container user "
+                "would be 0:0 and caller algorithm source would execute as "
+                "container root (ADR 0070). Run the launcher as a non-root user."
+            )
+        return f"{uid}:{gid}"
     return f"{_FALLBACK_CONTAINER_UID}:{_FALLBACK_CONTAINER_GID}"
 
 

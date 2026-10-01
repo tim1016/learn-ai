@@ -76,18 +76,6 @@ async def _create_paper_profile(client: AsyncClient, name: str = "Paper — test
     return response.json()["profile"]["profile_id"]
 
 
-async def test_owner_is_readable_and_renameable(client: AsyncClient) -> None:
-    read = await client.get(f"{PREFIX}/owner")
-    assert read.status_code == 200
-    assert read.json()["display_label"] == OPERATOR_IDENTITY
-
-    renamed = await client.patch(f"{PREFIX}/owner", json={"display_label": "Desk operator"})
-
-    assert renamed.status_code == 200
-    assert renamed.json()["owner_id"] == read.json()["owner_id"]
-    assert renamed.json()["display_label"] == "Desk operator"
-
-
 async def test_credential_slots_report_labels_and_availability_only(client: AsyncClient) -> None:
     response = await client.get(f"{PREFIX}/credential-slots")
 
@@ -497,7 +485,7 @@ async def test_a_verifier_refusal_answers_in_the_contract_shape(
 ) -> None:
     """A credential refusal is a typed 409, never the catch-all 500.
 
-    ``BrokerProfileError`` already carries the contract §6 ``{reason, message,
+    ``BrokerProfileError`` already carries the ``{reason, message,
     next_step}`` payload and its own ``http_status``, but nothing translated
     it: it is not a ``BrokerConfigurationError``, so it reached the ``Exception``
     handler and the desk saw a generic fault on exactly the two routes that
@@ -630,19 +618,6 @@ async def test_a_body_claiming_a_server_resolved_identity_is_refused(
     assert (await client.get(f"{PREFIX}/profiles")).json()["profiles"] == []
 
 
-async def test_the_events_route_pages_the_audit_log(client: AsyncClient) -> None:
-    profile_id = await _create_paper_profile(client)
-    await client.patch(f"{PREFIX}/profiles/{profile_id}", json={"display_name": "Renamed"})
-
-    newest = await client.get(f"{PREFIX}/events", params={"limit": 1})
-    older = await client.get(
-        f"{PREFIX}/events", params={"before_event_id": newest.json()["events"][0]["event_id"]}
-    )
-
-    assert [event["action"] for event in newest.json()["events"]] == ["profile_renamed"]
-    assert [event["action"] for event in older.json()["events"]] == ["profile_created"]
-
-
 async def test_an_unreadable_database_is_a_503_not_a_crash(
     clerk_dir: Path, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -668,11 +643,8 @@ async def test_an_unreadable_database_is_a_503_not_a_crash(
 @pytest.mark.parametrize(
     ("method", "path", "body"),
     [
-        ("GET", "/owner", None),
         ("GET", "/profiles", None),
         ("GET", "/selection", None),
-        ("GET", "/events", None),
-        ("PATCH", "/owner", {"display_label": "x"}),
         ("POST", "/profiles", {**PAPER_BODY, "display_name": "x"}),
         ("POST", "/selection/apply", {"expected_selection_generation": 0}),
     ],

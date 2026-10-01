@@ -114,7 +114,6 @@ export class AlpacaSqliteCustodyComponent {
   readonly timelineQuery = input<SqliteTimelineQuery | null>(null);
   readonly projectionInvalidated = output();
   private readonly brokers = inject(BrokersService);
-  private requireClerkId(): string { return this.target().clerkId; }
 
   protected readonly projection = resource({
     params: () => ({

@@ -3,12 +3,10 @@ import { HttpClient } from '@angular/common/http';
 import { map, tap } from 'rxjs/operators';
 import { Observable } from 'rxjs';
 import {
-  SmartAggregatesResult, CalculateIndicatorsResult, OptionsContractsResult,
+  SmartAggregatesResult,
   OptionsChainSnapshotResult, StockSnapshotResult,
-  StockSnapshotsResult, MarketMoversResult, UnifiedSnapshotResult,
-  TrackedTickersResult, TickerDetailResult, RelatedTickersResult,
-  StrategyAnalyzeResult, StrategyAnalyzeOptions, StrategyLegInput, FetchProgress,
-  RuleBasedBacktestResult, PricingCompareResult,
+  StrategyAnalyzeResult, StrategyAnalyzeOptions, StrategyLegInput,
+  PricingCompareResult,
 } from '../graphql/types';
 import { environment } from '../../environments/environment';
 import { todayDateString, dateStringMonthsFromNow } from '../utils/date-validation';
@@ -40,125 +38,12 @@ const QUERY = `
         volumeWeightedAveragePrice timestamp
         timespan multiplier transactionCount
       }
-      summary {
-        periodHigh periodLow averageVolume averageVwap
-        openPrice closePrice priceChange priceChangePercent totalBars
-      }
-      gapDetection {
-        totalWeekdays daysWithData missingDays partialDays
-        coveragePercent expectedBars actualBars
-        missingDates partialDates
-      }
     }
   }
 `;
 
 interface GraphQLResponse {
   data: { getOrFetchStockAggregates: SmartAggregatesResult };
-  errors?: { message: string }[];
-}
-
-const CALCULATE_INDICATORS_QUERY = `
-  query CalculateIndicators(
-    $ticker: String!
-    $fromDate: String!
-    $toDate: String!
-    $indicators: [IndicatorConfigInput!]!
-    $timespan: String! = "day"
-    $multiplier: Int! = 1
-  ) {
-    calculateIndicators(
-      ticker: $ticker
-      fromDate: $fromDate
-      toDate: $toDate
-      indicators: $indicators
-      timespan: $timespan
-      multiplier: $multiplier
-    ) {
-      success
-      ticker
-      indicators {
-        name
-        window
-        data {
-          timestamp value signal histogram upper lower
-        }
-      }
-      error
-    }
-  }
-`;
-
-const CHECK_CACHED_RANGES_QUERY = `
-  query CheckCachedRanges(
-    $ticker: String!
-    $ranges: [DateRangeInput!]!
-    $timespan: String! = "day"
-    $multiplier: Int! = 1
-  ) {
-    checkCachedRanges(
-      ticker: $ticker
-      ranges: $ranges
-      timespan: $timespan
-      multiplier: $multiplier
-    ) {
-      fromDate toDate isCached
-    }
-  }
-`;
-
-interface CheckCachedRangesResponse {
-  data: { checkCachedRanges: CachedRangeResult[] };
-  errors?: { message: string }[];
-}
-
-export interface CachedRangeResult {
-  fromDate: string;
-  toDate: string;
-  isCached: boolean;
-}
-
-interface CalculateIndicatorsResponse {
-  data: { calculateIndicators: CalculateIndicatorsResult };
-  errors?: { message: string }[];
-}
-
-const GET_OPTIONS_CONTRACTS_QUERY = `
-  query GetOptionsContracts(
-    $underlyingTicker: String!
-    $asOfDate: String
-    $contractType: String
-    $strikePriceGte: Decimal
-    $strikePriceLte: Decimal
-    $expirationDate: String
-    $expirationDateGte: String
-    $expirationDateLte: String
-    $limit: Int! = 100
-  ) {
-    getOptionsContracts(
-      underlyingTicker: $underlyingTicker
-      asOfDate: $asOfDate
-      contractType: $contractType
-      strikePriceGte: $strikePriceGte
-      strikePriceLte: $strikePriceLte
-      expirationDate: $expirationDate
-      expirationDateGte: $expirationDateGte
-      expirationDateLte: $expirationDateLte
-      limit: $limit
-    ) {
-      success
-      contracts {
-        ticker underlyingTicker contractType
-        strikePrice expirationDate exerciseStyle
-      }
-      count
-      error
-    }
-  }
-`;
-
-interface OptionsContractsResponse {
-  data: { getOptionsContracts: OptionsContractsResult };
   errors?: { message: string }[];
 }
 
@@ -241,176 +126,13 @@ interface StockSnapshotResponse {
   errors?: { message: string }[];
 }
 
-const GET_STOCK_SNAPSHOTS_QUERY = `
-  query GetStockSnapshots($tickers: [String!]) {
-    getStockSnapshots(tickers: $tickers) {
-      success
-      snapshots { ${SNAPSHOT_FIELDS} }
-      count
-      error
-    }
-  }
-`;
-
-interface StockSnapshotsResponse {
-  data: { getStockSnapshots: StockSnapshotsResult };
-  errors?: { message: string }[];
-}
-
-const GET_MARKET_MOVERS_QUERY = `
-  query GetMarketMovers($direction: String!) {
-    getMarketMovers(direction: $direction) {
-      success
-      tickers { ${SNAPSHOT_FIELDS} }
-      count
-      error
-    }
-  }
-`;
-
-interface MarketMoversResponseGql {
-  data: { getMarketMovers: MarketMoversResult };
-  errors?: { message: string }[];
-}
-
-const GET_UNIFIED_SNAPSHOT_QUERY = `
-  query GetUnifiedSnapshot($tickers: [String!], $limit: Int! = 10) {
-    getUnifiedSnapshot(tickers: $tickers, limit: $limit) {
-      success
-      results {
-        ticker type marketStatus name
-        session {
-          price change changePercent
-          open close high low previousClose volume
-        }
-      }
-      count
-      error
-    }
-  }
-`;
-
-interface UnifiedSnapshotResponseGql {
-  data: { getUnifiedSnapshot: UnifiedSnapshotResult };
-  errors?: { message: string }[];
-}
-
-// Ticker Reference queries
-const GET_TRACKED_TICKERS_QUERY = `
-  query GetTrackedTickers($tickers: [String!]!) {
-    getTrackedTickers(tickers: $tickers) {
-      success
-      tickers {
-        ticker name market type active
-        primaryExchange currencyName
-      }
-      count
-      error
-    }
-  }
-`;
-
-interface TrackedTickersResponseGql {
-  data: { getTrackedTickers: TrackedTickersResult };
-  errors?: { message: string }[];
-}
-
-const GET_TICKER_DETAILS_QUERY = `
-  query GetTickerDetails($ticker: String!) {
-    getTickerDetails(ticker: $ticker) {
-      success ticker name description
-      marketCap homepageUrl totalEmployees
-      listDate sicDescription primaryExchange
-      type weightedSharesOutstanding
-      address { address1 city state postalCode }
-      error
-    }
-  }
-`;
-
-interface TickerDetailResponseGql {
-  data: { getTickerDetails: TickerDetailResult };
-  errors?: { message: string }[];
-}
-
-const GET_RELATED_TICKERS_QUERY = `
-  query GetRelatedTickers($ticker: String!) {
-    getRelatedTickers(ticker: $ticker) {
-      success ticker related error
-    }
-  }
-`;
-
-interface RelatedTickersResponseGql {
-  data: { getRelatedTickers: RelatedTickersResult };
-  errors?: { message: string }[];
-}
-
-
-const RUN_RULE_BASED_BACKTEST_MUTATION = `
-  mutation RunRuleBasedBacktest(
-    $ticker: String!
-    $fromDate: String!
-    $toDate: String!
-    $multiplier: Int! = 15
-    $timespan: String! = "minute"
-    $filterRth: Boolean! = true
-    $parametersJson: String! = "{}"
-  ) {
-    runRuleBasedBacktest(
-      ticker: $ticker
-      fromDate: $fromDate
-      toDate: $toDate
-      multiplier: $multiplier
-      timespan: $timespan
-      filterRth: $filterRth
-      parametersJson: $parametersJson
-    ) {
-      success ticker strategyName parameters
-      totalTrades winningTrades losingTrades
-      winRate avgWinPct avgLossPct
-      winLossRatio profitFactor expectancyPerTrade
-      totalPnlPct maxDrawdownPct totalPnlPts
-      sharpeRatio barsProcessed
-      trades {
-        tradeNumber tradeType
-        entryTimestamp exitTimestamp
-        entryPrice exitPrice
-        pnl pnlPct cumulativePnlPct
-        signalReason
-        emaFast emaSlow emaGap rsi adx
-      }
-      error
-    }
-  }
-`;
-
-interface RunRuleBasedBacktestResponse {
-  data: { runRuleBasedBacktest: RuleBasedBacktestResult };
-  errors?: { message: string }[];
-}
-
-const GET_FETCH_PROGRESS_QUERY = `
-  query GetFetchProgress($ticker: String!) {
-    getFetchProgress(ticker: $ticker) {
-      ticker totalWindows completedWindows
-      barsFetched currentWindow status
-    }
-  }
-`;
-
-interface FetchProgressResponse {
-  data: { getFetchProgress: FetchProgress | null };
-  errors?: { message: string }[];
-}
-
 const ANALYZE_OPTIONS_STRATEGY_QUERY = `
   query AnalyzeOptionsStrategy(
     $symbol: String!
     $legs: [StrategyLegInput!]!
     $expirationDate: String!
     $spotPrice: Decimal!
-    $riskFreeRate: Decimal = 0.043
+    $riskFreeRate: Decimal
     $includeCurrentCurve: Boolean = false
     $includeGreekCurves: Boolean = false
     $includeLegDiagnostics: Boolean = false
@@ -457,7 +179,7 @@ const PRICING_MODEL_COMPARISON_QUERY = `
     $volatility: Decimal!
     $expirationDate: String!
     $optionType: String!
-    $riskFreeRate: Decimal = 0.05
+    $riskFreeRate: Decimal
     $dividendYield: Decimal = 0
     $evaluationDate: String
     $spotMin: Decimal
@@ -482,6 +204,7 @@ const PRICING_MODEL_COMPARISON_QUERY = `
       optionType
       expirationDate
       timeToExpiryYears
+      riskFreeRate
       models {
         model
         points { spot price delta gamma theta vega rho }
@@ -526,66 +249,6 @@ export class MarketDataService {
       );
   }
 
-  getFetchProgress(ticker: string): Observable<FetchProgress | null> {
-    return this.http
-      .post<FetchProgressResponse>(GRAPHQL_URL, {
-        query: GET_FETCH_PROGRESS_QUERY,
-        variables: { ticker: ticker.toUpperCase() }
-      })
-      .pipe(
-        map(response => response.data.getFetchProgress)
-      );
-  }
-
-  checkCachedRanges(
-    ticker: string,
-    ranges: { fromDate: string; toDate: string }[],
-    timespan = 'day',
-    multiplier = 1
-  ): Observable<CachedRangeResult[]> {
-    return this.http
-      .post<CheckCachedRangesResponse>(GRAPHQL_URL, {
-        query: CHECK_CACHED_RANGES_QUERY,
-        variables: { ticker, ranges, timespan, multiplier }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.checkCachedRanges)
-      );
-  }
-
-  getOptionsContracts(
-    underlyingTicker: string,
-    options: {
-      asOfDate?: string;
-      contractType?: string;
-      strikePriceGte?: number;
-      strikePriceLte?: number;
-      expirationDate?: string;
-      expirationDateGte?: string;
-      expirationDateLte?: string;
-      limit?: number;
-    } = {}
-  ): Observable<OptionsContractsResult> {
-    return this.http
-      .post<OptionsContractsResponse>(GRAPHQL_URL, {
-        query: GET_OPTIONS_CONTRACTS_QUERY,
-        variables: { underlyingTicker, ...options }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getOptionsContracts)
-      );
-  }
-
   getOptionsExpirations(
     underlyingTicker: string,
     options: {
@@ -614,29 +277,6 @@ export class MarketDataService {
           const result = response.data.getOptionsExpirations;
           return result.success ? result.expirations : [];
         })
-      );
-  }
-
-  calculateIndicators(
-    ticker: string,
-    fromDate: string,
-    toDate: string,
-    indicators: { name: string; window: number }[],
-    timespan = 'day',
-    multiplier = 1
-  ): Observable<CalculateIndicatorsResult> {
-    return this.http
-      .post<CalculateIndicatorsResponse>(GRAPHQL_URL, {
-        query: CALCULATE_INDICATORS_QUERY,
-        variables: { ticker, fromDate, toDate, indicators, timespan, multiplier }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.calculateIndicators)
       );
   }
 
@@ -675,132 +315,13 @@ export class MarketDataService {
       );
   }
 
-  getStockSnapshots(tickers?: string[]): Observable<StockSnapshotsResult> {
-    return this.http
-      .post<StockSnapshotsResponse>(GRAPHQL_URL, {
-        query: GET_STOCK_SNAPSHOTS_QUERY,
-        variables: { tickers }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getStockSnapshots)
-      );
-  }
-
-  getMarketMovers(direction: string): Observable<MarketMoversResult> {
-    return this.http
-      .post<MarketMoversResponseGql>(GRAPHQL_URL, {
-        query: GET_MARKET_MOVERS_QUERY,
-        variables: { direction }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getMarketMovers)
-      );
-  }
-
-  getUnifiedSnapshot(tickers?: string[], limit = 10): Observable<UnifiedSnapshotResult> {
-    return this.http
-      .post<UnifiedSnapshotResponseGql>(GRAPHQL_URL, {
-        query: GET_UNIFIED_SNAPSHOT_QUERY,
-        variables: { tickers, limit }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getUnifiedSnapshot)
-      );
-  }
-
-  getTrackedTickers(tickers: string[]): Observable<TrackedTickersResult> {
-    return this.http
-      .post<TrackedTickersResponseGql>(GRAPHQL_URL, {
-        query: GET_TRACKED_TICKERS_QUERY,
-        variables: { tickers }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getTrackedTickers)
-      );
-  }
-
-  getTickerDetails(ticker: string): Observable<TickerDetailResult> {
-    return this.http
-      .post<TickerDetailResponseGql>(GRAPHQL_URL, {
-        query: GET_TICKER_DETAILS_QUERY,
-        variables: { ticker }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getTickerDetails)
-      );
-  }
-
-  getRelatedTickers(ticker: string): Observable<RelatedTickersResult> {
-    return this.http
-      .post<RelatedTickersResponseGql>(GRAPHQL_URL, {
-        query: GET_RELATED_TICKERS_QUERY,
-        variables: { ticker }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getRelatedTickers)
-      );
-  }
-
-  runRuleBasedBacktest(
-    ticker: string,
-    fromDate: string,
-    toDate: string,
-    multiplier = 15,
-    timespan = 'minute',
-    filterRth = true,
-    parametersJson = '{}',
-  ): Observable<RuleBasedBacktestResult> {
-    return this.http
-      .post<RunRuleBasedBacktestResponse>(GRAPHQL_URL, {
-        query: RUN_RULE_BASED_BACKTEST_MUTATION,
-        variables: { ticker, fromDate, toDate, multiplier, timespan, filterRth, parametersJson }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.runRuleBasedBacktest)
-      );
-  }
-
   analyzeOptionsStrategy(
     symbol: string,
     legs: StrategyLegInput[],
     expirationDate: string,
     spotPrice: number,
-    riskFreeRate = 0.043,
+    /** Omit to have Python price at its one default rate (#2764). */
+    riskFreeRate: number | null = null,
     options: StrategyAnalyzeOptions = {},
   ): Observable<StrategyAnalyzeResult> {
     return this.http
@@ -847,7 +368,7 @@ export class MarketDataService {
           volatility: params.volatility,
           expirationDate: params.expirationDate,
           optionType: params.optionType,
-          riskFreeRate: params.riskFreeRate ?? 0.05,
+          riskFreeRate: params.riskFreeRate ?? null,
           dividendYield: params.dividendYield ?? 0,
           evaluationDate: params.evaluationDate ?? null,
           spotMin: params.spotMin ?? null,

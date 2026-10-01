@@ -3,7 +3,7 @@ Volatility Surface Builder
 ===========================
 
 Formula: Per-expiry IV solve (solver.py) → smile fit (fitting.py, choice of variance/SABR/SVI) → cross-expiry variance-time interpolation (σ²(T) · T linear in T, preserving no-calendar-arbitrage).
-Reference: Internal orchestration of app/volatility/solver.py + fitting.py; variance-time interpolation is industry standard per docs/math-rigor.md Upgrade 1.
+Reference: Internal orchestration of app/volatility/solver.py + fitting.py; variance-time interpolation is industry standard.
 Canonical implementation: app/volatility/surface.py
 Validated against: NONE — pending (no golden fixture; pending-fixture per registry)
 
@@ -191,7 +191,7 @@ class VolSurfaceBuilder:
     def __init__(
         self,
         spot: float,
-        rate: float = 0.05,
+        rate: float,
         dividend: float = 0.0,
         eval_date: str = "",
         min_contracts_per_slice: int = 5,

@@ -92,7 +92,7 @@ export function preferredSlot(slots: readonly BrokerCredentialSlot[]): string {
   return (slots.find((slot) => slot.available) ?? slots[0])?.slot ?? '';
 }
 
-/** `min` is exclusive, `max` is exclusive — the contract §2.4 shape for a fraction. */
+/** `min` is exclusive, `max` is exclusive — the bound shape for a fraction. */
 function betweenExclusive(
   value: number | null,
   label: string,

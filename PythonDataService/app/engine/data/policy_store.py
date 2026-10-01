@@ -8,7 +8,7 @@ the lake is the only place historical bars live now (ADR 0049) -- and what
 survives here is the vocabulary and the root lookup its callers still need:
 
 - :func:`policy_key` names a ``(source, adjusted)`` pair. It no longer
-  selects a directory; it is the label the engine and ``/api/engine/bars``
+  selects a directory; it is the label the engine and ``/api/engine/chart``
   report so a caller can see which policy produced a response.
 - :func:`resolve_data_roots` answers "where do the LEAN readers look?" with
   the lake root for the run's adjustment mode. It is the single
@@ -154,7 +154,7 @@ def _safe_symbol(symbol: str) -> str:
     """Validate the symbol before it flows into a filesystem path."""
     # Lazy import: the canonical path-safety validator lives with the
     # sidecar workspace code; the engine layer reuses it rather than
-    # duplicating the ticker alphabet (guiding-philosophy #5).
+    # duplicating the ticker alphabet.
     from app.lean_sidecar.workspace import validate_symbol
 
     return validate_symbol(symbol)

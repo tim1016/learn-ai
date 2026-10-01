@@ -1,7 +1,6 @@
 """Spec-driven strategy backtest API.
 
 POST /api/spec-strategy/backtest    Run a backtest with an inline JSON spec.
-GET  /api/spec-strategy/schema      JSON Schema export for UI form generation.
 GET  /api/spec-strategy/fixtures    List canonical Phase-1 spec fixtures.
 GET  /api/spec-strategy/fixtures/{name}    Return one canonical fixture.
 
@@ -26,7 +25,6 @@ from datetime import date as Date
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, ValidationError
@@ -69,8 +67,7 @@ class SpecBacktestRequest(BaseModel):
 class SpecTradeResponse(BaseModel):
     """Single trade emitted by a spec backtest.
 
-    Timestamps are ``int64 ms UTC`` per the repo-wide wire-format rule
-    (see ``.claude/rules/numerical-rigor.md`` § "Timestamp rigor"). UI
+    Timestamps are ``int64 ms UTC`` on the wire. UI
     callers convert to local-time strings at the display boundary; no
     other layer should be reading these fields as strings.
     """
@@ -183,16 +180,6 @@ def _trade_to_response(i: int, t: LoggedTrade) -> SpecTradeResponse:
 # ---------------------------------------------------------------------------
 # Endpoints.
 # ---------------------------------------------------------------------------
-@router.get("/schema")
-def get_schema() -> dict[str, Any]:
-    """Return the JSON Schema for StrategySpec.
-
-    The Frontend uses this to generate form structure and validate specs
-    inline before round-tripping to the backtest endpoint.
-    """
-    return StrategySpec.model_json_schema()
-
-
 @router.get("/fixtures", response_model=list[FixtureListItem])
 def list_fixtures() -> list[FixtureListItem]:
     """List the canonical Phase-1 spec fixtures shipped with the package."""

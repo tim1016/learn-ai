@@ -31,11 +31,11 @@ def _et(year: int, month: int, day: int, hour: int, minute: int = 0) -> int:
     ("now_ms", "next_step"),
     [
         pytest.param(
-            _et(2026, 9, 30, 20, 30), "Next Start or Resume window opens Thu Oct 1, 04:00 ET.", id="tomorrow",
+            _et(2026, 9, 30, 20, 30), "Next Start window opens Thu Oct 1, 04:00 ET.", id="tomorrow",
         ),
         # New Year's Day 2027 is a Friday holiday: the next session is Monday, in another year.
         pytest.param(
-            _et(2026, 12, 31, 20, 30), "Next Start or Resume window opens Mon Jan 4 2027, 04:00 ET.", id="next-year",
+            _et(2026, 12, 31, 20, 30), "Next Start window opens Mon Jan 4 2027, 04:00 ET.", id="next-year",
         ),
     ],
 )
@@ -54,13 +54,7 @@ def test_a_closed_window_admission_words_the_next_open_as_of_its_own_evaluation(
     decision = evaluate_run_admission(bot, _clerk(observed_at_ms=now), evaluated_at_ms=now)
 
     assert decision.reason_code == "DEPLOY_WINDOW_CLOSED"
-    assert decision.next_step == "Next Start or Resume window opens Mon Jan 4 2027, 04:00 ET."
-
-
-def test_start_window_next_step_while_the_window_is_open() -> None:
-    now = _et(2026, 9, 30, 10)
-
-    assert start_window_next_step(deploy_window(now), now_ms=now) == "Start is allowed in the current session."
+    assert decision.next_step == "Next Start window opens Mon Jan 4 2027, 04:00 ET."
 
 
 def test_exit_steps_summary_names_each_step_in_the_owners_et_words() -> None:

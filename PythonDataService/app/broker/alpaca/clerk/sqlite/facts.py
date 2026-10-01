@@ -11,12 +11,12 @@ this facts string — is therefore sufficient to reconstruct the command
 resource on rebuild without a live database or a caller closure.
 
 ``ENTER_ACCEPTED`` facts are pinned in
-``docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md`` §3.d; #1377 adds
+ADR 0035's binding annex, §3.d; #1377 adds
 the dataclass here alongside the fold that consumes it
 (``folds._fold_enter_accepted``). The evidence-fold kinds that follow it
 (``ORDER_SUBMIT_UNCERTAIN``, ``ORDER_SUBMIT_FAILED``, ``ORDER_FILL_OBSERVED``)
 only ever *update* an already-existing ``effect_operations``/``orders`` row —
-none of their fields are needed to rebuild that row's identity — but §3d's
+none of their fields are needed to rebuild that row's identity — but the annex's §3d
 "no untyped snapshot bag" rule still applies to whatever they *do* carry
 beyond outer transition columns, so those get typed dataclasses too.
 ``ORDER_SUBMIT_ACKED`` is the near-exception: every field its fold reads
@@ -200,7 +200,7 @@ class CommandRejectedFacts:
 
 @dataclass(frozen=True)
 class EnterAcceptedFacts:
-    """§3d's ``ENTER_ACCEPTED`` row: command idempotency key/hash/kind/action,
+    """The annex's §3d ``ENTER_ACCEPTED`` row: command idempotency key/hash/kind/action,
     the decision id, the effect idempotency key/kind, and the complete
     immutable broker leg — everything ``_fold_enter_accepted`` needs to
     rebuild the ``commands``, ``effect_operations``, and ``orders`` rows from
@@ -326,8 +326,8 @@ _ACCEPTED_SHAPE_DEFAULTS: Mapping[str, Any] = {
 def _omit_defaults(payload: dict[str, Any], defaults: Mapping[str, Any]) -> dict[str, Any]:
     """Drop every field holding its default, so old rows stay byte-identical.
 
-    The one canonical omit-when-default rule for durable facts (see the
-    hash-chained-schema rule in ``.claude/rules/numerical-rigor.md``): a
+    The one canonical omit-when-default rule for durable facts (the log is
+    hash-chained, ADR 0035 D8): a
     field added by a later schema version must not appear in the canonical
     JSON of a row that does not use it.
     """
@@ -484,7 +484,7 @@ class ExitReducingOrderCreatedFacts:
     for the reducing/close order — symbol and side are needed to place the
     order; ``quantity`` is the Clerk-proven remaining attributed quantity at
     the moment cancellation resolved (the acceptance criterion this fact
-    exists to prove — see ``docs/references/clerk-invariants.md §1``).
+    exists to prove — ADR 0030).
     ``order_type``, ``time_in_force``, ``limit_price`` and ``extended_hours``
     carry the decision's session-dependent leg shape (ADR 0059 D5.3), so a
     resumed submission rebuilds the identical leg without being told it
@@ -908,31 +908,6 @@ class ExecutionCoverageResolvedFacts:
 
 
 @dataclass(frozen=True)
-class ExecutionCorrectedFacts:
-    """An auditable effective replacement for one prior execution slice.
-
-    The correction's ``execution_id`` is a distinct broker identity.  The
-    superseded row remains in ``fills`` so every exposure adjustment can be
-    reconstructed from the custody transition stream.
-    """
-
-    execution_id: str
-    superseded_execution_ref: str
-    symbol: str
-    side: str
-    corrected_qty: float
-    corrected_price: float
-    why: str
-
-    def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
-
-    @classmethod
-    def from_facts_json(cls, facts_json: str) -> ExecutionCorrectedFacts:
-        return cls(**json.loads(facts_json))
-
-
-@dataclass(frozen=True)
 class CustodySubjectRegisteredFacts:
     """Versioned identity for a non-bot Clerk custody subject."""
 
@@ -1109,8 +1084,7 @@ def validate_execution_slice_facts(facts: ExecutionSliceFilledFacts) -> None:
     """Reject malformed broker-execution inputs before a custody transition.
 
     Formula: n/a — input-boundary validation for the execution-slice fold.
-    Reference: docs/prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md
-      § Task S1.2.
+    Reference: none external.
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
       test_folds_execution.py::test_execution_slice_filled_rejects_invalid_facts.
@@ -1228,7 +1202,7 @@ def leg_instruction_payload(leg: BrokerOrderLeg) -> dict[str, object]:
     ``BrokerOrderLeg`` — the manual instruction hash, the manual command's
     ``payload_hash``, and the bot-driven ENTER decision's ``payload_hash`` —
     routes through this function rather than dumping the leg itself, so
-    there is exactly one payload rule (CLAUDE.md guiding philosophy #5).
+    there is exactly one payload rule.
 
     ``extended_hours`` is omitted when ``False`` so every leg accepted
     before the field existed keeps validating against its stored hash
@@ -1374,29 +1348,3 @@ def validate_manual_order_replaced_facts(facts: ManualOrderReplacedFacts) -> Non
         raise ValueError("manual order replacement replaced_by must be a followable broker order id")
     if facts.replaces == facts.replaced_by:
         raise ValueError("a replacement link cannot point at the order it replaces")
-
-
-def validate_execution_corrected_facts(facts: ExecutionCorrectedFacts) -> None:
-    """Reject malformed broker correction inputs before transition admission.
-
-    Formula: n/a — input-boundary validation for replacement execution facts.
-    Reference: docs/prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md
-      § Task S1.2.
-    Canonical implementation: this file.
-    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
-      test_folds_execution.py::test_execution_correction_invalid_target_raises_uncertainty.
-    """
-    if not isinstance(facts.execution_id, str) or not facts.execution_id:
-        raise ValueError("correction execution_id must be non-empty")
-    if not isinstance(facts.superseded_execution_ref, str) or not facts.superseded_execution_ref:
-        raise ValueError("superseded_execution_ref must be non-empty")
-    if facts.execution_id == facts.superseded_execution_ref:
-        raise ValueError("a correction cannot supersede itself")
-    if not isinstance(facts.symbol, str) or not facts.symbol:
-        raise ValueError("correction symbol must be non-empty")
-    if facts.side not in {"BUY", "SELL"}:
-        raise ValueError(f"invalid correction side {facts.side!r}")
-    _require_finite_positive(facts.corrected_qty, field="corrected_qty")
-    _require_finite_positive(facts.corrected_price, field="corrected_price")
-    if not isinstance(facts.why, str) or not facts.why:
-        raise ValueError("correction why must be non-empty")

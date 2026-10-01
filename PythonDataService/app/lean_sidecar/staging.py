@@ -5,9 +5,6 @@ calling the launcher. ``staging.py`` is the single seam where Polygon
 data turns into LEAN's on-disk format and the algorithm source + config
 are placed next to it. The launcher does no staging — staging happens
 out-of-process and the launcher only invokes the container.
-
-Authority: ``docs/architecture/lean-sidecar-lab.md`` §"Workspace
-contract" and §"LEAN data-folder fidelity".
 """
 
 from __future__ import annotations
@@ -18,7 +15,6 @@ import os
 import shutil
 import subprocess
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
@@ -46,26 +42,6 @@ IMAGE_INTEREST_RATE = f"{IMAGE_LEAN_DATA_ROOT}/alternative/interest-rate"
 
 class MetadataStagingError(RuntimeError):
     """The image-bundled metadata could not be extracted."""
-
-
-@dataclass(frozen=True, slots=True)
-class StagedRun:
-    """Materialized view of what is on disk before the launcher runs.
-
-    Returned by :func:`stage_python_run` so the manifest writer can
-    hash exactly the files that ended up in the workspace, rather than
-    re-scanning the directory tree and risk capturing artifacts a
-    previous run left behind.
-    """
-
-    workspace: Workspace
-    algorithm_source_path: Path
-    config_path: Path
-    bar_zip_paths: tuple[Path, ...]
-    market_hours_path: Path | None
-    symbol_properties_path: Path | None
-    factor_files: tuple[Path, ...]
-    map_files: tuple[Path, ...]
 
 
 def stage_algorithm_source(workspace: Workspace, source: str) -> Path:
@@ -230,7 +206,7 @@ def stage_empty_corporate_action_dirs(workspace: Workspace) -> None:
     """Create empty ``factor_files`` / ``map_files`` subdirectories.
 
     A reconciliation-grade run requires real factor and map files (see
-    ADR §"Corporate actions and metadata policy"). For the
+    ADR 0070 decision 8). For the
     non-reconciliation trusted sample the windows have no corporate
     actions, so an empty directory is enough to silence LEAN's
     ``LocalDiskMapFileProvider`` warning and keep the run output
@@ -239,21 +215,6 @@ def stage_empty_corporate_action_dirs(workspace: Workspace) -> None:
     workspace.ensure_layout()
     for sub in ("factor_files", "map_files"):
         (workspace.data_dir / "equity" / "usa" / sub).mkdir(parents=True, exist_ok=True)
-
-
-def list_factor_map_files(workspace: Workspace) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
-    """List staged factor and map files under the workspace data dir.
-
-    Empty tuples are returned when no files are present — that is the
-    Phase 1 trusted-sample case (no corporate actions in window) and is
-    intentionally distinct from the reconciliation-grade requirement
-    that both lists be non-empty for affected symbols.
-    """
-    factor_root = workspace.data_dir / "equity" / "usa" / "factor_files"
-    map_root = workspace.data_dir / "equity" / "usa" / "map_files"
-    factors = tuple(sorted(factor_root.rglob("*.csv"))) if factor_root.exists() else ()
-    maps = tuple(sorted(map_root.rglob("*.csv"))) if map_root.exists() else ()
-    return factors, maps
 
 
 def list_metadata_databases(
@@ -360,8 +321,7 @@ def stage_lean_metadata_from_image(
                 "launcher's own call into staging)"
             )
         # Data-plane container has no podman on PATH — by design, per
-        # the launcher topology in lean-sidecar-lab.md §"Launcher
-        # topology". Delegate to the host-side launcher via HTTP, then
+        # ADR 0070 decision 2. Delegate to the host-side launcher via HTTP, then
         # verify the files landed in the workspace through our view of
         # the shared bind mount.
         return _stage_lean_metadata_via_launcher(workspace, image_digest)

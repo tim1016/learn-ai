@@ -155,13 +155,6 @@ def friendly(job_type: str, phase_id: str) -> str:
     return _humanize(phase_id)
 
 
-def total_weight(job_type: str) -> int:
-    """Sum of all phase weights for the job type. Useful for the UI to
-    convert phase index → fractional progress when the runner doesn't
-    emit explicit ``on_progress``."""
-    return sum(p.weight for p in JOB_PHASES.get(job_type, ()))
-
-
 def _humanize(token: str) -> str:
     """Turn ``ticker_3_AAPL`` into ``Ticker 3 AAPL``."""
     parts = [p for p in token.replace("-", "_").split("_") if p]

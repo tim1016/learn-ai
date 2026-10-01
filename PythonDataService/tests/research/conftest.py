@@ -5,8 +5,7 @@ against a database explicitly attested as disposable
 (``POSTGRES_URL_IS_EPHEMERAL=1``, the same signal the data-lake catalog tests
 require). The Python-owned research tables are ensured once and never
 dropped: every test works on ids and symbols of its own, so the suites are
-safe under xdist's ``--dist load`` (CI runs the change-driven paths in
-parallel). Shared by the Grid Search, Walk-Forward Study and Recency suites.
+safe under xdist's ``--dist load`` (CI runs them in parallel). Shared by the Grid Search, Walk-Forward Study and Recency suites.
 """
 
 from __future__ import annotations

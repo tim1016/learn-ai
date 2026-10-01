@@ -1,13 +1,10 @@
-"""Data-plane process liveness metadata for PRD #684."""
+"""The data-plane process's resolved code revision (env override or git SHA)."""
 
 from __future__ import annotations
 
 import os
 import subprocess
 from pathlib import Path
-
-from app.broker.ibkr.models import DataPlaneHealth, DataPlaneReloadMode
-from app.utils.timestamps import now_ms_utc
 
 
 def _read_git_revision() -> str:
@@ -57,16 +54,6 @@ def _read_git_head(repo_root: Path) -> str:
     return head if head else "unknown"
 
 
-def _reload_mode() -> DataPlaneReloadMode:
-    if _env_falsey("UVICORN_RELOAD"):
-        return "disabled"
-    if _env_truthy("WATCHFILES_FORCE_POLLING"):
-        return "watchfiles-polling"
-    if _env_truthy("UVICORN_RELOAD"):
-        return "watchfiles"
-    return "unknown"
-
-
 def _env_revision(name: str) -> str | None:
     value = os.getenv(name)
     if value is None:
@@ -77,21 +64,6 @@ def _env_revision(name: str) -> str | None:
     return revision
 
 
-def _env_truthy(name: str) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return False
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _env_falsey(name: str) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return False
-    return value.strip().lower() in {"0", "false", "no", "off"}
-
-
-_PROCESS_START_MS = now_ms_utc()
 _CODE_REVISION = (
     _env_revision("DATA_PLANE_CODE_REVISION")
     or _env_revision("GIT_SHA")
@@ -103,20 +75,8 @@ _CODE_REVISION = (
 def resolved_code_revision() -> str:
     """Return the process's resolved code revision (env override or git SHA).
 
-    Public accessor for callers outside this module that need the same
-    provenance value ``data_plane_health()`` reports — e.g. the Recency
-    Chart's evidence fingerprint (design spec D16), which must distinguish
+    The provenance value callers stamp on their evidence — e.g. the Recency
+    Chart's evidence fingerprint (ADR 0072 decision 5), which must distinguish
     trades produced by different strategy-code revisions.
     """
     return _CODE_REVISION
-
-
-def data_plane_health() -> DataPlaneHealth:
-    """Return stable process metadata plus request-time freshness."""
-    return DataPlaneHealth(
-        service="polygon-data-service",
-        code_revision=_CODE_REVISION,
-        process_start_ms=_PROCESS_START_MS,
-        fetched_at_ms=now_ms_utc(),
-        reload=_reload_mode(),
-    )

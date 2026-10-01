@@ -1,13 +1,7 @@
-"""Pydantic models for portfolio scenario / live-Greeks endpoints.
-
-These models implement Phase 2 of `docs/architecture/numerical-authority-migration-plan.md`:
-move portfolio scenario / live-Greeks math out of `.NET` and into Python.
-The `.NET` services become passthroughs (Phase 2.2); this is the canonical
-shape they will call.
+"""Pydantic models for `portfolio_scenario.evaluate_scenario`.
 
 Design notes:
-- Each position is self-describing. The Python service does not load from
-  the .NET DB; the caller (`.NET`) projects DB state into these models.
+- Each position is self-describing; the caller supplies every field.
 - Stocks are represented as positions with `instrument="stock"` and no
   option fields. They contribute `delta=1, gamma=0, theta=0, vega=0` to
   scenario aggregates, computed from `quantity * spot_change`.
@@ -22,6 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
@@ -94,9 +89,9 @@ class ScenarioRequest(BaseModel):
     Greeks; passes a specific timestamp for what-if at a future date.
     """
 
-    as_of_ms: int = Field(..., description="Evaluation timestamp (int64 ms UTC)")
+    as_of_ms: int = Field(..., le=MAX_TIMESTAMP_MS, description="Evaluation timestamp (int64 ms UTC)")
     spot_price: float = Field(..., gt=0, description="Current underlying spot")
-    risk_free_rate: float = Field(0.043, ge=0, le=0.5)
+    risk_free_rate: float = Field(DEFAULT_RISK_FREE_RATE, ge=0, le=0.5)
     dividend_yield: float = Field(0.0, ge=0, le=0.5)
     positions: list[Position] = Field(..., min_length=1, max_length=64)
     grid: ScenarioGrid = Field(default_factory=ScenarioGrid)
@@ -173,16 +168,3 @@ class ScenarioResponse(BaseModel):
             "These do not invalidate results; they surface assumptions."
         ),
     )
-
-
-class LiveGreeksRequest(BaseModel):
-    """Convenience request for the common 'live Greeks at current state' case.
-
-    Equivalent to ScenarioRequest with the default 1×1×1 grid.
-    """
-
-    as_of_ms: int
-    spot_price: float = Field(..., gt=0)
-    risk_free_rate: float = Field(0.043, ge=0, le=0.5)
-    dividend_yield: float = Field(0.0, ge=0, le=0.5)
-    positions: list[Position] = Field(..., min_length=1, max_length=64)

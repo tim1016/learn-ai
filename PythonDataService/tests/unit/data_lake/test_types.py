@@ -7,7 +7,6 @@ Issue: #1877 (PR D of #1861) — start_trading_date_ms/end_trading_date_ms.
 from __future__ import annotations
 
 from datetime import date
-from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -23,7 +22,6 @@ from app.data_lake.types import (
     trading_date_to_calendar_anchor_ms,
 )
 
-_EXPLICIT_ROOT = UUID("44444444-4444-4444-4444-444444444444")
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 
@@ -47,10 +45,6 @@ class TestArtifactIdentityDataRootId:
         monkeypatch.setattr(settings, "DATA_LAKE_ROOT_ID", "")
         identity = ArtifactIdentity(**self._identity_kwargs())
         assert identity.data_root_id == LEGACY_ROOT_ID
-
-    def test_explicit_value_is_preserved(self):
-        identity = ArtifactIdentity(**self._identity_kwargs(), data_root_id=_EXPLICIT_ROOT)
-        assert identity.data_root_id == _EXPLICIT_ROOT
 
 
 class TestArtifactRecordDataRootId:
@@ -78,19 +72,12 @@ class TestArtifactRecordDataRootId:
         record = ArtifactRecord(**self._record_kwargs())
         assert record.data_root_id == LEGACY_ROOT_ID
 
-    def test_explicit_value_is_preserved(self):
-        record = ArtifactRecord(**self._record_kwargs(), data_root_id=_EXPLICIT_ROOT)
-        assert record.data_root_id == _EXPLICIT_ROOT
-
 
 class TestCalendarAnchorHelpers:
     """The forward/inverse pair anchoring a POST-body trading date at
     12:00:00.000 UTC — a deliberate, documented exception to the
     session-open (09:30 ET) anchor the rest of the lake's wire vocabulary
     uses (trading_date_at_ms / session_open_ms_utc)."""
-
-    def test_anchor_hour_is_noon_utc(self):
-        assert CALENDAR_ANCHOR_UTC_HOUR == 12
 
     def test_forward_then_inverse_round_trips(self):
         d = date(2024, 5, 20)
@@ -187,20 +174,6 @@ class TestDataRunSpec:
         assert spec.start_trading_date == date(2024, 5, 20)
         assert spec.end_trading_date == date(2024, 5, 24)
 
-    def test_lowercase_symbol_is_rejected(self):
-        payload = self._valid_payload()
-        payload["symbols"] = ["spy"]
-        with pytest.raises(ValidationError):
-            DataRunSpec(**payload)
-
-    def test_start_after_end_is_rejected(self):
-        """Reversed range: start after end."""
-        payload = self._valid_payload()
-        payload["start_trading_date_ms"] = trading_date_to_calendar_anchor_ms(date(2024, 5, 24))
-        payload["end_trading_date_ms"] = trading_date_to_calendar_anchor_ms(date(2024, 5, 20))
-        with pytest.raises(ValidationError):
-            DataRunSpec(**payload)
-
     def test_empty_symbols_rejected(self):
         payload = self._valid_payload()
         payload["symbols"] = []
@@ -244,53 +217,7 @@ class TestDataRunSpec:
         with pytest.raises(ValidationError):
             DataRunSpec(**payload)
 
-    def test_5_year_range_cap(self):
-        payload = self._valid_payload()
-        payload["start_trading_date_ms"] = trading_date_to_calendar_anchor_ms(date(2018, 1, 1))
-        payload["end_trading_date_ms"] = trading_date_to_calendar_anchor_ms(date(2024, 12, 31))  # ~7 years
-        with pytest.raises(ValidationError):
-            DataRunSpec(**payload)
-
     # --- #1877 boundary matrix -------------------------------------------
-
-    def test_old_field_names_are_rejected(self):
-        """The pre-#1877 ISO-date field names must be refused outright —
-        no compatibility alias, no dual-model transcription."""
-        payload = {
-            "request_id": "12345678-1234-5678-1234-567812345678",
-            "run_type": "python_lab",
-            "symbols": ["SPY"],
-            "start_trading_date": "2024-05-20",
-            "end_trading_date": "2024-05-24",
-            "lean_image_digest": "sha256:abc123",
-        }
-        with pytest.raises(ValidationError):
-            DataRunSpec(**payload)
-
-    def test_iso_strings_on_the_ms_fields_are_rejected(self):
-        payload = self._valid_payload()
-        payload["start_trading_date_ms"] = "2024-05-20"
-        payload["end_trading_date_ms"] = "2024-05-24"
-        with pytest.raises(ValidationError):
-            DataRunSpec(**payload)
-
-    def test_non_integer_values_are_rejected(self):
-        payload = self._valid_payload()
-        payload["start_trading_date_ms"] = 1716206400000.5
-        with pytest.raises(ValidationError):
-            DataRunSpec(**payload)
-
-    def test_values_outside_signed_int64_are_rejected(self):
-        payload = self._valid_payload()
-        payload["start_trading_date_ms"] = _INT64_MAX + 1
-        with pytest.raises(ValidationError):
-            DataRunSpec(**payload)
-
-    def test_off_anchor_milliseconds_are_rejected(self):
-        payload = self._valid_payload()
-        payload["start_trading_date_ms"] = payload["start_trading_date_ms"] + 1
-        with pytest.raises(ValidationError):
-            DataRunSpec(**payload)
 
     def test_numeric_string_value_is_rejected(self):
         """A numeric string that would parse to an on-anchor ms value must

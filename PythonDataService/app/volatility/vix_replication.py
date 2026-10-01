@@ -2,12 +2,12 @@
 
 Formula: σ²_T = (2/T)·Σᵢ(ΔKᵢ/Kᵢ²)·e^(rT)·Q(Kᵢ) - (1/T)·(F/K₀ - 1)². See "Formula per expiry T" block below for full notation. Constant-maturity 30-day vol is variance-time interpolation between two expiries straddling 30 calendar days.
 Reference: CBOE VIX 2019 whitepaper "VIX Index Calculation: Step-by-Step" (the modern variant); the underlying mathematics goes back to Demeterfi, Derman, Kamal, Zou (1999) "More Than You Ever Wanted to Know About Volatility Swaps" (Goldman Sachs Quantitative Strategies Research Notes). Either citation is acceptable; CBOE 2019 is the operational definition.
-Canonical implementation: this file (registry: § Volatility surface and analytics, finding F-0007). Used as ground truth against the parametric IV30 (which interpolates fitted ATM σ in variance-space).
+Canonical implementation: this file. Used as ground truth against the parametric IV30 (which interpolates fitted ATM σ in variance-space).
 Validated against: NONE — pending fixture against CBOE-published VIX values for a known date (e.g., a recent quarter-end where the official VIX is on cboe.com). High-stakes provenance: the formula must match CBOE 2019 exactly.
 
 Implements the CBOE VIX 2019 whitepaper formula on a chain of listed options.
 Used as **ground truth** for our parametric IV30 (which interpolates fitted
-ATM σ in variance-space) — Step 4 of the IV-RV alignment plan.
+ATM σ in variance-space).
 
 Formula per expiry T:
 
@@ -200,8 +200,7 @@ def _select_atm_strike_normalized(quotes: list[NormalizedOptionQuote]) -> Normal
 
 DOMINANCE_GATE_THRESHOLD = 0.50
 """Maximum tolerated single-strike variance share before the gate
-iteratively drops the dominator and recomputes. See
-``docs/architecture/iv-research-chat-notes.md (pruned 2026-09-12, git history)`` §5.8 for the rationale
+iteratively drops the dominator and recomputes. The rationale
 on threshold choice (50% — half the variance from one strike is the
 "this IV is unreliable" line, lower than CBOE's implicit tolerance via
 two-zero-bid truncation but higher than the empirical SPY ~0.34 max

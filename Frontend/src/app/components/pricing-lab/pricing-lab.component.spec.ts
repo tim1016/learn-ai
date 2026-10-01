@@ -5,6 +5,7 @@ import { vi } from 'vitest';
 import { PricingLabComponent } from './pricing-lab.component';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { PricingCompareResult, SnapshotContractResult } from '../../graphql/types';
+import { bsPrice } from '../../utils/black-scholes';
 
 vi.mock('lightweight-charts', () => {
   const mockTimeScale = { fitContent: vi.fn() };
@@ -83,26 +84,6 @@ describe('PricingLabComponent', () => {
     httpMock.verify();
   });
 
-  describe('initialization', () => {
-    it('creates the component', () => {
-      expect(component).toBeTruthy();
-    });
-
-    it('defaults ticker to SPY', () => {
-      expect(component.ticker()).toBe('SPY');
-    });
-
-    it('starts with no expirations, no contract, no result', () => {
-      expect(component.availableExpirations()).toEqual([]);
-      expect(component.selectedContract()).toBeNull();
-      expect(component.serverResult()).toBeNull();
-    });
-
-    it('defaults riskFreeRate to 0.05', () => {
-      expect(component.riskFreeRate()).toBe(0.05);
-    });
-  });
-
   // ── PL-A: Data-fetch prelude ───────────────────────────────────
   describe('PL-A: ticker → expirations → chain prelude', () => {
     it('selects nearest future expiration and triggers a chain fetch', async () => {
@@ -152,12 +133,34 @@ describe('PricingLabComponent', () => {
       expect(component.expirationsLoading()).toBe(false);
     });
 
+    it('takes a snapshot rate of exactly 0 as the rate', async () => {
+      const promise = component.fetchChain('SPY', '2099-01-01');
+      expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
+        data: {
+          getOptionsChainSnapshot: {
+            success: true,
+            underlying: { ticker: 'SPY', price: 590, change: 0, changePercent: 0 },
+            contracts: [],
+            count: 0,
+            riskFreeRate: 0,
+            dividendYield: null,
+            rateSource: 'FRED',
+            dividendSource: null,
+            error: null,
+          },
+        },
+      });
+      await promise;
+
+      expect(component.riskFreeRate()).toBe(0);
+    });
+
     it('clears selected contract and prior server result when fetchChain runs again', async () => {
       // Seed prior state
       component.selectedContract.set(buildContract());
       component.serverResult.set({
         success: true, strike: 0, optionType: 'call', expirationDate: '',
-        timeToExpiryYears: 0, models: [], error: null,
+        timeToExpiryYears: 0, riskFreeRate: null, models: [], error: null,
       } satisfies PricingCompareResult);
 
       const promise = component.fetchChain('AAPL', '2099-01-01');
@@ -244,10 +247,42 @@ describe('PricingLabComponent', () => {
       expect(component.statusMessage()?.type).toBe('success');
     });
 
+    it('sends no rate when the rate field is empty, so Python prices at its default', async () => {
+      seedReadyState();
+      component.riskFreeRate.set(null);
+
+      const promise = component.runComparison();
+      const req = expectGraphQL(httpMock, 'pricingModelComparison');
+      expect(req.request.body.variables.riskFreeRate).toBeNull();
+
+      req.flush({ data: { pricingModelComparison: { success: false, strike: 590, optionType: 'call', expirationDate: '2099-01-01', timeToExpiryYears: 0, riskFreeRate: 0.043, models: [], error: 'stop' } } });
+      await promise;
+    });
+
+    it('prices the in-browser Legacy BS overlay at the rate the server priced at, not at the field', () => {
+      seedReadyState();
+      component.spotRangePct.set(20);
+      component.riskFreeRate.set(0.09);
+      const serverRate = 0.043;
+      const ttm = 0.25;
+      const spotMin = 590 * 0.8;
+      component.serverResult.set({
+        success: true, strike: 590, optionType: 'call', expirationDate: '2099-01-01',
+        timeToExpiryYears: ttm, riskFreeRate: serverRate, error: null,
+        models: [{
+          model: 'python_bs',
+          points: [{ spot: spotMin, price: bsPrice(spotMin, 590, serverRate, 0.20, ttm, 'call'), delta: 0, gamma: 0, theta: 0, vega: 0, rho: 0 }],
+        }],
+      });
+
+      const pythonVsLegacy = component.summaryStats().find(row => row.key === 'python_bs');
+      expect(pythonVsLegacy?.maxDiff).toBe(0);
+    });
+
     it('records server-level errors in statusMessage and clears serverResult', async () => {
       seedReadyState();
       // Pre-seed a result so we can assert it gets cleared
-      component.serverResult.set({ success: true, strike: 0, optionType: 'call', expirationDate: '', timeToExpiryYears: 0, models: [], error: null });
+      component.serverResult.set({ success: true, strike: 0, optionType: 'call', expirationDate: '', timeToExpiryYears: 0, riskFreeRate: null, models: [], error: null });
 
       const promise = component.runComparison();
       const req = expectGraphQL(httpMock, 'pricingModelComparison');

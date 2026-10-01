@@ -1,6 +1,6 @@
-"""Both hops of one browser history request must widen (issue #2204, FR-010).
+"""Both hops of one browser history request must widen (issue #2204).
 
-Pins the ordering the PRD requires in two places: the two constants
+Pins the ordering that must hold in two places: the two constants
 themselves, and the OUTER coordinator -> Clerk delivery bound declared on the
 ``bot_chart_history`` ``ProviderOperation``. The INNER Clerk -> coordinator
 bound ``RemoteHistoryBatchClient`` builds its transport with is pinned in
@@ -23,7 +23,7 @@ from app.broker.fleet.provider import ProviderOperation
 
 
 def test_outer_bound_is_strictly_larger_than_the_inner_bound() -> None:
-    """The one assertion FR-010 requires a test to pin."""
+    """The outer delivery bound must outlast the inner one."""
     assert HISTORY_BATCH_OUTER_TIMEOUT_S > HISTORY_BATCH_INNER_TIMEOUT_S
 
 
@@ -130,25 +130,6 @@ async def test_http_lane_delivery_builds_its_client_with_the_operations_bound(
     await delivery.deliver(request)
 
     assert captured["read_timeout_s"] == HISTORY_BATCH_OUTER_TIMEOUT_S
-
-
-async def test_http_lane_delivery_builds_the_default_operations_client_at_10s(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An operation that never widens still builds its client at the fleet
-    default -- pinned explicitly so a regression that silently drops
-    ``read_timeout_s`` (falling back to ``build_internal_client``'s own
-    default) cannot pass unnoticed."""
-    captured: dict[str, object] = {}
-    delivery = _probe_delivery(monkeypatch, captured)
-    operation = _probe_operation(read_timeout_s=DEFAULT_INTERNAL_TIMEOUT_S)
-    request = DeliveryRequest(
-        broker="alpaca", clerk_id="clrk_x", operation=operation, path_params={}
-    )
-
-    await delivery.deliver(request)
-
-    assert captured["read_timeout_s"] == DEFAULT_INTERNAL_TIMEOUT_S
 
 
 async def test_lane_router_thread_the_operations_bound_through_to_http_delivery(

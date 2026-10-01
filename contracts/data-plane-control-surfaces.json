@@ -12,7 +12,6 @@
     "/api/accounts",
     "/api/alpaca-clerk-sqlite",
     "/api/broker-clerks",
-    "/api/brokers",
-    "/api/market-data-feed"
+    "/api/brokers"
   ]
 }

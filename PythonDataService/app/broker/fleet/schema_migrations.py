@@ -197,7 +197,7 @@ END;
 
 SCHEMA_DDL_V1 = _SCHEMA_DDL_V1_TEMPLATE.replace("MAX_TIMESTAMP_MS", str(MAX_TIMESTAMP_MS))
 
-# The v1→v2 upgrade (audit 2026-09-13, findings 1/4/7): additive columns on
+# The v1→v2 upgrade (ADR 0062 addendum): additive columns on
 # clerks, sessions and assignments; the approved-endpoint table; and a
 # rebuild of routing_receipts whose v1 outcome CHECK cannot express the
 # four-state attempt vocabulary. The rebuild copies every row — 'failed'

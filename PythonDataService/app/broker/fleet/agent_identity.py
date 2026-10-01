@@ -1,4 +1,4 @@
-"""The serving runtime's identity echo (FR-076, delivery B).
+"""The serving runtime's identity echo (ADR 0062 Decision 5).
 
 The agent answers fleet-addressed requests — the ones the coordinator pins
 with ``X-Fleet-*`` headers — with the identity it actually serves, derived
@@ -41,49 +41,6 @@ SERVED_IDENTITY_STATE_KEY = "fleet_served_identity"
 #: servable unauthenticated — health checks, the qualification router, and
 #: diagnostic reads keep working.
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-
-#: Two POST routes with no coordinator successor (#2069's orphan cleanup,
-#: #2114's stranded-mutation retention): a real coordinator dispatch will
-#: never carry a proven token for either, because no catalog operation
-#: forwards to them. They are the only legitimate way for an operator to
-#: clear a live loss hold or regenerate a missing replay receipt once the
-#: agent's mutation fence is on, so they are exempted from it by name here —
-#: the single place these two routes are named in this module, matched
-#: against the path template FastAPI actually mounted rather than a second
-#: copy of the literal string.
-_STRANDED_OPERATOR_MUTATIONS = frozenset(
-    {
-        ("POST", "/api/brokers/{broker}/live-envelope/loss-hold/clear"),
-        (
-            "POST",
-            "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/{run_id}/replay-receipt",
-        ),
-    }
-)
-
-
-def _template_matches(path_segments: tuple[str, ...], template: str) -> bool:
-    """Whether ``path_segments`` fits ``template``, treating ``{x}`` as a wildcard."""
-    template_segments = tuple(segment for segment in template.split("/") if segment)
-    if len(path_segments) != len(template_segments):
-        return False
-    return all(
-        actual == expected or (expected.startswith("{") and expected.endswith("}"))
-        for actual, expected in zip(path_segments, template_segments, strict=True)
-    )
-
-
-def _is_stranded_operator_mutation(method: str, path: str) -> bool:
-    """Whether this request targets one of the two stranded operator routes.
-
-    Derived from ``_STRANDED_OPERATOR_MUTATIONS`` — the constant is the
-    match, not documentation of one written separately.
-    """
-    segments = tuple(segment for segment in path.split("/") if segment)
-    return any(
-        template_method == method and _template_matches(segments, template_path)
-        for template_method, template_path in _STRANDED_OPERATOR_MUTATIONS
-    )
 
 
 def _served_header_values(identity: Mapping[str, Any]) -> list[tuple[bytes, bytes]]:
@@ -199,7 +156,7 @@ async def _send_refusal(
 
 
 def _unpinned_mutation_refusal() -> BrokerAndClerkRequired:
-    """The FR-070 family a lane agent answers an unpinned mutation with."""
+    """The refusal family a lane agent answers an unpinned mutation with."""
     return BrokerAndClerkRequired(
         "This process serves one clerk lane and accepts mutations only from "
         "the fleet coordinator, which pins the broker and clerk it "
@@ -275,8 +232,7 @@ class FleetIdentityMiddleware:
     lane's contract, not the public API's. A separately deployed lane agent
     may also fence its mutations (``refuse_unpinned_mutations``, #2075): on
     that posture, reads still pass untouched, but a mutation is served only
-    when it is the coordinator's own proven forward, or one of the two
-    stranded operator-recovery routes with no coordinator successor.
+    when it is the coordinator's own proven forward.
     """
 
     def __init__(self, app: Any, *, refuse_unpinned_mutations: bool = False) -> None:
@@ -301,25 +257,24 @@ class FleetIdentityMiddleware:
             await self.app(scope, receive, send)
             return
         method = str(scope.get("method", "GET")).upper()
-        if self._refuse_unpinned_mutations and method in _MUTATING_METHODS:
-            # On a lane agent, a mutation has exactly one legitimate caller:
-            # the coordinator's own proven forward (its service token plus
-            # the broker/clerk pin it always attaches — lane_forward_is_
-            # authorized requires both). Checking only "is a clerk id
-            # present" is not proof of that: a caller who merely knows the
-            # clerk id could pin it without the token, and _pin_mismatch
-            # below treats the broker/epoch/generation pins it then omits as
-            # unconstrained rather than as missing proof, so it would reach
-            # the handler on the browser secret alone (#2075, Codex P1-B on
-            # PR #2115). Authenticate every mutation the same way, before
-            # any pin is even read. The two stranded operator-recovery
-            # routes have no coordinator successor and are exempted by name.
-            path = str(scope.get("path", ""))
-            if not _is_stranded_operator_mutation(
-                method, path
-            ) and not lane_forward_is_authorized(Headers(scope=scope)):
-                await _send_refusal(send, _unpinned_mutation_refusal())
-                return
+        # On a lane agent, a mutation has exactly one legitimate caller:
+        # the coordinator's own proven forward (its service token plus
+        # the broker/clerk pin it always attaches — lane_forward_is_
+        # authorized requires both). Checking only "is a clerk id
+        # present" is not proof of that: a caller who merely knows the
+        # clerk id could pin it without the token, and _pin_mismatch
+        # below treats the broker/epoch/generation pins it then omits as
+        # unconstrained rather than as missing proof, so it would reach
+        # the handler on the browser secret alone (#2075, Codex P1-B on
+        # PR #2115). Authenticate every mutation the same way, before
+        # any pin is even read.
+        if (
+            self._refuse_unpinned_mutations
+            and method in _MUTATING_METHODS
+            and not lane_forward_is_authorized(Headers(scope=scope))
+        ):
+            await _send_refusal(send, _unpinned_mutation_refusal())
+            return
         request_headers = {
             name.decode("latin-1").lower(): value.decode("latin-1")
             for name, value in scope.get("headers", [])

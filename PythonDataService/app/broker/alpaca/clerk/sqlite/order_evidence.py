@@ -4,8 +4,8 @@ The R4 ("never fabricate a terminal outcome") and R7 ("order identity
 resolution by exact ``client_order_id``") discipline applies identically
 whether the order being resolved is an ENTER's own submit or an EXIT's
 cancel-the-entry / submit-the-reducing-order steps — both domain modules
-route through this one gate rather than each keeping its own copy
-(CLAUDE.md guiding-philosophy #5: single source of truth). Nothing here
+route through this one gate rather than each keeping its own copy.
+Nothing here
 decides *when* to call the broker or what to do next; it only records what
 an observed (or absent, or lost) ``BrokerOrder`` snapshot means.
 """
@@ -13,6 +13,7 @@ an observed (or absent, or lost) ``BrokerOrder`` snapshot means.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -21,7 +22,7 @@ from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
     SIMULATED_EXACT_CONFLICT_COPY,
     append_exact_execution_slice,
 )
-from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
+from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON, total_price_conflict_atol
 from app.broker.alpaca.clerk.sqlite.facts import (
     EnterAcceptedFacts,
     ManualOrderCancelResultFacts,
@@ -38,6 +39,7 @@ from app.broker.alpaca.clerk.sqlite.manual_order_completion import (
     manual_order_ending_copy,
     manual_order_has_exact_terminal_coverage,
 )
+from app.broker.alpaca.clerk.sqlite.manual_order_executions import ManualLegExecutionRecovery
 from app.broker.alpaca.clerk.sqlite.manual_order_replacement import (
     MANUAL_ORDER_REPLACED_TRANSITION,
     live_manual_effect,
@@ -75,7 +77,11 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
 from app.broker.contract.errors import BrokerError, BrokerOrderNotPermitted
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
-from app.broker.contract.ports import AuthoritativeSubmissionEvidencePort, BrokerTradePort
+from app.broker.contract.ports import (
+    AuthoritativeSubmissionEvidencePort,
+    BrokerActivityEvidencePort,
+    BrokerTradePort,
+)
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
@@ -93,19 +99,7 @@ def submit_absence_grace_ms() -> int:
     return reason_age_policy(ORDER_OUTCOME_UNKNOWN_REASON_CODE, VoidAfter).grace_ms
 
 
-#: Numerical-rigor tolerance for the #2460 economic price conflict, in
-#: currency units per share. Alpaca publishes price fields at cent precision,
-#: so a same-quantity average-price difference below one cent per share cannot
-#: be distinguished from vendor rounding and raises nothing; a difference at or
-#: above it is a real economic disagreement and is recorded as
-#: ``EXECUTION_PRICE_CONFLICT``. Same $0.01/share basis as the
-#: ``FILL_PRICE_DRIFT`` default in the reconciliation taxonomy
-#: (``.claude/rules/numerical-rigor.md``). See ``docs/references/clerk-invariants.md``.
-TOTAL_PRICE_CONFLICT_ATOL = 0.01
-
-
 __all__ = [
-    "TOTAL_PRICE_CONFLICT_ATOL",
     "UNFILLED_TERMINAL_STATES",
     "BrokerRefusal",
     "broker_refusal",
@@ -434,8 +428,8 @@ def fold_execution_price_conflict(
     refused (``"stale"``) -- a delayed broker frame must neither restate an
     older conflicting price nor clear a newer conflict. A total at least as
     new that agrees again within tolerance drops the order from the episode
-    and ends it when the last order goes. An execution correction clears it
-    the same way once the corrected fills agree with the broker's reported
+    and ends it when the last order goes. A change to the recorded fills
+    clears it the same way once they agree with the broker's reported
     average -- that exit is the sweep's re-derivation,
     :func:`reconcile_execution_price_conflicts`, because a terminal order's
     totals are never re-folded.
@@ -457,7 +451,7 @@ def fold_execution_price_conflict(
     if recorded_qty < FILL_QTY_EPSILON:
         return
     recorded_avg_price = recorded_cost / recorded_qty
-    if abs(order.filled_avg_price - recorded_avg_price) >= TOTAL_PRICE_CONFLICT_ATOL:
+    if abs(order.filled_avg_price - recorded_avg_price) >= total_price_conflict_atol(order.filled_avg_price):
         outcome = raise_execution_price_conflict_uncertainty(
             repo,
             effect=effect,
@@ -519,12 +513,12 @@ def reconcile_execution_price_conflicts(repo: ClerkSqliteRepository) -> int:
     A terminal order's totals stop being re-folded -- the reconciliation
     sweep reads open orders, and the exact-lookup folds end with their
     effects -- so the clear-on-agreeing-total path alone could strand an
-    episode. This gives the issue's second exit its mechanism: when an
-    identified execution correction changed the recorded fills, the
-    corrected effective average is compared against the broker's last
-    reported average (kept in the cause as evidence), and the order drops
-    out of the episode when they now agree within tolerance. Recorded
-    evidence only, no broker I/O; idempotent through the atomic clear.
+    episode. This gives the issue's second exit its mechanism: when the
+    recorded fills change, their effective average is compared against the
+    broker's last reported average (kept in the cause as evidence), and the
+    order drops out of the episode when they now agree within tolerance.
+    Recorded evidence only, no broker I/O; idempotent through the atomic
+    clear.
 
     The clear is compare-and-clear (#2460 review): the sweep passes the
     ``(uncertainty_id, cause)`` it derived from as the expected episode, and
@@ -543,9 +537,8 @@ def reconcile_execution_price_conflicts(repo: ClerkSqliteRepository) -> int:
             if recorded_qty < FILL_QTY_EPSILON:
                 continue
             corrected_avg_price = recorded_cost / recorded_qty
-            if (
-                abs(conflicted.reported_avg_price - corrected_avg_price)
-                >= TOTAL_PRICE_CONFLICT_ATOL
+            if abs(conflicted.reported_avg_price - corrected_avg_price) >= total_price_conflict_atol(
+                conflicted.reported_avg_price
             ):
                 continue
             owning_order = repo.order(conflicted.order_ref)
@@ -566,7 +559,7 @@ def reconcile_execution_price_conflicts(repo: ClerkSqliteRepository) -> int:
                 in {"narrowed", "resolved"}
             ):
                 logger.info(
-                    "Execution correction explained a price conflict; dropping the order",
+                    "Recorded fills now agree with the reported price; dropping the order",
                     extra={
                         "action": "execution_price_conflict_correction_cleared",
                         "order_ref": conflicted.order_ref,
@@ -659,7 +652,9 @@ def _fold_simulated_execution_evidence(
         append_exact_execution_slice(
             repo,
             event=event,
-            order=order,
+            symbol=order.symbol,
+            side=order.side,
+            broker_order_id=order.order_id,
             order_ref=order_ref,
             owner=effect,
             evidence_source="simulated_execution",
@@ -776,6 +771,15 @@ def fold_order_acknowledgement(
                 ).to_facts_json(),
             )
         )
+    # A filled chain head whose exact executions cover its quantity proves
+    # the chain's total, superseding a cumulative that may under-credit it
+    # (#2786), before the completion check reads the exact total.
+    repo.prove_manual_chain_total_coverage(
+        order_ref=order_ref,
+        head_broker_order_id=order.order_id,
+        head_state=order.status,
+        head_quantity=order.quantity,
+    )
     if (
         manual_order_has_exact_terminal_coverage(
             repo,
@@ -1435,6 +1439,7 @@ async def resolve_order_submission(
     order_ref: str,
     trade: BrokerTradePort,
     off_loop: OffLoop | None = None,
+    activities: BrokerActivityEvidencePort | None = None,
 ) -> None:
     """Recover any captured order by its exact client identity.
 
@@ -1445,6 +1450,14 @@ async def resolve_order_submission(
     A manual order Alpaca replaced (#2656) is then followed to its chain
     head by broker id (:func:`follow_manual_replacement_chain`); a head read
     that fails folds this one order uncertain, never the account's pass.
+
+    ``activities`` is the sweep's read port. Before each answer is folded,
+    a live manual leg's chain head records the executions it reports that
+    the leg has no exact record of, read from Alpaca's account activity
+    (:class:`ManualLegExecutionRecovery`, #2686): only exact executions end
+    a filled leg, and a replacement's REST cumulative may leave out its
+    original's fills. Every other order folds as before, and a simulated
+    authority has no broker activity to read.
 
     ``off_loop`` moves each synchronous repository run onto a worker thread
     (#1993); the default keeps the pre-#1993 inline behavior for every
@@ -1521,23 +1534,40 @@ async def resolve_order_submission(
             )
         else:
             simulated_authority = trade_port_folds_simulated_evidence(trade)
-            await guarded(
-                lambda: fold_exact_order_evidence(
-                    repo,
-                    effect_operation_id=effect.effect_operation_id,
+            executions = (
+                None
+                if activities is None or simulated_authority
+                else ManualLegExecutionRecovery(
+                    repo=repo,
+                    broker=broker,
+                    read=activities,
                     order_ref=order_ref,
-                    order=order,
-                    simulated_authority=simulated_authority,
+                    since_ms=order.created_at_ms if order.created_at_ms is not None else 0,
+                    run=guarded,
                 )
             )
+
+            async def _fold(answer: BrokerOrder) -> None:
+                if executions is not None:
+                    await executions.recover(answer)
+                await guarded(
+                    lambda: fold_exact_order_evidence(
+                        repo,
+                        effect_operation_id=effect.effect_operation_id,
+                        order_ref=order_ref,
+                        order=answer,
+                        simulated_authority=simulated_authority,
+                    )
+                )
+
+            await _fold(order)
             head = await follow_manual_replacement_chain(
                 repo,
                 broker=broker,
-                effect_operation_id=effect.effect_operation_id,
                 order_ref=order_ref,
                 observed=order,
                 run=guarded,
-                simulated_authority=simulated_authority,
+                fold=_fold,
             )
             if not isinstance(head, BrokerOrder):
                 head_failed_why = unobserved_chain_head_why(head)
@@ -1601,11 +1631,10 @@ async def follow_manual_replacement_chain(
     repo: ClerkSqliteRepository,
     *,
     broker: ClaimedBrokerIO,
-    effect_operation_id: str,
     order_ref: str,
     observed: BrokerOrder,
     run: OffLoop,
-    simulated_authority: bool = False,
+    fold: Callable[[BrokerOrder], Awaitable[None]],
 ) -> BrokerOrder | BrokerError | None:
     """Fold each later member of a manual leg's chain until its head is the order observed.
 
@@ -1616,7 +1645,8 @@ async def follow_manual_replacement_chain(
     the last answer: the head's observation (``observed`` itself for every
     unreplaced and every bot order), or the error or ``None`` of a head read
     that failed -- which the caller folds as its own uncertainty, never
-    letting it escape the pass.
+    letting it escape the pass. ``fold`` is the caller's own fold, the one
+    it folded ``observed`` with, so every member folds alike.
     """
     last: BrokerOrder = observed
     for _ in range(MAX_REPLACEMENT_HOPS_PER_PASS):
@@ -1628,15 +1658,7 @@ async def follow_manual_replacement_chain(
         answer = await broker.observe_broker_order(head_id)
         if not isinstance(answer, BrokerOrder):
             return answer
-        await run(
-            lambda answer=answer: fold_exact_order_evidence(
-                repo,
-                effect_operation_id=effect_operation_id,
-                order_ref=order_ref,
-                order=answer,
-                simulated_authority=simulated_authority,
-            )
-        )
+        await fold(answer)
         last = answer
     logger.info(
         "A manual order's replacement chain is longer than one pass follows",

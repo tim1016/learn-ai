@@ -5,9 +5,8 @@ the retained browser-direct, unscoped `GET`/`HEAD` read aliases observed by
 Delivery D. It does not retire canonical broker-and-Clerk routes, broaden a
 fleet mutation, alter provider authority, or authorize a Live action.
 
-**Authority:** [ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md),
-the [multi-broker Clerk PRD](../prds/2026-09-12-multi-broker-clerk-control-plane.md),
-and the [Delivery D ownership matrix](../design/fleet-d-runtime-ownership-matrix.md).
+**Authority:** [ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md)
+and the [Delivery D rollout runbook](fleet-d-two-clerk-rollout.md#8-begin-compatibility-observation-before-cutover-and-retain-it).
 Enrollment, retirement of a Clerk, restore, reassignment, endpoint changes, and
 Live arming remain their own host ceremonies.
 

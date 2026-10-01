@@ -6,13 +6,14 @@
  * lockstep with the Python side — the Phase 2a/3a contract says the
  * wire format is the source of truth.
  *
- * Per ``.claude/rules/numerical-rigor.md``, every timestamp on the wire
+ * Every timestamp on the wire
  * is ``int64 ms UTC``. TypeScript can't represent int64 exactly past
  * 2^53, but for our 2026-era timestamps ``number`` is faithful.
  *
  * PR B.5 (2026-05-19) — surface narrowed to what the unified Engine
- * Lab needs: ``startTrustedRun`` request/response and the launcher's
- * error envelope. Inspection / reconciliation / manifest / log-tail
+ * Lab needs: the trusted-run request/response (the run itself is read back
+ * through the jobs framework in ``strategy-lab-runner.service.ts``) and the
+ * launcher's error envelope. Inspection / reconciliation / manifest / log-tail
  * types were removed alongside the ``/lean-lab`` retirement; check git
  * history if a future feature needs to revive any of them.
  */

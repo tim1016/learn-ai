@@ -1,12 +1,9 @@
 """Typed price-normalization contract for option mids feeding the IV solver.
 
-Formula: quality_score = 1 − half_spread / mid (per docs/architecture/iv-ownership-research.md §7.9). Two input regimes: live OPRA NBBO mid=(bid+ask)/2, half_spread=(ask−bid)/2; EOD close synthesis (close proxy, spread estimated).
-Reference: Internal — docs/architecture/iv-ownership-research.md §4.6 (schema rationale) and §7.9 (quality score formula).
+Formula: quality_score = 1 − half_spread / mid. Two input regimes: live OPRA NBBO mid=(bid+ask)/2, half_spread=(ask−bid)/2; EOD close synthesis (close proxy, spread estimated).
+Reference: Internal — no external reference.
 Canonical implementation: app/volatility/price_normalization.py
 Validated against: NONE — pending (schema / contract validation owed)
-
-See ``docs/architecture/iv-ownership-research.md`` §4.6 for the schema and
-§7.9 for the ``quality_score = 1 - half_spread / mid`` rationale.
 
 The system has two real data regimes for option prices:
 
@@ -56,8 +53,7 @@ but indefensible at 10Δ where real spreads are ~1–2% of S. The tiered
 schedule (Nemes-style) bounds the wing-spread bias without needing
 historical NBBO. Default for new synthesis paths going forward;
 ``DEFAULT_HALF_SPREAD_RULE`` (flat 0.5%·S) is preserved for the SPY
-2024-12-20 golden fixture so its reconstructions stay byte-identical.
-See ``docs/architecture/iv-research-chat-notes.md (pruned 2026-09-12, git history)`` §5.5."""
+2024-12-20 golden fixture so its reconstructions stay byte-identical."""
 
 
 def tiered_moneyness_half_spread(

@@ -31,15 +31,10 @@ Reference:
     Standard FIFO inventory method (GAAP / IFRS).  No external software port —
     well-known accounting arithmetic.  See Kieso, Weygandt & Warfield,
     *Intermediate Accounting* (17e), Chapter 8 (Inventories: Measurement).
-    Prior registry entry (canonical-in-dotnet-justified, closed 2026-05-06,
-    per finding F-0010): ``Backend/Services/Implementation/PositionEngine.cs``.
-    That instance accounts over EF/Postgres lots; **this implementation** is a
-    NEW Python canonical for broker-v2 bots whose fills live in the Alpaca
-    order journal, NOT in Postgres.  The two instances are parallel, not
-    duplicates: they operate on different data stores with different consumers
-    (portfolio-engine vs. bot-panel) and are NOT expected to net to the same
-    numbers (different scope, different fills).  This file is the canonical
-    implementation for the broker-v2 bot-panel P&L path.
+    The .NET FIFO engine over EF/Postgres lots (``PositionEngine.cs``) was
+    removed with the Portfolio page (#2756).  This file is the canonical
+    implementation for the broker-v2 bot-panel P&L path, whose fills live in
+    the Alpaca order journal.
     Validated against:
         PythonDataService/tests/broker/alpaca/clerk/test_fifo_pnl.py
         (hand-derived fixtures at atol=1e-9 for float views; an exact

@@ -3,7 +3,7 @@
 ``et_when_words`` is the one author of backend copy that names a day and
 minute in ET: a bot's end, the Start window's next open, the Deploy exit
 steps, the end-sale alert. The words are display-only: never stored, parsed
-back, or compared; the value stays ``int64 ms UTC`` (temporal-rigor.md).
+back, or compared; the value stays ``int64 ms UTC``.
 
 They live in their own module, outside ``session_anchors.py`` and
 ``timestamps.py``, because those two are hashed — into every Sweep / Grid

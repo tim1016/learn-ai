@@ -85,9 +85,6 @@ export class IndicatorVerdictHeroComponent {
     const v = this.verdict();
     return (v.screensPassed / v.screensTotal) * this.gaugeVisible;
   });
-  readonly gaugeOffset = computed(
-    () => this.gaugeCircumference - this.gaugeVisible
-  );
 
   /** Pre-formatted percent strings derived from the raw [0, 1] fractions
    *  on the analysis. Earlier we glued ``%`` onto the raw fraction

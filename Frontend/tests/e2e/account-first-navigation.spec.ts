@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page, type Route } from '@playwright/test';
 
 import type { BrokerAccountSnapshot } from '../../src/app/api/alpaca.types';
@@ -525,8 +526,15 @@ test.describe('Account-first Alpaca navigation', () => {
     await installFleetBoundary(page);
 
     // Standing nowhere near an account: a pill has no tab to keep, so it
-    // opens the account's own Home.
+    // opens the account's own Home. Data Lab is one of the pages that used to
+    // nest a second <main> in the shell's; AXE runs here once the route has
+    // rendered, every rule, so the landmark rules see the real shell (#2689).
     await page.goto('/data-lab');
+    await expect(page.getByRole('heading', { name: 'Data Lab', level: 1 })).toBeVisible();
+    const axe = await new AxeBuilder({ page }).analyze();
+    expect(
+      axe.violations.map(({ id, nodes }) => `${id}: ${nodes.map((node) => node.target.join(' ')).join(' | ')}`),
+    ).toEqual([]);
     await accountPill(page, 'Live').click();
 
     await expect(page).toHaveURL(LIVE_WORKSPACE);

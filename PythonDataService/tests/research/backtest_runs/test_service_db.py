@@ -83,28 +83,6 @@ async def test_an_engine_run_with_a_group_leaves_no_verdict_until_its_companion_
     assert await repo.get_parity_verdict(conn, group) is None
 
 
-async def test_marking_a_group_failed_through_the_service_transitions_only_a_pending_verdict(conn, unique: str) -> None:
-    group = f"pg-{unique}"
-    left = _saved_id(
-        await service.persist_run_payload(
-            _certificate_engine_payload(unique, parity_group_id=group, requested_engine="both")
-        )
-    )
-    await asyncio.to_thread(
-        service.record_parity_disposition_sync,
-        parity_group_id=group,
-        left_run_id=left,
-        status="unavailable",
-        verdict_json="{}",
-    )
-
-    await asyncio.to_thread(
-        service.mark_parity_failed_sync, group, status="run_failed", detail="LEAN exited with code 1"
-    )
-
-    assert (await repo.get_parity_verdict(conn, group)).status == "unavailable"  # already terminal: untouched
-
-
 async def test_a_companion_that_produced_no_result_settles_its_group_at_run_failed(conn, unique: str) -> None:
     """#1977: the group used to sit at ``pending`` for ever and the report polled it for ever."""
     group = f"pg-{unique}"

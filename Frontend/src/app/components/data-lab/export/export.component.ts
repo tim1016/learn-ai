@@ -26,13 +26,13 @@ import { ExportColumnPickerComponent } from './export-column-picker/export-colum
 import { columnsForPayload } from './export-csv-options';
 
 /**
- * Data Lab Build dataset (PRD §7.4).
+ * Data Lab Build dataset.
  *
- * NEVER mounts DataLabChartComponent and never calls the chart endpoint
- * (FR-004). The recipe is a progressive four-section form over the shared
+ * NEVER mounts DataLabChartComponent and never calls the chart endpoint.
+ * The recipe is a progressive four-section form over the shared
  * workspace state; columns/sessions/estimates come from the Python plan
- * receipt rendered verbatim (FR-012); generation goes through
- * `RunSessionService.start()` — the ONLY submission path (FR-005).
+ * receipt rendered verbatim; generation goes through
+ * `RunSessionService.start()` — the ONLY submission path.
  * The plan re-runs by itself whenever the recipe changes, so the
  * dataset.csv column picker always lists the current columns (owner
  * decision 2026-09-19).
@@ -76,7 +76,8 @@ export class ExportComponent {
   readonly optIncludeVega = signal(true);
   readonly optIncludeRho = signal(false);
   readonly optIncludeDiscontinuity = signal(true);
-  readonly optRiskFreeRate = signal(0.05);
+  /** Empty sends no rate, so Python solves IV and Greeks at its one default (#2764). */
+  readonly optRiskFreeRate = signal<number | null>(null);
   readonly optDividendYield = signal(0.0);
 
   // ── Plan receipt ──────────────────────────────────────────
@@ -97,8 +98,9 @@ export class ExportComponent {
 
   /** The stored receipt describes a recipe that no longer matches the live
    *  workspace (ticker/window/timeframe/indicators/options changed after the
-   *  plan ran). Its counts must not read as current in §4 — the template
-   *  labels the receipt stale until the automatic re-plan lands. */
+   *  plan ran). Its counts must not read as current in the Review and
+   *  generate section — the template labels the receipt stale until the
+   *  automatic re-plan lands. */
   readonly planReceiptStale = computed(() => {
     if (!this.planReceipt()) return false;
     const stored = this.store.datasetPlanReceiptSignature();
@@ -115,7 +117,7 @@ export class ExportComponent {
   readonly generateError = signal('');
 
   /** A run is active (fetching or bundling) — a second generate is
-   *  disabled meanwhile (PRD §16); cancellation stays available via the
+   *  disabled meanwhile; cancellation stays available via the
    *  shell-owned RunDock across routes. */
   readonly runActive = computed(
     () =>
@@ -175,6 +177,7 @@ export class ExportComponent {
   });
 
   private buildOptionsConfig(): OptionsCompanionWireConfig {
+    const riskFreeRate = this.optRiskFreeRate();
     return {
       enabled: this.store.companions().optionsCompanionEnabled,
       strikes_each_side: this.optionsStrikesEachSide(),
@@ -192,7 +195,7 @@ export class ExportComponent {
       include_vega: this.optIncludeVega(),
       include_rho: this.optIncludeRho(),
       include_discontinuity: this.optIncludeDiscontinuity(),
-      risk_free_rate: this.optRiskFreeRate(),
+      ...(riskFreeRate === null ? {} : { risk_free_rate: riskFreeRate }),
       dividend_yield: this.optDividendYield(),
     };
   }
@@ -247,7 +250,7 @@ export class ExportComponent {
     }
   }
 
-  /** The ONLY submission path (FR-005). */
+  /** The ONLY submission path. */
   async generate(): Promise<void> {
     if (this.generateBlocked()) return;
     const input = this.recipeInput();
@@ -304,11 +307,19 @@ export class ExportComponent {
     if (Number.isFinite(value) && value >= 0) this.optionsDteDistance.set(Math.floor(value));
   }
 
-  onRateInput(target: 'riskFree' | 'dividendYield', event: Event): void {
+  onRiskFreeRateInput(event: Event): void {
+    const raw = (event.target as HTMLInputElement).value;
+    if (raw.trim() === '') {
+      this.optRiskFreeRate.set(null);
+      return;
+    }
+    const value = Number(raw);
+    if (Number.isFinite(value)) this.optRiskFreeRate.set(value);
+  }
+
+  onDividendYieldInput(event: Event): void {
     const value = Number((event.target as HTMLInputElement).value);
-    if (!Number.isFinite(value)) return;
-    if (target === 'riskFree') this.optRiskFreeRate.set(value);
-    else this.optDividendYield.set(value);
+    if (Number.isFinite(value)) this.optDividendYield.set(value);
   }
 
   onOptionsFlagToggle(key: OptionsFlagKey, event: Event): void {

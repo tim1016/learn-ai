@@ -1,4 +1,4 @@
-"""Broker-qualified account assignment fencing (PRD §9.6, ADR 0062 Decisions 3–4).
+"""Broker-qualified account assignment fencing (ADR 0062 Decisions 3–4).
 
 Every invariant that makes the fence a fence: provider-qualified uniqueness,
 no expiry into takeover, monotonic generations, transactional updates, and
@@ -140,8 +140,8 @@ def test_reserve_for_the_same_owner_is_idempotent(control_dir: Path, fleet_servi
     first = _reserved(fleet_service, "fake_alpha", lane.clerk_id, "acct-i")
     again = _reserved(fleet_service, "fake_alpha", lane.clerk_id, "acct-i")
     assert first == again
-    # The same-owner resume of an *effective* assignment (audit 2026-09-13,
-    # finding 1): a restarted clerk re-runs its reservation step and gets its
+    # The same-owner resume of an *effective* assignment (ADR 0062
+    # addendum, item 1): a restarted clerk re-runs its reservation step and gets its
     # confirmed facts back untouched, never a refusal.
     fleet_service.register_agent_session(fleet_protocol_version=2, clerk_id=lane.clerk_id, worker_key=lane.worker_key)
     session = fleet_service._store.read_session(lane.clerk_id)
@@ -220,7 +220,7 @@ def test_confirm_refuses_a_rival_and_a_released_assignment(
             routing_epoch=rival_session.routing_epoch,
         )
     # A session-less clerk cannot confirm anything at all: there is no worker
-    # to have acknowledged the binding (FR-064's gate, on the write path).
+    # to have acknowledged the binding (the confirmation gate, on the write path).
     third = provision_lane(fleet_service, broker="fake_alpha", label="third", tmp_path=control_dir.parent)
     _reserved(fleet_service, "fake_alpha", third.clerk_id, "acct-t")
     from app.broker.fleet.errors import ClerkUnreachable

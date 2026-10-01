@@ -46,7 +46,7 @@ def test_a_lane_volume_without_a_marker_refuses_by_name(tmp_path: Path) -> None:
 
 
 def test_a_volume_marker_instant_outside_the_admissible_range_is_refused() -> None:
-    """Every persisted ``*_ms`` field declares the domain ceiling (temporal-rigor.md)."""
+    """Every persisted ``*_ms`` field declares the domain ceiling (ADR 0022 (g))."""
     fields = {
         "marker_version": 1,
         "broker": "alpaca",

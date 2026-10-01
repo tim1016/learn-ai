@@ -439,7 +439,7 @@ def materialize_engine_run(
     simply fewer bars: the run proceeded, the series had a hole in it, and
     the reported numbers looked exactly like numbers from a complete series.
     The lake refuses instead, naming the sessions. That is the posture
-    ``.claude/rules/numerical-rigor.md`` already takes everywhere else --
+    the repo already takes everywhere else --
     "if two series have different timestamps, that is data telling you
     something, do not silence it" -- applied to the one place it was not.
 

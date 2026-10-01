@@ -27,7 +27,7 @@ import pytest
 import respx
 
 from app.config import settings
-from app.data_lake import catalog_client
+from app.data_lake import catalog_client, root_identity
 from app.data_lake.types import ArtifactRecord
 from app.lean_sidecar import config as sidecar_config
 
@@ -243,7 +243,11 @@ class FakeCatalog:
             identity.price_adjustment_mode,
         )
 
-    async def claim_minute_bar(self, identity, worker_id, lease_ttl_ms, data_contract_hash, file_path) -> int | None:
+    async def claim_minute_bar(
+        self, identity, worker_id, lease_ttl_ms, data_contract_hash, file_path, provider_params=None
+    ) -> int | None:
+        # ``provider_params`` is the importer's audit trail (#1832); no reader
+        # decides anything from it, so the fake accepts it without storing it.
         return self._claim(
             self._minute_key(identity), self._identity_row(identity, data_contract_hash, file_path), worker_id, lease_ttl_ms
         )
@@ -282,7 +286,7 @@ class FakeCatalog:
 
     async def select_coverage_minute_bars(
         self, market, symbol, data_type, start_trading_date, end_trading_date, *, price_adjustment_mode,
-        include_previously_published=False,
+        data_root_id=None, include_previously_published=False,
     ) -> list[ArtifactRecord]:
         # Mode is a required filter in the real query (#1832): two modes can
         # coexist for one (market, symbol, date, data_type), and a fake that
@@ -297,11 +301,14 @@ class FakeCatalog:
                 return True
             return start_trading_date <= trading_date <= end_trading_date
 
+        # Root-scoped like the real query: an omitted root is the active one (#1876).
+        root_id = data_root_id if data_root_id is not None else root_identity.active_root_id()
         return [
             self._record(row)
             for row in self.rows.values()
             if row["artifact_kind"] == "time_series_bars"
             and row["resolution"] == "minute"
+            and row["data_root_id"] == root_id
             and row["market"] == market
             and row["symbol"] == symbol
             and row["data_type"] == data_type

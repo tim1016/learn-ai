@@ -40,6 +40,7 @@ from app.data_lake.bar_validation import (
     assert_publishable_minute_bars,
     assert_publishable_stored_minute_bars,
 )
+from app.data_lake.cache_import import import_minute_trade_dch
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.derived_daily import (
     MinuteBarReadError,
@@ -93,6 +94,7 @@ from app.data_lake.types import (
     PriceAdjustmentMode,
     classify_overall_status,
 )
+from app.engine.live.identity import confine_path_to_root
 
 logger = logging.getLogger(__name__)
 
@@ -467,6 +469,20 @@ def _cache_matches(row: ArtifactRecord, dch: str, lake_root: Path, version: str 
         return False  # Missing/invalid evidence is rebuilt, never blessed in place.
 
 
+def _minute_trade_cache_matches(row: ArtifactRecord, dch: str, lake_root: Path, version: str | None) -> bool:
+    """:func:`_cache_matches`, plus a raw day the lean-cache import committed.
+
+    An imported raw day is the same Polygon recipe as a live fetch; its data
+    contract hash differs only to record that it was imported. Reusing it is
+    what the import is for (#1839), and #2454's version pinning was never to
+    touch raw data (#2660). An adjusted import records no corporate-action
+    version, so it still rebuilds.
+    """
+    if version is None and row.data_contract_hash == import_minute_trade_dch(adjusted=False):
+        return True
+    return _cache_matches(row, dch, lake_root, version)
+
+
 async def _cached_bars_still_valid(cached: ArtifactRecord, spec: DataRunSpec) -> bool:
     """Does a contract-matching cache hit still hold contract-valid bars?
 
@@ -592,8 +608,9 @@ async def _process_minute_trade_artifact(
         )
         if existing:
             cached = existing[0]
-            if _cache_matches(cached, dch, resolve_lake_root(spec.price_adjustment_mode), adjustment_version) \
-                    and await _cached_bars_still_valid(cached, spec):
+            if _minute_trade_cache_matches(
+                cached, dch, resolve_lake_root(spec.price_adjustment_mode), adjustment_version
+            ) and await _cached_bars_still_valid(cached, spec):
                 return cached, None, True
             prior = await catalog_client.refresh_complete_artifact(
                 artifact_id=cached.id, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS,
@@ -1746,9 +1763,10 @@ def _publish_action_snapshot(spec: DataRunSpec, symbol: str, snapshot: Corporate
     payload = snapshot.payload()
     current_path = current_snapshot_path(symbol)
     history_path = current_path.parent / symbol.lower() / f"{snapshot.version}.json"
-    if not (lake_root / history_path).exists():
+    if not confine_path_to_root(lake_root / history_path, lake_root, label="adjustment history").exists():
         atomic_write_and_promote(payload, lake_root, staging_root, history_path, spec.request_id, _WORKER_ID, 1)
-    if (lake_root / current_path).exists() and (lake_root / current_path).read_bytes() == payload:
+    current_file = confine_path_to_root(lake_root / current_path, lake_root, label="adjustment snapshot")
+    if current_file.exists() and current_file.read_bytes() == payload:
         return
     atomic_write_and_promote(payload, lake_root, staging_root, current_path, spec.request_id, _WORKER_ID, 1)
 

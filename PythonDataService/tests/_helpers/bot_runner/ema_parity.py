@@ -79,8 +79,8 @@ def _ema_signal_evaluation_id(bar_close_ms: int, *, symbol: str = "SPY") -> str:
     SHA-256 of the canonical JSON of program version, settings, and bar-close
     clock) from the real registered strategy -- not a hand-typed guess at the
     hash bytes. Proves ``decision_id`` really is the deterministic per-bar
-    Signal Program identity the PRD requires (``decision_id = evaluation_id``,
-    issue #1728 / PRD section 16), rather than merely echoing whatever the
+    Signal Program identity ADR 0043 decision 5 requires
+    (``decision_id = evaluation_id``, issue #1728), rather than merely echoing whatever the
     current build happens to emit.
     """
     registration = _STRATEGY_REGISTRY["ema_crossover_signal"]

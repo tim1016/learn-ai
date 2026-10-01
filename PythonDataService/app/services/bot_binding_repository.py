@@ -39,6 +39,7 @@ from app.schemas.exit_terms import ExitTerms
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import ParameterOrigin, SealedBotProgram
 from app.services.bot_carryover import configuration_hash
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,6 @@ RUNS_DIRECTORY = "runs"
 RUN_OUTCOMES_DIRECTORY = "run_outcomes"
 RUN_BUILD_EVIDENCE_DIRECTORY = "program_build_evidence"
 SEALED_PROGRAM_FILENAME = "sealed_program_v2.json"
-LEGACY_MIGRATION_LINEAGE_FILENAME = "legacy_migration_lineage.json"
 _RUN_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
 
 
@@ -215,7 +215,7 @@ class ProgramBuildRunEvidence(BaseModel):
     golden_trace_root: str = Field(pattern=r"^[0-9a-f]{64}$")
     running_artifact_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     qualification_receipt_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    verified_at_ms: int = Field(ge=0)
+    verified_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     # The wiring half of the build proof (#1735), recorded so a frozen run
     # replays the verdict it actually ran under instead of an unknown (#1828).
     # A schema_version 1 record has none and defaults here; that default is a
@@ -251,22 +251,6 @@ class ProgramBuildRunEvidence(BaseModel):
         return self.model_dump(exclude=NON_IDENTITY_EVIDENCE_FIELDS)
 
 
-class LegacyMigrationLineageRecord(BaseModel):
-    """Read-only historical evidence from the removed legacy clone workflow.
-
-    The original and clone identity bytes remain untouched. Fresh deployment
-    never appends a seal or constructs a successor from this lineage record.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: Literal[1] = 1
-    strategy_instance_id: str
-    migrated_from_strategy_instance_id: str
-    reason: str = Field(min_length=1, max_length=512)
-    created_at_ms: int = Field(ge=0)
-
-
 class CurrentRunBinding(BaseModel):
     """Replaceable pointer to the newest run bound to one instance."""
 
@@ -288,7 +272,7 @@ class BotRunOutcomeRecord(BaseModel):
     run_id: str = Field(pattern=_RUN_ID_PATTERN)
     kind: BotDutyOutcomeKind
     reason_code: str = Field(min_length=1, max_length=128)
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     crash_diagnostic: BotCrashDiagnostic | None = None
     # #1729 AC10: the Clerk-proved canary rollback verdict for this exact
     # Stop, when one was computed. See ``BotDutyOutcome.canary_rollback``.
@@ -524,19 +508,6 @@ class BotBindingRepository:
         ):
             raise ValueError("program-build evidence belongs to another run identity")
         return evidence
-
-    def read_legacy_migration_lineage(
-        self,
-        strategy_instance_id: str,
-    ) -> LegacyMigrationLineageRecord | None:
-        """Return this instance's clone lineage evidence, when it exists."""
-        path = self._instance_dir_for(strategy_instance_id) / LEGACY_MIGRATION_LINEAGE_FILENAME
-        if not path.is_file():
-            return None
-        record = LegacyMigrationLineageRecord.model_validate_json(path.read_text(encoding="utf-8"))
-        if record.strategy_instance_id != strategy_instance_id:
-            raise ValueError("migration lineage evidence belongs to another strategy instance")
-        return record
 
     def _migrate_legacy_binding(self, instance_dir: Path) -> None:
         """Replay-safe normalization when a later launch needs legacy history."""

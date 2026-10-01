@@ -5,32 +5,25 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 
 from app.models.requests import (
-    MarketMoversRequest,
     OptionsChainSnapshotRequest,
     StockSnapshotRequest,
-    StockSnapshotsRequest,
-    UnifiedSnapshotRequest,
 )
 from app.models.responses import (
     DaySnapshot,
     GreeksSnapshot,
     LastQuoteSnapshot,
     LastTradeSnapshot,
-    MarketMoversResponse,
     MinuteBar,
     OptionsChainSnapshotResponse,
     OptionsContractSnapshotItem,
     SnapshotBar,
     StockSnapshotResponse,
-    StockSnapshotsResponse,
     StockTickerSnapshot,
     UnderlyingSnapshot,
-    UnifiedSnapshotItem,
-    UnifiedSnapshotResponse,
-    UnifiedSnapshotSession,
 )
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import get_rate_and_dividend
+from app.utils.session_anchors import calendar_days_to_expiry
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -83,37 +76,26 @@ async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
         logger.info(f"[Snapshot] Returning {len(contracts)} contracts for {request.underlying_ticker}")
 
         # Source live r and q for callers (pricing-lab, strategy-builder, etc.).
-        # Best-effort: failures fall back to the FRED 0.043 default and q=0
-        # without breaking the snapshot payload.
-        risk_free_rate: float | None = None
-        dividend_yield: float | None = None
-        rate_source: str | None = None
-        dividend_source: str | None = None
-        spot = underlying.price if underlying and underlying.price else None
-        if spot and spot > 0:
-            try:
-                rd = get_rate_and_dividend(
-                    ticker=request.underlying_ticker,
-                    spot_price=spot,
-                    polygon=polygon_client,
-                    dte_days=30,
-                )
-                risk_free_rate = rd.rate
-                dividend_yield = rd.dividend_yield
-                rate_source = rd.source_rate
-                dividend_source = rd.source_dividend
-            except Exception as exc:
-                logger.warning("[Snapshot] rate/dividend lookup failed: %s", exc)
+        # The rate always resolves, so the pricing pages never invent their
+        # own; the dividend is best-effort (#2764). The rate is the requested
+        # expiry's tenor, on the DTE the strategy analysis prices over; with
+        # no expiry, the IV30 convention's 30 days (#2789).
+        rd = get_rate_and_dividend(
+            ticker=request.underlying_ticker,
+            spot_price=underlying.price or 0.0,
+            polygon=polygon_client,
+            dte_days=calendar_days_to_expiry(request.expiration_date) if request.expiration_date else 30,
+        )
 
         return OptionsChainSnapshotResponse(
             success=True,
             underlying=underlying,
             contracts=contracts,
             count=len(contracts),
-            risk_free_rate=risk_free_rate,
-            dividend_yield=dividend_yield,
-            rate_source=rate_source,
-            dividend_source=dividend_source,
+            risk_free_rate=rd.rate,
+            dividend_yield=rd.dividend_yield,
+            rate_source=rd.source_rate,
+            dividend_source=rd.source_dividend,
         )
 
     except Exception as e:
@@ -155,77 +137,4 @@ async def get_stock_snapshot(request: StockSnapshotRequest):
         logger.error(f"[Snapshot] Error fetching ticker snapshot: {e!s}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch stock snapshot: {e!s}"
-        )
-
-
-@router.post("/market", response_model=StockSnapshotsResponse)
-async def get_stock_snapshots(request: StockSnapshotsRequest):
-    """Fetch snapshots for multiple stock tickers (or all tickers if none specified)."""
-    try:
-        ticker_label = ",".join(request.tickers) if request.tickers else "all"
-        logger.info(f"[Snapshot] Market snapshot request: {ticker_label}")
-
-        results = polygon_client.get_stock_snapshots(request.tickers)
-        snapshots = [_build_ticker_snapshot(r) for r in results]
-
-        logger.info(f"[Snapshot] Returning {len(snapshots)} market snapshots")
-        return StockSnapshotsResponse(success=True, snapshots=snapshots, count=len(snapshots))
-
-    except Exception as e:
-        logger.error(f"[Snapshot] Error fetching market snapshots: {e!s}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch market snapshots: {e!s}"
-        )
-
-
-@router.post("/movers", response_model=MarketMoversResponse)
-async def get_market_movers(request: MarketMoversRequest):
-    """Fetch top market movers — gainers or losers."""
-    try:
-        logger.info(f"[Snapshot] Market movers request: {request.direction}")
-
-        results = polygon_client.get_market_movers(request.direction)
-        tickers = [_build_ticker_snapshot(r) for r in results]
-
-        logger.info(f"[Snapshot] Returning {len(tickers)} {request.direction}")
-        return MarketMoversResponse(success=True, tickers=tickers, count=len(tickers))
-
-    except Exception as e:
-        logger.error(f"[Snapshot] Error fetching market movers: {e!s}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch market movers: {e!s}"
-        )
-
-
-@router.post("/unified", response_model=UnifiedSnapshotResponse)
-async def get_unified_snapshots(request: UnifiedSnapshotRequest):
-    """Fetch unified v3 snapshots with flexible ticker filtering."""
-    try:
-        logger.info(f"[Snapshot] Unified snapshot request: tickers={request.tickers}, limit={request.limit}")
-
-        results = polygon_client.get_unified_snapshots(
-            tickers=request.tickers,
-            limit=request.limit,
-        )
-
-        items = []
-        for r in results:
-            session_data = r.get("session")
-            items.append(
-                UnifiedSnapshotItem(
-                    ticker=r.get("ticker"),
-                    type=r.get("type"),
-                    market_status=r.get("market_status"),
-                    name=r.get("name"),
-                    session=UnifiedSnapshotSession(**session_data) if session_data else None,
-                )
-            )
-
-        logger.info(f"[Snapshot] Returning {len(items)} unified snapshots")
-        return UnifiedSnapshotResponse(success=True, results=items, count=len(items))
-
-    except Exception as e:
-        logger.error(f"[Snapshot] Error fetching unified snapshots: {e!s}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch unified snapshots: {e!s}"
         )

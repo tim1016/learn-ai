@@ -121,8 +121,3 @@ export function movesForBlocker(blocker: OperatorBlocker): readonly OperatorMove
   if (blocker.disposition === 'wait') return [];
   return blocker.primary_move ? [blocker.primary_move, ...secondaryMoves] : secondaryMoves;
 }
-
-export interface DeployPreflightResponse {
-  ready: boolean;
-  blockers: OperatorBlocker[];
-}

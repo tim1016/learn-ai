@@ -41,19 +41,4 @@ describe('ValidationStagePlaceholderComponent', () => {
     expect(screen.queryByText('EXIT')).toBeNull();
     expect(screen.getByText('Next bar open')).toBeTruthy();
   });
-
-  it('names the decision-minute open rather than calling every other mode the next open (#2599)', async () => {
-    await render(ValidationStagePlaceholderComponent, {
-      inputs: {
-        symbol: 'SPY',
-        resolution: 'minute',
-        fillMode: 'decision_minute_open',
-        engine: 'python',
-      },
-      providers: [provideZonelessChangeDetection()],
-    });
-
-    expect(screen.getByText('Decision minute open')).toBeTruthy();
-    expect(screen.queryByText('Next bar open')).toBeNull();
-  });
 });

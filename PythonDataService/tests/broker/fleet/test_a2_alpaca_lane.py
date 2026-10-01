@@ -1,6 +1,6 @@
 """Delivery A2: one Alpaca lane end-to-end through the fleet protocol.
 
-The exit evidence the audit's delivery table demands, as tests: the Alpaca
+The exit evidence for the A2 lane delivery, as tests: the Alpaca
 adapter and its catalog; the internal fleet surface with two-factor
 authentication; both presence transports (the remote one over a real
 socket); the confirmation evidence and the offline rule; the agent boot
@@ -147,24 +147,6 @@ def _served_context(*, account_id: str | None, capability: str):
     )
 
 
-def test_the_composition_registry_maps_alpaca_and_nothing_else() -> None:
-    """The app-level composition is the only production registry, Alpaca-only."""
-    adapters = production_provider_adapters()
-    assert set(adapters) == {"alpaca"}
-    assert adapters["alpaca"].provider_id == "alpaca"
-
-
-def test_live_verdict_declares_configuration_access_not_execution_readiness() -> None:
-    """#2140: EXECUTION readiness would refuse routing to an unactivated lane
-    before its refusal reason was ever reached (see ``resolve_route``'s
-    docstring, ``app/broker/fleet/service.py``). Asserted directly against
-    the declared operation, not indirectly through a request that happens to
-    pass for an already-bound lane -- a passing request for a bound lane
-    would still pass under ``EXECUTION`` too, and could not catch this
-    readiness regressing."""
-    assert _alpaca_operation("live_verdict").readiness is OperationReadiness.CONFIGURATION_ACCESS
-
-
 async def test_live_verdict_stays_routable_for_an_activation_required_lane(
     control_dir: Path, clock: FrozenClock
 ) -> None:
@@ -258,7 +240,7 @@ class _CoordinatorApp:
 
 
 #: The agent's own served identity — what its runtime actually is, never a
-#: reflection of what the caller pinned (audit 2026-09-13, finding 7).
+#: reflection of what the caller pinned.
 AGENT_BROKER = "alpaca"
 AGENT_CLERK_ID = "clrk_testagent00000000000000aa"
 AGENT_EPOCH = 4
@@ -1439,7 +1421,7 @@ async def test_close_fleet_lane_stops_the_heartbeat(
 async def test_serve_lane_presence_installs_the_identity_echo_and_starts_the_beat_without_a_binding(
     control_dir: Path, clock: FrozenClock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The echo belongs to the lane, exactly as the beat does (FR-076).
+    """The echo belongs to the lane, exactly as the beat does.
 
     The identity echo used to be installed inside the binding branch, so the
     four paths that install no binding left an open, heartbeating lane
@@ -1840,7 +1822,7 @@ async def test_a_refused_beat_re_confirms_its_granted_binding_under_the_replacem
         # re-confirmed is ready, not starting.
         assert _directory_entry(service, boot.clerk_id)["lifecycle_state"] == "ready"
         # The durable evidence names the session that confirmed, as it does at
-        # boot — the next FR-066 offline recovery reads it as fact.
+        # boot — the next offline recovery reads it as fact.
         evidence = read_confirmation_evidence(root)
         assert evidence is not None
         assert evidence.agent_instance_id == boot.session.agent_instance_id
@@ -2324,7 +2306,7 @@ async def test_confirm_binding_records_the_session_it_confirmed_even_if_the_lane
     ``confirm_binding`` awaits the coordinator, and a refused beat during that
     await re-registers the lane — replacing ``boot.session`` under it. Reading
     the session a second time for the evidence would write an instance id and
-    epoch the coordinator never saw, and the next boot's FR-066 recovery reads
+    epoch the coordinator never saw, and the next boot's offline recovery reads
     that evidence as fact.
     """
     from app.broker.alpaca.clerk.fleet_boot import (
@@ -2399,7 +2381,7 @@ async def test_confirm_binding_records_the_session_it_confirmed_even_if_the_lane
 async def test_an_offline_coordinator_boots_only_the_evidence_confirmed_tuple(
     control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """FR-066: offline boot matches only the exact confirmed tuple."""
+    """Offline boot (ADR 0062 Decision 7) matches only the exact confirmed tuple."""
     service = FleetControlService(
         store=FleetRegistryStore.open(control_dir=control_dir),
         provider_adapters=production_provider_adapters(),
@@ -2466,7 +2448,7 @@ async def test_an_offline_coordinator_boots_only_the_evidence_confirmed_tuple(
 async def test_a_reachable_coordinator_that_refuses_expectation_boots_offline_too(
     control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """FR-066 also covers a refusal that carries no fleet reason code.
+    """Offline boot also covers a refusal that carries no fleet reason code.
 
     Distinct from ``test_an_offline_coordinator_boots_only_the_evidence_confirmed_tuple``
     above: that test dials a dead port and never gets a response at all. Here
@@ -2856,8 +2838,9 @@ def test_the_router_surface_follows_the_role(
     """Combined keeps today's surface; the coordinator is narrowly bounded.
 
     Delivery B gives the coordinator the clerk-scoped routing surface under
-    ``/api/brokers/{broker}/clerks/…``. Delivery D adds exactly two retained
-    read aliases; the unscoped agent families stay on clerk-agent processes.
+    ``/api/brokers/{broker}/clerks/…``. Delivery D adds exactly one retained
+    read alias (``panel-profile``); the unscoped agent families stay on
+    clerk-agent processes.
     """
     paths = _route_paths_for_role(role)
     unscoped_broker_paths = {
@@ -2871,10 +2854,7 @@ def test_the_router_surface_follows_the_role(
         sorted(paths)[:5],
     )
     if role == "fleet_coordinator":
-        assert unscoped_broker_paths == {
-            "/api/brokers/{broker}/live-verdict",
-            "/api/brokers/{broker}/panel-profile",
-        }
+        assert unscoped_broker_paths == {"/api/brokers/{broker}/panel-profile"}
     has_internal = any(path.startswith("/internal/fleet") for path in paths)
     assert has_internal is expect_internal
     if role == "fleet_coordinator":
@@ -2884,7 +2864,7 @@ def test_the_router_surface_follows_the_role(
             path.startswith("/api/brokers/{broker}/clerks") for path in paths
         ) is False  # no control dir in this probe: nothing mounts
     # The data-plane core is the coordinator's: an agent serves none of it
-    # (review finding 1 — the gate exists and the probe proves it).
+    # (the gate exists and the probe proves it).
     has_core = any(path.startswith("/api/engine") or path.startswith("/api/research") for path in paths)
     assert has_core == (role != "clerk_agent"), (role, sorted(paths)[:5])
 
@@ -2925,7 +2905,7 @@ def test_the_coordinator_surface_appears_with_a_control_directory() -> None:
         paths = set(json.loads(completed.stdout.strip().splitlines()[-1]))
         assert any(path.startswith("/internal/fleet") for path in paths)
         # The coordinator owns the clerk-scoped routing surface plus exactly
-        # two D compatibility reads; agent families remain private.
+        # one D compatibility read (panel-profile); agent families remain private.
         brokers_paths = {
             path for path in paths if path.startswith("/api/brokers")
         }
@@ -2935,10 +2915,7 @@ def test_the_coordinator_surface_appears_with_a_control_directory() -> None:
             for path in brokers_paths
             if not path.startswith("/api/brokers/{broker}/clerks")
         }
-        assert unscoped == {
-            "/api/brokers/{broker}/live-verdict",
-            "/api/brokers/{broker}/panel-profile",
-        }
+        assert unscoped == {"/api/brokers/{broker}/panel-profile"}
 
 
 def _volume_with_effective_tuple(tmp_path: Path, *, binding_generation: int = 0) -> Path:

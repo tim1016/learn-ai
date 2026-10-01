@@ -1,13 +1,11 @@
 """Reproducibility manifest writer.
 
-Per ``docs/architecture/lean-sidecar-lab.md`` §"Reproducibility manifest",
 ``manifest.json`` records every input that can affect the run's output so
 that a normalized result can be replayed (or detected as un-replayable)
 later. Anything that changes the manifest hash set invalidates existing
 reconciliation fixtures derived from it.
 
-Every timestamp written here is ``int64 ms UTC``. Per
-``.claude/rules/numerical-rigor.md`` §"Timestamp rigor", no
+Every timestamp written here is ``int64 ms UTC``; no
 ``datetime``/``DateTime``/ISO string crosses this boundary.
 """
 
@@ -89,9 +87,9 @@ def sha256_text(text: str) -> str:
 # Manifest fields
 # ---------------------------------------------------------------------------
 #
-# Field names mirror the ADR's bullet list under §"Reproducibility
-# manifest" so that "what is in the manifest" is grep-able against the
-# authority doc.
+# ADR 0070 decision 8 names the policy fields the manifest records:
+# adjustment, normalization, fill-forward, brokerage and the market-hours /
+# symbol-properties databases.
 
 
 DataAdjustmentPolicy = Literal[
@@ -236,7 +234,8 @@ class RunManifest:
     limits: Mapping[str, Any]
     parameters: Mapping[str, Any]
 
-    # Windows — recorded independently per §"Date-window and bar-consumption"
+    # Windows — requested, staged and effective are recorded independently
+    # (ADR 0070 decision 8)
     requested_window_ms: WindowMs
     input_snapshot_sha256: str
     comparison_contract_id: str | None = None
@@ -244,7 +243,7 @@ class RunManifest:
     staged_data_window_ms: WindowMs | None = None
     effective_algorithm_window_ms: WindowMs | None = None
 
-    # Consumption proof per §"Date-window and bar-consumption"
+    # Consumption proof: bars LEAN actually consumed per symbol (ADR 0070 decision 8)
     bars_consumed_by_symbol: Mapping[str, int] = field(default_factory=dict)
 
     # Convenience index of every staged zip keyed by workspace-relative

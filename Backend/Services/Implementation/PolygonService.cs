@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Backend.Configuration;
 using Backend.Models.DTOs.PolygonResponses;
 using Backend.Services.Interfaces;
@@ -19,6 +20,13 @@ public class PolygonService : IPolygonService
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+    };
+
+    // A pricing request omits an absent risk-free rate rather than sending
+    // null, so Python fills its one default (#2764).
+    private static readonly JsonSerializerOptions _omitNullRequestOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
     public PolygonService(
@@ -173,284 +181,12 @@ public class PolygonService : IPolygonService
         }
     }
 
-    public async Task<StockSnapshotsResponse> FetchStockSnapshotsAsync(
-        List<string>? tickers = null,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            _logger.LogInformation("[Snapshot] Fetching stock snapshots for {Tickers}",
-                tickers != null ? string.Join(",", tickers) : "all");
-
-            var request = new { tickers };
-            var response = await _httpClient.PostAsJsonAsync(
-                "/api/snapshot/market", request, cancellationToken);
-
-            response.EnsureSuccessStatusCode();
-
-            var result = await response.Content.ReadFromJsonAsync<StockSnapshotsResponse>(
-                _jsonOptions, cancellationToken);
-
-            if (result == null)
-                throw new HttpRequestException("Received null response from Python service for stock snapshots");
-
-            _logger.LogInformation("[Snapshot] Fetched {Count} stock snapshots", result.Count);
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[Snapshot] Error fetching stock snapshots");
-            throw;
-        }
-    }
-
-    public async Task<MarketMoversResponse> FetchMarketMoversAsync(
-        string direction,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            _logger.LogInformation("[Snapshot] Fetching market movers: {Direction}", direction);
-
-            var request = new { direction };
-            var response = await _httpClient.PostAsJsonAsync(
-                "/api/snapshot/movers", request, cancellationToken);
-
-            response.EnsureSuccessStatusCode();
-
-            var result = await response.Content.ReadFromJsonAsync<MarketMoversResponse>(
-                _jsonOptions, cancellationToken);
-
-            if (result == null)
-                throw new HttpRequestException("Received null response from Python service for market movers");
-
-            _logger.LogInformation("[Snapshot] Fetched {Count} {Direction}", result.Count, direction);
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[Snapshot] Error fetching market movers ({Direction})", direction);
-            throw;
-        }
-    }
-
-    public async Task<UnifiedSnapshotResponse> FetchUnifiedSnapshotAsync(
-        List<string>? tickers = null,
-        int limit = 10,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            _logger.LogInformation("[Snapshot] Fetching unified snapshots: tickers={Tickers}, limit={Limit}",
-                tickers != null ? string.Join(",", tickers) : "none", limit);
-
-            var request = new { tickers, limit };
-            var response = await _httpClient.PostAsJsonAsync(
-                "/api/snapshot/unified", request, cancellationToken);
-
-            response.EnsureSuccessStatusCode();
-
-            var result = await response.Content.ReadFromJsonAsync<UnifiedSnapshotResponse>(
-                _jsonOptions, cancellationToken);
-
-            if (result == null)
-                throw new HttpRequestException("Received null response from Python service for unified snapshots");
-
-            _logger.LogInformation("[Snapshot] Fetched {Count} unified snapshots", result.Count);
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[Snapshot] Error fetching unified snapshots");
-            throw;
-        }
-    }
-
-    public async Task<TickerListResponse> FetchTickerListAsync(
-        List<string> tickers,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            _logger.LogInformation("[Tickers] Fetching ticker list for {Count} tickers", tickers.Count);
-
-            var request = new { tickers };
-            var response = await _httpClient.PostAsJsonAsync(
-                "/api/tickers/list", request, cancellationToken);
-
-            response.EnsureSuccessStatusCode();
-
-            var result = await response.Content.ReadFromJsonAsync<TickerListResponse>(
-                _jsonOptions, cancellationToken);
-
-            if (result == null)
-                throw new HttpRequestException("Received null response from Python service for ticker list");
-
-            _logger.LogInformation("[Tickers] Fetched {Count} tickers", result.Count);
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[Tickers] Error fetching ticker list");
-            throw;
-        }
-    }
-
-    public async Task<TickerDetailResponse> FetchTickerDetailsAsync(
-        string ticker,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            _logger.LogInformation("[Tickers] Fetching details for {Ticker}", ticker);
-
-            var request = new { ticker };
-            var response = await _httpClient.PostAsJsonAsync(
-                "/api/tickers/details", request, cancellationToken);
-
-            response.EnsureSuccessStatusCode();
-
-            var result = await response.Content.ReadFromJsonAsync<TickerDetailResponse>(
-                _jsonOptions, cancellationToken);
-
-            if (result == null)
-                throw new HttpRequestException("Received null response from Python service for ticker details");
-
-            _logger.LogInformation("[Tickers] Fetched details for {Ticker}", ticker);
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[Tickers] Error fetching details for {Ticker}", ticker);
-            throw;
-        }
-    }
-
-    public async Task<RelatedTickersResponse> FetchRelatedTickersAsync(
-        string ticker,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            _logger.LogInformation("[Tickers] Fetching related companies for {Ticker}", ticker);
-
-            var request = new { ticker };
-            var response = await _httpClient.PostAsJsonAsync(
-                "/api/tickers/related", request, cancellationToken);
-
-            response.EnsureSuccessStatusCode();
-
-            var result = await response.Content.ReadFromJsonAsync<RelatedTickersResponse>(
-                _jsonOptions, cancellationToken);
-
-            if (result == null)
-                throw new HttpRequestException("Received null response from Python service for related tickers");
-
-            _logger.LogInformation("[Tickers] Fetched {Count} related companies for {Ticker}",
-                result.Related.Count, ticker);
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[Tickers] Error fetching related companies for {Ticker}", ticker);
-            throw;
-        }
-    }
-
-    public async Task<PortfolioScenarioResponseDto> PortfolioScenarioAsync(
-        long asOfMs,
-        decimal spotPrice,
-        List<PortfolioScenarioPositionDto> positions,
-        PortfolioScenarioGridDto? grid = null,
-        decimal riskFreeRate = 0.043m,
-        decimal dividendYield = 0m,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            grid ??= new PortfolioScenarioGridDto();
-
-            var request = new
-            {
-                as_of_ms = asOfMs,
-                spot_price = spotPrice,
-                risk_free_rate = riskFreeRate,
-                dividend_yield = dividendYield,
-                positions = positions.Select(p => p.Instrument == "option"
-                    ? (object)new
-                    {
-                        instrument = "option",
-                        symbol = p.Symbol,
-                        option_type = p.OptionType,
-                        strike = p.Strike,
-                        expiration_ms = p.ExpirationMs,
-                        quantity = p.Quantity,
-                        multiplier = p.Multiplier ?? 100m,
-                        entry_price = p.EntryPrice,
-                        current_iv = p.CurrentIv,
-                        leg_id = p.LegId,
-                    }
-                    : new
-                    {
-                        instrument = "stock",
-                        symbol = p.Symbol,
-                        quantity = p.Quantity,
-                        entry_price = p.EntryPrice,
-                        leg_id = p.LegId,
-                    }),
-                grid = new
-                {
-                    spot_shocks = grid.SpotShocks,
-                    time_shifts_days = grid.TimeShiftsDays,
-                    iv_shifts = grid.IvShifts,
-                },
-            };
-
-            _logger.LogInformation(
-                "[Portfolio] Scenario for {Symbol}: {PositionCount} positions, {Points} grid points",
-                positions.FirstOrDefault()?.Symbol ?? "?",
-                positions.Count,
-                grid.SpotShocks.Count * grid.TimeShiftsDays.Count * grid.IvShifts.Count);
-
-            var response = await _httpClient.PostAsJsonAsync(
-                "/api/portfolio/scenario", request, cancellationToken);
-
-            response.EnsureSuccessStatusCode();
-
-            var result = await response.Content.ReadFromJsonAsync<PortfolioScenarioResponseDto>(
-                _jsonOptions, cancellationToken);
-
-            if (result == null)
-                throw new HttpRequestException("Received null response from Python /api/portfolio/scenario");
-
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[Portfolio] Error running scenario");
-            throw;
-        }
-    }
-
-    public Task<PortfolioScenarioResponseDto> PortfolioLiveGreeksAsync(
-        long asOfMs,
-        decimal spotPrice,
-        List<PortfolioScenarioPositionDto> positions,
-        decimal riskFreeRate = 0.043m,
-        decimal dividendYield = 0m,
-        CancellationToken cancellationToken = default)
-    {
-        // Live Greeks = scenario with the default 1×1×1 grid (current state only).
-        return PortfolioScenarioAsync(
-            asOfMs, spotPrice, positions, grid: null, riskFreeRate, dividendYield, cancellationToken);
-    }
-
     public async Task<StrategyAnalyzeResponseDto> AnalyzeOptionsStrategyAsync(
         string symbol,
         List<StrategyLegInput> legs,
         string expirationDate,
         decimal spotPrice,
-        decimal riskFreeRate = 0.043m,
+        decimal? riskFreeRate = null,
         StrategyAnalyzeOptions? options = null,
         CancellationToken cancellationToken = default)
     {
@@ -488,7 +224,7 @@ public class PolygonService : IPolygonService
             };
 
             var response = await _httpClient.PostAsJsonAsync(
-                "/api/strategy/analyze", request, cancellationToken);
+                "/api/strategy/analyze", request, _omitNullRequestOptions, cancellationToken);
 
             response.EnsureSuccessStatusCode();
 
@@ -507,65 +243,6 @@ public class PolygonService : IPolygonService
         catch (Exception ex)
         {
             _logger.LogError(ex, "[Strategy] Error analyzing strategy for {Symbol}", symbol);
-            throw;
-        }
-    }
-
-    public async Task<OptionsContractsResponse> FetchOptionsContractsAsync(
-        string underlyingTicker,
-        string? asOfDate = null,
-        string? contractType = null,
-        decimal? strikePriceGte = null,
-        decimal? strikePriceLte = null,
-        string? expirationDate = null,
-        string? expirationDateGte = null,
-        string? expirationDateLte = null,
-        int limit = 100,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            _logger.LogInformation(
-                "Fetching options contracts for {Underlying}, asOf={AsOf}, type={Type}, strike=[{Gte},{Lte}]",
-                underlyingTicker, asOfDate, contractType, strikePriceGte, strikePriceLte);
-
-            var request = new
-            {
-                underlying_ticker = underlyingTicker,
-                as_of_date = asOfDate,
-                contract_type = contractType,
-                strike_price_gte = strikePriceGte,
-                strike_price_lte = strikePriceLte,
-                expiration_date = expirationDate,
-                expiration_date_gte = expirationDateGte,
-                expiration_date_lte = expirationDateLte,
-                limit
-            };
-
-            var response = await _httpClient.PostAsJsonAsync(
-                "/api/options/contracts",
-                request,
-                cancellationToken);
-
-            response.EnsureSuccessStatusCode();
-
-            var result = await response.Content.ReadFromJsonAsync<OptionsContractsResponse>(
-                _jsonOptions, cancellationToken);
-
-            if (result == null)
-            {
-                throw new HttpRequestException("Received null response from Python service for options contracts");
-            }
-
-            _logger.LogInformation(
-                "Fetched {Count} options contracts for {Underlying}",
-                result.Count, underlyingTicker);
-
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error fetching options contracts for {Underlying}", underlyingTicker);
             throw;
         }
     }
@@ -619,60 +296,10 @@ public class PolygonService : IPolygonService
         }
     }
 
-    public async Task<TradeResponse> FetchTradesAsync(
-        string ticker,
-        string? timestamp = null,
-        int limit = 50000,
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            _logger.LogInformation("Fetching trades for {Ticker}", ticker);
-
-            var request = new
-            {
-                ticker,
-                timestamp,
-                limit
-            };
-
-            var response = await _httpClient.PostAsJsonAsync(
-                "/api/trades/fetch",
-                request,
-                cancellationToken);
-
-            response.EnsureSuccessStatusCode();
-
-            var result = await response.Content.ReadFromJsonAsync<TradeResponse>(
-                _jsonOptions, cancellationToken);
-
-            if (result == null)
-            {
-                throw new HttpRequestException("Received null response from Python service");
-            }
-
-            if (!result.Success)
-            {
-                throw new HttpRequestException($"Python service returned error: {result.Error}");
-            }
-
-            _logger.LogInformation(
-                "Successfully fetched {Count} trades for {Ticker}",
-                result.Summary?.CleanedCount ?? 0, ticker);
-
-            return result;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error fetching trades for {Ticker}", ticker);
-            throw;
-        }
-    }
-
     public async Task<QuantLibPriceResponse> QuantLibPriceAsync(
         decimal spot,
         decimal strike,
-        decimal riskFreeRate,
+        decimal? riskFreeRate,
         decimal volatility,
         string expirationDate,
         string optionType,
@@ -691,7 +318,7 @@ public class PolygonService : IPolygonService
             {
                 spot = (double)spot,
                 strike = (double)strike,
-                risk_free_rate = (double)riskFreeRate,
+                risk_free_rate = (double?)riskFreeRate,
                 volatility = (double)volatility,
                 expiration_date = expirationDate,
                 option_type = optionType,
@@ -701,7 +328,7 @@ public class PolygonService : IPolygonService
             };
 
             var response = await _httpClient.PostAsJsonAsync(
-                "/api/quantlib/price", request, cancellationToken);
+                "/api/quantlib/price", request, _omitNullRequestOptions, cancellationToken);
             response.EnsureSuccessStatusCode();
 
             var result = await response.Content.ReadFromJsonAsync<QuantLibPriceResponse>(
@@ -716,84 +343,13 @@ public class PolygonService : IPolygonService
         }
     }
 
-    public async Task<QuantLibStrategyResponse> QuantLibStrategyAsync(
-        decimal spot,
-        List<StrategyLegInput> legs,
-        string expirationDate,
-        decimal riskFreeRate = 0.05m,
-        string? evaluationDate = null,
-        decimal dividendYield = 0m,
-        string engine = "analytic_bs",
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            _logger.LogInformation(
-                "[QuantLib] Pricing {LegCount}-leg strategy at S={Spot} engine={Engine}",
-                legs.Count, spot, engine);
-
-            var request = new
-            {
-                spot = (double)spot,
-                legs = legs.Select(l => new
-                {
-                    strike = (double)l.Strike,
-                    option_type = l.OptionType,
-                    position = l.Position,
-                    iv = (double)l.Iv,
-                    premium = (double)l.Premium,
-                    quantity = l.Quantity,
-                    expiration_date = expirationDate,
-                }),
-                risk_free_rate = (double)riskFreeRate,
-                evaluation_date = evaluationDate,
-                dividend_yield = (double)dividendYield,
-                engine,
-            };
-
-            var response = await _httpClient.PostAsJsonAsync(
-                "/api/quantlib/strategy", request, cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            var result = await response.Content.ReadFromJsonAsync<QuantLibStrategyResponse>(
-                _jsonOptions, cancellationToken);
-
-            return result ?? throw new HttpRequestException("Null response from QuantLib strategy endpoint");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[QuantLib] Error pricing strategy");
-            throw;
-        }
-    }
-
-    public async Task<QuantLibStatusResponse> QuantLibStatusAsync(
-        CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            var response = await _httpClient.GetAsync("/api/quantlib/status", cancellationToken);
-            response.EnsureSuccessStatusCode();
-
-            var result = await response.Content.ReadFromJsonAsync<QuantLibStatusResponse>(
-                _jsonOptions, cancellationToken);
-
-            return result ?? throw new HttpRequestException("Null response from QuantLib status endpoint");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "[QuantLib] Error checking status");
-            return new QuantLibStatusResponse { Available = false, Engines = [] };
-        }
-    }
-
     public async Task<PricingCompareResponse> PricingCompareAsync(
         decimal spot,
         decimal strike,
         decimal volatility,
         string expirationDate,
         string optionType,
-        decimal riskFreeRate = 0.05m,
+        decimal? riskFreeRate = null,
         decimal dividendYield = 0m,
         string? evaluationDate = null,
         decimal? spotMin = null,
@@ -814,7 +370,7 @@ public class PolygonService : IPolygonService
                 volatility = (double)volatility,
                 expiration_date = expirationDate,
                 option_type = optionType,
-                risk_free_rate = (double)riskFreeRate,
+                risk_free_rate = (double?)riskFreeRate,
                 dividend_yield = (double)dividendYield,
                 evaluation_date = evaluationDate,
                 spot_min = spotMin.HasValue ? (double?)spotMin.Value : null,
@@ -823,7 +379,7 @@ public class PolygonService : IPolygonService
             };
 
             var response = await _httpClient.PostAsJsonAsync(
-                "/api/quantlib/compare", request, cancellationToken);
+                "/api/quantlib/compare", request, _omitNullRequestOptions, cancellationToken);
             response.EnsureSuccessStatusCode();
 
             var result = await response.Content.ReadFromJsonAsync<PricingCompareResponse>(
@@ -837,6 +393,4 @@ public class PolygonService : IPolygonService
             throw;
         }
     }
-
-    public HttpClient GetHttpClient() => _httpClient;
 }

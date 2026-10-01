@@ -1,4 +1,4 @@
-// Explore headlines section (PRD §11) — collapsed by default, lazy fetch.
+// Explore headlines section — collapsed by default, lazy fetch.
 @use '../../../../styles/tokens' as *;
 
 :host {
@@ -19,6 +19,9 @@
   gap: 0.5rem;
   min-width: 0;
   margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: normal;
 }
 
 .explore__news-toggle {

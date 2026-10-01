@@ -25,7 +25,7 @@ podman exec -w /app polygon-data-service python -m \
 
 ## Tolerance
 `atol=1e-9, rtol=0` for the regression test. Regenerate only with
-justification in `docs/references/supertrend.md`.
+justification in the commit message.
 
 ## Files
 - `input.csv` — OHLC bars

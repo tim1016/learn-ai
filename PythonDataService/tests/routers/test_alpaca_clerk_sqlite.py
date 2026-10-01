@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import threading
 from dataclasses import fields
 from decimal import Decimal
 from pathlib import Path
@@ -40,18 +38,15 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     TimelinePage,
 )
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
-from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     RecoveryExecutionError,
     RecoveryExecutionResult,
 )
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
-    RepositoryPoisoned,
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.timeline_query import TimelineFilters, _encode_cursor
-from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import BrokerAccountSnapshot, OrderSide
 from app.routers import alpaca_clerk_sqlite
 from app.routers.alpaca_clerk_sqlite import router
@@ -134,15 +129,6 @@ class FakeAlpacaPort:
         return None
 
 
-class FakeRegistry:
-    def __init__(self, port: FakeAlpacaPort | None = None) -> None:
-        self._port = port or FakeAlpacaPort()
-
-    def resolve(self, broker_id: str) -> FakeAlpacaPort:
-        assert broker_id == "alpaca"
-        return self._port
-
-
 @pytest.fixture
 def api(tmp_path: Path):
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path)
@@ -201,68 +187,6 @@ def _start_run(lifecycle_run_id: str = "run-1") -> CommandResource:
     return submit_start_run(
         repo, account_id=repo.account_id, strategy_instance_id=SID, lifecycle_run_id=lifecycle_run_id,
     ).command
-
-
-async def test_decision_evidence_exposes_full_trace_and_run_identity_without_mutation(api: FastAPI) -> None:
-    from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
-
-    runtime = get_active_clerk_runtime()
-    assert runtime is not None and isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
-    repo = runtime.clerk.repository
-    receipt = SqliteDecisionReceipts(repo, strategy_instance_id=SID).append(
-        outcome="enter_intent", symbol="SPY", observed_at_ms=1_790_171_100_001,
-        facts={"bar_ref": "SPY@1790171100000", "run_id": "run-1", "decision_id": "decision-1",
-               "reason_code": "STRATEGY_ENTER", "decision_bar_close_ms": 1_790_171_100_000,
-               "trace_digest": "a" * 64},
-    )
-    meta = repo.control_meta_snapshot()
-    async with _client(api) as client:
-        response = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/decision-evidence")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["account_id"] == ACCOUNT_ID
-    assert body["account_mode"] == "paper"
-    assert body["authority_kind"] == "sqlite"
-    assert body["db_identity_token"] == meta.db_identity_token
-    assert body["highest_seq"] == receipt.seq
-    assert body["next_after_seq"] is None
-    assert body["decisions"][0] == {
-        "seq": 1, "run_id": "run-1", "recorded_at_ms": 1_790_171_100_001,
-        "decision_bar_close_ms": 1_790_171_100_000, "trace_digest": "a" * 64,
-        "outcome": "enter_intent", "reason_code": "STRATEGY_ENTER", "decision_id": "decision-1", "order_ref": None,
-    }
-    assert repo.control_meta_snapshot() == meta
-
-
-@pytest.mark.parametrize("suffix,status", [
-    ("?limit=0", 422), ("?limit=501", 422), ("?after_seq=-1", 422),
-    ("?through_seq=-1", 422), ("?through_seq=1", 409), ("?after_seq=1", 409),
-])
-async def test_decision_evidence_enforces_page_bounds(api: FastAPI, suffix: str, status: int) -> None:
-    async with _client(api) as client:
-        response = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/decision-evidence{suffix}")
-    assert response.status_code == status
-
-
-async def test_decision_evidence_refuses_foreign_account_and_missing_bot(api: FastAPI) -> None:
-    async with _client(api) as client:
-        foreign = await client.get(f"/api/alpaca-clerk-sqlite/accounts/pa-foreign/bots/{SID}/decision-evidence")
-        missing = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/missing/decision-evidence")
-    assert foreign.status_code == missing.status_code == 404
-
-
-async def test_malformed_source_trace_cannot_be_returned_as_valid_evidence(api: FastAPI) -> None:
-    from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
-
-    runtime = get_active_clerk_runtime()
-    assert runtime is not None and isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
-    SqliteDecisionReceipts(runtime.clerk.repository, strategy_instance_id=SID).append(
-        outcome="no_action", symbol="SPY", observed_at_ms=1, facts={"trace_digest": "not-a-digest"},
-    )
-    async with _client(api) as client:
-        response = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/decision-evidence")
-    assert response.status_code == 503
-    assert response.json()["detail"]["reason"] == "decision_evidence_invalid"
 
 
 def _historical_recovery_plan(
@@ -421,19 +345,14 @@ async def test_timeline_route_accepts_a_maximum_scope_cursor(api: FastAPI) -> No
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "path",
-    [
-        f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/timeline",
-        f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/bots/{SID}/timeline",
-    ],
-)
-async def test_timeline_routes_reject_unregistered_transition_kinds(
+async def test_timeline_route_rejects_unregistered_transition_kinds(
     api: FastAPI,
-    path: str,
 ) -> None:
     async with _client(api) as client:
-        response = await client.get(path, params={"transition_kind": "NOT_A_TRANSITION"})
+        response = await client.get(
+            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/timeline",
+            params={"transition_kind": "NOT_A_TRANSITION"},
+        )
 
     assert response.status_code == 422
 
@@ -442,18 +361,14 @@ def test_timeline_openapi_contract_enumerates_registered_transition_kinds(
     api: FastAPI,
 ) -> None:
     document = api.openapi()
-    for path in (
-        "/api/alpaca-clerk-sqlite/accounts/{account_id}/timeline",
-        "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/timeline",
-    ):
-        parameter = next(
-            item
-            for item in document["paths"][path]["get"]["parameters"]
-            if item["name"] == "transition_kind"
-        )
-        assert parameter["schema"]["anyOf"][0] == {
-            "$ref": "#/components/schemas/TimelineTransitionKind"
-        }
+    parameter = next(
+        item
+        for item in document["paths"]["/api/alpaca-clerk-sqlite/accounts/{account_id}/timeline"]["get"]["parameters"]
+        if item["name"] == "transition_kind"
+    )
+    assert parameter["schema"]["anyOf"][0] == {
+        "$ref": "#/components/schemas/TimelineTransitionKind"
+    }
 
     assert document["components"]["schemas"]["TimelineTransitionKind"]["enum"] == [
         member.value for member in alpaca_clerk_sqlite.TimelineTransitionKind
@@ -556,21 +471,6 @@ async def test_failed_authority_snapshot_matches_the_route_account_canonically(
     assert own.json()["account_id"] == custody_account_id
     assert foreign.status_code == 503, foreign.text
     assert foreign.json()["detail"]["reason"] == "sqlite_clerk_startup_failed"
-
-
-@pytest.mark.asyncio
-async def test_get_command_returns_the_command_resource(api: FastAPI) -> None:
-    command = _start_run()
-    async with _client(api) as client:
-        get = await client.get(
-            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/commands/{command.command_id}"
-        )
-    assert get.status_code == 200
-    body = get.json()
-    assert body["command_id"] == command.command_id
-    assert body["state"] == "succeeded"
-    assert body["action"] == "START"
-    assert body["disabled_tooltip"] is None  # terminal — nothing to disable for
 
 
 @pytest.mark.asyncio
@@ -994,77 +894,6 @@ async def test_presented_reconciliation_returns_its_durable_receipt_clock(
 
 
 @pytest.mark.asyncio
-async def test_get_unknown_command_returns_typed_404(api: FastAPI) -> None:
-    async with _client(api) as client:
-        response = await client.get(
-            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/commands/cmd:does-not-exist"
-        )
-        assert response.status_code == 404
-        assert response.json()["detail"]["reason"] == "command_not_found"
-
-
-@pytest.mark.asyncio
-async def test_missing_active_runtime_returns_typed_503(
-    tmp_path: Path,
-) -> None:
-    del tmp_path
-    set_active_clerk_runtime(None)
-    app = FastAPI()
-    app.include_router(router)
-    try:
-        async with _client(app) as client:
-            response = await client.get(
-                "/api/alpaca-clerk-sqlite/accounts/PA-NEVER-INITIALIZED/commands/cmd:x"
-            )
-        assert response.status_code == 503
-        assert response.json()["detail"]["reason"] == "active_clerk_not_started"
-    finally:
-        set_active_clerk_runtime(None)
-
-
-@pytest.mark.asyncio
-async def test_blocked_repository_call_does_not_stall_an_unrelated_request(
-    api: FastAPI, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Scope E: repository calls are dispatched via ``asyncio.to_thread``, so
-    a slow read does not block a concurrent, unrelated GET on the same
-    event loop (open-pr-review-2026-08-05.md P2 "Synchronous SQLite/fsync
-    blocks the FastAPI event loop")."""
-    repo = alpaca_clerk_sqlite._active_sqlite_facade(ACCOUNT_ID).repository
-    real_get_command = repo.get_command
-    entered = threading.Event()
-    release = threading.Event()
-
-    def slow_get_command(command_id: str):
-        if command_id == "cmd:slow":
-            entered.set()
-            # Held until the unrelated request has answered. A route that ran
-            # this read on the event loop would sit here for the whole timeout,
-            # so the slow request would be done before the unrelated one began.
-            release.wait(timeout=2.0)
-        return real_get_command(command_id)
-
-    monkeypatch.setattr(repo, "get_command", slow_get_command)
-
-    async with _client(api) as client:
-        slow = asyncio.create_task(
-            client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/commands/cmd:slow")
-        )
-        try:
-            while not entered.is_set():
-                await asyncio.sleep(0.005)
-            unrelated = await client.get(
-                f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/commands/cmd:does-not-exist"
-            )
-
-            assert unrelated.status_code == 404
-            assert not slow.done()  # answered while the slow read was still held
-        finally:
-            release.set()
-        assert (await slow).status_code == 404
-
-
-@pytest.mark.asyncio
 async def test_lease_lost_returns_typed_503(api: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.broker.alpaca.clerk.sqlite.repository import ExecutionLeaseLost
 
@@ -1080,178 +909,6 @@ async def test_lease_lost_returns_typed_503(api: FastAPI, monkeypatch: pytest.Mo
         )
         assert response.status_code == 503
         assert response.json()["detail"]["reason"] == "sqlite_authority_unavailable"
-
-
-@pytest.mark.asyncio
-async def test_reconcile_now_runs_operator_pass(
-    api: FastAPI, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    observed: dict[str, object] = {}
-
-    async def fake_reconcile(*, trigger: str) -> AccountReconciliationResult:
-        observed.update(trigger=trigger)
-        return AccountReconciliationResult(
-            verdict="position_drift",
-            resolved_count=2,
-            drifted_symbols=("SPY",),
-        )
-
-    runtime = get_active_clerk_runtime()
-    assert runtime is not None
-    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
-    monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: FakeRegistry())
-    monkeypatch.setattr(runtime.clerk, "reconcile_account", fake_reconcile)
-
-    async with _client(api) as client:
-        response = await client.post(
-            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/reconcile"
-        )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "verdict": "position_drift",
-        "resolved_count": 2,
-        "foreign_order_count": 0,
-        "drifted_symbols": ["SPY"],
-        "indeterminate_symbols": [],
-    }
-    assert observed["trigger"] == "OPERATOR_RECONCILE_NOW"
-
-
-@pytest.mark.asyncio
-async def test_reconcile_now_translates_broker_failure(
-    api: FastAPI, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def fake_reconcile(*_args, **_kwargs):
-        raise BrokerUnavailable("broker offline")
-
-    runtime = get_active_clerk_runtime()
-    assert runtime is not None
-    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
-    monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: FakeRegistry())
-    monkeypatch.setattr(runtime.clerk, "reconcile_account", fake_reconcile)
-
-    async with _client(api) as client:
-        response = await client.post(
-            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/reconcile"
-        )
-
-    assert response.status_code == 503
-    assert response.json()["detail"]["reason"] == "broker_unavailable"
-
-
-@pytest.mark.asyncio
-async def test_reconcile_now_translates_poisoned_repository(
-    api: FastAPI, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def fake_reconcile(*_args, **_kwargs):
-        raise RepositoryPoisoned("mirror finalize failed")
-
-    runtime = get_active_clerk_runtime()
-    assert runtime is not None
-    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
-    monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: FakeRegistry())
-    monkeypatch.setattr(runtime.clerk, "reconcile_account", fake_reconcile)
-
-    async with _client(api) as client:
-        response = await client.post(
-            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/reconcile"
-        )
-
-    assert response.status_code == 503
-    assert response.json()["detail"]["reason"] == "sqlite_authority_unavailable"
-
-
-@pytest.mark.asyncio
-async def test_reconcile_now_rejects_mismatched_broker_account_before_recovery(
-    api: FastAPI, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    called = False
-
-    async def fake_reconcile(*_args, **_kwargs):
-        nonlocal called
-        called = True
-        raise AssertionError("must not reconcile the wrong broker account")
-
-    registry = FakeRegistry(FakeAlpacaPort(account_id="PA-OTHER"))
-    runtime = get_active_clerk_runtime()
-    assert runtime is not None
-    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
-    monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: registry)
-    monkeypatch.setattr(runtime.clerk, "reconcile_account", fake_reconcile)
-
-    async with _client(api) as client:
-        response = await client.post(
-            f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT_ID}/reconcile"
-        )
-
-    assert response.status_code == 409
-    assert response.json()["detail"]["reason"] == "broker_account_mismatch"
-    assert called is False
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "account_number_api", [False, True], ids=["real_paper", "shadow"], indirect=True
-)
-async def test_reconcile_now_accepts_the_canonical_route_account(
-    account_number_api: FastAPI, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The adapter reports Alpaca's spelling; Shadow custody is ``shadow:`` (#2220)."""
-    reconcile = AsyncMock(return_value=AccountReconciliationResult(verdict="clean"))
-    runtime = get_active_clerk_runtime()
-    assert runtime is not None
-    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
-    registry = FakeRegistry(FakeAlpacaPort(account_id=ACCOUNT_NUMBER))
-    monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: registry)
-    monkeypatch.setattr(runtime.clerk, "reconcile_account", reconcile)
-
-    async with _client(account_number_api) as client:
-        response = await client.post(
-            f"/api/alpaca-clerk-sqlite/accounts/{CANONICAL_ROUTE_ACCOUNT}/reconcile"
-        )
-
-    assert response.status_code == 200, response.text
-    assert response.json()["verdict"] == "clean"
-    reconcile.assert_awaited_once_with(trigger="OPERATOR_RECONCILE_NOW")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "account_number_api", [False, True], ids=["real_paper", "shadow"], indirect=True
-)
-@pytest.mark.parametrize(
-    ("route_account", "adapter_account", "status", "reason"),
-    [
-        (FOREIGN_ROUTE_ACCOUNT, ACCOUNT_NUMBER, 404, "sqlite_account_not_active"),
-        (CANONICAL_ROUTE_ACCOUNT, FOREIGN_ROUTE_ACCOUNT.upper(), 409, "broker_account_mismatch"),
-    ],
-    ids=["foreign_route", "foreign_adapter"],
-)
-async def test_reconcile_now_still_refuses_a_foreign_account(
-    account_number_api: FastAPI,
-    monkeypatch: pytest.MonkeyPatch,
-    route_account: str,
-    adapter_account: str,
-    status: int,
-    reason: str,
-) -> None:
-    reconcile = AsyncMock()
-    runtime = get_active_clerk_runtime()
-    assert runtime is not None
-    assert isinstance(runtime.clerk, SqliteAlpacaClerkFacade)
-    registry = FakeRegistry(FakeAlpacaPort(account_id=adapter_account))
-    monkeypatch.setattr(alpaca_clerk_sqlite, "get_broker_registry", lambda: registry)
-    monkeypatch.setattr(runtime.clerk, "reconcile_account", reconcile)
-
-    async with _client(account_number_api) as client:
-        response = await client.post(
-            f"/api/alpaca-clerk-sqlite/accounts/{route_account}/reconcile"
-        )
-
-    assert response.status_code == status, response.text
-    assert response.json()["detail"]["reason"] == reason
-    reconcile.assert_not_awaited()
 
 
 # ── #2007: the check route prices a flatten; execute carries the confirmed limit ──

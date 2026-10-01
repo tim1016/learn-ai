@@ -6,8 +6,7 @@ load-and-validate, scan+filter — live in
 forward specific surface: function signatures the runner and router
 already call, plus the phase-specific ``spec_hash`` filter on
 ``list_walk_forwards`` that the artifact store's generic
-``list_ids`` doesn't carry. See
-``docs/architecture/research-artifact-seam.md`` for the design.
+``list_ids`` doesn't carry.
 
 On-disk layout (unchanged from pre-seam):
 

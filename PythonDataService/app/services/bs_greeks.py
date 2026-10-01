@@ -27,10 +27,6 @@ so downstream consumers see identical units regardless of engine:
 The standalone ``bs_european_vega`` returns the **raw** value (per 1.0 vol
 unit) because that's what root-finders need (Newton-Raphson uses
 ``f(σ)/f'(σ)`` directly without a 1/100 rescale).
-
-See ``docs/references/options-bs-greeks-2026-04-24.md`` and
-``docs/architecture/options-math-authorities.md`` for source attribution
-and the broader options-math layout.
 """
 
 from __future__ import annotations

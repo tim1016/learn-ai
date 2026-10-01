@@ -388,10 +388,10 @@ async def lock_paired_evidence_for_golden_case(
 ) -> asyncpg.Record | None:
     """Hold a landed verdict and companion run until designation commits.
 
-    ``delete_run`` locks its target run before consulting the Golden evidence
-    guard.  The ``NOWAIT`` run lock is therefore intentional: if a delete won
-    that race, designation rolls back with a retryable authored refusal rather
-    than deadlocking while each transaction holds half of the evidence pair.
+    The ``NOWAIT`` run lock is intentional: if another transaction already
+    holds a conflicting lock on the companion run, designation rolls back with
+    a retryable authored refusal rather than deadlocking while each
+    transaction holds half of the evidence pair.
     """
     verdict = await parity_verdict_for_case(conn, parity_group_id, lock=True)
     try:
@@ -460,33 +460,3 @@ async def insert_review(
         reviewed_at_ms,
     )
     return None if row is None else GoldenReviewRow(**row)
-
-
-async def is_run_protected(conn: asyncpg.Connection, run_id: int) -> bool:
-    """Whether a run is a selected baseline or attached parity evidence."""
-    protected = await conn.fetchval(
-        """
-        SELECT EXISTS (
-            SELECT 1 FROM research_validation_golden_runs WHERE source_run_id = $1
-            UNION ALL
-            SELECT 1
-              FROM research_validation_golden_runs golden
-              JOIN research_parity_verdicts verdict
-                ON verdict.parity_group_id = (golden.validation_case_json ->> 'parity_group_id')
-             WHERE verdict.left_run_id = $1 OR verdict.right_run_id = $1
-            UNION ALL
-            SELECT 1
-              FROM research_validation_golden_runs golden
-              JOIN research_backtest_runs companion
-                ON companion.parity_group_id = (golden.validation_case_json ->> 'parity_group_id')
-             WHERE companion.id = $1
-            UNION ALL
-            SELECT 1
-              FROM research_golden_validation_reviews review
-              JOIN research_parity_verdicts verdict ON verdict.id = review.parity_verdict_id
-             WHERE verdict.left_run_id = $1 OR verdict.right_run_id = $1
-        )
-        """,
-        run_id,
-    )
-    return bool(protected)

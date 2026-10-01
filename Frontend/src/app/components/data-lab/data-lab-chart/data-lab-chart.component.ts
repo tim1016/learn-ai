@@ -106,10 +106,6 @@ const BAR_SOURCE_NOTICE_COPY = new Map<string, string>([
     'Some sessions in this range are not in the data lake yet and came straight from the market-data provider.',
   ],
   [
-    'adjusted_prices_provider_only',
-    'Split- and dividend-adjusted prices come straight from the market-data provider. The data lake holds unadjusted prices only.',
-  ],
-  [
     'symbol_provider_only',
     'The data lake does not carry this symbol, so its bars came straight from the market-data provider.',
   ],
@@ -235,7 +231,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
   ticker = input.required<string>();
   fromDate = input.required<string>();
   toDate = input.required<string>();
-  /** Numeric int64 ms UTC window (PRD §12): when the parent owns a numeric
+  /** Numeric int64 ms UTC window: when the parent owns a numeric
    *  committed window, it flows through here so the wire body carries the
    *  additive `start_ms_utc` / exclusive `end_ms_utc` authority fields
    *  alongside the legacy date strings. Null for parents that only have
@@ -439,7 +435,7 @@ export class DataLabChartComponent implements AfterViewInit, OnDestroy {
             ticker,
             from_date: fromDate,
             to_date: toDate,
-            // Numeric temporal authority (PRD §12) — additive, sent only
+            // Numeric temporal authority — additive, sent only
             // when the parent supplied a numeric committed window.
             ...(this.startMsUtc() !== null ? { start_ms_utc: this.startMsUtc() } : {}),
             ...(this.endMsUtc() !== null ? { end_ms_utc: this.endMsUtc() } : {}),

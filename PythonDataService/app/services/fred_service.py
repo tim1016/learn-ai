@@ -1,8 +1,8 @@
 """FRED Treasury rate service for dynamic risk-free rate interpolation.
 
-Formula: Linear interpolation in DTE between the 4 published Treasury tenors (DTB4WK / DTB3 / DTB6 / DTB1YR). For DTE outside the tenor range, clamp to the nearest tenor. `FALLBACK_RATE = 0.043` is used when FRED is unreachable (logged warning).
-Reference: FRED data series — `https://fred.stlouisfed.org/series/{DTB4WK,DTB3,DTB6,DTB1YR}`. Per `docs/math-rigor.md` Upgrade 4 — variance-time / DTE interpolation across the published Treasury yield curve is the standard convention; CME options-pricing systems use the same family of tenors.
-Canonical implementation: this file (`get_rate`). The hardcoded `r = 0.043` constants in `iv_builder.py:18`, `contract_finder.py:26`, `models/strategy.py:48`, `models/portfolio.py:97/184` are pending migration to call `fred_service.get_rate()` — see registry § "Known rule-5 non-compliance" item 5 and finding F-0029.
+Formula: Linear interpolation in DTE between the 4 published Treasury tenors (DTB4WK / DTB3 / DTB6 / DTB1YR). For DTE outside the tenor range, clamp to the nearest tenor. `DEFAULT_RISK_FREE_RATE` is used when FRED is unreachable (logged warning), and the rate's source then says so.
+Reference: FRED data series — `https://fred.stlouisfed.org/series/{DTB4WK,DTB3,DTB6,DTB1YR}`. Variance-time / DTE interpolation across the published Treasury yield curve is the standard convention; CME options-pricing systems use the same family of tenors.
+Canonical implementation: this file (`get_risk_free_rate`). Its fallback is `app/services/risk_free_rate.py::DEFAULT_RISK_FREE_RATE`, the one default a pricing request with no rate also uses, so a failed lookup and an omitted rate price at the same number (#2764).
 Validated against: PythonDataService/tests/test_fred_service.py (interpolation, fallback, parsing).
 
 Fetches daily Treasury bill/bond rates from FRED and interpolates
@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,9 @@ TENOR_MAP: dict[str, int] = {
     "DTB1YR": 365,
 }
 
-FALLBACK_RATE = 0.043
+# Where a resolved rate came from: FRED, or the one default when FRED could not answer.
+RATE_SOURCE_FRED = "FRED"
+RATE_SOURCE_DEFAULT = "default"
 
 # Cache: {observation_date_str: {dte_days: rate}}
 _rate_cache: dict[str, dict[int, float]] = {}
@@ -105,7 +108,7 @@ def _fetch_all_tenors(observation_date: str) -> dict[int, float]:
 def _interpolate_rate(rates: dict[int, float], dte_days: int) -> float:
     """Linear interpolation between adjacent Treasury tenors."""
     if not rates:
-        return FALLBACK_RATE
+        return DEFAULT_RISK_FREE_RATE
 
     tenors = sorted(rates.keys())
 
@@ -129,7 +132,7 @@ def _interpolate_rate(rates: dict[int, float], dte_days: int) -> float:
             weight = (dte_days - t_low) / (t_high - t_low)
             return r_low + weight * (r_high - r_low)
 
-    return FALLBACK_RATE
+    return DEFAULT_RISK_FREE_RATE
 
 
 def get_risk_free_rate(dte_days: int = 30, observation_date: str | None = None) -> float:
@@ -142,8 +145,15 @@ def get_risk_free_rate(dte_days: int = 30, observation_date: str | None = None) 
 
     Returns:
         Annualized risk-free rate as a decimal (e.g. 0.043 for 4.3%).
-        Falls back to FALLBACK_RATE on any error.
+        Falls back to DEFAULT_RISK_FREE_RATE on any error.
     """
+    rate, _source = get_risk_free_rate_and_source(dte_days, observation_date)
+    return rate
+
+
+def get_risk_free_rate_and_source(dte_days: int = 30, observation_date: str | None = None) -> tuple[float, str]:
+    """``get_risk_free_rate`` plus where the rate came from: ``RATE_SOURCE_FRED``,
+    or ``RATE_SOURCE_DEFAULT`` when FRED could not answer."""
     global _rate_cache, _cache_timestamp
 
     if observation_date is None:
@@ -152,7 +162,7 @@ def get_risk_free_rate(dte_days: int = 30, observation_date: str | None = None) 
     # Check cache
     if _is_cache_valid() and observation_date in _rate_cache:
         cached_rates = _rate_cache[observation_date]
-        return _interpolate_rate(cached_rates, dte_days)
+        return _interpolate_rate(cached_rates, dte_days), RATE_SOURCE_FRED
 
     # Fetch fresh rates
     rates = _fetch_all_tenors(observation_date)
@@ -168,98 +178,10 @@ def get_risk_free_rate(dte_days: int = 30, observation_date: str | None = None) 
             dte_days,
             result,
         )
-        return result
+        return result, RATE_SOURCE_FRED
 
-    logger.warning("[FRED] No rates available for %s, using fallback %.4f", observation_date, FALLBACK_RATE)
-    return FALLBACK_RATE
-
-
-def prefetch_rate_cache(start_date: str, end_date: str) -> int:
-    """Bulk-fetch FRED rates for a date range and populate the cache.
-
-    Makes only 4 HTTP calls total (one per tenor) instead of 4 per trading day.
-    Returns the number of dates cached.
-    """
-    global _rate_cache, _cache_timestamp
-
-    api_key = getattr(settings, "FRED_API_KEY", None)
-    if not api_key:
-        logger.warning("[FRED] No API key — skipping prefetch")
-        return 0
-
-    # Fetch full range for each tenor
-    all_series: dict[str, list[dict[str, Any]]] = {}
-    for series_id in TENOR_MAP:
-        params = {
-            "series_id": series_id,
-            "api_key": api_key,
-            "file_type": "json",
-            "observation_start": start_date,
-            "observation_end": end_date,
-            "sort_order": "asc",
-            "limit": 10000,
-        }
-        try:
-            with httpx.Client(timeout=15.0) as client:
-                resp = client.get(FRED_BASE_URL, params=params)
-                resp.raise_for_status()
-                all_series[series_id] = resp.json().get("observations", [])
-        except (httpx.HTTPError, Exception) as e:
-            logger.warning("[FRED] Prefetch failed for %s: %s", series_id, e)
-            all_series[series_id] = []
-
-    # Build per-date rate maps
-    # Index: {series_id: {date_str: rate_float}}
-    series_by_date: dict[str, dict[str, float]] = {}
-    for series_id, observations in all_series.items():
-        for obs in observations:
-            dt = obs.get("date", "")
-            val = obs.get("value", ".")
-            if val != "." and dt:
-                try:
-                    series_by_date.setdefault(series_id, {})[dt] = float(val) / 100.0
-                except ValueError:
-                    continue
-
-    # Collect all unique dates across all series
-    all_dates: set[str] = set()
-    for date_map in series_by_date.values():
-        all_dates.update(date_map.keys())
-
-    # For each date, assemble {days: rate} from all tenors
-    cached_count = 0
-    for date_str in sorted(all_dates):
-        rates: dict[int, float] = {}
-        for series_id, days in TENOR_MAP.items():
-            rate = series_by_date.get(series_id, {}).get(date_str)
-            if rate is not None:
-                rates[days] = rate
-        if rates:
-            _rate_cache[date_str] = rates
-            cached_count += 1
-
-    # Also fill non-FRED dates (weekends/holidays) by forward-filling
-    # so that get_risk_free_rate() for any date in range hits cache
-    sorted_cached = sorted(_rate_cache.keys())
-    if sorted_cached:
-        from datetime import datetime as dt_cls
-        from datetime import timedelta as td_cls
-
-        d = dt_cls.strptime(start_date, "%Y-%m-%d")
-        end_d = dt_cls.strptime(end_date, "%Y-%m-%d")
-        last_rates: dict[int, float] | None = None
-        while d <= end_d:
-            ds = d.strftime("%Y-%m-%d")
-            if ds in _rate_cache:
-                last_rates = _rate_cache[ds]
-            elif last_rates is not None:
-                _rate_cache[ds] = last_rates
-                cached_count += 1
-            d += td_cls(days=1)
-
-    _cache_timestamp = time.time()
-    logger.info("[FRED] Prefetched rates for %d dates (%s to %s)", cached_count, start_date, end_date)
-    return cached_count
+    logger.warning("[FRED] No rates available for %s, using fallback %.4f", observation_date, DEFAULT_RISK_FREE_RATE)
+    return DEFAULT_RISK_FREE_RATE, RATE_SOURCE_DEFAULT
 
 
 def clear_cache() -> None:

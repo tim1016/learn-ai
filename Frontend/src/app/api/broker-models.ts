@@ -2,7 +2,7 @@
  * Broker API model aliases and SSE payload types.
  *
  * The REST schemas live in ``broker.types.ts`` (regenerated from the
- * Python service's OpenAPI spec — see ``Frontend/AGENTS.md``). SSE
+ * Python service's OpenAPI spec by ``npm run codegen:openapi``). SSE
  * endpoints emit ``text/event-stream`` so FastAPI does not surface
  * their payload shape via OpenAPI; we mirror those Pydantic models
  * here by hand to keep one source of typed truth in the frontend.
@@ -21,99 +21,6 @@ export type PanelActionErrorResponse = components['schemas']['PanelActionErrorRe
 
 export type OptionRight = 'C' | 'P';
 export type GreeksSource = 'model' | 'bid' | 'ask' | 'last' | 'none';
-// Mirrors ``app.broker.ibkr.models``'s IbkrApiRequestName / IbkrApiCallbackName.
-// Narrowed to the calls the service can still make by PR-C of #1813
-// (2026-08-27). This hand-kept copy had also drifted from the Pydantic source
-// independently of that narrowing: it was missing `reqHistoricalDataAsync` and
-// `historicalData`, both of which are live, and both are restored here.
-export type IbkrApiRequestName =
-  | 'cancelMktData'
-  | 'qualifyContractsAsync'
-  | 'reqContractDetailsAsync'
-  | 'reqHistoricalDataAsync'
-  | 'reqMarketDataType'
-  | 'reqMktData'
-  | 'reqRealTimeBars'
-  | 'reqSecDefOptParamsAsync'
-  | 'whatIfOrderAsync';
-export type IbkrApiCallbackName =
-  | 'contractDetails'
-  | 'historicalData'
-  | 'marketDataType'
-  | 'realTimeBar'
-  | 'realTimeBarList'
-  | 'securityDefinitionOptionParameter'
-  | 'tickSnapshot'
-  | 'whatIfOrder';
-export type IbkrEvidenceScalar = string | number | boolean | null;
-export type IbkrEvidenceValue =
-  | IbkrEvidenceScalar
-  | IbkrEvidenceValue[]
-  | { [key: string]: IbkrEvidenceValue };
-
-export interface IbkrApiRequestEvidence {
-  call: IbkrApiRequestName;
-  params: Record<string, IbkrEvidenceValue>;
-}
-
-export interface IbkrSerializerWarning {
-  object_type: string;
-  serializer_error: string;
-}
-
-export interface IbkrApiResponseEvidence {
-  callback: IbkrApiCallbackName;
-  fields: Record<string, IbkrEvidenceValue>;
-  serializer_warnings: IbkrSerializerWarning[];
-}
-
-export interface IbkrApiEvidenceEvent {
-  seq: number;
-  ts_ms: number;
-  source: string;
-  account_id: string | null;
-  symbol: string | null;
-  strategy_instance_id: string | null;
-  request: IbkrApiRequestEvidence;
-  response: IbkrApiResponseEvidence | null;
-  error: string | null;
-}
-
-export type DataPlaneHealth = components['schemas']['DataPlaneHealth'];
-
-export type SessionKind = 'RTH' | 'PRE' | 'POST' | 'OVERNIGHT';
-export type CapabilityDataQuality =
-  | 'live'
-  | 'delayed'
-  | 'frozen'
-  | 'delayed_frozen'
-  | 'none';
-export type CapabilityTradeability = 'yes' | 'needs_enablement' | 'no';
-export type CapabilityAccountMode = 'live' | 'paper';
-
-export interface SessionCapability {
-  window_today_open_ms: number | null;
-  window_today_close_ms: number | null;
-  data: CapabilityDataQuality;
-  tradeable: CapabilityTradeability;
-  order_eligible_outside_rth: boolean;
-  evidence_codes: number[];
-}
-
-export interface SessionDataCapability {
-  symbol: string;
-  con_id: number;
-  account_mode: CapabilityAccountMode;
-  account_id: string;
-  probed_at_ms: number;
-  time_zone_id: string;
-  sessions: Record<SessionKind, SessionCapability>;
-  raw_evidence: IbkrApiEvidenceEvent[];
-}
-
-export interface BrokerCapabilityResponse {
-  snapshots: SessionDataCapability[];
-}
 
 // ── SSE payload models (hand-mirrored from app.broker.ibkr.models) ────
 
@@ -173,23 +80,4 @@ export interface IbkrStrikeList {
   expiry_ms: number;
   strikes: number[];
   fetched_at_ms: number;
-}
-
-// ── REST shape: /api/broker/option-contracts/{symbol} (Slice 1F) ─────
-
-export interface OptionContractMatch {
-  con_id: number;
-  symbol: string;
-  local_symbol: string;
-  trading_class: string;
-  exchange: string;
-  currency: string;
-  expiry_ms: number;
-  strike: number;
-  right: 'C' | 'P';
-  multiplier: number;
-}
-
-export interface OptionContractsResponse {
-  matches: OptionContractMatch[];
 }

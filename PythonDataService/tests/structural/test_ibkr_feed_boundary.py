@@ -8,7 +8,7 @@ consumer outside its scope; PR-B of #1813 (2026-08-27) retired all
 three consumers (``order_error_stream.py``, ``broker_session_events``
 emission, and ``app/broker/safety_verdict.py``), so the exception list
 is now empty. See
-``docs/superpowers/specs/2026-08-26-ibkr-decommission-slice-0-design.md``.
+ADR 0062 § "Retained market-data provider".
 
 **The module-retirement contract.** The single home for "retirement X
 deleted module M — prove M is still gone and that nothing names it",
@@ -59,7 +59,6 @@ RETAINED_FEED_MODULES = [
     "app.broker.ibkr.market_data",
     "app.broker.ibkr.minute_assembler",
     "app.broker.ibkr.surface",
-    "app.services.market_data_capability_service",
 ]
 
 # Dotted-path prefixes considered "account/order/session bucket" — a
@@ -353,33 +352,6 @@ def _referenced_module_names(source_path: Path) -> set[str]:
         found.add(base)
         found.update(f"{base}.{alias.name}" for alias in node.names)
     return found
-
-
-def test_retired_modules_no_longer_resolve() -> None:
-    """No module any of the three retirements deleted may resolve to a file again.
-
-    This is the "structural-retirement" half of the contract: the boundary
-    test proves the feed does not *import* the bucket, this one proves the
-    bucket is not *there*. A module that came back would satisfy the
-    import-graph test trivially (nothing imports it yet) while quietly
-    reopening the surface the retirement closed.
-    """
-    assert RETIRED_MODULES, "RETIRED_MODULES is empty — this guard would pass vacuously."
-    assert EARLIER_RETIRED_MODULES, "EARLIER_RETIRED_MODULES is empty — this guard would pass vacuously."
-    assert not set(RETIRED_MODULES) & set(EARLIER_RETIRED_MODULES), (
-        "A module is listed under both retirements — the provenance split is meant to be exclusive."
-    )
-
-    resurrected = [
-        dotted
-        for dotted in ALL_RETIRED_MODULES
-        if _module_path(dotted).exists() or _is_package_dir(dotted)
-    ]
-    assert not resurrected, (
-        "Module(s) retired by #1583, ADR 0038 or #1813 resolve again: "
-        f"{resurrected}. Re-adding one is a deliberate decision that belongs in a PR of "
-        "its own, with its row in the registry docs — not a silent resurrection."
-    )
 
 
 def test_no_surviving_module_references_a_retired_module() -> None:

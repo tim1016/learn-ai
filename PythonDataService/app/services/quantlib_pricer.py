@@ -2,8 +2,8 @@
 
 Formula: Same Black-Scholes-Merton math as bs_greeks.py (Hull §15.8 / §19), but routed through QuantLib's compiled C++ implementation. Uses analytic_bs engine for analytical pricing; alternate engines available for stress / sensitivity work.
 Reference: Hull §15.8, §19; QuantLib C++ source (quantlib.org). The Python bindings are SWIG-generated.
-Canonical implementation: this file (QuantLib variant). Companion canonical: app/services/bs_greeks.py (closed-form variant). Both are parity-pinned canonical per docs/math-sources-of-truth.md § Options pricing and Greeks. The frontend's app/utils/black-scholes.ts is a render-helper-only legacy path with two intentional callers (pricing-lab, strategy-builder) — not a math authority.
-Validated against: PythonDataService/tests/services/test_bs_cross_engine_parity.py — 360-case grid at atol=1e-10 between this file and bs_greeks.py (Phase 1.4 shipped 2026-04-26, precision-leak fix 69d2bfe). Greek-only cross-engine parity is pending-fixture per registry.
+Canonical implementation: this file (QuantLib variant). Companion canonical: app/services/bs_greeks.py (closed-form variant). Both are parity-pinned canonical. The frontend's app/utils/black-scholes.ts is a render-helper-only legacy path with two intentional callers (pricing-lab, strategy-builder) — not a math authority.
+Validated against: PythonDataService/tests/services/test_bs_cross_engine_parity.py — 360-case grid at atol=1e-10 between this file and bs_greeks.py (Phase 1.4 shipped 2026-04-26, precision-leak fix 69d2bfe). Greek-only cross-engine parity is pending-fixture.
 
 Uses the compiled QuantLib C++ library via SWIG Python bindings to compute
 theoretical prices and Greeks (delta, gamma, theta, vega, rho) for European
@@ -57,20 +57,6 @@ class GreeksResult:
     # Optional diagnostics
     d1: float | None = None
     d2: float | None = None
-
-
-@dataclass
-class StrategyGreeksResult:
-    """Multi-leg strategy pricing result."""
-
-    engine: str
-    net_price: float
-    net_delta: float
-    net_gamma: float
-    net_theta: float
-    net_vega: float
-    net_rho: float
-    legs: list[GreeksResult]
 
 
 def _ensure_ql() -> None:
@@ -412,66 +398,3 @@ def implied_volatility(
             return round((lo + hi) / 2.0, 8)
 
     return round((lo + hi) / 2.0, 8)
-
-
-# ---------------------------------------------------------------------------
-# Multi-leg strategy pricing
-# ---------------------------------------------------------------------------
-
-
-def price_strategy(
-    spot: float,
-    legs: list[dict],
-    risk_free_rate: float,
-    evaluation_date: date | None = None,
-    dividend_yield: float = 0.0,
-    engine: PricingEngine = PricingEngine.ANALYTIC_BS,
-) -> StrategyGreeksResult:
-    """Price a multi-leg options strategy.
-
-    Each leg dict must contain:
-        strike, option_type ('call'/'put'), position ('long'/'short'),
-        iv (decimal, e.g. 0.20), premium, quantity
-    """
-    leg_results: list[GreeksResult] = []
-    net = {"price": 0.0, "delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0, "rho": 0.0}
-
-    for leg in legs:
-        expiration = leg.get("expiration_date")
-        if isinstance(expiration, str):
-            expiration = date.fromisoformat(expiration)
-
-        result = price_option(
-            spot=spot,
-            strike=leg["strike"],
-            risk_free_rate=risk_free_rate,
-            volatility=leg["iv"],
-            expiration_date=expiration,
-            option_type=leg["option_type"],
-            evaluation_date=evaluation_date,
-            dividend_yield=dividend_yield,
-            engine=engine,
-        )
-
-        sign = 1 if leg["position"] == "long" else -1
-        qty = leg.get("quantity", 1)
-
-        net["price"] += result.price * sign * qty
-        net["delta"] += result.delta * sign * qty
-        net["gamma"] += result.gamma * sign * qty
-        net["theta"] += result.theta * sign * qty
-        net["vega"] += result.vega * sign * qty
-        net["rho"] += result.rho * sign * qty
-
-        leg_results.append(result)
-
-    return StrategyGreeksResult(
-        engine=engine.value,
-        net_price=round(net["price"], 8),
-        net_delta=round(net["delta"], 8),
-        net_gamma=round(net["gamma"], 8),
-        net_theta=round(net["theta"], 8),
-        net_vega=round(net["vega"], 8),
-        net_rho=round(net["rho"], 8),
-        legs=leg_results,
-    )

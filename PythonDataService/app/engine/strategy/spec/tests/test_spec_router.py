@@ -6,7 +6,6 @@ data-source dependency is overridden with a synthetic minute-bar
 reader so tests don't need access to the LEAN data archive.
 
 Coverage:
-  * GET  /api/spec-strategy/schema returns a draft-2020-12 JSON Schema
   * GET  /api/spec-strategy/fixtures lists the canonical fixtures on disk
   * GET  /api/spec-strategy/fixtures/sma_crossover round-trips through
     StrategySpec validation
@@ -16,9 +15,6 @@ Coverage:
 """
 
 from __future__ import annotations
-
-import asyncio
-import sys
 
 from httpx import ASGITransport, AsyncClient
 
@@ -63,16 +59,6 @@ async def _client():
 # ---------------------------------------------------------------------------
 # Tests.
 # ---------------------------------------------------------------------------
-async def test_schema_endpoint() -> None:
-    async with await _client() as client:
-        resp = await client.get("/api/spec-strategy/schema")
-    assert resp.status_code == 200
-    schema = resp.json()
-    assert "$defs" in schema
-    assert "FreshCross" in schema["$defs"]
-    assert "DrawdownFromPeak" in schema["$defs"]
-
-
 async def test_fixtures_list_endpoint() -> None:
     async with await _client() as client:
         resp = await client.get("/api/spec-strategy/fixtures")
@@ -148,7 +134,6 @@ async def test_backtest_runs_sma_spec_on_synthetic_data() -> None:
     # Indicator snapshots present on each trade.
     assert all(t["indicators"] for t in body["trades"])
 
-    # Per ``.claude/rules/numerical-rigor.md`` § "Timestamp rigor",
     # entry_time / exit_time on the wire are int64 ms UTC, not ISO
     # strings. Verify the wire shape and that the values are roughly
     # in the expected millisecond range.
@@ -236,35 +221,3 @@ async def test_backtest_rejects_malformed_spec() -> None:
             },
         )
     assert resp.status_code in (400, 422), f"expected 4xx, got {resp.status_code}: {resp.text}"
-
-
-# ---------------------------------------------------------------------------
-# Script entry point.
-# ---------------------------------------------------------------------------
-def run_all() -> None:
-    failed = False
-    tests = [
-        ("schema endpoint", test_schema_endpoint),
-        ("fixtures list endpoint", test_fixtures_list_endpoint),
-        ("fixture detail endpoint", test_fixture_detail_endpoint),
-        ("fixture detail unknown -> 404", test_fixture_detail_unknown_returns_404),
-        ("backtest runs SMA spec on synthetic data", test_backtest_runs_sma_spec_on_synthetic_data),
-        ("backtest rejects unsupported feature with 400", test_backtest_rejects_unsupported_spec_feature_with_400),
-        ("backtest rejects malformed spec", test_backtest_rejects_malformed_spec),
-    ]
-    for label, fn in tests:
-        try:
-            asyncio.run(fn())
-            print(f"PASS: {label}")
-        except AssertionError as e:
-            failed = True
-            print(f"FAIL: {label} — {e}")
-        except Exception as e:
-            failed = True
-            print(f"ERROR: {label} — {type(e).__name__}: {e}")
-    if failed:
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    run_all()

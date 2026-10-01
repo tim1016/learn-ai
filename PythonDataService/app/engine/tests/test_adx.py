@@ -238,7 +238,7 @@ def test_golden_fixture_regression():
     This fixture is our own implementation's output, pinned as a
     regression guard. If Wilder's math in adx.py changes, this test
     fails and the fixture must be regenerated with justification
-    (see docs/references/adx.md).
+    (in the commit message).
     """
     input_csv = FIXTURE_DIR / "input.csv"
     output_csv = FIXTURE_DIR / "output.csv"

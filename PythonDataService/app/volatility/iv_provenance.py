@@ -1,13 +1,9 @@
 """Typed provenance for IV30 outputs.
 
 Formula: Provenance schema only — no arithmetic. Key computed fields: variance_contribution_synthetic (weighted by VIX-replication integration weight, not raw count); strike_coverage_score (wing extension as fraction of 5σ); max_single_strike_share.
-Reference: Internal — docs/architecture/iv-ownership-research.md §4.6 (schema) and §7.3 (variance-share vs count-share rationale).
+Reference: Internal — no external reference.
 Canonical implementation: app/volatility/iv_provenance.py
 Validated against: NONE — pending (schema/type validation owed)
-
-See ``docs/architecture/iv-ownership-research.md`` §4.6 for the consolidated
-schema rationale and §7.3 for why count-share *and* variance-share are both
-recorded.
 
 `IvSource` and `IvProvenance` describe the **derived** volatility — distinct
 from `PriceSource` and `NormalizedOptionPrice` (in `price_normalization.py`)
@@ -39,8 +35,7 @@ The two operationally important fields are:
   hard-fail flag are surfaced via ``single_strike_dropped`` /
   ``single_strike_hard_failed``. Healthy SPY-like chains land near
   ``1/n_strikes``; values above ~0.30 warrant a look at the dominating
-  strike. See research-doc §8.2.5 and ``iv-research-chat-notes.md``
-  §5.8.
+  strike.
 """
 
 from __future__ import annotations

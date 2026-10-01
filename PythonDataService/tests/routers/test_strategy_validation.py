@@ -102,7 +102,7 @@ async def test_strategy_validation_flag_write_is_guarded_and_appends_server_even
     # exercises the generic flag/refresh write path (control-secret guard,
     # ledger append) and needs a strategy whose evidence hashes currently
     # match its source. #1672 deliberately changed deployment_validation's
-    # source (see docs/references/deployment-validation-consecutive-green.md),
+    # source (session-boundary literals),
     # so its evidence hash no longer matches and flag-write correctly refuses
     # to act on it — that refusal is covered separately in
     # test_strategy_validation_catalog_and_detail_expose_manifest.

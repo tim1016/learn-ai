@@ -1,12 +1,17 @@
 """Closed proof vocabulary for exact executions that overlap aggregate recovery.
 
-Formula: Q = fsum(qty); C = fsum(qty × price); P = C / Q. The canonical
-  set proof accepts only abs(Q_E - Q_R) < 1e-9 shares,
-  abs(P_E - P_R) < 1e-9 currency/share, and
-  abs(C_E - C_R) <= max(|Q_E|, |Q_R|) × 1e-9
-  + max(|P_E|, |P_R|) × 1e-9 + 1e-18 currency.
+Formula: Q = fsum(qty); C = fsum(qty × price). The canonical set proof
+  accepts only abs(Q_E - Q_R) < 1e-9 shares and, in exact decimals,
+  abs(C_E - C_R) < tick(C_O / Q_O) × Q_O + max(p) × abs(Q_E - Q_R)
+  currency, where Q_O and C_O are the order's effective fills, tick is one
+  valid price increment (marketable_limit.price_increment) and max(p) the
+  highest row price: putting the exacts in place of the cumulative moves the
+  order's average price by less than one increment, beyond the priced share
+  residue the quantity rule accepts.
 Reference: Project-authored execution-coverage contract in PRD #1543, stories
   18, 19, 28, and 33; this is authored project logic, not a reused proof.
+  The price rule is ADR 0036's vendor-rounding rule (2026-09-30 amendment,
+  item 3), applied to coverage on 2026-10-01 (#2791).
 Canonical implementation: this file's prove_execution_coverage_set. The
   direct exact-to-one-cumulative replacement is consumed by the #1554 Clerk
   fold; the existing exact_replaces_cumulative remains the temporary S0
@@ -26,6 +31,7 @@ import json
 import math
 import sqlite3
 from dataclasses import asdict, dataclass, field
+from decimal import Context, Decimal, localcontext
 from enum import StrEnum
 
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -42,16 +48,43 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     ExecutionCoverageConflictCause,
 )
+from app.broker.alpaca.marketable_limit import price_increment
 
 #: Numerical-rigor tolerance for an exact slice that replaces an aggregate
-#: recovery row. See ``docs/references/clerk-invariants.md §2``.
+#: recovery row. See ADR 0036, 2026-09-30 amendment, item 1.
 FILL_QTY_EPSILON = 1e-9
 
 #: Set-proof quantity tolerance in shares. The comparison is intentionally strict.
 QTY_ATOL = 1e-9
 
-#: Set-proof gross-cost tolerance basis in currency units per share.
+#: The per-share price basis of the strict envelope coverage was proven with
+#: before #2791 (:func:`strict_gross_cost_envelope`), kept so those records replay.
 PRICE_ATOL = 1e-9
+
+
+def total_price_conflict_atol(reported_avg_price: float) -> float:
+    """One valid price increment at a reported average, per share (#2460, #2770).
+
+    Formula: ``price_increment(reported_avg_price)``, ``rtol=0`` -- $0.01 at or
+      above $1, $0.0001 below. A same-quantity average-price difference below
+      one valid increment of the reported price cannot be told from vendor
+      rounding; one at or above it is a real economic disagreement. A broker
+      total that disagrees with its recorded fills by that much is recorded
+      as ``EXECUTION_PRICE_CONFLICT``; exact executions that would move their
+      order's average by that much cannot replace its cumulative (#2791).
+    Assumes Alpaca reports a sub-dollar ``filled_avg_price`` to at least
+      $0.0001; a coarser report would read its own rounding as a conflict.
+    Reference: ADR 0036, 2026-09-30 amendment, item 3; the tick rule is
+      Alpaca's price precision (``app/broker/alpaca/marketable_limit.py``).
+    Canonical implementation: this function, on
+      ``marketable_limit.price_increment``.
+    Validated against: tests/broker/alpaca/clerk/sqlite/test_economic_projection.py::
+      test_a_sub_cent_difference_below_one_dollar_is_a_price_conflict,
+      test_a_vendor_rounding_sized_difference_raises_no_conflict and
+      test_the_sweep_keeps_a_sub_dollar_conflict_its_recorded_fills_still_disagree_with;
+      tests/broker/alpaca/clerk/sqlite/test_execution_coverage_set_proof.py.
+    """
+    return float(price_increment(Decimal(str(reported_avg_price))))
 
 
 @dataclass(frozen=True)
@@ -157,15 +190,7 @@ class ExecutionCoverageSupersededFacts:
                 canonicalize(value["exact_execution"])
             )
             value["prior_exact_observations"] = [
-                ExecutionCoverageExactProvenance(
-                    exact_execution=ExecutionSliceFilledFacts.from_facts_json(
-                        canonicalize(item["exact_execution"])
-                    ),
-                    observation_transition_sequence=item["observation_transition_sequence"],
-                    clerk_observed_at_ms=item["clerk_observed_at_ms"],
-                    recorded_at_ms=item["recorded_at_ms"],
-                    recorded_transition_sequence=item["recorded_transition_sequence"],
-                )
+                _exact_provenance_from_mapping(item)
                 for item in value.pop("prior_exact_observations", [])
             ]
         except (KeyError, TypeError, ValueError) as exc:
@@ -173,13 +198,87 @@ class ExecutionCoverageSupersededFacts:
         return cls(**value)
 
 
+def _exact_provenance_from_mapping(item: dict) -> ExecutionCoverageExactProvenance:
+    """One recorded exact provenance, read back from its facts JSON object."""
+    return ExecutionCoverageExactProvenance(
+        exact_execution=ExecutionSliceFilledFacts.from_facts_json(canonicalize(item["exact_execution"])),
+        observation_transition_sequence=item["observation_transition_sequence"],
+        clerk_observed_at_ms=item["clerk_observed_at_ms"],
+        recorded_at_ms=item["recorded_at_ms"],
+        recorded_transition_sequence=item["recorded_transition_sequence"],
+    )
+
+
+#: The transition kind and summary code of the chain-total coverage proof (#2786).
+CHAIN_TOTAL_PROVEN_TRANSITION = "EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN"
+
+
+@dataclass(frozen=True)
+class ExecutionCoverageChainTotalProvenFacts:
+    """A filled manual chain's exact executions replacing its cumulative coverage (#2786).
+
+    ``head_quantity`` is the chain head's own requested quantity, read from
+    the head's observation that proved the total: no other durable row holds
+    it. Every other figure is re-read from current rows by the fold, which
+    refuses a plan they no longer match. ``made_effective_exact_observations``
+    are the quarantined exacts that become effective fills, each with its
+    original custody clocks; ``effective_exact_execution_ids`` were effective
+    already. ``position_delta`` is ``exact_quantity - prior_effective_quantity``,
+    the one coverage change that moves the position.
+    """
+
+    actor: str
+    account_id: str
+    authority_generation: int
+    db_identity_token: str
+    expected_control_revision: int
+    order_ref: str
+    symbol: str
+    side: str
+    head_broker_order_id: str
+    head_quantity: float
+    superseded_cumulative_fill_ids: list[str]
+    effective_exact_execution_ids: list[str]
+    made_effective_exact_observations: list[ExecutionCoverageExactProvenance]
+    exact_quantity: float
+    prior_effective_quantity: float
+    position_delta: float
+    quantity_tolerance: float
+    resolved_uncertainty_id: str | None
+    evidence_refs: list[str]
+
+    def to_facts_json(self) -> str:
+        return canonicalize(asdict(self))
+
+    @classmethod
+    def from_facts_json(cls, facts_json: str) -> ExecutionCoverageChainTotalProvenFacts:
+        value = json.loads(facts_json)
+        if not isinstance(value, dict):
+            raise ValueError("chain-total coverage facts must be an object")
+        try:
+            value["made_effective_exact_observations"] = [
+                _exact_provenance_from_mapping(item) for item in value["made_effective_exact_observations"]
+            ]
+            return cls(**value)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("chain-total coverage facts are invalid") from exc
+
+
 @dataclass(frozen=True)
 class ExecutionCoverageSetCandidate:
-    """All immutable observations required for one automatic set-proof attempt."""
+    """All immutable observations required for one automatic set-proof attempt.
+
+    ``order_effective_quantity`` and ``order_effective_gross_cost`` are the
+    order's effective fills before the swap -- its effective exacts and the
+    cumulative-recovery rows -- whose average the swap may move by less than
+    one price increment.
+    """
 
     cumulative_recovery: tuple[CumulativeCoverageObservation, ...]
     prior_quarantined_exact: tuple[ExactCoverageObservation, ...]
     incoming_exact: ExactCoverageObservation
+    order_effective_quantity: float
+    order_effective_gross_cost: float
     active_episode_ids: tuple[str, ...] = ()
     effective_exact_source_ids: frozenset[str] = field(default_factory=frozenset)
     unreadable_source_ids: tuple[str, ...] = ()
@@ -210,9 +309,9 @@ class ExecutionCoverageSetProofRefusalReason(StrEnum):
     NONFINITE_FEE = "nonfinite_fee"
     NONFINITE_GROSS_COST = "nonfinite_gross_cost"
     NONFINITE_AGGREGATE = "nonfinite_aggregate"
+    INVALID_ORDER_TOTAL = "invalid_order_total"
     QUANTITY_MISMATCH = "quantity_mismatch"
     VWAP_MISMATCH = "vwap_mismatch"
-    COST_MISMATCH = "cost_mismatch"
 
 
 @dataclass(frozen=True)
@@ -241,6 +340,12 @@ def prove_execution_coverage_set(
     candidate: ExecutionCoverageSetCandidate,
 ) -> ExecutionCoverageSetProofResult:
     """Prove whether complete cumulative and exact sets carry equal economics.
+
+    Quantities must agree strictly. Prices are compared at Alpaca's price
+    precision, never at float precision (#2791): the cumulative's price comes
+    from the broker's rounded order average, so exact executions explain it
+    when they move the order's average by less than one valid increment
+    (:func:`execution_coverage_cost_gap`).
 
     Fees are deliberately absent from the arithmetic because cumulative recovery
     has no fee observation. The success result returns the exact observations
@@ -311,25 +416,35 @@ def prove_execution_coverage_set(
             ExecutionCoverageSetProofRefusalReason.QUANTITY_MISMATCH,
             "Exact and cumulative coverage quantities differ outside the strict share tolerance.",
         )
-    if abs(exact_aggregate.vwap - cumulative_aggregate.vwap) >= PRICE_ATOL:
+    order_quantity = candidate.order_effective_quantity
+    order_gross_cost = candidate.order_effective_gross_cost
+    if (
+        not _is_finite(order_quantity)
+        or not _is_finite(order_gross_cost)
+        or order_quantity <= 0
+        or order_gross_cost < 0
+        or cumulative_aggregate.quantity - order_quantity >= QTY_ATOL
+    ):
+        return _set_refusal(
+            ExecutionCoverageSetProofRefusalReason.INVALID_ORDER_TOTAL,
+            "The order's effective fills are not a positive total that holds its cumulative recovery.",
+        )
+    cost_gap, cost_tolerance = execution_coverage_cost_gap(
+        exact=exact,
+        cumulative=candidate.cumulative_recovery,
+        order_quantity=order_quantity,
+        order_gross_cost=order_gross_cost,
+    )
+    if not cost_gap < cost_tolerance:
         return _set_refusal(
             ExecutionCoverageSetProofRefusalReason.VWAP_MISMATCH,
-            "Exact and cumulative VWAPs differ outside the strict currency-per-share tolerance.",
-        )
-    cost_tolerance = execution_coverage_gross_cost_tolerance(
-        exact=exact_aggregate,
-        cumulative=cumulative_aggregate,
-    )
-    if abs(exact_aggregate.gross_cost - cumulative_aggregate.gross_cost) > cost_tolerance:
-        return _set_refusal(
-            ExecutionCoverageSetProofRefusalReason.COST_MISMATCH,
-            "Exact and cumulative gross costs differ outside the inclusive currency tolerance.",
+            "The exact executions would move the order's average price by one valid increment or more.",
         )
     return ExecutionCoverageSetProofSuccess(
         exact=exact_aggregate,
         cumulative=cumulative_aggregate,
         position_delta=position_delta,
-        gross_cost_tolerance=cost_tolerance,
+        gross_cost_tolerance=float(cost_tolerance),
         retained_exact_observations=tuple(sorted(exact, key=lambda observation: observation.source_id)),
     )
 
@@ -397,6 +512,84 @@ def order_total_proves_coverage(evidence: OrderTotalCoverageEvidence) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class ChainTotalCoverageEvidence:
+    """A manual leg's chain head and every distinct exact execution of its chain, in shares."""
+
+    head_state: str | None
+    head_quantity: float | None
+    exact_quantities: tuple[float, ...]
+
+
+def chain_total_proves_coverage(evidence: ChainTotalCoverageEvidence) -> bool:
+    """Whether a filled manual chain's exact executions are every share its head asked for (#2786).
+
+    The order-total proof above needs the broker's cumulative to equal the
+    recorded fills. A manual leg Alpaca replaced has no such figure: a
+    replacement's ``filled_qty`` may leave out its original's fills
+    (:mod:`manual_order_replacement`), so a cumulative folded from it can
+    under-credit the chain, and the exacts that arrive later conflict with
+    it for ever. The chain has a stronger final figure instead: a head that
+    reports ``filled`` executed its own ``qty``, which is the whole chain's
+    total. When the chain's distinct exact executions sum to it, they are
+    every execution of the chain, so they replace every cumulative-recovery
+    row and the leg's position becomes their total -- the one coverage proof
+    that moves the position. An unreplaced manual leg is a chain of one.
+
+    Formula: state = filled ∧ Q_head > 0 ∧ every q_exact finite and > 0
+      ∧ |fsum(q_exact) − Q_head| < QTY_ATOL (shares, rtol = 0).
+    Reference: Project-authored chain-total coverage proof for issue #2786,
+      extending the #2346 order-level proof to a manual replacement chain;
+      ADR 0036, 2026-10-01 amendment.
+    Canonical implementation: this function.
+    Validated against: tests/broker/alpaca/clerk/sqlite/
+      test_manual_order_chain_total_proof.py.
+    """
+    if (evidence.head_state or "").lower() != "filled":
+        return False
+    head_quantity = evidence.head_quantity
+    exact = evidence.exact_quantities
+    if head_quantity is None or not exact:
+        return False
+    if not all(_is_finite(value) for value in (head_quantity, *exact)):
+        return False
+    if head_quantity <= 0 or any(quantity <= 0 for quantity in exact):
+        return False
+    return abs(math.fsum(exact) - head_quantity) < QTY_ATOL
+
+
+def order_total_retained_exacts_explain_cumulative(
+    *,
+    retained_quantities: tuple[float, ...],
+    cumulative_quantities: tuple[float, ...],
+) -> bool:
+    """Whether the exacts an order-total proof kept quarantined are every share of the order's cumulative (#2791).
+
+    The order-level proof above closes an episode without moving a fill, so
+    an order whose exacts disagree with its broker total by a price
+    increment or more keeps its cumulative-recovery rows for ever, and no
+    fill names the executions behind them. When the retained exacts hold
+    every share those rows hold, each of those executions is still named:
+    the effective exacts and the retained ones together are the broker's
+    final total. A fee population needs only that: which executions there
+    were, not whose price stands. Quantities only, as in the proof itself.
+
+    Formula: every q finite and > 0
+      ∧ |fsum(q_retained) − fsum(q_cumulative)| < QTY_ATOL (shares, rtol = 0).
+    Reference: Project-authored for issue #2791, on the #2346 order-level
+      proof (:func:`order_total_proves_coverage`).
+    Canonical implementation: this function.
+    Validated against: tests/broker/alpaca/clerk/sqlite/
+      test_bot_order_activity_disagreement.py.
+    """
+    if not retained_quantities or not cumulative_quantities:
+        return False
+    quantities = (*retained_quantities, *cumulative_quantities)
+    if not all(_is_finite(quantity) and quantity > 0 for quantity in quantities):
+        return False
+    return abs(math.fsum(retained_quantities) - math.fsum(cumulative_quantities)) < QTY_ATOL
+
+
 def _validate_set_economics(
     observations: tuple[CumulativeCoverageObservation | ExactCoverageObservation, ...],
 ) -> ExecutionCoverageSetProofRefusal | None:
@@ -442,12 +635,56 @@ def _aggregate_coverage(
     )
 
 
-def execution_coverage_gross_cost_tolerance(
+def execution_coverage_cost_gap(
+    *,
+    exact: tuple[ExactCoverageObservation, ...],
+    cumulative: tuple[CumulativeCoverageObservation, ...],
+    order_quantity: float,
+    order_gross_cost: float,
+) -> tuple[Decimal, Decimal]:
+    """The exacts' gross-cost gap from the cumulative, and the gap at which they move the order's average one increment.
+
+    ``tick(C_O / Q_O) × Q_O``: the cumulative carries the rounding of the
+    broker's order average over every share of the order, however few of them
+    the cumulative rows hold, so the gap is measured on the order's whole
+    average rather than on the rows'. ``max(p) × |Q_E − Q_R|`` prices the
+    share residue, under ``QTY_ATOL``, the quantity rule accepted, at the
+    highest price any row carries; with equal quantities it is zero, so a gap
+    of exactly one increment is refused.
+
+    Both are exact: every recorded float enters as the decimal it was written
+    as (``Decimal(str(x))``, ADR 0036 item 4), so a one-increment gap is never
+    read as just under one by binary rounding (#2791).
+    """
+    with localcontext(_EXACT_DECIMAL_CONTEXT):
+        rows = (*exact, *cumulative)
+        exact_cost = sum((_recorded(row.quantity) * _recorded(row.price) for row in exact), Decimal(0))
+        cumulative_cost = sum((_recorded(row.quantity) * _recorded(row.price) for row in cumulative), Decimal(0))
+        residue = abs(
+            sum((_recorded(row.quantity) for row in exact), Decimal(0))
+            - sum((_recorded(row.quantity) for row in cumulative), Decimal(0))
+        )
+        quantity = _recorded(order_quantity)
+        tick = price_increment(_recorded(order_gross_cost) / quantity)
+        tolerance = tick * quantity + max(abs(_recorded(row.price)) for row in rows) * residue
+        return abs(exact_cost - cumulative_cost), tolerance
+
+
+#: Wide enough that sums of products of any two finite float decimals are exact.
+_EXACT_DECIMAL_CONTEXT = Context(prec=1400)
+
+
+def _recorded(value: float) -> Decimal:
+    """A recorded float as the decimal it was written as."""
+    return Decimal(str(value))
+
+
+def strict_gross_cost_envelope(
     *,
     exact: ExecutionCoverageAggregate,
     cumulative: ExecutionCoverageAggregate,
 ) -> float:
-    """Propagate pinned quantity and VWAP error into a gross-cost envelope."""
+    """The float-precision envelope coverage was proven with before #2791, kept so those records replay."""
     return (
         max(abs(exact.quantity), abs(cumulative.quantity)) * PRICE_ATOL
         + max(abs(exact.vwap), abs(cumulative.vwap)) * QTY_ATOL
@@ -528,22 +765,7 @@ def validate_execution_coverage_superseded_facts(
     if prior_ids != sorted(set(prior_ids)) or exact.execution_id in prior_ids:
         raise ValueError("coverage supersession prior exact identities must be sorted and unique")
     for item in prior:
-        validate_execution_slice_facts(item.exact_execution)
-        if (
-            item.exact_execution.symbol.upper() != facts.symbol.upper()
-            or item.exact_execution.side != facts.side
-            or item.observation_transition_sequence != item.recorded_transition_sequence
-        ):
-            raise ValueError("coverage supersession prior exact provenance is inconsistent")
-        for field_name in (
-            "observation_transition_sequence",
-            "recorded_transition_sequence",
-            "clerk_observed_at_ms",
-            "recorded_at_ms",
-        ):
-            value = getattr(item, field_name)
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise ValueError(f"coverage supersession prior {field_name} is invalid")
+        _validate_exact_provenance(item, symbol=facts.symbol, side=facts.side, subject="coverage supersession prior")
     all_exact = [*(item.exact_execution for item in prior), exact]
     expected_exact_quantity = math.fsum(item.slice_qty for item in all_exact)
     expected_exact_gross_cost = math.fsum(
@@ -572,6 +794,100 @@ def _require_finite_positive_coverage(value: object, *, field: str) -> None:
 def _require_finite_nonnegative_coverage(value: object, *, field: str) -> None:
     if not _is_finite(value) or value < 0:
         raise ValueError(f"{field} must be finite and non-negative")
+
+
+def _validate_exact_provenance(
+    item: ExecutionCoverageExactProvenance, *, symbol: str, side: str, subject: str
+) -> None:
+    """One retained exact's facts and custody clocks, for the leg ``symbol``/``side``."""
+    validate_execution_slice_facts(item.exact_execution)
+    if (
+        item.exact_execution.symbol.upper() != symbol.upper()
+        or item.exact_execution.side != side
+        or item.observation_transition_sequence != item.recorded_transition_sequence
+    ):
+        raise ValueError(f"{subject} exact provenance is inconsistent")
+    for field_name in (
+        "observation_transition_sequence",
+        "recorded_transition_sequence",
+        "clerk_observed_at_ms",
+        "recorded_at_ms",
+    ):
+        value = getattr(item, field_name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{subject} {field_name} is invalid")
+
+
+def _require_sorted_unique_strings(values: object, *, field: str) -> None:
+    if (
+        not isinstance(values, list)
+        or any(not isinstance(value, str) or not value for value in values)
+        or values != sorted(set(values))
+    ):
+        raise ValueError(f"{field} must be sorted, unique, non-empty strings")
+
+
+def validate_execution_coverage_chain_total_proven_facts(
+    facts: ExecutionCoverageChainTotalProvenFacts,
+) -> None:
+    """Validate the closed chain-total coverage record before it reaches the hash chain (#2786).
+
+    The fold re-reads every figure but ``head_quantity`` from current rows;
+    this boundary makes the recorded plan self-contained: its binding, its
+    exact set, and the arithmetic that ties its totals to its position delta.
+    """
+    if facts.actor != "AUTOMATIC":
+        raise ValueError("chain-total coverage actor must be AUTOMATIC")
+    for field_name in ("account_id", "db_identity_token", "order_ref", "symbol", "head_broker_order_id"):
+        value = getattr(facts, field_name)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"chain-total coverage requires {field_name}")
+    if (
+        isinstance(facts.authority_generation, bool)
+        or not isinstance(facts.authority_generation, int)
+        or facts.authority_generation < 1
+    ):
+        raise ValueError("chain-total coverage requires authority_generation")
+    if (
+        isinstance(facts.expected_control_revision, bool)
+        or not isinstance(facts.expected_control_revision, int)
+        or facts.expected_control_revision < 0
+    ):
+        raise ValueError("chain-total coverage requires expected_control_revision")
+    if facts.side not in {"BUY", "SELL"}:
+        raise ValueError("chain-total coverage requires an exact side")
+    _require_finite_positive_coverage(facts.head_quantity, field="head_quantity")
+    _require_finite_positive_coverage(facts.exact_quantity, field="exact_quantity")
+    _require_finite_nonnegative_coverage(facts.prior_effective_quantity, field="prior_effective_quantity")
+    if facts.quantity_tolerance != QTY_ATOL:
+        raise ValueError("chain-total coverage quantity tolerance is not the pinned QTY_ATOL")
+    if not _is_finite(facts.position_delta) or (
+        facts.position_delta != facts.exact_quantity - facts.prior_effective_quantity
+    ):
+        raise ValueError("chain-total coverage position delta is not its exact total less its prior fills")
+    if abs(facts.exact_quantity - facts.head_quantity) >= facts.quantity_tolerance:
+        raise ValueError("chain-total coverage exact total does not cover the head's quantity")
+    _require_sorted_unique_strings(facts.superseded_cumulative_fill_ids, field="superseded_cumulative_fill_ids")
+    _require_sorted_unique_strings(facts.effective_exact_execution_ids, field="effective_exact_execution_ids")
+    made_effective = facts.made_effective_exact_observations
+    if not isinstance(made_effective, list):
+        raise ValueError("chain-total coverage made-effective exacts must be a list")
+    made_effective_ids = [item.exact_execution.execution_id for item in made_effective]
+    if made_effective_ids != sorted(set(made_effective_ids)) or set(made_effective_ids) & set(
+        facts.effective_exact_execution_ids
+    ):
+        raise ValueError("chain-total coverage exact identities must be sorted and distinct")
+    for item in made_effective:
+        _validate_exact_provenance(item, symbol=facts.symbol, side=facts.side, subject="chain-total coverage")
+    if not facts.superseded_cumulative_fill_ids and not made_effective:
+        raise ValueError("chain-total coverage must supersede a cumulative fill or make an exact effective")
+    if facts.resolved_uncertainty_id is not None and (
+        not isinstance(facts.resolved_uncertainty_id, str) or not facts.resolved_uncertainty_id
+    ):
+        raise ValueError("chain-total coverage resolved uncertainty id is invalid")
+    _require_sorted_unique_strings(facts.evidence_refs, field="evidence_refs")
+    if not facts.evidence_refs:
+        raise ValueError("chain-total coverage requires evidence references")
 
 
 @dataclass(frozen=True)
@@ -648,6 +964,43 @@ def active_execution_coverage_conflicts(
             )
         )
     return tuple(conflicts)
+
+
+def coverage_conflict_evidence_refs(conn: sqlite3.Connection, *, order_ref: str) -> frozenset[str]:
+    """Every evidence reference the order's coverage conflicts name, open or resolved.
+
+    A conflict whose raised facts are unreadable names nothing, as it
+    proves nothing in :func:`active_execution_coverage_conflicts`.
+    """
+    named: set[str] = set()
+    rows = conn.execute(
+        "SELECT facts_json FROM uncertainties WHERE reason_code = ?", (EXECUTION_COVERAGE_CONFLICT_REASON_CODE,)
+    ).fetchall()
+    for row in rows:
+        try:
+            raised = UncertaintyRaisedFacts.from_facts_json(row["facts_json"])
+            cause = ExecutionCoverageConflictCause.from_mapping(raised.cause_facts)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if cause.order_ref == order_ref:
+            named.update(raised.evidence_refs)
+    return frozenset(named)
+
+
+def custody_subject_has_coverage_conflict(conn: sqlite3.Connection, *, effect_operation_id: str) -> bool:
+    """Whether the custody subject owning ``effect_operation_id`` has an open coverage conflict on any of its orders.
+
+    The uncertainty store admits one open coverage conflict per custody
+    subject (``ux_uncertainties_one_active_cause``), so while one is open no
+    other order of that subject can raise its own (#2791).
+    """
+    row = conn.execute(
+        "SELECT 1 FROM uncertainties u JOIN effect_operations e ON u.subject_id IS e.subject_id "
+        "WHERE e.effect_operation_id = ? AND u.scope = 'CUSTODY_SUBJECT' AND u.reason_code = ? "
+        "AND u.resolved_at_ms IS NULL LIMIT 1",
+        (effect_operation_id, EXECUTION_COVERAGE_CONFLICT_REASON_CODE),
+    ).fetchone()
+    return row is not None
 
 
 def quarantined_executions_for_conflict(
@@ -917,32 +1270,6 @@ def cumulative_recovery_fills_for_order(
     )
 
 
-def direct_cumulative_recovery_fill_for_order(
-    conn: sqlite3.Connection,
-    *,
-    order_ref: str,
-) -> CumulativeRecoveryFill | None:
-    """Return one isolated aggregate row eligible for direct replacement.
-
-    #1554 is deliberately narrower than the set proof: automatic admission
-    is allowed only while this order's effective economics consist of exactly
-    one cumulative-recovery row. Any other effective fill must retain the
-    established fail-closed coverage path until the accumulated-set slice can
-    account for it.
-    """
-    cumulative = cumulative_recovery_fills_for_order(conn, order_ref=order_ref)
-    if len(cumulative) != 1:
-        return None
-    other_effective = conn.execute(
-        "SELECT 1 FROM fills f WHERE f.order_ref = ? "
-        "AND f.evidence_source != 'cumulative_recovery' "
-        "AND NOT EXISTS (SELECT 1 FROM fills successor "
-        "WHERE successor.superseded_execution_ref = f.execution_id) LIMIT 1",
-        (order_ref,),
-    ).fetchone()
-    return None if other_effective is not None else cumulative[0]
-
-
 def exact_replaces_cumulative(
     *,
     exact: ExecutionSliceFilledFacts,
@@ -950,10 +1277,14 @@ def exact_replaces_cumulative(
 ) -> bool:
     """Temporary S0 one-to-one mirror of the canonical set-proof predicate.
 
-    Formula: exact and cumulative sides/prices/quantities agree within the
-      S0 strict `FILL_QTY_EPSILON` boundary.
+    Formula: same side, |q_cumulative − q_exact| < FILL_QTY_EPSILON shares,
+      and |p_cumulative − p_exact| < tick(p_cumulative) per share, compared
+      in exact decimals (#2791). It measures the gap on the one
+      cumulative row, where the set proof measures it on the order's whole
+      average; the two agree when that row is its order's only fill.
     Reference: Project-authored S0 operator contract retained during the
-      execution-coverage migration in PRD #1543.
+      execution-coverage migration in PRD #1543; the price rule is ADR 0036's
+      vendor-rounding rule.
     Canonical implementation: prove_execution_coverage_set in this file; this
       S0 predicate remains only for the shipped operator flow.
     Validated against: tests/broker/alpaca/clerk/sqlite/
@@ -962,8 +1293,16 @@ def exact_replaces_cumulative(
     return (
         cumulative.side == exact.side
         and abs(cumulative.quantity - exact.slice_qty) < FILL_QTY_EPSILON
-        and abs(cumulative.price - exact.slice_price) < FILL_QTY_EPSILON
+        and _is_finite(cumulative.price)
+        and _is_finite(exact.slice_price)
+        and _below_one_increment(reference=cumulative.price, other=exact.slice_price)
     )
+
+
+def _below_one_increment(*, reference: float, other: float) -> bool:
+    """Whether two recorded prices differ by less than one valid increment of ``reference``, compared exactly."""
+    with localcontext(_EXACT_DECIMAL_CONTEXT):
+        return abs(_recorded(reference) - _recorded(other)) < price_increment(_recorded(reference))
 
 
 def _unavailable(

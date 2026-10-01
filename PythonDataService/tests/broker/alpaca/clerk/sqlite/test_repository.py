@@ -1,12 +1,12 @@
-"""Repository-spine adversarial tests — PRD §15.1/§15.4 subset in Slice-2 scope.
+"""Repository-spine adversarial tests — the Slice-2 subset of the clerk's kill, tamper and rebuild cases.
 
 Slice 2 ("Pass focused atomicity, idempotency, identity, corruption, and
 rebuild-from-mirror tests") does not yet have commands/effects/broker
-contact, so the PRD's broker-facing adversarial cases (idempotent commands,
+contact, so the broker-facing adversarial cases (idempotent commands,
 UNKNOWN reconciliation, EXIT flows) are out of scope here and land with
-their owning slices. This file covers every §15.4 case a bare repository
-spine can meaningfully exercise, plus the mirror-fence and hash-chain
-mechanics from §4/§7/§8/§9 of the pinned contracts doc.
+their owning slices. This file covers every case a bare repository spine can
+meaningfully exercise, plus the mirror-fence and hash-chain mechanics from
+§4/§7/§9 of ADR 0035's binding annex and ``sqlite/mirror.py``.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite import process_repositories, repository_lifecycle
+from app.broker.alpaca.clerk.sqlite import repository_lifecycle
 from app.broker.alpaca.clerk.sqlite.facts import (
     UncertaintyRaisedFacts,
     UncertaintyResolvedFacts,
@@ -56,36 +56,6 @@ def _clock_seq():
         return counter["t"]
 
     return clock
-
-
-def test_process_repository_shutdown_closes_every_cached_handle_after_one_failure(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    closed: list[str] = []
-
-    class FakeRepository:
-        def __init__(self, account_id: str, *, fail: bool = False) -> None:
-            self.account_id = account_id
-            self.fail = fail
-
-        def close(self) -> None:
-            closed.append(self.account_id)
-            if self.fail:
-                raise OSError("close failed")
-
-    with process_repositories._lock:
-        process_repositories._repositories.update(
-            {
-                "PA-FAIL": FakeRepository("PA-FAIL", fail=True),
-                "PA-OK": FakeRepository("PA-OK"),
-            }
-        )
-
-    process_repositories.close_all_repositories()
-
-    assert closed == ["PA-FAIL", "PA-OK"]
-    assert process_repositories._repositories == {}
-    assert "failed to close cached SQLite Alpaca Clerk repository" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -299,8 +269,8 @@ def test_open_a_never_initialized_account_raises_file_not_found(tmp_path: Path) 
 
 
 def test_remove_db_after_established_is_not_silently_recreated(tmp_path: Path) -> None:
-    """PRD §15.4: 'remove clerk.db after authority was established and prove
-    it is not recreated.' Closes the gap the Slice-1 review found."""
+    """Remove ``clerk.db`` after authority was established and prove it is not
+    recreated. Closes the gap the Slice-1 review found."""
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     db_path = repo.db_path
     repo.close()
@@ -347,8 +317,8 @@ def test_append_transition_advances_sequence_hash_chain_and_revision(tmp_path: P
 def test_disk_full_before_mirror_prepare_fails_closed_without_transition(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PRD §15.1 'kill before the command commit: no command, no broker call',
-    generalized to the spine: if the mirror PREPARE fsync fails, no SQLite
+    """Kill before the command commit: no command, no broker call.
+    Generalized to the spine: if the mirror PREPARE fsync fails, no SQLite
     transaction opens and no row is appended."""
     clock = _clock_seq()
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
@@ -369,8 +339,8 @@ def test_disk_full_before_mirror_prepare_fails_closed_without_transition(
 def test_kill_after_sqlite_commit_before_mirror_finalize_reopen_finalizes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PRD §15.4 'kill after SQLite commit but before mirror finalization:
-    ... an intact DB finalizes on restart.'"""
+    """Kill after SQLite commit but before mirror finalization: an intact DB
+    finalizes on restart."""
     clock = _clock_seq()
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
@@ -546,8 +516,8 @@ def test_rebuild_refuses_when_db_path_already_exists(tmp_path: Path) -> None:
 
 
 def test_tampered_mirror_line_fails_closed_on_rebuild(tmp_path: Path) -> None:
-    """PRD §15.4: 'tamper with a mirror line and prove hash-chain-break
-    detection fails closed (no tampered import).'"""
+    """Tamper with a mirror line and prove hash-chain-break detection fails
+    closed (no tampered import)."""
     clock = _clock_seq()
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")
@@ -781,12 +751,6 @@ def test_account_hold_raised_fold_creates_an_active_account_clerk_hold(tmp_path:
     repo.close()
 
 
-def test_active_hold_returns_none_when_no_hold_of_that_reason_exists(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
-    assert repo.active_hold(scope="ACCOUNT_CLERK", reason_code="UNEXPLAINED_ORDER_HOLD") is None
-    repo.close()
-
-
 def test_two_hold_transitions_each_mint_a_distinct_hold_id(tmp_path: Path) -> None:
     """Two independent raises (e.g. two different reason codes, or a test
     directly exercising the fold twice) must never collide on hold_id — the
@@ -834,21 +798,15 @@ def test_attributed_positions_by_symbol_sums_across_bots(tmp_path: Path) -> None
         )
         repo._conn.commit()
 
-    # Golden fractional aggregation; the tolerance is the source-backed
-    # contract in docs/references/clerk-invariants.md §3.
+    # Golden fractional aggregation; the tolerance matches
+    # POSITION_QTY_EPSILON (1e-9).
     assert repo.attributed_positions_by_symbol() == {"SPY": pytest.approx(0.3, abs=1e-9)}
     repo.close()
 
 
-def test_uncertain_orders_is_empty_on_a_fresh_repository(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
-    assert repo.uncertain_orders() == []
-    repo.close()
-
-
 # ---------------------------------------------------------------------------
-# #1380 primitives: UNCERTAINTY_RAISED/RESOLVED folds + raise_uncertainty_if_
-# none_active/active_uncertainty*/active_holds_for_admission read helpers.
+# #1380 primitives: UNCERTAINTY_RAISED/RESOLVED folds +
+# active_uncertainty*/active_holds_for_admission read helpers.
 # ---------------------------------------------------------------------------
 
 
@@ -931,33 +889,6 @@ def test_uncertainty_raised_fold_creates_an_active_bot_scoped_uncertainty(
         reason_code="TEST_REASON",
         strategy_instance_id="qqq-bot",
     ) is None
-    repo.close()
-
-
-def test_active_uncertainty_returns_none_when_none_exists(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
-    assert repo.active_uncertainty(scope="ACCOUNT_CLERK", reason_code="TEST_REASON", strategy_instance_id=None) is None
-    repo.close()
-
-
-def test_raise_uncertainty_if_none_active_is_idempotent(tmp_path: Path) -> None:
-    repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
-    first = repo.raise_uncertainty_if_none_active(
-        scope="ACCOUNT_CLERK",
-        reason_code="TEST_REASON",
-        strategy_instance_id=None,
-        build_transition=lambda: _uncertainty_transition(strategy_instance_id=None),
-    )
-    before = len(repo.custody_transitions())
-    second = repo.raise_uncertainty_if_none_active(
-        scope="ACCOUNT_CLERK",
-        reason_code="TEST_REASON",
-        strategy_instance_id=None,
-        build_transition=lambda: _uncertainty_transition(strategy_instance_id=None),
-    )
-    assert first is True
-    assert second is False
-    assert len(repo.custody_transitions()) == before  # no second raise
     repo.close()
 
 

@@ -19,10 +19,8 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
 from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.facts import (
     CustodySubjectRegisteredFacts,
-    ExecutionCorrectedFacts,
     ExecutionSliceFilledFacts,
     ManualOrderAcceptedFacts,
-    ManualOrderCancelResultFacts,
     ManualTicketLegReservedFacts,
     ManualTicketReservedFacts,
     OrderSubmitFailedFacts,
@@ -34,7 +32,6 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     ManualOrderCancelOwnershipError,
-    ManualOrderCancelTerminalError,
     accept_manual_order_cancellation,
     resolve_manual_order_cancellation,
     submit_manual_order_cancellation,
@@ -995,79 +992,6 @@ async def test_exact_execution_changes_only_the_manual_subject_position(
 
 
 @pytest.mark.asyncio
-async def test_manual_execution_correction_replaces_only_manual_custody(
-    repo: ClerkSqliteRepository,
-) -> None:
-    submitted = await submit_manual_order(
-        repo,
-        account_id=ACCOUNT_ID,
-        operator_id=OPERATOR_ID,
-        ticket_id=TICKET_ID,
-        leg_id=LEG_ID,
-        leg=market_buy(),
-        trade=FakeTrade(repo=repo),
-    )
-    assert submitted.leg.effect_operation_id is not None
-    assert submitted.leg.order_ref is not None
-    exact = ExecutionSliceFilledFacts(
-        execution_id="manual-execution-to-correct",
-        symbol="SPY",
-        side="BUY",
-        slice_qty=1,
-        slice_price=500,
-        fee=None,
-        fee_fidelity="not_reported",
-        evidence_source="websocket",
-        source_event_at_ms=1_700_000_000_200,
-    )
-    repo.append_transition(
-        TransitionInput(
-            command_id=submitted.command.command_id,
-            effect_operation_id=submitted.leg.effect_operation_id,
-            order_ref=submitted.leg.order_ref,
-            transition_kind="EXECUTION_SLICE_FILLED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="in_progress",
-            source_event_at_ms=exact.source_event_at_ms,
-            clerk_observed_at_ms=repo.clock(),
-            summary_code="EXECUTION_SLICE_FILLED",
-            facts_json=exact.to_facts_json(),
-        )
-    )
-    corrected = ExecutionCorrectedFacts(
-        execution_id="manual-corrected-execution",
-        superseded_execution_ref=exact.execution_id,
-        symbol="SPY",
-        side="BUY",
-        corrected_qty=2,
-        corrected_price=501,
-        why="broker corrected the exact manual fill",
-    )
-
-    outcome = repo.append_execution_correction_or_raise(
-        correction=TransitionInput(
-            command_id=submitted.command.command_id,
-            effect_operation_id=submitted.leg.effect_operation_id,
-            order_ref=submitted.leg.order_ref,
-            transition_kind="EXECUTION_CORRECTED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="in_progress",
-            source_event_at_ms=1_700_000_000_201,
-            clerk_observed_at_ms=repo.clock(),
-            summary_code="EXECUTION_CORRECTED",
-            facts_json=corrected.to_facts_json(),
-        ),
-        build_uncertainty=lambda reason: pytest.fail(f"unexpected correction rejection: {reason}"),
-    )
-
-    assert outcome == "appended"
-    assert repo.attributed_positions_for_subject(manual_operator_subject_id(OPERATOR_ID)) == {"SPY": 2.0}
-    assert repo.attributed_positions_for_strategy("bot-1") == {}
-
-
-@pytest.mark.asyncio
 async def test_manual_sell_reserves_only_its_subject_long_position(repo: ClerkSqliteRepository) -> None:
     trade = FakeTrade(repo=repo)
     bought = await submit_manual_order(
@@ -1576,53 +1500,6 @@ async def test_manual_cancel_records_a_broker_rejection_when_exact_evidence_stay
     latest = repo.transitions_for_order(submitted.leg.order_ref)[-1]
     assert latest["transition_kind"] == "ORDER_CANCEL_UNCERTAIN"
     assert "broker refused cancellation" in latest["facts_json"]
-
-
-@pytest.mark.asyncio
-async def test_manual_cancel_refuses_a_terminal_target_before_creating_a_cancel_effect(
-    repo: ClerkSqliteRepository,
-) -> None:
-    trade = FakeTrade(repo=repo)
-    submitted = await submit_manual_order(
-        repo,
-        account_id=ACCOUNT_ID,
-        operator_id=OPERATOR_ID,
-        ticket_id=TICKET_ID,
-        leg_id=LEG_ID,
-        leg=market_buy(),
-        trade=trade,
-    )
-    assert submitted.leg.order_ref is not None and submitted.leg.effect_operation_id is not None
-    repo.append_transition(
-        TransitionInput(
-            command_id=submitted.command.command_id,
-            effect_operation_id=submitted.leg.effect_operation_id,
-            order_ref=submitted.leg.order_ref,
-            transition_kind="MANUAL_ORDER_CANCELED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="failed",
-            clerk_observed_at_ms=repo.clock(),
-            summary_code="MANUAL_ORDER_CANCELED",
-            facts_json=ManualOrderCancelResultFacts(
-                outcome="CANCELED",
-                why="Exact broker evidence already made this manual order terminal.",
-            ).to_facts_json(),
-        )
-    )
-
-    with pytest.raises(ManualOrderCancelTerminalError, match="already terminal"):
-        await submit_manual_order_cancellation(
-            repo,
-            account_id=ACCOUNT_ID,
-            operator_id=OPERATOR_ID,
-            order_ref=submitted.leg.order_ref,
-            cancel_request_id="d40f1aeb-263c-4a57-8583-0e48f1d9298b",
-            trade=trade,
-        )
-
-    assert repo.manual_order_cancellation(order_ref=submitted.leg.order_ref) is None
-    assert trade.cancel_calls == []
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,8 @@
 """What an installation bundle carries, and what it must never carry (#2268).
 
 Owner decision (grill session 2026-09-22, #2151 comment): the bundle holds the
-five podman volumes, ``data-lake-volume/``, the whole
+podman volumes (the qualification-drill volume left with its compose service,
+#2757), ``data-lake-volume/``, the whole
 ``PythonDataService/artifacts/`` and ``PythonDataService/lean-cache`` — the
 rule being that every gitignored folder a container mounts goes in, which by
 that same rule carries ``PythonDataService/cache`` too — and no secret at all.
@@ -27,7 +28,7 @@ from typing import Literal
 from app.installation_migration.topology import compose_variable
 from app.lean_sidecar.launcher_auth import LAUNCHER_TOKEN_FILENAME
 
-VolumeRole = Literal["postgres", "fleet_control", "clerk", "qualification"]
+VolumeRole = Literal["postgres", "fleet_control", "clerk"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,11 +62,6 @@ BUNDLED_VOLUMES: tuple[BundledVolume, ...] = (
     BundledVolume("alpaca-fleet-control", "learn-ai_alpaca-fleet-control", "fleet_control"),
     BundledVolume("alpaca-clerk-data", "learn-ai-alpaca-clerk-data", "clerk"),
     BundledVolume("alpaca-paper-clerk-data", "learn-ai-alpaca-paper-clerk-data", "clerk"),
-    BundledVolume(
-        "alpaca-clerk-qualification-data",
-        "learn-ai-alpaca-clerk-qualification-data",
-        "qualification",
-    ),
 )
 
 #: The lake's folder key. Its host path follows ``LEAN_DATA_VOLUME_HOST_PATH``
@@ -96,7 +92,7 @@ EXCLUDED_BIND_MOUNTS: dict[str, str] = {
 #: token a process mints under ``artifacts/`` is minted afresh on the new
 #: host. ``LAUNCHER_TOKEN_FILENAME`` is the LEAN launcher's live token, named
 #: by its canonical definition. The retired host daemon's
-#: ``.host-daemon-token`` (ADR 0007) and the clerk host-binding capability
+#: ``.host-daemon-token`` and the clerk host-binding capability
 #: have no canonical definition left in code, so they are caught by shape:
 #: any ``*-token``/``*_token`` name, any hidden name mentioning a token or a
 #: capability, key material (``*.pem``, ``*.key``, SSH ``id_*`` keys, and
@@ -128,7 +124,7 @@ _SKIPPED_SECRET_NOTES = {
     LAUNCHER_TOKEN_FILENAME: (
         "The LEAN launcher's token; ensure_launcher_token mints a fresh one on the new host."
     ),
-    ".host-daemon-token": "Retired host-daemon token (ADR 0007); nothing reads it.",
+    ".host-daemon-token": "Retired host-daemon token; nothing reads it.",
     ".clerk-host-binding-capability": "Retired clerk host-binding capability; nothing reads it.",
 }
 _DEFAULT_SKIPPED_SECRET_NOTE = (

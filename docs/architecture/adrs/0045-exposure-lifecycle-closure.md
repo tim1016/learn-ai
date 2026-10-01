@@ -1,7 +1,7 @@
 # ADR 0045 — Exposure lifecycle closure: recovery flatten executor, EXIT refusal taxonomy, stuck-EXIT watchdog
 
 **Status:** Accepted 2026-08-24
-**Provenance:** Authored with the exposure-lifecycle-closure implementation (PRD #1752, PRs #1763/#1765/#1768 and this PR), from `docs/superpowers/plans/2026-08-24-exposure-lifecycle-closure.md`; spec: `docs/audits/strategy-execution-research-directions-2026-08-24.md` Direction 1. Supersedes [ADR 0010](0010-operator-action-contract-flatten-pause-stop.md) for the active Alpaca/SQLite control plane.
+**Provenance:** Authored with the exposure-lifecycle-closure implementation (PRD #1752, PRs #1763/#1765/#1768 and this PR), from `docs/superpowers/plans/2026-08-24-exposure-lifecycle-closure.md`; spec: Direction 1 of the 2026-08-24 strategy-execution research brief (in Git history). Supersedes ADR 0010 (now deleted; in Git history) for the active Alpaca/SQLite control plane.
 **Decision drivers:** F18/F19 (ops study 2026-08-24 §8–§9); the "correct mechanism exists, unwired" failure mode named by the same-day research directions.
 **Related:** ADR 0035 (SQLite sole Alpaca custody authority), ADR 0038 (Alpaca sole bot control plane), ADR 0041 (generated Button Reference), ADR 0010 (superseded).
 **Vocabulary:** `CONTEXT.md` § "Exposure lifecycle closure" — Recovery EXIT, Safe flatten, Redrive, `EXIT_STUCK`.
@@ -144,6 +144,12 @@ disabled; a held position requires Flatten before Resume. There is no automatic
 exit on run death, no broker-side protective stop (the contract supports market
 and limit orders only; stops do not trade in extended hours), and no carry-over
 without a per-strategy replay-equivalence proof.
+
+**Amended 2026-09-30 (#2470):** #2550 removed Resume, so an ended bot never runs
+again and a held position stays its own until Flattened. A restart ends the run
+but not its orders: the Clerk cancels the run's working entry (#2362) and keeps
+working its exit, and while that exit works the held-position warning says
+Flatten waits for it. `test_crash_restart.py` pins each crash point.
 
 **Amended 2026-09-29 (owner decision): a Dry Run is exempt.** It holds nothing
 real, so leaving its simulated position open only strands a chore and a false

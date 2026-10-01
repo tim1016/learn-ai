@@ -120,24 +120,6 @@ async def test_version_7_declares_append_only_golden_validation_ledgers(scratch_
     ]
 
 
-async def test_version_8_rejects_program_authorization_on_a_rejected_review(
-    scratch_db: asyncpg.Connection,
-) -> None:
-    await ensure_schema(scratch_db)
-
-    constraint = await scratch_db.fetchrow(
-        """
-        SELECT pg_get_constraintdef(oid) AS definition, convalidated
-          FROM pg_constraint
-         WHERE conname = 'ck_research_golden_validation_reviews_authorized_only_on_accept'
-        """
-    )
-
-    assert constraint is not None
-    assert "decision = 'accept'" in constraint["definition"]
-    assert constraint["convalidated"] is False
-
-
 async def test_version_8_preserves_a_previously_legal_rejected_authorization(
     scratch_db: asyncpg.Connection,
 ) -> None:

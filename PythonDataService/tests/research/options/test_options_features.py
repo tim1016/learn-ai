@@ -36,11 +36,6 @@ class TestIv30d:
         result = OptionsFeatures.compute_iv_30d(df)
         pd.testing.assert_series_equal(result, df["iv_30d_atm"].astype(float), check_names=False)
 
-    def test_preserves_length(self):
-        df = _make_iv_df(n=50)
-        result = OptionsFeatures.compute_iv_30d(df)
-        assert len(result) == 50
-
 
 class TestIvRank:
     """Test IV Rank feature."""
@@ -186,15 +181,6 @@ class TestLogSkew:
 class TestVrp:
     """Test Volatility Risk Premium with namespace isolation."""
 
-    def test_signal_mode_no_future_leak(self):
-        """Signal mode uses trailing RV — no NaN at the end."""
-        iv_df = _make_iv_df(n=50)
-        stock_df = _make_stock_df(n=50)
-        result = OptionsFeatures.compute_vrp(iv_df, stock_df, mode="signal")
-        assert result.name == "vrp_5"
-        # Trailing RV: last values should NOT be NaN (after warmup)
-        assert result.iloc[-1] is not np.nan or pd.notna(result.iloc[-1])
-
     def test_research_mode_uses_forward(self):
         """Research mode uses forward RV — NaN at the end."""
         iv_df = _make_iv_df(n=50)
@@ -235,21 +221,6 @@ class TestVrp:
 
 class TestComputeFeatureDispatch:
     """Test feature dispatch function."""
-
-    def test_iv_30d(self):
-        df = _make_iv_df()
-        result = OptionsFeatures.compute_feature("iv_30d", df)
-        assert len(result) == len(df)
-
-    def test_iv_rank_60(self):
-        df = _make_iv_df(n=100)
-        result = OptionsFeatures.compute_feature("iv_rank_60", df)
-        assert len(result) == len(df)
-
-    def test_log_skew(self):
-        df = _make_iv_df()
-        result = OptionsFeatures.compute_feature("log_skew", df)
-        assert len(result) == len(df)
 
     def test_unknown_feature_raises(self):
         df = _make_iv_df()

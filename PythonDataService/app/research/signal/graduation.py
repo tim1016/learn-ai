@@ -1,7 +1,7 @@
 """Graduation evaluation for the Signal Engine.
 
-Formula: Stage ladder (0/1/2/3) evaluated against IC t-stat, OOS Sharpe, regime coverage, and deflated Sharpe thresholds per docs/signal-engine-authority.md §4–5. Stage 0 rejection short-circuits all downstream.
-Reference: Internal — docs/signal-engine-authority.md §4 (authority for every formula); Bailey & López de Prado (2014) Deflated Sharpe for Stage 2+ gate.
+Formula: Stage ladder (0/1/2/3) evaluated against IC t-stat, OOS Sharpe, regime coverage, and deflated Sharpe thresholds per ADR 0073 decision 1. Stage 0 rejection short-circuits all downstream.
+Reference: Internal — ADR 0073 decision 1 (the stage ladder); Bailey & López de Prado (2014) Deflated Sharpe for Stage 2+ gate.
 Canonical implementation: app/research/signal/graduation.py
 Validated against: NONE — pending (pending-fixture per registry)
 
@@ -15,7 +15,7 @@ The decision lives on two surfaces:
 2. **Stage 0 rejection** — a hard kill switch that fires *first* and
    short-circuits interpretation of downstream metrics. When triggered,
    the UI collapses the deeper panels behind a "show diagnostic details
-   anyway" disclosure (see `signal-engine-authority.md` § 5).
+   anyway" disclosure.
 
 The legacy A–F grade and "Robust Alpha / Conditional Alpha / Degrading"
 status labels are kept for now to avoid breaking the existing UI; they
@@ -32,7 +32,7 @@ from app.research.signal.backtest import BacktestResult
 from app.research.signal.diagnostics import DataSufficiency, SignalDiagnostics
 from app.research.signal.walk_forward import WalkForwardResult
 
-# ─── Stage 0 thresholds (authority: docs/signal-engine-authority.md § 5.1) ──
+# ─── Stage 0 thresholds (authority: ADR 0073 decision 1) ──
 
 STAGE0_STABILITY_MIN = 0.25
 STAGE0_MEDIAN_OOS_SHARPE_MIN = 0.0  # strict-greater, so ≤ 0 fails
@@ -287,9 +287,9 @@ def _evaluate_stage0(
 
     The thresholds here are the project defaults adopted from external
     methodology review (2026-04-30) and codified in
-    ``docs/signal-engine-authority.md`` § 5.1. Tuning them requires
-    updating the constants at the top of this module, the authority
-    document, and the matching test.
+    ADR 0073 decision 1. Tuning them requires
+    updating the constants at the top of this module, ADR 0073,
+    and the matching test.
     """
     failures: list[Stage0Failure] = []
 

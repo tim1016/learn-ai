@@ -4,7 +4,7 @@ The adapter is the **single ingestion boundary**: it consumes Alpaca's raw JSON
 mappings (from the ``raw_data=True`` client) and produces broker-contract
 models. Every vendor→contract conversion happens here, exactly once:
 
-- RFC-3339 timestamp strings → ``int64`` ms UTC (temporal-rigor: the one
+- RFC-3339 timestamp strings → ``int64`` ms UTC (the one
   conversion boundary on ingestion).
 - Decimal money/quantity strings → ``float`` (read-only display surface; the
   verbatim decimals remain in the capture journal).
@@ -181,7 +181,7 @@ def et_date_to_ms(value: str) -> int:
 
     Non-trade activity rows carry a settlement/record *date*, not an instant.
     Anchoring at the start of the ET calendar day keeps the value from drifting
-    a calendar day when rendered in ``date-et`` mode (temporal-rigor).
+    a calendar day when rendered in ``date-et`` mode (ADR 0022 (a), (e)).
     """
     day = date.fromisoformat(value)
     anchored = datetime(day.year, day.month, day.day, tzinfo=_ET)
@@ -633,6 +633,20 @@ def from_alpaca_activity(
         occurred_at_ms=occurred_at_ms(payload),
         observed_at_ms=_observed(observed_at_ms),
     )
+
+
+def execution_id_from_activity_id(activity_id: str) -> str:
+    """Recover Alpaca's execution identity from its account-activity identity.
+
+    Trade updates expose the bare execution UUID, while account activities may
+    prefix that same UUID with the vendor timestamp and ``::``. The full
+    activity ID remains opaque everywhere else; only the evidence bridges
+    between the two compare the embedded execution identity.
+    """
+    timestamp_prefix, separator, embedded_execution_id = activity_id.rpartition("::")
+    if separator and timestamp_prefix.isdigit() and embedded_execution_id:
+        return embedded_execution_id
+    return activity_id
 
 
 def from_alpaca_asset(payload: Mapping[str, Any]) -> BrokerAsset:

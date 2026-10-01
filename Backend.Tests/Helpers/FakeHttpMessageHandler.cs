@@ -23,7 +23,7 @@ public class FakeHttpMessageHandler : HttpMessageHandler
     }
 
     /// <summary>
-    /// Create from status code and response body string (used by PolygonServiceTests, SanitizationServiceTests).
+    /// Create from status code and response body string (used by PolygonServiceTests).
     /// </summary>
     public FakeHttpMessageHandler(HttpStatusCode statusCode, string responseBody)
     {

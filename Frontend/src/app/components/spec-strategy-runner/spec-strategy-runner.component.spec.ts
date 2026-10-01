@@ -250,16 +250,6 @@ describe('SpecStrategyRunnerComponent', () => {
     expect(component.currentSavedId()).toBeNull();
   });
 
-  // ---- Plain-English summaries ----------------------------------------
-  it('exposes per-block plain-English summaries that update with the spec', () => {
-    expect(component.entrySummary()).toContain('crosses above');
-    expect(component.exitSummary()).toContain('5 or more bars since entry');
-
-    component.selectFixture('rsi_mean_reversion');
-    expect(component.entrySummary()).toContain('RSI(14) <');
-    expect(component.exitSummary()).toContain('RSI(14) >');
-  });
-
   // ---- Run --------------------------------------------------------------
   it('runBacktest hands the current spec and run config to the service', async () => {
     await component.runBacktest();

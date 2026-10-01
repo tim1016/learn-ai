@@ -4,37 +4,16 @@ import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import { fakeBotPanelView, fakePanelAction, fakeSqliteBotActions, fakeSqliteStopAction } from '../../../../testing/bot-panel-fixtures';
-import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import {
   AlpacaLiveVerdictService,
   LANE_MODE_WORDING,
   type LaneVerdictState,
 } from '../../../../services/alpaca-live-verdict.service';
-import type { BotPanelView, BotRunView, CurrentRunState } from '../lib/broker-v2-panel.types';
+import type { BotPanelView, CurrentRunState } from '../lib/broker-v2-panel.types';
 import { EMPTY_CURRENT_RUN_STATE } from '../lib/broker-v2-panel.types';
 import { BotBannerComponent } from './bot-banner.component';
 
 const BACK_ROUTE = ['brokers', 'alpaca', 'clerks', 'clrk_spec', 'accounts', 'pa9', 'bots'];
-
-function fakeRun(overrides: Partial<BotRunView> = {}): BotRunView {
-  return {
-    strategy_instance_id: 'spy-momentum-01',
-    run_id: 'run-current',
-    configuration_hash: 'a'.repeat(64),
-    launch_reason: 'deploy',
-    started_at_ms: 1_753_800_000_000,
-    process: {
-      strategy_instance_id: 'spy-momentum-01',
-      run_id: 'run-current',
-      process_identity: 'process-1',
-      state: 'RUNNING',
-      registry_generation: 'registry-1',
-      observed_at_ms: 1_753_800_005_000,
-    },
-    terminal_outcome: null,
-    ...overrides,
-  };
-}
 
 const PAPER_VERDICT = { verdict: { final_verdict: 'paper' }, lastError: null } as unknown as LaneVerdictState;
 const verdicts = { stateFor: vi.fn(() => PAPER_VERDICT) };
@@ -216,20 +195,6 @@ describe('BotBannerComponent', () => {
 
     expect(screen.queryByRole('button', { name: 'More actions for this bot' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Manual order' })).toBeNull();
-  });
-
-  it('shows the run timing and the strategy clocks', async () => {
-    await renderBanner({}, {
-      run: fakeRun({
-        terminal_outcome: { kind: 'STOPPED', reason_code: 'OPERATOR_STOP', recorded_at_ms: 1_753_850_000_000, run_id: 'run-current' },
-      }),
-      loading: false,
-      failed: false,
-    });
-
-    expect(screen.getByText(formatTimestampDisplay(1_753_800_000_000, { granularity: 'time' }))).toBeTruthy();
-    expect(screen.getByText(formatTimestampDisplay(1_753_850_000_000, { granularity: 'time' }))).toBeTruthy();
-    expect(screen.getByText('Last decision')).toBeTruthy();
   });
 
   it('surfaces a run-timing retry request', async () => {

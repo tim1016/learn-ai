@@ -4,8 +4,7 @@ Reuses ``app.research.runs.hashing.hash_payload`` so all hash strings in
 this package are bare 64-char hex, matching ``strategy_spec_hash`` and
 ``data_snapshot_id`` formats used by the run ledger.
 
-Wire and storage timestamps are ``int64 ms UTC`` per
-``.claude/rules/numerical-rigor.md`` -> "Timestamp rigor".
+Wire and storage timestamps are ``int64 ms UTC``.
 
 Formulas:
     rows_hash = hash_payload(rows_sorted_by_timestamp_ms)
@@ -15,9 +14,8 @@ Formulas:
 
 Reference: SHA-256 (FIPS 180-4) via ``app.research.runs.hashing.hash_payload``
     (canonical-JSON SHA-256 with relaxed RFC 8785 contract — key-order
-    independence, non-ASCII stability, no whitespace); v0.5 design at
-    ``docs/superpowers/specs/2026-05-09-ml-prediction-as-data-v05-design.md``;
-    authority at ``docs/ml-predictions-authority.md``.
+    independence, non-ASCII stability, no whitespace); predictions enter
+    a run as data per ADR 0072 decision 6.
 
 Canonical implementation: this file (manifest schema + hash math + parquet I/O).
 Validated against:
@@ -73,8 +71,8 @@ class QuantConnectPrecomputedFixtureGenerator(BaseModel):
     a sidecar JSON) and passed by the caller; QC's emitted file itself
     contains only the per-date prediction list, no provenance metadata.
 
-    All timestamps are ``int64 ms UTC`` per ``.claude/rules/numerical-rigor.md``
-    -> "Timestamp rigor". Raw QC date strings (the per-row ``"YYYY-MM-DD"``
+    All timestamps are ``int64 ms UTC``.
+    Raw QC date strings (the per-row ``"YYYY-MM-DD"``
     values from the export) are converted to ``int64 ms UTC`` at the
     importer boundary using ``qc_daily_anchor_tz`` + ``qc_daily_anchor_hhmm``.
     """

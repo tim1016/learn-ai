@@ -1,10 +1,9 @@
 """The startup ceremony: what a worker binds, and what it refuses to bind.
 
-This is package D's safety surface. Every test here corresponds to a line in
-the plan's acceptance matrix or its "done when" list, and the ones that matter
-most are the refusals — a refused Apply and a crash with a staged selection
-both have to leave the worker running its *last-effective* revision, because a
-worker with no broker and an open position cannot EXIT.
+This is package D's safety surface. The tests that matter most are the
+refusals — a refused Apply and a crash with a staged selection both have to
+leave the worker running its *last-effective* revision, because a worker with no
+broker and an open position cannot EXIT.
 """
 
 from __future__ import annotations
@@ -358,7 +357,7 @@ async def test_a_refused_apply_is_consumed_so_the_next_restart_cannot_re_arm_it(
 async def test_an_unprovable_prior_account_refuses_rather_than_assuming_it_is_clear(
     service: BrokerConfigurationService, environment: AlpacaCredentialEnvironment
 ) -> None:
-    """Absence of evidence is not evidence of absence (plan §5)."""
+    """Absence of evidence is not evidence of absence."""
     effective_id, _ = await _profile_bound_to(
         service, display_name="Paper — effective", account_id=PAPER_ACCOUNT
     )

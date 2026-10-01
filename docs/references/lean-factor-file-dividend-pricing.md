@@ -84,6 +84,3 @@ With AAPL's real 2020 sequence (dividend, then 4:1 split):
 - Read-side parity (unchanged by this fix):
   `tests/data_lake/test_factor_files.py` against LEAN's
   `CorporateFactorProvider.GetScalingFactors` walk.
-
-Registry: `docs/math-sources-of-truth.md` → "LEAN factor-file
-corporate-action factors".

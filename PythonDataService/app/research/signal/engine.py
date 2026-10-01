@@ -1,7 +1,7 @@
 """Signal engine orchestrator — converts validated features into tradable signals.
 
 Formula: Orchestration only — wraps standardize, backtest, walk_forward, diagnostics, graduation into a single Signal pipeline. No new arithmetic.
-Reference: Internal — docs/signal-engine-authority.md.
+Reference: Internal.
 Canonical implementation: app/research/signal/engine.py
 Validated against: NONE — pending (pending-fixture per registry)
 """

@@ -61,7 +61,7 @@ def test_init_provision_verify_show_and_retire_round_trip(
     assert clerk_id.startswith("clrk_")
     assert provisioned["worker_key"].startswith("wkrk_")
     # The two transport tokens are minted once for the operator's environment
-    # files and stored nowhere (audit 2026-09-13, finding 3).
+    # files and stored nowhere (ADR 0062 addendum, item 5).
     assert provisioned["agent_service_token"].startswith("svct_")
     assert provisioned["coordinator_service_token"].startswith("svct_")
     assert provisioned["agent_service_token"] != provisioned["coordinator_service_token"]
@@ -330,7 +330,7 @@ def test_drain_and_force_retire_answer_over_the_cli(tmp_path: Path, capsys) -> N
     assert refusal["error"].startswith("clerk_drain_deadline_pending:")
 
     # The completing path needs a deadline that has elapsed against the CLI's
-    # wall clock; §7.3 forbids moving the first lane's, so enter a second
+    # wall clock; ADR 0063 §7.3 forbids moving the first lane's, so enter a second
     # lane's drain through a service seam whose frozen clock sits far in the
     # past.
     past = FrozenClock(start_ms=now_ms_utc() - 90 * 86_400_000)

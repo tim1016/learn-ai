@@ -1,41 +1,16 @@
 # Clerk custody invariants (Alpaca SQLite spine)
 
-> **Status:** active. Consolidated 2026-09-12 from
-> `clerk-exit-reducing-quantity.md`, `clerk-fill-quantity-tolerance.md`,
-> and `clerk-position-drift-tolerance.md` (git history retains the
-> originals).
-
 These are internal custody invariants, not ports from external trading
-software. The authority is the pinned contract
-`docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md` (ENTER fold
-§3d, EXIT acceptance criteria §3/§6, reconciliation acceptance criteria)
-plus the repository's strict-float policy in
-`.claude/rules/numerical-rigor.md`.
+software. The decisions and their reasons are ADR 0030 (an EXIT reduces the
+final instance-attributed quantity exactly), ADR 0036 Decision 1 (the one
+flatness boundary) and ADR 0036's 2026-09-30 amendment (fill-quantity
+tolerance, delta pricing, the one-cent price conflict). This note keeps the
+tests that pin each rule and the coverage-set tolerance.
 
 ## 1. EXIT reducing-order quantity
 
-The canonical implementation is
-`PythonDataService/app/broker/alpaca/clerk/sqlite/exit_resolution.py`.
-After every captured same-strategy/symbol ENTRY is terminal, the Clerk
-refreshes each exact broker identity and reads the current
-SQLite-attributed quantity:
-
-`reducing_quantity = abs(final_attributed_quantity)`
-
-The side is `SELL` for a positive attributed quantity and `BUY` for a
-negative quantity. The calculation may not use requested ENTRY quantity,
-broker account net position, or a pre-cancellation snapshot. A
-database-unique `EXIT_REDUCING_ORDER_CREATED` transition records the
-symbol, side, and exact quantity before broker submission, making replay
-and retry deterministic.
-
-**Acceptance criterion.** An EXIT succeeds only after terminal
-reducing-order evidence leaves
-`abs(attributed_quantity) < POSITION_QTY_EPSILON`, where
-`POSITION_QTY_EPSILON = 1e-9` and `rtol=0`. A terminal partial reduction
-that does not meet that criterion fails the EXIT and opens a durable
-bot-scoped non-flat fence; it never fabricates flatness or permits new
-exposure.
+The decision is ADR 0030; the flat boundary it must reach is ADR 0036
+Decision 1.
 
 **Validation.**
 `PythonDataService/tests/broker/alpaca/clerk/sqlite/test_exit.py` covers
@@ -45,109 +20,7 @@ attributed-flat proof.
 
 ## 2. Fill-quantity tolerance and delta pricing
 
-The canonical fold is
-`PythonDataService/app/broker/alpaca/clerk/sqlite/folds.py::_fold_order_fill_observed`.
-
-### Delta quantity
-
-Alpaca reports `filled_quantity` as the order's *cumulative* filled
-quantity, not a per-execution delta. The fold recovers the delta as:
-
-`delta_qty = cumulative_filled_quantity - SUM(prior recorded fills' qty)`
-
-Quantities are floats (fractional shares are legal), so a repeated
-observation of the same cumulative state can differ from the recorded sum
-by float64 accumulation residue rather than exactly zero. The gate is
-`FILL_QTY_EPSILON = 1e-9` with `rtol=0`: an absolute tolerance, not scaled
-to the position size, matching the canonical position boundary in §3 for
-the same reason — share quantities are absolute, so a relative tolerance
-would hide real drift on small positions. `1e-9` sits several orders of
-magnitude above the residue a handful of `SUM`/subtraction operations on
-float64 doubles can produce (~1e-12–1e-13 at the quantity magnitudes this
-fold handles), so it filters that noise without being large enough to
-discard a real fractional fill.
-
-`fill_id` is built from `cumulative_filled_quantity` formatted at the same
-fixed precision (`:.9f`) rather than the float's raw `str()` repr, so two
-observations of a mathematically-identical cumulative state dedup even if
-their underlying float representations differ by residue.
-
-The two constants are coupled by design, not independently tunable: the
-formatting precision matches the epsilon's decimal place so a cumulative
-quantity at or below `FILL_QTY_EPSILON` (e.g. `4e-10`) formats to the same
-string as a literal zero (`"0.000000000"`). This never collides with a
-real recorded fill, because the order of operations in
-`_fold_order_fill_observed` makes it moot: the `delta_qty < FILL_QTY_EPSILON`
-gate below the dedup check means a sub-epsilon cumulative quantity is
-never inserted into `fills` in the first place — there is no
-zero-quantity row for a later, larger fill's `fill_id` to accidentally
-match against. Re-observing a sub-epsilon quantity repeatedly is simply
-idempotent (the epsilon gate no-ops every time), not a dedup edge case.
-
-### Delta price
-
-Alpaca's `filled_avg_price` is the volume-weighted average price over the
-*whole* order, not the price of the latest delta. Copying it verbatim as
-the delta's price is wrong once an order fills in more than one clip at
-different prices. The fold instead derives the delta's own price from the
-cumulative cost bases:
-
-`delta_price = (cumulative_qty * cumulative_avg_price - prior_qty * prior_avg_price) / delta_qty`
-
-using `SUM(qty * price)` over this order's already-recorded fills for the
-prior cost basis (no separate column needed — every previously-recorded
-fill row already carries its own qty/price).
-
-### Same-quantity price conflict (issue #2460)
-
-A cumulative broker total whose quantity matches the order's recorded
-effective fills but whose `filled_avg_price` disagrees with their average is
-contradictory economic evidence, not a delivery quirk. The fold compares
-`abs(reported_avg_price - recorded_avg_price)` against
-`TOTAL_PRICE_CONFLICT_ATOL = 0.01` currency/share with `rtol=0`
-(`order_evidence.py`): Alpaca publishes price fields at cent precision, so a
-difference below one cent per share cannot be distinguished from vendor
-rounding and raises nothing, while a difference at or above it records a
-durable `EXECUTION_PRICE_CONFLICT` episode. The same $0.01/share basis as
-the reconciliation taxonomy's `FILL_PRICE_DRIFT` default
-(`.claude/rules/numerical-rigor.md`) is deliberate: both ask "is this price
-difference real or representational?" about broker-reported fills.
-
-The recorded fills, positions and FIFO P&L inputs are never rewritten; the
-episode keeps the broker's reported average, the recorded average and the
-total's source time as evidence, and reports the owning custody subject's
-economic coverage `incomplete`. Unlike `EXECUTION_COVERAGE_CONFLICT` it never
-forbids reductions or exits — the quantity is the one thing both sides agree
-on.
-
-Only a quantity-matching total can raise it (while quantities differ no
-price verdict is possible), re-folding the same conflicting total is
-idempotent, and it clears when a later total agrees within tolerance again
-— which is also how an identified execution correction clears it: the
-correction changes the recorded fills, the next total the sweep folds
-agrees, and the order drops out of the episode.
-
-Three scoping rules keep that verdict honest across every observation route:
-
-- **Both aggregate routes fold it.** The REST/reconciliation snapshot path
-  (`fold_order_evidence`) and the `trade_updates` path (after its exact
-  execution slice and acknowledgement) run the same price-conflict fold, so
-  a snapshot-opened conflict cannot keep a stale reported average once a
-  later websocket fill's aggregate agrees.
-- **Evidence is ordered by source time.** A total whose `updated_at_ms` is
-  older than the stored evidence for the same order changes nothing — it can
-  neither restate an older conflicting price nor clear a newer conflict. A
-  total with no source time changes nothing either; the rule cannot order it.
-- **The episode is keyed by custody subject.** The raise, refresh, and clear
-  bind to the observing effect's durable subject (bot or manual operator),
-  never to `strategy_instance_id` alone, so manual-order conflicts scope to
-  their operator exactly as bot conflicts scope to their instance.
-
-The sweep's re-derivation (`reconcile_execution_price_conflicts`) is
-compare-and-clear: it passes the `(uncertainty_id, cause)` it derived from
-into the locked clear, which refuses when a concurrent fold refreshed the
-episode in between; the next pass re-derives against the refreshed
-evidence.
+The decisions are ADR 0036's 2026-09-30 amendment, items 1-3.
 
 ### Validation
 
@@ -165,7 +38,7 @@ evidence.
 - `test_an_older_agreeing_total_does_not_clear_a_newer_conflict`,
   `test_a_manual_order_price_conflict_is_scoped_to_its_custody_subject`, and
   `test_a_refreshed_price_conflict_survives_a_sweep_holding_the_old_identity`
-  pin the review-round scoping rules above.
+  pin the scoping rules stated in `order_evidence.py`.
 
 `PythonDataService/tests/broker/alpaca/clerk/test_trade_evidence.py`:
 
@@ -200,12 +73,17 @@ each `math.fsum` calculation:
 - `C_E = Σ qty × price(E)` and `C_R = Σ qty × price(R)` in **currency**;
 - `P_E = C_E / Q_E` and `P_R = C_R / Q_R` in **currency/share**.
 
-`QTY_ATOL = 1e-9` shares and `PRICE_ATOL = 1e-9` currency/share use zero
-relative tolerance. Quantity and VWAP comparisons are strict:
-`abs(Q_E - Q_R) < QTY_ATOL` and `abs(P_E - P_R) < PRICE_ATOL`.
-Gross-cost comparison is inclusive against the propagated envelope:
-`COST_ATOL = max(|Q_E|, |Q_R|) × PRICE_ATOL + max(|P_E|, |P_R|) × QTY_ATOL
-+ QTY_ATOL × PRICE_ATOL`, requiring `abs(C_E - C_R) <= COST_ATOL`.
+Quantity is strict: `abs(Q_E - Q_R) < QTY_ATOL`, with `QTY_ATOL = 1e-9`
+shares and zero relative tolerance. Price is compared at Alpaca's price
+precision, never at float precision (ADR 0036, 2026-10-01 amendment, #2791).
+With `Q_O` and `C_O` the order's effective fills, `tick` one valid price
+increment of `C_O / Q_O` and `max(p)` the highest row price, the proof
+requires, in exact decimals,
+`abs(C_E - C_R) < COST_ATOL = tick × Q_O + max(p) × abs(Q_E - Q_R)`:
+the exacts move the order's average by less than one increment.
+Records proven before #2791 carry the float-precision envelope
+`max(|Q_E|, |Q_R|) × 1e-9 + max(|P_E|, |P_R|) × 1e-9 + 1e-18`, which the
+fold still accepts on replay.
 The replacement's `Δposition = Q_E - Q_R` is therefore zero under the
 pinned absolute share-tolerance policy; the fold records the aggregates,
 tolerance, every cumulative source, and every prior quarantined exact's
@@ -234,45 +112,17 @@ cases.
 
 The canonical fold is
 `PythonDataService/app/broker/alpaca/clerk/sqlite/reconcile.py::plan_account_reconciliation`.
+The flat boundary is ADR 0036 Decision 1.
 
 `delta(symbol) = broker_signed_quantity - clerk_attributed_quantity`
 
 A symbol is flagged `position_drift` when
 `position_quantity_is_nonzero(delta)` (`abs(delta) >= POSITION_QTY_EPSILON`)
 (`1e-9`, `rtol=0`) **and** the symbol has no non-terminal in-flight order
-of ours — a working order legitimately explains a temporary mismatch (the
-fill hasn't landed/folded yet), so it is suppressed for that pass rather
-than flagged as drift.
-
-This re-stated the proven pre-SQLite exposure policy on the SQLite
-`positions` fold rather than inventing another threshold. ADR 0037 /
-#1618 completed that migration: the JSONL `exposure.py` implementation
-(whose provenance note — `account_exposure_deltas` with the same formula,
-absolute `1e-9`/`rtol=0` boundary, and in-flight suppression — was
-previously tracked in a separate retired-provenance doc) is deleted and
-`sqlite/folds.py::position_quantity_is_nonzero` is now the sole Alpaca
-exposure/flat boundary. The former migration parity test retired with the
-legacy projection; the SQLite boundary and reconciliation cases below
-remain the direct proof.
-
-An absolute tolerance, not relative: share quantities are compared
-directly, so scaling the accepted error with position size would hide real
-drift on small positions — same reasoning as §2's `FILL_QTY_EPSILON`.
-
-### Reuse (#1379)
-
-All SQLite custody paths call the canonical
-`folds.py::position_quantity_is_nonzero` predicate when deciding whether a
-position is exposure. That includes
-`sqlite/uncertainty.py::_has_attributed_exposure`, which fences fresh
-ENTER admission after a repaired or legacy attributed-position projection.
-It defines `abs(qty) >= epsilon` as nonzero, so exactly `1e-9` is never
-classified as both flat and nonzero by different **SQLite custody**
-workflows. Within that SQLite scope, residual drift and exposure/flat
-decisions use the same inclusive boundary, so exactly `1e-9` cannot be
-accepted as flat by one SQLite custody path and nonzero by another.
-ADR 0036 extends that target beyond SQLite by requiring every other
-exposure/flat workflow to call the same predicate.
+of ours. A mismatch on a symbol with a working order is not a confirmed
+drift, but it is not proven equal either: it is `indeterminate`, and it
+fences new exposure until a pass with no in-flight order proves equality
+(#1655).
 
 ### Validation
 
@@ -280,12 +130,13 @@ exposure/flat workflow to call the same predicate.
 
 - `test_plan_flags_position_drift_when_broker_and_attributed_disagree`
   pins a real disagreement above the tolerance.
-- `test_plan_suppresses_drift_for_a_symbol_with_a_non_terminal_in_flight_order`
-  pins the in-flight suppression.
+- `test_plan_marks_indeterminate_for_a_symbol_with_a_non_terminal_in_flight_order`
+  pins the in-flight case as indeterminate: neither confirmed drift nor
+  clean.
 - `test_plan_drift_tolerance_ignores_float_residue_within_epsilon` pins a
   `4e-13` residue as `clean`, not `position_drift`.
 - `test_plan_drift_uses_canonical_exact_epsilon_boundary` pins exact
   `1e-9` as drift, matching the shared predicate.
-- `test_new_exposure_uses_the_canonical_attributed_quantity_boundary_fixture`
+- `test_uncertainty.py::test_new_exposure_uses_the_canonical_attributed_quantity_boundary_fixture`
   pins quantities below, at, and above `1e-9` for fresh-ENTER admission;
   exactly `1e-9` and every larger residual block new exposure.

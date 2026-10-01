@@ -7,30 +7,37 @@ auditable in one small module.
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn
 
 from app.broker.alpaca.clerk.sqlite import reads
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    CHAIN_TOTAL_PROVEN_TRANSITION,
     ORDER_TOTAL_PROVEN_RESOLUTION_KIND,
     ORDER_TOTAL_PROVEN_SUMMARY_CODE,
     QTY_ATOL,
+    ChainTotalCoverageEvidence,
     CumulativeRecoveryFill,
+    ExecutionCoverageChainTotalProvenFacts,
     ExecutionCoverageExactProvenance,
     ExecutionCoverageIdentity,
     ExecutionCoverageSetProofSuccess,
     ExecutionCoverageSupersededFacts,
     active_execution_coverage_conflicts,
+    chain_total_proves_coverage,
     cumulative_recovery_fills_for_order,
     exact_replaces_cumulative,
     execution_coverage_proof,
     execution_is_quarantined,
     order_total_proves_coverage,
     prove_execution_coverage_set,
+    validate_execution_coverage_chain_total_proven_facts,
     validate_execution_coverage_superseded_facts,
 )
 from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import (
+    chain_total_coverage_plan,
     effective_exact_execution_ids_for_order,
     execution_coverage_candidate,
     order_total_coverage_evidence,
@@ -53,6 +60,8 @@ from app.broker.alpaca.clerk.sqlite.models import (
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionCoverageResolutionUnavailable(Exception):
@@ -134,6 +143,7 @@ class ClerkSqliteRepositoryExecutionCoverageApi:
                 cumulative=cumulative,
                 prior=prior,
                 exact=facts,
+                order_effective=reads.effective_fill_totals_for_order(self._conn, exact_transition.order_ref),
                 effective_exact_source_ids=effective_exact_execution_ids_for_order(
                     self._conn,
                     order_ref=exact_transition.order_ref,
@@ -203,6 +213,7 @@ class ClerkSqliteRepositoryExecutionCoverageApi:
                 cumulative=cumulative,
                 prior=prior,
                 exact=facts,
+                order_effective=reads.effective_fill_totals_for_order(self._conn, exact_transition.order_ref),
                 active_episode_ids=(conflict.uncertainty_id,),
                 effective_exact_source_ids=effective_exact_ids,
                 unreadable_source_ids=unreadable_quarantine_source_ids_for_order(
@@ -344,6 +355,113 @@ class ClerkSqliteRepositoryExecutionCoverageApi:
                 )
                 resolved += 1
             return resolved
+
+    def prove_manual_chain_total_coverage(
+        self: ClerkSqliteRepository,
+        *,
+        order_ref: str,
+        head_broker_order_id: str,
+        head_state: str,
+        head_quantity: float | None,
+    ) -> bool:
+        """Supersede a filled manual chain's cumulative coverage with its exact executions (#2786).
+
+        ``head_*`` is one observation of the leg's chain head -- only a
+        head's observation states the leg's lifecycle (#2656), so a former
+        member's answer never judges the chain against its own quantity.
+        When the head and the order projection both say ``filled`` and the
+        chain's distinct exact executions sum to the head's quantity
+        (:func:`chain_total_proves_coverage`), one transition deletes every
+        cumulative-recovery row, makes every quarantined exact effective,
+        moves the leg's position to the exact total and closes the coverage
+        episode they opened; the caller's completion check then ends the
+        leg. Runs on recorded evidence only, under the write lock; it reads
+        on every acknowledgement and writes only through ``append_transition``,
+        whose own fence renews the lease. Returns whether it appended the
+        proof.
+        """
+        with self._write_lock:
+            order = reads.order(self._conn, order_ref)
+            if (
+                order is None
+                or order.broker_order_id != head_broker_order_id
+                or head_state.strip().lower() != "filled"
+            ):
+                return False
+            effect = reads.effect_operation(self._conn, order.effect_operation_id)
+            if effect is None or effect.kind != "MANUAL_ORDER" or effect.state not in reads.NONTERMINAL_EFFECT_STATES:
+                return False
+            plan = chain_total_coverage_plan(self._conn, order_ref=order_ref)
+            if plan is None or head_quantity is None or not chain_total_proves_coverage(
+                ChainTotalCoverageEvidence(
+                    head_state=order.broker_state,
+                    head_quantity=head_quantity,
+                    exact_quantities=plan.exact_quantities,
+                )
+            ):
+                return False
+            meta = reads.control_meta_snapshot(self._conn)
+            facts = ExecutionCoverageChainTotalProvenFacts(
+                actor="AUTOMATIC",
+                account_id=meta.account_id,
+                authority_generation=meta.authority_generation,
+                db_identity_token=meta.db_identity_token,
+                expected_control_revision=meta.control_revision,
+                order_ref=order_ref,
+                symbol=plan.symbol,
+                side=plan.side,
+                head_broker_order_id=head_broker_order_id,
+                head_quantity=head_quantity,
+                superseded_cumulative_fill_ids=list(plan.superseded_cumulative_fill_ids),
+                effective_exact_execution_ids=list(plan.effective_exact_execution_ids),
+                made_effective_exact_observations=list(plan.made_effective),
+                exact_quantity=plan.exact_quantity,
+                prior_effective_quantity=plan.prior_effective_quantity,
+                position_delta=plan.exact_quantity - plan.prior_effective_quantity,
+                quantity_tolerance=QTY_ATOL,
+                resolved_uncertainty_id=plan.resolved_uncertainty_id,
+                evidence_refs=sorted(
+                    {
+                        f"order:{order_ref}",
+                        f"broker_order:{head_broker_order_id}",
+                        *(f"execution:{execution_id}" for execution_id in plan.effective_exact_execution_ids),
+                        *(f"execution:{item.exact_execution.execution_id}" for item in plan.made_effective),
+                        *(f"fill:{fill_id}" for fill_id in plan.superseded_cumulative_fill_ids),
+                    }
+                ),
+            )
+            validate_execution_coverage_chain_total_proven_facts(facts)
+            self.append_transition(
+                TransitionInput(
+                    strategy_instance_id=effect.strategy_instance_id,
+                    run_id=effect.run_id,
+                    command_id=effect.command_id,
+                    effect_operation_id=effect.effect_operation_id,
+                    order_ref=order_ref,
+                    broker_order_id=head_broker_order_id,
+                    transition_kind=CHAIN_TOTAL_PROVEN_TRANSITION,
+                    custody_owner="ACCOUNT_CLERK",
+                    execution_authority="ACCOUNT_CLERK",
+                    operation_state="in_progress",
+                    clerk_observed_at_ms=self._clock(),
+                    summary_code=CHAIN_TOTAL_PROVEN_TRANSITION,
+                    facts_json=facts.to_facts_json(),
+                )
+            )
+        logger.info(
+            "A filled manual chain's exact executions proved its total and replaced its cumulative coverage",
+            extra={
+                "action": "manual_chain_total_proven",
+                "order_ref": order_ref,
+                "head_broker_order_id": head_broker_order_id,
+                "head_quantity": head_quantity,
+                "exact_quantity": facts.exact_quantity,
+                "position_delta": facts.position_delta,
+                "superseded_cumulative_fill_ids": facts.superseded_cumulative_fill_ids,
+                "resolved_uncertainty_id": facts.resolved_uncertainty_id,
+            },
+        )
+        return True
 
     def historical_execution_recovery_target(
         self: ClerkSqliteRepository,

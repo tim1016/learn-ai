@@ -40,8 +40,7 @@ class DurableConflictError(Exception):
 
 class UnknownStrategyInstanceError(Exception):
     """The target bot has no ``strategy_instances`` row — a typed domain
-    not-found, never a raw SQLite foreign-key failure (open-pr-review-2026-08-05.md
-    P2 "Unknown bot ID becomes raw SQLite 500"). Shared by every
+    not-found, never a raw SQLite foreign-key failure. Shared by every
     domain module that targets a bot (#1376's commands.py, #1377's enter.py)."""
 
     def __init__(self, strategy_instance_id: str) -> None:

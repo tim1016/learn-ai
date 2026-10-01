@@ -40,13 +40,14 @@ catch it, rather than passing on two identical fixtures that could not tell
 the modes apart.
 
 No Postgres, no run: every test in this module skips cleanly when
-``POSTGRES_URL`` is unset. The pull-request gate defers this directory; the
-daily workflow supplies the disposable, migrated-to-head Postgres required to
+``POSTGRES_URL`` is unset, as it is in the pull-request shards; the daily
+workflow supplies the disposable, migrated-to-head Postgres required to
 execute it. Never point ``POSTGRES_URL`` at ``my-postgres``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -64,6 +65,7 @@ from app.data_lake import catalog_client
 from app.data_lake.ensure_data import ensure_data
 from app.data_lake.metadata_bundle import metadata_data_contract_hash as _metadata_dch
 from app.data_lake.path_policy import LeanMinuteBarPath, lake_subpath, resolve_lake_root
+from app.data_lake.root_identity import active_root_id, init_empty_root
 from app.data_lake.types import DataRunSpec, PriceAdjustmentMode, trading_date_to_calendar_anchor_ms
 from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.data.policy_store import resolve_data_roots
@@ -204,6 +206,9 @@ def tmp_lake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     write_root = tmp_path / "writer-root"
     (write_root / "lake").mkdir(parents=True)
     (write_root / "staging").mkdir(parents=True)
+    # Readers admit lake files only under a root identity marker (#2456),
+    # which production startup refuses to run without.
+    init_empty_root(write_root, active_root_id())
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-polygon-key")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")
@@ -460,9 +465,13 @@ async def test_both_price_adjustment_modes_catalogue_independently_and_read_back
     assert engine_adjusted_roots == [resolve_lake_root("polygon_split_adjusted")]
     assert engine_raw_roots != engine_adjusted_roots
 
-    engine_raw_bars = LeanMinuteDataReader(engine_raw_roots, session="regular").read_day(SYMBOL, TRADING_DATE)
-    engine_adjusted_bars = LeanMinuteDataReader(engine_adjusted_roots, session="regular").read_day(
-        SYMBOL, TRADING_DATE
+    # Off the event loop, as production reads: lake admission refuses a
+    # loop thread (#2456).
+    engine_raw_bars = await asyncio.to_thread(
+        LeanMinuteDataReader(engine_raw_roots, session="regular").read_day, SYMBOL, TRADING_DATE
+    )
+    engine_adjusted_bars = await asyncio.to_thread(
+        LeanMinuteDataReader(engine_adjusted_roots, session="regular").read_day, SYMBOL, TRADING_DATE
     )
     assert len(engine_raw_bars) == 390
     assert len(engine_adjusted_bars) == 390
@@ -483,11 +492,11 @@ async def test_both_price_adjustment_modes_catalogue_independently_and_read_back
     assert sidecar_adjusted_root == tmp_lake / lake_subpath("polygon_split_adjusted")
     assert sidecar_raw_root != sidecar_adjusted_root
 
-    sidecar_raw_artifacts = resolve_lake_artifacts(
-        lake_root=sidecar_raw_root, symbol=SYMBOL, start=TRADING_DATE, end=TRADING_DATE
+    sidecar_raw_artifacts = await asyncio.to_thread(
+        resolve_lake_artifacts, lake_root=sidecar_raw_root, symbol=SYMBOL, start=TRADING_DATE, end=TRADING_DATE
     )
-    sidecar_adjusted_artifacts = resolve_lake_artifacts(
-        lake_root=sidecar_adjusted_root, symbol=SYMBOL, start=TRADING_DATE, end=TRADING_DATE
+    sidecar_adjusted_artifacts = await asyncio.to_thread(
+        resolve_lake_artifacts, lake_root=sidecar_adjusted_root, symbol=SYMBOL, start=TRADING_DATE, end=TRADING_DATE
     )
     assert len(sidecar_raw_artifacts.trade_zip_paths) == 1
     assert len(sidecar_adjusted_artifacts.trade_zip_paths) == 1
@@ -532,7 +541,8 @@ async def test_sidecar_refuses_a_mode_with_no_coverage_rather_than_falling_back(
     assert raw_result.overall_status == "complete", f"raw run failed: {raw_result.failures}"
 
     with pytest.raises(LakeMountError):
-        resolve_lake_artifacts(
+        await asyncio.to_thread(
+            resolve_lake_artifacts,
             lake_root=data_plane_lake_root("polygon_split_adjusted"),
             symbol=SYMBOL,
             start=TRADING_DATE,

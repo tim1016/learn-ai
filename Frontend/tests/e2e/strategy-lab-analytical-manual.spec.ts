@@ -1,4 +1,13 @@
-import { expect, test } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
+import { expect, test, type Page } from '@playwright/test';
+
+/** The page as the app shell serves it passes AXE, landmarks and all (#2689:
+ *  the shell's <main> is the only one; the page root is a labelled section).
+ *  Every rule runs. */
+async function expectNoAxeViolations(page: Page): Promise<void> {
+  const axe = await new AxeBuilder({ page }).analyze();
+  expect(axe.violations.map(({ id, nodes }) => `${id}: ${nodes.map((node) => node.target.join(' ')).join(' | ')}`)).toEqual([]);
+}
 
 test.describe('Strategy Lab analytical manual', () => {
   test('supports keyboard-addressable search, filters, contextual links, and a non-runtime case study', async ({ page }) => {
@@ -39,11 +48,7 @@ test.describe('Strategy Lab analytical manual', () => {
     await page.getByRole('button', { name: 'Clear filters' }).click();
     await expect(search).toHaveValue('');
     await expect(page.getByRole('link', { name: /Compare with/i })).toBeVisible();
-  });
 
-  test('keeps unknown metric and stale contract context explicit', async ({ page }) => {
-    await page.goto('/strategy-lab/docs?metric=unknown_metric&contract=retired-v0');
-
-    await expect(page.getByText(/requested metric is not documented/i)).toBeVisible();
+    await expectNoAxeViolations(page);
   });
 });

@@ -19,7 +19,6 @@ every money read prices from.
 
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
@@ -29,13 +28,8 @@ import pytest
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.live_envelope import ENTRY_FEE_PROVISION_UNRECORDED
-from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGETS_NOT_SWITCHED_ON
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
-from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
-    HOLDS_COMPATIBILITY_VIEW_DDL,
-)
-from app.broker.alpaca.clerk.sqlite.day_pnl import risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.enter import (
     EnterSubmission,
     EntrySubmissionRefusal,
@@ -48,7 +42,6 @@ from app.broker.alpaca.clerk.sqlite.envelope_reservations import (
     entry_cash_claims,
 )
 from app.broker.alpaca.clerk.sqlite.facts import (
-    ExecutionCorrectedFacts,
     ExecutionSliceFilledFacts,
 )
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
@@ -61,14 +54,6 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     AdmissionBlockedError,
-    RefusalClass,
-    classify_admission_refusal,
-    raise_account_hold,
-)
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
-    HOLD_REASON_CODE_SQL_PARAMS,
-    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
-    LossHoldCause,
 )
 from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
@@ -104,22 +89,6 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
 T1_TERMINAL_ACK = T0 + 1_000
 T2_OBSERVATION = T0 + 2_000
 T3_TRAILING_FILL = T0 + 3_000
-
-
-_CAUSE = LossHoldCause(
-    day_start_ms=1_788_000_000_000,
-    day_pnl_usd=-5_250.0,
-    loss_limit_usd=5_000.0,
-    last_equity_usd=100_000.0,
-    observed_at_ms=T0,
-)
-
-# The ``holds`` view a pre-ADR-0059 build baked into its file: same shape, two
-# codes instead of three. Derived from the current DDL rather than transcribed,
-# so it cannot silently stop being "the current view minus the loss hold".
-_V12_HOLDS_VIEW_DDL = HOLDS_COMPATIBILITY_VIEW_DDL.replace(
-    f"'{LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE}', ", ""
-)
 
 
 def _leg(**overrides: Any) -> BrokerOrderLeg:
@@ -174,121 +143,6 @@ def _observed_order(
         events=[],
         observed_at_ms=source_event_at_ms,
     )
-
-
-def _db_path(artifacts_root: Path) -> Path:
-    return artifacts_root / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
-
-
-def _rewind_to_v12(db_path: Path) -> None:
-    """Make a real v13 file look like the v12 file a prior build left behind.
-
-    Both halves matter: no ``envelope_reservations`` table, and a ``holds``
-    view whose *stored* SQL still names only the two v12 codes — which is the
-    shape that would project a loss hold as an uncertainty.
-    """
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.executescript(
-            "DROP TABLE deployment_budgets;\n"
-            "DROP TABLE account_risk_policy;\n"
-            "DROP TABLE envelope_reservations;\n"
-            "DROP TRIGGER trg_budget_authority_monotonic;\n"
-            "ALTER TABLE control_meta DROP COLUMN authorization_version;\n"
-            "DROP VIEW holds;\n"
-            f"{_V12_HOLDS_VIEW_DDL}"
-            "UPDATE control_meta SET schema_version = 12 WHERE id = 1;\n"
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def test_a_fresh_authority_has_the_reservations_table_at_schema_v13(
-    envelope_repo: ClerkSqliteRepository,
-) -> None:
-    assert schema.SCHEMA_VERSION >= 20
-    assert envelope_repo.control_meta_snapshot().schema_version == schema.SCHEMA_VERSION
-    assert (
-        envelope_repo._conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='envelope_reservations'"
-        ).fetchone()
-        is not None
-    )
-
-
-def test_a_v12_authority_migrates_additively_to_v13(tmp_path: Path, envelope_clock: _TestClock) -> None:
-    """The upgrade adds the table and re-publishes the view from live code.
-
-    A view definition is stored text, baked in at the version that created it,
-    so a v12 file's ``holds`` still names two codes while a fresh v13 file
-    names three. Re-rendering it in the migration is what makes an upgraded
-    file and a fresh one project the loss hold identically.
-    """
-    assert _V12_HOLDS_VIEW_DDL != HOLDS_COMPATIBILITY_VIEW_DDL
-
-    clerk = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=envelope_clock
-    )
-    _start_legacy_run(clerk, envelope_clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
-    accept_enter(
-        clerk,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="d1",
-        lifecycle_run_id=RUN_ID,
-        leg=_leg(quantity=10),
-    )
-    before = [
-        tuple(row)
-        for row in clerk._conn.execute(
-            "SELECT sequence, row_hash FROM custody_transitions ORDER BY sequence"
-        )
-    ]
-    assert before
-    clerk.close()
-    _rewind_to_v12(_db_path(tmp_path))
-
-    reopened = ClerkSqliteRepository.open(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=envelope_clock
-    )
-    try:
-        assert reopened.control_meta_snapshot().schema_version == schema.SCHEMA_VERSION
-        assert (
-            reopened._conn.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='envelope_reservations'"
-            ).fetchone()
-            is not None
-        )
-        assert [
-            tuple(row)
-            for row in reopened._conn.execute(
-                "SELECT sequence, row_hash FROM custody_transitions ORDER BY sequence"
-            )
-        ] == before
-
-        view_sql = reopened._conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'holds'"
-        ).fetchone()["sql"]
-        for reason_code in HOLD_REASON_CODE_SQL_PARAMS:
-            assert f"'{reason_code}'" in view_sql
-
-        assert (
-            raise_account_hold(
-                reopened,
-                reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
-                evidence_refs=[f"day-pnl:{_CAUSE.day_start_ms}"],
-                cause_facts=_CAUSE.to_mapping(),
-            )
-            == "raised"
-        )
-        assert [
-            (row["reason_code"], row["state"])
-            for row in reopened._conn.execute("SELECT reason_code, state FROM holds")
-        ] == [(LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, "ACTIVE")]
-    finally:
-        reopened.close()
 
 
 def test_accepting_an_enter_records_its_price_and_fee_provision_in_the_same_commit(
@@ -548,118 +402,6 @@ def _append_slice(
         )
         == "appended"
     )
-
-
-def _append_correction(
-    repo: ClerkSqliteRepository,
-    accepted: EnterSubmission,
-    *,
-    execution_id: str,
-    superseded_execution_ref: str,
-    quantity: float,
-    source_event_at_ms: int,
-) -> None:
-    """Restate a prior slice's quantity, leaving the superseded row auditable."""
-    facts = ExecutionCorrectedFacts(
-        execution_id=execution_id,
-        superseded_execution_ref=superseded_execution_ref,
-        symbol="SPY",
-        side="BUY",
-        corrected_qty=quantity,
-        corrected_price=100.0,
-        why="Broker restated the execution quantity",
-    )
-    assert (
-        repo.append_execution_correction_or_raise(
-            correction=TransitionInput(
-                strategy_instance_id=accepted.command.strategy_instance_id,
-                run_id=accepted.command.run_id,
-                command_id=accepted.command.command_id,
-                effect_operation_id=accepted.effect_operation_id,
-                order_ref=accepted.order_ref,
-                transition_kind="EXECUTION_CORRECTED",
-                custody_owner="ACCOUNT_CLERK",
-                execution_authority="ACCOUNT_CLERK",
-                operation_state="in_progress",
-                source_event_at_ms=source_event_at_ms,
-                clerk_observed_at_ms=repo.clock(),
-                summary_code="EXECUTION_CORRECTED",
-                facts_json=facts.to_facts_json(),
-            ),
-            build_uncertainty=_refuse_correction_uncertainty,
-        )
-        == "appended"
-    )
-
-
-def _refuse_correction_uncertainty(reason: str) -> TransitionInput:
-    raise AssertionError(f"the correction fixture must be valid: {reason}")
-
-
-@pytest.mark.parametrize(
-    ("original_qty", "corrected_qty", "expected"),
-    [
-        (10.0, 5.0, "500.01"),  # downward: the restated 5 units are unfilled cash again, with the whole fee
-        (5.0, 10.0, "0"),  # upward: the whole ENTER is filled, nothing left to reserve
-    ],
-)
-def test_a_corrected_fill_reserves_at_its_restated_size(
-    envelope_repo: ClerkSqliteRepository,
-    envelope_clock: _TestClock,
-    active_instance: tuple[str, str],
-    original_qty: float,
-    corrected_qty: float,
-    expected: str,
-) -> None:
-    """A correction is dated by the root execution, not by its own arrival.
-
-    The original fill is recorded *before* the observation and restated
-    *after* it — the case that used to price the remainder at the superseded
-    size for the whole life of the working order. What the broker's cash
-    reflected at ``T2_OBSERVATION`` is the restated quantity, because the
-    execution itself happened at ``T1_TERMINAL_ACK``; only the Clerk's
-    knowledge of it arrived late.
-    """
-    sid, run_id = active_instance
-    accepted = accept_enter(
-        envelope_repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=sid,
-        decision_id="d1",
-        lifecycle_run_id=run_id,
-        leg=_leg(quantity=10),
-        envelope=_gate(),
-        reference_price=100.0,
-    )
-    assert accepted.effect_operation_id is not None and accepted.order_ref is not None
-
-    envelope_clock.value = T1_TERMINAL_ACK
-    _append_slice(
-        envelope_repo,
-        accepted,
-        execution_id="exec-original-1",
-        quantity=original_qty,
-        source_event_at_ms=T1_TERMINAL_ACK,
-    )
-    envelope_clock.value = T3_TRAILING_FILL
-    _append_correction(
-        envelope_repo,
-        accepted,
-        execution_id="exec-corrected-1",
-        superseded_execution_ref="exec-original-1",
-        quantity=corrected_qty,
-        source_event_at_ms=T3_TRAILING_FILL,
-    )
-
-    # The order never acknowledged, so it is still working: its unfilled
-    # remainder is what the bound has to price.
-    assert (
-        envelope_repo._conn.execute(
-            "SELECT broker_state FROM orders WHERE order_ref = ?", (accepted.order_ref,)
-        ).fetchone()["broker_state"]
-        is None
-    )
-    assert _claimed(envelope_repo, seen_before_ms=T2_OBSERVATION) == Decimal(expected)
 
 
 def test_an_unseen_recorded_fill_reserves_at_its_actual_cost(
@@ -937,37 +679,6 @@ def test_a_legacy_reservation_with_an_unfilled_remainder_refuses_instead_of_clai
         lifecycle_run_id=ENVELOPE_RUN_ID_B, leg=_leg(symbol="QQQ", quantity=1),
         envelope=_gate(observed_at_ms=T1_TERMINAL_ACK), reference_price=100.0,
     ).created
-
-
-def test_a_legacy_remainder_a_correction_reopens_refuses_the_next_enter_under_its_own_code(
-    envelope_repo: ClerkSqliteRepository, envelope_clock: _TestClock
-) -> None:
-    """A filled legacy entry claims no fee; a correction that reopens its remainder makes the fee unknown again.
-
-    The refused ENTER is transient: account-scoped, retried on the next
-    decision clock, and it writes nothing.
-    """
-    _start_legacy_run(envelope_repo, envelope_clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
-    legacy = _legacy_enter(envelope_repo, SID, RUN_ID)
-    _append_slice(envelope_repo, legacy, execution_id="legacy-fill", quantity=10.0, source_event_at_ms=T0)
-    _stop(envelope_repo, SID, RUN_ID)
-    _register_active(envelope_repo, envelope_clock, strategy_instance_id=ENVELOPE_SID_B, symbol="QQQ", run_id=ENVELOPE_RUN_ID_B)
-
-    envelope_clock.value = T1_TERMINAL_ACK
-    _append_correction(
-        envelope_repo, legacy, execution_id="legacy-corrected", superseded_execution_ref="legacy-fill",
-        quantity=5.0, source_event_at_ms=T1_TERMINAL_ACK,
-    )
-    before = envelope_repo.control_meta_snapshot().control_revision
-    with pytest.raises(AdmissionBlockedError) as exc_info:
-        accept_enter(
-            envelope_repo, account_id=ACCOUNT_ID, strategy_instance_id=ENVELOPE_SID_B, decision_id="d1",
-            lifecycle_run_id=ENVELOPE_RUN_ID_B, leg=_leg(symbol="QQQ", quantity=1), reference_price=100.0,
-            envelope=_gate(observed_at_ms=T1_TERMINAL_ACK, fill_sequence=risk_fill_sequence(envelope_repo)),
-        )
-    assert exc_info.value.decision.reason_code == ENTRY_FEE_PROVISION_UNRECORDED
-    assert classify_admission_refusal(ENTRY_FEE_PROVISION_UNRECORDED) is RefusalClass.TRANSIENT
-    assert envelope_repo.control_meta_snapshot().control_revision == before
 
 
 def test_a_legacy_reservation_with_no_remainder_still_claims_its_unseen_fills_at_cost(

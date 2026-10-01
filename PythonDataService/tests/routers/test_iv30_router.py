@@ -123,7 +123,7 @@ class TestVixStyleRoute:
         assert prov["variance_contribution_synthetic"] == pytest.approx(0.0, abs=1e-12)
         assert prov["price_source_mix"].get("opra_mid") == pytest.approx(1.0)
         assert 0.0 <= prov["strike_coverage_score"] <= 1.0
-        # max_single_strike_share (research-doc §8.2.5) must reach the wire —
+        # max_single_strike_share must reach the wire —
         # FastAPI response_model would silently drop it if not declared on
         # IvProvenancePayload.
         assert "max_single_strike_share" in prov
@@ -195,7 +195,7 @@ class TestParametricRoute:
         # All ATM legs are real OPRA → 0% synthetic.
         assert prov["variance_contribution_synthetic"] == pytest.approx(0.0)
         # Parametric samples no wings — coverage and per-strike-share are
-        # both 0 by construction (research-doc §8.2.5).
+        # both 0 by construction.
         assert prov["strike_coverage_score"] == 0.0
         assert prov["max_single_strike_share"] == 0.0
         assert prov["price_source_mix"].get("opra_mid") == pytest.approx(1.0)
@@ -214,6 +214,17 @@ class TestPolygonFailureModes:
             )
             assert resp.status_code == 502
             assert "spot" in resp.text.lower()
+
+    async def test_failed_dividend_lookup_returns_502(self, client, mock_snapshot):
+        from app.services.rate_dividend_service import RateAndDividend
+
+        no_dividend = RateAndDividend(
+            rate=mock_snapshot["rate"], dividend_yield=None, source_rate="FRED", source_dividend=None
+        )
+        with patch("app.routers.iv30.get_rate_and_dividend", return_value=no_dividend):
+            resp = await client.post("/api/edge/iv30/vix-style", json={"symbol": "SPY"})
+        assert resp.status_code == 502
+        assert "dividend" in resp.text.lower()
 
     async def test_no_contracts_returns_502(self, client):
         from app.routers import iv30 as iv30_router_module

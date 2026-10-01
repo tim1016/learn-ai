@@ -23,7 +23,7 @@ documented judgment calls; both counterexamples that forced the median and
 the coverage rule are reproduced in the tests. Coverage is always disclosed
 as "based on D of S folds", whatever the label.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/1925 revision 7;
-  docs/references/walk-forward-study.md.
+  ADR 0056 decision 5.
 Canonical implementation: this file.
 Validated against: tests/research/walk_forward_study/test_verdict.py.
 """

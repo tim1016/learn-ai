@@ -13,7 +13,7 @@ and deliberate: a snapshot redelivered for a cell the launch already holds
 of creating a second one — the cutover's "unknown commit outcome" question,
 answered by identity rather than by a retry policy.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/1927 revision 2;
-  docs/superpowers/specs/2026-08-16-recency-chart-design.md D14, D16, D17, D20.
+  ADR 0057 decision 5.
 Canonical implementation: this file.
 Validated against: tests/research/recency/test_repository.py.
 """
@@ -55,7 +55,7 @@ RECENCY_LAUNCH_COLUMNS = FenceColumns(
 
 
 class LaunchNotFoundError(LookupError):
-    """A snapshot arrived for a launch that was never persisted — the launch must exist before dispatch (D20)."""
+    """A snapshot arrived for a launch that was never persisted — the launch must exist before dispatch."""
 
 
 class LaunchAccountingError(ValueError):
@@ -452,9 +452,4 @@ async def hero_candidates(
 
 async def set_run_deleted(conn: asyncpg.Connection, run_id: int, *, deleted: bool) -> bool:
     result = await conn.execute('UPDATE "RecencyRuns" SET "DeletedAtMs" = $2 WHERE "Id" = $1', run_id, now_ms_utc() if deleted else None)
-    return result.endswith(" 1")
-
-
-async def set_launch_deleted(conn: asyncpg.Connection, launch_id: str, *, deleted: bool) -> bool:
-    result = await conn.execute('UPDATE "RecencyLaunches" SET "DeletedAtMs" = $2 WHERE "Id" = $1', launch_id, now_ms_utc() if deleted else None)
     return result.endswith(" 1")

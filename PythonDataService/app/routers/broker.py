@@ -15,14 +15,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
+from pydantic import Field
 
 from app.broker.ibkr import contracts as ibkr_contracts
-from app.broker.ibkr.api_evidence import (
-    IbkrApiEvidenceEvent,
-    get_ibkr_api_evidence_recorder,
-)
 from app.broker.ibkr.auto_reconnect_monitor import get_monitor
-from app.broker.ibkr.bar_models import IbkrBarsSnapshot
 from app.broker.ibkr.client import (
     BrokerError,
     ConnectionRefusedDueToSentinelError,
@@ -40,7 +36,6 @@ from app.broker.ibkr.health import (
 )
 from app.broker.ibkr.market_data import stream_option_chain
 from app.broker.ibkr.models import (
-    DataPlaneHealth,
     IbkrChainSnapshot,
     IbkrConnectionHealth,
     IbkrStrikeList,
@@ -54,8 +49,7 @@ from app.broker.ibkr.surface import (
 )
 from app.routers.broker_dependencies import is_broker_disabled, require_connected_client
 from app.schemas.broker_search import OptionContractMatch
-from app.services.data_plane_health import data_plane_health
-from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.throttle import TtlCache
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
@@ -82,10 +76,6 @@ _OPTION_CONTRACTS_CACHE: TtlCache[
 ] = TtlCache(ttl_seconds=300.0, max_size=512)
 
 
-def _ibkr_api_evidence_to_sse(event: IbkrApiEvidenceEvent) -> str:
-    return f"event: ibkr_api\ndata: {event.model_dump_json()}\n\n"
-
-
 def reset_option_contracts_cache_for_testing() -> None:
     """Test-only hook — flush the TTL cache so an earlier test cannot leak
     a cached response into the next assertion."""
@@ -93,55 +83,7 @@ def reset_option_contracts_cache_for_testing() -> None:
     _OPTION_CONTRACTS_CACHE = TtlCache(ttl_seconds=300.0, max_size=512)
 
 
-# ── /ibkr/evidence diagnostics ────────────────────────────────────────
-
-
-@router.get("/ibkr/evidence", response_model=list[IbkrApiEvidenceEvent])
-async def ibkr_api_evidence_backfill(
-    after_seq: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=500)] = 250,
-) -> list[IbkrApiEvidenceEvent]:
-    """Recent raw IBKR API evidence captured at broker adapter boundaries."""
-    return get_ibkr_api_evidence_recorder().backfill(after_seq=after_seq, limit=limit)
-
-
-@router.get("/ibkr/evidence/stream")
-async def ibkr_api_evidence_stream(
-    since_seq: Annotated[int, Query(ge=0)] = 0,
-) -> StreamingResponse:
-    """SSE stream of raw IBKR API evidence for cockpit diagnostics."""
-    recorder = get_ibkr_api_evidence_recorder()
-
-    async def event_source():
-        for event in recorder.backfill(after_seq=since_seq, limit=500):
-            yield _ibkr_api_evidence_to_sse(event)
-        subscription = recorder.subscribe()
-        try:
-            while True:
-                event = await subscription.queue.get()
-                if event is None:
-                    break
-                if event.seq > since_seq:
-                    yield _ibkr_api_evidence_to_sse(event)
-        except asyncio.CancelledError:
-            raise
-        finally:
-            recorder.unsubscribe(subscription)
-
-    return StreamingResponse(
-        event_source(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
 # ── /health ────────────────────────────────────────────────────────────
-
-
-@router.get("/data-plane/health", response_model=DataPlaneHealth)
-async def data_plane_health_endpoint() -> DataPlaneHealth:
-    """Code-liveness diagnostic for the long-running FastAPI data plane."""
-    return data_plane_health()
 
 
 @router.get("/health", response_model=IbkrConnectionHealth)
@@ -290,7 +232,7 @@ async def list_expirations_endpoint(symbol: str) -> dict:
 @router.get("/strikes/{symbol}", response_model=IbkrStrikeList)
 async def list_strikes_endpoint(
     symbol: str,
-    expiry_ms: Annotated[int, Query(..., gt=0, description="Expiry timestamp in int64 ms UTC.")],
+    expiry_ms: Annotated[int, Query(..., gt=0, le=MAX_TIMESTAMP_MS, description="Expiry timestamp in int64 ms UTC.")],
 ) -> IbkrStrikeList:
     """Strikes that IBKR can actually qualify for one (symbol, expiry).
 
@@ -321,7 +263,7 @@ async def list_strikes_endpoint(
 @router.get("/option-contracts/{symbol}")
 async def option_contracts_endpoint(
     symbol: str,
-    expiry_ms: Annotated[int, Query(gt=0, description="Expiry timestamp in int64 ms UTC.")],
+    expiry_ms: Annotated[int, Query(gt=0, le=MAX_TIMESTAMP_MS, description="Expiry timestamp in int64 ms UTC.")],
     strike: Annotated[float, Query(gt=0, description="Option strike.")],
     right: Annotated[str, Query(pattern="^[CP]$", description="C for call, P for put.")],
 ) -> dict:
@@ -362,7 +304,7 @@ async def option_contracts_endpoint(
 @router.get("/option-chain/{symbol}")
 async def option_chain_stream(
     symbol: str,
-    expiry_ms: Annotated[int, Query(..., gt=0, description="Expiry timestamp in int64 ms UTC.")],
+    expiry_ms: Annotated[int, Query(..., gt=0, le=MAX_TIMESTAMP_MS, description="Expiry timestamp in int64 ms UTC.")],
     strikes: Annotated[
         list[float] | None,
         Query(
@@ -411,10 +353,10 @@ async def option_chain_stream(
                 "reason is in the service log."
             )
         except ValueError as exc:
-            # Contract qualification (``qualify_underlying``,
-            # ``build_option_contract``) raises ValueError when IBKR
-            # cannot resolve a symbol/strike/right combination — surface
-            # those through the same SSE error path as broker errors.
+            # Contract qualification (``qualify_underlying``) raises
+            # ValueError when IBKR cannot resolve a symbol/strike/right
+            # combination — surface those through the same SSE error path
+            # as broker errors.
             logger.error("Invalid option-chain request: %s", exc)
             yield _sse_error_frame(
                 "The option-chain request could not be qualified. Check the symbol, expiry, strike, and right."
@@ -434,7 +376,7 @@ async def option_chain_stream(
 async def option_surface_stream(
     symbol: str,
     expiry_ms: Annotated[
-        list[int] | None,
+        list[Annotated[int, Field(le=MAX_TIMESTAMP_MS)]] | None,
         Query(
             description=(
                 "Expirations to fan over (repeated). Each value is an int64 "
@@ -549,58 +491,6 @@ def _sse_error_frame(message: str) -> str:
     nothing the service log does not already hold.
     """
     return f"event: error\ndata: {json.dumps({'error': message})}\n\n"
-
-
-@router.get("/bars/snapshot", response_model=IbkrBarsSnapshot)
-async def bars_snapshot_endpoint(
-    symbol: Annotated[str, Query(min_length=1, max_length=12)],
-    since_ms: Annotated[int | None, Query(ge=0)] = None,
-) -> IbkrBarsSnapshot:
-    """Return the live 1-min OHLCV buffer for ``symbol``.
-
-    Idempotent: first call lazily subscribes to ``reqRealTimeBars`` on the
-    public broker session; subsequent calls return the current buffer.
-    ``since_ms`` filters bars to ``start_ms > since_ms`` for incremental
-    polling. ``status`` reflects subscription health so the UI can
-    distinguish "no bars yet" (subscribing) from "broker disconnected"
-    (errored).
-    """
-    _raise_if_disabled()
-    sym = symbol.strip().upper()
-    state = await LIVE_BAR_AGGREGATOR.ensure_subscribed(sym)
-    bars = LIVE_BAR_AGGREGATOR.snapshot(sym, since_ms=since_ms)
-    return IbkrBarsSnapshot(
-        symbol=sym,
-        status=state.status,
-        last_error=state.last_error,
-        last_bar_ms=state.last_bar_ms,
-        bars=bars,
-    )
-
-
-@router.get("/bars-5s/snapshot", response_model=IbkrBarsSnapshot)
-async def bars_5s_snapshot_endpoint(
-    symbol: Annotated[str, Query(min_length=1, max_length=12)],
-    since_ms: Annotated[int | None, Query(ge=0)] = None,
-) -> IbkrBarsSnapshot:
-    """Return the live raw 5-sec OHLCV buffer for ``symbol``.
-
-    Mirror of ``/bars/snapshot`` for the high-resolution chart. It owns an
-    independent 5-second buffer, but same-symbol 5-second and 1-minute
-    consumers multiplex onto one public-client ``reqRealTimeBars`` request.
-    Each bar's ``end_ms - start_ms`` window is 5 000.
-    """
-    _raise_if_disabled()
-    sym = symbol.strip().upper()
-    state = await LIVE_BAR_AGGREGATOR.ensure_subscribed_5s(sym)
-    bars = LIVE_BAR_AGGREGATOR.snapshot_5s(sym, since_ms=since_ms)
-    return IbkrBarsSnapshot(
-        symbol=sym,
-        status=state.status,
-        last_error=state.last_error,
-        last_bar_ms=state.last_bar_ms,
-        bars=bars,
-    )
 
 
 # ── helpers ────────────────────────────────────────────────────────────

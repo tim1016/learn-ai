@@ -11,15 +11,16 @@ Formula:
     Rounding is always in the marketable direction, so the anchor never
     understates the allowance the operator set.
 Reference:
-    ADR 0059 Decision 5.3; CONTEXT.md "Marketable limit anchor"; Alpaca
-    "Orders at Alpaca" § Extended Hours Trading (limit-only) — see
-    docs/references/alpaca-extended-hours.md.
-Canonical implementation: this file.
+    ADR 0059 Decision 5.3; Alpaca
+    "Orders at Alpaca" § Extended Hours Trading (limit-only).
+Canonical implementation: this file. :func:`price_increment` is the tick
+    rule; the Clerk's price-conflict tolerance reads it too (#2770).
 Validated against:
     tests/broker/alpaca/test_marketable_limit.py::test_marketable_limit_price,
-    tests/broker/alpaca/test_marketable_limit.py::test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price
+    tests/broker/alpaca/test_marketable_limit.py::test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price,
+    tests/broker/alpaca/test_marketable_limit.py::test_price_increment_changes_at_one_dollar
 
-**Why the tick rule exists twice** (CLAUDE.md guiding philosophy #5 permits a
+**Why the tick rule exists twice** (a canonical rule may have a
 duplicate only for a real reason, with a parity test naming the canonical
 file). ``BrokerOrderLeg._limit_price_matches_order_type`` enforces Alpaca's
 precision rule on the *final* price, at the contract boundary, where it guards
@@ -48,6 +49,11 @@ _DOLLAR_TICK = Decimal("0.01")
 _SUB_DOLLAR_TICK = Decimal("0.0001")
 
 
+def price_increment(price: Decimal) -> Decimal:
+    """Alpaca's valid price increment at ``price``: 0.01 at or above $1, 0.0001 below."""
+    return _DOLLAR_TICK if price >= 1 else _SUB_DOLLAR_TICK
+
+
 def marketable_limit_price(*, side: OrderSide, anchor: Decimal, allowance_bps: Decimal) -> Decimal:
     """The limit price a leg carries outside the regular session.
 
@@ -69,8 +75,7 @@ def marketable_limit_price(*, side: OrderSide, anchor: Decimal, allowance_bps: D
     else:
         raw = anchor * (1 - fraction)
         rounding = ROUND_FLOOR
-    tick = _DOLLAR_TICK if raw >= 1 else _SUB_DOLLAR_TICK
-    price = raw.quantize(tick, rounding=rounding)
+    price = raw.quantize(price_increment(raw), rounding=rounding)
     if price <= 0:
         raise ValueError(
             f"a {side.value} anchored at {anchor} with {allowance_bps} bps quantises "
@@ -79,10 +84,11 @@ def marketable_limit_price(*, side: OrderSide, anchor: Decimal, allowance_bps: D
     return price
 
 
-#: The declared default band multiple (#2229): the canonical number both
-#: the allowances default and ``recovery_reduction.RECOVERY_BAND_ALLOWANCE_MULTIPLE``
-#: alias. A module constant here because the dataclass's home is the only
-#: place both sides can read without an import cycle.
+#: The declared default band multiple (#2229): how far through the book a
+#: confirmed limit may go, in multiples of the sealed exit allowance. Owner
+#: decision 2026-09-19: refuse a price more than twice the allowance past the
+#: bid (sell) or ask (cover), so a typo cannot sweep a thin after-hours book.
+#: The deploy form pre-fills this value; each bot seals its explicit choice.
 DEFAULT_EXIT_BAND_MULTIPLE = Decimal(2)
 #: The declared default spread cap (#2229): the canonical number both the
 #: allowances default and ``recovery_reduction.RECOVERY_SPREAD_WARNING_BPS``
@@ -111,10 +117,9 @@ class ExtendedHoursAllowances:
     deliberately **not** part of the sealed envelope, so every arming record
     ever written keeps validating and hashing byte-identically; unset they
     answer :data:`DEFAULT_EXIT_BAND_MULTIPLE` and
-    :data:`DEFAULT_EXIT_SPREAD_CAP_BPS` — the canonical numbers
-    ``recovery_reduction.RECOVERY_BAND_ALLOWANCE_MULTIPLE`` and
-    ``RECOVERY_SPREAD_WARNING_BPS`` alias, so tuning the human's warning and
-    the Clerk's enforcement cannot drift apart. No constructor here reads
+    :data:`DEFAULT_EXIT_SPREAD_CAP_BPS` — the canonical number
+    ``recovery_reduction.RECOVERY_SPREAD_WARNING_BPS`` aliases, so tuning the
+    human's warning and the Clerk's enforcement cannot drift apart. No constructor here reads
     them: the one canonical stamp is ``program_leg.with_deploy_recovery_pricing``,
     so a deploy-time value applies on every resolution path or none, never
     two of three.

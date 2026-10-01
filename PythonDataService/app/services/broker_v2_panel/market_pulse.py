@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import MarketDataFeed
-from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.broker_v2_panel import MarketPulseView
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_start_admission import market_data_admission_fact
-from app.services.market_data_capability_service import extended_phase_proven_at_ms
 from app.services.market_liveness import market_liveness_fact
+from app.services.session_authority import declared_extended_phase_at_ms
 
 # The admission feed emits closed one-minute bars. This is the contracted source
 # cadence shown to operators, not the feed implementation's longer stale cutoff.
@@ -37,8 +36,6 @@ def build_market_pulse(
     *,
     now_ms: int,
     symbol: str | None = None,
-    account_id: str | None = None,
-    capability: SessionDataCapability | None = None,
     use_rth: bool,
     bot_running: bool,
     liveness: MarketLivenessFact | None = None,
@@ -55,8 +52,6 @@ def build_market_pulse(
         now_ms,
         symbol=symbol,
         use_rth=use_rth,
-        capability=capability,
-        account_id=account_id,
         extended_window=extended_window,
     )
     session = fact.scheduled_phase
@@ -91,9 +86,7 @@ def build_market_pulse(
         and symbol is not None
         and bool(fact.connected)
         and not fact.stale
-        and extended_phase_proven_at_ms(
-            now_ms=now_ms, symbol=symbol, account_id=account_id, extended_window=extended_window
-        )
+        and declared_extended_phase_at_ms(now_ms=now_ms, extended_window=extended_window)
     )
     # The Market badge (market_state) renders right beside `headline` in the
     # V2 header (panel-header.component.html) — reporting the raw "CLOSED"
@@ -104,10 +97,10 @@ def build_market_pulse(
     reconciled_market_state = "TRADABLE" if live_closed_is_actually_extended_hours else liveness.state
 
     # Live broker-reported liveness takes priority over the narrower
-    # extended-session-capability check below: a HALTED/UNKNOWN liveness
-    # fact is the stronger, more foundational safety signal (it governs
-    # whether new exposure may be created at all, per #1671), regardless of
-    # whether extended-hours capability happens to be proven. A CLOSED fact
+    # extended-session check below: a HALTED/UNKNOWN liveness fact is the
+    # stronger, more foundational safety signal (it governs whether new
+    # exposure may be created at all, per #1671), regardless of whether a
+    # declared window happens to prove an extended phase. A CLOSED fact
     # that extended hours actually cover is exempted (above) and falls
     # through to the feed-state branches below instead.
     if liveness.market_data is not None and liveness.market_data.reason_code == "MARKET_HALT_PERSISTENCE_FAILED":
@@ -141,10 +134,10 @@ def build_market_pulse(
     elif not use_rth and not fact.extended_phase_proven and session == "CLOSED":
         headline = "Extended-session phase unproved"
         explanation = (
-            "No fresh capability matches this account and instrument, so the "
+            "The executing authority declares no extended-hours window, so the "
             "canonical NYSE calendar can prove only regular hours or closed."
         )
-        next_step = "Refresh the instrument's account-scoped session capability before relying on extended hours."
+        next_step = "Use regular hours only, or deploy through an account that declares an extended-hours window."
         attention_required = bot_running
     elif not bars_expected:
         headline = "Market closed — no live bar expected"

@@ -16,10 +16,9 @@ IBKR supplies live bars and Alpaca handles accounts and orders. The tool is
 
 ## What moves, and what does not
 
-The bundle is one file. It carries the five podman volumes
+The bundle is one file. It carries the four podman volumes
 (`learn-ai_pgdata`, `learn-ai_alpaca-fleet-control`,
-`learn-ai-alpaca-clerk-data`, `learn-ai-alpaca-paper-clerk-data`,
-`learn-ai-alpaca-clerk-qualification-data`), plus `data-lake-volume/`,
+`learn-ai-alpaca-clerk-data`, `learn-ai-alpaca-paper-clerk-data`), plus `data-lake-volume/`,
 `PythonDataService/artifacts/`, `PythonDataService/cache/` and
 `PythonDataService/lean-cache/`.
 
@@ -47,7 +46,9 @@ On the **new** Mac:
 
 1. Install Podman and clone the repo. Check out the same commit as the old
    machine, or a newer one. Import refuses older code, and it refuses a commit
-   it does not know, so `git fetch` first.
+   it does not know, so `git fetch` first. A bundle exported before #2757 still
+   lists the retired qualification volume, so newer code refuses it
+   (`bundle_manifest_invalid`); update the old machine and export again.
 2. Set up and log in to IB Gateway exactly as on the old machine
    ([IBKR setup guide](ibkr-setup-guide.md)). Go-live checks that every lane
    gets bars through it.

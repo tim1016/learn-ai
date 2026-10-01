@@ -3,7 +3,6 @@ import {
   signal,
   computed,
   inject,
-  DestroyRef,
   ChangeDetectionStrategy,
   effect,
 } from '@angular/core';
@@ -123,7 +122,6 @@ export class SignalRunnerComponent {
   ];
 
   private jobsService = inject(JobsService);
-  private destroyRef = inject(DestroyRef);
   private catalog = inject(IndicatorCatalogService);
 
   /** Catalog passed to the picker. */
@@ -239,10 +237,6 @@ export class SignalRunnerComponent {
 
   openConfigure(): void {
     this.configureModalOpen.set(true);
-  }
-
-  closeConfigure(open: boolean): void {
-    if (!open) this.configureModalOpen.set(false);
   }
 
   onModalParamChange(change: { name: string; value: number }): void {

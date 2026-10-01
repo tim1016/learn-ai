@@ -21,8 +21,7 @@ durable synthesized fills. Same-direction fills add signed entry notional;
 reductions retain the prior average cost for the remaining quantity; a flip
 opens only the residual at the flip fill price. A position is emitted iff
 ``position_quantity_is_nonzero(quantity)``.
-Reference: average-cost broker position convention, recorded in
-``docs/references/synthetic-broker-position-projection.md``.
+Reference: average-cost broker position convention.
 Canonical implementation: ``project_positions`` in this module.
 Validated against: ``tests/services/test_source_bar_ledger.py`` exact
 buy/reduce/add/flip parity fixture (``atol=0``, ``rtol=0``).
@@ -45,7 +44,7 @@ from app.services.jsonl_wal import JsonlWal
 from app.services.session_authority import order_session_state_at_ms
 from app.services.source_bar_ledger import RetainedSourceBar, SourceBarLedger
 from app.utils.advisory_lock import advisory_file_lock
-from app.utils.session_anchors import et_date_at_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
 
 # The sim world's existing file name; the shadow world writes the same shape
 # in its own custody directory, so one reader serves both.
@@ -79,9 +78,9 @@ class SynthesizedAnchor(BaseModel):
     provider: str
     bar_identity: str
     bar_ref: str
-    decision_bar_start_ms: int = Field(ge=0)
-    decision_bar_end_ms: int = Field(ge=0)
-    cancel_at_ms: int | None = Field(default=None, ge=0)
+    decision_bar_start_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    decision_bar_end_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    cancel_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     fill_bar_ref: str | None = None
     unfilled_reason: Literal["untouched", "no_evidence"] | None = None
 
@@ -200,21 +199,6 @@ class SynthesizedOrderLedger:
             label=label,
             trusted_root=trusted_root,
         )
-
-    @classmethod
-    def read_latest_beside_database(cls, *, account_id: str, db_path: Path) -> dict[str, SynthesizedOrderRecord]:
-        """Read-only evidence access using the same confined WAL and identity fold."""
-        from app.broker.alpaca.clerk.sqlite.writes import confined_account_file
-
-        artifacts_root = db_path.parent.parent.parent.parent
-        path = confined_account_file(artifacts_root, account_id, SYNTHESIZED_ORDER_LEDGER_FILENAME)
-        if path.parent.resolve() != db_path.parent.resolve():
-            raise SynthesizedBarBindingError("The order evidence path does not belong to this custody database.")
-        wal = JsonlWal(
-            path, record_model=SynthesizedOrderRecord, corrupt_error=_corrupt_order_ledger,
-            seq_of=lambda row: row.seq, label="synthesized_orders", trusted_root=db_path.parent,
-        )
-        return cls.latest_records_from(wal.read_all())
 
     @classmethod
     def beside_source_bars(

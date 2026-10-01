@@ -7,20 +7,17 @@ The async fetch+bundle flow used to live here as
 was migrated to the unified job framework: the public surface is now
 ``POST /api/jobs/dataset-zip`` (.NET layer), which dispatches to
 ``POST /api/jobs-internal/dataset-zip`` (this service) — see
-``app/routers/jobs.py``. The synchronous one-shot ``POST /generate-zip``
-endpoint below is unchanged.
+``app/routers/jobs.py``.
 """
 
 from __future__ import annotations
 
-import io
 import logging
 from collections.abc import Callable
 from typing import Any
 
 import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import StreamingResponse
 
 from app.models.requests import DatasetGenerationRequest, DatasetPlanRequest
 from app.research.divergence.ingest import (
@@ -28,14 +25,11 @@ from app.research.divergence.ingest import (
     dividends_from_polygon_payload,
 )
 from app.schemas.dataset_plan import DatasetPlanResponse
-from app.services.dataset_plan_service import build_dataset_plan, prepare_generation_request
+from app.services.dataset_plan_service import build_dataset_plan
 from app.services.dataset_service import (
     INDICATOR_CONFIGS,
     add_previous_close_column,
     bar_minutes_for,
-    build_csv_bytes,
-    build_metadata_csv,
-    build_metadata_json,
     build_zip_bytes,
     fetch_bars_chunked,
     fetch_rth_closes,
@@ -86,14 +80,6 @@ def _export_columns(
     price_side_cols = [c for c in _projection_without_indicators(df, column_meta) if c in selected]
     indicator_meta = [m for m in column_meta if m["column"] in selected]
     return data_cols, price_side_cols, indicator_meta
-
-
-def _prepare_or_422(request: DatasetGenerationRequest) -> DatasetGenerationRequest:
-    """Resolve the window and check the column selection; either failing is a client error."""
-    try:
-        return prepare_generation_request(request)
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
 
 
 def _fetch_and_process(
@@ -159,8 +145,7 @@ def _fetch_and_process(
 
     # Dividend adjustment (TV-style). Polygon's adjusted=True only does splits;
     # when the user opts in, we fetch the dividend reference file and subtract
-    # each dividend from bars dated before its ex-date. See
-    # docs/tv-polygon-validation-gotchas.md §1 for the reason this matters.
+    # each dividend from bars dated before its ex-date.
     if request.adjust_for_dividends:
         import pandas as pd
 
@@ -262,8 +247,7 @@ async def plan_dataset(request: DatasetPlanRequest) -> DatasetPlanResponse:
     Planning touches only the local NYSE calendar — it never calls
     Polygon. Bar counts are arithmetic estimates typed with assumptions
     and provenance; output columns come from the same projection
-    function the ZIP generation path uses (data-lab workspace redesign
-    PRD §12).
+    function the ZIP generation path uses.
     """
     try:
         return build_dataset_plan(request)
@@ -273,108 +257,6 @@ async def plan_dataset(request: DatasetPlanRequest) -> DatasetPlanResponse:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
     except Exception as e:
         logger.error(f"[DATASET] Plan error: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
-@router.post("/generate-csv")
-async def generate_dataset_csv(request: DatasetGenerationRequest):
-    """Fetch minute OHLCV data in chunks, calculate selected indicators,
-    and return a streaming CSV file."""
-    try:
-        request = _prepare_or_422(request)
-        logger.info(
-            f"[DATASET] Generating CSV for {request.ticker}: "
-            f"{request.from_date} to {request.to_date}, "
-            f"indicators={[e.get('name') for e in request.indicator_entries]}"
-        )
-
-        df, column_meta, raw_count = _fetch_and_process(request)
-
-        all_data_cols, _, _ = _export_columns(request, df, column_meta)
-
-        csv_bytes = build_csv_bytes(df, all_data_cols, time_zone=request.time_zone)
-
-        session_label = "rth" if request.session == "rth" else "ext"
-        ts_label = f"{request.multiplier}{request.timespan}" if request.multiplier > 1 else request.timespan
-        filename = f"{request.ticker}_{ts_label}_{session_label}_{request.from_date}_to_{request.to_date}.csv"
-        logger.info(
-            f"[DATASET] CSV ready: {raw_count} raw bars → {len(df)} processed, "
-            f"{len(column_meta)} indicator columns"
-        )
-
-        return StreamingResponse(
-            io.BytesIO(csv_bytes),
-            media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[DATASET] Error: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
-@router.post("/generate-metadata")
-async def generate_dataset_metadata(request: DatasetGenerationRequest):
-    """Fetch minute OHLCV data, calculate indicators, and return metadata JSON."""
-    try:
-        request = _prepare_or_422(request)
-        df, column_meta, raw_count = _fetch_and_process(request)
-
-        _, ohlcv_cols, indicator_meta = _export_columns(request, df, column_meta)
-
-        metadata_bytes = build_metadata_json(
-            ticker=request.ticker,
-            from_date=request.from_date,
-            to_date=request.to_date,
-            bar_count=raw_count,
-            column_meta=indicator_meta,
-            ohlcv_cols=ohlcv_cols,
-            session=request.session,
-            forward_fill=request.forward_fill,
-            raw_bar_count=raw_count,
-            filled_bar_count=len(df),
-            time_zone=request.time_zone,
-        )
-
-        session_label = "rth" if request.session == "rth" else "ext"
-        filename = f"{request.ticker}_minute_{session_label}_{request.from_date}_to_{request.to_date}_metadata.json"
-        return StreamingResponse(
-            io.BytesIO(metadata_bytes),
-            media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[DATASET] Metadata error: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
-@router.post("/generate-metadata-csv")
-async def generate_dataset_metadata_csv(request: DatasetGenerationRequest):
-    """Fetch minute OHLCV data, calculate indicators, and return column descriptions CSV."""
-    try:
-        request = _prepare_or_422(request)
-        df, column_meta, _ = _fetch_and_process(request)
-
-        _, ohlcv_cols, indicator_meta = _export_columns(request, df, column_meta)
-        csv_bytes = build_metadata_csv(indicator_meta, ohlcv_cols, time_zone=request.time_zone)
-
-        session_label = "rth" if request.session == "rth" else "ext"
-        filename = f"{request.ticker}_minute_{session_label}_{request.from_date}_to_{request.to_date}_columns.csv"
-        return StreamingResponse(
-            io.BytesIO(csv_bytes),
-            media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[DATASET] Metadata CSV error: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
@@ -575,50 +457,6 @@ def _build_zip_with_events(
     return zip_bytes, filename
 
 
-@router.post("/generate-zip")
-async def generate_dataset_zip(request: DatasetGenerationRequest):
-    """Fetch OHLCV, calculate indicators, and return a ZIP.
-
-    Always contains ``dataset.csv``, ``metadata.csv``, ``columns.csv``. Adds
-    per-slot CSVs under ``calls/`` and ``puts/`` subfolders when
-    ``options_companion`` is enabled, and ``quality_report.md`` when
-    ``include_quality_report`` is true.
-
-    Synchronous variant — single response with the binary ZIP. The
-    streaming counterpart at ``/generate-zip/stream`` emits SSE events for
-    chunk-level UI progress; use that one for unified-flow Fetch.
-    """
-    try:
-        request = _prepare_or_422(request)
-        logger.info(
-            f"[DATASET] Generating ZIP for {request.ticker}: "
-            f"{request.from_date} to {request.to_date}, "
-            f"indicators={[e.get('name') for e in request.indicator_entries]}, "
-            f"options_companion={bool(request.options_companion and request.options_companion.enabled)}, "
-            f"quality_report={request.include_quality_report}"
-        )
-
-        df, column_meta, raw_count = _fetch_and_process(request)
-        zip_bytes, filename = _build_zip_with_events(request, df, column_meta, raw_count)
-
-        logger.info(
-            f"[DATASET] ZIP ready: {raw_count} raw bars → {len(df)} processed, "
-            f"{len([m['column'] for m in column_meta])} indicator columns"
-        )
-
-        return StreamingResponse(
-            io.BytesIO(zip_bytes),
-            media_type="application/zip",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[DATASET] ZIP error: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-
 @router.post("/validation-report")
 async def generate_validation_report(
     our_csv: UploadFile = File(..., description="pandas-ta generated CSV"),
@@ -646,35 +484,4 @@ async def generate_validation_report(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Validation report failed: {e!s}",
-        )
-
-
-@router.post("/validation-report-download")
-async def download_validation_report(
-    our_csv: UploadFile = File(..., description="pandas-ta generated CSV"),
-    tv_csv: UploadFile = File(..., description="TradingView exported CSV"),
-    ticker: str = Form("SPY"),
-):
-    """Same as validation-report but returns the markdown as a downloadable file."""
-    from app.services.validation_service import generate_validation_report as gen_report
-
-    try:
-        our_bytes = await our_csv.read()
-        tv_bytes = await tv_csv.read()
-
-        report_md = gen_report(our_bytes, tv_bytes, ticker)
-        report_bytes = report_md.encode("utf-8")
-
-        filename = f"{ticker}_validation_report.md"
-        return StreamingResponse(
-            io.BytesIO(report_bytes),
-            media_type="text/markdown",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-        )
-
-    except Exception as e:
-        logger.error(f"[VALIDATION] Download error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e),
         )

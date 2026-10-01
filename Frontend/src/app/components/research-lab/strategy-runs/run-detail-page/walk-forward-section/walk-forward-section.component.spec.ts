@@ -150,11 +150,6 @@ describe('WalkForwardSectionComponent', () => {
     });
   });
 
-  it('shows empty-state copy when no walk-forwards exist', () => {
-    const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('No walk-forwards yet');
-  });
-
   it('runRollingWalkForward calls runFromRun, refreshes the list, and remembers the new wf_id', async () => {
     service.listWalkForwards.mockClear();
     await component.runRollingWalkForward();

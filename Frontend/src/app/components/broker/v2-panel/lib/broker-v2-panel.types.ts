@@ -1,7 +1,7 @@
 /**
  * Frontend aliases over mechanically generated Python OpenAPI contracts.
  *
- * All temporal fields are `int64 ms UTC` numbers per temporal-rigor.md.
+ * All temporal fields are `int64 ms UTC` numbers.
  * Python owns the semantic contract; this file adds only convenient local
  * names plus closed rendering-only unions for template exhaustiveness.
  */
@@ -18,7 +18,7 @@ export type StationState =
   | 'unknown_stale'
   | 'not_applicable';
 
-// ── Action ids (closed vocabulary, spec §11) ─────────────────────────────────
+// ── Action ids (closed vocabulary) ───────────────────────────────────────────
 
 export type ActionId = components['schemas']['PanelAction']['action_id'];
 
@@ -35,37 +35,26 @@ export type BotClearRequest = components['schemas']['BotClearRequest'];
 export type CohortActionResult = components['schemas']['CohortActionResult'];
 export type CohortLegResult = components['schemas']['CohortLegResult'];
 
-// ── Operator-blocker reuse (OperatorBlocker contract) ────────────────────────
+// ── Panel profile ────────────────────────────────────────────────────────────
 
-export type OperatorBlocker = components['schemas']['OperatorBlocker'];
-export type OperatorConfirmationCopy =
-  components['schemas']['OperatorConfirmationCopy'];
-
-// ── §4 Panel profile ─────────────────────────────────────────────────────────
-
-export type StationApplicability =
-  components['schemas']['StationApplicability'];
 export type PanelProfile = components['schemas']['PanelProfile'];
 
-// ── §5 Catalog view ──────────────────────────────────────────────────────────
+// ── Catalog view ─────────────────────────────────────────────────────────────
 
 export type BotCatalogView = components['schemas']['BotCatalogView'];
 
-// ── §7 Panel view ────────────────────────────────────────────────────────────
+// ── Panel view ───────────────────────────────────────────────────────────────
 
-export type DutyOutcomeView = components['schemas']['DutyOutcomeView'];
 export type ExposureNoticeView = components['schemas']['ExposureNoticeView'];
 export type StartupJoinView = components['schemas']['StartupJoinView'];
 export type BotHealthCard = components['schemas']['BotHealthCard'];
 export type ChannelHealthView = components['schemas']['ChannelHealthView'];
-export type FeedContinuityEventView = components['schemas']['FeedContinuityEventView'];
 export type FeedContinuityView = components['schemas']['FeedContinuityView'];
 export type ClerkCard = components['schemas']['ClerkCard'];
 export type StationView = components['schemas']['StationView'];
 export type ReadinessCheckView = components['schemas']['ReadinessCheckView'];
 export type TransactionRail = components['schemas']['TransactionRail'];
 export type PanelAction = components['schemas']['PanelAction'];
-export type ExitTerms = components['schemas']['ExitTerms'];
 
 /**
  * `authority_kind` names the exact Clerk account authority (real Paper vs
@@ -126,7 +115,7 @@ export const EMPTY_CURRENT_RUN_STATE: CurrentRunState = Object.freeze({
   failed: false,
 });
 
-// ── §11 Action execution ─────────────────────────────────────────────────────
+// ── Action execution ─────────────────────────────────────────────────────────
 
 export type PanelActionRequest = components['schemas']['PanelActionRequest'];
 export type PanelActionResult = components['schemas']['PanelActionResult'];
@@ -134,7 +123,7 @@ export type PanelActionResult = components['schemas']['PanelActionResult'];
  * backend closes this set at `PanelQuiesceActionRequest.action_id`. */
 export type PanelQuiesceActionId = components['schemas']['PanelQuiesceActionRequest']['action_id'];
 
-// ── §8 Chart types ───────────────────────────────────────────────────────────
+// ── Chart types ──────────────────────────────────────────────────────────────
 
 export type ChartSource = components['schemas']['ChartBar']['source'];
 export type ChartLiveResolution = components['schemas']['ChartLiveResponse']['resolution'];
@@ -161,7 +150,7 @@ export type BotPanelLiveSnapshot = components['schemas']['BotPanelLiveSnapshot']
 /** Why the live snapshot is withheld; `PRODUCER_STALLED` is the typed stale state (#2353). */
 export type LiveSnapshotUnavailableDetail = components['schemas']['LiveSnapshotUnavailableDetail'];
 
-// ── §14 Operator-gated evidence ──────────────────────────────────────────────
+// ── Operator-gated evidence ──────────────────────────────────────────────────
 
 export type EvidenceEntry = components['schemas']['EvidenceEntry'];
 export type EvidencePage = components['schemas']['EvidencePage'];

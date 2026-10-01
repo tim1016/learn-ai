@@ -1,6 +1,6 @@
-"""Regression probes for the four reproduced admission gaps (audit 2026-09-13).
+"""Regression probes for the four reproduced admission gaps (ADR 0062 addendum).
 
-The audit drove these four scenarios through ``FleetControlService`` on the
+The review drove these four scenarios through ``FleetControlService`` on the
 pre-hardening spine and recorded the wrong answers. Each test here pins the
 required answer; together they are the definition of "observed health is not
 confirmed admission" for the fleet protocol.
@@ -290,8 +290,8 @@ def test_an_agent_speaking_another_protocol_version_refuses(
 def test_the_same_path_in_two_namespaces_is_two_volumes(
     control_dir: Path, fleet_service
 ) -> None:
-    """Audit finding 4: equal path strings across deployment namespaces are
-    different mounts; within one namespace they still refuse."""
+    """Equal path strings across deployment namespaces are different mounts;
+    within one namespace they still refuse (ADR 0062 addendum, item 6)."""
 
     namespace_a = control_dir.parent / "ns-a"
     namespace_b = control_dir.parent / "ns-b"
@@ -299,7 +299,7 @@ def test_the_same_path_in_two_namespaces_is_two_volumes(
         directory.mkdir(parents=True, exist_ok=True)
     # Both containers mount their own volume at the same canonical path by
     # resolving through per-namespace temp roots to the same *string* is not
-    # possible on one host — so emulate the audit's scenario directly: same
+    # possible on one host — so emulate the reviewed scenario directly: same
     # path string, different namespaces, distinct attestations.
     shared_path = namespace_a / "app" / "artifacts" / "alpaca_clerk"
     shared_path.mkdir(parents=True)

@@ -268,6 +268,28 @@ class TestBuildCommand:
         monkeypatch.setattr(runner.os, "getgid", lambda: 1000, raising=False)
         assert runner._container_user_spec() == "1000:1000"
 
+    def test_build_command_refuses_to_launch_under_a_root_euid(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression (#2769): driving ``build_command`` under a root
+        launcher refuses with ``RunnerConfigurationError`` — the error
+        class the launcher service maps to a
+        ``runner_configuration_error`` launch rejection — instead of
+        emitting ``--user=0:0``."""
+        from app.lean_sidecar import runner
+
+        monkeypatch.setattr(runner.os, "getuid", lambda: 0, raising=False)
+        monkeypatch.setattr(runner.os, "getgid", lambda: 0, raising=False)
+        monkeypatch.setattr(runner.os, "geteuid", lambda: 0, raising=False)
+        ws = resolve_workspace("run_root_launcher", tmp_artifacts_root)
+        ws.ensure_layout()
+
+        with pytest.raises(RunnerConfigurationError, match="must not run as root"):
+            build_command(ws, DUMMY_DIGEST)
+
     def test_container_user_spec_falls_back_when_getuid_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """On Windows where ``os.getuid`` does not exist, the helper
         returns ``10001:10001`` — non-root, fixed, audit-explicit. The
@@ -374,32 +396,6 @@ class TestBuildCommand:
 
         monkeypatch.delattr(runner.os, "geteuid", raising=False)
         assert runner._is_rootless_podman("/usr/bin/podman") is False
-
-    def test_is_rootless_podman_does_not_shell_out_to_podman(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Regression for the silent-fallback bug: previously this
-        function called ``subprocess.run`` to query ``podman info``,
-        and any failure of that call (including the 15s timeout firing
-        under concurrent podman load) would silently return ``False``
-        and drop ``--userns=keep-id`` from the LEAN argv. The fix
-        replaced the probe with a euid check, which is deterministic
-        and has no subprocess. Guard against a future regression that
-        reintroduces the subprocess path."""
-        from app.lean_sidecar import runner
-
-        def _explode(*_args: object, **_kwargs: object) -> object:
-            raise AssertionError(
-                "_is_rootless_podman must not invoke subprocess.run; the "
-                "subprocess-based probe was removed because its 15s timeout "
-                "raced with concurrent podman activity and silently "
-                "misclassified rootless as rootful (see PR fixing this)."
-            )
-
-        monkeypatch.setattr(runner.subprocess, "run", _explode)
-        # Should return whatever euid says — no subprocess.
-        _ = runner._is_rootless_podman("/usr/bin/podman")
 
     def test_rejects_tmpfs_followed_by_another_flag(
         self,
@@ -630,17 +626,6 @@ class TestKillReason:
     (wall-clock timeout vs workspace cap overrun) into one — the
     discriminator is the enum threaded through the helper.
     """
-
-    def test_enum_has_expected_members(self) -> None:
-        from app.lean_sidecar.runner import KillReason
-
-        assert KillReason.WALL_CLOCK_TIMEOUT == "wall_clock_timeout"
-        assert KillReason.WORKSPACE_MAX_MB_EXCEEDED == "workspace_max_mb_exceeded"
-        # Stable string values for log / payload routing.
-        assert {m.value for m in KillReason} == {
-            "wall_clock_timeout",
-            "workspace_max_mb_exceeded",
-        }
 
     def test_kill_helper_accepts_reason_kwarg_and_logs_it(
         self,

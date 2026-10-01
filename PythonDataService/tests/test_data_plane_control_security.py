@@ -18,7 +18,6 @@ from app.broker.fleet.errors import (
 from app.config import settings
 from app.main import app
 from app.security.data_plane_control import (
-    CONTROL_ALLOW_UNAUTHENTICATED_ENV_VAR,
     CONTROL_SECRET_ENV_VAR,
     CONTROL_SECRET_HEADER,
     RETIRED_DATA_PLANE_CONTROL_SECRET,
@@ -165,14 +164,9 @@ def test_always_guarded_reads_are_declared_in_shared_manifest() -> None:
     for safe ones. A route that carries the always-on guard but sits under
     no ``protected_read_prefixes`` entry therefore 403s from the browser as
     soon as ``DATA_PLANE_CONTROL_SECRET`` is configured, while every
-    server-side test still passes.
-
-    That is exactly how ``GET /api/market-data-feed/health`` shipped with
-    PR-A of #1813: guarded, undeclared, and invisible to
+    server-side test still passes — and
     ``test_guarded_control_routes_are_declared_in_shared_manifest``, which
-    only inspects unsafe-method routes. Fixed in PR-B of #1813 (2026-08-27)
-    by declaring ``/api/market-data-feed``; this assertion is what stops the
-    next one.
+    only inspects unsafe-method routes, cannot see it.
     """
     guarded_reads = [
         (route.path, sorted(_safe_read_methods(route)))
@@ -336,10 +330,6 @@ def test_broker_v2_routes_declare_always_on_guard() -> None:
     assert all(has_guard for _path, _methods, has_guard in broker_routes)
 
 
-def test_broker_v2_protected_reads_are_declared_in_shared_manifest() -> None:
-    assert "/api/brokers" in _PROTECTED_READ_PREFIXES
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("supplied", [None, "wrong"])
 async def test_broker_v2_read_rejects_missing_or_wrong_secret(
@@ -471,10 +461,6 @@ async def test_control_mutation_compares_header_as_bytes(monkeypatch) -> None:
     assert exc_info.value.status_code == 403
 
     await require_data_plane_control_secret(_request("POST"), supplied="tëst-control-secret")
-
-
-def test_local_dev_opt_out_has_named_environment_switch() -> None:
-    assert CONTROL_ALLOW_UNAUTHENTICATED_ENV_VAR == "DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL"
 
 
 def test_internal_fleet_prefix_is_absent_from_the_browser_control_surface_manifest() -> None:

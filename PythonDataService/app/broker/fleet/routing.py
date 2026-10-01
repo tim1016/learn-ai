@@ -1,17 +1,17 @@
-"""The coordinator's routed-operation core (PRD §9.8, §10.2–§10.4, delivery B).
+"""The coordinator's routed-operation core.
 
 One path turns a public clerk-scoped request into a verified provider
 response: resolve the lane against the registry (readiness, pinned epoch and
-generation, wrong-target refusal), validate the §10.3 command envelope,
-persist the pinned routing attempt *before* dispatch for every effectful
-operation, deliver through the lane adapter, and settle the attempt's typed
-outcome. The provider clerk remains the sole deduplication and outcome
-authority (D11); this layer never resubmits, never retargets, and never
-treats an omitted identity echo as verified.
+generation, wrong-target refusal), validate the command envelope, persist
+the pinned routing attempt *before* dispatch for every effectful operation,
+deliver through the lane adapter, and settle the attempt's typed outcome. The
+provider clerk remains the sole deduplication and outcome authority
+(ADR 0062 addendum, item 7); this layer never resubmits, never retargets, and
+never treats an omitted identity echo as verified.
 
-Refusals surface as the §10.4 families — the typed error hierarchy already
-carries their reason codes and pinned statuses; nothing here invents a new
-one.
+Refusals surface as the stable refusal families (ADR 0062 Decision 5) — the
+typed error hierarchy already carries their reason codes and pinned statuses;
+nothing here invents a new one.
 """
 
 from __future__ import annotations
@@ -130,16 +130,21 @@ async def _no_stream_events() -> AsyncIterator[object]:
 
 
 class CommandEnvelopeInvalid(ValueError):
-    """A command body's §10.3 envelope is absent or incoherent.
+    """A command body's envelope is absent or incoherent.
 
     A contract violation, not a fleet family: the caller's request never
     reached a routing decision. The public router maps it to 422.
     """
 
+    def __init__(self, message: str) -> None:
+        """Keep the authored message the 422 body echoes, never ``str(self)``."""
+        super().__init__(message)
+        self.message = message
+
 
 @dataclass(frozen=True, slots=True)
 class CommandEnvelope:
-    """The §10.3 command context, validated against the routed operation."""
+    """The command context, validated against the routed operation."""
 
     capability: str
     idempotency_key: str | None
@@ -491,7 +496,7 @@ class LaneRouter:
         if receipt.state != RoutingReceiptState.NOT_DISPATCHED:
             # A settled attempt never redispatches: the provider clerk's
             # receipt is the outcome authority, and a retry of the same key
-            # must reconcile against it, not resubmit (D11).
+            # must reconcile against it, not resubmit (ADR 0062 addendum, item 7).
             raise ClerkRoutingAttemptConflict(
                 f"Idempotency key {receipt.idempotency_key} already settled as "
                 f"{receipt.state.value}"
@@ -506,7 +511,7 @@ class LaneRouter:
             )
         delivery = self._delivery_for(broker, session)
         # Dispatch is one-way from here: whatever happens next, the attempt
-        # can never present as definitively un-sent (D11). The claim is
+        # can never present as definitively un-sent (ADR 0062 addendum, item 7). The claim is
         # exclusive — a same-key attempt already dispatched but unsettled
         # (in flight, or its outcome lost) refuses outcome-unknown here and
         # is never delivered again (#2319).
@@ -731,7 +736,7 @@ class LaneRouter:
         body: object,
         path_params: Mapping[str, str],
     ) -> CommandEnvelope:
-        """Validate the §10.3 envelope against the operation being routed."""
+        """Validate the command envelope against the operation being routed."""
         if envelope is None:
             raise CommandEnvelopeInvalid(
                 f"A {operation.method} to {operation.path_template} requires a "

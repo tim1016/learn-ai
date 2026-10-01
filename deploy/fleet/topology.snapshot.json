@@ -193,7 +193,6 @@
       "volumes": [
         "Frontend/proxy.conf.js->/app/proxy.conf.js:bind",
         "Frontend/src->/app/src:bind",
-        "PythonDataService/tests/fixtures/action_plan->/app/src/testing/action_plan_fixtures:bind",
         "contracts->/contracts:bind"
       ]
     },
@@ -212,7 +211,6 @@
         "ALPACA_CLERK_DIR",
         "BACKEND_URL",
         "DATA_PLANE_CONTROL_SECRET",
-        "FILL_METHOD",
         "FLEET_AGENT_SERVICE_TOKENS_JSON",
         "FLEET_CONTROL_DIR",
         "FLEET_COORDINATOR_SERVICE_TOKENS_JSON",
@@ -233,13 +231,11 @@
         "LEAN_DATA_ROOT",
         "LEAN_DATA_WRITE_ROOT",
         "LEAN_LAUNCHER_URL",
-        "MAX_NULL_PERCENTAGE",
         "POLYGON_API_KEY",
         "POLYGON_RATE_LIMIT_PER_MIN",
         "PORT",
         "POSTGRES_URL",
         "REDIS_URL",
-        "REMOVE_DUPLICATES",
         "TRUSTED_HOSTS",
         "UVICORN_RELOAD",
         "WATCHFILES_FORCE_POLLING"

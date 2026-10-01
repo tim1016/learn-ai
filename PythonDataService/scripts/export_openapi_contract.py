@@ -45,14 +45,10 @@ def _schema_text() -> str:
     # Schema export never calls Polygon, but Settings requires a key at import
     # time. A harmless placeholder makes this command hermetic in CI.
     os.environ.setdefault("POLYGON_API_KEY", "contract-schema-placeholder")
-    # The committed contract describes the production API surface. Dev-only
-    # fault-injection routes are conditionally registered at app import time,
-    # so inheriting a developer's enabled environment makes generation
-    # nondeterministic and produces a contract CI cannot reproduce.
-    os.environ["ALPACA_FAULT_INJECTION_ENABLED"] = "false"
-    # Same reasoning for the fleet coordinator surface: the clerk-scoped
-    # routing surface mounts only with a control directory, and the committed
-    # contract must describe it. The schema path never opens a registry, so a
+    # The committed contract describes the production API surface, so the
+    # export must not depend on the caller's environment. The clerk-scoped
+    # fleet routing surface mounts only with a control directory, and the
+    # committed contract must describe it. The schema path never opens a registry, so a
     # placeholder path pins the mount deterministically — and the role is
     # forced to the combined posture so an inherited clerk-agent environment
     # cannot shrink the contract either.

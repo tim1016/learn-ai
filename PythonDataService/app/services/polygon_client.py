@@ -14,8 +14,6 @@ they happen, this client paces requests on the way out:
 This adds deterministic latency that the UI surfaces as "Your Polygon Starter
 plan allows 5 requests/minute — waiting X seconds for the next slot." Users
 see why the app is slow rather than guessing.
-
-See ``docs/references/polygon-throttle.md`` for the layman explanation.
 """
 
 import json
@@ -158,32 +156,6 @@ class PolygonClientService:
 
         except Exception as e:
             logger.error(f"Error fetching aggregates for {ticker}: {e!s}")
-            raise
-
-    def fetch_trades(self, ticker: str, timestamp: str | None = None, limit: int = 50000) -> list[dict[str, Any]]:
-        """Fetch real-time trades from Polygon"""
-        try:
-            logger.info(f"Fetching trades for {ticker}")
-
-            trades = []
-            for trade in self.client.list_trades(ticker=ticker, timestamp=timestamp, limit=limit):
-                trades.append(
-                    {
-                        "timestamp": trade.sip_timestamp if hasattr(trade, "sip_timestamp") else trade.timestamp,
-                        "price": trade.price,
-                        "size": trade.size,
-                        "exchange": trade.exchange if hasattr(trade, "exchange") else None,
-                        "conditions": trade.conditions if hasattr(trade, "conditions") else None,
-                        "sequence_number": trade.sequence_number if hasattr(trade, "sequence_number") else None,
-                        "trade_id": trade.id if hasattr(trade, "id") else None,
-                    }
-                )
-
-            logger.info(f"Fetched {len(trades)} trades for {ticker}")
-            return trades
-
-        except Exception as e:
-            logger.error(f"Error fetching trades for {ticker}: {e!s}")
             raise
 
     # ------------------------------------------------------------------
@@ -338,7 +310,7 @@ class PolygonClientService:
         **The ``insights`` array is vendor-asserted, not derived.** Each entry carries
         a sentiment label produced by Polygon's own unpublished model. We cannot
         reimplement it, so it can never satisfy the golden-fixture standard in
-        ``.claude/rules/numerical-rigor.md`` — it is recorded, never validated.
+        ADR 0069 §1 — it is recorded, never validated.
         Consumers must label it as external vendor data. Note also that Polygon scores
         an article whenever *it* runs the model, not at ``published_utc``: backfilled
         sentiment is scored by a model newer than the article, so it is unsafe as a
@@ -346,7 +318,7 @@ class PolygonClientService:
 
         **Temporal boundary.** The ``published_utc*`` *filters* stay vendor-format
         strings, which is a deliberate, documented deviation from
-        ``.claude/rules/temporal-rigor.md`` (CLAUDE.md philosophy #4): Polygon gives a
+        ADR 0022 (a), recorded in ADR 0022 (f): Polygon gives a
         bare ``YYYY-MM-DD`` whole-day semantics that an instant in milliseconds cannot
         express, so converting would narrow what a caller can ask for. This function is
         the designated ingestion boundary, and the direction that matters — vendor data
@@ -895,97 +867,6 @@ class PolygonClientService:
             logger.error(f"Error fetching stock snapshot for {ticker}: {e!s}")
             raise
 
-    def get_stock_snapshots(
-        self,
-        tickers: list[str] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Fetch snapshots for multiple stock tickers (v2 API).
-
-        Args:
-            tickers: List of ticker symbols. If None, returns all tickers.
-        """
-        try:
-            ticker_str = ",".join(tickers) if tickers else None
-            logger.info(f"Fetching stock snapshots for {ticker_str or 'all tickers'}")
-
-            snapshots = self.client.get_snapshot_all("stocks", tickers=ticker_str)
-
-            results = [self._serialize_ticker_snapshot(s) for s in snapshots]
-            logger.info(f"Fetched {len(results)} stock snapshots")
-            return results
-
-        except Exception as e:
-            logger.error(f"Error fetching stock snapshots: {e!s}")
-            raise
-
-    def get_market_movers(self, direction: str) -> list[dict[str, Any]]:
-        """Fetch top market movers — gainers or losers (v2 API).
-
-        Args:
-            direction: "gainers" or "losers"
-        """
-        try:
-            logger.info(f"Fetching market movers: {direction}")
-
-            snapshots = self.client.get_snapshot_direction("stocks", direction)
-
-            results = [self._serialize_ticker_snapshot(s) for s in snapshots]
-            logger.info(f"Fetched {len(results)} {direction}")
-            return results
-
-        except Exception as e:
-            logger.error(f"Error fetching market movers ({direction}): {e!s}")
-            raise
-
-    def get_unified_snapshots(
-        self,
-        tickers: list[str] | None = None,
-        limit: int = 10,
-    ) -> list[dict[str, Any]]:
-        """Fetch unified snapshots via the v3 API.
-
-        Args:
-            tickers: Optional list of ticker symbols to filter.
-            limit: Max results per page (default 10, max 250).
-        """
-        try:
-            logger.info(f"Fetching unified snapshots: tickers={tickers}, limit={limit}")
-
-            results = []
-            for snapshot in self.client.list_universal_snapshots(
-                ticker_any_of=tickers,
-                limit=limit,
-            ):
-                session = getattr(snapshot, "session", None)
-                results.append(
-                    {
-                        "ticker": getattr(snapshot, "ticker", None),
-                        "type": getattr(snapshot, "type", None),
-                        "market_status": getattr(snapshot, "market_status", None),
-                        "name": getattr(snapshot, "name", None),
-                        "session": {
-                            "price": getattr(session, "price", None),
-                            "change": getattr(session, "change", None),
-                            "change_percent": getattr(session, "change_percent", None),
-                            "open": getattr(session, "open", None),
-                            "close": getattr(session, "close", None),
-                            "high": getattr(session, "high", None),
-                            "low": getattr(session, "low", None),
-                            "previous_close": getattr(session, "previous_close", None),
-                            "volume": getattr(session, "volume", None),
-                        }
-                        if session
-                        else None,
-                    }
-                )
-
-            logger.info(f"Fetched {len(results)} unified snapshots")
-            return results
-
-        except Exception as e:
-            logger.error(f"Error fetching unified snapshots: {e!s}")
-            raise
-
     @staticmethod
     def _serialize_bar(bar: Any) -> dict[str, Any] | None:
         """Serialize an Agg or MinuteSnapshot bar to a dict."""
@@ -1028,38 +909,6 @@ class PolygonClientService:
             "updated": getattr(snapshot, "updated", None),
         }
 
-    def list_tickers(self, tickers: list[str]) -> list[dict[str, Any]]:
-        """Fetch basic info for a list of stock tickers from Polygon reference API.
-
-        Uses GET /v3/reference/tickers with limit=1000, then filters to requested tickers.
-        """
-        try:
-            ticker_set = {t.upper() for t in tickers}
-            logger.info(f"[Tickers] Fetching basic info for {len(ticker_set)} tickers")
-
-            results = []
-            for t in self.client.list_tickers(market="stocks", active=True, limit=1000):
-                symbol = getattr(t, "ticker", None)
-                if symbol and symbol in ticker_set:
-                    results.append(
-                        {
-                            "ticker": symbol,
-                            "name": getattr(t, "name", None) or "",
-                            "market": getattr(t, "market", None) or "",
-                            "type": getattr(t, "type", None) or "",
-                            "active": getattr(t, "active", True),
-                            "primary_exchange": getattr(t, "primary_exchange", None),
-                            "currency_name": getattr(t, "currency_name", None),
-                        }
-                    )
-
-            logger.info(f"[Tickers] Found {len(results)}/{len(ticker_set)} tickers")
-            return results
-
-        except Exception as e:
-            logger.error(f"[Tickers] Error fetching ticker list: {e!s}")
-            raise
-
     def list_catalog_tickers(self) -> list[dict[str, Any]]:
         """The whole US-stock reference catalog for the shared symbol picker.
 
@@ -1094,107 +943,4 @@ class PolygonClientService:
             return entries
         except Exception as e:
             logger.error(f"[Tickers] Error fetching the symbol catalog: {e!s}")
-            raise
-
-    def get_ticker_details(self, ticker: str) -> dict[str, Any]:
-        """Fetch detailed overview for a single ticker from Polygon.
-
-        Uses GET /v3/reference/tickers/{ticker}.
-        """
-        try:
-            logger.info(f"[Tickers] Fetching details for {ticker}")
-
-            details = self.client.get_ticker_details(ticker)
-
-            address = getattr(details, "address", None)
-            result = {
-                "ticker": getattr(details, "ticker", ticker),
-                "name": getattr(details, "name", None) or "",
-                "description": getattr(details, "description", None),
-                "market_cap": getattr(details, "market_cap", None),
-                "homepage_url": getattr(details, "homepage_url", None),
-                "total_employees": getattr(details, "total_employees", None),
-                "list_date": getattr(details, "list_date", None),
-                "sic_description": getattr(details, "sic_description", None),
-                "primary_exchange": getattr(details, "primary_exchange", None),
-                "type": getattr(details, "type", None),
-                "weighted_shares_outstanding": getattr(details, "weighted_shares_outstanding", None),
-                "address": {
-                    "address1": getattr(address, "address1", None),
-                    "city": getattr(address, "city", None),
-                    "state": getattr(address, "state", None),
-                    "postal_code": getattr(address, "postal_code", None),
-                }
-                if address
-                else None,
-            }
-
-            logger.info(f"[Tickers] Fetched details for {ticker}")
-            return result
-
-        except Exception as e:
-            logger.error(f"[Tickers] Error fetching details for {ticker}: {e!s}")
-            raise
-
-    def get_related_companies(self, ticker: str) -> list[str]:
-        """Fetch related company tickers from Polygon.
-
-        Uses GET /v1/related-companies/{ticker}.
-        """
-        try:
-            logger.info(f"[Tickers] Fetching related companies for {ticker}")
-
-            response = self.client.get_related_companies(ticker)
-            related = [getattr(r, "ticker", None) for r in (response or []) if getattr(r, "ticker", None)]
-
-            logger.info(f"[Tickers] Found {len(related)} related companies for {ticker}")
-            return related
-
-        except Exception as e:
-            logger.error(f"[Tickers] Error fetching related companies for {ticker}: {e!s}")
-            raise
-
-    def fetch_technical_indicator(
-        self,
-        ticker: str,
-        indicator_type: str,  # sma, ema, rsi, macd
-        timestamp: str | None = None,
-        timespan: str = "day",
-        window: int = 50,
-        **kwargs,
-    ) -> dict[str, Any]:
-        """Fetch technical indicators from Polygon"""
-        try:
-            logger.info(f"Fetching {indicator_type.upper()} for {ticker}")
-
-            # Map indicator types to client methods
-            indicator_methods = {
-                "sma": self.client.get_sma,
-                "ema": self.client.get_ema,
-                "rsi": self.client.get_rsi,
-                "macd": self.client.get_macd,
-            }
-
-            if indicator_type.lower() not in indicator_methods:
-                raise ValueError(f"Unsupported indicator type: {indicator_type}")
-
-            method = indicator_methods[indicator_type.lower()]
-
-            # Call appropriate method
-            result = method(ticker=ticker, timestamp=timestamp, timespan=timespan, window=window, **kwargs)
-
-            # Convert to serializable format
-            return {
-                "ticker": ticker,
-                "indicator_type": indicator_type,
-                "timestamp": result.timestamp if hasattr(result, "timestamp") else None,
-                "values": result.values if hasattr(result, "values") else None,
-                "metadata": {
-                    "timespan": timespan,
-                    "window": window,
-                },
-            }
-
-        except Exception as e:
-            logger.error(f"Error fetching {indicator_type} for {ticker}: {e!s}")
             raise

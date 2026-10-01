@@ -202,7 +202,7 @@ describe('DataLabComponent (shell)', () => {
         replaceUrl: true,
       },
     );
-    // URL state populates the committed workspace (PRD §14)…
+    // URL state populates the committed workspace…
     expect(fixture.componentInstance.store.committedTicker()).toBe('AAPL');
     expect(fixture.componentInstance.store.committedWindow()?.startMsUtc).toBe(
       Date.UTC(2026, 3, 15),

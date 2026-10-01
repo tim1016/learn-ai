@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import inspect
 import io
-import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -40,7 +39,7 @@ class RunCancelledError(Exception):
 class CanonicalBarsError(ValueError):
     """Polygon returned bars that violate the canonical-input contract.
 
-    Per .claude/rules/numerical-rigor.md § "External-API ingestion",
+    Per ADR 0022 (h),
     duplicates and non-monotonic timestamps must surface as errors,
     not be silently repaired.
     """
@@ -86,24 +85,8 @@ def assert_canonical_bar_stream(bars: list[dict[str, Any]], symbol: str) -> None
 logger = logging.getLogger(__name__)
 
 _POLYGON_MAX_BARS = 50_000
-_MINUTES_PER_DAY = 450
-_DAYS_PER_CHUNK = _POLYGON_MAX_BARS // _MINUTES_PER_DAY
 _ET = ZoneInfo("US/Eastern")
 
-# Default indicator configurations matching TradingView standard setup
-DEFAULT_INDICATORS: list[dict[str, Any]] = [
-    {"name": "ema", "params": {"length": 5}},
-    {"name": "ema", "params": {"length": 10}},
-    {"name": "ema", "params": {"length": 20}},
-    {"name": "ema", "params": {"length": 30}},
-    {"name": "ema", "params": {"length": 40}},
-    {"name": "ema", "params": {"length": 50}},
-    {"name": "ema", "params": {"length": 100}},
-    {"name": "ema", "params": {"length": 200}},
-    {"name": "bbands", "params": {"length": 20, "std": 2.0}},
-    {"name": "supertrend", "params": {"length": 10, "multiplier": 3.0}},
-    {"name": "macd", "params": {"fast": 12, "slow": 26, "signal": 9}},
-]
 
 # Configurable parameters for key indicators
 INDICATOR_CONFIGS: dict[str, list[dict[str, Any]]] = {
@@ -275,7 +258,7 @@ def fetch_bars_chunks_raw(
     """Return chunk-concatenated bars WITHOUT dedup or re-sort.
 
     This is the canonical-input path used by the LEAN sidecar: per
-    ``.claude/rules/numerical-rigor.md`` § "External-API ingestion",
+    ADR 0022 (h),
     duplicates and non-monotonic timestamps must surface as errors at
     the ingestion boundary, not be silently repaired. Callers that want
     the legacy sanitized behavior (frontend Data Lab, indicator
@@ -724,8 +707,8 @@ def _sessions_between(first: Date, last: Date) -> tuple[SessionWindow, ...]:
 def resolve_indicator_window(from_date: str, *, max_lookback: int, bar_minutes: int) -> IndicatorWindow:
     """The ONE decision of a picked window's warm-up start and its visible start (#2458).
 
-    The Data Lab chart, the dataset export, the indicator table, the
-    indicator-reliability study and the quality report's indicator step all
+    The Data Lab chart, the dataset export, the indicator-reliability
+    study and the quality report's indicator step all
     size their lead-in here, keyed on the length of the bars their indicators
     actually run on — the chart passes its timeframe's
     ``TIMEFRAME_DEFS`` minutes, a Polygon-bar caller passes
@@ -791,30 +774,6 @@ def resolve_indicator_window(from_date: str, *, max_lookback: int, bar_minutes: 
         if needed_sessions <= len(sessions):
             fetch_from = sessions[-needed_sessions].session_date
     return IndicatorWindow(from_date, fetch_from.isoformat(), window_start_ms, warmup_bars)
-
-
-def indicator_table_params_to_entries(
-    ema_periods: list[int],
-    bb_length: int = 20,
-    bb_std: float = 2.0,
-    supertrend_length: int = 10,
-    supertrend_multiplier: float = 3.0,
-    rsi_length: int = 14,
-    macd_fast: int = 12,
-    macd_slow: int = 26,
-    macd_signal: int = 9,
-    adx_length: int = 14,
-) -> list[dict[str, Any]]:
-    """Convert fixed indicator-table params into dynamic indicator_entries."""
-    entries: list[dict[str, Any]] = []
-    for period in sorted(ema_periods):
-        entries.append({"name": "ema", "params": {"length": period}})
-    entries.append({"name": "bbands", "params": {"length": bb_length, "std": bb_std}})
-    entries.append({"name": "supertrend", "params": {"length": supertrend_length, "multiplier": supertrend_multiplier}})
-    entries.append({"name": "rsi", "params": {"length": rsi_length}})
-    entries.append({"name": "macd", "params": {"fast": macd_fast, "slow": macd_slow, "signal": macd_signal}})
-    entries.append({"name": "adx", "params": {"length": adx_length}})
-    return entries
 
 
 def _tag_session_column(
@@ -989,53 +948,6 @@ def calculate_indicators_then_trim(
     return trim_to_window(df, trim_from_ts, trim_to_ts), column_meta
 
 
-def rename_to_indicator_table_columns(
-    df: pd.DataFrame,
-    column_meta: list[dict[str, Any]],
-) -> pd.DataFrame:
-    """Rename pandas-ta raw column names to the indicator-table API contract."""
-    rename_map: dict[str, str] = {}
-    for m in column_meta:
-        col = m["column"]
-        ind = m["indicator"]
-        if ind == "bbands":
-            if col.startswith("bbl"):
-                rename_map[col] = "bb_lower"
-            elif col.startswith("bbm"):
-                rename_map[col] = "bb_basis"
-            elif col.startswith("bbu"):
-                rename_map[col] = "bb_upper"
-        elif ind == "supertrend":
-            if col.startswith("supertl"):
-                rename_map[col] = "supertrend_up"
-            elif col.startswith("superts"):
-                rename_map[col] = "supertrend_down"
-        elif ind == "rsi":
-            rename_map[col] = "rsi"
-        elif ind == "macd":
-            if col.startswith("macdh"):
-                rename_map[col] = "macd_histogram"
-            elif col.startswith("macds"):
-                rename_map[col] = "macd_signal"
-            else:
-                rename_map[col] = "macd"
-        elif ind == "adx":
-            if "dmp" not in col and "dmn" not in col:
-                rename_map[col] = "adx"
-        elif ind == "ema":
-            # calculate_dynamic_indicators produces "ema_length5" → rename to "ema_5"
-            length = m.get("params", "").replace("length=", "")
-            if length:
-                rename_map[col] = f"ema_{length}"
-
-    # Drop columns not in the indicator-table contract (bbb, bbp, supert, supertd, dmp, dmn)
-    keep_cols = set(rename_map.values()) | {"timestamp", "open", "high", "low", "close", "volume"}
-    df = df.rename(columns=rename_map)
-    drop_cols = [c for c in df.columns if c not in keep_cols]
-    df = df.drop(columns=drop_cols, errors="ignore")
-    return df
-
-
 def indicator_params_label(params: dict[str, Any]) -> str:
     """The ``params`` label :func:`calculate_dynamic_indicators` stamps on each
     column it adds (``"length=20"``; ``"default"`` when there are none) — the
@@ -1138,8 +1050,8 @@ def project_output_columns(
     """Project the canonical ordered output-column list for a dataset.
 
     This is the ONE column-projection authority shared by every export
-    surface (generate-csv, generate-zip's dataset.csv/columns.csv, and
-    the fetch-free ``POST /api/dataset/plan`` receipt) so their column
+    surface (the dataset ZIP's dataset.csv/columns.csv and the
+    fetch-free ``POST /api/dataset/plan`` receipt) so their column
     lists cannot drift.
 
     ``PC`` (previous trading day's close) sits before ``open`` when
@@ -1219,138 +1131,6 @@ def build_csv_bytes(df: pd.DataFrame, columns: list[str], time_zone: str | None 
         leading: list[Any] = [ts] if time_labels is None else [ts, time_labels[position]]
         writer.writerow(leading + [_fmt(row.get(col)) for col in columns])
     return output.getvalue().encode("utf-8")
-
-
-def build_metadata_json(
-    ticker: str,
-    from_date: str,
-    to_date: str,
-    bar_count: int,
-    column_meta: list[dict[str, Any]],
-    ohlcv_cols: list[str],
-    session: str = "extended",
-    forward_fill: bool = False,
-    raw_bar_count: int = 0,
-    filled_bar_count: int = 0,
-    time_zone: str | None = None,
-) -> bytes:
-    """Generate CSV metadata JSON describing every column and its calculation."""
-    base_columns = [
-        {
-            "column": "unix_ts",
-            "type": "int",
-            "description": "Unix timestamp in milliseconds (UTC)",
-            "source": "Polygon.io",
-        },
-    ]
-    if time_zone is not None:
-        base_columns.append(
-            {
-                "column": time_column_name(time_zone),
-                "type": "string",
-                "description": _time_column_description(time_zone),
-                "source": "Derived from unix_ts",
-            }
-        )
-    for col in ohlcv_cols:
-        desc_map = {
-            "PC": "Previous trading day's RTH close for the underlying ticker",
-            "open": "Opening price of the minute bar",
-            "high": "Highest price during the minute bar",
-            "low": "Lowest price during the minute bar",
-            "close": "Closing price of the minute bar",
-            "volume": "Number of shares traded during the minute bar",
-            "vwap": "Volume-weighted average price for the minute bar",
-            "transactions": "Number of transactions in the minute bar",
-        }
-        source_map = {
-            "PC": "Polygon.io REST API (list_aggs, daily timespan)",
-        }
-        base_columns.append(
-            {
-                "column": col,
-                "type": "float" if col != "transactions" else "int",
-                "description": desc_map.get(col, col),
-                "source": source_map.get(col, "Polygon.io REST API (list_aggs)"),
-            }
-        )
-
-    # Session column (added by _tag_session_column)
-    base_columns.append(
-        {
-            "column": "session",
-            "type": "string",
-            "description": "Trading session: rth (regular 09:30-16:00 ET), pre (pre-market), or post (after-hours)",
-            "source": "Derived from NYSE calendar",
-        }
-    )
-
-    indicator_columns = []
-    for meta in column_meta:
-        desc = _describe_indicator_column(meta["indicator"], meta["column"], meta["params"])
-        indicator_columns.append(
-            {
-                "column": meta["column"],
-                "type": "float",
-                "indicator": meta["indicator"],
-                "parameters": meta["params"],
-                "library": meta["library"],
-                "description": desc,
-            }
-        )
-
-    metadata = {
-        "dataset": {
-            "ticker": ticker,
-            "from_date": from_date,
-            "to_date": to_date,
-            "timespan": "minute",
-            "multiplier": 1,
-            "bar_count": bar_count,
-            "generated_at_ms": now_ms_utc(),
-        },
-        "data_source": {
-            "provider": "Polygon.io",
-            "plan": "Starter (2-year history, 15-min delayed)",
-            "api": "REST v2 list_aggs with auto-pagination",
-            "chunking": f"Date range split into ~{_DAYS_PER_CHUNK}-day windows to stay within {_POLYGON_MAX_BARS} bar API limit",
-        },
-        "calculation_engine": {
-            "library": "pandas-ta",
-            "version": getattr(ta, "version", "unknown"),
-            "description": "Technical Analysis library for Python built on pandas, providing 150+ indicators",
-            "url": "https://github.com/twopirllc/pandas-ta",
-        },
-        "columns": base_columns + indicator_columns,
-        "processing": {
-            "session_filter": session,
-            "session_description": "Regular Trading Hours 09:30-16:00 ET"
-            if session == "rth"
-            else "Extended hours (pre-market + RTH + after-hours)",
-            "forward_fill": forward_fill,
-            "forward_fill_description": "Missing minute bars filled with previous close (volume=0)"
-            if forward_fill
-            else "No fill — raw Polygon data with gaps",
-            "raw_bars_from_polygon": raw_bar_count,
-            "bars_after_processing": filled_bar_count or bar_count,
-            "bars_added_by_fill": (filled_bar_count - raw_bar_count) if forward_fill and filled_bar_count else 0,
-        },
-        "known_behaviors": {
-            "vwap": "Polygon VWAP is a daily rolling VWAP, not per-bar. It accumulates across the session and routinely falls outside a single bar's H/L range. This is correct behavior.",
-            "supertrend_nans": "supertl (long/support) is NaN during downtrends; superts (short/resistance) is NaN during uptrends. This is by design — use supert for the main line and supertd for direction.",
-            "polygon_0700_contamination": "Polygon includes late-reported settlement trades in minute aggregates around 07:00-07:02 ET, inflating close prices by $4-6 on some bars. TradingView filters these out. This causes EMA/indicator divergence vs TradingView — longer-period EMAs recover more slowly from the contaminated bar.",
-            "flat_bars": "Bars where High=Low=Open=Close occur in pre/post market when only 1 trade happens in the minute. Expected in extended hours.",
-            "saturday_data": "Some bars may appear on Saturday UTC — these are Friday after-hours trades past midnight UTC. Filtered out when session='rth'.",
-        },
-        "notes": [
-            "All float values are rounded to 6 decimal places",
-            "Empty cells indicate NaN (indicator warm-up period or insufficient data)",
-            "Timestamps represent the start of each minute bar (bar-open convention)",
-            "Input timestamps are accepted only when unique and strictly increasing",
-            "VWAP is a daily rolling accumulation — not bounded by individual bar H/L",
-        ],
-    }
-    return json.dumps(metadata, indent=2).encode("utf-8")
 
 
 _INDICATOR_DESCRIPTIONS: dict[str, dict[str, str]] = {

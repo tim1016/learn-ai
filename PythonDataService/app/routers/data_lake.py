@@ -115,7 +115,7 @@ async def get_coverage(
     rather than omitted.
 
     The window arrives as two ``int64 ms UTC`` values, not ISO dates.
-    ``.claude/rules/temporal-rigor.md`` allows exactly one wire format for a
+    ADR 0022 (a) allows exactly one wire format for a
     temporal value and a trading date is not an exception to it — it is a
     date-anchored value, carried as the millisecond instant of that session's
     open and resolved back through ``America/New_York``
@@ -370,13 +370,13 @@ class BackfillJobRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Wire serialization — temporal-rigor.md: every wire temporal value is
+# Wire serialization — every wire temporal value is
 # int64 ms UTC, never an ISO date string. ArtifactFailure/NonSessionRecord
 # stay plain `date`-typed Pydantic models (they're a shared contract
 # /ensure-data's own response also uses, out of scope here); the
 # conversion happens only at this router's own SSE/job-result boundary.
 # "Trading date" is anchored at the session open (09:30 ET), per
-# temporal-rigor.md's date-anchored-value rule.
+# ADR 0022 (a)'s date-anchored-value rule.
 # ---------------------------------------------------------------------------
 
 

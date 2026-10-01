@@ -98,20 +98,6 @@ class DecisionReceiptResource:
 
 
 @dataclass(frozen=True)
-class DecisionReceiptPageResource:
-    """A bounded, committed evidence read, including the source watermark."""
-
-    meta: ControlMetaSnapshot
-    strategy_instance_id: str
-    config_hash: str
-    observed_at_ms: int
-    after_seq: int
-    highest_seq: int
-    next_after_seq: int | None
-    receipts: tuple[DecisionReceiptResource, ...]
-
-
-@dataclass(frozen=True)
 class ExternalOrderResource:
     """A broker order outside every registered bot namespace.
 
@@ -177,7 +163,7 @@ class RunResource:
 
 @dataclass(frozen=True)
 class EffectOperationResource:
-    """A row of ``effect_operations`` — Clerk-owned ENTER/EXIT/... work (§7)."""
+    """A row of ``effect_operations`` — Clerk-owned ENTER/EXIT/... work."""
 
     effect_operation_id: str
     authority_generation: int

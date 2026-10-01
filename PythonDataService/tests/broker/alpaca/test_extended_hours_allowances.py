@@ -1,4 +1,4 @@
-"""Where an extended-session leg's allowance comes from (ADR 0060; plan §0 D3).
+"""Where an extended-session leg's allowance comes from (ADR 0060).
 
 The rule under test: an authority composes its allowances from the effective
 revision's live envelope, else from its settings, and is never blocked by a

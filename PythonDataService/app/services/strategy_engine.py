@@ -2,7 +2,7 @@
 
 Formula: POP (Probability of Profit) and EV (Expected Value) under the BS-M lognormal model. Per-leg payoff curves at expiry; current-time PnL by composing per-leg theoretical values from `bs_greeks.py`; Greek curves per-spot grid; per-leg diagnostic table. Aggregates into a strategy-level response shape consumed by Strategy Lab.
 Reference: Hull, Options Futures and Other Derivatives (10e), §11–12 (payoff diagrams), §19 (Greek Letters); composes the canonical Python options authorities (`bs_greeks.py`, `quantlib_pricer.py`, `volatility/solver.py`).
-Canonical implementation: this file (`AnalyzeOptionsStrategy` per registry § Options pricing and Greeks; finding F-0004). The Frontend `OptionsStrategyLabComponent` consumes this response and is now a passthrough since Phase 1.2 (commit 451394d).
+Canonical implementation: this file (`AnalyzeOptionsStrategy`). The Frontend `OptionsStrategyLabComponent` consumes this response and is now a passthrough since Phase 1.2 (commit 451394d).
 Validated against: PythonDataService/tests/test_strategy_engine.py (POP, EV, strategy Greeks across spreads, single-legs, time-decay).
 
 All probability math lives here — Black-Scholes lognormal model
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date, datetime
 
 import numpy as np
 from scipy.stats import lognorm, norm
@@ -29,6 +28,7 @@ from app.models.strategy import (
     StrategyLeg,
 )
 from app.services.bs_greeks import black_scholes_greeks, bs_european_price
+from app.utils.session_anchors import calendar_days_to_expiry
 
 logger = logging.getLogger(__name__)
 
@@ -622,10 +622,7 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
             request.expiration_date,
         )
 
-        # Days to expiry
-        exp_date = datetime.strptime(request.expiration_date, "%Y-%m-%d").date()
-        today = date.today()
-        days_to_expiry = max((exp_date - today).days, 0)
+        days_to_expiry = calendar_days_to_expiry(request.expiration_date)
 
         strategy_cost = compute_strategy_cost(request.legs)
 

@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, JsonValue, model_validator
 
 from app.schemas.chart import ChartIndicatorEntry, ChartIndicatorResult
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 class EngineChartRequest(BaseModel):
     strategy_name: str = Field(..., min_length=1)
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     symbol: str = Field(..., min_length=1, max_length=20)
-    from_ms_utc: int = Field(..., ge=0)
-    to_ms_utc: int = Field(..., ge=0)
+    from_ms_utc: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS)
+    to_ms_utc: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS)
     adjusted: bool = True
     session: Literal["regular", "extended"] = "regular"
     timespan: Literal["minute", "hour", "day"] = "minute"
@@ -42,7 +43,7 @@ class EngineChartCoverage(BaseModel):
     expected_days: int
     available_days: int
     is_complete: bool
-    missing_session_ms_utc: list[int] = Field(default_factory=list)
+    missing_session_ms_utc: list[Annotated[int, Field(le=MAX_TIMESTAMP_MS)]] = Field(default_factory=list)
 
 
 class ResolvedChartIndicator(BaseModel):

@@ -6,8 +6,8 @@ endpoints, mints the ``job_id``, and writes the initial state record to
 Redis. Python receives the ``job_id`` and runs the actual work, emitting
 progress events to the same Redis keys.
 
-The split keeps the architecture aligned with the project rule: Python
-owns all math, .NET is transport.
+The split keeps the architecture aligned with ADR 0068: Python
+owns the math, .NET is transport.
 
 Field naming
 ------------
@@ -28,7 +28,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.encoders import jsonable_encoder
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 from pydantic.alias_generators import to_camel
 
 from app.jobs import cache as result_cache
@@ -61,10 +61,7 @@ from app.schemas.ticker_request import (
 from app.services.dataset_service import RunCancelledError
 from app.services.engine_backtest_service import execute_engine_backtest
 from app.services.polygon_client import PolygonClientService
-from app.services.rule_based_backtest import (
-    RuleBasedBacktestResult,
-    run_rule_based_backtest,
-)
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -154,23 +151,6 @@ class _CamelCaseMultiTickerRequest(MultiTickerRequest):
     )
 
 
-class RuleBasedBacktestJobRequest(_CamelCaseTickerRequest):
-    """Body of POST /api/jobs-internal/backtest.
-
-    **Default override**: ``multiplier=15`` to preserve the
-    pre-migration default (the rule-based backtest path defaulted to
-    15-minute bars before this PR). Without the override, the inherited
-    base default of 1 would silently switch every caller to 1-minute
-    bars.
-    """
-
-    # Override base default — preserves pre-migration multiplier=15.
-    multiplier: int = Field(15, ge=1)
-
-    job_id: str = Field(..., min_length=1)
-    parameters: dict = Field(default_factory=dict)
-
-
 class DatasetZipJobRequest(_CamelCaseModel):
     """Body of POST /api/jobs-internal/dataset-zip.
 
@@ -221,17 +201,17 @@ class StrategyGridConfigRequest(_CamelCaseModel):
 
 
 class RecencyChartSpecRequest(_CamelCaseModel):
-    """One Recency launch's grid and window, as sent at launch and stored in the durable row (design spec D4).
+    """One Recency launch's grid and window, as sent at launch and stored in the durable row.
 
     Each parameter's range is either an explicit value list or an
-    inclusive low/high/step sweep (design spec D4) — the discriminated
+    inclusive low/high/step sweep — the discriminated
     ``type`` field lets one dict carry either shape per parameter.
     """
 
     strategies: list[StrategyGridConfigRequest] = Field(min_length=1)
     symbols: list[str] = Field(min_length=1)
-    window_start_ms: int
-    window_end_ms: int
+    window_start_ms: int = Field(le=MAX_TIMESTAMP_MS)
+    window_end_ms: int = Field(le=MAX_TIMESTAMP_MS)
     data_policy: str = "polygon-adjusted-regular-minute"
     fill_mode: str = "signal_bar_close"
     commission_per_order: float = 0.0
@@ -266,9 +246,8 @@ class LeanEngineRunJobRequest(_CamelCaseModel):
 class CrossSectionalJobRequest(_CamelCaseMultiTickerRequest):
     """Body of POST /api/jobs-internal/cross-sectional.
 
-    The Frontend posts the same shape it currently sends to the GraphQL
-    ``runBatchOptionsResearch`` mutation, plus an injected ``job_id``
-    from the .NET JobsApi.
+    The Frontend's research request, plus an injected ``job_id`` from the
+    .NET JobsApi.
     """
 
     job_id: str = Field(..., min_length=1)
@@ -318,68 +297,6 @@ class SignalEngineJobRequest(_CamelCaseTickerRequest):
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
-
-
-@router.post("/backtest", status_code=status.HTTP_202_ACCEPTED)
-async def start_rule_based_backtest_job(req: RuleBasedBacktestJobRequest) -> dict:
-    """Kick off a rule-based backtest in a worker thread. Returns 202.
-
-    The actual progress is observed by subscribing to the SSE stream
-    served by the .NET layer at ``/jobs/{id}/events``.
-    """
-    if not req.symbol.strip():
-        raise HTTPException(status_code=400, detail="symbol is required")
-
-    def work(emit: ProgressEmitter, cancel) -> dict:
-        # ----- Phase 1: load bars from Polygon -----
-        emit.phase("loading_bars")
-        emit.log(f"Fetching {req.symbol} {req.multiplier}{req.timespan} bars from {req.from_date} to {req.to_date}")
-        cancel.raise_if_cancelled()
-
-        bars = polygon_client.fetch_aggregates(
-            ticker=req.symbol.upper(),
-            multiplier=req.multiplier,
-            timespan=req.timespan,
-            from_date=req.from_date,
-            to_date=req.to_date,
-        )
-        if not bars:
-            raise ValueError(f"No bars returned for {req.symbol} in date range")
-
-        emit.log(f"Fetched {len(bars)} bars")
-        emit.progress(current=len(bars), total=len(bars), unit="bars", message="bars loaded")
-        cancel.raise_if_cancelled()
-
-        # ----- Phase 2: run the backtest -----
-        emit.phase("simulating")
-        # The rule-based engine is one-shot — it computes indicators and
-        # iterates the dataframe internally. Coarse progress only:
-        # phase boundaries are the meaningful signal here.
-        result: RuleBasedBacktestResult = run_rule_based_backtest(
-            ticker=req.symbol.upper(),
-            bars=bars,
-            params=req.parameters,
-        )
-        cancel.raise_if_cancelled()
-
-        if not result.success:
-            raise ValueError(result.error or "Backtest returned no result")
-
-        # ----- Phase 3: serialize -----
-        emit.phase("computing_stats")
-        emit.progress(
-            current=result.bars_processed,
-            total=result.bars_processed,
-            unit="bars",
-            message=f"{result.total_trades} trades",
-        )
-        return _serialize(result)
-
-    # The rule-based job checks cancellation only at its three phase
-    # boundaries, so every check must read the flag (#2463; the framework
-    # default is also 1 — this states it like every sibling job).
-    run_in_thread(req.job_id, work, thread_name=f"backtest-{req.job_id[:8]}", cancel_check_every_n=1)
-    return {"job_id": req.job_id, "status": "queued"}
 
 
 @router.post("/dataset-zip", status_code=status.HTTP_202_ACCEPTED)
@@ -602,7 +519,16 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
         refusal = recency_service.resume_refusal(launch_row, live=live)
         if refusal is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "NOT_RESUMABLE", "message": refusal})
-        stored = RecencyChartSpecRequest.model_validate_json(launch_row.config_json)
+        try:
+            stored = RecencyChartSpecRequest.model_validate_json(launch_row.config_json)
+        except ValidationError as exc:
+            # The stored row no longer parses (a request bound tightened since
+            # the launch, e.g. the ADR 0022 (g) ceiling); it cannot run as recorded.
+            reasons = "; ".join(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors())
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "NOT_RESUMABLE", "message": f"the stored launch configuration no longer validates: {reasons}"},
+            ) from exc
         try:
             launch = recency_service.validate_launch(
                 launch_id=launch_row.launch_id,
@@ -1188,63 +1114,12 @@ async def start_signal_engine_job(req: SignalEngineJobRequest) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _serialize(r: RuleBasedBacktestResult) -> dict:
-    """Convert RuleBasedBacktestResult dataclass to a JSON-friendly dict.
-
-    Mirrors the snake_case shape the .NET ``RuleBasedPythonResponse``
-    deserializer already expects, so the existing GraphQL response type
-    can re-use it when the caller fetches the result."""
-    return {
-        "success": r.success,
-        "ticker": r.ticker,
-        "strategy_name": r.strategy_name,
-        "parameters": r.parameters,
-        "total_trades": r.total_trades,
-        "winning_trades": r.winning_trades,
-        "losing_trades": r.losing_trades,
-        "win_rate": r.win_rate,
-        "avg_win_pct": r.avg_win_pct,
-        "avg_loss_pct": r.avg_loss_pct,
-        "win_loss_ratio": r.win_loss_ratio,
-        "profit_factor": r.profit_factor,
-        "expectancy_per_trade": r.expectancy_per_trade,
-        "total_pnl_pct": r.total_pnl_pct,
-        "max_drawdown_pct": r.max_drawdown_pct,
-        "total_pnl_pts": r.total_pnl_pts,
-        "sharpe_ratio": r.sharpe_ratio,
-        "bars_processed": r.bars_processed,
-        "trades": [
-            {
-                "trade_number": t.trade_number,
-                "trade_type": t.trade_type,
-                "entry_timestamp": t.entry_timestamp,
-                "exit_timestamp": t.exit_timestamp,
-                "entry_price": t.entry_price,
-                "exit_price": t.exit_price,
-                "pnl": t.pnl,
-                "pnl_pct": t.pnl_pct,
-                "cumulative_pnl_pct": t.cumulative_pnl_pct,
-                "signal_reason": t.signal_reason,
-                "ema_fast": t.ema_fast,
-                "ema_slow": t.ema_slow,
-                "ema_gap": t.ema_gap,
-                "rsi": t.rsi,
-                "adx": t.adx,
-            }
-            for t in r.trades
-        ],
-        "error": r.error,
-    }
-
-
 def _serialize_target(target: Any) -> dict:
-    """Project a ``TargetResult`` to a JSON-friendly dict that mirrors
-    the GraphQL ``TargetMetadata`` shape the Frontend already consumes
-    via ``runFeatureResearch``. The bulky ``values``/``timestamps``
+    """Project a ``TargetResult`` to the JSON-friendly ``TargetMetadata``
+    shape the Frontend consumes. The bulky ``values``/``timestamps``
     Series are intentionally dropped — only the metadata that drives
     the UI disclosure travels with the report. ``invalid_reason_counts``
-    is emitted as a list of ``{reason, count}`` so the async path
-    matches the projection Hot Chocolate emits for the sync path.
+    is emitted as a list of ``{reason, count}``.
     """
     return {
         "target_name": target.target_name,

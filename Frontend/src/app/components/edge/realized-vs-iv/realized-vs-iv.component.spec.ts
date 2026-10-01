@@ -14,8 +14,7 @@ import {
 /**
  * Banner-rendering tests for the IV-source/confidence panel added in
  * the Step E + recorder-fallback follow-up. Asserts on the rendered
- * DOM (data-testid hooks), not on private signal values, per
- * .claude/rules/angular.md "Testing".
+ * DOM (data-testid hooks), not on private signal values.
  */
 describe("RealizedVsIvComponent — IV confidence banner", () => {
   let fixture: ComponentFixture<RealizedVsIvComponent>;
@@ -129,10 +128,10 @@ describe("RealizedVsIvComponent — IV confidence banner", () => {
     expect(textOf(el, '[data-testid="iv-source"]')).toContain("no IV provided");
   });
 
-  // Research-doc §7.11 / §8.2.4: when the recorder row lacks an explicit
-  // health_score, confidence is computed against the conservative 0.5
-  // imputed prior; the UI flags this so the consumer doesn't treat the
-  // confidence number as evidence-backed.
+  // ADR 0071 decision 11: when the recorder row lacks an explicit
+  // health_score, confidence drops the health factor (1 - vcs); the UI
+  // flags this so the consumer doesn't treat the confidence number as
+  // evidence-backed.
 
   it("renders the imputed pill when healthImputed=true", () => {
     setIvConfidence({

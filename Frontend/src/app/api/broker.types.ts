@@ -24,26 +24,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/accounts/{account_id}/pnl-attribution": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Account Pnl Attribution
-         * @description Return C2's inclusive account FIFO attribution from SQLite folds.
-         */
-        get: operations["get_account_pnl_attribution_api_accounts__account_id__pnl_attribution_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/accounts/{account_id}/transactions": {
         parameters: {
             query?: never;
@@ -127,23 +107,6 @@ export interface paths {
          *     Returns sanitized OHLCV data with summary statistics
          */
         post: operations["fetch_aggregates_api_aggregates_fetch_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/decision-evidence": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Paged, identity-bearing decision evidence for Paper/Live experiments */
-        get: operations["decision_evidence_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__decision_evidence_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -259,60 +222,6 @@ export interface paths {
         get: operations["get_bot_snapshot_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__snapshot_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{strategy_instance_id}/timeline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Bot Timeline */
-        get: operations["get_bot_timeline_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__timeline_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/alpaca-clerk-sqlite/accounts/{account_id}/commands/{command_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Command */
-        get: operations["get_command_api_alpaca_clerk_sqlite_accounts__account_id__commands__command_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/alpaca-clerk-sqlite/accounts/{account_id}/reconcile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reconcile Now
-         * @description Run the same fail-closed account pass used by the automatic sweep.
-         */
-        post: operations["reconcile_now_api_alpaca_clerk_sqlite_accounts__account_id__reconcile_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -467,160 +376,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/broker-clerks/aggregate/directory": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Resilient clerk fleet directory, one lane's failure isolated (FR-083/084)
-         * @description The same per-lane data as ``GET /broker-clerks``, per-lane isolated.
-         *
-         *     ``directory()`` loops every registered clerk with no per-lane exception
-         *     isolation -- one clerk's descriptor projection throwing fails the whole
-         *     roster. This calls the same projection through ``aggregate_lane_reads``'s
-         *     provenance-preserving partial aggregation (PRD FR-083/084; ADR 0062): one
-         *     lane's exception is that lane's explicit ``ok: False`` entry, never an
-         *     omission, a substitution, or a 500 for every other lane. No local
-         *     ``try``/``except`` is needed here (unlike ``describe_broker_clerk`` or the
-         *     audit read): ``aggregate_lane_reads`` already isolates every per-lane
-         *     exception, so the only ``FleetControlError`` this route could ever see is
-         *     an uninstalled fleet service, which the coordinator's global handler
-         *     already answers identically to ``_refuse`` -- the same reason
-         *     ``list_broker_clerks`` above carries no local try either.
-         */
-        get: operations["aggregate_broker_clerks_directory_api_broker_clerks_aggregate_directory_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker-clerks/audit/routing-receipts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Routing-receipt audit trail, since a lower bound (#2104)
-         * @description Routing receipts at or after ``since_ms``, newest first.
-         *
-         *     Read-only: no idempotency key, no command envelope, no ceremony. The
-         *     durable audit trail (routing receipts, assignment history, session
-         *     history) was otherwise reachable only by opening the coordinator's
-         *     SQLite file by hand.
-         *
-         *     The receipt ledger covers **commands only** (ADR 0063, #2153): routed
-         *     streams open no receipt and a lane's own bot runner never enters the
-         *     coordinator, so an empty or quiet window is not evidence of lane
-         *     inactivity.
-         *
-         *     ``before_ms``/``before_correlation_id`` continue a previous page's keyset
-         *     (#2133) -- pass back a truncated page's ``next_before_ms``/
-         *     ``next_before_correlation_id`` verbatim to walk the full window past
-         *     ``limit`` instead of only ever reaching the newest page.
-         */
-        get: operations["list_routing_receipts_audit_api_broker_clerks_audit_routing_receipts_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/bars-5s/snapshot": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Bars 5S Snapshot Endpoint
-         * @description Return the live raw 5-sec OHLCV buffer for ``symbol``.
-         *
-         *     Mirror of ``/bars/snapshot`` for the high-resolution chart. It owns an
-         *     independent 5-second buffer, but same-symbol 5-second and 1-minute
-         *     consumers multiplex onto one public-client ``reqRealTimeBars`` request.
-         *     Each bar's ``end_ms - start_ms`` window is 5 000.
-         */
-        get: operations["bars_5s_snapshot_endpoint_api_broker_bars_5s_snapshot_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/bars/snapshot": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Bars Snapshot Endpoint
-         * @description Return the live 1-min OHLCV buffer for ``symbol``.
-         *
-         *     Idempotent: first call lazily subscribes to ``reqRealTimeBars`` on the
-         *     public broker session; subsequent calls return the current buffer.
-         *     ``since_ms`` filters bars to ``start_ms > since_ms`` for incremental
-         *     polling. ``status`` reflects subscription health so the UI can
-         *     distinguish "no bars yet" (subscribing) from "broker disconnected"
-         *     (errored).
-         */
-        get: operations["bars_snapshot_endpoint_api_broker_bars_snapshot_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/capability": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Broker Capability */
-        get: operations["read_broker_capability_api_broker_capability_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/capability/probe": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Probe Broker Capability */
-        post: operations["probe_broker_capability_api_broker_capability_probe_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/broker/connect": {
         parameters: {
             query?: never;
@@ -639,26 +394,6 @@ export interface paths {
          *     /reconnect via a process-wide asyncio lock.
          */
         post: operations["connect_endpoint_api_broker_connect_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/data-plane/health": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Data Plane Health Endpoint
-         * @description Code-liveness diagnostic for the long-running FastAPI data plane.
-         */
-        get: operations["data_plane_health_endpoint_api_broker_data_plane_health_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -717,46 +452,6 @@ export interface paths {
          * @description Connection diagnostic. Never raises on disconnect.
          */
         get: operations["broker_health_api_broker_health_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/ibkr/evidence": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Ibkr Api Evidence Backfill
-         * @description Recent raw IBKR API evidence captured at broker adapter boundaries.
-         */
-        get: operations["ibkr_api_evidence_backfill_api_broker_ibkr_evidence_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/ibkr/evidence/stream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Ibkr Api Evidence Stream
-         * @description SSE stream of raw IBKR API evidence for cockpit diagnostics.
-         */
-        get: operations["ibkr_api_evidence_stream_api_broker_ibkr_evidence_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1183,41 +878,6 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/alpaca/configuration/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Events */
-        get: operations["list_events_api_brokers_alpaca_configuration_events_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/alpaca/configuration/owner": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Owner */
-        get: operations["read_owner_api_brokers_alpaca_configuration_owner_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Patch Owner */
-        patch: operations["patch_owner_api_brokers_alpaca_configuration_owner_patch"];
         trace?: never;
     };
     "/api/brokers/alpaca/configuration/profiles": {
@@ -1682,23 +1342,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/authority-facts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Independent process and Clerk custody facts for one bot */
-        get: operations["get_authority_facts_scoped_api_brokers__broker__accounts__account_id__bots__sid__authority_facts_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/budget": {
         parameters: {
             query?: never;
@@ -1725,23 +1368,6 @@ export interface paths {
         };
         /** Polygon chart: bounded timeframe window (§8) */
         get: operations["get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/chart/live": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** LIVE chart pane: today's IBKR bars + fill markers (§8) */
-        get: operations["get_live_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_live_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1978,23 +1604,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/activities": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Activities */
-        get: operations["list_activities_api_brokers__broker__activities_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/activities/period": {
         parameters: {
             query?: never;
@@ -2011,23 +1620,6 @@ export interface paths {
          *     reads the next older stretch.
          */
         get: operations["get_activity_period_api_brokers__broker__activities_period_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/assets": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Assets */
-        get: operations["list_assets_api_brokers__broker__assets_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2059,160 +1651,6 @@ export interface paths {
         get: operations["get_lane_attention_api_brokers__broker__attention_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List bots whose durable binding carries this broker tag */
-        get: operations["list_bots_api_brokers__broker__bots_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/catalog": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Bots-list roster (single-account alias of the scoped route) (§5) */
-        get: operations["get_catalog_unscoped_api_brokers__broker__bots_catalog_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{sid}/chart/history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Polygon chart (single-account alias) (§8) */
-        get: operations["get_history_chart_unscoped_api_brokers__broker__bots__sid__chart_history_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{sid}/chart/live": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** LIVE chart pane (single-account alias) (§8) */
-        get: operations["get_live_chart_unscoped_api_brokers__broker__bots__sid__chart_live_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{sid}/evidence": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Operator-gated raw evidence (single-account alias) (§14) */
-        get: operations["get_evidence_unscoped_api_brokers__broker__bots__sid__evidence_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{sid}/panel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Panel projection (single-account alias) (§7) */
-        get: operations["get_panel_unscoped_api_brokers__broker__bots__sid__panel_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{strategy_instance_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** One bot's roster row (artifact-derived state + registry liveness) */
-        get: operations["get_bot_status_api_brokers__broker__bots__strategy_instance_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/current": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read the current run without inferring process or terminal state */
-        get: operations["get_current_run_api_brokers__broker__bots__strategy_instance_id__runs_current_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/{run_id}/replay-receipt": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read one run's durable replay-parity receipt */
-        get: operations["read_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_get"];
-        put?: never;
-        /** Recompute one completed run's replay-parity receipt from its retained bars */
-        post: operations["generate_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2552,26 +1990,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/authority-facts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Bot Authority Facts
-         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/authority-facts (bot_panel_read).
-         */
-        get: operations["fleet_bot_authority_facts_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__authority_facts_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/budget": {
         parameters: {
             query?: never;
@@ -2604,46 +2022,6 @@ export interface paths {
          * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/chart/history (bot_panel_read).
          */
         get: operations["fleet_bot_chart_history_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_history_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/chart/live": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Bot Chart Live
-         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/chart/live (bot_panel_read).
-         */
-        get: operations["fleet_bot_chart_live_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_live_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/decision-evidence": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Bot Decision Evidence
-         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/decision-evidence (custody_read).
-         */
-        get: operations["fleet_bot_decision_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__decision_evidence_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2886,106 +2264,6 @@ export interface paths {
          * @description Fleet-routed POST /accounts/{account_id}/custody/bots/{sid}/runs/stop (custody_command).
          */
         post: operations["fleet_custody_runs_stop_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__runs_stop_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/snapshot": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Custody Bot Snapshot
-         * @description Fleet-routed GET /accounts/{account_id}/custody/bots/{sid}/snapshot (custody_read).
-         */
-        get: operations["fleet_custody_bot_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__snapshot_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/bots/{sid}/timeline": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Custody Bot Timeline
-         * @description Fleet-routed GET /accounts/{account_id}/custody/bots/{sid}/timeline (custody_read).
-         */
-        get: operations["fleet_custody_bot_timeline_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__timeline_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/commands/{command_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Custody Command Read
-         * @description Fleet-routed GET /accounts/{account_id}/custody/commands/{command_id} (custody_read).
-         */
-        get: operations["fleet_custody_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_commands__command_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/pnl-attribution": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Custody Pnl Attribution
-         * @description Fleet-routed GET /accounts/{account_id}/custody/pnl-attribution (custody_read).
-         */
-        get: operations["fleet_custody_pnl_attribution_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_pnl_attribution_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/custody/reconcile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Fleet Custody Reconcile
-         * @description Fleet-routed POST /accounts/{account_id}/custody/reconcile (custody_command).
-         */
-        post: operations["fleet_custody_reconcile_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_reconcile_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3456,26 +2734,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/clerks/{clerk_id}/activities": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Activities Read
-         * @description Fleet-routed GET /activities (account_read).
-         */
-        get: operations["fleet_activities_read_api_brokers__broker__clerks__clerk_id__activities_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/clerks/{clerk_id}/activities/period": {
         parameters: {
             query?: never;
@@ -3674,50 +2932,6 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/events": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Configuration Events
-         * @description Fleet-routed GET /configuration/events (configuration_manage).
-         */
-        get: operations["fleet_configuration_events_api_brokers__broker__clerks__clerk_id__configuration_events_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/clerks/{clerk_id}/configuration/owner": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fleet Configuration Owner Read
-         * @description Fleet-routed GET /configuration/owner (configuration_manage).
-         */
-        get: operations["fleet_configuration_owner_read_api_brokers__broker__clerks__clerk_id__configuration_owner_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Fleet Configuration Owner Update
-         * @description Fleet-routed PATCH /configuration/owner (configuration_manage).
-         */
-        patch: operations["fleet_configuration_owner_update_api_brokers__broker__clerks__clerk_id__configuration_owner_patch"];
         trace?: never;
     };
     "/api/brokers/{broker}/clerks/{clerk_id}/configuration/profiles": {
@@ -4216,23 +3430,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/clock": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Clock Evidence */
-        get: operations["get_clock_evidence_api_brokers__broker__clock_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/fees/attribution": {
         parameters: {
             query?: never;
@@ -4247,26 +3444,6 @@ export interface paths {
          *     Lifetime by default; ``period`` reads one account Activity period's fees.
          */
         get: operations["get_deployment_fee_attribution_api_brokers__broker__fees_attribution_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/fees/session-reconciliation": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Session Fee Reconciliation
-         * @description Predicted-vs-observed regulatory fees for one trade date (ADR 0059 D6).
-         */
-        get: operations["get_session_fee_reconciliation_api_brokers__broker__fees_session_reconciliation_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4380,26 +3557,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/brokers/{broker}/live-envelope/loss-hold/clear": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Clear Live Loss Hold
-         * @description The guarded loss-hold clear (ADR 0059 D4; ADR 0011 §6 shape): re-observes, refuses while the breach stands.
-         */
-        post: operations["clear_live_loss_hold_api_brokers__broker__live_envelope_loss_hold_clear_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/brokers/{broker}/live-verdict": {
         parameters: {
             query?: never;
@@ -4415,26 +3572,6 @@ export interface paths {
          *     read of current account risk and budget authority are the only inputs.
          */
         get: operations["get_live_verdict_api_brokers__broker__live_verdict_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/brokers/{broker}/order-groups": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Order Groups
-         * @description Return recent orders grouped by symbol with Python-owned quantity totals.
-         */
-        get: operations["list_order_groups_api_brokers__broker__order_groups_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4554,47 +3691,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/chart/allowed-timeframes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Allowed Timeframes
-         * @description Return allowed timeframes for the given date range and session.
-         *     Frontend should use this as the source of truth for timeframe availability.
-         */
-        post: operations["allowed_timeframes_api_chart_allowed_timeframes_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/chart/available-indicators": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Chart Indicators
-         * @description Return indicators available for chart overlays and panels.
-         */
-        get: operations["list_chart_indicators_api_chart_available_indicators_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/chart/data": {
         parameters: {
             query?: never;
@@ -4693,26 +3789,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/chart/timeframes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Timeframes
-         * @description Return all supported timeframes with metadata.
-         */
-        get: operations["list_timeframes_api_chart_timeframes_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/data-lake/artifacts/{artifact_id}": {
         parameters: {
             query?: never;
@@ -4795,7 +3871,7 @@ export interface paths {
          *     rather than omitted.
          *
          *     The window arrives as two ``int64 ms UTC`` values, not ISO dates.
-         *     ``.claude/rules/temporal-rigor.md`` allows exactly one wire format for a
+         *     ADR 0022 (a) allows exactly one wire format for a
          *     temporal value and a trading date is not an exception to it — it is a
          *     date-anchored value, carried as the millisecond instant of that session's
          *     open and resolved back through ``America/New_York``
@@ -4949,96 +4025,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/dataset/generate-csv": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Dataset Csv
-         * @description Fetch minute OHLCV data in chunks, calculate selected indicators,
-         *     and return a streaming CSV file.
-         */
-        post: operations["generate_dataset_csv_api_dataset_generate_csv_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dataset/generate-metadata": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Dataset Metadata
-         * @description Fetch minute OHLCV data, calculate indicators, and return metadata JSON.
-         */
-        post: operations["generate_dataset_metadata_api_dataset_generate_metadata_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dataset/generate-metadata-csv": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Dataset Metadata Csv
-         * @description Fetch minute OHLCV data, calculate indicators, and return column descriptions CSV.
-         */
-        post: operations["generate_dataset_metadata_csv_api_dataset_generate_metadata_csv_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dataset/generate-zip": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Dataset Zip
-         * @description Fetch OHLCV, calculate indicators, and return a ZIP.
-         *
-         *     Always contains ``dataset.csv``, ``metadata.csv``, ``columns.csv``. Adds
-         *     per-slot CSVs under ``calls/`` and ``puts/`` subfolders when
-         *     ``options_companion`` is enabled, and ``quality_report.md`` when
-         *     ``include_quality_report`` is true.
-         *
-         *     Synchronous variant — single response with the binary ZIP. The
-         *     streaming counterpart at ``/generate-zip/stream`` emits SSE events for
-         *     chunk-level UI progress; use that one for unified-flow Fetch.
-         */
-        post: operations["generate_dataset_zip_api_dataset_generate_zip_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/dataset/plan": {
         parameters: {
             query?: never;
@@ -5055,8 +4041,7 @@ export interface paths {
          *     Planning touches only the local NYSE calendar — it never calls
          *     Polygon. Bar counts are arithmetic estimates typed with assumptions
          *     and provenance; output columns come from the same projection
-         *     function the ZIP generation path uses (data-lab workspace redesign
-         *     PRD §12).
+         *     function the ZIP generation path uses.
          */
         post: operations["plan_dataset_api_dataset_plan_post"];
         delete?: never;
@@ -5080,77 +4065,6 @@ export interface paths {
          *     Returns a markdown validation report.
          */
         post: operations["generate_validation_report_api_dataset_validation_report_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/dataset/validation-report-download": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Download Validation Report
-         * @description Same as validation-report but returns the markdown as a downloadable file.
-         */
-        post: operations["download_validation_report_api_dataset_validation_report_download_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/cross-asset/run": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Cross Asset Run */
-        post: operations["cross_asset_run_api_edge_cross_asset_run_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/cross-asset/strategies": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Cross Asset Strategies */
-        get: operations["cross_asset_strategies_api_edge_cross_asset_strategies_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/edge-score/series": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Edge Score Series */
-        post: operations["edge_score_series_api_edge_edge_score_series_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5196,35 +4110,12 @@ export interface paths {
          * Iv30 Vix Style
          * @description Live VIX-style IV30 from a fresh Polygon snapshot.
          *
-         *     The acceptance criterion (plan §5.C): on a normal trading day, this
+         *     The acceptance criterion: on a normal trading day, this
          *     returns within 50 bps of the published CBOE VIX index value when
          *     called against SPY. The provenance object reports
          *     ``variance_contribution_synthetic ≈ 0`` and ``opra_mid`` ≈ 100% mix.
          */
         post: operations["iv30_vix_style_api_edge_iv30_vix_style_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/realized-vs-iv/coverage/{symbol}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Realized Vs Iv Coverage
-         * @description Probe how much stored IV history is available for `symbol`.
-         *
-         *     v1 stub: returns a non-blocking placeholder so the UI can render the
-         *     coverage banner. Wires into the real OptionIvSnapshots query in v2.
-         */
-        get: operations["realized_vs_iv_coverage_api_edge_realized_vs_iv_coverage__symbol__get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5246,74 +4137,6 @@ export interface paths {
          *     align IV30 series; emit VRP forward + z-score.
          */
         post: operations["realized_vs_iv_series_api_edge_realized_vs_iv_series_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/realized-vs-iv/signals": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Realized Vs Iv Signals */
-        post: operations["realized_vs_iv_signals_api_edge_realized_vs_iv_signals_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/regimes/cluster": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Regimes Cluster */
-        post: operations["regimes_cluster_api_edge_regimes_cluster_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/regimes/strategy-fit": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Regimes Strategy Fit */
-        post: operations["regimes_strategy_fit_api_edge_regimes_strategy_fit_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/edge/trade-sim/run": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Trade Sim Run */
-        post: operations["trade_sim_run_api_edge_trade_sim_run_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5349,32 +4172,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/engine/bars": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Engine Bars
-         * @description Serve consolidated bars from the shared bar store for run charting.
-         *
-         *     Reads the same roots, the same session filter, and the same
-         *     consolidator a backtest run used, so the returned bars equal the
-         *     run's transient ``chart_bars`` for the same DataPolicy + window.
-         *     Display reads never mutate the cache — missing days surface in
-         *     ``coverage``, not as a fetch and not as a 500.
-         */
-        get: operations["get_engine_bars_api_engine_bars_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/engine/chart": {
         parameters: {
             query?: never;
@@ -5389,32 +4186,6 @@ export interface paths {
          * @description Render exact strategy bars and indicators from one policy-store read.
          */
         post: operations["get_engine_chart_api_engine_chart_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/engine/data/availability": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Data Availability
-         * @description Report how many trading days are already on disk for a symbol.
-         *
-         *     Checks the reference mount first, then the writable cache, and
-         *     returns both the aggregate coverage and a per-root breakdown so the
-         *     Angular UI can show the user whether SPY is hitting the bit-exact
-         *     reference data or an arbitrary ticker has been fetched into the
-         *     Polygon cache.
-         */
-        get: operations["get_data_availability_api_engine_data_availability_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5465,51 +4236,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/engine/strategies/{name}/pine": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Pine Script
-         * @description Generate a Pine v6 script for ``name`` using the given params.
-         *
-         *     The request body is the same ``{params: {...}}`` shape used by
-         *     ``/backtest`` — the same Pydantic schema validates it. Response is
-         *     the Pine source as ``text/plain`` so the browser can offer it as a
-         *     direct download.
-         */
-        post: operations["generate_pine_script_api_engine_strategies__name__pine_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/examples/alpaca-bot-control/fixtures": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Static Fixtures
-         * @description Return the committed documents for contract inspection only.
-         */
-        get: operations["list_static_fixtures_api_examples_alpaca_bot_control_fixtures_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/golden-fixtures": {
         parameters: {
             query?: never;
@@ -5522,73 +4248,6 @@ export interface paths {
          * @description Return the golden fixture catalog with the most recent validation status.
          */
         get: operations["get_golden_fixtures_api_golden_fixtures_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/indicators/calculate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Calculate Indicators
-         * @description Calculate technical indicators from OHLCV data.
-         */
-        post: operations["calculate_indicators_api_indicators_calculate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/indicators/generate-table": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Indicator Table
-         * @description Fetch bars from Polygon and generate a full indicator table
-         *     with EMAs, Bollinger Bands, Supertrend, RSI, MACD, and ADX.
-         *
-         *     Uses the shared preprocessing pipeline (session filter, forward-fill,
-         *     warm-up buffer, indicator calculation).
-         */
-        post: operations["generate_indicator_table_api_indicators_generate_table_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/iv-recorder/series/{ticker}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Read Series
-         * @description Read recorded snapshots for a ticker over a time window.
-         *
-         *     Both bounds are inclusive; either may be omitted to leave the
-         *     corresponding bound open.
-         */
-        get: operations["read_series_api_iv_recorder_series__ticker__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5616,29 +4275,6 @@ export interface paths {
          *     validation problems (unknown slot, missing ticker).
          */
         post: operations["take_snapshot_api_iv_recorder_snapshot_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs-internal/backtest": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start Rule Based Backtest Job
-         * @description Kick off a rule-based backtest in a worker thread. Returns 202.
-         *
-         *     The actual progress is observed by subscribing to the SSE stream
-         *     served by the .NET layer at ``/jobs/{id}/events``.
-         */
-        post: operations["start_rule_based_backtest_job_api_jobs_internal_backtest_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5884,34 +4520,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/lean-sidecar/calendar/blocked-dates": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Return blocked non-tradeable dates in a range.
-         * @description Return weekends and holidays in ``[from_, to]``.
-         *
-         *     Per P2.5 the UI date picker consumes this to disable + label each
-         *     blocked date — single backend source of truth for the NYSE
-         *     calendar so the picker and the validator cannot drift.
-         *
-         *     Early-close half-days are tradeable sessions and are NOT returned
-         *     here. Weekends and holidays return ``"weekend"`` and ``"holiday"``
-         *     respectively. Trading days are NOT in the payload.
-         */
-        get: operations["get_calendar_blocked_dates_api_lean_sidecar_calendar_blocked_dates_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/lean-sidecar/calendar/next-trading-day-open": {
         parameters: {
             query?: never;
@@ -5936,29 +4544,6 @@ export interface paths {
         get: operations["get_calendar_next_trading_day_open_api_lean_sidecar_calendar_next_trading_day_open_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lean-sidecar/compare": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Classify divergences between two trade lists (Task 3.2).
-         * @description Accept two trade arrays and return a classified divergence list.
-         *
-         *     Pure compute — no DB access on the Python side. The .NET backend
-         *     fetches trades from Postgres and POSTs them here (Task 3.3).
-         */
-        post: operations["compare_trades_api_lean_sidecar_compare_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5994,222 +4579,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/lean-sidecar/runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List past runs from the artifacts root (newest first).
-         * @description Return the run-history index for the LEAN Lab sidebar.
-         *
-         *     Scans direct child directories of ``DEFAULT_ARTIFACTS_ROOT``, keeps
-         *     those whose names match ``RUN_ID_PATTERN`` (so stray dirs created
-         *     out-of-band are ignored), reads each ``manifest.json``, sorts by
-         *     ``started_at_ms`` desc (run_id desc as a stable tiebreaker), and
-         *     truncates to ``_RUN_INDEX_CAP``.
-         *
-         *     Reviewer P2: cap is applied *after* the sort, not during the scan.
-         *     The scan-time ordering is by ``run_id`` text, which can diverge
-         *     from ``started_at_ms`` order — pre-Phase-4d run_ids didn't include
-         *     a millisecond suffix, so a legacy run with a lexically-late slug
-         *     could push a genuinely-newer run past the cap. Sorting first and
-         *     truncating after costs O(N log N) on the row count but is bounded
-         *     by ``_SCAN_HARD_CAP`` to keep a pathological artifacts root from
-         *     DoSing the endpoint.
-         *
-         *     Pure read — does not touch the launcher, does not require LEAN to
-         *     be running. Manifests that fail to parse are silently skipped (a
-         *     half-written file from a crash mid-write shouldn't break the
-         *     listing for the rest).
-         */
-        get: operations["get_runs_index_api_lean_sidecar_runs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lean-sidecar/runs/{run_id}/cross-reconcile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Cross-engine reconciliation — diff this LEAN-Lab run against an Engine-Lab strategy.
-         * @description Phase 5g cross-engine reconciliation.
-         *
-         *     Compares this LEAN-Lab run's fills against an Engine-Lab strategy
-         *     run on the same staged workspace data (D3 — shared staged data,
-         *     not Engine-Lab's native fixtures).
-         *
-         *     Flow:
-         *
-         *     1. Resolve LEAN-Lab workspace + load ``manifest.json`` (extract
-         *        symbol, trading window, starting cash).
-         *     2. Load LEAN's ``normalized/result.json`` (the Phase 3a parser
-         *        output the orchestrator persisted).
-         *     3. Run the caller-supplied Engine-Lab strategy class against the
-         *        workspace data via
-         *        :func:`cross_runner.run_engine_lab_on_workspace`.
-         *     4. Diff via :func:`cross_reconciler.compare_cross_engine`. Default
-         *        gating taxonomy is strict — every category gating EXCEPT
-         *        ``COMMISSION_DRIFT`` (diagnostic). ``assert_fees=true`` (D3
-         *        Branch-A) promotes ``COMMISSION_DRIFT`` to gating.
-         *     5. Fold the comparator output into
-         *        ``CrossEngineReconciliationReportModel`` (``schema_version=1``
-         *        per D10).
-         *
-         *     Error contract mirrors the Phase 5a self-reconciler where possible:
-         *
-         *     * 404 ``run_not_found`` — invalid run_id, or workspace dir absent.
-         *     * 404 ``normalized_missing`` — workspace exists but no parseable
-         *       ``result.json`` (LEAN crashed before producing artifacts, or the
-         *       file failed validation).
-         *     * 404 ``manifest_missing`` — workspace exists but ``manifest.json``
-         *       is absent (the orchestrator never finished writing it). The
-         *       cross-run needs the manifest for symbol/dates/cash.
-         *     * 400 ``manifest_incomplete`` — manifest present but missing one of
-         *       the required fields (older manifest schema, or a malformed
-         *       hand-edited file). Surfaces the missing field name in ``detail``.
-         *     * 400 ``strategy_not_found`` — caller named an Engine-Lab strategy
-         *       class that does not resolve. ``detail`` carries the known list.
-         *     * 400 ``strategy_incompatible`` — strategy resolved but does not
-         *       accept the ``symbol`` kwarg required by the Phase 5g.2 contract.
-         */
-        post: operations["post_cross_reconcile_api_lean_sidecar_runs__run_id__cross_reconcile_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lean-sidecar/runs/{run_id}/log": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Return LEAN's own log.txt (tail-capped) for a completed run. */
-        get: operations["get_log_api_lean_sidecar_runs__run_id__log_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lean-sidecar/runs/{run_id}/manifest": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Return the reproducibility manifest for a completed run. */
-        get: operations["get_manifest_api_lean_sidecar_runs__run_id__manifest_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lean-sidecar/runs/{run_id}/normalized": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Return the normalized LEAN result (parsed equity curve + orders + stats).
-         * @description Serve the parsed result.json written by the orchestrator.
-         *
-         *     404 when the file is absent: either the run hasn't completed, or
-         *     LEAN died before producing the artifacts the parser reads. The
-         *     operator can `GET /runs/{id}/log` to diagnose.
-         */
-        get: operations["get_normalized_api_lean_sidecar_runs__run_id__normalized_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lean-sidecar/runs/{run_id}/observations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Return the trusted sample's per-bar audit CSV. */
-        get: operations["get_observations_api_lean_sidecar_runs__run_id__observations_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/lean-sidecar/runs/{run_id}/reconcile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reconcile a past run's recorded fees against the canonical IBKR commission model (Phase 5a).
-         * @description Phase 5a — self-reconciliation: compares each filled order
-         *     event's recorded ``orderFeeAmount`` against the IBKR equity-tier
-         *     fee. Returns the categorized divergence report; tolerance is the
-         *     project default ($0.01) from ``.claude/rules/numerical-rigor.md``.
-         *
-         *     Accepts only ``run_id``. The reconciler is decoupled from whether
-         *     the run was reconciliation-grade — a default-brokerage run will
-         *     have many ``commission_drift`` rows by construction (LEAN's
-         *     default commission ≠ IBKR's tier). Phase 5b will add the
-         *     reconciliation-grade template that makes this report come back
-         *     clean for properly-pinned runs.
-         *
-         *     Reads the persisted normalized ``result.json`` (written by the
-         *     orchestrator after each run), NOT a fresh re-parse of LEAN's raw
-         *     output artifacts. The persisted file pins the parser_version at the
-         *     time of the run; reading it back means a future parser-version bump
-         *     cannot retroactively alter the reconciliation result for an old
-         *     run. The pinned ``parser_version`` is echoed back on the response
-         *     so a consumer can detect when two reports are not comparable.
-         *
-         *     404 contract: ``normalized_missing`` if ``result.json`` is absent
-         *     (run hadn't completed, or LEAN crashed before producing parseable
-         *     output) OR if the file exists but does not validate against the
-         *     current ``NormalizedResult`` schema.
-         */
-        post: operations["post_reconcile_api_lean_sidecar_runs__run_id__reconcile_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/lean-sidecar/trusted-runs": {
         parameters: {
             query?: never;
@@ -6224,94 +4593,10 @@ export interface paths {
          * @description Stage, launch, and write the manifest for one trusted-sample run.
          *
          *     Phase 2a: trusted sample only. No algorithm-source field, no
-         *     arbitrary user input. See ADR §"Phase sequencing" for when that
-         *     gate opens (Phase 3).
+         *     arbitrary user input. ADR 0070 decision 6 governs when caller source
+         *     may run.
          */
         post: operations["post_trusted_run_api_lean_sidecar_trusted_runs_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/market-data-feed/health": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Shared IBKR market-data feed health
-         * @description Returns the current health snapshot for the process-level shared MarketDataFeed: connection state, stale flag, last bar timestamp, and active subscription count.  Returns 503 when the feed has not been installed (IBKR broker disabled).
-         */
-        get: operations["get_feed_health_api_market_data_feed_health_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/market/dashboard": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Market Dashboard
-         * @description Get combined market status + upcoming holidays in a single call.
-         *
-         *     Useful for the frontend dashboard calendar widget.
-         */
-        get: operations["get_market_dashboard_api_market_dashboard_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/market/holidays": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Market Holidays
-         * @description Get the next upcoming market holidays and early closes.
-         *
-         *     - **limit**: Number of upcoming events to return (default 5)
-         */
-        get: operations["get_market_holidays_api_market_holidays_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/market/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Market Status
-         * @description Get the current trading status of NYSE, NASDAQ, and overall market.
-         */
-        get: operations["get_market_status_api_market_status_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6338,33 +4623,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/options/contracts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * List Options Contracts
-         * @description List options contracts for a given underlying ticker.
-         *
-         *     - **underlying_ticker**: Underlying stock symbol (e.g., GLD, SPY)
-         *     - **as_of_date**: Date to check contracts as of (YYYY-MM-DD)
-         *     - **contract_type**: Filter by call or put
-         *     - **strike_price_gte/lte**: Filter by strike price range
-         *     - **expiration_date**: Exact or range filter for expiration
-         *     - **limit**: Maximum number of results (default 100)
-         */
-        post: operations["list_options_contracts_api_options_contracts_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/options/expirations": {
         parameters: {
             query?: never;
@@ -6381,50 +4639,6 @@ export interface paths {
          *     and extracts unique dates without loading full contract payloads.
          */
         post: operations["list_options_expirations_api_options_expirations_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/portfolio/live-greeks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Portfolio Live Greeks
-         * @description Recompute Greeks for current portfolio state.
-         *
-         *     Convenience wrapper around `/scenario` with a 1×1×1 (current-state-only)
-         *     grid. The response shape is identical: a single ``ScenarioPoint`` with
-         *     per-leg Greeks at the current spot/time/IV.
-         */
-        post: operations["portfolio_live_greeks_api_portfolio_live_greeks_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/portfolio/scenario": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Portfolio Scenario
-         * @description Evaluate a portfolio across a grid of scenario points.
-         */
-        post: operations["portfolio_scenario_api_portfolio_scenario_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6483,46 +4697,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/quantlib/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Quantlib Status
-         * @description Check whether QuantLib is installed and list available engines.
-         */
-        get: operations["quantlib_status_api_quantlib_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/quantlib/strategy": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Quantlib Strategy
-         * @description Price a multi-leg options strategy and return aggregate Greeks.
-         */
-        post: operations["quantlib_strategy_api_quantlib_strategy_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/research/backtest-runs": {
         parameters: {
             query?: never;
@@ -6557,11 +4731,7 @@ export interface paths {
         get: operations["get_backtest_run_api_research_backtest_runs__run_id__get"];
         put?: never;
         post?: never;
-        /**
-         * Delete Backtest Run
-         * @description Hard-delete a run; a run backing a live Recency Chart run must go through Recency soft-delete.
-         */
-        delete: operations["delete_backtest_run_api_research_backtest_runs__run_id__delete"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -6584,69 +4754,6 @@ export interface paths {
         patch: operations["update_backtest_run_notes_api_research_backtest_runs__run_id__notes_patch"];
         trace?: never;
     };
-    "/api/research/build-iv-history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Build Iv History Endpoint
-         * @description Build historical 30-day constant-maturity IV for a ticker.
-         *
-         *     Long-running: may take 5-10 minutes per ticker due to API calls.
-         *     Derives IV from expired options contracts + Black-Scholes inversion.
-         */
-        post: operations["build_iv_history_endpoint_api_research_build_iv_history_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/documentation": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Documentation
-         * @description Return complete mathematical documentation for the UI information panel.
-         */
-        get: operations["get_documentation_api_research_documentation_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/features": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Features
-         * @description List all available research features with metadata.
-         */
-        get: operations["list_features_api_research_features_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/research/golden-validations": {
         parameters: {
             query?: never;
@@ -6659,40 +4766,6 @@ export interface paths {
         put?: never;
         /** Designate Golden Run */
         post: operations["designate_golden_run_api_research_golden_validations_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/golden-validations/{golden_run_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Golden Run */
-        get: operations["get_golden_run_api_research_golden_validations__golden_run_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/golden-validations/{golden_run_id}/applicability": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Assess Golden Run */
-        post: operations["assess_golden_run_api_research_golden_validations__golden_run_id__applicability_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6907,57 +4980,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/research/recency/launches/{launch_id}/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Restore Recency Launch */
-        post: operations["restore_recency_launch_api_research_recency_launches__launch_id__restore_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/recency/launches/{launch_id}/soft-delete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Soft Delete Recency Launch */
-        post: operations["soft_delete_recency_launch_api_research_recency_launches__launch_id__soft_delete_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/recency/runs/{run_id}/restore": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Restore Recency Run */
-        post: operations["restore_recency_run_api_research_recency_runs__run_id__restore_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/research/recency/runs/{run_id}/soft-delete": {
         parameters: {
             query?: never;
@@ -7029,100 +5051,6 @@ export interface paths {
          * @description One captured trading day's raw minute candles.
          */
         post: operations["run_day_candles_api_research_return_distribution_day_candles_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/run-batch-options": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Run Batch Options Endpoint
-         * @description Run cross-sectional options feature study across multiple tickers.
-         *
-         *     Tests the same options feature across a universe of tickers and
-         *     determines if the effect is cross-sectionally consistent.
-         */
-        post: operations["run_batch_options_endpoint_api_research_run_batch_options_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/run-feature": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Run Feature Research Endpoint
-         * @description Run a feature validation experiment.
-         *
-         *     Accepts OHLCV bars, computes the requested feature, validates it
-         *     against 15-minute forward log returns using IC, stationarity, and
-         *     quantile analysis.
-         */
-        post: operations["run_feature_research_endpoint_api_research_run_feature_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/run-options-feature": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Run Options Feature Endpoint
-         * @description Run options feature research using derived IV data.
-         *
-         *     Uses the same IC analysis pipeline as stock features but adapted for
-         *     daily-frequency options signals.
-         */
-        post: operations["run_options_feature_endpoint_api_research_run_options_feature_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/run-signal": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Run Signal Engine Endpoint
-         * @description Run the signal engine pipeline.
-         *
-         *     Converts a validated feature into a tradable signal with
-         *     standardization, regime gating, backtesting, walk-forward validation,
-         *     and graduation assessment.
-         */
-        post: operations["run_signal_engine_endpoint_api_research_run_signal_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7314,32 +5242,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/research/trading-calendar": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Trading Calendar
-         * @description Return the trading-calendar breakdown for ``[start, end]``.
-         *
-         *     Same date semantics as ``POST /api/research/strategy-runs``:
-         *     ``end`` is inclusive (``StrategyAlgorithm.set_end_date`` runs through
-         *     23:59:59 of that day). The date-picker UI calls this before submitting
-         *     a run so the user can see which days will be skipped (weekends,
-         *     holidays) before discovering the truncation in the result.
-         */
-        get: operations["get_trading_calendar_api_research_trading_calendar_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/research/walk-forward-studies": {
         parameters: {
             query?: never;
@@ -7398,70 +5300,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/sanitize": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Sanitize Data
-         * @description Sanitize arbitrary market data using pandas-dq Fix_DQ.
-         *
-         *     Accepts a JSON list of dicts with numeric market data fields.
-         *     Returns the cleaned data with outliers removed, missing values filled,
-         *     and types enforced.
-         */
-        post: operations["sanitize_data_api_sanitize_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/snapshot/market": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Get Stock Snapshots
-         * @description Fetch snapshots for multiple stock tickers (or all tickers if none specified).
-         */
-        post: operations["get_stock_snapshots_api_snapshot_market_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/snapshot/movers": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Get Market Movers
-         * @description Fetch top market movers — gainers or losers.
-         */
-        post: operations["get_market_movers_api_snapshot_movers_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/snapshot/options-chain": {
         parameters: {
             query?: never;
@@ -7501,26 +5339,6 @@ export interface paths {
          * @description Fetch a snapshot for a single stock ticker (price, day/prevDay OHLCV, change).
          */
         post: operations["get_stock_snapshot_api_snapshot_ticker_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/snapshot/unified": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Get Unified Snapshots
-         * @description Fetch unified v3 snapshots with flexible ticker filtering.
-         */
-        post: operations["get_unified_snapshots_api_snapshot_unified_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7581,29 +5399,6 @@ export interface paths {
         };
         /** Get Fixture */
         get: operations["get_fixture_api_spec_strategy_fixtures__name__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/spec-strategy/schema": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Schema
-         * @description Return the JSON Schema for StrategySpec.
-         *
-         *     The Frontend uses this to generate form structure and validate specs
-         *     inline before round-tripping to the backtest endpoint.
-         */
-        get: operations["get_schema_api_spec_strategy_schema_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -7726,264 +5521,6 @@ export interface paths {
          *     process already owns — not broker-operator evidence.
          */
         get: operations["ticker_catalog_api_tickers_catalog_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tickers/details": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Get Ticker Details
-         * @description Fetch detailed overview for a single stock ticker.
-         */
-        post: operations["get_ticker_details_api_tickers_details_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tickers/list": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * List Tickers
-         * @description Fetch basic reference info for a batch of stock tickers.
-         */
-        post: operations["list_tickers_api_tickers_list_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/tickers/related": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Get Related Tickers
-         * @description Fetch related company tickers for a given stock.
-         */
-        post: operations["get_related_tickers_api_tickers_related_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/batch-summary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Batch Summary
-         * @description Build or load surfaces for a date range, return daily summaries.
-         *
-         *     Returns ATM IV, 25D RR/BF, skew slope per day.
-         */
-        post: operations["batch_summary_api_volatility_surface_batch_summary_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/build": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Build Surface
-         * @description Build an implied volatility surface from an option chain.
-         *
-         *     Accepts a list of option records (strike, ttm, price, is_call) and
-         *     returns a cached surface_id for subsequent queries.
-         */
-        post: operations["build_surface_api_volatility_surface_build_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/build-from-csv": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Build From Csv
-         * @description Build IV surface from raw CSV text.
-         *
-         *     CSV expected columns: strike, expiration_date, bid, ask, option_type, open_interest, volume
-         */
-        post: operations["build_from_csv_api_volatility_surface_build_from_csv_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/build-from-ticker": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Build From Ticker
-         * @description Build IV surface by fetching option chain from data source.
-         *
-         *     Loads chains via OptionChainLoader, applies filters, and builds surface.
-         */
-        post: operations["build_from_ticker_api_volatility_surface_build_from_ticker_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/{surface_id}/diagnostics": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Diagnostics
-         * @description Retrieve full diagnostics for a surface.
-         */
-        get: operations["get_diagnostics_api_volatility_surface__surface_id__diagnostics_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/{surface_id}/export/{format}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Export Surface
-         * @description Export surface as JSON, CSV, or Parquet.
-         *
-         *     format: json, csv, or parquet
-         */
-        get: operations["export_surface_api_volatility_surface__surface_id__export__format__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/{surface_id}/grid": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Grid
-         * @description Retrieve IV grid for a surface as a matrix (x, y, z).
-         *
-         *     axis: log_moneyness, moneyness, or strike
-         *     dte_days: Optional comma-separated list of DTE days to include
-         */
-        get: operations["get_grid_api_volatility_surface__surface_id__grid_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/{surface_id}/query": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Query Surface
-         * @description Query IV at specific (strike, ttm) points.
-         *
-         *     Body: [{"strike": 100, "ttm": 0.25}, ...]
-         */
-        post: operations["query_surface_api_volatility_surface__surface_id__query_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/volatility/surface/{surface_id}/smiles": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Smiles
-         * @description Retrieve fitted and market smile curves per expiry.
-         *
-         *     axis: log_moneyness, moneyness, or strike
-         */
-        get: operations["get_smiles_api_volatility_surface__surface_id__smiles_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8500,52 +6037,6 @@ export interface components {
             to_date: string;
         };
         /**
-         * AllowedTimeframesRequest
-         * @description Request for allowed timeframes given a date range.
-         */
-        AllowedTimeframesRequest: {
-            /**
-             * From Date
-             * @description Start date (YYYY-MM-DD)
-             */
-            from_date: string;
-            /**
-             * Session
-             * @description 'rth' or 'extended'
-             * @default rth
-             */
-            session?: string;
-            /** Ticker */
-            ticker: string;
-            /**
-             * To Date
-             * @description End date (YYYY-MM-DD)
-             */
-            to_date: string;
-        };
-        /**
-         * AlpacaBotControlFixtureEnvelope
-         * @description Versioned server-presented fixture envelope for one diagnostic scenario.
-         */
-        AlpacaBotControlFixtureEnvelope: {
-            operator: components["schemas"]["OperatorDiagnosticView"];
-            /** Review Note */
-            review_note: string;
-            /**
-             * Scenario Id
-             * @enum {string}
-             */
-            scenario_id: "running_ready_flat" | "running_attributed_long" | "entry_partial_pending" | "exit_cancelling_entry" | "exit_closing" | "exit_complete" | "stopped_flat" | "stop_requires_flatten" | "stopped_carryover_intact" | "stopped_carryover_mismatch" | "instance_submit_uncertain" | "market_data_stale" | "account_unattributable" | "account_unprovable" | "known_manual_exposure";
-            /** Scenario Label */
-            scenario_label: string;
-            /**
-             * Schema Version
-             * @constant
-             */
-            schema_version: "1.0";
-            trader: components["schemas"]["TraderDiagnosticView"];
-        };
-        /**
          * AlpacaDeploySubmission
          * @description One Deploy command: the settings plus the opaque key that makes it retry-safe.
          *
@@ -8988,52 +6479,6 @@ export interface components {
             quantity?: number;
         };
         /**
-         * AlphaDecayStatsResponse
-         * @description Alpha decay regression statistics with power-guard flags.
-         */
-        AlphaDecayStatsResponse: {
-            /**
-             * Intercept
-             * @default 0
-             */
-            intercept?: number;
-            /**
-             * Is Significant
-             * @default false
-             */
-            is_significant?: boolean;
-            /**
-             * Is Test Valid
-             * @default false
-             */
-            is_test_valid?: boolean;
-            /**
-             * N Folds Used
-             * @default 0
-             */
-            n_folds_used?: number;
-            /**
-             * P Value
-             * @default 1
-             */
-            p_value?: number;
-            /**
-             * R Squared
-             * @default 0
-             */
-            r_squared?: number;
-            /**
-             * Slope
-             * @default 0
-             */
-            slope?: number;
-            /**
-             * T Stat
-             * @default 0
-             */
-            t_stat?: number;
-        };
-        /**
          * AnchoredSplitPolicySpec
          * @description Strict HTTP/storage shape for one anchored split.
          */
@@ -9054,34 +6499,6 @@ export interface components {
         ApplyRequest: {
             /** Expected Selection Generation */
             expected_selection_generation: number;
-        };
-        /**
-         * ArbitrageDetail
-         * @description Arbitrage violation diagnostics.
-         */
-        ArbitrageDetail: {
-            /**
-             * Butterfly Violations
-             * @description Number of butterfly violations
-             * @default 0
-             */
-            butterfly_violations?: number;
-            /**
-             * Calendar Violations
-             * @description Number of calendar spread violations
-             * @default 0
-             */
-            calendar_violations?: number;
-            /**
-             * Severity
-             * @description Violation severity (none, low, moderate, high)
-             */
-            severity: string;
-            /**
-             * Worst Slices
-             * @description Details of worst violations
-             */
-            worst_slices?: Record<string, never>[];
         };
         /**
          * ArtifactDetail
@@ -9229,46 +6646,6 @@ export interface components {
             selector: "atm";
         };
         /**
-         * AuthoredValue
-         * @description One server-presented label/value pair; Angular does not compose it.
-         */
-        AuthoredValue: {
-            /** Label */
-            label: string;
-            /** Value */
-            value: string;
-        };
-        /** AvailabilityResponse */
-        AvailabilityResponse: {
-            /** Available Days */
-            available_days: number;
-            /** End */
-            end: string;
-            /** Expected Days */
-            expected_days: number;
-            /** Is Complete */
-            is_complete: boolean;
-            /**
-             * Missing Days
-             * @default []
-             */
-            missing_days?: string[];
-            /** Resolution */
-            resolution: string;
-            /** Sources */
-            sources?: {
-                [key: string]: string[];
-            };
-            /** Start */
-            start: string;
-            /** Symbol */
-            symbol: string;
-            /** Unreadable Days */
-            unreadable_days: number[];
-            /** Unreadable Files */
-            unreadable_files: components["schemas"]["UnreadableFileResponse"][];
-        };
-        /**
          * BackfillDefaults
          * @description The parts of a ``DataRunSpec`` only the data plane knows (#1838).
          *
@@ -9325,81 +6702,6 @@ export interface components {
             /** Job Id */
             job_id: string;
             spec: components["schemas"]["DataRunSpec"];
-        };
-        /**
-         * BacktestResultResponse
-         * @description Single backtest result for a threshold x cost config.
-         */
-        BacktestResultResponse: {
-            /**
-             * Annualized Turnover
-             * @default 0
-             */
-            annualized_turnover?: number;
-            /**
-             * Avg Holding Bars
-             * @default 0
-             */
-            avg_holding_bars?: number;
-            /**
-             * Avg Win Loss Ratio
-             * @default 0
-             */
-            avg_win_loss_ratio?: number;
-            /** Cost Bps */
-            cost_bps: number;
-            /**
-             * Cumulative Returns
-             * @default []
-             */
-            cumulative_returns?: number[];
-            /**
-             * Dates
-             * @default []
-             */
-            dates?: string[];
-            /**
-             * Gross Sharpe
-             * @default 0
-             */
-            gross_sharpe?: number;
-            /**
-             * Gross Total Return
-             * @default 0
-             */
-            gross_total_return?: number;
-            /**
-             * Max Drawdown
-             * @default 0
-             */
-            max_drawdown?: number;
-            /**
-             * Net Sharpe
-             * @default 0
-             */
-            net_sharpe?: number;
-            /**
-             * Net Total Return
-             * @default 0
-             */
-            net_total_return?: number;
-            /**
-             * Positions
-             * @default []
-             */
-            positions?: number[];
-            /** Threshold */
-            threshold: number;
-            /**
-             * Total Trades
-             * @default 0
-             */
-            total_trades?: number;
-            /**
-             * Win Rate
-             * @default 0
-             */
-            win_rate?: number;
         };
         /**
          * BacktestRunClosingBarSkipResponse
@@ -9875,78 +7177,6 @@ export interface components {
             /** Test Trade Count */
             test_trade_count: number;
         };
-        /**
-         * BatchSummaryRequest
-         * @description Request to build surfaces for a date range.
-         */
-        BatchSummaryRequest: {
-            /** @description Market conventions */
-            conventions?: components["schemas"]["ConventionsModel"];
-            /**
-             * End Date
-             * @description End date (YYYY-MM-DD)
-             */
-            end_date: string;
-            /** @description Data quality filters */
-            filters?: components["schemas"]["DataFiltersModel"];
-            /**
-             * @description Surface fitting method
-             * @default svi
-             */
-            method?: components["schemas"]["SurfaceMethodEnum"];
-            /**
-             * Mode
-             * @description Build mode (auto, build, cached)
-             * @default cached
-             */
-            mode?: string;
-            /**
-             * Start Date
-             * @description Start date (YYYY-MM-DD)
-             */
-            start_date: string;
-            /**
-             * Ticker
-             * @description Underlying ticker
-             */
-            ticker: string;
-        };
-        /**
-         * BatchSummaryResponse
-         * @description Response with daily summaries for a date range.
-         */
-        BatchSummaryResponse: {
-            /**
-             * Daily Summaries
-             * @description Per-day surface summaries
-             */
-            daily_summaries: components["schemas"]["DailySummary"][];
-            /**
-             * Ticker
-             * @description Underlying ticker
-             */
-            ticker: string;
-        };
-        /** Body_download_validation_report_api_dataset_validation_report_download_post */
-        Body_download_validation_report_api_dataset_validation_report_download_post: {
-            /**
-             * Our Csv
-             * Format: binary
-             * @description pandas-ta generated CSV
-             */
-            our_csv: string;
-            /**
-             * Ticker
-             * @default SPY
-             */
-            ticker?: string;
-            /**
-             * Tv Csv
-             * Format: binary
-             * @description TradingView exported CSV
-             */
-            tv_csv: string;
-        };
         /** Body_generate_validation_report_api_dataset_validation_report_post */
         Body_generate_validation_report_api_dataset_validation_report_post: {
             /**
@@ -9969,7 +7199,7 @@ export interface components {
         };
         /**
          * BotCatalogView
-         * @description One roster row: bot status + slice-0 rollups (§5).
+         * @description One roster row: bot status + slice-0 rollups.
          *
          *     Assembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``
          *     (incremental cache). ``needs_attention`` and ``status_label`` drive the
@@ -10058,14 +7288,6 @@ export interface components {
             idempotency_key: string;
             /** Strategy Instance Ids */
             strategy_instance_ids: string[];
-        };
-        /**
-         * BotControlAuthorityFacts
-         * @description Independent process and Clerk facts for one bot control decision.
-         */
-        BotControlAuthorityFacts: {
-            clerk: components["schemas"]["ClerkCustodySnapshot"];
-            process: components["schemas"]["BotProcessFact"];
         };
         /**
          * BotCrashDiagnostic
@@ -10190,7 +7412,7 @@ export interface components {
         };
         /**
          * BotHealthCard
-         * @description Bot-health card beside the rail (§7.2).
+         * @description Bot-health card beside the rail.
          *
          *     Terminal Stop retains custody evidence; new trading requires fresh Deploy.
          */
@@ -10353,7 +7575,7 @@ export interface components {
         };
         /**
          * BotPanelView
-         * @description The full 5s-poll panel projection for one bot (§7).
+         * @description The full 5s-poll panel projection for one bot.
          *
          *     Everything except chart data: bot health, clerk/account state, the six-
          *     station rail, a journal-tail reference, the presented actions, and the
@@ -10460,44 +7682,6 @@ export interface components {
             state: "RUNNING" | "STOPPING" | "EXITED" | "UNKNOWN";
             /** Strategy Instance Id */
             strategy_instance_id: string;
-        };
-        /**
-         * BotRunReadBrokerErrorDetail
-         * @description Broker-registry failure detail returned by a bot-run read.
-         */
-        BotRunReadBrokerErrorDetail: {
-            /** Broker */
-            broker: string;
-            /** Message */
-            message: string;
-            /** Why */
-            why: string | null;
-        };
-        /**
-         * BotRunReadNotFoundResponse
-         * @description 404 envelope for an unknown broker or strategy-instance run.
-         */
-        BotRunReadNotFoundResponse: {
-            /** Detail */
-            detail: components["schemas"]["BotRunReadBrokerErrorDetail"] | components["schemas"]["BotRunReadRunnerErrorDetail"];
-        };
-        /**
-         * BotRunReadRunnerErrorDetail
-         * @description Runner failure detail returned by a bot-run read.
-         */
-        BotRunReadRunnerErrorDetail: {
-            admission: components["schemas"]["RunAdmissionDecision"] | null;
-            /** Message */
-            message: string;
-            /** Why */
-            why: string | null;
-        };
-        /**
-         * BotRunReadRunnerErrorResponse
-         * @description 422 envelope emitted by the bot runner for an invalid run read.
-         */
-        BotRunReadRunnerErrorResponse: {
-            detail: components["schemas"]["BotRunReadRunnerErrorDetail"];
         };
         /**
          * BotRunTerminalOutcomeView
@@ -10707,72 +7891,6 @@ export interface components {
             next_page_token?: string | null;
         };
         /**
-         * BrokerAsset
-         * @description A tradable (or listed) instrument descriptor.
-         */
-        BrokerAsset: {
-            /** Asset Class */
-            asset_class: string;
-            /** Asset Id */
-            asset_id: string;
-            /** Broker */
-            broker: string;
-            /** Exchange */
-            exchange: string | null;
-            /** Fractionable */
-            fractionable: boolean;
-            /** Marginable */
-            marginable: boolean | null;
-            /** Name */
-            name: string | null;
-            /** Shortable */
-            shortable: boolean | null;
-            /** Status */
-            status: string;
-            /** Symbol */
-            symbol: string;
-            /** Tradable */
-            tradable: boolean;
-        };
-        /** BrokerCapabilityProbeResponse */
-        BrokerCapabilityProbeResponse: {
-            /** Snapshots */
-            snapshots: components["schemas"]["SessionDataCapability"][];
-        };
-        /** BrokerCapabilityReadResponse */
-        BrokerCapabilityReadResponse: {
-            /** Snapshots */
-            snapshots: components["schemas"]["SessionDataCapability"][];
-        };
-        /**
-         * BrokerClockEvidence
-         * @description Market-wide broker-clock evidence — not scheduled-session authority.
-         *
-         *     The canonical calendar module (``.claude/rules/temporal-rigor.md``) remains
-         *     the sole source of scheduled session structure. This narrow live input may
-         *     prove that the broker currently says the market is open or closed, but it
-         *     cannot establish that any particular symbol is tradable or not halted. The
-         *     liveness composition therefore pairs it with symbol-scoped vendor status
-         *     evidence; no session/calendar logic may treat these fields as authority.
-         *     The one liveness use of them: an open answer's ``next_close_ms`` is when
-         *     that answer stops proving the market open (#2596). It bounds the answer,
-         *     never the scheduled session, which stays the calendar's.
-         */
-        BrokerClockEvidence: {
-            /** Broker */
-            broker: string;
-            /** Is Open */
-            is_open: boolean;
-            /** Next Close Ms */
-            next_close_ms: number | null;
-            /** Next Open Ms */
-            next_open_ms: number | null;
-            /** Observed At Ms */
-            observed_at_ms: number;
-            /** Vendor Timestamp Ms */
-            vendor_timestamp_ms: number;
-        };
-        /**
          * BrokerHealthCondition
          * @description Backend-authored operator copy for the data-plane broker session.
          *
@@ -10882,29 +8000,6 @@ export interface components {
             price: number | null;
             /** Quantity */
             quantity: number | null;
-        };
-        /**
-         * BrokerOrderGroup
-         * @description Recent orders grouped by symbol with canonical gross quantity totals.
-         *
-         *     Quantities are absolute broker-reported shares across both buy and sell
-         *     orders. They are activity totals, not net position or directional exposure.
-         */
-        BrokerOrderGroup: {
-            /** Gross Filled Quantity */
-            gross_filled_quantity: number;
-            /** Gross Requested Quantity */
-            gross_requested_quantity: number;
-            /** Gross Working Quantity */
-            gross_working_quantity: number;
-            /** Order Count */
-            order_count: number;
-            /** Orders */
-            orders: components["schemas"]["BrokerOrder"][];
-            /** Symbol */
-            symbol: string;
-            /** Working Order Count */
-            working_order_count: number;
         };
         /**
          * BrokerOrderLeg
@@ -11084,137 +8179,6 @@ export interface components {
              * @default false
              */
             total?: boolean;
-        };
-        /**
-         * BuildFromCsvRequest
-         * @description Request to build IV surface from raw CSV data.
-         */
-        BuildFromCsvRequest: {
-            /** @description Market conventions */
-            conventions?: components["schemas"]["ConventionsModel"];
-            /**
-             * Csv Content
-             * @description Raw CSV text with option records
-             */
-            csv_content: string;
-            /**
-             * @description Surface fitting method
-             * @default svi
-             */
-            method?: components["schemas"]["SurfaceMethodEnum"];
-            /**
-             * Spot
-             * @description Current underlying price
-             */
-            spot: number;
-            /**
-             * Ticker
-             * @description Optional ticker symbol for metadata
-             * @default
-             */
-            ticker?: string;
-        };
-        /**
-         * BuildFromTickerRequest
-         * @description Request to build IV surface from ticker and date.
-         */
-        BuildFromTickerRequest: {
-            /** @description Market conventions */
-            conventions?: components["schemas"]["ConventionsModel"];
-            /**
-             * Date
-             * @description Evaluation date (YYYY-MM-DD)
-             */
-            date: string;
-            /** @description Data quality filters */
-            filters?: components["schemas"]["DataFiltersModel"];
-            /**
-             * @description Surface fitting method
-             * @default svi
-             */
-            method?: components["schemas"]["SurfaceMethodEnum"];
-            /**
-             * Ticker
-             * @description Underlying ticker symbol
-             */
-            ticker: string;
-        };
-        /**
-         * BuildIvHistoryRequest
-         * @description Request body for POST /research/build-iv-history.
-         */
-        BuildIvHistoryRequest: {
-            /**
-             * End Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            end_date: string;
-            /**
-             * Start Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            start_date: string;
-            /**
-             * Underlying Ticker
-             * @description Stock symbol (e.g. SPY)
-             */
-            underlying_ticker: string;
-        };
-        /**
-         * BuildIvHistoryResponse
-         * @description Response body for POST /research/build-iv-history.
-         */
-        BuildIvHistoryResponse: {
-            /**
-             * Data Points
-             * @default 0
-             */
-            data_points?: number;
-            diagnostics?: components["schemas"]["IvDiagnosticsReportResponse"] | null;
-            /** End Date */
-            end_date: string;
-            /** Error */
-            error?: string | null;
-            /**
-             * Iv Data
-             * @default []
-             */
-            iv_data?: Record<string, never>[];
-            /** Start Date */
-            start_date: string;
-            /** Success */
-            success: boolean;
-            /** Underlying Ticker */
-            underlying_ticker: string;
-        };
-        /**
-         * CalculateIndicatorsRequest
-         * @description Request to calculate technical indicators from OHLCV data
-         */
-        CalculateIndicatorsRequest: {
-            /** Bars */
-            bars: components["schemas"]["OhlcvBar"][];
-            /** Indicators */
-            indicators: components["schemas"]["IndicatorConfig"][];
-            /** Ticker */
-            ticker: string;
-        };
-        /**
-         * CalculateIndicatorsResponse
-         * @description Response from indicator calculation
-         */
-        CalculateIndicatorsResponse: {
-            /** Error */
-            error?: string | null;
-            /**
-             * Indicators
-             * @default []
-             */
-            indicators?: components["schemas"]["IndicatorResult"][];
-            /** Success */
-            success: boolean;
-            /** Ticker */
-            ticker: string;
         };
         /**
          * CanaryActivationConfirmation
@@ -11437,7 +8401,7 @@ export interface components {
         };
         /**
          * ChannelHealthView
-         * @description One market-data / execution channel's health (§7.3).
+         * @description One market-data / execution channel's health.
          */
         ChannelHealthView: {
             /** Explanation */
@@ -11463,11 +8427,11 @@ export interface components {
         };
         /**
          * ChartBar
-         * @description One source-tagged OHLCV bar for a chart pane (§8).
+         * @description One source-tagged OHLCV bar for a chart pane.
          *
          *     Broker-generic — decoupled from the IBKR-specific ``IbkrMinuteBar``. Prices
          *     are strings to preserve exact decimal representation over the wire.
-         *     ``source`` is truthfully tagged ``ibkr`` / ``polygon`` / ``mixed`` (§8).
+         *     ``source`` is truthfully tagged ``ibkr`` / ``polygon`` / ``mixed``.
          */
         ChartBar: {
             /** Close */
@@ -11531,7 +8495,7 @@ export interface components {
          * ChartDataRequest
          * @description Request for chart data with resampled bars and indicators.
          *
-         *     Temporal authority (data-lab workspace redesign PRD §12): the numeric
+         *     Temporal authority: the numeric
          *     ``start_ms_utc`` / ``end_ms_utc`` pair is the canonical window form and
          *     each field takes precedence over its date-string counterpart when
          *     supplied. Each value resolves by flooring to its UTC calendar date —
@@ -11679,7 +8643,7 @@ export interface components {
         };
         /**
          * ChartFillMarker
-         * @description One fill marker for a chart pane (§8, §10).
+         * @description One fill marker for a chart pane.
          *
          *     Projected from the clerk journal's fill events filtered by the bot's
          *     namespace. ``side`` and ``price`` render the buy/sell marker.
@@ -11714,7 +8678,7 @@ export interface components {
         };
         /**
          * ChartHistoryResponse
-         * @description Bounded Polygon chart response for one selected timeframe (§8).
+         * @description Bounded Polygon chart response for one selected timeframe.
          *
          *     ``bars`` is the bounded display window. ``indicator_bars`` includes every
          *     available preceding warmup candle, capped by the configured Polygon history
@@ -11885,7 +8849,7 @@ export interface components {
         };
         /**
          * ChartLiveResponse
-         * @description Today's merged, source-tagged LIVE-pane bars + today's fill markers (§8).
+         * @description Today's merged, source-tagged LIVE-pane bars + today's fill markers.
          *
          *     ``as_of_ms`` and the two session boundaries derive from the canonical NY
          *     calendar — "today" is the NY trading date, never browser-local midnight.
@@ -11917,7 +8881,7 @@ export interface components {
         };
         /**
          * ChartOverlayNoticeView
-         * @description An honest chip explaining a fallback overlay (§8).
+         * @description An honest chip explaining a fallback overlay.
          */
         ChartOverlayNoticeView: {
             /** Code */
@@ -11978,7 +8942,7 @@ export interface components {
             end_ms_utc: number;
             /**
              * Estimated Bars Per Timeframe
-             * @description Calendar-arithmetic bar estimate per timeframe for this window (same estimator as /api/chart/allowed-timeframes)
+             * @description Calendar-arithmetic bar estimate per timeframe for this window (same estimator as POST /api/chart/data)
              */
             estimated_bars_per_timeframe: {
                 [key: string]: number;
@@ -12027,7 +8991,7 @@ export interface components {
         };
         /**
          * ClerkCard
-         * @description Account/clerk card beside the rail (§7.3).
+         * @description Account/clerk card beside the rail.
          */
         ClerkCard: {
             /** Account Id */
@@ -12087,60 +9051,6 @@ export interface components {
             terminal_age_ms?: number | null;
         };
         /**
-         * ClerkCustodySnapshot
-         * @description Clerk-authored account and instance custody answer for control policy.
-         */
-        ClerkCustodySnapshot: {
-            /** Account Id */
-            account_id: string;
-            /**
-             * Account Mode
-             * @enum {string}
-             */
-            account_mode: "paper" | "live";
-            /** Broker */
-            broker: string;
-            /** Clerk Generation */
-            clerk_generation: string;
-            /**
-             * Evidence Refs
-             * @default []
-             */
-            evidence_refs?: string[];
-            exposure: components["schemas"]["CustodyExposureFact"];
-            freeze: components["schemas"]["AccountFreezeState"];
-            hold: components["schemas"]["HoldState"];
-            /** Journal Sequence */
-            journal_sequence: number;
-            /** Next Step */
-            next_step?: string | null;
-            /**
-             * Observed At Ms
-             * Format: int64
-             */
-            observed_at_ms: number;
-            pending_orders: components["schemas"]["CustodyCountFact"];
-            /** Reason Code */
-            reason_code: string;
-            /**
-             * Reconciled At Ms
-             * Format: int64
-             */
-            reconciled_at_ms: number;
-            /** Reconciliation Fresh */
-            reconciliation_fresh: boolean;
-            /**
-             * Reconciliation State
-             * @enum {string}
-             */
-            reconciliation_state: "clean" | "unexplained_order" | "missing_intent" | "stale";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            terminal_orders: components["schemas"]["CustodyCountFact"];
-            unresolved_effects: components["schemas"]["CustodyCountFact"];
-            working_orders: components["schemas"]["CustodyCountFact"];
-        };
-        /**
          * ClerkCustodyTimeline
          * @description Distinct source, arrival, and durable clocks for one intent lifecycle.
          */
@@ -12191,42 +9101,6 @@ export interface components {
             record_count: number;
             /** Uncertain Count */
             uncertain_count: number;
-        };
-        /**
-         * ClerkDecisionEvidencePage
-         * @description A bounded source page; missing retained sequences are never concealed.
-         */
-        ClerkDecisionEvidencePage: {
-            /** Account Id */
-            account_id: string;
-            /**
-             * Account Mode
-             * @enum {string}
-             */
-            account_mode: "paper" | "live";
-            /** After Seq */
-            after_seq: number;
-            /** Authority Generation */
-            authority_generation: number;
-            /**
-             * Authority Kind
-             * @enum {string}
-             */
-            authority_kind: "sqlite" | "synthetic" | "shadow";
-            /** Config Hash */
-            config_hash: string;
-            /** Db Identity Token */
-            db_identity_token: string;
-            /** Decisions */
-            decisions: components["schemas"]["ExperimentDecision"][];
-            /** Highest Seq */
-            highest_seq: number;
-            /** Next After Seq */
-            next_after_seq: number | null;
-            /** Observed At Ms */
-            observed_at_ms: number;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
         };
         /**
          * ClerkOrderInstruction
@@ -12758,32 +9632,6 @@ export interface components {
             /** Updated At Ms */
             updated_at_ms: number;
         };
-        /** ConfigurationEventListResponse */
-        ConfigurationEventListResponse: {
-            /** Events */
-            events: components["schemas"]["ConfigurationEventResponse"][];
-        };
-        /** ConfigurationEventResponse */
-        ConfigurationEventResponse: {
-            /** Action */
-            action: string;
-            /** Actor Owner Id */
-            actor_owner_id: string;
-            /** Event Id */
-            event_id: string;
-            /** Next Ref */
-            next_ref: string | null;
-            /** Previous Ref */
-            previous_ref: string | null;
-            /** Profile Id */
-            profile_id: string | null;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Result */
-            result: string;
-            /** Revision */
-            revision: number | null;
-        };
         /**
          * ConfiguredSignalProgramSeal
          * @description Inner seal: the exact semantic signal program selected by the user.
@@ -12843,82 +9691,6 @@ export interface components {
             kind: "Const";
             /** Value */
             value: number;
-        };
-        /**
-         * ConventionsModel
-         * @description Market conventions for surface building.
-         */
-        ConventionsModel: {
-            /**
-             * Day Count
-             * @description Day count convention
-             * @default Actual365Fixed
-             */
-            day_count?: string;
-            /**
-             * Dividend Yield
-             * @description Dividend yield (continuous)
-             * @default 0
-             */
-            dividend_yield?: number;
-            /**
-             * Forward Model
-             * @description Forward model (bsm, simple)
-             * @default bsm
-             */
-            forward_model?: string;
-            /**
-             * Rate
-             * @description Risk-free rate (continuous)
-             * @default 0.05
-             */
-            rate?: number;
-        };
-        /**
-         * CostViabilityResponse
-         * @description Cost-adjusted long-short spread, anchored on spec direction.
-         */
-        CostViabilityResponse: {
-            /**
-             * Cost Assumption One Way Bps
-             * @default 1
-             */
-            cost_assumption_one_way_bps?: number;
-            /**
-             * Cost Erasure One Way Bps
-             * @default 0
-             */
-            cost_erasure_one_way_bps?: number;
-            /**
-             * Directional Spread Bps
-             * @default 0
-             */
-            directional_spread_bps?: number;
-            /**
-             * Gross Spread Bps Signed
-             * @default 0
-             */
-            gross_spread_bps_signed?: number;
-            /**
-             * Net Spread Bps At Assumption
-             * @default 0
-             */
-            net_spread_bps_at_assumption?: number;
-            /**
-             * Note
-             * @default
-             */
-            note?: string;
-            /**
-             * Spec Direction
-             * @default unknown
-             */
-            spec_direction?: string;
-            /**
-             * Viable At Assumption
-             * @default false
-             */
-            viable_at_assumption?: boolean;
         };
         /**
          * CoverageDay
@@ -12999,158 +9771,12 @@ export interface components {
             /** Slots */
             slots: components["schemas"]["CredentialSlotResponse"][];
         };
-        /** CrossAssetBars */
-        CrossAssetBars: {
-            /** Bars */
-            bars: components["schemas"]["BarPayload"][];
-            /** Symbol */
-            symbol: string;
-        };
-        /** CrossAssetRunBody */
-        CrossAssetRunBody: {
-            /**
-             * Bar Size
-             * @default 1d
-             * @enum {string}
-             */
-            bar_size?: "15m" | "1d";
-            /** Bars By Symbol */
-            bars_by_symbol: components["schemas"]["CrossAssetBars"][];
-            /** End Ms */
-            end_ms: number;
-            /**
-             * Split Mode
-             * @default all
-             * @enum {string}
-             */
-            split_mode?: "rolling" | "calendar" | "walkforward" | "all";
-            /** Start Ms */
-            start_ms: number;
-            /** Strategy Name */
-            strategy_name: string;
-            /** Symbols */
-            symbols: string[];
-        };
-        /**
-         * CrossEngineDivergenceModel
-         * @description One typed disagreement between paired LEAN-Lab and Engine-Lab fills.
-         *
-         *     Maps onto ``research.parity.qc_reconciler.Divergence``. When one side
-         *     is missing (DECISION_MISMATCH), the corresponding snapshot is None.
-         */
-        CrossEngineDivergenceModel: {
-            /**
-             * Category
-             * @enum {string}
-             */
-            category: "fixture_insufficient" | "decision_mismatch" | "direction_mismatch" | "quantity_mismatch" | "fill_price_drift" | "commission_drift" | "pnl_drift" | "order_type_mismatch";
-            /** Detail */
-            detail: string;
-            engine_fill: components["schemas"]["CrossEngineFillSnapshotModel"] | null;
-            lean_fill: components["schemas"]["CrossEngineFillSnapshotModel"] | null;
-            /**
-             * Trading Date
-             * @description NY-local trading date in ISO YYYY-MM-DD form. The reconciler aligns on NY trading date so the wire form reflects that (extended-hours fills can have a UTC date one day off).
-             */
-            trading_date: string;
-        };
-        /**
-         * CrossEngineFillSnapshotModel
-         * @description One side of a paired (LEAN, Engine Lab) divergence row.
-         *
-         *     Carries enough information for the operator to understand WHICH fill
-         *     was on this side without re-fetching the full normalized result. The
-         *     Decimal-valued fields are wire-serialized as strings so the cents are
-         *     exact (avoids float-binary loss in JSON, matches the Phase 5a
-         *     convention).
-         */
-        CrossEngineFillSnapshotModel: {
-            /** Fee */
-            fee?: string | null;
-            /** Fill Price */
-            fill_price: string;
-            /** Fill Quantity */
-            fill_quantity: number;
-            /** Fill Quantity Raw */
-            fill_quantity_raw?: string | null;
-            /** Fill Time Ms Utc */
-            fill_time_ms_utc: number;
-            /**
-             * Side
-             * @enum {string}
-             */
-            side: "Buy" | "Sell";
-            /** Symbol */
-            symbol: string;
-        };
-        /**
-         * CrossEngineReconciliationReportModel
-         * @description Phase 5g — cross-engine fill-by-fill reconciliation report.
-         *
-         *     ``schema_version`` is the D10 contract: any future shape change bumps
-         *     this so the consumer can fail-fast on an unrecognized version. The
-         *     current shape is v1.
-         */
-        CrossEngineReconciliationReportModel: {
-            /** Assert Fees */
-            assert_fees: boolean;
-            /** Counts By Category */
-            counts_by_category: {
-                [key: string]: number;
-            };
-            /** Divergences */
-            divergences: components["schemas"]["CrossEngineDivergenceModel"][];
-            /** Divergent Count */
-            divergent_count: number;
-            /** Engine Lab Strategy Class */
-            engine_lab_strategy_class: string;
-            /** Engine Total Fills */
-            engine_total_fills: number;
-            /** Gating Divergent Count */
-            gating_divergent_count: number;
-            /** Lean Total Fills */
-            lean_total_fills: number;
-            /** Matched Count */
-            matched_count: number;
-            /** Passed */
-            passed: boolean;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Schema Version
-             * @description Explicit schema version per mission-critical doc D10. Consumers MUST fail-fast on an unrecognized version rather than silently misrender.
-             * @default 1
-             */
-            schema_version?: number;
-        };
-        /**
-         * CrossReconcileRequestModel
-         * @description POST /api/lean-sidecar/runs/{run_id}/cross-reconcile — request shape.
-         *
-         *     The request names which Engine Lab strategy class to diff against.
-         *     No auto-derivation: per D3, ambiguity at this seam silently produces
-         *     wrong divergence reports, so we require an explicit string.
-         */
-        CrossReconcileRequestModel: {
-            /**
-             * Assert Fees
-             * @description When false (default), COMMISSION_DRIFT is diagnostic — it shows up in the report but does not flip ``passed`` to False. When true (only meaningful on reconciliation-grade templates that pin the IBKR fee model on both sides), COMMISSION_DRIFT joins the gating set. Same Branch-A semantics as the qc_reconciler.
-             * @default false
-             */
-            assert_fees?: boolean;
-            /**
-             * Engine Lab Strategy Class
-             * @description Name of the Engine Lab strategy class to run on the same workspace data and diff against this LEAN-Lab run. Required: no auto-derivation convention. See mission-critical doc D3.
-             */
-            engine_lab_strategy_class: string;
-        };
         /**
          * CrossSectionalJobRequest
          * @description Body of POST /api/jobs-internal/cross-sectional.
          *
-         *     The Frontend posts the same shape it currently sends to the GraphQL
-         *     ``runBatchOptionsResearch`` mutation, plus an injected ``job_id``
-         *     from the .NET JobsApi.
+         *     The Frontend's research request, plus an injected ``job_id`` from the
+         *     .NET JobsApi.
          */
         CrossSectionalJobRequest: {
             /** Featurename */
@@ -13192,53 +9818,6 @@ export interface components {
             to_date: string;
         };
         /**
-         * CrossSectionalReportResponse
-         * @description Response body for POST /research/run-batch-options.
-         */
-        CrossSectionalReportResponse: {
-            /**
-             * Aggregate Ic
-             * @default 0
-             */
-            aggregate_ic?: number;
-            /**
-             * Cross Sectional Consistent
-             * @default false
-             */
-            cross_sectional_consistent?: boolean;
-            /** Error */
-            error?: string | null;
-            /** Feature Name */
-            feature_name: string;
-            /**
-             * Pass Rate
-             * @default 0
-             */
-            pass_rate?: number;
-            /** Success */
-            success: boolean;
-            /**
-             * Summary
-             * @default
-             */
-            summary?: string;
-            /**
-             * Ticker Results
-             * @default []
-             */
-            ticker_results?: components["schemas"]["TickerBatchResult"][];
-            /**
-             * Tickers Passed
-             * @default 0
-             */
-            tickers_passed?: number;
-            /**
-             * Tickers Tested
-             * @default 0
-             */
-            tickers_tested?: number;
-        };
-        /**
          * CurrentCurvePoint
          * @description Phase 1.1: theoretical per-share P&L at today's vol surface (not at expiry).
          */
@@ -13255,19 +9834,6 @@ export interface components {
              * @description Theoretical strategy value per share, at today's vol
              */
             theoretical_value: number;
-        };
-        /**
-         * CustodyCountFact
-         * @description Count whose zero/non-zero/unknown meaning is explicit.
-         */
-        CustodyCountFact: {
-            /** Count */
-            count?: number | null;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "zero" | "non_zero" | "unknown";
         };
         /** CustodyDiagnosis */
         CustodyDiagnosis: {
@@ -13351,21 +9917,6 @@ export interface components {
              */
             state: "resolvable_now" | "blocked_on_prerequisite" | "needs_review";
         };
-        /**
-         * CustodyExposureFact
-         * @description Instance exposure with unknown kept distinct from known flat.
-         */
-        CustodyExposureFact: {
-            /** Positions */
-            positions?: {
-                [key: string]: number;
-            } | null;
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "zero" | "non_zero" | "unknown";
-        };
         /** CustodyPositionDelta */
         CustodyPositionDelta: {
             /** Broker Observed Qty */
@@ -13389,73 +9940,6 @@ export interface components {
              * @enum {string}
              */
             scope: "account" | "bot" | "broker";
-        };
-        /**
-         * CustodySpineStep
-         * @description One explicitly presented custody step in the operator diagnostic.
-         */
-        CustodySpineStep: {
-            /** Label */
-            label: string;
-            /** State Label */
-            state_label: string;
-            /**
-             * Tone
-             * @enum {string}
-             */
-            tone: "neutral" | "verified" | "active" | "caution" | "blocked";
-        };
-        /**
-         * DailySummary
-         * @description Summary of a single day's IV surface.
-         */
-        DailySummary: {
-            /**
-             * Atm Iv
-             * @description ATM implied vol
-             */
-            atm_iv?: number | null;
-            /**
-             * Bf 25D
-             * @description Butterfly 25-delta
-             */
-            bf_25d?: number | null;
-            /**
-             * Cached
-             * @description Loaded from cache
-             * @default false
-             */
-            cached?: boolean;
-            /**
-             * Date
-             * @description Date (YYYY-MM-DD)
-             */
-            date: string;
-            /**
-             * Health Score
-             * @description Health score 0-100
-             */
-            health_score: number;
-            /**
-             * N Contracts
-             * @description Contracts used
-             */
-            n_contracts: number;
-            /**
-             * Rr 25D
-             * @description Risk reversal 25-delta
-             */
-            rr_25d?: number | null;
-            /**
-             * Skew Slope
-             * @description Vol skew slope
-             */
-            skew_slope?: number | null;
-            /**
-             * Surface Id
-             * @description Surface identifier
-             */
-            surface_id: string;
         };
         /** DataAvailabilityResult */
         DataAvailabilityResult: {
@@ -13516,61 +10000,6 @@ export interface components {
              * @default []
              */
             skipped_non_sessions?: components["schemas"]["NonSessionRecord"][];
-        };
-        /**
-         * DataFiltersModel
-         * @description Data quality filters for option contracts.
-         */
-        DataFiltersModel: {
-            /**
-             * Max Dte
-             * @description Maximum days to expiry
-             * @default 365
-             */
-            max_dte?: number;
-            /**
-             * Max Spread Pct
-             * @description Max bid-ask spread as % of mid
-             * @default 0.2
-             */
-            max_spread_pct?: number;
-            /**
-             * Min Dte
-             * @description Minimum days to expiry
-             * @default 7
-             */
-            min_dte?: number;
-            /**
-             * Min Open Interest
-             * @description Minimum open interest
-             * @default 10
-             */
-            min_open_interest?: number;
-        };
-        /**
-         * DataPlaneHealth
-         * @description Code-liveness metadata for the long-running FastAPI data plane.
-         *
-         *     PRD #684 uses this as the operator's fast check for "fixed on disk"
-         *     versus "actually live in the process". All timestamps are int64 ms UTC.
-         */
-        DataPlaneHealth: {
-            /** Code Revision */
-            code_revision: string;
-            /** Fetched At Ms */
-            fetched_at_ms: number;
-            /** Process Start Ms */
-            process_start_ms: number;
-            /**
-             * Reload
-             * @enum {string}
-             */
-            reload: "disabled" | "watchfiles" | "watchfiles-polling" | "unknown";
-            /**
-             * Service
-             * @constant
-             */
-            service: "polygon-data-service";
         };
         /**
          * DataQualityRequest
@@ -13704,217 +10133,6 @@ export interface components {
             symbols: string[];
         };
         /**
-         * DataSufficiencyResponse
-         * @description Data sufficiency assessment.
-         */
-        DataSufficiencyResponse: {
-            /**
-             * Coverage Warnings
-             * @default []
-             */
-            coverage_warnings?: string[];
-            /**
-             * Effective Oos Bars
-             * @default 0
-             */
-            effective_oos_bars?: number;
-            /**
-             * Regime Coverage
-             * @default {}
-             */
-            regime_coverage?: {
-                [key: string]: number;
-            };
-            /**
-             * Regimes Covered
-             * @default 0
-             */
-            regimes_covered?: number;
-            /**
-             * Test Bars
-             * @default 0
-             */
-            test_bars?: number;
-            /**
-             * Total Bars
-             * @default 0
-             */
-            total_bars?: number;
-            /**
-             * Train Bars
-             * @default 0
-             */
-            train_bars?: number;
-            /**
-             * Walk Forward Folds
-             * @default 0
-             */
-            walk_forward_folds?: number;
-        };
-        /**
-         * DatasetGenerationRequest
-         * @description Request to generate a full indicator dataset with chunked OHLCV fetching
-         */
-        DatasetGenerationRequest: {
-            /**
-             * Adjust For Dividends
-             * @description When true, fetch the dividend reference file and subtract each dividend from bars dated before its ex-date server-side. Produces TV-style dividend-adjusted prices. Requires the Polygon reference companion (automatically bundled when this is on).
-             * @default false
-             */
-            adjust_for_dividends?: boolean;
-            /**
-             * Adjusted
-             * @description Polygon adjusted=true — adjusts for SPLITS ONLY. Does NOT adjust for dividends. Use the separate adjust_for_dividends flag for TV-style dividend adjustment. See docs/tv-polygon-validation-gotchas.md §1.
-             * @default true
-             */
-            adjusted?: boolean;
-            /**
-             * Columns
-             * @description Data columns to write to dataset.csv, drawn from the plan's output_columns. Written in the canonical projection order regardless of list order; unix_ts is always first and is not listed here. Null writes every projected column. A name this recipe cannot produce is rejected.
-             */
-            columns?: string[] | null;
-            /**
-             * End Ms Utc
-             * @description Canonical numeric window end, EXCLUSIVE (int64 ms UTC). When supplied, takes precedence over to_date; a window ending on the session open of day X excludes day X's data.
-             */
-            end_ms_utc?: number | null;
-            /**
-             * Fail On Gaps
-             * @description Reject intra-day gaps. Disable only together with explicit forward_fill=True.
-             * @default true
-             */
-            fail_on_gaps?: boolean;
-            /**
-             * Forward Fill
-             * @description Explicitly synthesize missing minute bars from the previous close (volume=0)
-             * @default false
-             */
-            forward_fill?: boolean;
-            /**
-             * From Date
-             * @description Start date (YYYY-MM-DD)
-             */
-            from_date: string;
-            /**
-             * Include Dividends
-             * @description Bundle dividends.csv (Polygon /stocks/v1/dividends)
-             * @default false
-             */
-            include_dividends?: boolean;
-            /**
-             * Include Financials
-             * @description Bundle financials.csv (Polygon /vX/reference/financials, quarterly filings)
-             * @default false
-             */
-            include_financials?: boolean;
-            /**
-             * Include News
-             * @description Bundle news.csv (Polygon /v2/reference/news)
-             * @default false
-             */
-            include_news?: boolean;
-            /**
-             * Include Previous Close
-             * @description When true, add a 'PC' column to dataset.csv positioned before 'open'. PC is the close of the most recently completed RTH session at or before each bar's timestamp: bars before 16:00 ET reference the prior trading day's close, bars at or after 16:00 ET reference the same day's close (which has just printed). This makes overnight volatility a single subtraction across the 16:00 boundary. Sourced from Polygon daily aggregates honoring the 'adjusted' flag; a ~14 calendar-day buffer before from_date is fetched so morning bars on day 1 have a prior session.
-             * @default true
-             */
-            include_previous_close?: boolean;
-            /**
-             * Include Quality Report
-             * @description When true, run the data-quality pipeline on the fetched bars and bundle quality_report.md into the ZIP alongside the dataset.
-             * @default false
-             */
-            include_quality_report?: boolean;
-            /**
-             * Include Quotes
-             * @description Bundle quotes.csv (Polygon /v3/quotes, NBBO). TICK-LEVEL — millions of rows; use a short date window. Capped server-side at 500k rows.
-             * @default false
-             */
-            include_quotes?: boolean;
-            /**
-             * Include Splits
-             * @description Bundle splits.csv (Polygon /stocks/v1/splits)
-             * @default false
-             */
-            include_splits?: boolean;
-            /**
-             * Include Ticker Overview
-             * @description Bundle ticker_overview.json (Polygon /v3/reference/tickers/{ticker})
-             * @default false
-             */
-            include_ticker_overview?: boolean;
-            /**
-             * Include Trades
-             * @description Bundle trades.csv (Polygon /v3/trades). TICK-LEVEL — millions of rows; use a short date window. Capped server-side at 500k rows.
-             * @default false
-             */
-            include_trades?: boolean;
-            /**
-             * Indicator Entries
-             * @description List of indicator entries, each with 'name' and optional 'params' dict. e.g. [{'name': 'ema', 'params': {'length': 20}}, {'name': 'rsi', 'params': {'length': 14}}]
-             * @default []
-             */
-            indicator_entries?: Record<string, never>[];
-            /**
-             * Limit
-             * @description Polygon aggregate per-request limit (1–50000). Higher values mean fewer chunks.
-             * @default 50000
-             */
-            limit?: number;
-            /**
-             * Multiplier
-             * @description Bar multiplier (e.g., 5 with timespan='minute' gives 5-min bars)
-             * @default 1
-             */
-            multiplier?: number;
-            /** @description Optional options companion file config. When set with enabled=True, the ZIP gains per-slot CSVs under calls/ and puts/ subfolders (one per ATM-relative slot). */
-            options_companion?: components["schemas"]["OptionsCompanionConfig"] | null;
-            /**
-             * Session
-             * @description 'rth' for regular trading hours only (09:30-16:00 ET), 'extended' for all hours
-             * @default extended
-             */
-            session?: string;
-            /**
-             * Sort
-             * @description Polygon aggregate sort order: 'asc' (oldest first) or 'desc' (newest first). Applies to the upstream Polygon request; the downstream merged result stays ascending.
-             * @default asc
-             */
-            sort?: string;
-            /**
-             * Start Ms Utc
-             * @description Canonical numeric window start (int64 ms UTC). When supplied, takes precedence over from_date for the fetch span (resolved via the ET calendar).
-             */
-            start_ms_utc?: number | null;
-            /**
-             * Ticker
-             * @description Ticker symbol
-             */
-            ticker: string;
-            /**
-             * Time Zone
-             * @description IANA timezone (e.g. 'America/Chicago') for the optional readable time column in dataset.csv. When set, a 'time_<zone>' column right after unix_ts renders each bar's instant as 'YYYY-MM-DD HH:MM:SS' wall-clock in that zone — display only; unix_ts stays the canonical time. Null omits the column.
-             */
-            time_zone?: string | null;
-            /**
-             * Timespan
-             * @description Bar timespan: 'minute', 'hour', or 'day'
-             * @default minute
-             */
-            timespan?: string;
-            /**
-             * To Date
-             * @description End date (YYYY-MM-DD)
-             */
-            to_date: string;
-            /**
-             * Warmup
-             * @description Fetch extra bars before from_date to warm up indicator calculations
-             * @default true
-             */
-            warmup?: boolean;
-        };
-        /**
          * DatasetPlanRequest
          * @description Request for ``POST /api/dataset/plan`` — local, fetch-free planning.
          *
@@ -13923,8 +10141,7 @@ export interface components {
          *     executed with the same fields. ``from_date``/``to_date`` remain
          *     date-intent strings for now; the additive ``start_ms_utc``/
          *     ``end_ms_utc`` fields are the canonical numeric form and take
-         *     precedence over the date strings when supplied (data-lab workspace
-         *     redesign PRD §12).
+         *     precedence over the date strings when supplied.
          */
         DatasetPlanRequest: {
             /**
@@ -14313,20 +10530,15 @@ export interface components {
         };
         /**
          * DecisionColumnSpec
-         * @description One strategy-specific column in ``decisions.parquet`` (PRD-A §16.1
-         *     Resolution 5).
+         * @description One strategy-specific column of a spec's per-bar decision row.
          *
-         *     The spec is authoritative for the per-strategy decision-row schema:
-         *     the live runtime resolves the parquet columns as
-         *     ``CORE_DECISION_COLUMNS + [c.name for c in spec.decision_columns]``
-         *     (see ``app.engine.live.artifacts.resolve_decision_columns``). Each
-         *     entry declares the column ``name``, its ``dtype``, whether it is
-         *     ``nullable``, and a free-text ``semantic`` description so a new
-         *     strategy can grow the artifact schema without bespoke writer code.
+         *     Each entry declares the column ``name``, its ``dtype``, whether it is
+         *     ``nullable``, and a free-text ``semantic`` description. No app code
+         *     reads it; it stays because the sealed ``*.spec.json`` fixtures carry it.
          *
-         *     ``name`` must match an attribute the strategy publishes on its
-         *     ``DecisionSnapshot`` — the writer reads the value by that name.
-         *     For the SPY EMA strategy these are ``ema5`` / ``ema10`` / ``rsi``.
+         *     ``name`` names an attribute the strategy publishes on its
+         *     ``DecisionSnapshot``. For the SPY EMA strategy these are ``ema5`` /
+         *     ``ema10`` / ``rsi``.
          */
         DecisionColumnSpec: {
             /**
@@ -14344,47 +10556,6 @@ export interface components {
             nullable?: boolean;
             /** Semantic */
             semantic?: string | null;
-        };
-        /**
-         * DeflatedSharpeResponse
-         * @description Bailey & López de Prado Deflated Sharpe Ratio for the IS grid headline.
-         */
-        DeflatedSharpeResponse: {
-            /**
-             * Dsr Probability
-             * @default 0
-             */
-            dsr_probability?: number;
-            /**
-             * Expected Max Under Null
-             * @default 0
-             */
-            expected_max_under_null?: number;
-            /**
-             * Kurtosis
-             * @default 0
-             */
-            kurtosis?: number;
-            /**
-             * N Trials
-             * @default 0
-             */
-            n_trials?: number;
-            /**
-             * Raw Sharpe
-             * @default 0
-             */
-            raw_sharpe?: number;
-            /**
-             * Skewness
-             * @default 0
-             */
-            skewness?: number;
-            /**
-             * Valid
-             * @default false
-             */
-            valid?: boolean;
         };
         /**
          * DeploySubmissionUncommitted
@@ -14718,38 +10889,6 @@ export interface components {
             snapshot_at_exit?: string[];
         };
         /**
-         * DiagnosticsResponse
-         * @description Full diagnostics for a built surface.
-         */
-        DiagnosticsResponse: {
-            /** @description Arbitrage analysis */
-            arbitrage: components["schemas"]["ArbitrageDetail"];
-            /**
-             * Fitted Params
-             * @description Fitted parameters per slice
-             */
-            fitted_params: components["schemas"]["FitParamsResponse"][];
-            /**
-             * Health Score
-             * @description Overall health score 0-100
-             */
-            health_score: number;
-            /** @description Rejection analysis */
-            rejections: components["schemas"]["RejectionBreakdown"];
-            /**
-             * Slices
-             * @description Per-slice diagnostics
-             */
-            slices: components["schemas"]["SliceDiagnosticsResponse"][];
-            /** @description Build summary */
-            summary: components["schemas"]["SurfaceBuildSummary"];
-            /**
-             * Warnings
-             * @description List of warnings
-             */
-            warnings?: string[];
-        };
-        /**
          * DifferenceBps
          * @description Relative difference between two operands, expressed in basis points.
          *
@@ -14794,7 +10933,7 @@ export interface components {
         };
         /**
          * DivergenceCategory
-         * @description Categorical divergence types — see numerical-rigor.md.
+         * @description Categorical divergence types — see ADR 0069 §6.
          * @enum {string}
          */
         DivergenceCategory: "fixture_insufficient" | "decision_mismatch" | "direction_mismatch" | "quantity_mismatch" | "fill_price_drift" | "commission_drift" | "pnl_drift" | "order_type_mismatch";
@@ -14829,7 +10968,7 @@ export interface components {
         };
         /**
          * DutyOutcomeView
-         * @description Typed terminal duty fact shown on the bot-health card (§7.2).
+         * @description Typed terminal duty fact shown on the bot-health card.
          */
         DutyOutcomeView: {
             /** Explanation */
@@ -14849,61 +10988,6 @@ export interface components {
             recorded_at_ms: number | null;
             /** Run Id */
             run_id: string | null;
-        };
-        /** EdgeScoreBody */
-        EdgeScoreBody: {
-            /** Bars */
-            bars: components["schemas"]["BarPayload"][];
-            /** Iv30 */
-            iv30: (number | null)[];
-            /** Regime Labels */
-            regime_labels: number[];
-            /** Regime Score Map */
-            regime_score_map?: {
-                [key: string]: number;
-            } | null;
-            /** Symbol */
-            symbol: string;
-            /** Weights */
-            weights?: {
-                [key: string]: number;
-            } | null;
-        };
-        /**
-         * EffectiveSampleSizeResponse
-         * @description Autocorrelation-adjusted sample size.
-         */
-        EffectiveSampleSizeResponse: {
-            /**
-             * Autocorrelation Lag1
-             * @default 0
-             */
-            autocorrelation_lag1?: number;
-            /**
-             * Effective N
-             * @default 0
-             */
-            effective_n?: number;
-            /**
-             * Independent Bets
-             * @default 0
-             */
-            independent_bets?: number;
-            /**
-             * Max Lag Used
-             * @default 0
-             */
-            max_lag_used?: number;
-            /**
-             * Raw N
-             * @default 0
-             */
-            raw_n?: number;
-            /**
-             * Rho Sum
-             * @default 0
-             */
-            rho_sum?: number;
         };
         /**
          * EmaCrossover2BpsStrategyParametersModel
@@ -15020,12 +11104,6 @@ export interface components {
             from_date?: string | null;
             /** Initial Cash */
             initial_cash?: number | null;
-            /**
-             * Limit Penetration
-             * @description Dollar amount the bar must penetrate past a resting limit's price before the fill is recognized. Measured against the adverse extreme — low for buy limits, high for sell limits. Default 0 = TradingView-style touch fill; 0.02 for US equities is a realistic 2-tick queue-position model.
-             * @default 0
-             */
-            limit_penetration?: number;
             /** Params */
             params?: Record<string, never>;
             /**
@@ -15149,38 +11227,6 @@ export interface components {
             /** Winning Trades */
             winning_trades: number;
         };
-        /** EngineBarsCoverageResponse */
-        EngineBarsCoverageResponse: {
-            /** Available Days */
-            available_days: number;
-            /** Expected Days */
-            expected_days: number;
-            /** Is Complete */
-            is_complete: boolean;
-            /**
-             * Missing Days
-             * @default []
-             */
-            missing_days?: string[];
-        };
-        /** EngineBarsResponse */
-        EngineBarsResponse: {
-            /** Bars */
-            bars?: Record<string, never>[];
-            /** Count */
-            count: number;
-            coverage: components["schemas"]["EngineBarsCoverageResponse"];
-            /** Multiplier */
-            multiplier: number;
-            /** Policy Key */
-            policy_key: string;
-            /** Session */
-            session: string;
-            /** Symbol */
-            symbol: string;
-            /** Timespan */
-            timespan: string;
-        };
         /** EngineChartBar */
         EngineChartBar: {
             /** C */
@@ -15282,22 +11328,6 @@ export interface components {
             evaluation_start_ms: number;
             /** Warmup Primed */
             warmup_primed: boolean;
-        };
-        /**
-         * EngineParityDivergenceModel
-         * @description The first field where the BacktestEngine and runner-seam traces disagree.
-         */
-        EngineParityDivergenceModel: {
-            /** Evaluation Id */
-            evaluation_id: string | null;
-            /** Expected */
-            expected: string;
-            /** Field */
-            field: string;
-            /** Index */
-            index: number;
-            /** Observed */
-            observed: string;
         };
         /** EngineTradeResponse */
         EngineTradeResponse: {
@@ -15476,24 +11506,8 @@ export interface components {
             summary: string;
         };
         /**
-         * EvidenceItem
-         * @description Bounded evidence with a code label and opaque identifier kept verbatim.
-         */
-        EvidenceItem: {
-            /** Age Label */
-            age_label: string;
-            /** Code */
-            code: string;
-            /** Explanation */
-            explanation: string;
-            /** Label */
-            label: string;
-            /** Opaque Id */
-            opaque_id: string;
-        };
-        /**
          * EvidencePage
-         * @description A bounded page of operator-gated evidence entries (§14).
+         * @description A bounded page of operator-gated evidence entries.
          */
         EvidencePage: {
             /** Account Id */
@@ -15514,18 +11528,6 @@ export interface components {
             transaction_ref: string | null;
             /** Truncated */
             truncated: boolean;
-        };
-        /**
-         * ExchangeStatus
-         * @description Status of individual exchanges
-         */
-        ExchangeStatus: {
-            /** Nasdaq */
-            nasdaq?: string | null;
-            /** Nyse */
-            nyse?: string | null;
-            /** Otc */
-            otc?: string | null;
         };
         /**
          * ExcludedDay
@@ -15574,10 +11576,9 @@ export interface components {
          * ExitEligibilityContract
          * @description Level/countdown exit rule — the evidence future carryover work would read.
          *
-         *     PRD §11.1: "level/countdown exit eligibility evidence where carryover may
-         *     later be considered." Two rules exist, matching PRD §17's own
-         *     "level- or countdown-true" vocabulary for when a discarded staged EXIT
-         *     must re-emit:
+         *     This is the evidence where carryover may later be considered. Two rules
+         *     exist, matching the "level- or countdown-true" vocabulary for when a
+         *     discarded staged EXIT must re-emit:
          *
          *     * ``"fixed_bar_count_countdown"`` — ``ema_crossover_signal`` exits on a
          *       fixed decision-clock countdown
@@ -15592,16 +11593,10 @@ export interface components {
          *       unset for this rule.
          *
          *     ``countdown_state_persistable`` records a real, checked fact about
-         *     today's implementation, not an aspiration. For
-         *     ``fixed_bar_count_countdown``:
-         *     ``EmaCrossoverSignalAlgorithm.report_state_for_persistence`` returns
-         *     ``None`` whenever the strategy is mid-position, so an in-flight countdown
-         *     cannot currently survive a Pause/Resume — carryover work must either
-         *     change that or treat mid-countdown Resume as unsupported. For
-         *     ``level_true`` programs that have not yet implemented the
-         *     persistence-hook contract at all (e.g. ``sma_crossover`` today), this is
-         *     ``False`` for the stronger reason that no state -- not just an in-flight
-         *     exit -- currently survives Pause/Resume.
+         *     today's implementation, not an aspiration. No strategy persists its
+         *     state, so nothing -- an in-flight countdown included -- survives a
+         *     restart, and every program seals ``False``. Carryover work must either
+         *     add that persistence or treat a mid-countdown Resume as unsupported.
          */
         ExitEligibilityContract: {
             /** Countdown Decision Clocks */
@@ -15645,33 +11640,6 @@ export interface components {
             spread_cap_bps: number;
         };
         /**
-         * ExperimentDecision
-         * @description One Clerk receipt; observation time is never substituted for decision time.
-         */
-        ExperimentDecision: {
-            /** Decision Bar Close Ms */
-            decision_bar_close_ms?: number | null;
-            /** Decision Id */
-            decision_id?: string | null;
-            /** Order Ref */
-            order_ref?: string | null;
-            /**
-             * Outcome
-             * @enum {string}
-             */
-            outcome: "enter_intent" | "exit_intent" | "entered" | "exited" | "no_action" | "blocked" | "candidate_uncaptured_at_crash" | "decision_bar_quarantined";
-            /** Reason Code */
-            reason_code: string;
-            /** Recorded At Ms */
-            recorded_at_ms: number;
-            /** Run Id */
-            run_id: string | null;
-            /** Seq */
-            seq: number;
-            /** Trace Digest */
-            trace_digest?: string | null;
-        };
-        /**
          * ExposureNoticeView
          * @description What an abnormal run end left behind at the broker (#2410).
          *
@@ -15701,18 +11669,6 @@ export interface components {
             strategy_instance_id?: string | null;
             /** Symbol */
             symbol?: string | null;
-        };
-        /**
-         * ExposureSlice
-         * @description One attribution bucket, including known Clerk manual activity.
-         */
-        ExposureSlice: {
-            /** Explanation */
-            explanation: string;
-            /** Label */
-            label: string;
-            /** Quantity Label */
-            quantity_label: string;
         };
         /**
          * ExtendedLimitConfirmationRequest
@@ -15818,28 +11774,6 @@ export interface components {
             value_pct: number;
         };
         /**
-         * FeatureInfoResponse
-         * @description Feature metadata for the information panel.
-         */
-        FeatureInfoResponse: {
-            /** Category */
-            category: string;
-            /** Example */
-            example: string;
-            /** Formula Latex */
-            formula_latex: string;
-            /** Implementation Note */
-            implementation_note: string;
-            /** Interpretation */
-            interpretation: string;
-            /** Name */
-            name: string;
-            /** Variables */
-            variables: string;
-            /** Window */
-            window: number;
-        };
-        /**
          * FeatureResearchJobRequest
          * @description Body of POST /api/jobs-internal/feature-research.
          *
@@ -15884,190 +11818,6 @@ export interface components {
             timespan?: "minute" | "hour" | "day";
             /** To Date */
             to_date: string;
-        };
-        /**
-         * FeatureStageCriterionResponse
-         * @description Single advance-criterion in the next-stage list.
-         */
-        FeatureStageCriterionResponse: {
-            /**
-             * Current Value
-             * @default 0
-             */
-            current_value?: number;
-            /**
-             * Description
-             * @default
-             */
-            description?: string;
-            /**
-             * Met
-             * @default false
-             */
-            met?: boolean;
-            /**
-             * Name
-             * @default
-             */
-            name?: string;
-            /**
-             * Required Repr
-             * @default
-             */
-            required_repr?: string;
-        };
-        /**
-         * FeatureStageInfoResponse
-         * @description Where the feature sits on the 0/1/2/3 ladder.
-         */
-        FeatureStageInfoResponse: {
-            /**
-             * Advance Criteria
-             * @default []
-             */
-            advance_criteria?: components["schemas"]["FeatureStageCriterionResponse"][];
-            /**
-             * Description
-             * @default
-             */
-            description?: string;
-            /**
-             * Failed Screens
-             * @default []
-             */
-            failed_screens?: string[];
-            /**
-             * Label
-             * @default Rejected
-             */
-            label?: string;
-            /**
-             * Next Stage Label
-             * @default
-             */
-            next_stage_label?: string;
-            /**
-             * Stage
-             * @default 0
-             */
-            stage?: number;
-        };
-        /**
-         * FeatureValidationSpecResponse
-         * @description Per-feature validation contract surfaced to the UI.
-         *
-         *     Documents the question the screens are answering for this feature
-         *     so the reader can spot a "wrong target" or "wrong shape" mismatch
-         *     before reading the verdict.
-         */
-        FeatureValidationSpecResponse: {
-            /**
-             * Default Target
-             * @default
-             */
-            default_target?: string;
-            /**
-             * Expected Direction
-             * @default unknown
-             */
-            expected_direction?: string;
-            /**
-             * Expected Shape
-             * @default none
-             */
-            expected_shape?: string;
-            /**
-             * Feature Name
-             * @default
-             */
-            feature_name?: string;
-            /**
-             * Intent
-             * @default
-             */
-            intent?: string;
-            /**
-             * Is Signed Target Appropriate
-             * @default true
-             */
-            is_signed_target_appropriate?: boolean;
-            /**
-             * Monotonicity Required
-             * @default false
-             */
-            monotonicity_required?: boolean;
-            /**
-             * Notes
-             * @default []
-             */
-            notes?: string[];
-            /**
-             * Stationarity Required
-             * @default false
-             */
-            stationarity_required?: boolean;
-        };
-        /**
-         * FeatureValidationVerdictResponse
-         * @description Replaces the legacy single-boolean ``passed_validation``.
-         */
-        FeatureValidationVerdictResponse: {
-            cost_viability: components["schemas"]["CostViabilityResponse"];
-            /**
-             * Direction Matches Spec
-             * @default true
-             */
-            direction_matches_spec?: boolean;
-            economic_screen: components["schemas"]["ValidationScreenResponse"];
-            /**
-             * Final Decision
-             * @default
-             */
-            final_decision?: string;
-            ic_ci: components["schemas"]["IcCiResponse"];
-            multiple_testing: components["schemas"]["MultipleTestingWarningResponse"];
-            multiple_testing_screen: components["schemas"]["ValidationScreenResponse"];
-            oos_screen: components["schemas"]["ValidationScreenResponse"];
-            regime_stability_screen: components["schemas"]["ValidationScreenResponse"];
-            stage_info: components["schemas"]["FeatureStageInfoResponse"];
-            statistical_screen: components["schemas"]["ValidationScreenResponse"];
-            /**
-             * Target Signed Appropriate
-             * @default true
-             */
-            target_signed_appropriate?: boolean;
-        };
-        /**
-         * FeeDivergenceModel
-         * @description One row in the fee reconciliation report. Decimals serialized as
-         *     strings so the wire is exact (avoids float-binary error in JSON).
-         */
-        FeeDivergenceModel: {
-            /**
-             * Category
-             * @enum {string}
-             */
-            category: "commission_drift" | "no_recorded_fee" | "fractional_quantity";
-            /** Delta */
-            delta: string | null;
-            /** Expected Ibkr Fee */
-            expected_ibkr_fee: string;
-            /** Fill Price */
-            fill_price: string;
-            /** Fill Quantity */
-            fill_quantity: number;
-            /** Fill Quantity Raw */
-            fill_quantity_raw?: number | null;
-            /** Ms Utc */
-            ms_utc: number;
-            /** Order Event Id */
-            order_event_id: number;
-            /** Order Id */
-            order_id: number;
-            /** Recorded Fee */
-            recorded_fee: string | null;
-            /** Symbol */
-            symbol: string;
         };
         /**
          * FeedContinuityEventView
@@ -16134,36 +11884,6 @@ export interface components {
             unresolved_count: number;
         };
         /**
-         * FeedHealth
-         * @description Point-in-time health snapshot for a MarketDataFeed.
-         *
-         *     ``connected`` — the underlying broker connection is alive.
-         *     ``stale``     — connected but required source liveness has not been proven
-         *                     within the implementation's stale threshold.
-         *     ``last_bar_ms`` — ``start_ms`` of the most recently emitted bar, or ``None``
-         *                       if no bar has been emitted yet.
-         *     ``reason``    — human-readable detail when unhealthy (empty string when healthy).
-         *     ``active_subscription_count`` — number of symbols currently subscribed.
-         *     ``observed_at_ms`` — wall-clock of this snapshot, int64 ms UTC.
-         */
-        FeedHealth: {
-            /** Active Subscription Count */
-            active_subscription_count: number;
-            /** Connected */
-            connected: boolean;
-            /** Last Bar Ms */
-            last_bar_ms: number | null;
-            /**
-             * Observed At Ms
-             * @description Snapshot wall-clock, int64 ms UTC.
-             */
-            observed_at_ms: number;
-            /** Reason */
-            reason: string;
-            /** Stale */
-            stale: boolean;
-        };
-        /**
          * FifoAttributionRowResponse
          * @description One backend-computed FIFO lot closure; the browser renders it verbatim.
          */
@@ -16192,22 +11912,6 @@ export interface components {
             realized_pnl: number;
             /** Symbol */
             symbol: string;
-        };
-        /**
-         * FitParamsResponse
-         * @description Fitted parameters for a single expiry slice.
-         */
-        FitParamsResponse: {
-            /** Method */
-            method: string;
-            /** Params */
-            params: {
-                [key: string]: number;
-            };
-            /** Rmse */
-            rmse: number;
-            /** Ttm */
-            ttm: number;
         };
         /** FixedContracts */
         FixedContracts: {
@@ -16622,38 +12326,6 @@ export interface components {
             /** Reviewed By */
             reviewed_by: string;
         };
-        /** GoldenValidationApplicabilityRequest */
-        GoldenValidationApplicabilityRequest: {
-            /** Data Policy */
-            data_policy: Record<string, never> | null;
-            /** Execution */
-            execution: Record<string, never>;
-            /** Parameters */
-            parameters: Record<string, never>;
-            /** Program Version */
-            program_version?: string | null;
-            /** Strategy Name */
-            strategy_name: string;
-            /** Symbol */
-            symbol: string;
-            /** Window */
-            window: Record<string, never>;
-        };
-        /** GoldenValidationApplicabilityResponse */
-        GoldenValidationApplicabilityResponse: {
-            /** Applicable */
-            applicable: boolean;
-            /** Classification */
-            classification: string | null;
-            /** Explanation */
-            explanation: string;
-            /** Golden Validation Id */
-            golden_validation_id: number;
-            /** Mismatched Fields */
-            mismatched_fields: string[];
-            /** State */
-            state: string;
-        };
         /** GoldenValidationResponse */
         GoldenValidationResponse: {
             /** Designated At Ms */
@@ -16688,112 +12360,6 @@ export interface components {
             symbol: string;
             /** Validation Case */
             validation_case: Record<string, never>;
-        };
-        /**
-         * GraduationCriterionResponse
-         * @description Single graduation criterion.
-         */
-        GraduationCriterionResponse: {
-            /**
-             * Description
-             * @default
-             */
-            description?: string;
-            /**
-             * Failure Reason
-             * @default
-             */
-            failure_reason?: string;
-            /**
-             * Label
-             * @default Fail
-             */
-            label?: string;
-            /**
-             * Name
-             * @default
-             */
-            name?: string;
-            /**
-             * Passed
-             * @default false
-             */
-            passed?: boolean;
-            /**
-             * Threshold
-             * @default 0
-             */
-            threshold?: number;
-            /**
-             * Value
-             * @default 0
-             */
-            value?: number;
-        };
-        /**
-         * GraduationResultResponse
-         * @description Complete graduation assessment.
-         */
-        GraduationResultResponse: {
-            /**
-             * Criteria
-             * @default []
-             */
-            criteria?: components["schemas"]["GraduationCriterionResponse"][];
-            /**
-             * Overall Grade
-             * @default F
-             */
-            overall_grade?: string;
-            /**
-             * Overall Passed
-             * @default false
-             */
-            overall_passed?: boolean;
-            parameter_stability?: components["schemas"]["ParameterStabilityResponse"] | null;
-            stage0_rejection?: components["schemas"]["Stage0RejectionResponse"] | null;
-            stage_info?: components["schemas"]["GraduationStageInfoResponse"] | null;
-            /**
-             * Status Label
-             * @default Exploratory
-             */
-            status_label?: string;
-            /**
-             * Summary
-             * @default
-             */
-            summary?: string;
-        };
-        /**
-         * GraduationStageInfoResponse
-         * @description Where the signal sits on the 0/1/2/3 ladder, plus advancement criteria.
-         */
-        GraduationStageInfoResponse: {
-            /**
-             * Advance Criteria
-             * @default []
-             */
-            advance_criteria?: components["schemas"]["StageAdvanceCriterionResponse"][];
-            /**
-             * Description
-             * @default
-             */
-            description?: string;
-            /**
-             * Label
-             * @default Rejected
-             */
-            label?: string;
-            /**
-             * Next Stage Label
-             * @default
-             */
-            next_stage_label?: string;
-            /**
-             * Stage
-             * @default 0
-             */
-            stage?: number;
         };
         /**
          * GreekCurvePoint
@@ -16850,37 +12416,6 @@ export interface components {
             theta?: number | null;
             /** Vega */
             vega?: number | null;
-        };
-        /**
-         * GridMetaModel
-         * @description Metadata for a matrix grid response.
-         */
-        GridMetaModel: {
-            /**
-             * Expiry Dates
-             * @description Expiry dates (YYYY-MM-DD)
-             */
-            expiry_dates: string[];
-            /**
-             * Forwards
-             * @description Forward prices per expiry
-             */
-            forwards: number[];
-            /**
-             * N Expiries
-             * @description Number of expiries
-             */
-            n_expiries: number;
-            /**
-             * N Strikes
-             * @description Number of strikes
-             */
-            n_strikes: number;
-            /**
-             * Spot
-             * @description Spot price
-             */
-            spot: number;
         };
         /** GridSearchCellPageResponse */
         GridSearchCellPageResponse: {
@@ -17489,83 +13024,6 @@ export interface components {
             strength_label?: "Noise" | "Weak" | "Moderate" | "Strong";
         };
         /**
-         * IbkrApiEvidenceEvent
-         * @description One observed IBKR API request/response pair.
-         */
-        IbkrApiEvidenceEvent: {
-            /** Account Id */
-            account_id?: string | null;
-            /** Error */
-            error?: string | null;
-            request: components["schemas"]["IbkrApiRequestEvidence"];
-            response?: components["schemas"]["IbkrApiResponseEvidence"] | null;
-            /** Seq */
-            seq: number;
-            /** Source */
-            source: string;
-            /** Strategy Instance Id */
-            strategy_instance_id?: string | null;
-            /** Symbol */
-            symbol?: string | null;
-            /** Ts Ms */
-            ts_ms: number;
-        };
-        /**
-         * IbkrApiRequestEvidence
-         * @description Typed envelope for one IBKR API request/call.
-         */
-        IbkrApiRequestEvidence: {
-            /**
-             * Call
-             * @enum {string}
-             */
-            call: "cancelMktData" | "qualifyContractsAsync" | "reqContractDetailsAsync" | "reqHistoricalDataAsync" | "reqMarketDataType" | "reqMktData" | "reqRealTimeBars" | "reqSecDefOptParamsAsync" | "whatIfOrderAsync";
-            /** Params */
-            params?: {
-                [key: string]: components["schemas"]["JsonValue"];
-            };
-        };
-        /**
-         * IbkrApiResponseEvidence
-         * @description Typed envelope for one IBKR callback/response.
-         */
-        IbkrApiResponseEvidence: {
-            /**
-             * Callback
-             * @enum {string}
-             */
-            callback: "contractDetails" | "historicalData" | "marketDataType" | "realTimeBar" | "realTimeBarList" | "securityDefinitionOptionParameter" | "tickSnapshot" | "whatIfOrder";
-            /** Fields */
-            fields?: {
-                [key: string]: components["schemas"]["JsonValue"];
-            };
-            /** Serializer Warnings */
-            serializer_warnings?: components["schemas"]["IbkrSerializerWarning"][];
-        };
-        /**
-         * IbkrBarsSnapshot
-         * @description A snapshot of the live 1-min OHLCV ring buffer for one symbol.
-         *
-         *     ``status`` reports the aggregator's subscription health so the UI can
-         *     show "Subscribing…" / "Streaming" / "Error: …" instead of an
-         *     inscrutable empty chart.
-         */
-        IbkrBarsSnapshot: {
-            /** Bars */
-            bars?: components["schemas"]["IbkrMinuteBar"][];
-            /** Last Bar Ms */
-            last_bar_ms?: number | null;
-            /** Last Error */
-            last_error?: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "idle" | "subscribing" | "streaming" | "errored" | "resubscribing";
-            /** Symbol */
-            symbol: string;
-        };
-        /**
          * IbkrConnectionHealth
          * @description Diagnostic snapshot used by ``GET /api/broker/health``.
          *
@@ -17667,83 +13125,6 @@ export interface components {
             unreachable_since_ms?: number | null;
         };
         /**
-         * IbkrMinuteBar
-         * @description One closed 1-minute TRADES bar from IBKR real-time bars.
-         *
-         *     IBKR delivers 5-second bars via ``reqRealTimeBars``. The broker
-         *     boundary aggregates those into closed 1-minute bars and stores all
-         *     boundary timestamps as ``int64`` ms UTC.
-         */
-        IbkrMinuteBar: {
-            /** Close */
-            close: string;
-            /**
-             * Contribution Count
-             * @description 5-second bars folded into this minute; None when unknown (historical).
-             */
-            contribution_count?: number | null;
-            /**
-             * End Ms
-             * @description UTC milliseconds since epoch, exclusive.
-             */
-            end_ms: number;
-            /** Fetched At Ms */
-            fetched_at_ms: number;
-            /** High */
-            high: string;
-            /** Low */
-            low: string;
-            /** Open */
-            open: string;
-            /**
-             * Provenance
-             * @default ibkr_realtime
-             * @enum {string}
-             */
-            provenance?: "ibkr_realtime" | "ibkr_historical" | "polygon_historical" | "mixed";
-            /**
-             * Session Phase
-             * @default UNKNOWN
-             * @enum {string}
-             */
-            session_phase?: "PRE" | "RTH" | "POST" | "OVERNIGHT" | "CLOSED" | "UNKNOWN";
-            /**
-             * Source
-             * @default ibkr
-             * @enum {string}
-             */
-            source?: "ibkr" | "polygon" | "mixed";
-            /**
-             * Spans Interruption
-             * @description Contributions arrived over more than one connection generation.
-             * @default false
-             */
-            spans_interruption?: boolean;
-            /**
-             * Start Ms
-             * @description UTC milliseconds since epoch, inclusive.
-             */
-            start_ms: number;
-            /** Symbol */
-            symbol: string;
-            /** Use Rth */
-            use_rth?: boolean | null;
-            /** Venue */
-            venue?: string | null;
-            /** Volume */
-            volume: number;
-        };
-        /**
-         * IbkrSerializerWarning
-         * @description Structured warning emitted when an IBKR object cannot be fully serialized.
-         */
-        IbkrSerializerWarning: {
-            /** Object Type */
-            object_type: string;
-            /** Serializer Error */
-            serializer_error: string;
-        };
-        /**
          * IbkrStrikeList
          * @description Strikes IBKR has actually instantiated for one (symbol, expiry).
          *
@@ -17763,52 +13144,6 @@ export interface components {
             strikes: number[];
             /** Symbol */
             symbol: string;
-        };
-        /**
-         * IcCiResponse
-         * @description Lo-style confidence interval on the headline mean IC.
-         */
-        IcCiResponse: {
-            /**
-             * Ci Lower
-             * @default 0
-             */
-            ci_lower?: number;
-            /**
-             * Ci Upper
-             * @default 0
-             */
-            ci_upper?: number;
-            /**
-             * Confidence Level
-             * @default 0.95
-             */
-            confidence_level?: number;
-            /**
-             * N Eff Used
-             * @default 0
-             */
-            n_eff_used?: number;
-            /**
-             * Point
-             * @default 0
-             */
-            point?: number;
-            /**
-             * Se
-             * @default 0
-             */
-            se?: number;
-            /**
-             * Se Approximation Note
-             * @default
-             */
-            se_approximation_note?: string;
-            /**
-             * Valid
-             * @default false
-             */
-            valid?: boolean;
         };
         /** IndicatorBetween */
         IndicatorBetween: {
@@ -17903,41 +13238,6 @@ export interface components {
             op: "<" | "<=" | "==" | ">=" | ">" | "!=";
             /** Right */
             right: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Output"] | components["schemas"]["DifferenceBps"];
-        };
-        /**
-         * IndicatorConfig
-         * @description Configuration for a single indicator
-         */
-        IndicatorConfig: {
-            /**
-             * Name
-             * @description Indicator name: sma, ema, rsi, macd, bbands, stoch
-             */
-            name: string;
-            /**
-             * Window
-             * @description Lookback period
-             * @default 14
-             */
-            window?: number;
-        };
-        /**
-         * IndicatorDataPoint
-         * @description A single indicator value at a timestamp
-         */
-        IndicatorDataPoint: {
-            /** Histogram */
-            histogram?: number | null;
-            /** Lower */
-            lower?: number | null;
-            /** Signal */
-            signal?: number | null;
-            /** Timestamp */
-            timestamp: number;
-            /** Upper */
-            upper?: number | null;
-            /** Value */
-            value?: number | null;
         };
         /**
          * IndicatorInfo
@@ -18149,171 +13449,6 @@ export interface components {
             warnings?: string[];
         };
         /**
-         * IndicatorResult
-         * @description Result for a single indicator calculation
-         */
-        IndicatorResult: {
-            /** Data */
-            data: components["schemas"]["IndicatorDataPoint"][];
-            /** Name */
-            name: string;
-            /** Window */
-            window: number;
-        };
-        /**
-         * IndicatorTableRequest
-         * @description Request to generate a full TradingView-style indicator table from Polygon minute data.
-         *
-         *     Inherits ``symbol`` / ``from_date`` / ``to_date`` / ``timespan`` /
-         *     ``multiplier`` / ``session`` from the canonical ``TickerRequest``.
-         *     Legacy field names (``ticker`` / ``start_date`` / ``end_date``) are
-         *     still accepted during the PR (ii) → (iii) migration window via
-         *     Pydantic ``AliasChoices``.
-         *
-         *     **Default override**: ``session`` defaults to ``"extended"`` here
-         *     (vs the base's ``"rth"``) to preserve pre-migration behavior — this
-         *     endpoint operates on the full session by default.
-         */
-        IndicatorTableRequest: {
-            /**
-             * Adjusted
-             * @description Adjust for splits/dividends (Polygon default: true)
-             * @default true
-             */
-            adjusted?: boolean;
-            /**
-             * Adx Length
-             * @description ADX period
-             * @default 14
-             */
-            adx_length?: number;
-            /**
-             * Bb Length
-             * @description Bollinger Bands length
-             * @default 20
-             */
-            bb_length?: number;
-            /**
-             * Bb Std
-             * @description Bollinger Bands standard deviation
-             * @default 2
-             */
-            bb_std?: number;
-            /**
-             * Ema Periods
-             * @description EMA periods to calculate
-             * @default [
-             *       5,
-             *       10,
-             *       20,
-             *       30,
-             *       40,
-             *       50,
-             *       100,
-             *       200
-             *     ]
-             */
-            ema_periods?: number[];
-            /**
-             * Forward Fill
-             * @description Fill missing minute bars with previous close (volume=0)
-             * @default false
-             */
-            forward_fill?: boolean;
-            /** From Date */
-            from_date: string;
-            /**
-             * Macd Fast
-             * @description MACD fast period
-             * @default 12
-             */
-            macd_fast?: number;
-            /**
-             * Macd Signal
-             * @description MACD signal period
-             * @default 9
-             */
-            macd_signal?: number;
-            /**
-             * Macd Slow
-             * @description MACD slow period
-             * @default 26
-             */
-            macd_slow?: number;
-            /**
-             * Multiplier
-             * @default 1
-             */
-            multiplier?: number;
-            /**
-             * Rsi Length
-             * @description RSI period
-             * @default 14
-             */
-            rsi_length?: number;
-            /**
-             * Rsi Ma Length
-             * @description RSI moving average period
-             * @default 14
-             */
-            rsi_ma_length?: number;
-            /**
-             * Session
-             * @default extended
-             * @enum {string}
-             */
-            session?: "rth" | "extended";
-            /**
-             * Supertrend Length
-             * @description Supertrend ATR length
-             * @default 10
-             */
-            supertrend_length?: number;
-            /**
-             * Supertrend Multiplier
-             * @description Supertrend multiplier
-             * @default 3
-             */
-            supertrend_multiplier?: number;
-            /** Symbol */
-            symbol: string;
-            /**
-             * Timespan
-             * @default minute
-             * @enum {string}
-             */
-            timespan?: "minute" | "hour" | "day";
-            /** To Date */
-            to_date: string;
-        };
-        /**
-         * IndicatorTableResponse
-         * @description Response containing the full indicator table
-         */
-        IndicatorTableResponse: {
-            /**
-             * Columns
-             * @default []
-             */
-            columns?: string[];
-            /** Error */
-            error?: string | null;
-            /**
-             * Row Count
-             * @default 0
-             */
-            row_count?: number;
-            /**
-             * Rows
-             * @default []
-             */
-            rows?: Record<string, never>[];
-            /** Success */
-            success: boolean;
-            /** Ticker */
-            ticker: string;
-        };
-        /**
          * InsufficientCoverageDetail
          * @description The typed 400 body's ``detail`` for a too-thin usable sample.
          */
@@ -18382,82 +13517,6 @@ export interface components {
             symbol: string;
             /** Target Calendar Days */
             target_calendar_days: number;
-        };
-        /**
-         * IvDataPoint
-         * @description Single IV data point for options research.
-         */
-        IvDataPoint: {
-            /** Atm Iv */
-            atm_iv?: number | null;
-            /** Date */
-            date: string;
-            /** Iv Otm Call */
-            iv_otm_call?: number | null;
-            /** Iv Otm Put */
-            iv_otm_put?: number | null;
-            /** Stock Close */
-            stock_close?: number | null;
-        };
-        /**
-         * IvDiagnosticsReportResponse
-         * @description IV series diagnostics report.
-         */
-        IvDiagnosticsReportResponse: {
-            /**
-             * Discontinuities
-             * @default 0
-             */
-            discontinuities?: number;
-            /**
-             * Dte Spikes
-             * @default 0
-             */
-            dte_spikes?: number;
-            /** First Date */
-            first_date?: string | null;
-            /**
-             * Gaps
-             * @default 0
-             */
-            gaps?: number;
-            /** Iv Max */
-            iv_max?: number | null;
-            /** Iv Mean */
-            iv_mean?: number | null;
-            /** Iv Min */
-            iv_min?: number | null;
-            /** Iv Skewness */
-            iv_skewness?: number | null;
-            /** Iv Std */
-            iv_std?: number | null;
-            /** Last Date */
-            last_date?: string | null;
-            /**
-             * Missing Pct
-             * @default 0
-             */
-            missing_pct?: number;
-            /**
-             * Total Trading Days
-             * @default 0
-             */
-            total_trading_days?: number;
-            /**
-             * Valid
-             * @default false
-             */
-            valid?: boolean;
-            /**
-             * Valid Iv Days
-             * @default 0
-             */
-            valid_iv_days?: number;
-            /**
-             * Warnings
-             * @default []
-             */
-            warnings?: string[];
         };
         /**
          * IvProvenancePayload
@@ -19251,60 +14310,6 @@ export interface components {
             strike: number;
         };
         /**
-         * LegGreeks
-         * @description Greeks for a single leg at a single scenario point.
-         *
-         *     Sign conventions match `bs_greeks.BSGreeks`:
-         *     - delta: per share (option) or 1.0 (stock)
-         *     - gamma: per share
-         *     - theta: per calendar day
-         *     - vega: per 1% IV move
-         *     - rho: per 1% rate move
-         *
-         *     Quantity-scaled aggregates are computed at the response level
-         *     (`ScenarioPoint`); per-leg values here are *unscaled per-share* Greeks
-         *     so the caller can re-aggregate however it wants.
-         */
-        LegGreeks: {
-            /**
-             * Delta
-             * @default 0
-             */
-            delta?: number;
-            /**
-             * Gamma
-             * @default 0
-             */
-            gamma?: number;
-            /**
-             * Instrument
-             * @enum {string}
-             */
-            instrument: "stock" | "option";
-            /** Leg Id */
-            leg_id?: string | null;
-            /**
-             * Rho
-             * @default 0
-             */
-            rho?: number;
-            /**
-             * Theoretical Price
-             * @description Theoretical per-share price at this scenario point
-             */
-            theoretical_price: number;
-            /**
-             * Theta
-             * @default 0
-             */
-            theta?: number;
-            /**
-             * Vega
-             * @default 0
-             */
-            vega?: number;
-        };
-        /**
          * LiveEnvelopePayload
          * @description The four current account bounds; retired session counts are rejected.
          *
@@ -19420,30 +14425,6 @@ export interface components {
             state: "activation_available" | "review_available" | "graduated" | "blocked";
         };
         /**
-         * LiveGreeksRequest
-         * @description Convenience request for the common 'live Greeks at current state' case.
-         *
-         *     Equivalent to ScenarioRequest with the default 1×1×1 grid.
-         */
-        LiveGreeksRequest: {
-            /** As Of Ms */
-            as_of_ms: number;
-            /**
-             * Dividend Yield
-             * @default 0
-             */
-            dividend_yield?: number;
-            /** Positions */
-            positions: (components["schemas"]["StockPosition"] | components["schemas"]["OptionPosition"])[];
-            /**
-             * Risk Free Rate
-             * @default 0.043
-             */
-            risk_free_rate?: number;
-            /** Spot Price */
-            spot_price: number;
-        };
-        /**
          * LiveSnapshotUnavailableDetail
          * @description Why the live panel snapshot is withheld, with retry guidance.
          *
@@ -19533,36 +14514,6 @@ export interface components {
              * @enum {string}
              */
             logic: "AND" | "OR";
-        };
-        /**
-         * LossHoldClearOutcome
-         * @description The guarded loss-hold clear's outcome.
-         *
-         *     ``day_pnl_usd`` and ``loss_limit_usd`` are the loss rule's floats — the
-         *     bytes the rule compared and the seal recorded. They are machine figures
-         *     that no client renders as money: the dollars the owner reads live in
-         *     ``detail``, authored in Python through the money boundary (#2612), so a
-         *     cent never depends on a browser's float formatting.
-         */
-        LossHoldClearOutcome: {
-            /** Day Pnl Usd */
-            day_pnl_usd: number | null;
-            /** Detail */
-            detail: string;
-            /** Loss Limit Usd */
-            loss_limit_usd: number | null;
-            /**
-             * Observed At Ms
-             * Format: int64
-             */
-            observed_at_ms: number;
-            /**
-             * Outcome
-             * @enum {string}
-             */
-            outcome: "cleared" | "no_hold" | "refused";
-            /** Reason Code */
-            reason_code: string | null;
         };
         /** ManualOrderBrokerOrderResponse */
         ManualOrderBrokerOrderResponse: {
@@ -19734,111 +14685,6 @@ export interface components {
             message: string;
         };
         /**
-         * MarketDashboardResponse
-         * @description Combined market status + holidays for the dashboard
-         */
-        MarketDashboardResponse: {
-            /** Error */
-            error?: string | null;
-            holidays?: components["schemas"]["MarketHolidaysResponse"] | null;
-            status?: components["schemas"]["MarketStatusResponse"] | null;
-            /** Success */
-            success: boolean;
-        };
-        /**
-         * MarketHolidayEvent
-         * @description A single upcoming market holiday event
-         */
-        MarketHolidayEvent: {
-            /** Close */
-            close?: string | null;
-            /** Date */
-            date?: string | null;
-            /**
-             * Exchanges
-             * @default []
-             */
-            exchanges?: string[];
-            /** Name */
-            name?: string | null;
-            /** Open */
-            open?: string | null;
-            /** Status */
-            status?: string | null;
-        };
-        /**
-         * MarketHolidaysResponse
-         * @description Upcoming market holidays response
-         */
-        MarketHolidaysResponse: {
-            /**
-             * Count
-             * @default 0
-             */
-            count?: number;
-            /** Error */
-            error?: string | null;
-            /**
-             * Events
-             * @default []
-             */
-            events?: components["schemas"]["MarketHolidayEvent"][];
-            /** Success */
-            success: boolean;
-        };
-        /**
-         * MarketMoversRequest
-         * @description Request schema for top market movers
-         */
-        MarketMoversRequest: {
-            /**
-             * Direction
-             * @description 'gainers' or 'losers'
-             */
-            direction: string;
-        };
-        /**
-         * MarketMoversResponse
-         * @description Response for top market movers (gainers/losers)
-         */
-        MarketMoversResponse: {
-            /**
-             * Count
-             * @default 0
-             */
-            count?: number;
-            /** Error */
-            error?: string | null;
-            /** Success */
-            success: boolean;
-            /**
-             * Tickers
-             * @default []
-             */
-            tickers?: components["schemas"]["StockTickerSnapshot"][];
-        };
-        /**
-         * MarketPointModel
-         * @description A single market quote point.
-         */
-        MarketPointModel: {
-            /**
-             * Iv
-             * @description Implied volatility
-             */
-            iv: number;
-            /**
-             * Status
-             * @description Solver status (solved, invalid, etc.)
-             */
-            status: string;
-            /**
-             * X
-             * @description Moneyness value
-             */
-            x: number;
-        };
-        /**
          * MarketPulseView
          * @description Scheduled session, live tradability, and data recency authored by Python.
          */
@@ -19884,43 +14730,6 @@ export interface components {
             source: string | null;
         };
         /**
-         * MarketStatusResponse
-         * @description Current market status response
-         */
-        MarketStatusResponse: {
-            /**
-             * After Hours
-             * @default false
-             */
-            after_hours?: boolean;
-            /**
-             * Early Hours
-             * @default false
-             */
-            early_hours?: boolean;
-            /** Error */
-            error?: string | null;
-            /** @default {} */
-            exchanges?: components["schemas"]["ExchangeStatus"];
-            /**
-             * Market
-             * @default unknown
-             */
-            market?: string;
-            /**
-             * Server Time
-             * @default
-             */
-            server_time?: string;
-            /**
-             * Server Time Readable
-             * @default N/A
-             */
-            server_time_readable?: string;
-            /** Success */
-            success: boolean;
-        };
-        /**
          * MarketStatusSnapshot
          * @description Authenticated status-source observation shared with a Paper worker.
          *
@@ -19954,117 +14763,6 @@ export interface components {
          * @enum {string}
          */
         MarketStatusSource: "ibkr.market_data.status" | "alpaca.stock_data.status";
-        /**
-         * MatrixGridResponse
-         * @description Matrix grid of IV surface values.
-         */
-        MatrixGridResponse: {
-            /** @description Grid metadata */
-            meta: components["schemas"]["GridMetaModel"];
-            /**
-             * X
-             * @description Moneyness axis values
-             */
-            x: number[];
-            /**
-             * X Label
-             * @description X-axis label (log_moneyness, moneyness, strike)
-             */
-            x_label: string;
-            /**
-             * Y
-             * @description DTE days axis
-             */
-            y: number[];
-            /**
-             * Y Label
-             * @description Y-axis label
-             * @default dte_days
-             */
-            y_label?: string;
-            /**
-             * Z
-             * @description IV matrix [n_expiries × n_strikes]
-             */
-            z: (number | null)[][];
-            /**
-             * Z Label
-             * @description Z-axis label
-             * @default implied_vol
-             */
-            z_label?: string;
-        };
-        /**
-         * MethodologyResponse
-         * @description Methodology metadata from signal engine configuration.
-         */
-        MethodologyResponse: {
-            /**
-             * Annualization Factor
-             * @default 98280
-             */
-            annualization_factor?: number;
-            /**
-             * Bars Per Day
-             * @default 390
-             */
-            bars_per_day?: number;
-            /**
-             * Cost Bps Options
-             * @default []
-             */
-            cost_bps_options?: number[];
-            /**
-             * Default Cost Bps
-             * @default 2
-             */
-            default_cost_bps?: number;
-            /**
-             * Flip Sign
-             * @default true
-             */
-            flip_sign?: boolean;
-            /**
-             * Horizon
-             * @default 15
-             */
-            horizon?: number;
-            /**
-             * Min Bars For Signal
-             * @default 500
-             */
-            min_bars_for_signal?: number;
-            /**
-             * Optimization Target
-             * @default net_sharpe
-             */
-            optimization_target?: string;
-            /**
-             * Regime Gate Enabled
-             * @default true
-             */
-            regime_gate_enabled?: boolean;
-            /**
-             * Test Months
-             * @default 1
-             */
-            test_months?: number;
-            /**
-             * Thresholds
-             * @default []
-             */
-            thresholds?: number[];
-            /**
-             * Train Months
-             * @default 3
-             */
-            train_months?: number;
-            /**
-             * Window Type
-             * @default rolling
-             */
-            window_type?: string;
-        };
         /** MinDteExpiry */
         MinDteExpiry: {
             /** Days */
@@ -20331,46 +15029,6 @@ export interface components {
             warnings?: string[];
         };
         /**
-         * MonthlyICBreakdownResponse
-         * @description Monthly IC statistics.
-         */
-        MonthlyICBreakdownResponse: {
-            /** Mean Ic */
-            mean_ic: number;
-            /** Month */
-            month: string;
-            /** Observation Count */
-            observation_count: number;
-            /** T Stat */
-            t_stat: number;
-        };
-        /**
-         * MultipleTestingWarningResponse
-         * @description Holm-Bonferroni-corrected p-value across the feature family.
-         */
-        MultipleTestingWarningResponse: {
-            /**
-             * Holm P Value
-             * @default 1
-             */
-            holm_p_value?: number;
-            /**
-             * N Family
-             * @default 0
-             */
-            n_family?: number;
-            /**
-             * Note
-             * @default
-             */
-            note?: string;
-            /**
-             * Raw Nw P Value
-             * @default 1
-             */
-            raw_nw_p_value?: number;
-        };
-        /**
          * NavigateAction
          * @description Move: navigate to another operator page.
          */
@@ -20561,18 +15219,17 @@ export interface components {
         };
         /**
          * NumericalProvenanceContract
-         * @description The Math Provenance Contract (CLAUDE.md #2/#5), sealed as program identity.
+         * @description The Math Provenance Contract (ADR 0068 Decision 2), sealed as program identity.
          *
          *     Mirrors the ``Formula``/``Reference``/``Canonical implementation``/
-         *     ``Validated against`` block already required by the
-         *     ``learn-ai-validation`` skill and present in
+         *     ``Validated against`` block already required by
+         *     ADR 0068 Decision 2 and present in
          *     ``ema_crossover_signal.py``'s own module docstring; this is that same
          *     fact, made part of the immutable seal rather than living only in prose
          *     that could drift unnoticed. ``tolerance_atol``/``tolerance_rtol`` are
          *     ``None`` at ``equivalence_level="bit_exact"`` — the trace/decision
          *     identity in ``signal_program.py`` is Decimal-exact and SHA-256-compared,
-         *     not tolerance-compared; the documented ``1e-9`` absolute tolerance in
-         *     ``docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md``
+         *     not tolerance-compared; the documented ``1e-9`` absolute tolerance
          *     applies one level down, to the EMA/RSI *value* parity against LEAN.
          */
         NumericalProvenanceContract: {
@@ -20599,27 +15256,6 @@ export interface components {
             /** Validated Against */
             validated_against: string;
         };
-        /**
-         * OHLCVBar
-         * @description Single OHLCV bar.
-         */
-        OHLCVBar: {
-            /** Close */
-            close: number;
-            /** High */
-            high: number;
-            /** Low */
-            low: number;
-            /** Open */
-            open: number;
-            /**
-             * Timestamp
-             * @description Milliseconds since epoch
-             */
-            timestamp: number;
-            /** Volume */
-            volume: number;
-        };
         /** ObservedAccountResponse */
         ObservedAccountResponse: {
             /** Account Id */
@@ -20631,27 +15267,6 @@ export interface components {
             account_mode: "paper" | "live";
             /** Account Status */
             account_status?: string | null;
-        };
-        /**
-         * OhlcvBar
-         * @description Single OHLCV bar for indicator calculation
-         */
-        OhlcvBar: {
-            /** Close */
-            close: number;
-            /** High */
-            high: number;
-            /** Low */
-            low: number;
-            /** Open */
-            open: number;
-            /**
-             * Timestamp
-             * @description Unix milliseconds
-             */
-            timestamp: number;
-            /** Volume */
-            volume: number;
         };
         /**
          * OperatorBlocker
@@ -20743,42 +15358,6 @@ export interface components {
             /** Title */
             title: string;
         };
-        /**
-         * OperatorDiagnosticView
-         * @description All Operator-lens diagnosis, evidence, and action availability.
-         */
-        OperatorDiagnosticView: {
-            /** Actions */
-            actions: components["schemas"]["StaticAction"][];
-            /** Admission Explanation */
-            admission_explanation: string;
-            /** Admission Label */
-            admission_label: string;
-            /** Custody Spine */
-            custody_spine: components["schemas"]["CustodySpineStep"][];
-            /** Custody Spine Label */
-            custody_spine_label: string;
-            /** Evidence */
-            evidence: components["schemas"]["EvidenceItem"][];
-            /** Evidence Label */
-            evidence_label: string;
-            /** Exposure Label */
-            exposure_label: string;
-            /** Exposure Slices */
-            exposure_slices: components["schemas"]["ExposureSlice"][];
-            /** Freeze Explanation */
-            freeze_explanation: string;
-            /** Freeze Label */
-            freeze_label: string;
-            /** Next Step */
-            next_step: string;
-            /** Reduction Explanation */
-            reduction_explanation: string;
-            /** Reduction Label */
-            reduction_label: string;
-            /** Scope Cards */
-            scope_cards: components["schemas"]["AuthoredValue"][];
-        };
         /** OperatorMove */
         OperatorMove: {
             /** Action */
@@ -20831,101 +15410,6 @@ export interface components {
             underlying: string;
         };
         /**
-         * OptionPosition
-         * @description A single option leg (call or put, long or short).
-         */
-        OptionPosition: {
-            /**
-             * Current Iv
-             * @description Current implied volatility as decimal
-             */
-            current_iv: number;
-            /**
-             * Entry Price
-             * @description Per-share entry premium (always positive)
-             */
-            entry_price: number;
-            /**
-             * Expiration Ms
-             * @description Expiration as int64 ms since Unix epoch UTC
-             */
-            expiration_ms: number;
-            /**
-             * Instrument
-             * @default option
-             * @constant
-             */
-            instrument?: "option";
-            /**
-             * Leg Id
-             * @description Optional caller-supplied identifier echoed in the response
-             */
-            leg_id?: string | null;
-            /**
-             * Multiplier
-             * @description Contract multiplier (default 100)
-             * @default 100
-             */
-            multiplier?: number;
-            /**
-             * Option Type
-             * @enum {string}
-             */
-            option_type: "call" | "put";
-            /**
-             * Quantity
-             * @description Net quantity in *contracts* (negative for short)
-             */
-            quantity: number;
-            /** Strike */
-            strike: number;
-            /**
-             * Symbol
-             * @description Underlying ticker
-             */
-            symbol: string;
-        };
-        /**
-         * OptionRecord
-         * @description A single option contract with market data.
-         */
-        OptionRecord: {
-            /**
-             * Ask
-             * @description Ask price
-             */
-            ask?: number | null;
-            /**
-             * Bid
-             * @description Bid price
-             */
-            bid?: number | null;
-            /**
-             * Is Call
-             * @description True for call, False for put
-             */
-            is_call: boolean;
-            /** Open Interest */
-            open_interest?: number | null;
-            /**
-             * Option Price
-             * @description Mid market price
-             */
-            option_price: number;
-            /**
-             * Strike
-             * @description Strike price
-             */
-            strike: number;
-            /**
-             * Ttm
-             * @description Time to maturity in years
-             */
-            ttm: number;
-            /** Volume */
-            volume?: number | null;
-        };
-        /**
          * OptionTemplatePosition
          * @description Phase 2 placeholder. Schema admits the shape so authors can write
          *     forward-compatible specs; the Phase 1 evaluator raises
@@ -20966,10 +15450,11 @@ export interface components {
          * OptionsChainSnapshotResponse
          * @description Response schema for options chain snapshot.
          *
-         *     The ``risk_free_rate`` and ``dividend_yield`` fields are sourced from FRED
-         *     (DGS1MO interpolated) and Polygon TTM dividends respectively (Step 8 of
-         *     IV-RV alignment). They replace the historical hardcoded `r=0.043, q=0`
-         *     defaults used by pricing-lab, options-strategy-lab, strategy-builder.
+         *     ``risk_free_rate`` is FRED's Treasury-bill curve interpolated at the
+         *     requested expiration's days to expiry (30 days when no expiration is
+         *     given); ``dividend_yield`` is Polygon's TTM dividends. They replace the
+         *     historical hardcoded `r=0.043, q=0` defaults used by pricing-lab,
+         *     options-strategy-lab, strategy-builder.
          */
         OptionsChainSnapshotResponse: {
             /**
@@ -21006,8 +15491,8 @@ export interface components {
          *     from ATM (e.g. ``calls/atm-03.csv``, ``calls/atm.csv``, ``puts/atm+02.csv``).
          *     Each file is a fixed-schema time series for that slot across all trading
          *     days in range; the contract filling the slot rolls daily and is recorded
-         *     as the ``contract_ticker`` row value. See ``docs/options-companion-format.md``
-         *     for the full spec; computation lives in ``options_companion_service``.
+         *     as the ``contract_ticker`` row value. Computation lives in
+         *     ``options_companion_service``.
          */
         OptionsCompanionConfig: {
             /**
@@ -21108,8 +15593,8 @@ export interface components {
             include_vwap?: boolean;
             /**
              * Risk Free Rate
-             * @description Flat annualized risk-free rate used in IV/Greeks solves
-             * @default 0.05
+             * @description Flat annualized risk-free rate used in IV/Greeks solves (omit for the Python default)
+             * @default 0.043
              */
             risk_free_rate?: number;
             /**
@@ -21118,28 +15603,6 @@ export interface components {
              * @default 3
              */
             strikes_each_side?: number;
-        };
-        /**
-         * OptionsContractItem
-         * @description A single options contract
-         */
-        OptionsContractItem: {
-            /** Contract Type */
-            contract_type?: string | null;
-            /** Exercise Style */
-            exercise_style?: string | null;
-            /** Expiration Date */
-            expiration_date?: string | null;
-            /** Primary Exchange */
-            primary_exchange?: string | null;
-            /** Shares Per Contract */
-            shares_per_contract?: number | null;
-            /** Strike Price */
-            strike_price?: number | null;
-            /** Ticker */
-            ticker: string;
-            /** Underlying Ticker */
-            underlying_ticker?: string | null;
         };
         /**
          * OptionsContractSnapshotItem
@@ -21164,83 +15627,6 @@ export interface components {
             strike_price?: number | null;
             /** Ticker */
             ticker?: string | null;
-        };
-        /**
-         * OptionsContractsRequest
-         * @description Request schema for listing options contracts
-         */
-        OptionsContractsRequest: {
-            /**
-             * As Of Date
-             * @description As-of date (YYYY-MM-DD)
-             */
-            as_of_date?: string | null;
-            /**
-             * Contract Type
-             * @description Filter: call or put
-             */
-            contract_type?: string | null;
-            /**
-             * Expiration Date
-             * @description Exact expiration date (YYYY-MM-DD)
-             */
-            expiration_date?: string | null;
-            /**
-             * Expiration Date Gte
-             * @description Min expiration date
-             */
-            expiration_date_gte?: string | null;
-            /**
-             * Expiration Date Lte
-             * @description Max expiration date
-             */
-            expiration_date_lte?: string | null;
-            /**
-             * Expired
-             * @description Include expired contracts
-             */
-            expired?: boolean | null;
-            /**
-             * Limit
-             * @description Max results
-             * @default 100
-             */
-            limit?: number;
-            /**
-             * Strike Price Gte
-             * @description Min strike price
-             */
-            strike_price_gte?: number | null;
-            /**
-             * Strike Price Lte
-             * @description Max strike price
-             */
-            strike_price_lte?: number | null;
-            /**
-             * Underlying Ticker
-             * @description Underlying stock ticker
-             */
-            underlying_ticker: string;
-        };
-        /**
-         * OptionsContractsResponse
-         * @description Response schema for options contracts listing
-         */
-        OptionsContractsResponse: {
-            /**
-             * Contracts
-             * @default []
-             */
-            contracts?: components["schemas"]["OptionsContractItem"][];
-            /**
-             * Count
-             * @default 0
-             */
-            count?: number;
-            /** Error */
-            error?: string | null;
-            /** Success */
-            success: boolean;
         };
         /**
          * OptionsExpirationsRequest
@@ -21294,25 +15680,9 @@ export interface components {
          * @enum {string}
          */
         OrderSide: "buy" | "sell";
-        /** OwnerPatchRequest */
-        OwnerPatchRequest: {
-            /** Display Label */
-            display_label: string;
-        };
-        /** OwnerResponse */
-        OwnerResponse: {
-            /** Created At Ms */
-            created_at_ms: number;
-            /** Display Label */
-            display_label: string;
-            /** Owner Id */
-            owner_id: string;
-            /** Updated At Ms */
-            updated_at_ms: number;
-        };
         /**
          * PanelAction
-         * @description One backend-presented action (§11).
+         * @description One backend-presented action.
          *
          *     Angular executes only the closed set of known action ids and renders
          *     exactly what it is given. ``revision`` binds the action to the panel-state
@@ -21342,7 +15712,7 @@ export interface components {
         };
         /**
          * PanelActionErrorResponse
-         * @description A rejected action execution (409/500) (§11, PRD #1716 FR-4).
+         * @description A rejected action execution (409/500) (PRD #1716 FR-4).
          *
          *     Published so the OpenAPI contract and generated frontend types carry the
          *     exact error shape callers previously narrowed by hand from an untyped
@@ -21375,10 +15745,10 @@ export interface components {
         };
         /**
          * PanelActionRequest
-         * @description Execute one presented action (§11).
+         * @description Execute one presented action.
          *
          *     Identity is NEVER a request field — it derives from the authenticated
-         *     control channel (§14). The form carries only the reason.
+         *     control channel. The form carries only the reason.
          */
         PanelActionRequest: {
             /**
@@ -21397,7 +15767,7 @@ export interface components {
         };
         /**
          * PanelActionResult
-         * @description The outcome of an executed action (§11).
+         * @description The outcome of an executed action.
          *
          *     On success the caller re-polls the panel; ``applied`` distinguishes a fresh
          *     application from an idempotent replay (``applied=False`` — the key was seen
@@ -21430,7 +15800,7 @@ export interface components {
         };
         /**
          * PanelProfile
-         * @description Closed descriptor extending BrokerCapabilities for the panel (§4).
+         * @description Closed descriptor extending BrokerCapabilities for the panel.
          *
          *     Angular renders strictly from this: an inapplicable station renders as
          *     ``not_applicable``. A bot's commands are not listed here: its panel
@@ -21554,29 +15924,6 @@ export interface components {
             objective?: "sharpe_ratio";
         };
         /**
-         * ParameterStabilityResponse
-         * @description Parameter stability assessment.
-         */
-        ParameterStabilityResponse: {
-            /**
-             * Sharpe Values By Threshold
-             * @default {}
-             */
-            sharpe_values_by_threshold?: {
-                [key: string]: number;
-            };
-            /**
-             * Stability Label
-             * @default Fragile
-             */
-            stability_label?: string;
-            /**
-             * Stability Score
-             * @default 0
-             */
-            stability_score?: number;
-        };
-        /**
          * PayoffPoint
          * @description Single point on the payoff curve.
          */
@@ -21678,20 +16025,6 @@ export interface components {
          */
         PortfolioHistoryRange: "1D" | "30D" | "60D";
         /**
-         * PredictedSessionFees
-         * @description The model's end-of-day charge for the session, per component.
-         */
-        PredictedSessionFees: {
-            /** Cat Usd */
-            cat_usd: number;
-            /** Sec Usd */
-            sec_usd: number;
-            /** Taf Usd */
-            taf_usd: number;
-            /** Total Usd */
-            total_usd: number;
-        };
-        /**
          * PredictionComparison
          * @description Compare a per-bar prediction value against a constant threshold.
          */
@@ -21748,20 +16081,6 @@ export interface components {
             prediction_set_id: string;
         };
         /**
-         * PricePoint
-         * @description Compact, authored chart context; not a market-data API response.
-         */
-        PricePoint: {
-            /** Fill Label */
-            fill_label?: string | null;
-            /** Fill Tone */
-            fill_tone?: ("neutral" | "verified" | "active" | "caution" | "blocked") | null;
-            /** Label */
-            label: string;
-            /** Price */
-            price: string;
-        };
-        /**
          * PricingCompareRequest
          * @description Compare pricing models across a range of underlying prices.
          */
@@ -21788,7 +16107,8 @@ export interface components {
             option_type: string;
             /**
              * Risk Free Rate
-             * @default 0.05
+             * @description Annualized risk-free rate (omit for the Python default)
+             * @default 0.043
              */
             risk_free_rate?: number;
             /**
@@ -21830,6 +16150,11 @@ export interface components {
             models: components["schemas"]["PricingModelCurve"][];
             /** Option Type */
             option_type: string;
+            /**
+             * Risk Free Rate
+             * @description The rate every curve was priced at, so a client overlay can price at the same one
+             */
+            risk_free_rate: number;
             /** Strike */
             strike: number;
             /** Success */
@@ -22206,8 +16531,7 @@ export interface components {
          * @description What the price the operator proposed does against the Clerk's quote (#2007).
          *
          *     Every number an operator reads before confirming is computed by the Clerk
-         *     and rendered as-is; the browser never derives one (AGENTS.md § "Python
-         *     owns all math").
+         *     and rendered as-is; the browser never derives one (ADR 0068).
          */
         ProposedLimitEvaluationResponse: {
             /** Band Cap Bps */
@@ -22306,8 +16630,8 @@ export interface components {
             option_type: string;
             /**
              * Risk Free Rate
-             * @description Annualized risk-free rate
-             * @default 0.05
+             * @description Annualized risk-free rate (omit for the Python default)
+             * @default 0.043
              */
             risk_free_rate?: number;
             /**
@@ -22325,81 +16649,6 @@ export interface components {
              * @description Annualized IV (decimal, e.g. 0.20)
              */
             volatility: number;
-        };
-        /** QuantLibStatusResponse */
-        QuantLibStatusResponse: {
-            /** Available */
-            available: boolean;
-            /** Engines */
-            engines: string[];
-            /** Version */
-            version?: string | null;
-        };
-        /**
-         * QuantLibStrategyRequest
-         * @description Price a multi-leg strategy via QuantLib.
-         */
-        QuantLibStrategyRequest: {
-            /**
-             * Dividend Yield
-             * @default 0
-             */
-            dividend_yield?: number;
-            /**
-             * Engine
-             * @default analytic_bs
-             */
-            engine?: string;
-            /** Evaluation Date */
-            evaluation_date?: string | null;
-            /** Legs */
-            legs: components["schemas"]["StrategyLegInput"][];
-            /**
-             * Risk Free Rate
-             * @default 0.05
-             */
-            risk_free_rate?: number;
-            /** Spot */
-            spot: number;
-        };
-        /** QuantLibStrategyResponse */
-        QuantLibStrategyResponse: {
-            /** Engine */
-            engine: string;
-            /** Error */
-            error?: string | null;
-            /** Legs */
-            legs: components["schemas"]["StrategyLegResult"][];
-            /** Net Delta */
-            net_delta: number;
-            /** Net Gamma */
-            net_gamma: number;
-            /** Net Price */
-            net_price: number;
-            /** Net Rho */
-            net_rho: number;
-            /** Net Theta */
-            net_theta: number;
-            /** Net Vega */
-            net_vega: number;
-            /** Success */
-            success: boolean;
-        };
-        /**
-         * QuantileBinResponse
-         * @description Single quantile bin in the response.
-         */
-        QuantileBinResponse: {
-            /** Bin Number */
-            bin_number: number;
-            /** Count */
-            count: number;
-            /** Lower Bound */
-            lower_bound: number;
-            /** Mean Return */
-            mean_return: number;
-            /** Upper Bound */
-            upper_bound: number;
         };
         /**
          * ReadinessCheckView
@@ -22569,11 +16818,6 @@ export interface components {
             symbol: string;
             /** Total Pnl */
             total_pnl: number;
-        };
-        /** RecencyLaunchMutationResponse */
-        RecencyLaunchMutationResponse: {
-            /** Launch Id */
-            launch_id: string;
         };
         /**
          * RecencyLaunchResponse
@@ -22978,66 +17222,6 @@ export interface components {
             reason_code: string;
         };
         /**
-         * RegimeBucketResponse
-         * @description One cell of the joint (vol × trend) regime grid.
-         */
-        RegimeBucketResponse: {
-            /**
-             * Badge
-             * @default Empty
-             */
-            badge?: string;
-            /**
-             * Days
-             * @default 0
-             */
-            days?: number;
-            /**
-             * Effective Trades
-             * @default 0
-             */
-            effective_trades?: number;
-            /**
-             * Trend Label
-             * @default
-             */
-            trend_label?: string;
-            /**
-             * Vol Label
-             * @default
-             */
-            vol_label?: string;
-        };
-        /** RegimeClusterBody */
-        RegimeClusterBody: {
-            /** Algorithms */
-            algorithms?: ("hmm" | "kmeans")[];
-            /** Bars */
-            bars: components["schemas"]["BarPayload"][];
-            /**
-             * Iv Series
-             * @description Optional [{ts, iv30, health_score?, variance_contribution_synthetic?}]. When supplied, IV-derived features (iv30_z, d_iv_z, iv_vol_z) are added to the regime feature matrix and weighted by regime_feature_weight (Step F).
-             */
-            iv_series?: Record<string, never>[] | null;
-            /**
-             * Min Run Length
-             * @default 5
-             */
-            min_run_length?: number;
-            /**
-             * N States
-             * @default 3
-             */
-            n_states?: number;
-            /**
-             * P Min
-             * @default 0.7
-             */
-            p_min?: number;
-            /** Symbol */
-            symbol: string;
-        };
-        /**
          * RegimeICPoint
          * @description IC for one horizon within one regime bucket.
          */
@@ -23058,20 +17242,6 @@ export interface components {
             t_stat: number;
         };
         /**
-         * RegimeICResponse
-         * @description IC computed within a specific market regime.
-         */
-        RegimeICResponse: {
-            /** Mean Ic */
-            mean_ic: number;
-            /** Observation Count */
-            observation_count: number;
-            /** Regime Label */
-            regime_label: string;
-            /** T Stat */
-            t_stat: number;
-        };
-        /**
          * RegimeResults
          * @description Regime-conditioned IC. Values are null when the bucket is too small.
          */
@@ -23087,13 +17257,6 @@ export interface components {
              */
             vol_window?: number;
         };
-        /** RegimeStrategyFitBody */
-        RegimeStrategyFitBody: {
-            /** Regime Labels */
-            regime_labels: Record<string, never>[];
-            /** Trades */
-            trades: Record<string, never>[];
-        };
         /**
          * RegularSessionFlattenPricing
          * @description Inside the regular session the flatten is a market DAY order; no quote is needed.
@@ -23104,65 +17267,6 @@ export interface components {
              * @enum {string}
              */
             kind: "regular_session";
-        };
-        /**
-         * RejectionBreakdown
-         * @description Breakdown of contract rejections.
-         */
-        RejectionBreakdown: {
-            /**
-             * Accepted
-             * @description Number accepted
-             */
-            accepted: number;
-            /**
-             * By Reason
-             * @description Rejection counts by reason
-             */
-            by_reason: {
-                [key: string]: number;
-            };
-            /**
-             * Rejected
-             * @description Number rejected
-             */
-            rejected: number;
-            /**
-             * Total Quotes
-             * @description Total quotes received
-             */
-            total_quotes: number;
-        };
-        /**
-         * RelatedTickersRequest
-         * @description Request schema for fetching related companies for a ticker
-         */
-        RelatedTickersRequest: {
-            /**
-             * Ticker
-             * @description Stock ticker symbol
-             */
-            ticker: string;
-        };
-        /**
-         * RelatedTickersResponse
-         * @description Response for related companies lookup
-         */
-        RelatedTickersResponse: {
-            /** Error */
-            error?: string | null;
-            /**
-             * Related
-             * @default []
-             */
-            related?: string[];
-            /** Success */
-            success: boolean;
-            /**
-             * Ticker
-             * @default
-             */
-            ticker?: string;
         };
         /**
          * RemoveAction
@@ -23364,73 +17468,6 @@ export interface components {
             schema_version: number;
         };
         /**
-         * RobustnessResponse
-         * @description Complete robustness analysis.
-         */
-        RobustnessResponse: {
-            /**
-             * Best Month Ic
-             * @default 0
-             */
-            best_month_ic?: number;
-            /**
-             * Monthly Breakdown
-             * @default []
-             */
-            monthly_breakdown?: components["schemas"]["MonthlyICBreakdownResponse"][];
-            /**
-             * Pct Positive Months
-             * @default 0
-             */
-            pct_positive_months?: number;
-            /**
-             * Pct Sign Consistent Months
-             * @default 0
-             */
-            pct_sign_consistent_months?: number;
-            /**
-             * Pct Significant Months
-             * @default 0
-             */
-            pct_significant_months?: number;
-            /**
-             * Rolling T Stat
-             * @default []
-             */
-            rolling_t_stat?: components["schemas"]["RollingTStatPointResponse"][];
-            /**
-             * Sign Consistent Stability Label
-             * @default Unknown
-             */
-            sign_consistent_stability_label?: string;
-            /**
-             * Stability Label
-             * @default Unknown
-             */
-            stability_label?: string;
-            /**
-             * Structural Breaks
-             * @default []
-             */
-            structural_breaks?: components["schemas"]["StructuralBreakPointResponse"][];
-            train_test?: components["schemas"]["TrainTestSplitResponse"] | null;
-            /**
-             * Trend Regimes
-             * @default []
-             */
-            trend_regimes?: components["schemas"]["RegimeICResponse"][];
-            /**
-             * Volatility Regimes
-             * @default []
-             */
-            volatility_regimes?: components["schemas"]["RegimeICResponse"][];
-            /**
-             * Worst Month Ic
-             * @default 0
-             */
-            worst_month_ic?: number;
-        };
-        /**
          * RollingSplitPolicySpec
          * @description Strict HTTP/storage shape for one rolling split.
          */
@@ -23447,16 +17484,6 @@ export interface components {
             /** Train Days */
             train_days: number;
         };
-        /**
-         * RollingTStatPointResponse
-         * @description Single point in rolling smoothed t-stat series.
-         */
-        RollingTStatPointResponse: {
-            /** Month */
-            month: string;
-            /** T Stat Smoothed */
-            t_stat_smoothed: number;
-        };
         /** RollingTradePointResponse */
         RollingTradePointResponse: {
             /** Average Return */
@@ -23469,45 +17496,6 @@ export interface components {
             win_rate: number;
             /** Window Size */
             window_size: number;
-        };
-        /**
-         * RuleBasedBacktestJobRequest
-         * @description Body of POST /api/jobs-internal/backtest.
-         *
-         *     **Default override**: ``multiplier=15`` to preserve the
-         *     pre-migration default (the rule-based backtest path defaulted to
-         *     15-minute bars before this PR). Without the override, the inherited
-         *     base default of 1 would silently switch every caller to 1-minute
-         *     bars.
-         */
-        RuleBasedBacktestJobRequest: {
-            /** From Date */
-            from_date: string;
-            /** Jobid */
-            jobId: string;
-            /**
-             * Multiplier
-             * @default 15
-             */
-            multiplier?: number;
-            /** Parameters */
-            parameters?: Record<string, never>;
-            /**
-             * Session
-             * @default rth
-             * @enum {string}
-             */
-            session?: "rth" | "extended";
-            /** Symbol */
-            symbol: string;
-            /**
-             * Timespan
-             * @default minute
-             * @enum {string}
-             */
-            timespan?: "minute" | "hour" | "day";
-            /** To Date */
-            to_date: string;
         };
         /**
          * RunAdmissionDecision
@@ -23559,38 +17547,6 @@ export interface components {
             /** Runtime */
             runtime: number;
         };
-        /**
-         * RunBatchOptionsRequest
-         * @description Request body for POST /research/run-batch-options.
-         */
-        RunBatchOptionsRequest: {
-            /**
-             * End Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            end_date: string;
-            /**
-             * Feature Name
-             * @description Options feature to test
-             */
-            feature_name: string;
-            /**
-             * Start Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            start_date: string;
-            /**
-             * Target Type
-             * @description Target type
-             * @default directional
-             */
-            target_type?: string;
-            /**
-             * Tickers
-             * @description List of tickers to test
-             */
-            tickers: string[];
-        };
         /** RunEvidenceProvenance */
         RunEvidenceProvenance: {
             closing_bar_convention?: components["schemas"]["ClosingBarConvention"] | null;
@@ -23613,132 +17569,6 @@ export interface components {
             schema_version?: 1;
             /** Statistics Basis */
             statistics_basis: string;
-        };
-        /**
-         * RunFeatureResearchRequest
-         * @description Request body for POST /research/run-feature.
-         */
-        RunFeatureResearchRequest: {
-            /**
-             * Bars
-             * @description OHLCV bars (1-minute)
-             */
-            bars: components["schemas"]["OHLCVBar"][];
-            /**
-             * End Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            end_date: string;
-            /**
-             * Feature Name
-             * @description Feature to validate (e.g. momentum_5m)
-             */
-            feature_name: string;
-            /**
-             * Start Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            start_date: string;
-            /**
-             * Ticker
-             * @description Stock symbol (e.g. AAPL)
-             */
-            ticker: string;
-        };
-        /**
-         * RunFeatureResearchResponse
-         * @description Response body for POST /research/run-feature.
-         */
-        RunFeatureResearchResponse: {
-            /** Adf Pvalue */
-            adf_pvalue: number;
-            /** Bars Used */
-            bars_used: number;
-            /**
-             * Effective N
-             * @default 0
-             */
-            effective_n?: number;
-            /** End Date */
-            end_date: string;
-            /** Error */
-            error?: string | null;
-            /** Feature Name */
-            feature_name: string;
-            feature_spec?: components["schemas"]["FeatureValidationSpecResponse"] | null;
-            /**
-             * Ic Dates
-             * @default []
-             */
-            ic_dates?: string[];
-            /** Ic P Value */
-            ic_p_value: number;
-            /** Ic T Stat */
-            ic_t_stat: number;
-            /**
-             * Ic Values
-             * @default []
-             */
-            ic_values?: number[];
-            /**
-             * Is Monotonic
-             * @default false
-             */
-            is_monotonic?: boolean;
-            /** Is Stationary */
-            is_stationary: boolean;
-            /** Kpss Pvalue */
-            kpss_pvalue: number;
-            /** Mean Ic */
-            mean_ic: number;
-            /**
-             * Monotonicity Ratio
-             * @default 0
-             */
-            monotonicity_ratio?: number;
-            /**
-             * Nw P Value
-             * @default 1
-             */
-            nw_p_value?: number;
-            /**
-             * Nw T Stat
-             * @default 0
-             */
-            nw_t_stat?: number;
-            /** Passed Validation */
-            passed_validation: boolean;
-            /**
-             * Quantile Bins
-             * @default []
-             */
-            quantile_bins?: components["schemas"]["QuantileBinResponse"][];
-            robustness?: components["schemas"]["RobustnessResponse"] | null;
-            /** Start Date */
-            start_date: string;
-            /** Success */
-            success: boolean;
-            target_metadata?: components["schemas"]["TargetMetadataResponse"] | null;
-            /** Ticker */
-            ticker: string;
-            validation_verdict?: components["schemas"]["FeatureValidationVerdictResponse"] | null;
-        };
-        /**
-         * RunIndexResponseModel
-         * @description Paged-ish response for the run-history index.
-         *
-         *     ``cap`` is the configured per-request cap; ``truncated`` is True if
-         *     the artifacts root holds more runs than were returned. The frontend
-         *     surfaces both so the operator knows the list is not necessarily
-         *     exhaustive.
-         */
-        RunIndexResponseModel: {
-            /** Cap */
-            cap: number;
-            /** Runs */
-            runs: components["schemas"]["RunSummaryModel"][];
-            /** Truncated */
-            truncated: boolean;
         };
         /**
          * RunLedger
@@ -23896,327 +17726,6 @@ export interface components {
             win_rate?: number | null;
             /** Winning Trades */
             winning_trades: number;
-        };
-        /**
-         * RunOptionsFeatureResearchRequest
-         * @description Request body for POST /research/run-options-feature.
-         */
-        RunOptionsFeatureResearchRequest: {
-            /**
-             * End Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            end_date: string;
-            /**
-             * Feature Name
-             * @description Options feature (e.g. iv_rank_60)
-             */
-            feature_name: string;
-            /**
-             * Iv Data
-             * @description Historical IV data
-             */
-            iv_data: components["schemas"]["IvDataPoint"][];
-            /**
-             * Start Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            start_date: string;
-            /**
-             * Stock Daily Bars
-             * @description Daily stock OHLCV
-             */
-            stock_daily_bars: components["schemas"]["OHLCVBar"][];
-            /**
-             * Target Type
-             * @description Target: directional, volatility, abs_return
-             * @default directional
-             */
-            target_type?: string;
-            /**
-             * Ticker
-             * @description Stock symbol (e.g. AAPL)
-             */
-            ticker: string;
-        };
-        /**
-         * RunReconciliationReportModel
-         * @description Phase 5a — categorized fee-divergence report for one LEAN Lab run.
-         *
-         *     The report is decoupled from whether the run was reconciliation-grade.
-         *     A default-brokerage trusted-sample run will naturally surface many
-         *     ``commission_drift`` rows because LEAN's default commission differs
-         *     from IBKR's tier — that signal is informative, not a bug.
-         */
-        RunReconciliationReportModel: {
-            /** Algorithm Id */
-            algorithm_id: string;
-            /** Commission Atol */
-            commission_atol: string;
-            /** Divergences */
-            divergences: components["schemas"]["FeeDivergenceModel"][];
-            /** Divergent Count */
-            divergent_count: number;
-            /** Matched Count */
-            matched_count: number;
-            /** Normalized Parser Version */
-            normalized_parser_version: string;
-            /** Run Id */
-            run_id: string;
-            /** Total Expected Ibkr Fees */
-            total_expected_ibkr_fees: string;
-            /** Total Fill Events */
-            total_fill_events: number;
-            /** Total Recorded Fees */
-            total_recorded_fees: string;
-        };
-        /**
-         * RunReplayDivergenceModel
-         * @description One classified fidelity-leg disagreement between replay and live record.
-         */
-        RunReplayDivergenceModel: {
-            /** Bar Close Ms */
-            bar_close_ms: number;
-            /**
-             * Classification
-             * @enum {string}
-             */
-            classification: "expected_live_effect" | "drift";
-            /** Detail */
-            detail: string;
-            /** Evaluation Id */
-            evaluation_id: string;
-            /** Live Outcome */
-            live_outcome: string | null;
-            /** Reason Code */
-            reason_code: string;
-            /** Replay Staged */
-            replay_staged: string | null;
-        };
-        /**
-         * RunReplayReceipt
-         * @description Durable parity receipt for one completed run (Direction 2). All temporal fields are int64 ms UTC.
-         */
-        RunReplayReceipt: {
-            /** Bar Set Digest */
-            bar_set_digest: string;
-            /** Continuity Event Digest */
-            continuity_event_digest?: string | null;
-            /** Digest Verified Count */
-            digest_verified_count: number;
-            /** Divergences */
-            divergences: components["schemas"]["RunReplayDivergenceModel"][];
-            /** Drift Count */
-            drift_count: number;
-            /** Engine Parity Compared Count */
-            engine_parity_compared_count: number;
-            engine_parity_divergence: components["schemas"]["EngineParityDivergenceModel"] | null;
-            /** Engine Parity Trace Root */
-            engine_parity_trace_root: string | null;
-            /** Error */
-            error?: string | null;
-            /** Evidence End Seq */
-            evidence_end_seq?: number | null;
-            /** Expected Live Effect Count */
-            expected_live_effect_count: number;
-            /** Generated At Ms */
-            generated_at_ms: number;
-            /** Ledger End Seq */
-            ledger_end_seq: number | null;
-            /** Live Compared Count */
-            live_compared_count: number;
-            /** Match Count */
-            match_count: number;
-            /** Program Version */
-            program_version: string | null;
-            /** Provider */
-            provider: string;
-            /** Records Truncated */
-            records_truncated: boolean;
-            /** Retained Bar Count */
-            retained_bar_count: number;
-            /** Run Id */
-            run_id: string;
-            /**
-             * Schema Version
-             * @default 1
-             * @constant
-             */
-            schema_version?: 1;
-            /** Sealed Program Hash */
-            sealed_program_hash: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "pending" | "parity" | "parity_with_expected_live_effects" | "indeterminate" | "drift" | "replay_failed";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /** Strategy Key */
-            strategy_key: string;
-            /** Symbol */
-            symbol: string;
-        };
-        /**
-         * RunSignalEngineRequest
-         * @description Request body for POST /research/run-signal.
-         */
-        RunSignalEngineRequest: {
-            /**
-             * Bars
-             * @description OHLCV bars (1-minute)
-             */
-            bars: components["schemas"]["OHLCVBar"][];
-            /**
-             * End Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            end_date: string;
-            /**
-             * Feature Name
-             * @description Feature to test
-             * @default momentum_5m
-             */
-            feature_name?: string;
-            /**
-             * Flip Sign
-             * @description Flip sign for negative IC features
-             * @default true
-             */
-            flip_sign?: boolean;
-            /**
-             * Regime Gate Enabled
-             * @description Enable regime gating
-             * @default true
-             */
-            regime_gate_enabled?: boolean;
-            /**
-             * Start Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            start_date: string;
-            /**
-             * Ticker
-             * @description Stock symbol (e.g. AAPL)
-             */
-            ticker: string;
-        };
-        /**
-         * RunSignalEngineResponse
-         * @description Response body for POST /research/run-signal.
-         */
-        RunSignalEngineResponse: {
-            /**
-             * Backtest Grid
-             * @default []
-             */
-            backtest_grid?: components["schemas"]["BacktestResultResponse"][];
-            /**
-             * Bars Used
-             * @default 0
-             */
-            bars_used?: number;
-            /**
-             * Best Cost Bps
-             * @default 0
-             */
-            best_cost_bps?: number;
-            /**
-             * Best Threshold
-             * @default 0
-             */
-            best_threshold?: number;
-            /**
-             * Cost Bps Options
-             * @default []
-             */
-            cost_bps_options?: number[];
-            data_sufficiency?: components["schemas"]["DataSufficiencyResponse"] | null;
-            deflated_sharpe?: components["schemas"]["DeflatedSharpeResponse"] | null;
-            effective_sample?: components["schemas"]["EffectiveSampleSizeResponse"] | null;
-            /** End Date */
-            end_date: string;
-            /** Error */
-            error?: string | null;
-            /** Feature Name */
-            feature_name: string;
-            /**
-             * Flip Sign
-             * @default true
-             */
-            flip_sign?: boolean;
-            graduation?: components["schemas"]["GraduationResultResponse"] | null;
-            /**
-             * Joint Regime Coverage
-             * @default []
-             */
-            joint_regime_coverage?: components["schemas"]["RegimeBucketResponse"][];
-            methodology?: components["schemas"]["MethodologyResponse"] | null;
-            oos_sharpe_ci?: components["schemas"]["SharpeCiResponse"] | null;
-            /**
-             * Regime Coverage
-             * @default {}
-             */
-            regime_coverage?: {
-                [key: string]: number;
-            };
-            /**
-             * Research Log
-             * @default
-             */
-            research_log?: string;
-            signal_behavior?: components["schemas"]["SignalBehaviorMetricsResponse"] | null;
-            signal_diagnostics?: components["schemas"]["SignalDiagnosticsResponse"] | null;
-            /** Start Date */
-            start_date: string;
-            /** Success */
-            success: boolean;
-            /**
-             * Thresholds Tested
-             * @default []
-             */
-            thresholds_tested?: number[];
-            /** Ticker */
-            ticker: string;
-            walk_forward?: components["schemas"]["WalkForwardResultResponse"] | null;
-        };
-        /**
-         * RunSummaryModel
-         * @description One row in the run-history index.
-         *
-         *     Built from each run's ``manifest.json``. Index reads do not touch
-         *     the launcher and do not require LEAN to be running — they're a
-         *     pure read over the artifacts root. Fields are the minimum needed
-         *     to render a sidebar row + offer a "click to re-open" action;
-         *     detail views still go through the existing per-run endpoints
-         *     (``/runs/{id}/manifest``, ``/runs/{id}/normalized``, etc.).
-         */
-        RunSummaryModel: {
-            /**
-             * Algorithm Source Kind
-             * @enum {string}
-             */
-            algorithm_source_kind: "trusted_sample" | "user_provided" | "unknown";
-            /** Exit Clean */
-            exit_clean: boolean | null;
-            /** Exit Code */
-            exit_code: number | null;
-            /** Finished At Ms */
-            finished_at_ms: number | null;
-            /** Is Clean */
-            is_clean: boolean | null;
-            /** Lean Error Categories */
-            lean_error_categories: string[];
-            /** Requested End Ms Utc */
-            requested_end_ms_utc: number | null;
-            /** Requested Start Ms Utc */
-            requested_start_ms_utc: number | null;
-            /** Run Id */
-            run_id: string;
-            /** Started At Ms */
-            started_at_ms: number | null;
-            /** Symbol */
-            symbol: string | null;
         };
         /**
          * RunTrade
@@ -24450,37 +17959,6 @@ export interface components {
             removed_count: number;
         };
         /**
-         * SanitizeRequest
-         * @description Request schema for the standalone /api/sanitize endpoint
-         */
-        SanitizeRequest: {
-            /**
-             * Data
-             * @description List of market data records to sanitize
-             */
-            data: Record<string, never>[];
-            /**
-             * Quantile
-             * @description Quantile threshold for outlier removal
-             * @default 0.99
-             */
-            quantile?: number;
-        };
-        /**
-         * SanitizeResponse
-         * @description Response schema for the standalone /api/sanitize endpoint
-         */
-        SanitizeResponse: {
-            /** Data */
-            data: Record<string, never>[];
-            /** Error */
-            error?: string | null;
-            /** Success */
-            success: boolean;
-            /** Summary */
-            summary: Record<string, never>;
-        };
-        /**
          * SanitizedDataResponse
          * @description Typed response for the Python-to-.NET aggregate-bars boundary.
          */
@@ -24496,141 +17974,6 @@ export interface components {
             summary: components["schemas"]["SanitizationSummary"];
             /** Ticker */
             ticker: string;
-        };
-        /**
-         * ScenarioGrid
-         * @description Defines the grid of scenarios to evaluate.
-         *
-         *     A scenario is a (spot, time, iv-shift) triple. The default is a
-         *     1×1×1 grid that evaluates current state only — the "live Greeks"
-         *     use case. To compute a what-if surface, expand any of the three axes.
-         */
-        ScenarioGrid: {
-            /**
-             * Iv Shifts
-             * @description IV shifts as additive deltas (0.0 = current IV, 0.05 = +5 vol points)
-             */
-            iv_shifts?: number[];
-            /**
-             * Spot Shocks
-             * @description Spot shocks as fractional moves from current spot (e.g. -0.05 = spot drops 5%, 0.0 = current, 0.05 = spot rises 5%)
-             */
-            spot_shocks?: number[];
-            /**
-             * Time Shifts Days
-             * @description Time shifts in calendar days from now (0.0 = now, +7 = one week forward)
-             */
-            time_shifts_days?: number[];
-        };
-        /**
-         * ScenarioPoint
-         * @description Aggregate result for one (spot, time, iv) scenario point.
-         *
-         *     Aggregates apply the position quantity and contract multiplier.
-         *     For a 1-contract long ATM call with delta=0.5, the aggregate delta
-         *     is `0.5 * 1 * 100 = 50`.
-         */
-        ScenarioPoint: {
-            /**
-             * Aggregate Delta
-             * @description Sum of (per-share delta * quantity * multiplier)
-             * @default 0
-             */
-            aggregate_delta?: number;
-            /**
-             * Aggregate Gamma
-             * @default 0
-             */
-            aggregate_gamma?: number;
-            /**
-             * Aggregate Rho
-             * @default 0
-             */
-            aggregate_rho?: number;
-            /**
-             * Aggregate Theta
-             * @default 0
-             */
-            aggregate_theta?: number;
-            /**
-             * Aggregate Vega
-             * @default 0
-             */
-            aggregate_vega?: number;
-            /** Iv Shift */
-            iv_shift: number;
-            /** Legs */
-            legs?: components["schemas"]["LegGreeks"][];
-            /**
-             * Portfolio Pnl
-             * @description Aggregate P&L vs entry (sum over legs)
-             */
-            portfolio_pnl: number;
-            /**
-             * Spot
-             * @description Effective spot at this scenario point
-             */
-            spot: number;
-            /** Spot Shock */
-            spot_shock: number;
-            /** Time Shift Days */
-            time_shift_days: number;
-        };
-        /**
-         * ScenarioRequest
-         * @description Request a portfolio scenario evaluation.
-         *
-         *     `as_of_ms` is the evaluation timestamp; it determines TTM via
-         *     (expiration_ms - as_of_ms). The .NET caller passes `now()` for live
-         *     Greeks; passes a specific timestamp for what-if at a future date.
-         */
-        ScenarioRequest: {
-            /**
-             * As Of Ms
-             * @description Evaluation timestamp (int64 ms UTC)
-             */
-            as_of_ms: number;
-            /**
-             * Dividend Yield
-             * @default 0
-             */
-            dividend_yield?: number;
-            grid?: components["schemas"]["ScenarioGrid"];
-            /** Positions */
-            positions: (components["schemas"]["StockPosition"] | components["schemas"]["OptionPosition"])[];
-            /**
-             * Risk Free Rate
-             * @default 0.043
-             */
-            risk_free_rate?: number;
-            /**
-             * Spot Price
-             * @description Current underlying spot
-             */
-            spot_price: number;
-        };
-        /**
-         * ScenarioResponse
-         * @description Full response: every scenario point with per-leg breakdown.
-         */
-        ScenarioResponse: {
-            /** As Of Ms */
-            as_of_ms: number;
-            /** Dividend Yield */
-            dividend_yield: number;
-            /** Points */
-            points: components["schemas"]["ScenarioPoint"][];
-            /** Risk Free Rate */
-            risk_free_rate: number;
-            /** Spot Price */
-            spot_price: number;
-            /** Symbol */
-            symbol: string;
-            /**
-             * Warnings
-             * @description Soft warnings (e.g., 'leg X expired before scenario time T, treated as intrinsic'). These do not invalidate results; they surface assumptions.
-             */
-            warnings?: string[];
         };
         /**
          * SealedBotProgram
@@ -24733,7 +18076,7 @@ export interface components {
         };
         /**
          * SelectionResponse
-         * @description Staged **and** effective, always both (contract §4).
+         * @description Staged **and** effective, always both.
          *
          *     ``effective_acknowledged_at_ms`` is a historical acknowledgement: it says a
          *     worker once bound this revision, never that one is running now.
@@ -24764,112 +18107,6 @@ export interface components {
             /** Staged Revision */
             staged_revision: number | null;
         };
-        /** SeriesResponse */
-        SeriesResponse: {
-            /** N Snapshots */
-            n_snapshots: number;
-            /** Snapshots */
-            snapshots: components["schemas"]["RecordedSnapshotItem"][];
-            /** Ticker */
-            ticker: string;
-        };
-        /** SessionCapability */
-        SessionCapability: {
-            /**
-             * Data
-             * @enum {string}
-             */
-            data: "live" | "delayed" | "frozen" | "delayed_frozen" | "none";
-            /** Evidence Codes */
-            evidence_codes?: number[];
-            /** Order Eligible Outside Rth */
-            order_eligible_outside_rth: boolean;
-            /**
-             * Tradeable
-             * @enum {string}
-             */
-            tradeable: "yes" | "needs_enablement" | "no";
-            /** Window Today Close Ms */
-            window_today_close_ms?: number | null;
-            /** Window Today Open Ms */
-            window_today_open_ms?: number | null;
-        };
-        /** SessionDataCapability */
-        SessionDataCapability: {
-            /** Account Id */
-            account_id: string;
-            /**
-             * Account Mode
-             * @enum {string}
-             */
-            account_mode: "live" | "paper";
-            /** Con Id */
-            con_id: number;
-            /** Probed At Ms */
-            probed_at_ms: number;
-            /** Raw Evidence */
-            raw_evidence?: components["schemas"]["IbkrApiEvidenceEvent"][];
-            /** Sessions */
-            sessions: {
-                [key: string]: components["schemas"]["SessionCapability"];
-            };
-            /** Symbol */
-            symbol: string;
-            /** Time Zone Id */
-            time_zone_id: string;
-        };
-        /**
-         * SessionFeeReconciliation
-         * @description Predicted fees for one ET trade date against the FEE activities Alpaca posted.
-         */
-        SessionFeeReconciliation: {
-            /** Account Id */
-            account_id: string | null;
-            /** Broker */
-            broker: string;
-            /** Delta Usd */
-            delta_usd: number | null;
-            /** Fill Count */
-            fill_count: number;
-            /**
-             * Fill Window End Ms
-             * Format: int64
-             */
-            fill_window_end_ms: number;
-            /**
-             * Fill Window Start Ms
-             * Format: int64
-             */
-            fill_window_start_ms: number;
-            /** Observed Activity Count */
-            observed_activity_count: number;
-            /**
-             * Observed At Ms
-             * Format: int64
-             */
-            observed_at_ms: number;
-            /** Observed Total Usd */
-            observed_total_usd: number | null;
-            predicted: components["schemas"]["PredictedSessionFees"] | null;
-            /** Sell Fill Count */
-            sell_fill_count: number;
-            /**
-             * Session Open Ms
-             * Format: int64
-             */
-            session_open_ms: number;
-            /** Tolerance Usd */
-            tolerance_usd: number | null;
-            /** Unpinned Components */
-            unpinned_components: string[];
-            /**
-             * Verdict
-             * @enum {string}
-             */
-            verdict: "within_tolerance" | "drift" | "pending" | "unobserved" | "no_fills" | "rate_unpinned" | "unavailable";
-            /** Why */
-            why: string;
-        };
         /** SetHoldings */
         SetHoldings: {
             /** Fraction */
@@ -24898,47 +18135,6 @@ export interface components {
              * @constant
              */
             state: "restart_scheduled";
-        };
-        /**
-         * SharpeCiResponse
-         * @description Lo (2002) confidence interval for the annualised Sharpe ratio.
-         */
-        SharpeCiResponse: {
-            /**
-             * Ci Lower
-             * @default 0
-             */
-            ci_lower?: number;
-            /**
-             * Ci Upper
-             * @default 0
-             */
-            ci_upper?: number;
-            /**
-             * Confidence Level
-             * @default 0.95
-             */
-            confidence_level?: number;
-            /**
-             * N Eff Used
-             * @default 0
-             */
-            n_eff_used?: number;
-            /**
-             * Point
-             * @default 0
-             */
-            point?: number;
-            /**
-             * Se
-             * @default 0
-             */
-            se?: number;
-            /**
-             * Valid
-             * @default false
-             */
-            valid?: boolean;
         };
         /** SharpePnlDivergencePointResponse */
         SharpePnlDivergencePointResponse: {
@@ -24994,8 +18190,8 @@ export interface components {
          * SignalBarIntegrityContract
          * @description Duplicate/gap/out-of-order, watermark, and session-close ownership facts.
          *
-         *     PRD §11.1 lists these beside ``revision_policy`` (``SignalDataContract``)
-         *     as sealed identity, not runtime evidence. Today every field is a single
+         *     These sit beside ``revision_policy`` (``SignalDataContract``) as sealed
+         *     identity, not runtime evidence. Today every field is a single
          *     system-wide policy — not a per-program choice — enforced by two modules
          *     outside this schema:
          *
@@ -25011,7 +18207,7 @@ export interface components {
          *       owns bucket closing: it fires every complete bucket on the bar that
          *       closes it, so a session's trailing bucket is flushed exactly at the
          *       decision session's close rather than left stranded until the next
-         *       session's bars arrive (FR-011, #2303).
+         *       session's bars arrive (#2303).
          *
          *     A second policy would need its own Literal member and a per-program field
          *     here, not a silent default change on these.
@@ -25047,37 +18243,6 @@ export interface components {
              * @constant
              */
             session_close_ownership?: "single_router_forced_flush_at_session_close";
-        };
-        /**
-         * SignalBehaviorMetricsResponse
-         * @description Signal behavior analysis on active bars.
-         */
-        SignalBehaviorMetricsResponse: {
-            /**
-             * Avg Forward Return When Active
-             * @default 0
-             */
-            avg_forward_return_when_active?: number;
-            /**
-             * Avg Loss Return
-             * @default 0
-             */
-            avg_loss_return?: number;
-            /**
-             * Avg Win Return
-             * @default 0
-             */
-            avg_win_return?: number;
-            /**
-             * Hit Rate
-             * @default 0
-             */
-            hit_rate?: number;
-            /**
-             * Skewness Active Returns
-             * @default 0
-             */
-            skewness_active_returns?: number;
         };
         /**
          * SignalClockContract
@@ -25160,42 +18325,6 @@ export interface components {
             timestamp_contract?: "int64_ms_utc";
         };
         /**
-         * SignalDiagnosticsResponse
-         * @description Signal diagnostics.
-         */
-        SignalDiagnosticsResponse: {
-            /**
-             * Avg Abs Signal
-             * @default 0
-             */
-            avg_abs_signal?: number;
-            /**
-             * Pct Filtered By Threshold
-             * @default 0
-             */
-            pct_filtered_by_threshold?: number;
-            /**
-             * Pct Gated By Regime
-             * @default 0
-             */
-            pct_gated_by_regime?: number;
-            /**
-             * Pct Time Active
-             * @default 0
-             */
-            pct_time_active?: number;
-            /**
-             * Signal Mean
-             * @default 0
-             */
-            signal_mean?: number;
-            /**
-             * Signal Std
-             * @default 0
-             */
-            signal_std?: number;
-        };
-        /**
          * SignalEngineJobRequest
          * @description Body of POST /api/jobs-internal/signal-engine.
          *
@@ -25252,8 +18381,7 @@ export interface components {
          * SignalSeriesContract
          * @description One named signal series a program consumes off the sealed data contract.
          *
-         *     PRD §10.1/§11.1: "every signal series, field, and decision stream." A
-         *     program's ``data`` contract seals the *shared* provider/symbol/timeframe
+         *     A program's ``data`` contract seals the *shared* provider/symbol/timeframe
          *     pair every series reads from; this seals each named series drawn from
          *     that shared stream — e.g. ``ema_fast``, ``ema_slow``, and ``rsi`` all read
          *     ``field="close"`` off the same 15-minute decision bar. ``field`` also
@@ -25261,7 +18389,7 @@ export interface components {
          *     ``spy_strategy_a``'s ADX) that reads the full high/low/close swing
          *     rather than a single scalar -- ``field="close"`` would misdescribe what
          *     such a series actually consumes. ``warmup_bars`` is
-         *     the series' own ``is_ready`` threshold (PRD §11.1 "readiness"): the
+         *     the series' own ``is_ready`` threshold: the
          *     ``app.engine.indicators`` base class exposes ``is_ready`` as
          *     ``samples >= period``, so an EMA's ``warmup_bars`` equals its period; RSI
          *     overrides this to ``period + 1`` (one extra sample for the first delta);
@@ -25281,171 +18409,6 @@ export interface components {
             period: number;
             /** Warmup Bars */
             warmup_bars: number;
-        };
-        /** SignalsRequest */
-        SignalsRequest: {
-            /**
-             * Bar Size
-             * @default 1d
-             * @enum {string}
-             */
-            bar_size?: "15m" | "1d";
-            /** Bars */
-            bars: components["schemas"]["BarPayload"][];
-            /**
-             * Confidence Floor
-             * @description Hard-gate floor: signals are forced to 0 where confidence < floor.
-             * @default 0.1
-             */
-            confidence_floor?: number;
-            /** Estimators */
-            estimators?: string[];
-            /**
-             * Iv Series
-             * @description Optional [{ts, iv30, health_score?, variance_contribution_synthetic?}] history. iv30 must be ACT/365 (the solver's native basis); the router converts to TRD/252 before VRP. When health_score and variance_contribution_synthetic are supplied, the response includes per-bar confidence and the VRP signal is gated by it (Step E of IV-ownership plan).
-             */
-            iv_series?: Record<string, never>[] | null;
-            /**
-             * Lookback
-             * @default 252
-             */
-            lookback?: number;
-            /**
-             * Rule
-             * @default vrp_zscore
-             * @constant
-             */
-            rule?: "vrp_zscore";
-            /**
-             * Session
-             * @description Session for the HF RV estimator. ETH = 04:00-20:00 ET (default), RTH = 09:30-16:00 ET.
-             * @default ETH
-             * @enum {string}
-             */
-            session?: "ETH" | "RTH";
-            /** Symbol */
-            symbol: string;
-            /**
-             * Tenor Days
-             * @default 30
-             */
-            tenor_days?: number;
-            /**
-             * Threshold
-             * @default 1
-             */
-            threshold?: number;
-            /** Windows */
-            windows?: number[];
-        };
-        /** SignalsResponse */
-        SignalsResponse: {
-            /** Signal Oracle */
-            signal_oracle: number[];
-            /** Signal Realtime */
-            signal_realtime: number[];
-            /** Symbol */
-            symbol: string;
-            /** Ts */
-            ts: number[];
-            /** Vrp Z */
-            vrp_z: (number | null)[];
-        };
-        /**
-         * SliceDiagnosticsResponse
-         * @description Diagnostics for a single expiry slice.
-         */
-        SliceDiagnosticsResponse: {
-            /**
-             * Arbitrage Passed
-             * @default true
-             */
-            arbitrage_passed?: boolean;
-            /**
-             * Butterfly Violations
-             * @default 0
-             */
-            butterfly_violations?: number;
-            /** Fit Method */
-            fit_method: string;
-            /** Fit Rmse */
-            fit_rmse: number;
-            /** N Contracts */
-            n_contracts: number;
-            /** N Failed */
-            n_failed: number;
-            /** N Solved */
-            n_solved: number;
-            /** Ttm */
-            ttm: number;
-        };
-        /**
-         * SmilePointModel
-         * @description A single point on a fitted smile curve.
-         */
-        SmilePointModel: {
-            /**
-             * Iv
-             * @description Implied volatility
-             */
-            iv: number;
-            /**
-             * X
-             * @description Moneyness value (K/S or log-moneyness)
-             */
-            x: number;
-        };
-        /**
-         * SmileSliceResponse
-         * @description A single expiry slice with fitted and market points.
-         */
-        SmileSliceResponse: {
-            /**
-             * Dte Days
-             * @description Days to expiry
-             */
-            dte_days: number;
-            /**
-             * Expiry Date
-             * @description Expiry date (YYYY-MM-DD)
-             */
-            expiry_date: string;
-            /**
-             * Fitted
-             * @description Fitted smile points
-             */
-            fitted: components["schemas"]["SmilePointModel"][];
-            /**
-             * Forward
-             * @description Forward price
-             */
-            forward: number;
-            /**
-             * Market
-             * @description Market quotes
-             */
-            market: components["schemas"]["MarketPointModel"][];
-            /**
-             * Ttm
-             * @description Time to maturity in years
-             */
-            ttm: number;
-        };
-        /**
-         * SmilesResponse
-         * @description Collection of smile slices.
-         */
-        SmilesResponse: {
-            /**
-             * Slices
-             * @description Smile slices
-             */
-            slices: components["schemas"]["SmileSliceResponse"][];
-            /**
-             * X Label
-             * @description X-axis label (log_moneyness, moneyness, strike)
-             */
-            x_label: string;
         };
         /**
          * SnapshotBar
@@ -25555,8 +18518,7 @@ export interface components {
          * SpecTradeResponse
          * @description Single trade emitted by a spec backtest.
          *
-         *     Timestamps are ``int64 ms UTC`` per the repo-wide wire-format rule
-         *     (see ``.claude/rules/numerical-rigor.md`` § "Timestamp rigor"). UI
+         *     Timestamps are ``int64 ms UTC`` on the wire. UI
          *     callers convert to local-time strings at the display boundary; no
          *     other layer should be reading these fields as strings.
          */
@@ -25586,79 +18548,6 @@ export interface components {
             signal_reason?: string;
             /** Trade Number */
             trade_number: number;
-        };
-        /**
-         * Stage0FailureResponse
-         * @description A single Stage 0 kill criterion that the signal failed.
-         */
-        Stage0FailureResponse: {
-            /**
-             * Criterion Name
-             * @default
-             */
-            criterion_name?: string;
-            /**
-             * Message
-             * @default
-             */
-            message?: string;
-            /**
-             * Threshold Repr
-             * @default
-             */
-            threshold_repr?: string;
-            /**
-             * Value
-             * @default 0
-             */
-            value?: number;
-        };
-        /**
-         * Stage0RejectionResponse
-         * @description Stage 0 kill-switch evaluation.
-         */
-        Stage0RejectionResponse: {
-            /**
-             * Failed Criteria
-             * @default []
-             */
-            failed_criteria?: components["schemas"]["Stage0FailureResponse"][];
-            /**
-             * Rejected
-             * @default false
-             */
-            rejected?: boolean;
-        };
-        /**
-         * StageAdvanceCriterionResponse
-         * @description A single requirement to advance from the current stage.
-         */
-        StageAdvanceCriterionResponse: {
-            /**
-             * Current Value
-             * @default 0
-             */
-            current_value?: number;
-            /**
-             * Description
-             * @default
-             */
-            description?: string;
-            /**
-             * Met
-             * @default false
-             */
-            met?: boolean;
-            /**
-             * Name
-             * @default
-             */
-            name?: string;
-            /**
-             * Required Repr
-             * @default
-             */
-            required_repr?: string;
         };
         /**
          * StartupJoinView
@@ -25700,28 +18589,8 @@ export interface components {
             state: "waiting_for_stream" | "filling" | "history_joined" | "ready" | "refused";
         };
         /**
-         * StaticAction
-         * @description A deliberately inert action example for the static gallery.
-         */
-        StaticAction: {
-            /**
-             * Availability
-             * @enum {string}
-             */
-            availability: "available" | "blocked" | "terminal";
-            /** Explanation */
-            explanation: string;
-            /** Label */
-            label: string;
-            /**
-             * Tone
-             * @enum {string}
-             */
-            tone: "neutral" | "verified" | "active" | "caution" | "blocked";
-        };
-        /**
          * StationApplicability
-         * @description One station's applicability for this broker/mode (§4, §7).
+         * @description One station's applicability for this broker/mode.
          *
          *     ``applicable=False`` renders the station in the rail's fifth state
          *     (``not_applicable``); Angular never guesses which stations a broker has.
@@ -25741,7 +18610,7 @@ export interface components {
         };
         /**
          * StationView
-         * @description One of the six transaction-rail stations (§7.1).
+         * @description One of the six transaction-rail stations.
          *
          *     ``state`` is one of the five states; ``blocker`` is populated only when
          *     ``state == "blocked"`` (carries the reused OperatorBlocker contract).
@@ -25795,35 +18664,6 @@ export interface components {
             underlying: string;
         };
         /**
-         * StockPosition
-         * @description A long or short stock position.
-         */
-        StockPosition: {
-            /**
-             * Entry Price
-             * @description Avg entry price
-             */
-            entry_price: number;
-            /**
-             * Instrument
-             * @default stock
-             * @constant
-             */
-            instrument?: "stock";
-            /**
-             * Leg Id
-             * @description Optional caller-supplied identifier echoed in the response
-             */
-            leg_id?: string | null;
-            /**
-             * Quantity
-             * @description Net quantity (negative for short)
-             */
-            quantity: number;
-            /** Symbol */
-            symbol: string;
-        };
-        /**
          * StockSnapshotRequest
          * @description Request schema for single stock ticker snapshot
          */
@@ -25842,37 +18682,6 @@ export interface components {
             /** Error */
             error?: string | null;
             snapshot?: components["schemas"]["StockTickerSnapshot"] | null;
-            /** Success */
-            success: boolean;
-        };
-        /**
-         * StockSnapshotsRequest
-         * @description Request schema for multiple stock ticker snapshots
-         */
-        StockSnapshotsRequest: {
-            /**
-             * Tickers
-             * @description List of tickers. If omitted, returns all.
-             */
-            tickers?: string[] | null;
-        };
-        /**
-         * StockSnapshotsResponse
-         * @description Response for multiple stock ticker snapshots
-         */
-        StockSnapshotsResponse: {
-            /**
-             * Count
-             * @default 0
-             */
-            count?: number;
-            /** Error */
-            error?: string | null;
-            /**
-             * Snapshots
-             * @default []
-             */
-            snapshots?: components["schemas"]["StockTickerSnapshot"][];
             /** Success */
             success: boolean;
         };
@@ -25897,7 +18706,7 @@ export interface components {
          * StopRunRequest
          * @description ``lifecycle_run_id`` is required (corrective foundation slice): Stop
          *     is no longer resolved from the currently active run, since that made a
-         *     lost response unrecoverable — see the pinned contract's §3a.
+         *     lost response unrecoverable — see ADR 0035's binding annex §3a.
          */
         StopRunRequest: {
             /** Lifecycle Run Id */
@@ -25983,7 +18792,7 @@ export interface components {
             price_range_pct?: number;
             /**
              * Risk Free Rate
-             * @description Risk-free rate (default ~4.3%)
+             * @description Annualized risk-free rate (omit for the Python default)
              * @default 0.043
              */
             risk_free_rate?: number;
@@ -26181,11 +18990,6 @@ export interface components {
             /** Params Schema */
             params_schema: Record<string, never>;
             /**
-             * Pine Available
-             * @default false
-             */
-            pine_available?: boolean;
-            /**
              * Recency Supported
              * @default false
              */
@@ -26261,56 +19065,6 @@ export interface components {
              * @description Strike price
              */
             strike: number;
-        };
-        /** StrategyLegInput */
-        StrategyLegInput: {
-            /**
-             * Expiration Date
-             * @description YYYY-MM-DD
-             */
-            expiration_date: string;
-            /**
-             * Iv
-             * @description Implied volatility (decimal)
-             */
-            iv: number;
-            /** Option Type */
-            option_type: string;
-            /** Position */
-            position: string;
-            /**
-             * Premium
-             * @default 0
-             */
-            premium?: number;
-            /**
-             * Quantity
-             * @default 1
-             */
-            quantity?: number;
-            /** Strike */
-            strike: number;
-        };
-        /** StrategyLegResult */
-        StrategyLegResult: {
-            /** D1 */
-            d1?: number | null;
-            /** D2 */
-            d2?: number | null;
-            /** Delta */
-            delta: number;
-            /** Engine */
-            engine: string;
-            /** Gamma */
-            gamma: number;
-            /** Price */
-            price: number;
-            /** Rho */
-            rho: number;
-            /** Theta */
-            theta: number;
-            /** Vega */
-            vega: number;
         };
         /**
          * StrategyParamsSchema
@@ -26472,7 +19226,7 @@ export interface components {
              * @default 0
              */
             slippage_per_share?: number;
-            /** @description Validated StrategySpec — see /api/spec-strategy/schema */
+            /** @description Validated StrategySpec */
             spec: components["schemas"]["StrategySpec-Input"];
             /**
              * Start Date
@@ -26747,22 +19501,6 @@ export interface components {
             /** Refreshed At Ms */
             refreshed_at_ms: number;
         };
-        /**
-         * StructuralBreakPointResponse
-         * @description A detected structural break in the IC series.
-         */
-        StructuralBreakPointResponse: {
-            /** Date */
-            date: string;
-            /** Ic After */
-            ic_after: number;
-            /** Ic Before */
-            ic_before: number;
-            /** Significant */
-            significant: boolean;
-            /** T Stat */
-            t_stat: number;
-        };
         /** Subtract */
         "Subtract-Input": {
             /**
@@ -26787,146 +19525,6 @@ export interface components {
             /** Right */
             right: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Output"] | components["schemas"]["DifferenceBps"];
         };
-        /**
-         * SurfaceBuildRequest
-         * @description Request to build an implied volatility surface.
-         */
-        SurfaceBuildRequest: {
-            /**
-             * Build Bid Ask
-             * @description Build separate bid/ask surfaces
-             * @default false
-             */
-            build_bid_ask?: boolean;
-            /**
-             * Dividend
-             * @description Dividend yield (continuous)
-             * @default 0
-             */
-            dividend?: number;
-            /**
-             * Eval Date
-             * @description Evaluation date (YYYY-MM-DD)
-             * @default
-             */
-            eval_date?: string;
-            /**
-             * @description Surface fitting method
-             * @default variance
-             */
-            method?: components["schemas"]["SurfaceMethodEnum"];
-            /**
-             * Min Contracts Per Slice
-             * @description Min contracts per expiry to include
-             * @default 5
-             */
-            min_contracts_per_slice?: number;
-            /**
-             * Options
-             * @description Option chain records
-             */
-            options: components["schemas"]["OptionRecord"][];
-            /**
-             * Rate
-             * @description Risk-free rate (continuous)
-             * @default 0.05
-             */
-            rate?: number;
-            /**
-             * Sabr Beta
-             * @description SABR beta (fixed parameter)
-             * @default 0.5
-             */
-            sabr_beta?: number;
-            /**
-             * Spot
-             * @description Current underlying price
-             */
-            spot: number;
-            /**
-             * Ticker
-             * @description Underlying ticker symbol
-             */
-            ticker: string;
-        };
-        /**
-         * SurfaceBuildSummary
-         * @description Lightweight summary of a built surface.
-         */
-        SurfaceBuildSummary: {
-            /**
-             * Build Time Ms
-             * @description Build time in milliseconds
-             */
-            build_time_ms: number;
-            /**
-             * Cached
-             * @description Whether surface was loaded from cache
-             * @default false
-             */
-            cached?: boolean;
-            /**
-             * Date
-             * @description Build date (YYYY-MM-DD)
-             */
-            date: string;
-            /**
-             * Health Score
-             * @description Health score 0-100
-             */
-            health_score: number;
-            /**
-             * Method
-             * @description Fitting method used
-             */
-            method: string;
-            /**
-             * N Contracts Accepted
-             * @description Number of contracts accepted
-             */
-            n_contracts_accepted: number;
-            /**
-             * N Contracts Rejected
-             * @description Number rejected
-             */
-            n_contracts_rejected: number;
-            /**
-             * N Expiries
-             * @description Number of expiry slices
-             */
-            n_expiries: number;
-            /**
-             * Schema Version
-             * @description Schema version
-             * @default 1.0
-             */
-            schema_version?: string;
-            /**
-             * Spot
-             * @description Spot price at build time
-             */
-            spot: number;
-            /**
-             * Surface Id
-             * @description Opaque surface identifier
-             */
-            surface_id: string;
-            /**
-             * Ticker
-             * @description Underlying ticker
-             */
-            ticker: string;
-            /**
-             * Valid
-             * @description Whether surface is valid/usable
-             */
-            valid: boolean;
-        };
-        /**
-         * SurfaceMethodEnum
-         * @enum {string}
-         */
-        SurfaceMethodEnum: "variance" | "sabr" | "svi";
         /** SurvivalRule */
         "SurvivalRule-Input": {
             /** Action */
@@ -27053,241 +19651,6 @@ export interface components {
             symbol: string;
         };
         /**
-         * TargetMetadataResponse
-         * @description Audit trail of what the target pipeline actually computed.
-         */
-        TargetMetadataResponse: {
-            /**
-             * Bar Minutes
-             * @default 1
-             */
-            bar_minutes?: number;
-            /**
-             * Horizon Bars
-             * @default 15
-             */
-            horizon_bars?: number;
-            /**
-             * Horizon Minutes
-             * @default 15
-             */
-            horizon_minutes?: number;
-            /**
-             * Invalid Reason Counts
-             * @default {}
-             */
-            invalid_reason_counts?: {
-                [key: string]: number;
-            };
-            /**
-             * Target Name
-             * @default forward_log_return_15m
-             */
-            target_name?: string;
-            /**
-             * Timezone
-             * @default America/New_York
-             */
-            timezone?: string;
-            /**
-             * Total Count
-             * @default 0
-             */
-            total_count?: number;
-            /**
-             * Valid Count
-             * @default 0
-             */
-            valid_count?: number;
-            /**
-             * Valid Ratio
-             * @default 0
-             */
-            valid_ratio?: number;
-        };
-        /**
-         * TickerAddress
-         * @description Company address from ticker details
-         */
-        TickerAddress: {
-            /** Address1 */
-            address1?: string | null;
-            /** City */
-            city?: string | null;
-            /** Postal Code */
-            postal_code?: string | null;
-            /** State */
-            state?: string | null;
-        };
-        /**
-         * TickerBatchResult
-         * @description Per-ticker result in batch research.
-         */
-        TickerBatchResult: {
-            /**
-             * Data Points
-             * @default 0
-             */
-            data_points?: number;
-            /**
-             * Effective N
-             * @default 0
-             */
-            effective_n?: number;
-            /** Error */
-            error?: string | null;
-            /**
-             * Ic P Value
-             * @default 1
-             */
-            ic_p_value?: number;
-            /**
-             * Ic T Stat
-             * @default 0
-             */
-            ic_t_stat?: number;
-            /**
-             * Is Stationary
-             * @default false
-             */
-            is_stationary?: boolean;
-            /**
-             * Mean Ic
-             * @default 0
-             */
-            mean_ic?: number;
-            /**
-             * Nw P Value
-             * @default 1
-             */
-            nw_p_value?: number;
-            /**
-             * Nw T Stat
-             * @default 0
-             */
-            nw_t_stat?: number;
-            /**
-             * Passed Validation
-             * @default false
-             */
-            passed_validation?: boolean;
-            /** Ticker */
-            ticker: string;
-        };
-        /**
-         * TickerDetailRequest
-         * @description Request schema for fetching detailed overview of a single ticker
-         */
-        TickerDetailRequest: {
-            /**
-             * Ticker
-             * @description Stock ticker symbol
-             */
-            ticker: string;
-        };
-        /**
-         * TickerDetailResponse
-         * @description Response for detailed ticker overview
-         */
-        TickerDetailResponse: {
-            address?: components["schemas"]["TickerAddress"] | null;
-            /** Description */
-            description?: string | null;
-            /** Error */
-            error?: string | null;
-            /** Homepage Url */
-            homepage_url?: string | null;
-            /** List Date */
-            list_date?: string | null;
-            /** Market Cap */
-            market_cap?: number | null;
-            /**
-             * Name
-             * @default
-             */
-            name?: string;
-            /** Primary Exchange */
-            primary_exchange?: string | null;
-            /** Sic Description */
-            sic_description?: string | null;
-            /** Success */
-            success: boolean;
-            /**
-             * Ticker
-             * @default
-             */
-            ticker?: string;
-            /** Total Employees */
-            total_employees?: number | null;
-            /** Type */
-            type?: string | null;
-            /** Weighted Shares Outstanding */
-            weighted_shares_outstanding?: number | null;
-        };
-        /**
-         * TickerInfo
-         * @description Basic ticker info from the reference API
-         */
-        TickerInfo: {
-            /**
-             * Active
-             * @default true
-             */
-            active?: boolean;
-            /** Currency Name */
-            currency_name?: string | null;
-            /**
-             * Market
-             * @default
-             */
-            market?: string;
-            /**
-             * Name
-             * @default
-             */
-            name?: string;
-            /** Primary Exchange */
-            primary_exchange?: string | null;
-            /** Ticker */
-            ticker: string;
-            /**
-             * Type
-             * @default
-             */
-            type?: string;
-        };
-        /**
-         * TickerListRequest
-         * @description Request schema for fetching basic info for a list of tickers
-         */
-        TickerListRequest: {
-            /**
-             * Tickers
-             * @description List of ticker symbols
-             */
-            tickers: string[];
-        };
-        /**
-         * TickerListResponse
-         * @description Response for batch ticker info lookup
-         */
-        TickerListResponse: {
-            /**
-             * Count
-             * @default 0
-             */
-            count?: number;
-            /** Error */
-            error?: string | null;
-            /** Success */
-            success: boolean;
-            /**
-             * Tickers
-             * @default []
-             */
-            tickers?: components["schemas"]["TickerInfo"][];
-        };
-        /**
          * TimeInForce
          * @description How long an order stays working. S2 supports the two equity durations an
          *     operator needs for a resting order: ``DAY`` (expires at session close) and
@@ -27373,7 +19736,7 @@ export interface components {
          * TimelineTransitionKind
          * @enum {string}
          */
-        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_CORRECTED" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_REPLACED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "SIMULATION_SESSION_BASELINE" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
+        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_REPLACED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "SIMULATION_SESSION_BASELINE" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
         /** TimingCellResponse */
         TimingCellResponse: {
             /** Average Return */
@@ -27459,100 +19822,6 @@ export interface components {
             /** Symbol */
             symbol: string;
         };
-        /** TradeSimRunBody */
-        TradeSimRunBody: {
-            /** Bars */
-            bars: components["schemas"]["BarPayload"][];
-            /**
-             * Commission Per Unit
-             * @default 0.005
-             */
-            commission_per_unit?: number;
-            /**
-             * Instrument
-             * @default stock
-             * @enum {string}
-             */
-            instrument?: "stock" | "option";
-            /** Signals */
-            signals: Record<string, never>[];
-            /**
-             * Slippage Pct
-             * @default 0.0005
-             */
-            slippage_pct?: number;
-            /**
-             * Time Stop Bars
-             * @default 5
-             */
-            time_stop_bars?: number;
-        };
-        /**
-         * TraderDiagnosticView
-         * @description All Trader-lens meaning, authored by the fixture producer.
-         */
-        TraderDiagnosticView: {
-            /** Fill Summary */
-            fill_summary: string;
-            /** Headline */
-            headline: string;
-            /** Operation Summary */
-            operation_summary: string;
-            /** Price Context Label */
-            price_context_label: string;
-            /** Price Points */
-            price_points: components["schemas"]["PricePoint"][];
-            primary_action: components["schemas"]["StaticAction"];
-            /** Status Label */
-            status_label: string;
-            /**
-             * Status Tone
-             * @enum {string}
-             */
-            status_tone: "neutral" | "verified" | "active" | "caution" | "blocked";
-            /** Title */
-            title: string;
-            /** Truth Rows */
-            truth_rows: components["schemas"]["AuthoredValue"][];
-        };
-        /**
-         * TrainTestSplitResponse
-         * @description Chronological train/test split IC comparison.
-         */
-        TrainTestSplitResponse: {
-            /**
-             * Oos Retention
-             * @default 0
-             */
-            oos_retention?: number;
-            /**
-             * Oos Retention Label
-             * @default Unknown
-             */
-            oos_retention_label?: string;
-            /** Overfit Flag */
-            overfit_flag: boolean;
-            /** Test Days */
-            test_days: number;
-            /** Test End */
-            test_end: string;
-            /** Test Mean Ic */
-            test_mean_ic: number;
-            /** Test Start */
-            test_start: string;
-            /** Test T Stat */
-            test_t_stat: number;
-            /** Train Days */
-            train_days: number;
-            /** Train End */
-            train_end: string;
-            /** Train Mean Ic */
-            train_mean_ic: number;
-            /** Train Start */
-            train_start: string;
-            /** Train T Stat */
-            train_t_stat: number;
-        };
         /**
          * TrainingCandidateResult
          * @description Auditable train-window outcome for one parameter candidate.
@@ -27577,7 +19846,7 @@ export interface components {
         };
         /**
          * TransactionRail
-         * @description The six-station rail rendering one selected transaction (§7.1).
+         * @description The six-station rail rendering one selected transaction.
          */
         TransactionRail: {
             /** Stations */
@@ -27657,7 +19926,7 @@ export interface components {
             session?: ("regular" | "extended") | null;
             /**
              * Start Ms Utc
-             * @description Inclusive window start as int64 ms since Unix epoch UTC. Per .claude/rules/numerical-rigor.md, every wire timestamp is int64 ms UTC; ISO strings are not accepted.
+             * @description Inclusive window start as int64 ms since Unix epoch UTC. Every wire timestamp is int64 ms UTC; ISO strings are not accepted.
              */
             start_ms_utc: number;
             /**
@@ -27756,92 +20025,6 @@ export interface components {
             /** Ticker */
             ticker: string;
         };
-        /**
-         * UnifiedSnapshotItem
-         * @description A single item from the unified v3 snapshot
-         */
-        UnifiedSnapshotItem: {
-            /** Market Status */
-            market_status?: string | null;
-            /** Name */
-            name?: string | null;
-            session?: components["schemas"]["UnifiedSnapshotSession"] | null;
-            /** Ticker */
-            ticker?: string | null;
-            /** Type */
-            type?: string | null;
-        };
-        /**
-         * UnifiedSnapshotRequest
-         * @description Request schema for unified v3 snapshots
-         */
-        UnifiedSnapshotRequest: {
-            /**
-             * Limit
-             * @description Max results (default 10, max 250)
-             * @default 10
-             */
-            limit?: number;
-            /**
-             * Tickers
-             * @description Optional list of tickers to filter
-             */
-            tickers?: string[] | null;
-        };
-        /**
-         * UnifiedSnapshotResponse
-         * @description Response for unified v3 snapshots
-         */
-        UnifiedSnapshotResponse: {
-            /**
-             * Count
-             * @default 0
-             */
-            count?: number;
-            /** Error */
-            error?: string | null;
-            /**
-             * Results
-             * @default []
-             */
-            results?: components["schemas"]["UnifiedSnapshotItem"][];
-            /** Success */
-            success: boolean;
-        };
-        /**
-         * UnifiedSnapshotSession
-         * @description Session data from unified v3 snapshot
-         */
-        UnifiedSnapshotSession: {
-            /** Change */
-            change?: number | null;
-            /** Change Percent */
-            change_percent?: number | null;
-            /** Close */
-            close?: number | null;
-            /** High */
-            high?: number | null;
-            /** Low */
-            low?: number | null;
-            /** Open */
-            open?: number | null;
-            /** Previous Close */
-            previous_close?: number | null;
-            /** Price */
-            price?: number | null;
-            /** Volume */
-            volume?: number | null;
-        };
-        /**
-         * UnreadableFileResponse
-         * @description A data file that is on disk but its reader cannot decode (#2489, #2499).
-         */
-        UnreadableFileResponse: {
-            /** Path */
-            path: string;
-            /** Reason */
-            reason: string;
-        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -27850,37 +20033,6 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
-        };
-        /**
-         * ValidationScreenResponse
-         * @description One of the four screens (statistical / economic / OOS / multiple-testing).
-         */
-        ValidationScreenResponse: {
-            /**
-             * Description
-             * @default
-             */
-            description?: string;
-            /**
-             * Failure Reasons
-             * @default []
-             */
-            failure_reasons?: string[];
-            /**
-             * Name
-             * @default
-             */
-            name?: string;
-            /**
-             * Passed
-             * @default false
-             */
-            passed?: boolean;
-            /**
-             * Required For Stage1
-             * @default false
-             */
-            required_for_stage1?: boolean;
         };
         /** ValidationSummary */
         ValidationSummary: {
@@ -28113,73 +20265,6 @@ export interface components {
             walk_forward_id: string;
             /** Warnings */
             warnings?: string[];
-        };
-        /**
-         * WalkForwardResultResponse
-         * @description Aggregated walk-forward validation results.
-         */
-        WalkForwardResultResponse: {
-            alpha_decay?: components["schemas"]["AlphaDecayStatsResponse"] | null;
-            /**
-             * Best Window Sharpe
-             * @default 0
-             */
-            best_window_sharpe?: number;
-            /**
-             * Combined Oos Cumulative Returns
-             * @default []
-             */
-            combined_oos_cumulative_returns?: number[];
-            /**
-             * Combined Oos Dates
-             * @default []
-             */
-            combined_oos_dates?: string[];
-            /**
-             * Mean Oos Sharpe
-             * @default 0
-             */
-            mean_oos_sharpe?: number;
-            /**
-             * Median Oos Sharpe
-             * @default 0
-             */
-            median_oos_sharpe?: number;
-            /**
-             * Oos Sharpe Trend Slope
-             * @default 0
-             */
-            oos_sharpe_trend_slope?: number;
-            /**
-             * Pct Windows Positive Sharpe
-             * @default 0
-             */
-            pct_windows_positive_sharpe?: number;
-            /**
-             * Pct Windows Profitable
-             * @default 0
-             */
-            pct_windows_profitable?: number;
-            /**
-             * Std Oos Sharpe
-             * @default 0
-             */
-            std_oos_sharpe?: number;
-            /**
-             * Total Oos Bars
-             * @default 0
-             */
-            total_oos_bars?: number;
-            /**
-             * Windows
-             * @default []
-             */
-            windows?: components["schemas"]["WalkForwardWindowResponse"][];
-            /**
-             * Worst Window Sharpe
-             * @default 0
-             */
-            worst_window_sharpe?: number;
         };
         /** WalkForwardStudyDetailResponse */
         WalkForwardStudyDetailResponse: {
@@ -28455,102 +20540,6 @@ export interface components {
             winner_changes: number;
         };
         /**
-         * WalkForwardWindowResponse
-         * @description Single walk-forward fold result.
-         */
-        WalkForwardWindowResponse: {
-            /**
-             * Best Threshold
-             * @default 0
-             */
-            best_threshold?: number;
-            /**
-             * Fold Index
-             * @default 0
-             */
-            fold_index?: number;
-            /**
-             * Mu
-             * @default 0
-             */
-            mu?: number;
-            /**
-             * Oos Cumulative Returns
-             * @default []
-             */
-            oos_cumulative_returns?: number[];
-            /**
-             * Oos Dates
-             * @default []
-             */
-            oos_dates?: string[];
-            /**
-             * Oos Gross Sharpe
-             * @default 0
-             */
-            oos_gross_sharpe?: number;
-            /**
-             * Oos Max Drawdown
-             * @default 0
-             */
-            oos_max_drawdown?: number;
-            /**
-             * Oos Net Return
-             * @default 0
-             */
-            oos_net_return?: number;
-            /**
-             * Oos Net Sharpe
-             * @default 0
-             */
-            oos_net_sharpe?: number;
-            /**
-             * Oos Total Trades
-             * @default 0
-             */
-            oos_total_trades?: number;
-            /**
-             * Oos Win Rate
-             * @default 0
-             */
-            oos_win_rate?: number;
-            /**
-             * Sigma
-             * @default 0
-             */
-            sigma?: number;
-            /**
-             * Test Bars
-             * @default 0
-             */
-            test_bars?: number;
-            /**
-             * Test End
-             * @default
-             */
-            test_end?: string;
-            /**
-             * Test Start
-             * @default
-             */
-            test_start?: string;
-            /**
-             * Train Bars
-             * @default 0
-             */
-            train_bars?: number;
-            /**
-             * Train End
-             * @default
-             */
-            train_end?: string;
-            /**
-             * Train Start
-             * @default
-             */
-            train_start?: string;
-        };
-        /**
          * WarmupJoinView
          * @description How the current run joined its retained bars to the present (#2314).
          *
@@ -28648,30 +20637,6 @@ export interface components {
              */
             timespan: "minute" | "hour" | "day";
         };
-        /** _CompareRequestModel */
-        _CompareRequestModel: {
-            /**
-             * Assert Fees
-             * @default false
-             */
-            assert_fees?: boolean;
-            /**
-             * Fill Price Atol
-             * @default 0.01
-             */
-            fill_price_atol?: number | string;
-            /** Left Trades */
-            left_trades: components["schemas"]["_TradeRecordModel"][];
-            /** Right Trades */
-            right_trades: components["schemas"]["_TradeRecordModel"][];
-        };
-        /** _CompareResponseModel */
-        _CompareResponseModel: {
-            /** Divergences */
-            divergences: components["schemas"]["_DivergenceModel"][];
-            /** First Divergence Ms Utc */
-            first_divergence_ms_utc?: number | null;
-        };
         /**
          * _DataPolicyModel
          * @description Pydantic shape for the canonical ``DataPolicy`` request block.
@@ -28723,25 +20688,6 @@ export interface components {
              * @constant
              */
             timezone?: "America/New_York";
-        };
-        /** _DivergenceModel */
-        _DivergenceModel: {
-            /** Category */
-            category: string;
-            /** Left Fill Price */
-            left_fill_price?: string | null;
-            /** Left Quantity */
-            left_quantity?: string | null;
-            /** Message */
-            message: string;
-            /** Ms Utc */
-            ms_utc?: number | null;
-            /** Right Fill Price */
-            right_fill_price?: string | null;
-            /** Right Quantity */
-            right_quantity?: string | null;
-            /** Trade Number */
-            trade_number?: number | null;
         };
         /** _EngineBarsSpecModel */
         _EngineBarsSpecModel: {
@@ -28864,39 +20810,6 @@ export interface components {
              */
             warmup_days?: number;
         };
-        /**
-         * _TradeRecordModel
-         * @description One closed round-trip trade in the persist-payload format.
-         *
-         *     Financial fields use ``Decimal`` to avoid IEEE 754 rounding errors in
-         *     cent-level divergence classification (FILL_PRICE_DRIFT / PNL_DRIFT).
-         *     Pydantic v2 serialises Decimal from JSON numbers or strings transparently.
-         */
-        _TradeRecordModel: {
-            /** Entry Ms Utc */
-            entry_ms_utc: number;
-            /** Entry Price */
-            entry_price: number | string;
-            /** Exit Ms Utc */
-            exit_ms_utc: number;
-            /** Exit Price */
-            exit_price: number | string;
-            /** Fee */
-            fee?: number | string | null;
-            /**
-             * Is Synthetic Exit
-             * @default false
-             */
-            is_synthetic_exit?: boolean;
-            /** Pnl */
-            pnl: number | string;
-            /** Quantity */
-            quantity: number | string;
-            /** Signal Reason */
-            signal_reason: string;
-            /** Trade Number */
-            trade_number: number;
-        };
         /** LowHighStepRangeRequest */
         app__routers__jobs__LowHighStepRangeRequest: {
             /** High */
@@ -28970,42 +20883,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-        };
-    };
-    get_account_pnl_attribution_api_accounts__account_id__pnl_attribution_get: {
-        parameters: {
-            query: {
-                from_ms: number;
-                to_ms: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccountPnlAttributionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -29147,44 +21024,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SanitizedDataResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    decision_evidence_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__decision_evidence_get: {
-        parameters: {
-            query?: {
-                after_seq?: number;
-                through_seq?: number | null;
-                limit?: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ClerkDecisionEvidencePage"];
                 };
             };
             /** @description Validation Error */
@@ -29464,116 +21303,6 @@ export interface operations {
             };
         };
     };
-    get_bot_timeline_api_alpaca_clerk_sqlite_accounts__account_id__bots__strategy_instance_id__timeline_get: {
-        parameters: {
-            query?: {
-                cursor?: string | null;
-                page_size?: number;
-                order_ref?: string | null;
-                effect_operation_id?: string | null;
-                uncertainty_id?: string | null;
-                execution_id?: string | null;
-                transition_kind?: components["schemas"]["TimelineTransitionKind"] | null;
-                sequence?: number | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TimelinePageResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_command_api_alpaca_clerk_sqlite_accounts__account_id__commands__command_id__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                command_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CommandResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reconcile_now_api_alpaca_clerk_sqlite_accounts__account_id__reconcile_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReconciliationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     check_account_recovery_action_api_alpaca_clerk_sqlite_accounts__account_id__recovery_actions_check_post: {
         parameters: {
             query?: never;
@@ -29827,206 +21556,6 @@ export interface operations {
             };
         };
     };
-    aggregate_broker_clerks_directory_api_broker_clerks_aggregate_directory_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_routing_receipts_audit_api_broker_clerks_audit_routing_receipts_get: {
-        parameters: {
-            query: {
-                since_ms: number;
-                clerk_id?: string | null;
-                limit?: number;
-                before_ms?: number | null;
-                before_correlation_id?: string | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    bars_5s_snapshot_endpoint_api_broker_bars_5s_snapshot_get: {
-        parameters: {
-            query: {
-                symbol: string;
-                since_ms?: number | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IbkrBarsSnapshot"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    bars_snapshot_endpoint_api_broker_bars_snapshot_get: {
-        parameters: {
-            query: {
-                symbol: string;
-                since_ms?: number | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IbkrBarsSnapshot"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_broker_capability_api_broker_capability_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerCapabilityReadResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    probe_broker_capability_api_broker_capability_probe_post: {
-        parameters: {
-            query?: {
-                symbols?: string;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerCapabilityProbeResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     connect_endpoint_api_broker_connect_post: {
         parameters: {
             query?: never;
@@ -30045,37 +21574,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IbkrConnectionHealth"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    data_plane_health_endpoint_api_broker_data_plane_health_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DataPlaneHealth"];
                 };
             };
             /** @description Validation Error */
@@ -30171,73 +21669,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IbkrConnectionHealth"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    ibkr_api_evidence_backfill_api_broker_ibkr_evidence_get: {
-        parameters: {
-            query?: {
-                after_seq?: number;
-                limit?: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IbkrApiEvidenceEvent"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    ibkr_api_evidence_stream_api_broker_ibkr_evidence_stream_get: {
-        parameters: {
-            query?: {
-                since_seq?: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -31013,106 +22444,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlpacaDeskStateResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_events_api_brokers_alpaca_configuration_events_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                before_event_id?: string | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConfigurationEventListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_owner_api_brokers_alpaca_configuration_owner_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OwnerResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    patch_owner_api_brokers_alpaca_configuration_owner_patch: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OwnerPatchRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OwnerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -32230,41 +23561,6 @@ export interface operations {
             };
         };
     };
-    get_authority_facts_scoped_api_brokers__broker__accounts__account_id__bots__sid__authority_facts_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotControlAuthorityFacts"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     read_deployment_budget_scoped_api_brokers__broker__accounts__account_id__bots__sid__budget_get: {
         parameters: {
             query?: never;
@@ -32324,43 +23620,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChartHistoryResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_live_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_live_get: {
-        parameters: {
-            query?: {
-                resolution?: "5s" | "1m";
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChartLiveResponse"];
                 };
             };
             /** @description Validation Error */
@@ -32870,43 +24129,6 @@ export interface operations {
             };
         };
     };
-    list_activities_api_brokers__broker__activities_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                after_ms?: number | null;
-                current_session?: boolean;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerActivity"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_activity_period_api_brokers__broker__activities_period_get: {
         parameters: {
             query: {
@@ -32943,42 +24165,6 @@ export interface operations {
             };
         };
     };
-    list_assets_api_brokers__broker__assets_get: {
-        parameters: {
-            query?: {
-                status?: ("active" | "inactive") | null;
-                limit?: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerAsset"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_lane_attention_api_brokers__broker__attention_get: {
         parameters: {
             query?: never;
@@ -32999,366 +24185,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LaneAttentionRead"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_bots_api_brokers__broker__bots_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotStatusView"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_catalog_unscoped_api_brokers__broker__bots_catalog_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotCatalogView"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_history_chart_unscoped_api_brokers__broker__bots__sid__chart_history_get: {
-        parameters: {
-            query: {
-                timeframe: "1m" | "15m" | "30m" | "1h" | "1d";
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChartHistoryResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_live_chart_unscoped_api_brokers__broker__bots__sid__chart_live_get: {
-        parameters: {
-            query?: {
-                resolution?: "5s" | "1m";
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ChartLiveResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_evidence_unscoped_api_brokers__broker__bots__sid__evidence_get: {
-        parameters: {
-            query?: {
-                transaction_ref?: string | null;
-                cursor?: string | null;
-                page_size?: number;
-                client_hint?: string | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EvidencePage"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_panel_unscoped_api_brokers__broker__bots__sid__panel_get: {
-        parameters: {
-            query?: {
-                transaction_ref?: string | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotPanelView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_bot_status_api_brokers__broker__bots__strategy_instance_id__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotStatusView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_current_run_api_brokers__broker__bots__strategy_instance_id__runs_current_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotRunView"];
-                };
-            };
-            /** @description The broker or strategy-instance run is unknown. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotRunReadNotFoundResponse"];
-                };
-            };
-            /** @description The strategy-instance identifier is invalid. */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BotRunReadRunnerErrorResponse"];
-                };
-            };
-        };
-    };
-    read_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                strategy_instance_id: string;
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunReplayReceipt"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_run_replay_receipt_api_brokers__broker__bots__strategy_instance_id__runs__run_id__replay_receipt_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                strategy_instance_id: string;
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunReplayReceipt"];
                 };
             };
             /** @description Validation Error */
@@ -33993,42 +24819,6 @@ export interface operations {
             };
         };
     };
-    fleet_bot_authority_facts_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__authority_facts_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     fleet_bot_budget_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__budget_get: {
         parameters: {
             query?: never;
@@ -34066,78 +24856,6 @@ export interface operations {
         };
     };
     fleet_bot_chart_history_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_history_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_bot_chart_live_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__chart_live_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_bot_decision_evidence_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__decision_evidence_get: {
         parameters: {
             query?: never;
             header?: {
@@ -34600,188 +25318,6 @@ export interface operations {
                 clerk_id: string;
                 account_id: string;
                 sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_custody_bot_snapshot_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__snapshot_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_custody_bot_timeline_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_bots__sid__timeline_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                sid: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_custody_command_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_commands__command_id__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-                command_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_custody_pnl_attribution_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_pnl_attribution_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_custody_reconcile_api_brokers__broker__clerks__clerk_id__accounts__account_id__custody_reconcile_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-                account_id: string;
             };
             cookie?: never;
         };
@@ -35713,40 +26249,6 @@ export interface operations {
             };
         };
     };
-    fleet_activities_read_api_brokers__broker__clerks__clerk_id__activities_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     fleet_activity_period_read_api_brokers__broker__clerks__clerk_id__activities_period_get: {
         parameters: {
             query?: never;
@@ -36075,112 +26577,6 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_configuration_events_api_brokers__broker__clerks__clerk_id__configuration_events_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_configuration_owner_read_api_brokers__broker__clerks__clerk_id__configuration_owner_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    fleet_configuration_owner_update_api_brokers__broker__clerks__clerk_id__configuration_owner_patch: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-                clerk_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": Record<string, never> | null;
-            };
-        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -37213,39 +27609,6 @@ export interface operations {
             };
         };
     };
-    get_clock_evidence_api_brokers__broker__clock_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerClockEvidence"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_deployment_fee_attribution_api_brokers__broker__fees_attribution_get: {
         parameters: {
             query?: {
@@ -37269,41 +27632,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeploymentFeeAttribution"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_session_fee_reconciliation_api_brokers__broker__fees_session_reconciliation_get: {
-        parameters: {
-            query: {
-                session_open_ms: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionFeeReconciliation"];
                 };
             };
             /** @description Validation Error */
@@ -37457,39 +27785,6 @@ export interface operations {
             };
         };
     };
-    clear_live_loss_hold_api_brokers__broker__live_envelope_loss_hold_clear_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LossHoldClearOutcome"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_live_verdict_api_brokers__broker__live_verdict_get: {
         parameters: {
             query?: never;
@@ -37510,43 +27805,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlpacaLiveVerdict"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_order_groups_api_brokers__broker__order_groups_get: {
-        parameters: {
-            query?: {
-                status?: ("open" | "closed" | "all") | null;
-                limit?: number | null;
-                after_ms?: number | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                broker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerOrderGroup"][];
                 };
             };
             /** @description Validation Error */
@@ -37766,59 +28024,6 @@ export interface operations {
             };
         };
     };
-    allowed_timeframes_api_chart_allowed_timeframes_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AllowedTimeframesRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_chart_indicators_api_chart_available_indicators_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
     chart_data_api_chart_data_post: {
         parameters: {
             query?: never;
@@ -37932,26 +28137,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_timeframes_api_chart_timeframes_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
         };
@@ -38238,138 +28423,6 @@ export interface operations {
             };
         };
     };
-    generate_dataset_csv_api_dataset_generate_csv_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DatasetGenerationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_dataset_metadata_api_dataset_generate_metadata_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DatasetGenerationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_dataset_metadata_csv_api_dataset_generate_metadata_csv_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DatasetGenerationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_dataset_zip_api_dataset_generate_zip_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DatasetGenerationRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     plan_dataset_api_dataset_plan_post: {
         parameters: {
             query?: never;
@@ -38423,125 +28476,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    download_validation_report_api_dataset_validation_report_download_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_download_validation_report_api_dataset_validation_report_download_post"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cross_asset_run_api_edge_cross_asset_run_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CrossAssetRunBody"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cross_asset_strategies_api_edge_cross_asset_strategies_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-        };
-    };
-    edge_score_series_api_edge_edge_score_series_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EdgeScoreBody"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -38621,37 +28555,6 @@ export interface operations {
             };
         };
     };
-    realized_vs_iv_coverage_api_edge_realized_vs_iv_coverage__symbol__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                symbol: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     realized_vs_iv_series_api_edge_realized_vs_iv_series_post: {
         parameters: {
             query?: never;
@@ -38672,138 +28575,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RealizedVsIvSeriesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    realized_vs_iv_signals_api_edge_realized_vs_iv_signals_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SignalsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SignalsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    regimes_cluster_api_edge_regimes_cluster_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RegimeClusterBody"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    regimes_strategy_fit_api_edge_regimes_strategy_fit_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RegimeStrategyFitBody"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    trade_sim_run_api_edge_trade_sim_run_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TradeSimRunBody"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -38850,48 +28621,6 @@ export interface operations {
             };
         };
     };
-    get_engine_bars_api_engine_bars_get: {
-        parameters: {
-            query: {
-                symbol: string;
-                /** @description YYYY-MM-DD (inclusive) */
-                from_date: string;
-                /** @description YYYY-MM-DD (inclusive) */
-                to_date: string;
-                /** @description Adjustment mode — selects the policy-keyed cache subtree */
-                adjusted?: boolean;
-                session?: "regular" | "extended";
-                /** @description Strategy timeframe unit (DataPolicy strategy_bars.timespan) */
-                timespan?: "minute" | "hour" | "day";
-                /** @description Strategy timeframe multiplier */
-                multiplier?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EngineBarsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_engine_chart_api_engine_chart_post: {
         parameters: {
             query?: never;
@@ -38912,45 +28641,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EngineChartResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_data_availability_api_engine_data_availability_get: {
-        parameters: {
-            query: {
-                symbol: string;
-                /** @description YYYY-MM-DD (inclusive) */
-                start: string;
-                /** @description YYYY-MM-DD (inclusive) */
-                end: string;
-                /** @description Resolution to check: 'minute' (per-day zips) or 'daily' */
-                resolution?: "minute" | "daily";
-                /** @description Adjustment mode — selects the policy-keyed cache subtree */
-                adjusted?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AvailabilityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -39022,61 +28712,6 @@ export interface operations {
             };
         };
     };
-    generate_pine_script_api_engine_strategies__name__pine_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                name: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": Record<string, never>;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/plain": string;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_static_fixtures_api_examples_alpaca_bot_control_fixtures_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AlpacaBotControlFixtureEnvelope"][];
-                };
-            };
-        };
-    };
     get_golden_fixtures_api_golden_fixtures_get: {
         parameters: {
             query?: never;
@@ -39093,106 +28728,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GoldenFixturesCatalog"];
-                };
-            };
-        };
-    };
-    calculate_indicators_api_indicators_calculate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CalculateIndicatorsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CalculateIndicatorsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_indicator_table_api_indicators_generate_table_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["IndicatorTableRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IndicatorTableResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_series_api_iv_recorder_series__ticker__get: {
-        parameters: {
-            query?: {
-                start_ms?: number | null;
-                end_ms?: number | null;
-            };
-            header?: never;
-            path: {
-                ticker: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SeriesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -39217,39 +28752,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SnapshotResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_rule_based_backtest_job_api_jobs_internal_backtest_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RuleBasedBacktestJobRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -39587,40 +29089,6 @@ export interface operations {
             };
         };
     };
-    get_calendar_blocked_dates_api_lean_sidecar_calendar_blocked_dates_get: {
-        parameters: {
-            query: {
-                /** @description Inclusive start date (YYYY-MM-DD) */
-                from: string;
-                /** @description Inclusive end date (YYYY-MM-DD) */
-                to: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_calendar_next_trading_day_open_api_lean_sidecar_calendar_next_trading_day_open_get: {
         parameters: {
             query: {
@@ -39640,39 +29108,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    compare_trades_api_lean_sidecar_compare_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["_CompareRequestModel"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["_CompareResponseModel"];
                 };
             };
             /** @description Validation Error */
@@ -39706,230 +29141,6 @@ export interface operations {
             };
         };
     };
-    get_runs_index_api_lean_sidecar_runs_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunIndexResponseModel"];
-                };
-            };
-        };
-    };
-    post_cross_reconcile_api_lean_sidecar_runs__run_id__cross_reconcile_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CrossReconcileRequestModel"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CrossEngineReconciliationReportModel"];
-                };
-            };
-            /** @description Caller-supplied strategy class is unknown / incompatible with the cross-run contract (must accept ``symbol`` kwarg), OR the LEAN-Lab manifest is missing fields the cross-runner needs (symbol, dates, starting cash). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Run not found, or run completed but no normalized result.json / manifest.json on disk. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_log_api_lean_sidecar_runs__run_id__log_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/plain": string;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_manifest_api_lean_sidecar_runs__run_id__manifest_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_normalized_api_lean_sidecar_runs__run_id__normalized_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_observations_api_lean_sidecar_runs__run_id__observations_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/plain": string;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    post_reconcile_api_lean_sidecar_runs__run_id__reconcile_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunReconciliationReportModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     post_trusted_run_api_lean_sidecar_trusted_runs_post: {
         parameters: {
             query?: never;
@@ -39959,108 +29170,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_feed_health_api_market_data_feed_health_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FeedHealth"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_market_dashboard_api_market_dashboard_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MarketDashboardResponse"];
-                };
-            };
-        };
-    };
-    get_market_holidays_api_market_holidays_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MarketHolidaysResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_market_status_api_market_status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MarketStatusResponse"];
                 };
             };
         };
@@ -40121,39 +29230,6 @@ export interface operations {
             };
         };
     };
-    list_options_contracts_api_options_contracts_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OptionsContractsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OptionsContractsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_options_expirations_api_options_expirations_post: {
         parameters: {
             query?: never;
@@ -40174,72 +29250,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OptionsExpirationsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    portfolio_live_greeks_api_portfolio_live_greeks_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LiveGreeksRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScenarioResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    portfolio_scenario_api_portfolio_scenario_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScenarioRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScenarioResponse"];
                 };
             };
             /** @description Validation Error */
@@ -40319,59 +29329,6 @@ export interface operations {
             };
         };
     };
-    quantlib_status_api_quantlib_status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QuantLibStatusResponse"];
-                };
-            };
-        };
-    };
-    quantlib_strategy_api_quantlib_strategy_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["QuantLibStrategyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QuantLibStrategyResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_backtest_runs_api_research_backtest_runs_get: {
         parameters: {
             query?: {
@@ -40435,35 +29392,6 @@ export interface operations {
             };
         };
     };
-    delete_backtest_run_api_research_backtest_runs__run_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     update_backtest_run_notes_api_research_backtest_runs__run_id__notes_patch: {
         parameters: {
             query?: never;
@@ -40495,79 +29423,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    build_iv_history_endpoint_api_research_build_iv_history_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BuildIvHistoryRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BuildIvHistoryResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_documentation_api_research_documentation_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-        };
-    };
-    list_features_api_research_features_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FeatureInfoResponse"][];
                 };
             };
         };
@@ -40629,76 +29484,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GoldenValidationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_golden_run_api_research_golden_validations__golden_run_id__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                golden_run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoldenValidationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    assess_golden_run_api_research_golden_validations__golden_run_id__applicability_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                golden_run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GoldenValidationApplicabilityRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoldenValidationApplicabilityResponse"];
                 };
             };
             /** @description Validation Error */
@@ -41067,99 +29852,6 @@ export interface operations {
             };
         };
     };
-    restore_recency_launch_api_research_recency_launches__launch_id__restore_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                launch_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecencyLaunchMutationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    soft_delete_recency_launch_api_research_recency_launches__launch_id__soft_delete_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                launch_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecencyLaunchMutationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    restore_recency_run_api_research_recency_runs__run_id__restore_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RecencyRunMutationResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     soft_delete_recency_run_api_research_recency_runs__run_id__soft_delete_post: {
         parameters: {
             query?: never;
@@ -41314,138 +30006,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DayCandlesNotCapturedResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_batch_options_endpoint_api_research_run_batch_options_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RunBatchOptionsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CrossSectionalReportResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_feature_research_endpoint_api_research_run_feature_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RunFeatureResearchRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunFeatureResearchResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_options_feature_endpoint_api_research_run_options_feature_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RunOptionsFeatureResearchRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunFeatureResearchResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_signal_engine_endpoint_api_research_run_signal_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RunSignalEngineRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunSignalEngineResponse"];
                 };
             };
             /** @description Validation Error */
@@ -41877,40 +30437,6 @@ export interface operations {
             };
         };
     };
-    get_trading_calendar_api_research_trading_calendar_get: {
-        parameters: {
-            query: {
-                /** @description Window start date, YYYY-MM-DD (inclusive) */
-                start: string;
-                /** @description Window end date, YYYY-MM-DD (inclusive) */
-                end: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WindowSummary"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_walk_forward_studies_api_research_walk_forward_studies_get: {
         parameters: {
             query?: {
@@ -42040,105 +30566,6 @@ export interface operations {
             };
         };
     };
-    sanitize_data_api_sanitize_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SanitizeRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SanitizeResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_stock_snapshots_api_snapshot_market_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["StockSnapshotsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StockSnapshotsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_market_movers_api_snapshot_movers_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MarketMoversRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MarketMoversResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_options_chain_snapshot_api_snapshot_options_chain_post: {
         parameters: {
             query?: never;
@@ -42192,39 +30619,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StockSnapshotResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_unified_snapshots_api_snapshot_unified_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UnifiedSnapshotRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnifiedSnapshotResponse"];
                 };
             };
             /** @description Validation Error */
@@ -42318,26 +30712,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_schema_api_spec_strategy_schema_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
                 };
             };
         };
@@ -42525,404 +30899,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SymbolCatalogEntry"][];
-                };
-            };
-        };
-    };
-    get_ticker_details_api_tickers_details_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TickerDetailRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TickerDetailResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_tickers_api_tickers_list_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TickerListRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TickerListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_related_tickers_api_tickers_related_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RelatedTickersRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RelatedTickersResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    batch_summary_api_volatility_surface_batch_summary_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BatchSummaryRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BatchSummaryResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    build_surface_api_volatility_surface_build_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SurfaceBuildRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SurfaceBuildSummary"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    build_from_csv_api_volatility_surface_build_from_csv_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BuildFromCsvRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SurfaceBuildSummary"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    build_from_ticker_api_volatility_surface_build_from_ticker_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BuildFromTickerRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SurfaceBuildSummary"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_diagnostics_api_volatility_surface__surface_id__diagnostics_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                surface_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DiagnosticsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    export_surface_api_volatility_surface__surface_id__export__format__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                surface_id: string;
-                format: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_grid_api_volatility_surface__surface_id__grid_get: {
-        parameters: {
-            query?: {
-                axis?: string;
-                n_strikes?: number;
-                /** @description Comma-separated DTE days */
-                dte_days?: string | null;
-            };
-            header?: never;
-            path: {
-                surface_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MatrixGridResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    query_surface_api_volatility_surface__surface_id__query_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                surface_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": Record<string, never>[];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_smiles_api_volatility_surface__surface_id__smiles_get: {
-        parameters: {
-            query?: {
-                axis?: string;
-            };
-            header?: never;
-            path: {
-                surface_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SmilesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

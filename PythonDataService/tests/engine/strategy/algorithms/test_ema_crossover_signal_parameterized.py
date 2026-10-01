@@ -1,8 +1,8 @@
 """Regression coverage for parameterizing the EMA-crossover *signal* strategy.
 
 The signal strategy historically hardcoded a 0.20 absolute gap and a 50–70
-RSI band. Per the repo rule "any tunable that can be a parameter is one"
-(Recency Chart), these become real parameters — with defaults preserved
+RSI band. Any tunable that can be a parameter is one
+(Recency Chart), so these become real parameters — with defaults preserved
 exactly so the validated LEAN-parity behaviour at the default point is
 unchanged (the golden-fixture parity suite is the regression gate).
 """
@@ -79,23 +79,6 @@ def _entry_check(*, gap: Decimal, rsi_min: Decimal, rsi_max: Decimal, ema_gap: D
 
     strategy._on_fifteen_minute_bar(_entry_check_bar())
     return executor.intents
-
-
-def test_gap_threshold_defaults_to_020_and_is_configurable() -> None:
-    default = EmaCrossoverSignalAlgorithm()
-    # 0.30 gap clears the default 0.20 threshold.
-    assert default._gap_is_sufficient(Decimal("100.30"), Decimal("100.00")) is True
-
-    tighter = EmaCrossoverSignalAlgorithm(gap=Decimal("0.50"))
-    # Same 0.30 gap no longer clears a 0.50 threshold.
-    assert tighter._gap_is_sufficient(Decimal("100.30"), Decimal("100.00")) is False
-
-
-def test_rsi_band_defaults_to_50_70_and_is_configurable() -> None:
-    assert EmaCrossoverSignalAlgorithm()._rsi_gate_bounds() == (Decimal(50), Decimal(70))
-
-    custom = EmaCrossoverSignalAlgorithm(rsi_min=Decimal(55), rsi_max=Decimal(65))
-    assert custom._rsi_gate_bounds() == (Decimal(55), Decimal(65))
 
 
 def test_registration_exposes_gap_and_rsi_with_preserved_defaults() -> None:

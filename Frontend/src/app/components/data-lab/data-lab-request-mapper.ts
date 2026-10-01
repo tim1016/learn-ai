@@ -4,7 +4,7 @@ import {
   DataLabWindowMsUtc,
 } from './data-lab-workspace-store';
 
-/* Pure request mappers (PRD §7.2 / §12): map DataLabWorkspaceStore state to
+/* Pure request mappers: map DataLabWorkspaceStore state to
  * the existing wire payloads — the chart request body DataLabChartComponent
  * posts to `/api/chart/data` today, and the generate-zip payload shaped like
  * `_buildGenerateZipPayload` in data-lab.component.ts. Dates are derived from
@@ -106,7 +106,8 @@ export interface OptionsCompanionWireConfig {
   include_vega: boolean;
   include_rho: boolean;
   include_discontinuity: boolean;
-  risk_free_rate: number;
+  /** Absent when the rate field is empty; Python fills its one default (#2764). */
+  risk_free_rate?: number;
   dividend_yield: number;
 }
 

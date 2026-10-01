@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import catalog from './fleet-operation-catalog.snapshot.json';
@@ -92,14 +90,5 @@ describe('operationUrl', () => {
     for (const operationId of Object.keys(catalog.operations) as OperationId[]) {
       expect(() => operationUrl(operationId, fullTarget)).not.toThrow();
     }
-  });
-
-  it('no service reaches an unscoped broker path that the catalog does not declare', () => {
-    // GET /api/brokers/{broker}/order-groups is mounted clerk-only and is not in
-    // the catalog, so in fleet posture it 404s. Its one caller was dead (#2103
-    // Task 11 deletes brokers.service.ts's listOrderGroups).
-    const servicePath = join(__dirname, '..', 'services', 'brokers.service.ts');
-    const source = readFileSync(servicePath, 'utf8');
-    expect(source).not.toContain('order-groups');
   });
 });

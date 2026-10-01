@@ -49,8 +49,7 @@ _NON_KEY_TRANSITION_COLUMNS = tuple(
 def default_lease_owner() -> str:
     """A unique-per-process token, not a bare PID — the OS can recycle a PID
     onto an unrelated later process, which a bare ``pid:N`` comparison would
-    mistake for the same live owner (open-pr-review-2026-08-05.md P1 "Lease
-    is never renewed", which this pairs with)."""
+    mistake for the same live owner."""
     return f"boot:{secrets.token_hex(8)}:pid:{os.getpid()}"
 
 
@@ -65,9 +64,7 @@ def account_paths(artifacts_root: Path, account_id: str) -> tuple[Path, Path]:
 def confined_account_file(artifacts_root: Path, account_id: str, filename: str) -> Path:
     """Confine the exact file path, not merely its containing account
     directory — a legitimate account directory can still contain a symlink
-    named ``filename`` escaping ``artifacts_root`` (open-pr-review-2026-08-05.md
-    P2, "`clerk.db` is not itself confined" / "mirror file is not itself
-    confined")."""
+    named ``filename`` escaping ``artifacts_root``."""
     safe_account_id = safe_path_component(account_id, "account_id")
     return resolve_contained_path(artifacts_root, "accounts", "alpaca", safe_account_id, filename)
 

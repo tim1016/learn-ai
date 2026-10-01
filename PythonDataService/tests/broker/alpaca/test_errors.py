@@ -1,4 +1,4 @@
-"""Tests for the Alpaca → contract error map (spec §9)."""
+"""Tests for the Alpaca → contract error map."""
 
 from __future__ import annotations
 

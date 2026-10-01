@@ -1,15 +1,13 @@
 """Build the single-file HTML dashboard for the data-divergence study.
 
-Sections rendered (per research plan §8):
+Sections rendered:
   1. Header summary — counts, date range, headline numbers.
   2. Feed comparison — Polygon vs TV OHLCV differences, with prose context.
   3. Indicator divergence matrix — heatmap + per-row table.
   4. Per-indicator overlay charts — TV vs vetted pandas vs learn-ai engine.
-  5. Trade-level impact — per strategy, 4-variant summary + category bars + P&L.
-  6. Methodology, variant definitions, and inline gotchas.
+  5. Methodology, variant definitions, and inline gotchas.
 
-Plotly.js is bundled inline so the HTML renders offline. See
-``docs/tv-polygon-validation-gotchas.md`` for the full gotchas catalog.
+Plotly.js is bundled inline so the HTML renders offline.
 """
 
 from __future__ import annotations
@@ -28,55 +26,6 @@ from plotly.io import to_html
 logger = logging.getLogger(__name__)
 
 CACHE_ROOT = Path("cache/divergence")
-
-
-# ----------------------------------------------------------------------
-# Variant naming — used everywhere so V-A/V-B/V-C/V-D never leak to UI
-# ----------------------------------------------------------------------
-
-# Short labels for compact spaces (table columns, chart x-axes).
-VARIANT_SHORT: dict[str, str] = {
-    "V-A": "TradingView",
-    "V-B": "Pandas (RTH)",
-    "V-C": "Engine (RTH)",
-    "V-D": "Engine (current)",
-}
-# Full descriptive labels for legends and prose.
-VARIANT_FULL: dict[str, str] = {
-    "V-A": "TradingView (reference)",
-    "V-B": "Vetted pandas, Polygon RTH bars",
-    "V-C": "learn-ai engine, Polygon RTH bars",
-    "V-D": "learn-ai engine, Polygon full session (current behavior)",
-}
-
-# Descriptive column names for trade-summary tables. Order matters.
-TRADE_METRIC_LABELS: dict[str, str] = {
-    "n_trades": "Total trades fired",
-    "wins": "Profitable trades",
-    "losses": "Losing trades",
-    "win_rate_pct": "Win rate (%)",
-    "net_pnl": "Net P&L per share ($)",
-    "avg_win": "Average winning trade ($)",
-    "avg_loss": "Average losing trade ($)",
-    "best": "Best trade ($)",
-    "worst": "Worst trade ($)",
-    "profit_factor": "Profit factor (gross win ÷ gross loss)",
-    "avg_bars_held": "Average bars held in a trade",
-}
-
-# Descriptive labels for trade-pairing buckets.
-CATEGORY_LABELS: dict[str, str] = {
-    "matched_aligned": "Same bar as TradingView",
-    "matched_shifted": "Within ±5 bars of TradingView",
-    "a_only_flip": "TradingView fired, this variant didn't",
-    "b_only_flip": "This variant fired, TradingView didn't",
-}
-CATEGORY_COLORS: dict[str, str] = {
-    "matched_aligned": "#2e7d32",
-    "matched_shifted": "#fbc02d",
-    "a_only_flip": "#ef5350",
-    "b_only_flip": "#1976d2",
-}
 
 
 # ----------------------------------------------------------------------
@@ -139,8 +88,8 @@ def _explain(title: str, body_html: str) -> str:
 # ----------------------------------------------------------------------
 
 
-def _executive_summary(merged: pd.DataFrame, trades_dir: Path) -> str:
-    """Top-of-page narrative: the four or five numbers anyone should walk away with."""
+def _executive_summary(merged: pd.DataFrame, matrix_path: Path) -> str:
+    """Top-of-page narrative: the few numbers anyone should walk away with."""
     m = merged.copy()
     m["et"] = m["time_utc"].dt.tz_convert("America/New_York")
     trading_days = int(m["et"].dt.date.nunique())
@@ -148,7 +97,6 @@ def _executive_summary(merged: pd.DataFrame, trades_dir: Path) -> str:
     median_diff_c = close_diff.median() * 100
 
     # Indicator median divergence floor — the best-case agreement post-warmup.
-    matrix_path = trades_dir.parent / f"matrix_{trades_dir.parent.name}.csv"
     indicator_median = "(not yet computed)"
     if matrix_path.exists():
         mx = pd.read_csv(matrix_path)
@@ -156,51 +104,6 @@ def _executive_summary(merged: pd.DataFrame, trades_dir: Path) -> str:
         if len(mx_native):
             indicator_median = f"{mx_native.median():.4f}"
             f"{mx_native.quantile(0.95):.3f}"
-
-    # Trade-alignment headline: S1 trades V-C vs V-D (if available).
-    headline_s1_current = headline_s1_fixed = "—"
-    delta_total_pnl = None
-    summary_path = trades_dir / "summary.csv"
-    match_path = trades_dir / "match_summary.csv"
-    if summary_path.exists() and match_path.exists():
-        s = pd.read_csv(summary_path)
-        mm = pd.read_csv(match_path)
-
-        # S1 alignment: matched_aligned_n / (matched_aligned_n + a_only_flip_n + matched_shifted_n)
-        s1_vd = mm[(mm["strategy"] == "s1_ema_crossover") & (mm["variant"] == "V-D")]
-        s1_vc = mm[(mm["strategy"] == "s1_ema_crossover") & (mm["variant"] == "V-C")]
-
-        def _pct(row: pd.DataFrame) -> str:
-            if row.empty:
-                return "—"
-            r = row.iloc[0]
-            denom = (
-                int(r.get("matched_aligned_n", 0)) + int(r.get("matched_shifted_n", 0)) + int(r.get("a_only_flip_n", 0))
-            )
-            if denom == 0:
-                return "—"
-            return f"{int(r.get('matched_aligned_n', 0)) / denom * 100:.0f}%"
-
-        headline_s1_current = _pct(s1_vd)
-        headline_s1_fixed = _pct(s1_vc)
-
-        # Total aggregate P&L change across all 3 strategies, V-D to V-C
-        s_piv = s.pivot_table(index="strategy", columns="variant", values="net_pnl")
-        if "V-C" in s_piv.columns and "V-D" in s_piv.columns:
-            delta_total_pnl = float(s_piv["V-C"].sum() - s_piv["V-D"].sum())
-
-    delta_str = f"{delta_total_pnl:+.2f}" if delta_total_pnl is not None else "—"
-
-    # Primary finding in prose
-    finding = (
-        "When learn-ai's engine is fed regular-trading-hours data only "
-        "(the &ldquo;after-fix&rdquo; variant), its trades line up with "
-        "TradingView at <b>" + headline_s1_fixed + "</b> on Strategy 1 and at "
-        "similarly high rates on Strategies 2 and 3. In its current form, "
-        "with extended-hours bars contaminating the indicators, alignment "
-        "drops to <b>" + headline_s1_current + "</b>. This dashboard "
-        "quantifies the cost and shows the specific code fix that closes the gap."
-    )
 
     cards = [
         (
@@ -218,21 +121,6 @@ def _executive_summary(merged: pd.DataFrame, trades_dir: Path) -> str:
             f"{indicator_median} median",
             "Our vetted formulas reproduce TradingView to within fractions of a cent.",
         ),
-        (
-            "Strategy 1 alignment with TV — current engine",
-            headline_s1_current,
-            "Share of TradingView's entry bars the current production code reproduces.",
-        ),
-        (
-            "Strategy 1 alignment with TV — after the RTH-filter fix",
-            headline_s1_fixed,
-            "Share after applying the 5-line code change in the Roadmap doc.",
-        ),
-        (
-            "Aggregate P&L change from the fix (3 strategies)",
-            f"${delta_str} / share",
-            "Net $/share change across all three study strategies over the window.",
-        ),
     ]
     cards_html = "<div class='summary-grid exec'>"
     for label, value, help_ in cards:
@@ -247,7 +135,6 @@ def _executive_summary(merged: pd.DataFrame, trades_dir: Path) -> str:
     <section id='exec-summary'>
       <h2 class='no-rule'>Executive summary</h2>
       <div class='exec-block'>
-        <p class='exec-finding'>{finding}</p>
         {cards_html}
       </div>
     </section>
@@ -262,10 +149,7 @@ def _section_nav() -> str:
         ("sec-feed", "2. Feed comparison"),
         ("sec-indicators", "3. Indicator agreement"),
         ("sec-overlays", "4. Overlay charts"),
-        ("sec-trades", "5. Trade impact"),
-        ("sec-worst", "6. Worst days"),
-        ("sec-eth", "7. ETH contamination"),
-        ("sec-methodology", "8. Methodology"),
+        ("sec-methodology", "5. Methodology"),
     ]
     links = " &nbsp;·&nbsp; ".join(f"<a href='#{aid}'>{html_mod.escape(label)}</a>" for aid, label in items)
     return f"<nav class='toc'>{links}</nav>"
@@ -717,466 +601,7 @@ def _overlays_section(merged: pd.DataFrame) -> str:
 
 
 # ----------------------------------------------------------------------
-# Section 5 — Trade-level impact
-# ----------------------------------------------------------------------
-
-
-def _strategy_display_name(strat: str) -> str:
-    return {
-        "s1_ema_crossover": "Strategy 1 — EMA crossover (5 vs 10) with RSI filter",
-        "s2_rsi_mean_reversion": "Strategy 2 — RSI mean reversion (enter <30, exit >50)",
-        "s3_sma_crossover": "Strategy 3 — SMA crossover (50 vs 200, golden / death cross)",
-    }.get(strat, strat)
-
-
-def _trade_section(trades_dir: Path, timeframe: str) -> str:
-    summary_path = trades_dir / "summary.csv"
-    match_path = trades_dir / "match_summary.csv"
-    if not summary_path.exists() or not match_path.exists():
-        return "<h2>5. Trade-level impact</h2><p><em>Day 4 has not been run yet.</em></p>"
-
-    summary = pd.read_csv(summary_path)
-    match = pd.read_csv(match_path)
-
-    strategies = sorted(summary["strategy"].unique().tolist())
-
-    section_parts: list[str] = []
-    for strat in strategies:
-        srow = summary[summary["strategy"] == strat]
-        mrow = match[match["strategy"] == strat]
-
-        # ---- Per-variant summary table with descriptive labels ----
-        s_pivot = srow.set_index("variant")[list(TRADE_METRIC_LABELS.keys())].T
-        for v in ("V-A", "V-B", "V-C", "V-D"):
-            if v not in s_pivot.columns:
-                s_pivot[v] = None
-        s_pivot = s_pivot[[v for v in ("V-A", "V-B", "V-C", "V-D") if v in s_pivot.columns]]
-        s_pivot = s_pivot.rename(columns=VARIANT_SHORT)
-        s_pivot.index = [TRADE_METRIC_LABELS[k] for k in s_pivot.index]
-        s_pivot = s_pivot.reset_index().rename(columns={"index": "Performance metric"})
-        summary_tbl = _html_table(s_pivot, cls="tbl tight centered")
-
-        # ---- Stacked-bar chart: trade categories per variant ----
-        fig = go.Figure()
-        for cat, label in CATEGORY_LABELS.items():
-            col = f"{cat}_n"
-            if col not in mrow.columns:
-                continue
-            fig.add_trace(
-                go.Bar(
-                    x=[VARIANT_SHORT.get(v, v) for v in mrow["variant"]],
-                    y=mrow[col],
-                    name=label,
-                    marker_color=CATEGORY_COLORS.get(cat, "#666"),
-                    hovertemplate="%{x}<br>" + label + ": %{y}<extra></extra>",
-                )
-            )
-        fig.update_layout(
-            barmode="stack",
-            template="plotly_white",
-            height=340,
-            title=dict(text="Where each variant agrees or disagrees with TradingView", x=0.5),
-            yaxis_title="Number of trades",
-            xaxis_title="Variant being compared against TradingView",
-            legend=dict(orientation="h", y=1.18, x=0.5, xanchor="center", font=dict(size=10)),
-            margin=dict(t=70, b=60, l=60, r=20),
-        )
-        stack_div = _fig_to_div(fig, f"fig-trade-cat-{strat}", height=340)
-
-        # ---- Net P&L bar chart ----
-        fig2 = go.Figure(
-            data=go.Bar(
-                x=[VARIANT_SHORT.get(v, v) for v in srow["variant"]],
-                y=srow["net_pnl"],
-                marker_color=["#2e7d32" if v > 0 else "#c62828" for v in srow["net_pnl"]],
-                text=[f"{v:+.2f}" for v in srow["net_pnl"]],
-                textposition="outside",
-                hovertemplate="%{x}<br>Net P&L per share: $%{y:.2f}<extra></extra>",
-            )
-        )
-        fig2.update_layout(
-            template="plotly_white",
-            height=280,
-            title=dict(text="Net profit per share over the study window", x=0.5),
-            yaxis_title="Net P&L per share ($)",
-            xaxis_title="Variant",
-            margin=dict(t=50, b=50, l=60, r=20),
-        )
-        pnl_div = _fig_to_div(fig2, f"fig-trade-pnl-{strat}", height=280)
-
-        section_parts.append(f"""
-        <div class="strategy-block">
-          <h3>{html_mod.escape(_strategy_display_name(strat))}</h3>
-
-          {
-            _explain(
-                "Performance summary by variant",
-                "Each column is one variant of the indicator pipeline (see Section 6 "
-                "for definitions). Each row is a standard trading-strategy performance "
-                "metric. Compare TradingView (reference) to the others — closer numbers "
-                "mean closer alignment with the TradingView ground truth.",
-            )
-        }
-          {summary_tbl}
-
-          {
-            _explain(
-                "How each variant's trades line up with TradingView's",
-                "For each variant, every trade is paired against TradingView's trade "
-                "list and bucketed into one of four categories: green (same bar as "
-                "TradingView), yellow (within 5 bars of TradingView), red (TradingView "
-                "fired but this variant didn't), or blue (this variant fired but "
-                "TradingView didn't). The TradingView column is by definition all-green. "
-                "A tall green stack means strong alignment; lots of red and blue means "
-                "the variant is producing different trades than TradingView would.",
-            )
-        }
-          {stack_div}
-
-          {
-            _explain(
-                "Net profit per share, by variant",
-                "Aggregate P&L from running this strategy against each indicator pipeline "
-                "over the study window. Green bars are profitable, red are losses. A "
-                "completely flipped sign (e.g., positive in TradingView but negative in "
-                "the engine variant) is the most damaging form of divergence: the "
-                "strategy looks good on TradingView's chart but loses money in production.",
-            )
-        }
-          {pnl_div}
-        </div>
-        """)
-
-    return (
-        "<h2 id='sec-trades'>5. Trade-level impact — per strategy</h2>"
-        "<p class='subtitle'>"
-        "<b>What this section answers:</b> indicator-level differences only matter "
-        "if they cause different <i>trades</i>. Here we replay three strategies "
-        "(EMA crossover, RSI mean reversion, SMA crossover) against four "
-        "different indicator pipelines and count how many trades fire at the "
-        "same bar as TradingView, how many are timing-shifted, and how many are "
-        "missed or hallucinated. The four pipelines are defined in Section 6 below."
-        "</p>" + "".join(section_parts)
-    )
-
-
-# ----------------------------------------------------------------------
-# Section 6 — Worst days (per-day flipped-trade impact)
-# ----------------------------------------------------------------------
-
-
-def _worst_days_section(trades_dir: Path) -> str:
-    """Per-day breakdown of where each variant disagrees with TradingView."""
-    summary_path = trades_dir / "summary.csv"
-    if not summary_path.exists():
-        return "<h2>6. Worst days for trade alignment</h2><p><em>Day 4 has not been run yet.</em></p>"
-
-    # For each strategy, read V-A and V-D (worst offender) trade lists and find
-    # the days where V-A and V-D disagree most in dollar terms.
-    strategies = ["s1_ema_crossover", "s2_rsi_mean_reversion", "s3_sma_crossover"]
-    blocks: list[str] = []
-
-    for strat in strategies:
-        va_path = trades_dir / f"{strat}_V-A.csv"
-        vd_path = trades_dir / f"{strat}_V-D.csv"
-        if not va_path.exists() or not vd_path.exists():
-            continue
-        va = pd.read_csv(va_path, parse_dates=["entry_time", "exit_time"])
-        vd = pd.read_csv(vd_path, parse_dates=["entry_time", "exit_time"])
-        if va.empty and vd.empty:
-            continue
-
-        def to_et_date(s: pd.Series) -> pd.Series:
-            ts = pd.to_datetime(s, utc=True, errors="coerce")
-            return ts.dt.tz_convert("America/New_York").dt.date
-
-        va["et_date"] = to_et_date(va["entry_time"])
-        vd["et_date"] = to_et_date(vd["entry_time"])
-
-        # Per day, sum P&L on each side and compute the delta
-        per_day_a = (
-            va.groupby("et_date")
-            .agg(
-                tv_trades=("pnl_dollars", "size"),
-                tv_pnl=("pnl_dollars", "sum"),
-            )
-            .reset_index()
-        )
-        per_day_d = (
-            vd.groupby("et_date")
-            .agg(
-                engine_trades=("pnl_dollars", "size"),
-                engine_pnl=("pnl_dollars", "sum"),
-            )
-            .reset_index()
-        )
-
-        merged = per_day_a.merge(per_day_d, on="et_date", how="outer").fillna(0)
-        merged["delta_pnl"] = merged["engine_pnl"] - merged["tv_pnl"]
-        merged["abs_delta"] = merged["delta_pnl"].abs()
-        merged = merged.sort_values("abs_delta", ascending=False).head(10)
-
-        if merged.empty:
-            continue
-
-        merged_display = merged.rename(
-            columns={
-                "et_date": "Trading date",
-                "tv_trades": "TradingView trades that day",
-                "tv_pnl": "TradingView P&L ($)",
-                "engine_trades": "learn-ai (current) trades that day",
-                "engine_pnl": "learn-ai (current) P&L ($)",
-                "delta_pnl": "P&L delta vs TradingView ($)",
-            }
-        )[
-            [
-                "Trading date",
-                "TradingView trades that day",
-                "TradingView P&L ($)",
-                "learn-ai (current) trades that day",
-                "learn-ai (current) P&L ($)",
-                "P&L delta vs TradingView ($)",
-            ]
-        ]
-        for c in (
-            "TradingView P&L ($)",
-            "learn-ai (current) P&L ($)",
-            "P&L delta vs TradingView ($)",
-        ):
-            merged_display[c] = merged_display[c].apply(lambda v: f"{v:+.2f}")
-        for c in ("TradingView trades that day", "learn-ai (current) trades that day"):
-            merged_display[c] = merged_display[c].astype(int)
-
-        tbl = _html_table(merged_display, cls="tbl tight")
-        strat_name = _strategy_display_name(strat)
-        blocks.append(f"""
-        <div class="strategy-block">
-          <h3>{html_mod.escape(strat_name)}</h3>
-          {
-            _explain(
-                "Top 10 worst-disagreement days",
-                "Days are ranked by the absolute dollar difference between what "
-                "TradingView would have produced and what the learn-ai engine "
-                "actually produced (with extended-hours contamination). Positive "
-                "delta means the engine made more money than TradingView would have; "
-                "negative means it lost money on trades TradingView wouldn't have "
-                "taken. These are the days where the production system most "
-                "diverges from the &ldquo;what TV showed me&rdquo; experience.",
-            )
-        }
-          {tbl}
-        </div>
-        """)
-
-    if not blocks:
-        return ""
-    return f"""
-    <h2 id='sec-worst'>6. Worst days for trade alignment</h2>
-    <p class="subtitle">
-      <b>What this section answers:</b> when learn-ai's trade list disagrees
-      with TradingView, on which specific days does it cost (or earn) the most?
-      These tables let you trace the worst-disagreement days back to specific
-      market events and check the per-bar charts for an explanation.
-    </p>
-    {"".join(blocks)}
-    """
-
-
-# ----------------------------------------------------------------------
-# Section 7 — Extended-hours contamination chapter
-# ----------------------------------------------------------------------
-
-
-def _eth_contamination_section(trades_dir: Path) -> str:
-    """The headline "fixing this saves $X" chapter."""
-    summary_path = trades_dir / "summary.csv"
-    match_path = trades_dir / "match_summary.csv"
-    if not summary_path.exists() or not match_path.exists():
-        return ""
-
-    summary = pd.read_csv(summary_path)
-    match = pd.read_csv(match_path)
-
-    # For each strategy: V-C (engine RTH) vs V-D (engine current with ETH)
-    rows: list[dict] = []
-    for strat in sorted(summary["strategy"].unique()):
-        srow = summary[summary["strategy"] == strat].set_index("variant")
-        if "V-C" not in srow.index or "V-D" not in srow.index:
-            continue
-        rows.append(
-            {
-                "Strategy": _strategy_display_name(strat).split(" — ")[0],
-                "Description": _strategy_display_name(strat).split(" — ", 1)[1]
-                if " — " in _strategy_display_name(strat)
-                else "",
-                "Trades fired (RTH-fixed)": int(srow.loc["V-C", "n_trades"]),
-                "Trades fired (current)": int(srow.loc["V-D", "n_trades"]),
-                "Net P&L (RTH-fixed) $": f"{srow.loc['V-C', 'net_pnl']:+.2f}",
-                "Net P&L (current) $": f"{srow.loc['V-D', 'net_pnl']:+.2f}",
-                "P&L change after fix $": f"{srow.loc['V-C', 'net_pnl'] - srow.loc['V-D', 'net_pnl']:+.2f}",
-                "Win rate (RTH-fixed) %": f"{srow.loc['V-C', 'win_rate_pct']:.1f}",
-                "Win rate (current) %": f"{srow.loc['V-D', 'win_rate_pct']:.1f}",
-            }
-        )
-    if not rows:
-        return ""
-
-    table_df = pd.DataFrame(rows)
-    table_html = _html_table(table_df, cls="tbl tight")
-
-    # Bar chart: net P&L per strategy, RTH-fixed vs current side-by-side
-    fig = go.Figure()
-    for variant_key, label, color in [
-        ("V-C", "After RTH-filter fix", "#2e7d32"),
-        ("V-D", "Current behavior (ETH contamination)", "#c62828"),
-    ]:
-        ys, xs = [], []
-        for strat in sorted(summary["strategy"].unique()):
-            srow = summary[summary["strategy"] == strat].set_index("variant")
-            if variant_key in srow.index:
-                xs.append(_strategy_display_name(strat).split(" — ")[0])
-                ys.append(float(srow.loc[variant_key, "net_pnl"]))
-        fig.add_trace(
-            go.Bar(
-                x=xs, y=ys, name=label, marker_color=color, hovertemplate=label + "<br>%{x}: $%{y:.2f}<extra></extra>"
-            )
-        )
-    fig.update_layout(
-        barmode="group",
-        template="plotly_white",
-        height=340,
-        title=dict(text="Strategy P&L: current behavior vs RTH-filter-fix", x=0.5),
-        yaxis_title="Net P&L per share ($)",
-        legend=dict(orientation="h", y=1.16, x=0.5, xanchor="center"),
-        margin=dict(t=70, b=50, l=60, r=20),
-    )
-    pnl_div = _fig_to_div(fig, "fig-eth-pnl", height=340)
-
-    # Match-rate-vs-TradingView bar chart for V-D
-    match_rate_rows = []
-    for strat in sorted(summary["strategy"].unique()):
-        for variant_key in ("V-C", "V-D"):
-            mrow = match[(match["strategy"] == strat) & (match["variant"] == variant_key)]
-            if mrow.empty:
-                continue
-            r = mrow.iloc[0]
-            total_a = (
-                int(r.get("matched_aligned_n", 0)) + int(r.get("matched_shifted_n", 0)) + int(r.get("a_only_flip_n", 0))
-            )
-            aligned = int(r.get("matched_aligned_n", 0))
-            pct = aligned / total_a * 100 if total_a else 0
-            match_rate_rows.append(
-                (
-                    _strategy_display_name(strat).split(" — ")[0],
-                    "After RTH-filter fix" if variant_key == "V-C" else "Current behavior (ETH)",
-                    pct,
-                )
-            )
-    if match_rate_rows:
-        df_mr = pd.DataFrame(match_rate_rows, columns=["strat", "label", "pct"])
-        fig2 = go.Figure()
-        for label, color in [
-            ("After RTH-filter fix", "#2e7d32"),
-            ("Current behavior (ETH)", "#c62828"),
-        ]:
-            sub = df_mr[df_mr["label"] == label]
-            fig2.add_trace(
-                go.Bar(
-                    x=sub["strat"],
-                    y=sub["pct"],
-                    name=label,
-                    marker_color=color,
-                    text=[f"{v:.0f}%" for v in sub["pct"]],
-                    textposition="outside",
-                    hovertemplate=label + "<br>%{x}: %{y:.1f}%<extra></extra>",
-                )
-            )
-        fig2.update_layout(
-            barmode="group",
-            template="plotly_white",
-            height=320,
-            title=dict(text="Trades that fire on the same bar as TradingView (%)", x=0.5),
-            yaxis=dict(title="% of TradingView trades aligned", range=[0, 110]),
-            legend=dict(orientation="h", y=1.16, x=0.5, xanchor="center"),
-            margin=dict(t=60, b=50, l=60, r=20),
-        )
-        match_div = _fig_to_div(fig2, "fig-eth-match", height=320)
-    else:
-        match_div = ""
-
-    # Headline numbers
-    headline_lines: list[str] = []
-    for strat in sorted(summary["strategy"].unique()):
-        srow = summary[summary["strategy"] == strat].set_index("variant")
-        if "V-C" not in srow.index or "V-D" not in srow.index:
-            continue
-        delta = srow.loc["V-C", "net_pnl"] - srow.loc["V-D", "net_pnl"]
-        n_c = int(srow.loc["V-C", "n_trades"])
-        n_d = int(srow.loc["V-D", "n_trades"])
-        sname = _strategy_display_name(strat).split(" — ")[0]
-        headline_lines.append(
-            f"<li><b>{html_mod.escape(sname)}</b>: applying the fix would "
-            f"change net P&L per share by <b>{delta:+.2f}</b>, and trade count "
-            f"would change from <b>{n_d}</b> to <b>{n_c}</b>.</li>"
-        )
-
-    return f"""
-    <h2 id='sec-eth'>7. Extended-hours contamination — the headline fix</h2>
-    <p class="subtitle">
-      <b>What this section answers:</b> the single most important production
-      bug surfaced by this study is that the engine consumes pre-market and
-      after-hours bars when computing indicators, while TradingView's chart
-      shows only regular-trading-hours data. This section quantifies the
-      impact of fixing that.
-    </p>
-
-    {
-        _explain(
-            "Per-strategy impact of the RTH-filter fix",
-            "&ldquo;RTH-fixed&rdquo; is the engine after a 5-line code change that "
-            "filters out pre-market and after-hours bars before updating indicators "
-            "(see the Roadmap doc). &ldquo;Current&rdquo; is what learn-ai actually "
-            "does today. Compare the trade counts and P&L columns to see how much "
-            "the fix would change behavior. The full code change is in the audit "
-            "and roadmap documents in <code>docs/</code>.",
-        )
-    }
-    {table_html}
-
-    <div class='headline-block'>
-      <b>If you apply the RTH-filter fix today, expect:</b>
-      <ul>
-        {"".join(headline_lines)}
-      </ul>
-    </div>
-
-    {
-        _explain(
-            "Net P&L: after the fix vs current behavior",
-            "Green bars are post-fix (engine on RTH bars only). Red bars are the "
-            "current production behavior (engine on full-session bars). Where the "
-            "red bar is far from the green bar, the bug is materially distorting "
-            "strategy results. A red bar on the wrong side of zero relative to its "
-            "green counterpart is a P&L sign reversal — the most damaging form.",
-        )
-    }
-    {pnl_div}
-
-    {
-        _explain(
-            "Trade alignment with TradingView, before vs after the fix",
-            "Percentage of TradingView's trades that fire on exactly the same bar "
-            "in each variant. After the fix, alignment should approach 100% for "
-            "every strategy (any residual is BATS-vs-Polygon feed noise). Today, "
-            "alignment ranges from 0% to 15% depending on the strategy.",
-        )
-    }
-    {match_div}
-    """
-
-
-# ----------------------------------------------------------------------
-# Section 8 — Methodology, variant definitions, and gotchas
+# Section 5 — Methodology, variant definitions, and gotchas
 # ----------------------------------------------------------------------
 
 
@@ -1286,21 +711,21 @@ def _methodology_section() -> str:
     """
 
     return f"""
-    <h2 id='sec-methodology'>8. Methodology and gotchas</h2>
+    <h2 id='sec-methodology'>5. Methodology and gotchas</h2>
     <p class="subtitle">
       Everything you need to interpret the numbers above, in one place.
       For the full 17-item gotchas catalog see
       <code>docs/tv-polygon-validation-gotchas.md</code>.
     </p>
 
-    <h3>8a. Variant definitions</h3>
+    <h3>5a. Variant definitions</h3>
     <p class="caption-mini">
-      The four variants compared in Sections 3 and 5 are summarized below.
+      The four variants compared in Section 3 are summarized below.
       Each combines one indicator implementation with one bar source.
     </p>
     {variants_tbl}
 
-    <h3>8b. How each indicator is calculated</h3>
+    <h3>5b. How each indicator is calculated</h3>
     <p class="caption-mini">
       Every indicator follows the canonical formula given here. These match
       TradingView Pine v5/v6's <code>ta.*</code> functions to 4-6 decimal places
@@ -1308,10 +733,10 @@ def _methodology_section() -> str:
     </p>
     {formulas}
 
-    <h3>8c. Bar timing and session filtering</h3>
+    <h3>5c. Bar timing and session filtering</h3>
     {bar_timing}
 
-    <h3>8d. Top 5 gotchas you should know</h3>
+    <h3>5d. Top 5 gotchas you should know</h3>
     <p class="caption-mini">
       The most important pitfalls when comparing TradingView to Polygon-derived
       indicators on US equities.
@@ -1401,7 +826,6 @@ def build_dashboard(
     tf_cache = cache_root / timeframe
     merged_path = tf_cache / "merged.parquet"
     matrix_path = tf_cache / f"matrix_{timeframe}.csv"
-    trades_dir = tf_cache / "trades"
 
     if not merged_path.exists():
         raise FileNotFoundError(f"{merged_path} not found. Run `python -m app.research.divergence.cli all ...` first.")
@@ -1416,14 +840,14 @@ def build_dashboard(
     parts.append(
         f"<h1>SPY {timeframe.upper()} — Data divergence dashboard</h1>"
         f"<p class='subtitle lead'>"
-        f"<b>One question, one answer:</b> when learn-ai runs a strategy on SPY "
-        f"15-minute bars, does it produce the same trades a trader would see on "
-        f"a TradingView chart? This dashboard quantifies the gap, isolates its "
-        f"cause, and shows what changes with a specific code fix."
+        f"<b>One question, one answer:</b> when learn-ai computes its indicators on "
+        f"SPY 15-minute bars, does it produce the same values a trader would see on "
+        f"a TradingView chart? This dashboard quantifies the gap and isolates its "
+        f"cause."
         f"</p>"
     )
     parts.append(_section_nav())
-    parts.append(_executive_summary(merged, trades_dir))
+    parts.append(_executive_summary(merged, matrix_path))
     parts.append("<h2 id='sec-glance'>1. At a glance</h2>")
     parts.append(
         "<p class='subtitle'>Headline numbers for this study window. Hover any card for a one-line description.</p>"
@@ -1432,9 +856,6 @@ def build_dashboard(
     parts.append(_feed_comparison_section(merged))
     parts.append(_heatmap_section(matrix_path, timeframe))
     parts.append(_overlays_section(merged))
-    parts.append(_trade_section(trades_dir, timeframe))
-    parts.append(_worst_days_section(trades_dir))
-    parts.append(_eth_contamination_section(trades_dir))
     parts.append(_methodology_section())
     parts.append(
         "<div class='footer'>"
@@ -1446,8 +867,6 @@ def build_dashboard(
         "<li>For the engineering changes that close the gap, see "
         "<code>docs/engine-tv-alignment-roadmap.md</code> "
         "(four-tier plan, half a developer-week).</li>"
-        "<li>For the per-trade tables behind every chart, see "
-        "<code>cache/divergence/15m/trades/</code>.</li>"
         "</ul>"
         "<p>Generated by <code>app.research.divergence.dashboard.build_dashboard</code>. "
         "Plotly.js bundled inline so this file works offline.</p>"

@@ -1,7 +1,7 @@
 import type { NewsQuery } from '../../../services/news.service';
 import type { DataLabWindowMsUtc } from '../data-lab-workspace-store';
 
-/* App-owned numeric-window → vendor-query adapter (PRD §11).
+/* App-owned numeric-window → vendor-query adapter.
  *
  * The Data Lab UI owns an int64 ms UTC window and must not construct vendor
  * date strings inline. `NewsService`'s wire contract is Polygon's
@@ -18,7 +18,7 @@ export function utcMsToIsoInstant(msUtc: number): string {
 export const NEWS_MAX_HEADLINES = 5;
 
 /** Map the committed numeric UTC window and ticker to the news query.
- *  `endMsUtc` is exclusive (PRD §11). Pure. */
+ *  `endMsUtc` is exclusive. Pure. */
 export function windowToNewsQuery(
   ticker: string,
   window: DataLabWindowMsUtc,

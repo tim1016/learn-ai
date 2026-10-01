@@ -3,7 +3,7 @@
 Given a proposed strategy configuration + date range, evaluates a series of
 checks that cover the most common reasons a backtest result will diverge
 from what a TradingView user would see (every item maps to a known gotcha
-in ``docs/tv-polygon-validation-gotchas.md``).
+in the ``_GOTCHAS_DOC`` catalog).
 
 Each check returns one of:
 

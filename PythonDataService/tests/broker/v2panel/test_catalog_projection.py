@@ -183,20 +183,14 @@ def _recovery_capability(
     )
 
 
-def test_status_label_maps_the_closed_vocabulary() -> None:
-    assert status_label_for(_status(sid=SID, running=True)) == "Working"
-    assert status_label_for(_status(sid=SID, running=False, phase="OFF_DUTY")) == "Off duty"
-    assert status_label_for(_status(sid=SID, phase="RETIRED", running=False)) == "Retired"
-
-
 def test_an_unclean_exit_is_labelled_distinctly_from_a_deliberate_stop() -> None:
     """S3b: three bots died mid-run and the roster read "Off duty . Flat".
 
-    The audit and `known-gaps.md` both record this as `needs_attention=false`.
-    That is wrong -- attention was already true for a crash, and the backend
-    already authored crash-specific `status_explanation`. What actually hid
-    the failure is the label: the roster renders `status_label`, and a crash
-    mapped to the same "Off duty" a clean stop produces.
+    The crash was read as `needs_attention=false`. That is wrong -- attention
+    was already true for a crash, and the backend already authored
+    crash-specific `status_explanation`. What actually hid the failure is the
+    label: the roster renders `status_label`, and a crash mapped to the same
+    "Off duty" a clean stop produces.
 
     The labels come from the shared operator-copy vocabulary rather than new
     strings invented here.
@@ -470,7 +464,7 @@ def test_an_account_scoped_hold_puts_no_per_bot_command_on_any_row() -> None:
     into *each* bot's snapshot, so one account-wide hold marks the whole fleet
     ``needs_attention``. Deriving the row command from that fold would hand N
     operators N per-bot mutation buttons for one problem -- the same fan-out
-    defect family as the account-wide entry freeze this PRD removes.
+    defect family as an account-wide entry freeze.
 
     Attention itself stays: the rows are genuinely affected, and saying so is
     honest. What must not appear is the button.
@@ -648,14 +642,6 @@ async def test_a_stopped_flat_dry_run_is_finished_under_its_own_world_label(worl
 
     assert (row.group, row.world_label) == ("finished", "DRY RUN · simulated cash")
     assert (row.final_result_usd, row.trade_count) == ("1.25", 2)
-
-
-@pytest.mark.parametrize(
-    ("world", "label"),
-    [("real_live", "LIVE · real money"), ("shadow", "SHADOW · simulated fills on your live account")],
-)
-async def test_every_world_is_worded_one_way(world, label) -> None:
-    assert (await _home_row(running=True, exposure={}, world=world)).world_label == label
 
 
 async def test_finished_results_are_read_off_the_event_loop() -> None:

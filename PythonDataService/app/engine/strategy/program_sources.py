@@ -29,9 +29,9 @@ EMA_CROSSOVER_SIGNAL_ARTIFACT_PATHS: tuple[str, ...] = (
     # commit_signal_decision(), so execution/fill/sizing/commission/
     # Insight-publication bytes reached only through the commit path
     # cannot retroactively change a trace that already exists.
-    # test_signal_decision_digest_closure.py recomputes the closure from
-    # these paths and fails the build if a newly introduced import isn't
-    # triaged into this list or that one.
+    # test_signal_program_qualification_matrix.py recomputes the closure
+    # from these paths and fails the build if a newly introduced import
+    # isn't triaged into this list or that one.
     "app/engine/strategy/algorithms/ema_crossover_signal.py",
     "app/engine/strategy/base.py",
     "app/engine/strategy/normalized_gap.py",
@@ -43,7 +43,6 @@ EMA_CROSSOVER_SIGNAL_ARTIFACT_PATHS: tuple[str, ...] = (
     "app/engine/indicators/sma.py",
     "app/engine/consolidators/trade_bar_consolidator.py",
     "app/engine/data/trade_bar.py",
-    "app/engine/live/indicator_state.py",
     "app/lean_sidecar/trading_calendar.py",
     "app/utils/timestamps.py",
 )
@@ -58,9 +57,9 @@ SMA_CROSSOVER_ARTIFACT_PATHS: tuple[str, ...] = (
     # root below, MINUS the files in _SMA_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
     # (scripts/run_signal_program_build_qualification.py) that are provably
     # unreachable from evaluate_signal_bar()'s decision math.
-    # test_sma_signal_decision_digest_closure.py recomputes the closure from
-    # these paths and fails the build if a newly introduced import isn't
-    # triaged into one bucket or the other.
+    # test_signal_program_qualification_matrix.py recomputes the closure
+    # from these paths and fails the build if a newly introduced import
+    # isn't triaged into one bucket or the other.
     "app/engine/strategy/algorithms/sma_crossover.py",
     "app/engine/strategy/base.py",
     "app/engine/strategy/signal_intent.py",
@@ -69,7 +68,6 @@ SMA_CROSSOVER_ARTIFACT_PATHS: tuple[str, ...] = (
     "app/engine/indicators/sma.py",
     "app/engine/consolidators/trade_bar_consolidator.py",
     "app/engine/data/trade_bar.py",
-    "app/engine/live/indicator_state.py",
     "app/lean_sidecar/trading_calendar.py",
     "app/utils/timestamps.py",
 )
@@ -85,9 +83,9 @@ RSI_MEAN_REVERSION_ARTIFACT_PATHS: tuple[str, ...] = (
     # _RSI_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
     # (scripts/run_signal_program_build_qualification.py) that are provably
     # unreachable from evaluate_signal_bar()'s decision math.
-    # test_rsi_signal_decision_digest_closure.py recomputes the closure and
-    # fails the build if a newly introduced import isn't triaged into one
-    # bucket or the other.
+    # test_signal_program_qualification_matrix.py recomputes the closure
+    # and fails the build if a newly introduced import isn't triaged into
+    # one bucket or the other.
     "app/engine/strategy/algorithms/rsi_mean_reversion.py",
     "app/engine/strategy/base.py",
     "app/engine/strategy/signal_intent.py",
@@ -96,7 +94,6 @@ RSI_MEAN_REVERSION_ARTIFACT_PATHS: tuple[str, ...] = (
     "app/engine/indicators/rsi.py",
     "app/engine/consolidators/trade_bar_consolidator.py",
     "app/engine/data/trade_bar.py",
-    "app/engine/live/indicator_state.py",
     "app/lean_sidecar/trading_calendar.py",
     "app/utils/timestamps.py",
 )
@@ -112,7 +109,6 @@ DEPLOYMENT_VALIDATION_ARTIFACT_PATHS: tuple[str, ...] = (
     "app/engine/strategy/signal_program.py",
     "app/engine/consolidators/trade_bar_consolidator.py",
     "app/engine/data/trade_bar.py",
-    "app/engine/live/indicator_state.py",
     "app/lean_sidecar/trading_calendar.py",
     "app/utils/timestamps.py",
 )
@@ -127,9 +123,9 @@ SPY_STRATEGY_A_ARTIFACT_PATHS: tuple[str, ...] = (
     # MINUS the files in _SPY_STRATEGY_A_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
     # (scripts/run_signal_program_build_qualification.py) that are provably
     # unreachable from evaluate_signal_bar()'s decision math.
-    # test_spy_strategy_a_signal_decision_digest_closure.py recomputes the
-    # closure from these paths and fails the build if a newly introduced
-    # import isn't triaged into one bucket or the other.
+    # test_signal_program_qualification_matrix.py recomputes the closure
+    # from these paths and fails the build if a newly introduced import
+    # isn't triaged into one bucket or the other.
     "app/engine/strategy/algorithms/spy_strategy_a.py",
     "app/engine/strategy/algorithms/_rsi_range_base.py",
     "app/engine/strategy/base.py",
@@ -143,7 +139,6 @@ SPY_STRATEGY_A_ARTIFACT_PATHS: tuple[str, ...] = (
     "app/engine/indicators/adx.py",
     "app/engine/consolidators/trade_bar_consolidator.py",
     "app/engine/data/trade_bar.py",
-    "app/engine/live/indicator_state.py",
     "app/lean_sidecar/trading_calendar.py",
     "app/utils/timestamps.py",
 )
@@ -159,9 +154,9 @@ SPY_STRATEGY_B_ARTIFACT_PATHS: tuple[str, ...] = (
     # _SPY_STRATEGY_B_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
     # (scripts/run_signal_program_build_qualification.py) that are provably
     # unreachable from evaluate_signal_bar()'s decision math.
-    # test_spy_strategy_b_signal_decision_digest_closure.py recomputes the
-    # closure from these paths and fails the build if a newly introduced
-    # import isn't triaged into one bucket or the other. indicators/ema.py
+    # test_signal_program_qualification_matrix.py recomputes the closure
+    # from these paths and fails the build if a newly introduced import
+    # isn't triaged into one bucket or the other. indicators/ema.py
     # and indicators/sma.py are both real, non-obvious members of this
     # closure: macd.py's fast/slow lines are ExponentialMovingAverage
     # instances, and ema.py itself seeds its warmup from
@@ -181,7 +176,6 @@ SPY_STRATEGY_B_ARTIFACT_PATHS: tuple[str, ...] = (
     "app/engine/indicators/sma.py",
     "app/engine/consolidators/trade_bar_consolidator.py",
     "app/engine/data/trade_bar.py",
-    "app/engine/live/indicator_state.py",
     "app/lean_sidecar/trading_calendar.py",
     "app/utils/timestamps.py",
 )
@@ -197,9 +191,9 @@ SPY_STRATEGY_C_ARTIFACT_PATHS: tuple[str, ...] = (
     # _SPY_C_SIGNAL_DECISION_CLOSURE_EXCLUSIONS
     # (scripts/run_signal_program_build_qualification.py) that are provably
     # unreachable from evaluate_signal_bar()'s decision math.
-    # test_spy_strategy_c_signal_decision_digest_closure.py recomputes the
-    # closure from these paths and fails the build if a newly introduced
-    # import isn't triaged into one bucket or the other. RsiRangeStrategy
+    # test_signal_program_qualification_matrix.py recomputes the closure
+    # from these paths and fails the build if a newly introduced import
+    # isn't triaged into one bucket or the other. RsiRangeStrategy
     # (the shared base) is a root alongside the leaf module because
     # evaluate_signal_bar/commit_signal_decision/discard_signal_decision all
     # live on the base, not on SpyStrategyCAlgorithm itself.
@@ -213,7 +207,6 @@ SPY_STRATEGY_C_ARTIFACT_PATHS: tuple[str, ...] = (
     "app/engine/indicators/rsi.py",
     "app/engine/consolidators/trade_bar_consolidator.py",
     "app/engine/data/trade_bar.py",
-    "app/engine/live/indicator_state.py",
     "app/lean_sidecar/trading_calendar.py",
     "app/utils/timestamps.py",
 )

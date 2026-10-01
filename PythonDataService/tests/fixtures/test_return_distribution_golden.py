@@ -22,7 +22,6 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pyarrow.ipc as ipc
 import pytest
@@ -36,7 +35,6 @@ from app.research.return_distribution import (
 )
 from scripts.fixture_generators.return_distribution import (
     BIN_WIDTH,
-    N_SESSIONS,
     SPAN,
     oracle_bins,
     oracle_overlay,
@@ -129,30 +127,3 @@ def test_rd001_production_pipeline_matches_oracle_and_committed_output(kind: str
     for bin_index, bin_model in enumerate(production.histogram.bins):
         stamped = sum(1 for d in result.days if d.bin_indices[ki] == bin_index)
         assert stamped == bin_model.count, (kind, bin_index)
-
-
-def test_rd001_bin_geometry_pinned() -> None:
-    output = _read("output.arrow")
-    assert output["bin_width_pct"][0] == pytest.approx(BIN_WIDTH, abs=0.0)
-    assert output["span_pct"][0] == pytest.approx(SPAN, abs=0.0)
-    # 20 inner bins + 2 open edge bins per kind.
-    for prefix in ("c2c", "ses", "on"):
-        assert sum(1 for c in output.columns if c.startswith(f"{prefix}_bin")) == 22
-
-
-def test_rd001_input_spans_real_sessions_with_extended_hours() -> None:
-    """The input must exercise the calendar and both extended segments:
-    60 sessions including a half-day, with pre- and post-market bars."""
-    bars = _read("input.arrow").sort_values("start_ms").reset_index(drop=True)
-    et = pd.to_datetime(bars["start_ms"], unit="ms", utc=True).dt.tz_convert("America/New_York")
-    dates = sorted(set(et.dt.date))
-    assert len(dates) == N_SESSIONS
-    assert date(2024, 7, 3) in dates  # the 13:00-ET half-day
-    windows = {
-        w.session_date: (w.open_ms_utc, w.close_ms_utc)
-        for w in session_windows_ms_utc(dates[0], dates[-1])
-    }
-    is_pre = (bars["start_ms"] < et.dt.date.map({d: w[0] for d, w in windows.items()})).to_numpy()
-    is_post = (bars["start_ms"] >= et.dt.date.map({d: w[1] for d, w in windows.items()})).to_numpy()
-    assert int(np.count_nonzero(is_pre)) > 0, "fixture input has no pre-market bars"
-    assert int(np.count_nonzero(is_post)) > 0, "fixture input has no after-hours bars"

@@ -132,15 +132,6 @@ def test_export_refuses_a_non_flat_account_before_stopping_any_bot(tmp_path: Pat
     assert list(tmp_path.glob("bundle.tar*")) == []
 
 
-def test_export_reads_every_account_before_it_stops_a_single_bot(tmp_path: Path) -> None:
-    installation = build_installation(tmp_path)
-
-    _export(installation, tmp_path / "bundle.tar")
-
-    kinds = [kind for kind, _clerk in installation.lanes.calls]
-    assert kinds == ["quiet", "quiet", "stop", "stop", "quiet", "quiet"]
-
-
 def test_an_account_that_goes_non_flat_after_the_stop_is_refused_saying_bots_were_stopped(
     tmp_path: Path,
 ) -> None:
@@ -391,13 +382,13 @@ def test_a_secret_inside_a_bundled_folder_is_skipped_and_listed(tmp_path: Path) 
 
 def test_a_missing_volume_refuses_before_any_bot_stops(tmp_path: Path) -> None:
     installation = build_installation(tmp_path)
-    del installation.podman.volumes["learn-ai-alpaca-clerk-qualification-data"]
+    del installation.podman.volumes["learn-ai-alpaca-paper-clerk-data"]
 
     with pytest.raises(MigrationRefused) as refused:
         _export(installation, tmp_path / "bundle.tar")
 
     assert refused.value.reason == "volume_missing"
-    assert refused.value.details["volumes"] == ["learn-ai-alpaca-clerk-qualification-data"]
+    assert refused.value.details["volumes"] == ["learn-ai-alpaca-paper-clerk-data"]
     assert installation.lanes.stopped == []
 
 

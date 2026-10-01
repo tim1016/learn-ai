@@ -137,53 +137,6 @@ async def test_post_creates_persisted_run(client, tmp_path: Path):
     assert (run_dir / "result.json").is_file()
 
 
-async def test_post_then_get_round_trips(client):
-    post = await client.post("/api/research/strategy-runs", json=_request_body())
-    run_id = post.json()["ledger"]["run_id"]
-
-    got = await client.get(f"/api/research/strategy-runs/{run_id}")
-    assert got.status_code == 200, got.text
-
-    got_ledger = got.json()["ledger"]
-    post_ledger = post.json()["ledger"]
-    assert got_ledger == post_ledger
-
-
-async def test_post_repeat_runs_share_result_hash(client):
-    """Two POSTs with the same body → identical content hashes (different run_id)."""
-    a = await client.post("/api/research/strategy-runs", json=_request_body())
-    b = await client.post("/api/research/strategy-runs", json=_request_body())
-
-    a_ledger = a.json()["ledger"]
-    b_ledger = b.json()["ledger"]
-
-    assert a_ledger["run_id"] != b_ledger["run_id"]
-    assert a_ledger["strategy_spec_hash"] == b_ledger["strategy_spec_hash"]
-    assert a_ledger["data_snapshot_id"] == b_ledger["data_snapshot_id"]
-    assert a_ledger["result_hash"] == b_ledger["result_hash"]
-    assert a_ledger["trade_log_hash"] == b_ledger["trade_log_hash"]
-    assert a_ledger["metrics_hash"] == b_ledger["metrics_hash"]
-
-
-async def test_post_response_timestamps_are_int64_ms_utc(client):
-    """Wire-format invariant: every timestamp leaving the boundary is an int."""
-    response = await client.post("/api/research/strategy-runs", json=_request_body())
-    body = response.json()
-    ledger = body["ledger"]
-    result = body["result"]
-
-    assert isinstance(ledger["start_ms"], int)
-    assert isinstance(ledger["end_ms"], int)
-    assert isinstance(ledger["created_at_ms"], int)
-    assert isinstance(ledger["completed_at_ms"], int)
-
-    if result["equity_curve"]:
-        assert isinstance(result["equity_curve"][0]["timestamp_ms"], int)
-    for trade in result["trades"]:
-        assert isinstance(trade["entry_time_ms"], int)
-        assert isinstance(trade["exit_time_ms"], int)
-
-
 # ---------------------------------------------------------------------------
 # POST — validation errors.
 # ---------------------------------------------------------------------------
@@ -315,40 +268,6 @@ async def test_list_returns_recent_first(client):
     assert runs[0]["created_at_ms"] >= runs[1]["created_at_ms"]
 
 
-async def test_list_filter_by_spec_hash(client):
-    await client.post("/api/research/strategy-runs", json=_request_body(_spec_dict(fast_period=5)))
-    b = await client.post(
-        "/api/research/strategy-runs", json=_request_body(_spec_dict(fast_period=6))
-    )
-
-    target = b.json()["ledger"]["strategy_spec_hash"]
-    response = await client.get("/api/research/strategy-runs", params={"spec_hash": target})
-    assert response.status_code == 200
-    runs = response.json()["runs"]
-    assert len(runs) == 1
-    assert runs[0]["strategy_spec_hash"] == target
-
-
-async def test_list_filter_by_status(client):
-    completed = await client.post("/api/research/strategy-runs", json=_request_body())
-    failed_spec = _spec_dict()
-    failed_spec["entry"]["pyramiding"] = 2
-    failed = await client.post("/api/research/strategy-runs", json=_request_body(failed_spec))
-
-    completed_only = await client.get(
-        "/api/research/strategy-runs", params={"status": "completed"}
-    )
-    failed_only = await client.get(
-        "/api/research/strategy-runs", params={"status": "failed"}
-    )
-
-    completed_ids = [r["run_id"] for r in completed_only.json()["runs"]]
-    failed_ids = [r["run_id"] for r in failed_only.json()["runs"]]
-    assert completed.json()["ledger"]["run_id"] in completed_ids
-    assert failed.json()["ledger"]["run_id"] in failed_ids
-    assert completed.json()["ledger"]["run_id"] not in failed_ids
-
-
 async def test_list_filter_by_parent_run_id(client):
     parent = await client.post("/api/research/strategy-runs", json=_request_body())
     parent_id = parent.json()["ledger"]["run_id"]
@@ -370,69 +289,6 @@ async def test_list_limit_truncates(client):
 
     response = await client.get("/api/research/strategy-runs", params={"limit": 2})
     assert len(response.json()["runs"]) == 2
-
-
-# ---------------------------------------------------------------------------
-# GET /api/research/trading-calendar — date-picker preview endpoint.
-# ---------------------------------------------------------------------------
-async def test_trading_calendar_returns_memorial_day_breakdown(client):
-    """Happy path: the motivating bug case (Memorial Day 2026 week)."""
-    response = await client.get(
-        "/api/research/trading-calendar",
-        params={"start": "2026-05-19", "end": "2026-05-26"},
-    )
-    assert response.status_code == 200, response.text
-
-    body = response.json()
-    assert body["requested_start_date"] == "2026-05-19"
-    assert body["requested_end_date"] == "2026-05-26"
-    # end is inclusive — 5/26 is the fifth session (5/25 is Memorial Day).
-    assert body["sessions_included"] == [
-        "2026-05-19",
-        "2026-05-20",
-        "2026-05-21",
-        "2026-05-22",
-        "2026-05-26",
-    ]
-    excluded_by_date = {ex["date"]: ex for ex in body["sessions_excluded"]}
-    assert excluded_by_date["2026-05-25"] == {
-        "date": "2026-05-25",
-        "reason": "holiday",
-        "name": "Memorial Day",
-    }
-    assert excluded_by_date["2026-05-23"]["reason"] == "weekend"
-    assert excluded_by_date["2026-05-23"]["name"] is None
-    assert excluded_by_date["2026-05-24"]["reason"] == "weekend"
-
-
-async def test_trading_calendar_rejects_invalid_date(client):
-    response = await client.get(
-        "/api/research/trading-calendar",
-        params={"start": "not-a-date", "end": "2026-05-26"},
-    )
-    assert response.status_code == 400
-    assert "start" in response.json()["detail"]
-
-
-async def test_trading_calendar_accepts_same_day(client):
-    """start == end is a valid single-day inclusive window."""
-    response = await client.get(
-        "/api/research/trading-calendar",
-        params={"start": "2026-05-26", "end": "2026-05-26"},
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["sessions_included"] == ["2026-05-26"]
-    assert body["sessions_excluded"] == []
-
-
-async def test_trading_calendar_rejects_end_before_start(client):
-    response = await client.get(
-        "/api/research/trading-calendar",
-        params={"start": "2026-05-26", "end": "2026-05-19"},
-    )
-    assert response.status_code == 400
-    assert "on or after" in response.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

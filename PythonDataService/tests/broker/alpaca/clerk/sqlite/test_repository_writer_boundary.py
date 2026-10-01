@@ -130,12 +130,6 @@ def _writer_call_name(
             return node.func.attr
         if node.func.attr == "append" and isinstance(node.func.value, ast.Name) and node.func.value.id == "receipts":
             return "append_decision_receipt"
-        if (
-            node.func.attr == "update_final_outcome"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "receipts"
-        ):
-            return "update_decision_final_outcome"
         return None
     if (
         isinstance(node.func, ast.Name)
@@ -219,34 +213,6 @@ def test_external_repository_writers_match_the_explicit_census() -> None:
     }
 
     _assert_census(_writer_calls(_PRODUCTION_ROOT), expected)
-
-
-def test_writer_census_detects_decision_final_outcome_updates() -> None:
-    """The visitor still recognizes `receipts.update_final_outcome(...)`.
-
-    No production caller uses this pattern anymore: decision receipts are
-    now captured atomically inside the custody transaction
-    (`append_atomic_decision_receipt_row` via `_commit_transition_row`), so
-    the two-step provisional-then-final write this pattern used to protect
-    (`bot_trade_strategy._record_blocked_decision`) was deleted. This test
-    is now a detector self-test, matching the sibling alias fixture below,
-    so the visitor's `update_decision_final_outcome` branch keeps coverage.
-    """
-    source = (
-        "def blocked_decision(receipts):\n"
-        "    receipts.update_final_outcome(bar_ref='X', outcome='blocked', order_ref=None, facts={})\n"
-    )
-    visitor = _WriterCallVisitor(source_root=Path("fixture/decision_final_outcome.py"))
-    visitor.visit(ast.parse(source, filename="fixture/decision_final_outcome.py"))
-
-    assert (
-        _WriterCallSite(
-            "fixture/decision_final_outcome.py",
-            "blocked_decision",
-            "update_decision_final_outcome",
-        )
-        in visitor.calls
-    )
 
 
 def test_writer_census_detects_direct_repository_and_facade_aliases() -> None:

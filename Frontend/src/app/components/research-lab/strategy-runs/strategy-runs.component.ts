@@ -2,7 +2,6 @@ import { CommonModule, DecimalPipe } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
-  computed,
   inject,
   signal,
 } from '@angular/core';
@@ -20,8 +19,8 @@ import { TimestampDisplayPipe } from '../../../shared/timestamp';
 /**
  * Run-ledger list view (Phase B of the build-alpha-style research
  * pipeline). Talks to ``GET /api/research/strategy-runs`` directly via
- * ``StrategyRunsService``; no GraphQL passthrough yet (see
- * ``docs/references/run-ledger.md`` for the deferral rationale).
+ * ``StrategyRunsService``; no GraphQL passthrough (ADR 0031 sanctions
+ * Angular → FastAPI for Python-owned payloads).
  *
  * Columns are intentionally limited to ``RunLedger`` fields — the
  * listing endpoint returns ledgers, not full results, so metric
@@ -59,8 +58,6 @@ export class StrategyRunsComponent {
   readonly running = signal(false);
   readonly error = signal<string | null>(null);
   readonly lastFixtureRunId = signal<string | null>(null);
-
-  readonly hasRuns = computed(() => this.runs().length > 0);
 
   constructor() {
     void this.refresh();

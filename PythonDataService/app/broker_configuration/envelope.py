@@ -8,9 +8,7 @@ domain, so a paper allowance and a live one can never be bounded differently.
 Formula: none — this type carries no arithmetic. It carries the *domain* the
   six envelope values must satisfy and the *Python types* their canonical hash
   depends on.
-Reference: ADR 0060 Decision 6; contract §2.4;
-  ``docs/architecture/alpaca-configuration-ownership-inventory.md`` §A
-  "Type-fidelity warning".
+Reference: ADR 0060 Decision 6.
 Canonical implementation: this file, for stored values. ``AlpacaSettings``
   (``app/broker/alpaca/config.py``) stays canonical for environment-sourced
   values; the two are pinned equal by
@@ -42,8 +40,8 @@ from app.broker_configuration.errors import (
     InvalidPaperAllowances,
 )
 
-# ``(field, sqlite column affinity)`` in the order the contract's §2.4 table
-# lists them. The affinities are asserted against the shipped DDL by
+# The envelope fields, grouped by sqlite column affinity. The affinities are
+# asserted against the shipped DDL by
 # ``tests/broker_configuration/test_envelope_type_fidelity.py``.
 FLOAT_FIELDS: tuple[str, ...] = ("loss_fraction", "loss_usd", "xh_entry_bps", "xh_exit_bps")
 INT_FIELDS: tuple[str, ...] = ("shadow_sessions", "arming_max_sessions")

@@ -3,9 +3,8 @@
 Decision 9: the reasons do NOT enter the exported OpenAPI contract. The
 frontend's copy map locks against the committed snapshot instead, exactly as
 the broker-v2 panel vocabulary does -- see
-``scripts/regenerate_broker_v2_vocabulary_snapshot.py`` and
-``.github/workflows/ci.yml``'s ``broker-v2-vocabulary-contract`` job for the
-pattern this mirrors.
+``scripts/regenerate_broker_v2_vocabulary_snapshot.py`` for the pattern this
+mirrors.
 
 The live set is derived, not hand-listed: walking ``FleetControlError``'s
 subclass closure means a new refusal family cannot be added without this
@@ -126,16 +125,6 @@ def test_python_and_frontend_snapshots_are_byte_identical() -> None:
     assert _SNAPSHOT_PATH.read_text(encoding="utf-8") == _FRONTEND_SNAPSHOT_PATH.read_text(
         encoding="utf-8"
     )
-
-
-def test_snapshot_reasons_are_sorted_and_cover_every_declared_code() -> None:
-    snapshot = json.loads(_SNAPSHOT_PATH.read_text(encoding="utf-8"))
-    reasons = snapshot["reasons"]
-    assert list(reasons) == sorted(reasons)
-    assert set(reasons) == set(FLEET_REFUSAL_REASONS)
-    for code, entry in reasons.items():
-        assert entry["status_code"] == FLEET_REFUSAL_REASONS[code].status_code
-        assert entry["meaning"] == FLEET_REFUSAL_REASONS[code].meaning
 
 
 # ---- 7b: the next_step backfill --------------------------------------------

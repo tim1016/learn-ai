@@ -1,12 +1,12 @@
 """Durable operator desired-state — persists cross-run intent so a
-PAUSED bot stays PAUSED across crash + reboot and a STOPPED bot refuses
-to restart on its own.
+STOPPED bot refuses to restart on its own. Nothing writes PAUSED since
+#2550 removed Pause; the value stays readable for records written before.
 
 Distinct from ``command_channel.py``: commands are one-shot, per-run
 events (``artifacts/live_runs/<run_id>/commands/``); desired-state is
 persistent operator intent keyed by ``strategy_instance_id``
 (``artifacts/live_state/<strategy_instance_id>/desired_state.json``),
-surviving across runs. See plan §16.4 Resolution 7.
+surviving across runs.
 
 Mirrors ``live_state_sidecar.py``'s envelope + repo + atomic-write
 pattern and reuses its ``_file_lock`` / ``fsync_parent_dir`` helpers
@@ -71,9 +71,6 @@ def stable_desired_state_path(artifacts_root: Path, strategy_instance_id: str) -
     """Canonical on-disk path for a strategy instance's desired-state file.
 
     Layout: <artifacts_root>/live_state/<strategy_instance_id>/desired_state.json
-    Sits alongside ``live_state.json`` (the order-idempotency sidecar)
-    under the same per-strategy directory — see
-    ``live_state_sidecar.stable_live_state_path``.
 
     The id is validated as a single safe path segment (fail-fast at the
     boundary) so a caller-controlled value can never escape
@@ -201,7 +198,7 @@ class DesiredStateRepo:
     def write(self, record: DesiredStateRecord) -> None:
         """Atomic write under advisory lock: serialise to a sibling .tmp,
         fsync, os.replace, then fsync the parent dir so the rename
-        survives a crash. Mirrors ``LiveStateSidecarRepo.write``.
+        survives a crash.
         """
         root_real = os.path.realpath(os.fspath(self._trusted_root))
         candidate = os.path.realpath(os.fspath(self._path))

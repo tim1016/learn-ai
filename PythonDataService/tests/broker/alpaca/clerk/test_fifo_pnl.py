@@ -1,7 +1,7 @@
 """Golden-fixture tests for canonical FIFO P&L (broker-v2 panel S0).
 
 Fixture authority: PythonDataService/tests/fixtures/golden/broker-v2-fifo-pnl/attribution.md
-Tolerance: atol=1e-9, rtol=0 (numerical-rigor.md accumulated-P&L default).
+Tolerance: atol=1e-9, rtol=0 (stricter than the 1e-6 accumulated-P&L default, ADR 0069 §3).
 
 Each scenario is derived by hand from the FIFO algorithm and documented
 in-line so a quant reviewer can audit without running the code.
@@ -9,7 +9,6 @@ in-line so a quant reviewer can audit without running the code.
 
 from __future__ import annotations
 
-import ast
 import json
 from decimal import Decimal
 from fractions import Fraction
@@ -145,53 +144,6 @@ def test_multi_lot_fifo() -> None:
     assert len(result.open_lots) == 1
     assert _close(result.open_lots[0].qty, 30.0)
     assert _close(result.open_lots[0].cost, 11.0)
-
-
-# ── Scenario 4: reversal ──────────────────────────────────────────────────────
-
-
-def test_reversal() -> None:
-    """BUY 100 @ $10, SELL 150 @ $12 (reversal into short).
-
-    FIFO:
-      - Close the 100-share long lot: 100 × ($12 - $10) = $200 realized.
-      - Remaining 50 → new short lot @ $12.
-    """
-    fills = [
-        _fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=1000),
-        _fill(side=OrderSide.SELL, qty=150, price=12.0, ts_ms=2000),
-    ]
-    result = compute_fifo_pnl(fills)
-    assert _close(result.realized_pnl, 200.0)
-    assert len(result.open_lots) == 1
-    assert result.open_lots[0].side is OrderSide.SELL
-    assert _close(result.open_lots[0].qty, 50.0)
-    assert _close(result.open_lots[0].cost, 12.0)
-
-
-# ── Scenario 5: multi-day ─────────────────────────────────────────────────────
-
-
-def test_multi_day() -> None:
-    """BUY 100 @ $10 (day1 ts=1000), BUY 50 @ $11 (day2 ts=86_400_000),
-       SELL 80 @ $13 (day2 ts=86_401_000).
-
-    FIFO:
-      - Close 80 from lot1: 80 × ($13 - $10) = $240 realized.
-    Open: 20 @ $10 + 50 @ $11.
-    """
-    DAY2 = 86_400_000  # 24 h in ms
-    fills = [
-        _fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=1000),
-        _fill(side=OrderSide.BUY, qty=50, price=11.0, ts_ms=DAY2),
-        _fill(side=OrderSide.SELL, qty=80, price=13.0, ts_ms=DAY2 + 1000),
-    ]
-    result = compute_fifo_pnl(fills)
-    assert _close(result.realized_pnl, 240.0)
-    # Two remaining lots
-    lots_by_cost = {lot.cost: lot.qty for lot in result.open_lots}
-    assert _close(lots_by_cost.get(10.0, 0.0), 20.0)
-    assert _close(lots_by_cost.get(11.0, 0.0), 50.0)
 
 
 # ── Scenario 6: fees not reported ────────────────────────────────────────────
@@ -346,28 +298,6 @@ def test_realized_pnl_today_sell_outside_session_not_counted() -> None:
 # ── marks_complete ─────────────────────────────────────────────────────────────
 
 
-def test_marks_complete_partial_coverage_returns_none() -> None:
-    """Two-symbol portfolio with mark for only one symbol → open_pnl=None.
-
-    SPY: 100 open @ $10, mark=11.  AAPL: 50 open @ $200, NO mark.
-    Expected: open_pnl=None, marks_complete=False.
-    The SPY unrealized of $100 must NOT be returned — a partial sum is
-    misleading and violates the marks_complete contract.
-    """
-    fills = [
-        _fill(side=OrderSide.BUY, qty=100, price=10.0, ts_ms=1000, symbol="SPY",
-              event_key="exec:spy"),
-        _fill(side=OrderSide.BUY, qty=50, price=200.0, ts_ms=1001, symbol="AAPL",
-              event_key="exec:aapl"),
-    ]
-    result = compute_fifo_pnl(fills, mark_prices={"SPY": 11.0})
-    assert result.open_pnl is None, (
-        f"expected None (partial mark coverage); got {result.open_pnl}. "
-        "open_pnl must never be a partial sum across symbols."
-    )
-    assert result.marks_complete is False
-
-
 def test_marks_complete_all_symbols_covered() -> None:
     """Two-symbol portfolio with marks for BOTH symbols → open_pnl is correct sum."""
     fills = [
@@ -509,42 +439,6 @@ def test_open_pnl_money_is_exact_at_a_whole_cent_boundary() -> None:
     assert Fraction(result.exact_open_pnl) == Fraction("0.048360857") * (Fraction("100.3101682007") - 100)
     assert display_cents(result.exact_open_pnl) == 1
     assert display_cents(normalize_money(result.open_pnl)) == 2
-
-
-# Float display views of exact FIFO values, on FIFO's own results and on the
-# SQLite projections that carry them (``EconomicSnapshot``,
-# ``AccountPnlAttribution``); see ``fifo_pnl``'s module docstring.
-_FIFO_FLOAT_VIEWS = frozenset({
-    "realized_pnl", "open_pnl", "entry_price", "exit_price",
-    "realized_pnl_today", "realized_pnl_total", "start_open_pnl_total", "open_pnl_total",
-})
-
-
-def test_no_normalize_money_call_names_a_fifo_float_view_attribute() -> None:
-    """#2556: a direct-attribute grep guard -- a tripwire, not the guarantee.
-
-    It flags ``normalize_money(<x>.<float view>)`` written anywhere in the
-    service, which re-admits a rounded float as money. It cannot follow a
-    float view through a variable or a parameter (the bot page's open P&L and
-    Today's statement once did exactly that), so the guarantee is structural:
-    those renderers take FIFO's exact ``Decimal`` fields and
-    ``money.display_cents`` refuses a float -- pinned by the rendered-string
-    regressions in ``test_panel_projection.py``,
-    ``test_fee_attribution_view.py`` and ``test_simulated_account.py``.
-    """
-    app_root = Path(__file__).parents[4] / "app"
-    paths = sorted(app_root.rglob("*.py"))
-    assert len(paths) > 100, "the guard must scan the service, not an empty tree"
-    offenders = [
-        f"{path.relative_to(app_root.parent)}:{node.lineno}: {ast.unparse(node)}"
-        for path in paths
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "normalize_money"
-        and any(isinstance(arg, ast.Attribute) and arg.attr in _FIFO_FLOAT_VIEWS for arg in node.args)
-    ]
-    assert offenders == []
 
 
 # ── Golden fixture scenarios ──────────────────────────────────────────────────

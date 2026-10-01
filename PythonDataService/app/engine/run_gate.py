@@ -46,12 +46,9 @@ timeout can rescue, and its caller is holding the very lock it waits on. The
 process does not error; it stops.
 
 Note what the rule does *not* say. Reaching the engine through
-``asyncio.to_thread`` is fine and three callers do exactly that
-(``post_cross_reconcile``, ``run_spec_against_bars_and_persist``,
-``run_shadow_trace_evaluation``) — they hop off the event loop *before* taking
-the gate, and hold nothing while they wait. ``scripts/run_replay_proof.py``
-reaches ``run_shadow_trace_evaluation`` the same way and is likewise safe. The
-hazard is only the hop taken *while holding*, and today nothing does that: the
+``asyncio.to_thread`` is fine, and ``run_spec_against_bars_and_persist`` does
+exactly that — it hops off the event loop *before* taking the gate, and holds
+nothing while it waits. The hazard is only the hop taken *while holding*, and today nothing does that: the
 call is synchronous from the moment the gate is taken. Adding a ``to_thread``,
 a ``run_in_thread`` or a background-loop submit anywhere inside a gated call
 is the edit that breaks this.

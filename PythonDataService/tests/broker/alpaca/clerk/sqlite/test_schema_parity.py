@@ -1,9 +1,9 @@
-"""Guiding-philosophy #5 parity: schema.py's DDL must match the pinned doc.
+"""``schema.SCHEMA_DDL`` builds the tables, columns, indexes and triggers the
+clerk store relies on, and its migrations carry live stores to the current
+version intact.
 
-If this test fails, either the doc changed without updating ``schema.py`` (or
-vice versa) — the pinned-contracts document is the reference, this module is
-the canonical implementation, and this test is what keeps them from
-drifting.
+The DDL is the schema's only copy; ADR 0035's binding annex states the
+invariants behind it.
 """
 
 from __future__ import annotations
@@ -12,235 +12,23 @@ import sqlite3
 from pathlib import Path
 
 from app.broker.alpaca.clerk.sqlite import database_verification, schema
-
-REPO_ROOT = Path(__file__).resolve().parents[6]
-
-_V6_AUTHORITY_DDL = """
-CREATE TABLE control_meta (id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL);
-CREATE TABLE strategy_instances (strategy_instance_id TEXT PRIMARY KEY);
-CREATE TABLE runs (id INTEGER PRIMARY KEY);
-CREATE TABLE commands (id INTEGER PRIMARY KEY);
-CREATE TABLE effect_operations (id INTEGER PRIMARY KEY);
-CREATE TABLE orders (order_ref TEXT PRIMARY KEY);
-CREATE TABLE operation_order_links (id INTEGER PRIMARY KEY);
-CREATE TABLE fills (
-    fill_id TEXT PRIMARY KEY,
-    order_ref TEXT NOT NULL,
-    qty REAL NOT NULL,
-    price REAL NOT NULL,
-    side TEXT NOT NULL,
-    is_correction INTEGER NOT NULL DEFAULT 0,
-    source_event_at_ms INTEGER,
-    clerk_observed_at_ms INTEGER NOT NULL,
-    recorded_at_ms INTEGER NOT NULL
-);
-CREATE TABLE positions (id INTEGER PRIMARY KEY);
-CREATE TABLE holds (id INTEGER PRIMARY KEY);
-CREATE TABLE uncertainties (id INTEGER PRIMARY KEY);
-CREATE TABLE reconciliations (id INTEGER PRIMARY KEY);
-CREATE TABLE receipts (id INTEGER PRIMARY KEY);
-CREATE TABLE custody_transitions (
-    sequence INTEGER PRIMARY KEY,
-    order_ref TEXT,
-    facts_json TEXT
-);
-CREATE TABLE mirror_fence (id INTEGER PRIMARY KEY);
-"""
-
-
-def _empty_v6_authority(conn: sqlite3.Connection) -> None:
-    conn.executescript(_V6_AUTHORITY_DDL)
-    conn.execute("INSERT INTO control_meta (id, schema_version) VALUES (1, 6)")
-    conn.commit()
-
-
-def test_schema_ddl_matches_pinned_contracts_doc() -> None:
-    pinned = schema.load_pinned_ddl(REPO_ROOT)
-    assert pinned == schema.SCHEMA_DDL
-
-
-def test_schema_creates_all_pinned_tables() -> None:
-    """``holds`` is absent on purpose: v12 retired the table (ADR 0048 D2).
-
-    Its name survives as a read-only view over ``uncertainties``, asserted
-    separately by
-    :func:`test_holds_is_a_read_only_view_over_the_two_hold_causes`.
-    """
-    conn = sqlite3.connect(":memory:")
-    schema.configure_connection(conn)
-    schema.apply_schema(conn)
-    tables = {
-        row[0]
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name != 'sqlite_sequence'")
-    }
-    assert tables == {
-        "control_meta",
-        "account_risk_policy",
-        "deployment_budgets",
-        "strategy_instances",
-        "runs",
-        "custody_subjects",
-        "commands",
-        "effect_operations",
-        "orders",
-        "operation_order_links",
-        "fills",
-        "external_orders",
-        "bot_config",
-        "decision_receipts",
-        "envelope_reservations",
-        "positions",
-        "uncertainties",
-        "manual_order_tickets",
-        "manual_order_legs",
-        "manual_order_cancellations",
-        "reconciliations",
-        "receipts",
-        "custody_transitions",
-        "exit_recovery_checks",
-        "strategy_exit_terms",
-        "mirror_fence",
-    }
-
-
-def test_v9_execution_provenance_and_custody_subject_schema() -> None:
-    conn = sqlite3.connect(":memory:")
-    schema.configure_connection(conn)
-    schema.apply_schema(conn)
-
-    fills_columns = {row[1]: row for row in conn.execute("PRAGMA table_info(fills)")}
-    assert set(fills_columns) >= {
-        "execution_id",
-        "evidence_source",
-        "event_kind",
-        "superseded_execution_ref",
-        "fee",
-        "fee_fidelity",
-        "recorded_transition_sequence",
-    }
-    assert fills_columns["execution_id"][3] == 0
-    assert fills_columns["evidence_source"][4] == "'cumulative_recovery'"
-    assert fills_columns["event_kind"][4] == "'fill'"
-    assert fills_columns["fee_fidelity"][4] == "'not_reported'"
-
-    index_names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
-    assert {
-        "ux_fills_execution_id",
-        "ux_external_orders_broker_order_id",
-        "ix_decision_receipts_strategy_observed_at",
-        "ux_manual_order_legs_command",
-        "ux_manual_order_legs_effect",
-        "ux_manual_order_legs_order",
-        "ux_manual_order_legs_sequence",
-        "ix_manual_order_cancellations_effect",
-    } <= index_names
-
-    command_columns = {row[1]: row for row in conn.execute("PRAGMA table_info(commands)")}
-    effect_columns = {row[1]: row for row in conn.execute("PRAGMA table_info(effect_operations)")}
-    assert command_columns["subject_id"][3] == 1
-    assert effect_columns["subject_id"][3] == 1
-    assert command_columns["strategy_instance_id"][3] == 0
-    assert effect_columns["strategy_instance_id"][3] == 0
-
-
-def test_v9_authority_migrates_the_manual_cancellation_resource_and_leg_order_to_current() -> None:
-    conn = sqlite3.connect(":memory:")
-    schema.configure_connection(conn)
-    schema.apply_v9_schema(conn)
-    assert (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manual_order_cancellations'"
-        ).fetchone()
-        is None
-    )
-    conn.execute(
-        "INSERT INTO control_meta "
-        "(id, schema_version, broker, account_id, db_identity_token, authority_generation, "
-        "control_revision, created_at_ms, last_open_at_ms, reset_provenance_json, "
-        "execution_lease_owner, execution_lease_expires_at_ms) "
-        "VALUES (1, 9, 'alpaca', 'PA1', 'identity', 1, 0, 1, 1, NULL, NULL, NULL)"
-    )
-    conn.commit()
-
-    schema.migrate_schema(conn, from_version=9)
-
-    assert (
-        conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0]
-        == schema.SCHEMA_VERSION
-    )
-    assert (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'manual_order_cancellations'"
-        ).fetchone()
-        is not None
-    )
-    leg_columns = {row[1] for row in conn.execute("PRAGMA table_info(manual_order_legs)")}
-    assert "sequence_index" in leg_columns
-
-
-def test_v10_multi_leg_ticket_migrates_to_distinct_stable_sequence_indices() -> None:
-    conn = sqlite3.connect(":memory:")
-    schema.configure_connection(conn)
-    schema.apply_v9_schema(conn)
-    conn.execute(
-        "INSERT INTO control_meta "
-        "(id, schema_version, broker, account_id, db_identity_token, authority_generation, "
-        "control_revision, created_at_ms, last_open_at_ms, reset_provenance_json, "
-        "execution_lease_owner, execution_lease_expires_at_ms) "
-        "VALUES (1, 9, 'alpaca', 'PA1', 'identity', 1, 0, 1, 1, NULL, NULL, NULL)"
-    )
-    for statement in schema.SCHEMA_MIGRATIONS[9]:
-        conn.execute(statement)
-    conn.execute("UPDATE control_meta SET schema_version = 10 WHERE id = 1")
-    conn.execute(
-        "INSERT INTO custody_subjects "
-        "(subject_id, kind, strategy_instance_id, operator_id, created_at_ms) "
-        "VALUES ('manual-operator:operator', 'MANUAL_OPERATOR', NULL, 'operator', 1)"
-    )
-    conn.execute(
-        "INSERT INTO manual_order_tickets "
-        "(ticket_id, subject_id, operator_id, instruction_hash, state, created_at_ms, updated_at_ms) "
-        "VALUES ('ticket', 'manual-operator:operator', 'operator', 'hash', 'RESERVED', 1, 1)"
-    )
-    conn.executemany(
-        "INSERT INTO manual_order_legs "
-        "(ticket_id, leg_id, subject_id, instruction_hash, state, created_at_ms, updated_at_ms) "
-        "VALUES ('ticket', ?, 'manual-operator:operator', ?, 'RESERVED', ?, ?)",
-        (("leg-b", "hash-b", 2, 2), ("leg-a", "hash-a", 1, 1)),
-    )
-    conn.commit()
-
-    schema.migrate_schema(conn, from_version=10)
-
-    rows = conn.execute(
-        "SELECT leg_id, sequence_index FROM manual_order_legs WHERE ticket_id = 'ticket' ORDER BY sequence_index"
-    ).fetchall()
-    assert rows == [("leg-a", 0), ("leg-b", 1)]
+from tests.broker.alpaca.clerk.sqlite.conftest import build_v13_authority
 
 
 def _authority_built_up_to(conn: sqlite3.Connection, target_version: int) -> None:
-    """Build the historical v9 baseline, then replay the exact registered
-    migration chain (``SCHEMA_MIGRATIONS``, via the real ``migrate_schema``)
-    up to ``target_version``. ``SCHEMA_VERSION`` is patched for the duration
-    so the same production upgrade path used every day is what builds the
-    fixture, rather than a second hand-rolled copy of it drifting from the
-    real one."""
-    schema.apply_v9_schema(conn)
-    conn.execute(
-        "INSERT INTO control_meta "
-        "(id, schema_version, broker, account_id, db_identity_token, authority_generation, "
-        "control_revision, created_at_ms, last_open_at_ms, reset_provenance_json, "
-        "execution_lease_owner, execution_lease_expires_at_ms) "
-        "VALUES (1, 9, 'alpaca', 'PA1', 'identity', 1, 0, 1, 1, NULL, NULL, NULL)"
-    )
-    conn.commit()
+    """Build the v13 baseline, then replay the exact registered migration
+    chain (``SCHEMA_MIGRATIONS``, via the real ``migrate_schema``) up to
+    ``target_version``. ``SCHEMA_VERSION`` is patched for the duration so the
+    same production upgrade path used every day is what builds the fixture,
+    rather than a second hand-rolled copy of it drifting from the real one."""
+    build_v13_authority(conn, account_id="PA1")
 
     import pytest
 
     mp = pytest.MonkeyPatch()
     try:
         mp.setattr(schema, "SCHEMA_VERSION", target_version)
-        schema.migrate_schema(conn, from_version=9)
+        schema.migrate_schema(conn, from_version=13)
     finally:
         mp.undo()
 
@@ -546,61 +334,6 @@ def test_v9_subject_ownership_invariants_reject_counterfeit_and_cross_wired_rows
         )
     with pytest.raises(sqlite3.IntegrityError, match="custody_subjects are append-only"):
         conn.execute("DELETE FROM custody_subjects WHERE subject_id = 'bot:qqq'")
-
-
-def test_empty_v6_authority_stops_at_the_required_offline_v8_to_v9_ceremony() -> None:
-    conn = sqlite3.connect(":memory:")
-    schema.configure_connection(conn)
-    _empty_v6_authority(conn)
-
-    import pytest
-
-    with pytest.raises(schema.OfflineSchemaUpgradeRequired, match="offline v8-to-v9"):
-        schema.migrate_schema(conn, from_version=6)
-
-    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 6
-    assert (
-        conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decision_receipts'").fetchone()
-        is None
-    )
-
-
-def test_data_bearing_v6_authority_fails_closed_without_schema_mutation() -> None:
-    import pytest
-
-    conn = sqlite3.connect(":memory:")
-    schema.configure_connection(conn)
-    _empty_v6_authority(conn)
-    conn.execute("INSERT INTO custody_transitions (sequence) VALUES (1)")
-    conn.commit()
-    fills_before = list(conn.execute("PRAGMA table_info(fills)"))
-
-    with pytest.raises(ValueError, match="requires an empty authority"):
-        schema.migrate_schema(conn, from_version=6)
-
-    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 6
-    assert list(conn.execute("PRAGMA table_info(fills)")) == fills_before
-    assert (
-        conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'decision_receipts'").fetchone()
-        is None
-    )
-
-
-def test_v6_to_v8_migration_rolls_back_partial_ddl_on_failure() -> None:
-    import pytest
-
-    conn = sqlite3.connect(":memory:")
-    schema.configure_connection(conn)
-    _empty_v6_authority(conn)
-    conn.execute("CREATE TABLE external_orders (id INTEGER PRIMARY KEY)")
-    conn.commit()
-    fills_before = list(conn.execute("PRAGMA table_info(fills)"))
-
-    with pytest.raises(sqlite3.OperationalError, match="external_orders"):
-        schema.migrate_schema(conn, from_version=6)
-
-    assert conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()[0] == 6
-    assert list(conn.execute("PRAGMA table_info(fills)")) == fills_before
 
 
 def test_partial_unique_indexes_allow_only_one_active_safety_cause() -> None:

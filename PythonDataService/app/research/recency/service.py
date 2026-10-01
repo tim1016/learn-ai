@@ -62,7 +62,7 @@ def validate_launch(
     fill_mode: str,
     commission_per_order: float,
 ) -> ValidatedLaunch:
-    """The canonical grid plus its exact run count, or :class:`RecencyLaunchRejected` (D11 ceiling, ranges, request rules)."""
+    """The canonical grid plus its exact run count, or :class:`RecencyLaunchRejected` (ceiling, ranges, rules)."""
     try:
         # The ceiling is checked eagerly by expand_grid; a range the grid
         # language refuses only when it materialises (a step the floats
@@ -100,7 +100,7 @@ def validate_launch(
 
 
 async def create_launch(launch: ValidatedLaunch, *, request: dict[str, Any]) -> bool:
-    """Design spec D20: the durable launch exists before dispatch, so zero-success, cancellation and Redis expiry stay accountable.
+    """The durable launch exists before dispatch, so zero-success, cancellation and Redis expiry stay accountable.
 
     Returns whether this dispatch created the launch. An identical redelivery
     returns ``False`` (the caller decides, from the job's liveness, whether a
@@ -116,7 +116,7 @@ async def create_launch(launch: ValidatedLaunch, *, request: dict[str, Any]) -> 
 
 
 def window_date(ms: int) -> str:
-    """Trading-date string for ``EngineBacktestRequest.from_date`` / ``to_date`` — ET-anchored (temporal-rigor.md), never a UTC ``strftime``."""
+    """Trading-date string for ``EngineBacktestRequest.from_date`` / ``to_date`` — ET-anchored (ADR 0022 (a)), never a UTC ``strftime``."""
     return ms_to_et_date_string(ms)
 
 
@@ -179,7 +179,7 @@ def resume_refusal(launch: LaunchView, *, live: bool | None) -> str | None:
     conservatively, as everywhere a live record is asked.
     """
     if launch.deleted_at_ms is not None:
-        return "the launch is deleted; restore it before resuming"
+        return "the launch is deleted"
     if launch.status == "COMPLETED":
         return "the Recency launch is complete"
     if launch.status == "RUNNING" and live is not False:

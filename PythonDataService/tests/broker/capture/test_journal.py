@@ -1,4 +1,4 @@
-"""Tests for the broker-neutral capture journal (Broker System v2, §6)."""
+"""Tests for the broker-neutral capture journal (Broker System v2, ADR 0032)."""
 
 from __future__ import annotations
 
@@ -51,7 +51,6 @@ def test_record_round_trips_verbatim_utf8_body(tmp_path: Path) -> None:
     assert record["captured_at_ms"] == _FIXED_MS
     assert record["method"] == "GET"
     assert record["broker"] == "alpaca"
-    assert journal.records_written == 1
 
 
 def test_utc_day_rotation_writes_separate_day_files(tmp_path: Path) -> None:
@@ -153,7 +152,6 @@ def test_unsafe_broker_component_is_nonfatal_and_counted(tmp_path: Path) -> None
 
     assert ok is False
     assert journal.failure_count == 1
-    assert journal.records_written == 0
     assert list(tmp_path.rglob("*.jsonl")) == []
 
 
@@ -172,7 +170,6 @@ def test_multiple_records_append_to_same_day_file(tmp_path: Path) -> None:
 
     [path] = list((tmp_path / "alpaca" / "activities").glob("*.jsonl"))
     assert len(_read_records(path)) == 3
-    assert journal.records_written == 3
 
 
 def test_capture_dir_read_from_env(

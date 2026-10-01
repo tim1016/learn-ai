@@ -122,12 +122,6 @@ export class RobustnessReportComponent {
     return this.robustness().trainTest?.overfitFlag ? 'OVERFIT WARNING' : 'CONSISTENT';
   }
 
-  get trainTestDelta(): number {
-    const tt = this.robustness().trainTest;
-    if (!tt) return 0;
-    return tt.trainMeanIC - tt.testMeanIC;
-  }
-
   constructor() {
     effect(() => {
       const rob = this.robustness();

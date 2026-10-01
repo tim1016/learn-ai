@@ -10,9 +10,4 @@ public static class UnixMs
         var utc = value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
         return new DateTimeOffset(utc).ToUnixTimeMilliseconds();
     }
-
-    public static DateTime ToUtcDateTime(long value)
-    {
-        return DateTimeOffset.FromUnixTimeMilliseconds(value).UtcDateTime;
-    }
 }

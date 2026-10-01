@@ -46,6 +46,7 @@ from app.services.program_source_anchor import (
     _IMPORTED_SOURCE_DIGESTS,
     record_imported_program_sources,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_QUALIFICATION_MANIFEST = _SERVICE_ROOT / "app/data/signal_program_build_receipts.json"
@@ -66,7 +67,7 @@ class ProgramBuildQualificationReceipt(BaseModel):
     # isolation.
     wiring_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     qualification_suite: str
-    qualified_at_ms: int = Field(ge=0)
+    qualified_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     # Recorded lineage of the qualified bytes (see ProgramBuildGitProvenance).
     # Optional so the receipts minted before it existed keep their committed
     # hashes: an absent provenance is omitted from the hashed payload, never
@@ -348,7 +349,7 @@ def prove_running_program_build(
     # The wiring half is checked separately, and *after* the receipt lookup, so
     # the two drifts can never be confused. A drift in the artifacts above has
     # already failed closed by this point regardless of the toggle -- that is
-    # the admission control this PRD was built around, and issue #1735's scope
+    # the admission control this module was built around, and issue #1735's scope
     # note keeps it blocking. Only this newly-covered half is toggle-governed.
     wiring_matches = receipt.wiring_digest == running_wiring
     if not wiring_matches and settings.SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED:
@@ -552,8 +553,8 @@ def _seal_checks(
             "The registered golden trace root has moved since this instance was sealed.",
         ),
         # #1729 AC4 "provider" proof: the sealed qualification-lineage identity
-        # (PRD Sec 11.6) must still be present and unchanged against the
-        # currently registered contract. Not a live-feed parity gate -- see
+        # must still be present and unchanged against the currently registered
+        # contract. Not a live-feed parity gate -- see
         # SignalDataContract.provider's docstring.
         _SealCheck(
             "data.provider",
@@ -561,7 +562,7 @@ def _seal_checks(
             "The sealed qualification lineage no longer matches the registered contract.",
         ),
         # The sealed-semantics completeness fix (sibling to #1729): every field
-        # widened onto the seal (PRD Sec 11.1) must still match the registered
+        # widened onto the seal must still match the registered
         # contract, at the same cadence as the identity checks above.
         _SealCheck(
             "protocol_version",

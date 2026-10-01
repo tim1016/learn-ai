@@ -1,4 +1,4 @@
-"""Canonical evidence fingerprint (design spec D16).
+"""Canonical evidence fingerprint.
 
 Two executions must collapse to the same trade identity only when they
 agree on symbol, strategy, strategy-code revision, parameters, data

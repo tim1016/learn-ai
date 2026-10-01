@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.config import AlpacaSettings
-from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances, marketable_limit_price
+from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances, marketable_limit_price, price_increment
 from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, TimeInForce
 
 
@@ -33,6 +33,19 @@ from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, Tim
 )
 def test_marketable_limit_price(side: OrderSide, close: Decimal, bps: Decimal, expected: Decimal) -> None:
     assert marketable_limit_price(side=side, anchor=close, allowance_bps=bps) == expected
+
+
+@pytest.mark.parametrize(
+    ("price", "increment"),
+    [
+        # Alpaca's tick: a hundredth of a cent just below $1, a cent from $1 up.
+        (Decimal("0.9999"), Decimal("0.0001")),
+        (Decimal("1.00"), Decimal("0.01")),
+    ],
+)
+def test_price_increment_changes_at_one_dollar(price: Decimal, increment: Decimal) -> None:
+    """#2770: the Clerk's price-conflict tolerance reads this tick rule, so its $1 boundary is pinned here."""
+    assert price_increment(price) == increment
 
 
 def test_a_negative_allowance_is_refused() -> None:
@@ -60,7 +73,7 @@ def test_allowances_come_from_settings_and_are_absent_when_unset() -> None:
 def test_the_envelope_and_settings_constructors_agree_on_the_same_six_numbers() -> None:
     """A sealed envelope and an environment-configured one anchor identically.
 
-    The exit-pricing rule (ADR 0060; plan §0 D3) reads the allowance out of an
+    The exit-pricing rule (ADR 0060) reads the allowance out of an
     arming record's sealed envelope instead of out of settings, so the two
     adapters must not be able to disagree about the same numbers. Both are
     ``Decimal(str(...))`` conversions, deliberately: this is adapter-level
@@ -124,7 +137,7 @@ def test_an_allowance_of_a_hundred_percent_or_more_will_not_load(bps: str) -> No
 def test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price(
     side: OrderSide, close: str, bps: str
 ) -> None:
-    """Parity for the duplicated $1 tick rule (CLAUDE.md guiding philosophy #5).
+    """Parity for the duplicated $1 tick rule.
 
     ``marketable_limit.py`` picks the tick from the *pre*-quantisation ``raw``;
     ``BrokerOrderLeg._limit_price_matches_order_type`` checks the *final*
@@ -190,17 +203,10 @@ def test_allowance_converters_keep_defaults_legacy_knobs_only_apply_at_upgrade(m
     assert stamped.exit_spread_cap_bps == Decimal("200")
     # One concept, one value: the ticket warning and the enforcement gate
     # share the canonical numbers, so tuning one cannot drift the other.
-    from app.broker.alpaca.clerk.recovery_reduction import (
-        RECOVERY_BAND_ALLOWANCE_MULTIPLE,
-        RECOVERY_SPREAD_WARNING_BPS,
-    )
-    from app.broker.alpaca.marketable_limit import (
-        DEFAULT_EXIT_BAND_MULTIPLE,
-        DEFAULT_EXIT_SPREAD_CAP_BPS,
-    )
+    from app.broker.alpaca.clerk.recovery_reduction import RECOVERY_SPREAD_WARNING_BPS
+    from app.broker.alpaca.marketable_limit import DEFAULT_EXIT_SPREAD_CAP_BPS
 
     assert RECOVERY_SPREAD_WARNING_BPS == int(DEFAULT_EXIT_SPREAD_CAP_BPS) == 50
-    assert RECOVERY_BAND_ALLOWANCE_MULTIPLE == DEFAULT_EXIT_BAND_MULTIPLE
 
 
 def test_invalid_deploy_knob_values_degrade_loudly_to_the_declared_defaults() -> None:

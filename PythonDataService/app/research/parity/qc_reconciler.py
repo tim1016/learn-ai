@@ -21,12 +21,8 @@ Formulas:
     as an explicit gate rather than relying on implicit propagation.
 
 Reference: Internal design — divergence taxonomy is the 8-category
-    ``DivergenceCategory`` `StrEnum` documented in
-    ``.claude/rules/numerical-rigor.md`` → "Trade-level reconciliation
-    taxonomy"; design rationale, acceptance gates, and tolerance defaults
-    in ``docs/superpowers/specs/2026-05-11-phase3-pnl-parity-design.md``;
-    Phase 3.0 / 3.5 Path A reconciliation summary at
-    ``docs/references/reconciliations/qc-aapl-phase3.md``.
+    ``DivergenceCategory`` `StrEnum` recorded in ADR 0069 §6, with its
+    acceptance gate; tolerance defaults are ADR 0069 §3.
 
 Canonical implementation: this file.
 Validated against:
@@ -45,7 +41,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.research.parity.fixture_data_reader import FixtureDataReader
@@ -57,7 +53,7 @@ _NY = ZoneInfo("America/New_York")
 
 
 class DivergenceCategory(StrEnum):
-    """Categorical divergence types — see numerical-rigor.md."""
+    """Categorical divergence types — see ADR 0069 §6."""
 
     FIXTURE_INSUFFICIENT = "fixture_insufficient"
     DECISION_MISMATCH = "decision_mismatch"
@@ -71,7 +67,7 @@ class DivergenceCategory(StrEnum):
 
 @dataclass(frozen=True)
 class Tolerances:
-    """Per-field comparison tolerances. Phase 3 defaults match the design spec."""
+    """Per-field comparison tolerances. Phase 3 defaults are ADR 0069 §3's."""
 
     fill_price_atol: Decimal = Decimal("0.01")
     commission_atol: Decimal = Decimal("0.01")
@@ -249,22 +245,6 @@ class ReconciliationReport:
         lines.append(f"- window: {self.fixture_metadata.window_start} → {self.fixture_metadata.window_end}")
         return "\n".join(lines) + "\n"
 
-    def render_json(self) -> dict[str, Any]:
-        return {
-            "status": self.status,
-            "summary": {
-                "n_pairs": self.summary.n_pairs,
-                "n_qc_fills": self.summary.n_qc_fills,
-                "n_our_fills": self.summary.n_our_fills,
-                "n_unmatched_qc": self.summary.n_unmatched_qc,
-                "n_unmatched_ours": self.summary.n_unmatched_ours,
-                "n_divergences_by_category": {k.value: v for k, v in self.summary.n_divergences_by_category.items()},
-            },
-            "divergence_count": len(self.divergences),
-            "fixture_audit_count": len(self.fixture_audit),
-            "propagated_pnl_atol": str(self.diagnostics.propagated_pnl_atol),
-        }
-
 
 class FixtureSchemaError(ValueError):
     """Raised when a captured QC fixture does not match the canonical schema.
@@ -272,9 +252,7 @@ class FixtureSchemaError(ValueError):
     The reconciler does *not* try to be tolerant of every QC API response
     shape — the runbook's normalization step is responsible for producing a
     canonical payload, and this parser enforces that contract by failing
-    fast on deviations. See
-    ``docs/references/qc-aapl-phase3-capture-runbook.md`` § "Canonical
-    fixture schema".
+    fast on deviations.
     """
 
 
@@ -721,7 +699,7 @@ def reconcile_qc_aapl_phase3(
     """Reconcile QC's recorded backtest against ours and return a typed report.
 
     ``assert_fees`` toggles ``COMMISSION_DRIFT`` as a gating category. Set to
-    ``True`` only after the capture-smoke step (see Phase 3 spec §2.1.2)
+    ``True`` only after the capture-smoke step
     confirms QC's payload contains non-zero ``orderFeeAmount`` values
     (Branch A); leave ``False`` for Branch B fixtures where fees are
     informational only.

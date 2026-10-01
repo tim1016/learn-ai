@@ -2,9 +2,8 @@
 
 ``GET /`` serves the run-history table (newest first, optionally one
 engine's), ``GET /{id}`` the run report with its newest five hundred trades
-and parity verdicts, ``PATCH /{id}/notes`` the researcher's notes, and
-``DELETE /{id}`` a hard delete that refuses while a live Recency Chart run
-still points at the run. These replace the .NET ``backtestRuns`` /
+and parity verdicts, and ``PATCH /{id}/notes`` the researcher's notes.
+These replace the .NET ``backtestRuns`` /
 ``backtestRun`` GraphQL queries, the ``updateBacktestRunNotes`` mutation and
 the ``/api/studies`` REST surface; the Relay connection is not reproduced
 because the history table requests one fixed page and never pages.
@@ -12,7 +11,7 @@ because the history table requests one fixed page and never pages.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.research.backtest_runs import repository as repo
 from app.research.backtest_runs.repository import Engine
@@ -61,33 +60,3 @@ async def update_backtest_run_notes(run_id: int, body: BacktestRunNotesRequest) 
     if not await with_connection(repo.update_notes, run_id, body.notes):
         raise _not_found(run_id)
     return BacktestRunNotesResponse(id=run_id, notes=body.notes)
-
-
-@router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
-async def delete_backtest_run(run_id: int) -> Response:
-    """Hard-delete a run; a run backing a live Recency Chart run must go through Recency soft-delete."""
-    outcome = await with_connection(repo.delete_run, run_id)
-    if outcome == "not_found":
-        raise _not_found(run_id)
-    if outcome == "recency_member":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "RECENCY_MEMBER",
-                "message": (
-                    f"Backtest run {run_id} is a live Recency Chart run member; "
-                    "soft-delete the Recency run instead of deleting the run directly."
-                ),
-            },
-        )
-    if outcome == "golden_validation_evidence":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "GOLDEN_VALIDATION_EVIDENCE",
-                "message": (
-                    f"Backtest run {run_id} is retained by Golden Validation evidence and cannot be deleted."
-                ),
-            },
-        )
-    return Response(status_code=status.HTTP_204_NO_CONTENT)

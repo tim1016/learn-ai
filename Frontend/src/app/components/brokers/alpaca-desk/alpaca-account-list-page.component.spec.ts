@@ -137,18 +137,6 @@ describe('AlpacaAccountListPageComponent', () => {
     ]);
   });
 
-  it('describes no lane mechanics and offers no surface chooser', async () => {
-    await renderList({}, twoAccounts());
-
-    // The paragraph that listed the card's six links, and the per-card
-    // authority/binding/endpoint facts, are what #2187 removed: a list exists
-    // to choose from, and the workspace holds an account's mechanics.
-    expect(screen.queryByText(/Trader view for holdings/i)).toBeNull();
-    expect(screen.queryByText(/no lane is selected automatically/i)).toBeNull();
-    expect(screen.queryByText('Binding generation')).toBeNull();
-    expect(screen.queryByText('Endpoint mode')).toBeNull();
-  });
-
   it('makes a broker-wide deploy intent an explicit account choice', async () => {
     await renderList({ deploy: '' }, twoAccounts());
 

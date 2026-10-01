@@ -21,6 +21,7 @@ from pathlib import Path, PurePosixPath
 
 from app.data_lake.polygon_corp_actions import DividendEvent, SplitEvent
 from app.data_lake.types import trading_date_to_calendar_anchor_ms
+from app.engine.live.identity import confine_path_to_root
 from app.utils.advisory_lock import try_advisory_file_lock
 
 
@@ -160,10 +161,12 @@ async def capture_lock(
     @asynccontextmanager
     async def one(symbol: str) -> AsyncIterator[None]:
         deadline = time.monotonic() + timeout
+        # Request-body symbols name the lock file, so it stays under ``root``.
+        target = confine_path_to_root(root / current_snapshot_path(symbol), root, label="adjustment-version lock")
         while True:
             if check_cancelled is not None:
                 check_cancelled()
-            with try_advisory_file_lock(root / current_snapshot_path(symbol)) as acquired:
+            with try_advisory_file_lock(target) as acquired:
                 if acquired:
                     yield
                     return

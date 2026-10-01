@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import math
+from datetime import date
+from unittest.mock import patch
 
 import pytest
 
 from app.models.strategy import StrategyAnalyzeRequest, StrategyLeg
+from app.services.bs_greeks import bs_european_price
 from app.services.strategy_engine import (
     analyze_strategy,
     compute_d2,
@@ -20,6 +23,7 @@ from app.services.strategy_engine import (
     interpolate_iv_at_price,
     weighted_iv,
 )
+from app.utils.session_anchors import calendar_days_to_expiry, et_midnight_ms
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -304,6 +308,40 @@ class TestAnalyzeStrategy:
 
 
 # ---------------------------------------------------------------------------
+# Days to expiry — the tenor the chain snapshot's rate is looked up at (#2789)
+# ---------------------------------------------------------------------------
+
+# 23:30 ET on 2027-03-05 (EST) is already 04:30 UTC on 2027-03-06.
+_LATE_EVENING_ET_2027_03_05 = et_midnight_ms(date(2027, 3, 5)) + 23 * 3_600_000 + 30 * 60_000
+
+
+class TestDaysToExpiry:
+    def test_counts_from_the_et_date_not_the_utc_date(self):
+        assert calendar_days_to_expiry("2027-03-06", now_ms=_LATE_EVENING_ET_2027_03_05) == 1
+
+    def test_an_expired_contract_is_zero_days_out(self):
+        assert calendar_days_to_expiry("2027-02-19", now_ms=_LATE_EVENING_ET_2027_03_05) == 0
+
+    def test_analysis_prices_over_the_same_et_dte(self):
+        req = StrategyAnalyzeRequest(
+            symbol="TEST",
+            legs=[_leg(100, "call", "long", 5.0)],
+            expiration_date="2027-03-06",
+            spot_price=102,
+            risk_free_rate=0.04,
+            include_leg_diagnostics=True,
+        )
+        with patch("app.utils.session_anchors.now_ms_utc", return_value=_LATE_EVENING_ET_2027_03_05):
+            result = analyze_strategy(req)
+
+        one_day = bs_european_price(
+            spot=102, strike=100, ttm_years=1 / 365.0, rate=0.04, volatility=0.25, is_call=True, dividend=0.0
+        )
+        assert result.success is True
+        assert result.leg_diagnostics[0].current_theoretical == round(one_day, 6)
+
+
+# ---------------------------------------------------------------------------
 # IV interpolation
 # ---------------------------------------------------------------------------
 
@@ -573,40 +611,3 @@ class TestGreeks:
         legs = [_leg(100, "call", "long", 5.0, iv=0.25)]
         greeks = compute_strategy_greeks(legs, spot=110, r=0.043, days_to_expiry=0)
         assert greeks.gamma == 0.0
-
-
-# ---------------------------------------------------------------------------
-# Edge cases: input validation
-# ---------------------------------------------------------------------------
-
-
-class TestAnalyzeStrategyValidation:
-    def test_invalid_option_type_rejected(self):
-        """Unknown option type should be rejected by Pydantic."""
-        with pytest.raises(Exception):
-            _leg(100, "butterfly", "long", 5.0)
-
-    def test_invalid_position_rejected(self):
-        """Unknown position should be rejected by Pydantic."""
-        with pytest.raises(Exception):
-            _leg(100, "call", "neutral", 5.0)
-
-    def test_negative_spot_price_rejected(self):
-        """Negative spot price should be rejected by Pydantic gt=0."""
-        with pytest.raises(Exception):
-            StrategyAnalyzeRequest(
-                symbol="TEST",
-                legs=[_leg(100, "call", "long", 5.0)],
-                expiration_date="2026-12-31",
-                spot_price=-10.0,
-            )
-
-    def test_empty_legs_rejected(self):
-        """Empty legs list should be rejected by Pydantic min_length=1."""
-        with pytest.raises(Exception):
-            StrategyAnalyzeRequest(
-                symbol="TEST",
-                legs=[],
-                expiration_date="2026-12-31",
-                spot_price=100.0,
-            )

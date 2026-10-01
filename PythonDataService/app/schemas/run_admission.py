@@ -32,7 +32,7 @@ class RunProcessAdmissionFact(BaseModel):
     run_id: str | None = None
     process_identity: str | None = None
     registry_generation: str
-    observed_at_ms: int = Field(ge=0)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
     @model_validator(mode="after")
     def _identity_matches_state(self) -> RunProcessAdmissionFact:
@@ -50,14 +50,14 @@ class MarketDataAdmissionFact(BaseModel):
 
     state: Literal["AVAILABLE", "STALE", "UNAVAILABLE", "UNKNOWN"]
     feed_id: str | None = None
-    last_bar_ms: int | None = Field(default=None, ge=0)
-    observed_at_ms: int = Field(ge=0)
+    last_bar_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     reason: str | None = None
     connected: bool | None = None
     stale: bool | None = None
     active_subscription_count: int | None = Field(default=None, ge=0)
     scheduled_phase: BarSessionPhase = "UNKNOWN"
-    session_authority_source: Literal["ibkr_capability", "nyse_calendar", "broker_declared_window"] | None = None
+    session_authority_source: Literal["nyse_calendar", "broker_declared_window"] | None = None
     extended_phase_proven: bool = False
 
 
@@ -88,7 +88,7 @@ class ExtendedHoursAdmissionFact(BaseModel):
 
     state: ExtendedHoursAdmissionState
     refusal: LegRefusal | None = None
-    observed_at_ms: int = Field(ge=0)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
     @model_validator(mode="after")
     def consistent_refusal(self) -> ExtendedHoursAdmissionFact:
@@ -115,7 +115,7 @@ class StartRuntimeAdmissionFact(BaseModel):
         "RECOVERY_SWEEP_EVALUATING",
         "RECOVERY_UNCERTAIN",
     ]
-    observed_at_ms: int = Field(ge=0)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     explanation: str
     next_step: str | None = None
 
@@ -135,7 +135,7 @@ class StrategyValidationAdmissionFact(BaseModel):
     evidence_status: Literal["accepted", "evidence_only", "blocked", "unknown"]
     event_id: str | None = None
     evidence_snapshot_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    verified_at_ms: int = Field(ge=0)
+    verified_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     evidence_refs: tuple[str, ...] = ()
     explanation: str
     next_step: str | None = None
@@ -212,7 +212,7 @@ class ProgramBuildAdmissionFact(BaseModel):
     golden_trace_root: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     running_artifact_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     qualification_receipt_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    verified_at_ms: int = Field(ge=0)
+    verified_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     evidence_refs: tuple[str, ...] = ()
     explanation: str
     next_step: str | None = None
@@ -325,6 +325,6 @@ class RunAdmissionDecision(BaseModel):
     proposed_run_id: str
     configuration_hash: str
     account_id: str
-    evaluated_at_ms: int = Field(ge=0)
+    evaluated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     fact_ages_ms: RunAdmissionFactAges
     evidence_refs: tuple[str, ...]

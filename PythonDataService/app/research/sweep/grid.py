@@ -6,13 +6,13 @@ explicit value-list, or an inclusive low/high/step sequence. Expansion is
 lazy (a generator) so a large-but-legitimate sweep never fully materializes
 in memory; a cheap size computation runs eagerly before any expansion so a
 pathological/malformed grid is rejected immediately rather than after it
-starts exhausting the service (D11 — no product cap, but engineering rails).
+starts exhausting the service (ADR 0072 decision 4 — no product cap, but engineering rails).
 ``params_hash`` is a stable, key-order-independent identity for one
 strategy's parameter assignment — the first component of the Recency
-Chart's canonical evidence fingerprint (design spec §3, D16) and the cell
+Chart's canonical evidence fingerprint (ADR 0072 decision 5) and the cell
 identity of a Grid Search (PRD #1926) and a Walk-Forward study (PRD #1925).
-Reference: PRD https://github.com/tim1016/learn-ai/issues/1577; design spec
-docs/superpowers/specs/2026-08-16-recency-chart-design.md §5.3, D11, D16;
+Reference: PRD https://github.com/tim1016/learn-ai/issues/1577; ADR 0072
+decision 4 (Recency Chart D11);
 PRD https://github.com/tim1016/learn-ai/issues/1926 "Grid and workload".
 Canonical implementation: this file (moved from app/research/recency/grid.py
 when #1926 generalized it; the vocabulary is unchanged).
@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from itertools import product
 
-# A very high sanity ceiling, not a product-level cap (D11): real sweeps
+# A very high sanity ceiling, not a product-level cap (ADR 0072 decision 4): real sweeps
 # (tens of symbols x a handful of strategies x dozens of combos) sit many
 # orders of magnitude below this. It exists only to fail fast on a
 # fat-fingered range (e.g. step=0.0001 over a wide span) before the grid

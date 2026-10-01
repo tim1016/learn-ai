@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.schemas.ticker_request import Session, TickerRequest
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 _TIME_ZONE_DESCRIPTION = (
@@ -48,87 +48,6 @@ class AggregateRequest(BaseModel):
         return v
 
 
-class TradeRequest(BaseModel):
-    """Request schema for fetching trade data"""
-
-    ticker: str = Field(..., min_length=1, max_length=50)
-    timestamp: str | None = Field(None, description="Timestamp filter (YYYY-MM-DD)")
-    limit: int = Field(50000, ge=1, le=50000)
-
-
-class IndicatorRequest(BaseModel):
-    """Request schema for fetching technical indicators"""
-
-    ticker: str = Field(..., min_length=1, max_length=20)
-    indicator_type: str = Field(..., description="Indicator: sma, ema, rsi, macd")
-    timespan: str = Field("day", description="Timespan")
-    window: int = Field(50, ge=1, description="Window period")
-    timestamp: str | None = None
-
-    @field_validator("indicator_type")
-    @classmethod
-    def validate_indicator(cls, v: str) -> str:
-        valid = ["sma", "ema", "rsi", "macd"]
-        if v.lower() not in valid:
-            raise ValueError(f"indicator_type must be one of {valid}")
-        return v.lower()
-
-
-class SanitizeRequest(BaseModel):
-    """Request schema for the standalone /api/sanitize endpoint"""
-
-    data: list[dict[str, Any]] = Field(..., description="List of market data records to sanitize")
-    quantile: float = Field(0.99, ge=0.0, le=1.0, description="Quantile threshold for outlier removal")
-
-
-class OhlcvBar(BaseModel):
-    """Single OHLCV bar for indicator calculation"""
-
-    timestamp: int = Field(..., description="Unix milliseconds")
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
-
-
-class IndicatorConfig(BaseModel):
-    """Configuration for a single indicator"""
-
-    name: str = Field(..., description="Indicator name: sma, ema, rsi, macd, bbands, stoch")
-    window: int = Field(14, ge=1, description="Lookback period")
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, v: str) -> str:
-        valid = ["sma", "ema", "rsi", "macd", "bbands", "stoch"]
-        if v.lower() not in valid:
-            raise ValueError(f"indicator name must be one of {valid}")
-        return v.lower()
-
-
-class OptionsContractsRequest(BaseModel):
-    """Request schema for listing options contracts"""
-
-    underlying_ticker: str = Field(..., min_length=1, max_length=20, description="Underlying stock ticker")
-    as_of_date: str | None = Field(None, description="As-of date (YYYY-MM-DD)")
-    contract_type: str | None = Field(None, description="Filter: call or put")
-    strike_price_gte: float | None = Field(None, description="Min strike price")
-    strike_price_lte: float | None = Field(None, description="Max strike price")
-    expiration_date: str | None = Field(None, description="Exact expiration date (YYYY-MM-DD)")
-    expiration_date_gte: str | None = Field(None, description="Min expiration date")
-    expiration_date_lte: str | None = Field(None, description="Max expiration date")
-    expired: bool | None = Field(None, description="Include expired contracts")
-    limit: int = Field(100, ge=1, le=1000, description="Max results")
-
-    @field_validator("contract_type")
-    @classmethod
-    def validate_contract_type(cls, v: str | None) -> str | None:
-        if v is not None and v not in ["call", "put"]:
-            raise ValueError('contract_type must be "call" or "put"')
-        return v
-
-
 class OptionsExpirationsRequest(BaseModel):
     """Request schema for listing unique options expiration dates"""
 
@@ -160,98 +79,6 @@ class StockSnapshotRequest(BaseModel):
     ticker: str = Field(..., min_length=1, max_length=20, description="Stock ticker symbol")
 
 
-class StockSnapshotsRequest(BaseModel):
-    """Request schema for multiple stock ticker snapshots"""
-
-    tickers: list[str] | None = Field(None, description="List of tickers. If omitted, returns all.")
-
-
-class MarketMoversRequest(BaseModel):
-    """Request schema for top market movers"""
-
-    direction: str = Field(..., description="'gainers' or 'losers'")
-
-    @field_validator("direction")
-    @classmethod
-    def validate_direction(cls, v: str) -> str:
-        if v not in ("gainers", "losers"):
-            raise ValueError("direction must be 'gainers' or 'losers'")
-        return v
-
-
-class UnifiedSnapshotRequest(BaseModel):
-    """Request schema for unified v3 snapshots"""
-
-    tickers: list[str] | None = Field(None, description="Optional list of tickers to filter")
-    limit: int = Field(10, ge=1, le=250, description="Max results (default 10, max 250)")
-
-
-class CalculateIndicatorsRequest(BaseModel):
-    """Request to calculate technical indicators from OHLCV data"""
-
-    ticker: str = Field(..., min_length=1, max_length=20)
-    bars: list[OhlcvBar] = Field(..., min_length=1)
-    indicators: list[IndicatorConfig] = Field(..., min_length=1)
-
-
-class TickerListRequest(BaseModel):
-    """Request schema for fetching basic info for a list of tickers"""
-
-    tickers: list[str] = Field(..., min_length=1, description="List of ticker symbols")
-
-
-class TickerDetailRequest(BaseModel):
-    """Request schema for fetching detailed overview of a single ticker"""
-
-    ticker: str = Field(..., min_length=1, max_length=20, description="Stock ticker symbol")
-
-
-class RelatedTickersRequest(BaseModel):
-    """Request schema for fetching related companies for a ticker"""
-
-    ticker: str = Field(..., min_length=1, max_length=20, description="Stock ticker symbol")
-
-
-class IndicatorTableRequest(TickerRequest):
-    """Request to generate a full TradingView-style indicator table from Polygon minute data.
-
-    Inherits ``symbol`` / ``from_date`` / ``to_date`` / ``timespan`` /
-    ``multiplier`` / ``session`` from the canonical ``TickerRequest``.
-    Legacy field names (``ticker`` / ``start_date`` / ``end_date``) are
-    still accepted during the PR (ii) → (iii) migration window via
-    Pydantic ``AliasChoices``.
-
-    **Default override**: ``session`` defaults to ``"extended"`` here
-    (vs the base's ``"rth"``) to preserve pre-migration behavior — this
-    endpoint operates on the full session by default.
-    """
-
-    # Override base default — preserves pre-migration behavior. Without
-    # this override the inherited "rth" would silently change the
-    # endpoint's default session window.
-    session: Session = "extended"  # type: ignore[assignment]
-
-    ema_periods: list[int] = Field(
-        default=[5, 10, 20, 30, 40, 50, 100, 200],
-        description="EMA periods to calculate",
-    )
-    bb_length: int = Field(20, ge=1, description="Bollinger Bands length")
-    bb_std: float = Field(2.0, gt=0, description="Bollinger Bands standard deviation")
-    supertrend_length: int = Field(10, ge=1, description="Supertrend ATR length")
-    supertrend_multiplier: float = Field(3.0, gt=0, description="Supertrend multiplier")
-    rsi_length: int = Field(14, ge=1, description="RSI period")
-    rsi_ma_length: int = Field(14, ge=1, description="RSI moving average period")
-    macd_fast: int = Field(12, ge=1, description="MACD fast period")
-    macd_slow: int = Field(26, ge=1, description="MACD slow period")
-    macd_signal: int = Field(9, ge=1, description="MACD signal period")
-    adx_length: int = Field(14, ge=1, description="ADX period")
-    forward_fill: bool = Field(
-        False,
-        description="Fill missing minute bars with previous close (volume=0)",
-    )
-    adjusted: bool = Field(True, description="Adjust for splits/dividends (Polygon default: true)")
-
-
 class OptionsCompanionConfig(BaseModel):
     """Optional companion-file config emitted alongside the underlying dataset CSV.
 
@@ -261,8 +88,8 @@ class OptionsCompanionConfig(BaseModel):
     from ATM (e.g. ``calls/atm-03.csv``, ``calls/atm.csv``, ``puts/atm+02.csv``).
     Each file is a fixed-schema time series for that slot across all trading
     days in range; the contract filling the slot rolls daily and is recorded
-    as the ``contract_ticker`` row value. See ``docs/options-companion-format.md``
-    for the full spec; computation lives in ``options_companion_service``.
+    as the ``contract_ticker`` row value. Computation lives in
+    ``options_companion_service``.
     """
 
     enabled: bool = Field(False, description="Emit options companion CSV files in the ZIP")
@@ -301,7 +128,10 @@ class OptionsCompanionConfig(BaseModel):
         ),
     )
     risk_free_rate: float = Field(
-        0.05, ge=0, le=0.25, description="Flat annualized risk-free rate used in IV/Greeks solves"
+        DEFAULT_RISK_FREE_RATE,
+        ge=0,
+        le=0.25,
+        description="Flat annualized risk-free rate used in IV/Greeks solves (omit for the Python default)",
     )
     dividend_yield: float = Field(0.0, ge=0, le=0.25, description="Flat continuous dividend yield for Greeks")
 
@@ -378,7 +208,7 @@ class DatasetGenerationRequest(BaseModel):
     )
     # Canonical numeric window (int64 ms UTC) — additive; per-field takes
     # precedence over the date strings so a generated dataset matches the
-    # planned half-open window (data-lab workspace redesign PRD §12).
+    # planned half-open window.
     start_ms_utc: int | None = Field(
         None,
         ge=0,
@@ -481,8 +311,7 @@ class DatasetPlanRequest(BaseModel):
     executed with the same fields. ``from_date``/``to_date`` remain
     date-intent strings for now; the additive ``start_ms_utc``/
     ``end_ms_utc`` fields are the canonical numeric form and take
-    precedence over the date strings when supplied (data-lab workspace
-    redesign PRD §12).
+    precedence over the date strings when supplied.
     """
 
     ticker: str = Field(..., min_length=1, max_length=20, description="Ticker symbol")

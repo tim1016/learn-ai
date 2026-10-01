@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
 ValidationState = Literal["validated", "needs_validation"]
 StrategyValidationFlag = Literal["validated", "invalidated"]
 BehavioralEquivalenceVerdict = Literal["accepted_for_deploy", "evidence_only", "rejected"]
@@ -85,7 +87,7 @@ class StrategyValidationFlagEvent(BaseModel):
     strategy_key: str
     flag: StrategyValidationFlag
     flagged_by: str
-    flagged_at_ms: int = Field(ge=0)
+    flagged_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     reason: str = Field(min_length=1, max_length=4000)
     behavioral_equivalence: StrategyBehavioralEquivalence
     evidence_snapshot: StrategyEvidenceSnapshot
@@ -162,5 +164,5 @@ class StrategyValidationCatalog(BaseModel):
 
 class StrategyValidationRefreshResult(BaseModel):
     refresh_id: str
-    refreshed_at_ms: int = Field(ge=0)
+    refreshed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     detail: StrategyValidationDetail

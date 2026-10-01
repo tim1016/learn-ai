@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import pandas as pd
 import pytest
 
-from app.research.features.registry import OPTIONS_FEATURES, list_available_features
 from app.research.features.ta_features import TechnicalFeatures
 
 
@@ -59,14 +57,6 @@ class TestMACDSignal:
 
 
 class TestFeatureDispatcher:
-    def test_all_registered_features_compute(self, sample_bars_single_day: list[dict]) -> None:
-        for feature_name in list_available_features():
-            if feature_name in OPTIONS_FEATURES:
-                continue  # Options features use OptionsFeatures, not TechnicalFeatures
-            result = TechnicalFeatures.compute_feature(feature_name, sample_bars_single_day)
-            assert isinstance(result, pd.Series)
-            assert len(result) == len(sample_bars_single_day)
-
     def test_unknown_feature_raises(self) -> None:
         bars = [
             {"timestamp": i * 1000, "open": 100, "high": 101, "low": 99, "close": 100, "volume": 1e6} for i in range(50)

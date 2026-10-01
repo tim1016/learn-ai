@@ -170,7 +170,7 @@ describe('ExportComponent', () => {
     // Untouched checkboxes export every column, including later ones.
     expect(payload['columns']).toBeNull();
     expect(payload['time_zone']).toBe('America/Chicago');
-    // No HTTP of its own beyond the plan — generation is job-backed only (FR-005).
+    // No HTTP of its own beyond the plan — generation is job-backed only.
     http.verify();
   });
 
@@ -195,6 +195,33 @@ describe('ExportComponent', () => {
     await answerPlan(http);
     const payload = await generatePayload(runSession);
     expect(payload['adjust_for_dividends']).toBe(true);
+  });
+
+  it('sends no options-companion rate until one is typed, so Python solves at its default', async () => {
+    const { http, runSession } = await renderExport();
+    await answerPlan(http);
+    await userEvent.click(screen.getByText('Options companion'));
+    await userEvent.click(screen.getByRole('checkbox', { name: /include options companion/ }));
+    await answerPlan(http);
+
+    const rate = screen.getByRole('spinbutton', { name: 'Risk-free rate' }) as HTMLInputElement;
+    expect(rate.value).toBe('');
+    const payload = await generatePayload(runSession);
+    expect(payload['options_companion']).not.toHaveProperty('risk_free_rate');
+  });
+
+  it('sends the options-companion rate the user typed', async () => {
+    const { http, runSession } = await renderExport();
+    await answerPlan(http);
+    await userEvent.click(screen.getByText('Options companion'));
+    await userEvent.click(screen.getByRole('checkbox', { name: /include options companion/ }));
+    await answerPlan(http);
+
+    await userEvent.type(screen.getByRole('spinbutton', { name: 'Risk-free rate' }), '0.05');
+    await userEvent.tab();
+    await answerPlan(http);
+    const payload = await generatePayload(runSession);
+    expect(payload['options_companion']).toMatchObject({ risk_free_rate: 0.05 });
   });
 
   it('re-plans by itself when the recipe changes; a new column starts unticked after an edit', async () => {

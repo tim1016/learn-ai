@@ -1,10 +1,10 @@
 """No secret value, fragment, or length crosses a boundary (contract §1, §3).
 
-"Secret values appear in no row, payload, log, or error — asserted, not
-assumed" is one of the contract's own test obligations (§8). This module is
-that assertion: every surface a credential can plausibly reach — a ``repr``, a
-``str``, a log record, an error's operator prose, the availability payload — is
-searched for the fixture secrets and for their lengths.
+Secret values appear in no row, payload, log, or error — asserted, not
+assumed. This module is that assertion: every surface a credential can
+plausibly reach — a ``repr``, a ``str``, a log record, an error's operator
+prose, the availability payload — is searched for the fixture secrets and for
+their lengths.
 """
 
 from __future__ import annotations
@@ -47,15 +47,11 @@ _EVERY_ERROR: tuple[BrokerProfileError, ...] = (
     AccountVerificationFailed.from_broker_error(
         BrokerUnavailable("Could not reach Alpaca.", broker="alpaca", detail="timeout")
     ),
-    AccountVerificationFailed.not_observed(selected_account_id="PA3TESTACCOUNT"),
     AccountVerificationFailed.stale(age_ms=600_000, max_age_ms=300_000),
     AccountVerificationFailed.dated_after_the_clock(),
     AccountModeDisagreement(endpoint_mode="live", credential_slot="live"),
     AccountPinMismatch.on_reobservation(
         pinned_account_id="PA3TESTACCOUNT", observed_account_ids=("PA9OTHER",)
-    ),
-    AccountPinMismatch.on_selection(
-        pinned_account_id="PA3TESTACCOUNT", selected_account_id="PA9OTHER"
     ),
 )
 

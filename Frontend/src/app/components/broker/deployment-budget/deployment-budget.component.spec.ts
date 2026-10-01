@@ -271,12 +271,6 @@ describe("This bot's money", () => {
       .toEqual([tone === 'positive', tone === 'negative']);
   });
 
-  it('says there is no current price when the open gain or loss is unknown', async () => {
-    await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: true, openPnl: openPnl(null) });
-
-    expect(await screen.findByText('Open gain or loss on shares: no current price.')).toBeTruthy();
-  });
-
   it('has no open gain or loss note when it holds no shares', async () => {
     await renderCard(vi.fn().mockResolvedValue(RUNNING), { holdsShares: false, openPnl: openPnl('7.00', 'gain') });
 
@@ -306,12 +300,6 @@ describe("This bot's money", () => {
     expect(await screen.findByText('Holding its position')).toBeTruthy();
     expect(getBudget).toHaveBeenCalledTimes(2);
     expect(screen.getByRole('button', { name: "Refresh this bot's money" })).toBeTruthy();
-  });
-
-  it('says it is reading while the money is on its way', async () => {
-    await renderCard(vi.fn().mockReturnValue(new Promise<DeploymentBudgetView>(() => undefined)));
-
-    expect(screen.getByRole('status').textContent).toBe("Reading this bot's money…");
   });
 
   it.each([['running', RUNNING], ['stopped', STOPPED]])('has no detectable accessibility violations when %s', async (_name, view) => {

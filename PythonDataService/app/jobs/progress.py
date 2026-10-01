@@ -24,10 +24,8 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
-from uuid import uuid4
 
 import redis
 
@@ -143,31 +141,6 @@ class JobCancelled(Exception):
     """Raised by :class:`CancellationCheck` when cancel was requested."""
 
 
-def create_job(job_type: str, params: Mapping[str, Any]) -> str:
-    """Create a new job record in Redis and return its id.
-
-    Called by the HTTP handler that accepts the run request. The id is
-    a UUIDv4 (we don't actually need v7 ordering — the stream entry IDs
-    give us time-ordering for free).
-    """
-    job_id = str(uuid4())
-    r = get_redis()
-    state = {
-        "id": job_id,
-        "type": job_type,
-        "status": "queued",
-        "params": json.dumps(dict(params), default=str),
-        "created_at": str(int(time.time() * 1000)),
-        "cancel_requested": "0",
-    }
-    pipe = r.pipeline()
-    pipe.hset(_state_key(job_id), mapping=state)
-    pipe.expire(_state_key(job_id), JOB_TTL_SECONDS)
-    pipe.sadd(_active_set_key(), job_id)
-    pipe.execute()
-    return job_id
-
-
 def acquire_lease(job_id: str) -> None:
     """Mark a dispatched worker as holding the job: create ``job:{id}:lease``.
 
@@ -178,17 +151,6 @@ def acquire_lease(job_id: str) -> None:
     the worker last proved progress.
     """
     get_redis().set(_lease_key(job_id), "1", ex=JOB_LEASE_TTL_SECONDS)
-
-
-def renew_lease(job_id: str) -> None:
-    """Slide the lease forward. A no-op once it has expired: a worker that
-    lost its lease stays not-live even if it later resumes producing — its
-    record honestly read as interrupted, and only a terminal event may close
-    it again. Redis errors are logged, never raised into the worker."""
-    try:
-        get_redis().expire(_lease_key(job_id), JOB_LEASE_TTL_SECONDS)
-    except redis.RedisError as exc:
-        logger.warning("lease renewal failed for job %s: %s", job_id, exc)
 
 
 def release_lease(job_id: str) -> None:

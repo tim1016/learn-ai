@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 from pathlib import Path
 
 import httpx
@@ -28,7 +27,6 @@ from httpx import ASGITransport, AsyncClient
 from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.config import PINNED_LEAN_IMAGE_DIGEST
 from app.lean_sidecar.launcher.app import app as launcher_app
-from app.lean_sidecar.workspace import resolve_workspace
 from app.main import app as data_plane_app
 
 pytestmark = [
@@ -43,11 +41,9 @@ def patched_artifacts_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     root = (tmp_path / "artifacts").resolve()
     root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(sidecar_config, "DEFAULT_ARTIFACTS_ROOT", root)
-    from app.routers import lean_sidecar as lean_sidecar_router
     from app.services import lean_sidecar_service
 
     monkeypatch.setattr(lean_sidecar_service, "DEFAULT_ARTIFACTS_ROOT", root)
-    monkeypatch.setattr(lean_sidecar_router, "DEFAULT_ARTIFACTS_ROOT", root)
     # Launcher reads its own artifacts root from env so the same
     # ``run_id`` resolves to the same workspace path on both sides.
     monkeypatch.setenv("LEAN_LAUNCHER_ARTIFACTS_ROOT", str(root))
@@ -149,26 +145,3 @@ class TestRouterToLauncherToLeanEndToEnd:
                 if cat == "failed_data_requests" and "_quote.zip" in line:
                     continue
                 pytest.fail(f"unexpected error category {cat} with line: {line!r}")
-
-        # Manifest + observations + log must be reachable through the
-        # inspection endpoints.
-        ws = resolve_workspace("e2e_router_real", patched_artifacts_root)
-        async with AsyncClient(transport=ASGITransport(app=data_plane_app), base_url="http://test") as client:
-            manifest_r = await client.get("/api/lean-sidecar/runs/e2e_router_real/manifest")
-            obs_r = await client.get("/api/lean-sidecar/runs/e2e_router_real/observations")
-            log_r = await client.get("/api/lean-sidecar/runs/e2e_router_real/log")
-
-        assert manifest_r.status_code == 200
-        manifest = manifest_r.json()
-        assert manifest["lean_image_digest"] == PINNED_LEAN_IMAGE_DIGEST
-        assert manifest["algorithm_type_name"] == "MyAlgorithm"
-        # Manifest hashes a non-empty list of staged bar zips.
-        assert manifest["staged_data"]["bar_zips"], "no staged bars in manifest"
-
-        assert obs_r.status_code == 200
-        assert obs_r.text.startswith("ms_utc,close")
-
-        assert log_r.status_code == 200
-        assert "LEAN ALGORITHMIC TRADING ENGINE" in log_r.text
-        # Sanity: the on-disk manifest matches the manifest endpoint.
-        assert json.loads(ws.manifest_path.read_text(encoding="utf-8")) == manifest

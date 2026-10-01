@@ -17,8 +17,6 @@ than math validity:
 
 Math validity is covered by ``tests/services/test_bs_greeks.py`` and
 ``tests/services/test_bs_cross_engine_parity.py``.
-
-Documentation: ``docs/architecture/numerical-authority-migration-plan.md`` Phase 2.1.
 """
 
 from __future__ import annotations

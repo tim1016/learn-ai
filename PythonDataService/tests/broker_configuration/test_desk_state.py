@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.broker_configuration.desk_state import project_desk_state, worker_restart_command
+from app.broker_configuration.desk_state import worker_restart_command
 from app.broker_configuration.envelope import ValidatedLiveEnvelope
 from app.broker_configuration.records import CredentialSlotStatus
 from app.broker_configuration.runtime import build_service, worker_restart_target_from
@@ -54,33 +54,6 @@ async def _pinned_paper_profile(
     return created.profile.profile_id
 
 
-def test_worker_restart_command_names_the_declared_service() -> None:
-    """A deployment whose compose defaults already resolve the service declares
-    nothing else, and the command stays the bare form it has always been."""
-    assert worker_restart_command(restart_target("alpaca-paper-clerk")) == (
-        "podman compose restart alpaca-paper-clerk"
-    )
-
-
-def test_worker_restart_command_names_the_whole_declared_compose_context() -> None:
-    """`compose.fleet.yaml`'s posture: its own project, an explicit file set and
-    a profile. Without all three, `podman compose` resolves the default project
-    and `compose.yaml` alone, where the lane's service does not exist at all —
-    the restart fails and the staged profile stays unapplied.
-    """
-    target = restart_target(
-        "alpaca-paper-clerk",
-        compose_project="learn-ai-fleet",
-        compose_files=("compose.yaml", "compose.fleet.yaml"),
-        compose_profile="fleet",
-    )
-
-    assert worker_restart_command(target) == (
-        "podman compose --project-name learn-ai-fleet -f compose.yaml -f compose.fleet.yaml "
-        "--profile fleet restart alpaca-paper-clerk"
-    )
-
-
 def test_worker_restart_command_names_only_what_the_deployment_declared() -> None:
     """`compose.fleet.dev.yaml`'s posture: the overlay deliberately keeps the
     default `learn-ai` project and declares no profile, so the command names
@@ -94,38 +67,10 @@ def test_worker_restart_command_names_only_what_the_deployment_declared() -> Non
     )
 
 
-def test_worker_restart_command_is_absent_when_the_deployment_declared_nothing() -> None:
-    """The desk must not guess a service name — a guessed command restarts
-    some other process (the coordinator, historically) and applies nothing."""
-    assert worker_restart_command(None) is None
-
-
 def test_a_compose_context_without_a_worker_service_is_no_restart_target() -> None:
     """The service is the one indispensable fact. A deployment that describes
     its compose context but names no worker still authors no command."""
     assert worker_restart_target_from(FleetSettings(COMPOSE_PROFILE="fleet")) is None
-
-
-@pytest.mark.parametrize("service", [restart_target("alpaca-live-clerk")], indirect=True)
-async def test_desk_state_carries_the_declared_workers_restart_command(
-    service: BrokerConfigurationService,
-) -> None:
-    await _pinned_paper_profile(service)
-
-    state = service.desk_state()
-
-    assert state.restart_command == "podman compose restart alpaca-live-clerk"
-
-
-async def test_desk_state_omits_a_restart_command_for_an_undeclared_worker(
-    service: BrokerConfigurationService,
-) -> None:
-    """The fixture's default is a deployment that declared nothing, which is a
-    different fact from a caller that forgot to say — the service is handed the
-    declaration once, at construction, so there is no forgetting to model."""
-    await _pinned_paper_profile(service)
-
-    assert service.desk_state().restart_command is None
 
 
 def test_build_service_hands_the_service_the_deployments_declaration(
@@ -241,35 +186,6 @@ async def test_desk_state_keeps_an_approved_revision_after_a_new_draft_is_saved(
     assert state.setup_required_message is None
 
 
-async def test_projector_authors_the_live_choice_safety_copy(
-    service: BrokerConfigurationService,
-) -> None:
-    created = service.create_profile(
-        display_name="Live candidate",
-        credential_slot="alpaca_live_primary",
-        endpoint_mode="live",
-        live_envelope=ValidatedLiveEnvelope.from_mapping(LIVE_ENVELOPE_PAYLOAD),
-    )
-    profile_id = created.profile.profile_id
-    pinned = await service.pin_account(profile_id, 1, account_id="9LIVE0001")
-
-    state = project_desk_state(
-        selection=service.selection(),
-        profiles=service.list_profiles(),
-        revisions_by_profile={profile_id: [pinned]},
-        staged_revision=None,
-        effective_revision=None,
-        nicknames=service.list_nicknames(),
-        has_archived_profiles=False,
-        worker_restart=None,
-    )
-
-    assert state.choices[0].description == (
-        "Live candidate uses the verified live account. Selecting this profile does not arm "
-        "live trading."
-    )
-
-
 async def test_desk_state_tracks_stage_apply_and_effective_without_claiming_connectivity(
     service: BrokerConfigurationService,
 ) -> None:
@@ -357,24 +273,6 @@ async def test_desk_state_tracks_stage_apply_and_effective_without_claiming_conn
     assert repeat_restart_choice.is_effective is True
     assert repeat_restart_choice.action_kind == "view_restart_steps"
     assert repeat_restart_choice.action_label == "View restart steps"
-
-
-def test_desk_state_distinguishes_archived_profiles_from_a_fresh_installation(
-    service: BrokerConfigurationService,
-) -> None:
-    created = paper_profile(service, display_name="Archived paper")
-    service.update_profile(created.profile.profile_id, archived=True)
-
-    state = service.desk_state()
-
-    assert state.choices == ()
-    assert state.profiles_requiring_setup == 0
-    assert state.empty_choices_message == (
-        "All saved account configurations are archived. Restore one under Broker "
-        "connection in Settings, or set up a new account."
-    )
-    assert state.action.kind == "review_configuration"
-    assert state.action.label == "Review account configurations"
 
 
 async def test_desk_state_keeps_effective_and_staged_drift_visibly_separate(

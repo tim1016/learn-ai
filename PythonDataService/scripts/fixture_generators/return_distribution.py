@@ -11,7 +11,7 @@ against it, so a regression in the canonical implementation cannot leave
 the fixture green: the two sides of the comparison are built by different
 code paths.
 
-Regeneration (must be justified in the commit message per repo rules):
+Regeneration (must be justified in the commit message, ADR 0069 §1):
     cd PythonDataService && .venv/bin/python -m scripts.fixture_generators.return_distribution
 """
 

@@ -314,10 +314,6 @@ class StartupBrokerTruthUnavailable(RuntimeError):
         )
 
 
-class MissingEntryCustodyError(RuntimeError):
-    """An EXIT decision has no SQLite-owned entry identity to target."""
-
-
 @dataclass(frozen=True)
 class _PublishedReconciliation:
     """A reconciliation verdict bound to the instant it was observed.
@@ -390,7 +386,7 @@ class SqliteAlpacaClerkFacade:
         # refuses one on an account not switched to budgets (#2553) and bounds
         # the rest by their deployment's budget. Every account authority
         # composes one; ``None`` only on a store no authority composed
-        # (qualification rehearsals). Composed by the authority selector,
+        # (test fixtures). Composed by the authority selector,
         # never built here.
         self._live_envelope = live_envelope
         # #2623: how an ENTER refused only because executions postdate the
@@ -998,7 +994,6 @@ class SqliteAlpacaClerkFacade:
         action_plan: ActionPlan,
         quantity: int,
         use_rth: bool = True,
-        capability_account_id: str | None = None,
         retained_source_bar: RetainedSourceBar | None = None,
         decision_evidence: EffectDecisionEvidence | None = None,
     ) -> EffectOperationReceipt:
@@ -1023,7 +1018,6 @@ class SqliteAlpacaClerkFacade:
                     action_plan=action_plan,
                     quantity=quantity,
                     use_rth=use_rth,
-                    capability_account_id=capability_account_id,
                     retained_source_bar=retained_source_bar,
                     decision_evidence=decision_evidence,
                 ),
@@ -1070,7 +1064,6 @@ class SqliteAlpacaClerkFacade:
         action_plan: ActionPlan,
         quantity: int,
         use_rth: bool = True,
-        capability_account_id: str | None = None,
         retained_source_bar: RetainedSourceBar | None = None,
         decision_evidence: EffectDecisionEvidence | None = None,
     ) -> EffectOperationReceipt:
@@ -1096,7 +1089,6 @@ class SqliteAlpacaClerkFacade:
                 action_plan=action_plan,
                 quantity=quantity,
                 use_rth=use_rth,
-                capability_account_id=capability_account_id,
                 retained_source_bar=retained_source_bar,
                 decision_evidence=decision_evidence,
                 reading_outcome=reading_outcome,
@@ -1134,7 +1126,6 @@ class SqliteAlpacaClerkFacade:
         action_plan: ActionPlan,
         quantity: int,
         use_rth: bool,
-        capability_account_id: str | None,
         retained_source_bar: RetainedSourceBar | None,
         decision_evidence: EffectDecisionEvidence | None,
         reading_outcome: EntryReadingOutcome | None,
@@ -1292,8 +1283,7 @@ class SqliteAlpacaClerkFacade:
                 if self.authority_kind in _LIVE_MARKET_CLOCK_AUTHORITIES:
                     liveness = market_liveness_fact(entry.instrument.underlying, self._repo.clock())
                     policy = MarketEntryPolicy(
-                        symbol=entry.instrument.underlying, use_rth=use_rth,
-                        capability_account_id=capability_account_id,
+                        use_rth=use_rth,
                         extended_window=self._program_leg_policy.window, clock=self._repo.clock,
                         extended_session_live=lambda: self._stream_health is not None
                         and self._stream_health.market_data_live(entry.instrument.underlying),
@@ -2140,7 +2130,6 @@ __all__ = [
     "EntryReading",
     "IntakeFencePoisonedError",
     "IntakeFenceYieldError",
-    "MissingEntryCustodyError",
     "ReentrantAsyncLock",
     "SqliteAlpacaClerkFacade",
     "StartupBrokerTruthUnavailable",

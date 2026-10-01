@@ -49,6 +49,7 @@ from pathlib import Path, PurePosixPath
 from uuid import UUID
 
 from app.data_lake import catalog_client
+from app.engine.live.identity import confine_path_to_root
 
 logger = logging.getLogger(__name__)
 
@@ -93,10 +94,13 @@ def stage_path_for(
 
     The .tmp suffix marks the file as in-flight; promotion strips it via
     rename(2). Per-(request_id, worker_id, attempt) scoping makes retry and
-    parallel-worker collisions structurally impossible.
+    parallel-worker collisions structurally impossible. The request id
+    arrives in a request body, so the result is confined under
+    ``staging_root``.
     """
     rel = Path(*rel_lake_path.parts)
-    return staging_root / str(request_id) / worker_id / f"attempt_{attempt}" / rel.with_suffix(rel.suffix + ".tmp")
+    staged = staging_root / str(request_id) / worker_id / f"attempt_{attempt}" / rel.with_suffix(rel.suffix + ".tmp")
+    return confine_path_to_root(staged, staging_root, label="staged artifact")
 
 
 def _fsync_path(path: Path) -> None:

@@ -3,9 +3,7 @@
 Existing call sites (router, monte_carlo/baselines runners, tests)
 catch by these specific class names and continue to work unchanged;
 new common code can ``except ArtifactError`` and catch this family
-alongside the other phases'. See
-``docs/architecture/research-artifact-seam.md`` § "Shared base errors"
-for the rationale.
+alongside the other phases'.
 
 The classes used to live in ``runs/storage.py``; they moved here in
 PR 4 so ``storage.py`` can import the descriptor without creating

@@ -48,18 +48,7 @@ class Allow:
         return path.as_posix().startswith(self.prefix)
 
 
-DATEPIPE_ALLOWS = [
-    Allow(
-        "Frontend/src/app/components/portfolio/",
-        "Legacy portfolio surface still uses pre-ADR DateTime/string models; migrate with the portfolio storage slice.",
-    ),
-]
-
 TIMESTAMP_STRING_TYPE_ALLOWS = [
-    Allow(
-        "Frontend/src/app/graphql/portfolio-types.ts",
-        "Legacy portfolio GraphQL model remains on DateTime/string storage until the portfolio storage migration.",
-    ),
     Allow(
         "Frontend/src/app/services/data-lab-session.service.ts",
         "Legacy Data Lab session metadata remains on DateTime/string storage until the Data Lab storage migration.",
@@ -71,10 +60,6 @@ TIMESTAMP_STRING_TYPE_ALLOWS = [
     Allow(
         "Frontend/src/app/services/golden-fixtures.types.ts",
         "Golden-manifest metadata is an external artifact timestamp, not a trading timestamp wire contract.",
-    ),
-    Allow(
-        "Frontend/src/app/models/market-monitor.ts",
-        "Live-vendor liveness payload is an external API boundary; canonicalization belongs at ingestion.",
     ),
 ]
 
@@ -162,9 +147,6 @@ def check_frontend_datepipe() -> list[Violation]:
     ]
     violations: list[Violation] = []
     for path in iter_files([ROOT / "Frontend/src/app"], (".ts", ".html")):
-        relative = rel(path)
-        if is_allowed(relative, DATEPIPE_ALLOWS):
-            continue
         violations.extend(scan_lines(path, checks))
     return violations
 

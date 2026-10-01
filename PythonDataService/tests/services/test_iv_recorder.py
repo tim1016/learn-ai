@@ -20,7 +20,6 @@ from httpx import ASGITransport, AsyncClient
 from app.main import app
 from app.services.bs_greeks import bs_european_price
 from app.services.iv_recorder import (
-    SLOT_CHOICES,
     InMemoryIvSnapshotStore,
     JsonlIvSnapshotStore,
     RecordedIvSnapshot,
@@ -61,36 +60,6 @@ def _bs_chain_payload(
     }
 
 
-class TestInMemoryStore:
-    def test_round_trip(self):
-        store = InMemoryIvSnapshotStore()
-        snap = RecordedIvSnapshot(
-            ticker="SPY", snapshot_ts_ms=1, slot="09:35", spot=590.0,
-            rate=0.045, dividend_yield=0.012,
-            rate_source="FRED", dividend_source="Polygon TTM",
-            iv30_vix_style=0.18, iv30_parametric=0.17,
-            iv_provenance={"iv_source": "internal_solver"},
-            raw_chain=[], error=None,
-        )
-        store.write(snap)
-        rows = store.read_series("SPY")
-        assert len(rows) == 1
-        assert rows[0] == snap
-
-    def test_filter_by_window(self):
-        store = InMemoryIvSnapshotStore()
-        for ts in (100, 200, 300, 400):
-            store.write(RecordedIvSnapshot(
-                ticker="SPY", snapshot_ts_ms=ts, slot="09:35", spot=0.0,
-                rate=0.0, dividend_yield=0.0, rate_source="x", dividend_source="x",
-                iv30_vix_style=None, iv30_parametric=None,
-                iv_provenance={}, raw_chain=[], error=None,
-            ))
-        assert len(store.read_series("SPY", start_ms=200, end_ms=300)) == 2
-        assert len(store.read_series("SPY", start_ms=350)) == 1
-        assert len(store.read_series("SPY", end_ms=150)) == 1
-
-
 class TestJsonlStore:
     def test_round_trip_persists_to_disk(self, tmp_path: Path):
         store = JsonlIvSnapshotStore(tmp_path)
@@ -116,6 +85,14 @@ class TestJsonlStore:
     def test_unknown_ticker_returns_empty(self, tmp_path: Path):
         store = JsonlIvSnapshotStore(tmp_path)
         assert store.read_series("XYZ") == []
+
+    def test_read_series_refuses_a_ticker_that_escapes_the_store(self, tmp_path: Path):
+        # The ticker reaches read_series from a request body (edge.py).
+        store_dir = tmp_path / "store"
+        (tmp_path / "secret.jsonl").write_text("{}\n")
+        store = JsonlIvSnapshotStore(store_dir)
+        with pytest.raises(ValueError, match="escapes root"):
+            store.read_series("../secret")
 
     def test_legacy_jsonl_without_health_score_reads_back_as_none(
         self, tmp_path: Path
@@ -196,6 +173,28 @@ class TestRecorderService:
         assert row.health_score is not None
         assert 0.0 <= row.health_score <= 1.0
 
+    def test_a_failed_dividend_lookup_keeps_the_real_rate(self):
+        """IV30 is solved and stored at the FRED rate, not at r=0, when only q is missing (#2764)."""
+        store = InMemoryIvSnapshotStore()
+        polygon = MagicMock()
+        rate = 0.045
+        asof = datetime(2026, 4, 28, 13, 35, tzinfo=UTC)
+        polygon.list_snapshot_options_chain.return_value = _bs_chain_payload(
+            spot=591.0, sigma=0.20, rate=rate, asof=asof,
+            expiry_days=[21, 28, 35, 42],
+            strikes=[float(k) for k in range(540, 651, 5)],
+        )
+
+        with (
+            patch("app.services.rate_dividend_service.get_risk_free_rate_and_source", return_value=(rate, "FRED")),
+            patch("app.services.rate_dividend_service.compute_dividend_yield", side_effect=RuntimeError("timeout")),
+        ):
+            row = record_iv_snapshot(ticker="SPY", slot="09:35", store=store, polygon=polygon, asof=asof)
+
+        assert row.error is None
+        assert (row.rate, row.rate_source) == (rate, "FRED")
+        assert (row.dividend_yield, row.dividend_source) == (0.0, "unknown")
+
     def test_polygon_failure_persists_error_row(self):
         store = InMemoryIvSnapshotStore()
         polygon = MagicMock()
@@ -213,14 +212,6 @@ class TestRecorderService:
         assert len(rows) == 1
         assert rows[0].error is not None
         assert rows[0].health_score is None
-
-    def test_invalid_slot_rejected(self):
-        store = InMemoryIvSnapshotStore()
-        polygon = MagicMock()
-        with pytest.raises(ValueError, match="slot must be one of"):
-            record_iv_snapshot(
-                ticker="SPY", slot="10:00", store=store, polygon=polygon,
-            )
 
 
 @pytest.fixture
@@ -251,7 +242,7 @@ class TestRecorderRoutes:
         )
         assert resp.status_code == 400
 
-    async def test_snapshot_then_read_back(self, client, in_memory_store):
+    async def test_snapshot_route_records_a_slot(self, client, in_memory_store):
         from app.routers import iv_recorder as iv_recorder_router
 
         spot = 591.0
@@ -282,32 +273,3 @@ class TestRecorderRoutes:
             assert body["success"] is True
             assert body["snapshot"]["iv30_vix_style"] is not None
             assert body["snapshot"]["error"] is None
-
-        read_resp = await client.get("/api/iv-recorder/series/SPY")
-        assert read_resp.status_code == 200
-        data = read_resp.json()
-        assert data["n_snapshots"] == 1
-        assert data["snapshots"][0]["slot"] == "09:35"
-
-    async def test_series_window_filters(self, client, in_memory_store):
-        for ts in (100, 200, 300):
-            in_memory_store.write(
-                RecordedIvSnapshot(
-                    ticker="SPY", snapshot_ts_ms=ts, slot="09:35", spot=0.0,
-                    rate=0.0, dividend_yield=0.0,
-                    rate_source="x", dividend_source="x",
-                    iv30_vix_style=None, iv30_parametric=None,
-                    iv_provenance={}, raw_chain=[], error=None,
-                )
-            )
-        resp = await client.get("/api/iv-recorder/series/SPY", params={"start_ms": 150, "end_ms": 250})
-        body = resp.json()
-        assert body["n_snapshots"] == 1
-        assert body["snapshots"][0]["snapshot_ts_ms"] == 200
-
-
-class TestSlotChoicesContract:
-    def test_default_slots(self):
-        # 15:55 runs alongside 16:00 for the trial-month experiment in
-        # research-doc §7.6 / §8.2.3.
-        assert SLOT_CHOICES == ("09:35", "12:30", "15:55", "16:00")

@@ -431,6 +431,8 @@ export class AlpacaHomeComponent {
       target: withCommand(lane.target, 'bot_action', key),
       request: { idempotency_key: key, strategy_instance_ids: [...sids] },
     };
+    // A new batch replaces the last outcome; only a retry keeps it on screen (#2767).
+    this.clearOutcome.set(null);
     this.clearBatch.set(batch);
     await this.sendClear(batch);
   }

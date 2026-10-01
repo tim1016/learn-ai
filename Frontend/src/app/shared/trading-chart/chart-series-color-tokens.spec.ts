@@ -8,7 +8,6 @@ import {
   CHART_SERIES_ELIGIBLE_TOKENS,
   CHART_SERIES_SURFACE_HEX,
   ChartSeriesColorTokenDef,
-  chartSeriesColorVar,
   isChartSeriesColorToken,
 } from './chart-series-color-tokens';
 
@@ -48,14 +47,6 @@ describe('CHART_SERIES_COLOR_TOKENS', () => {
     expect(isChartSeriesColorToken('var(--chart-series-blue)')).toBe(false);
     expect(isChartSeriesColorToken(null)).toBe(false);
     expect(isChartSeriesColorToken(42)).toBe(false);
-  });
-
-  it('chartSeriesColorVar resolves to the custom-property reference, never a literal color', () => {
-    expect(chartSeriesColorVar('series-blue')).toBe('var(--chart-series-blue)');
-    expect(chartSeriesColorVar('series-violet')).toBe('var(--chart-series-violet)');
-    expect(() => chartSeriesColorVar('series-nope' as 'series-blue')).toThrow(
-      /Unknown chart series color token/,
-    );
   });
 
   it('every eligible token has >= 3:1 WCAG contrast on the chart surface (TV-dark)', () => {

@@ -1,5 +1,11 @@
 name: Daily Full Tests
 
+# The third tier: everything the PR shards skip — `slow`-marked tests,
+# PostgreSQL-backed tests, the browser e2e suite and the fleet compose
+# qualification. Every step runs under `!cancelled()`, so one red step never
+# hides the next, and a red run opens (or comments on) one issue that names
+# the failed tests.
+
 on:
   schedule:
     - cron: "0 6 * * *"
@@ -31,13 +37,17 @@ jobs:
           - 5432:5432
     steps:
       - uses: actions/checkout@v4
+        if: ${{ !cancelled() }}
         with:
           persist-credentials: false
       - uses: actions/setup-dotnet@v4
+        if: ${{ !cancelled() }}
         with:
           dotnet-version: "10.0.x"
-      - run: dotnet restore podman.sln
+      - if: ${{ !cancelled() }}
+        run: dotnet restore podman.sln
       - name: Run the complete backend suite
+        if: ${{ !cancelled() }}
         env:
           BACKEND_TEST_POSTGRES_CONNECTION_STRING: Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=postgres
           DOTNET_NOLOGO: true
@@ -45,7 +55,7 @@ jobs:
           mkdir -p TestResults
           dotnet test Backend.Tests/Backend.Tests.csproj --no-restore --configuration Release --logger "trx;LogFileName=backend-full.trx" --results-directory TestResults
       - name: Upload backend test results
-        if: failure()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: daily-backend-test-results
@@ -77,12 +87,15 @@ jobs:
         working-directory: PythonDataService
     steps:
       - uses: actions/checkout@v4
+        if: ${{ !cancelled() }}
         with:
           persist-credentials: false
       - uses: actions/setup-dotnet@v4
+        if: ${{ !cancelled() }}
         with:
           dotnet-version: "10.0.x"
       - name: Migrate the data-lake schema
+        if: ${{ !cancelled() }}
         working-directory: ${{ github.workspace }}
         env:
           DOTNET_NOLOGO: true
@@ -93,26 +106,33 @@ jobs:
           dotnet build Backend/Backend.csproj
           dotnet ef database update --project Backend/Backend.csproj
       - uses: actions/setup-python@v5
+        if: ${{ !cancelled() }}
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: PythonDataService/requirements*.txt
-      - run: pip install -r requirements-heavy.txt -r requirements-light.txt -r requirements-dev.txt
+      - if: ${{ !cancelled() }}
+        run: pip install -r requirements-heavy.txt -r requirements-light.txt -r requirements-dev.txt
+      # pytest.ini's testpaths name the roots, the same ones the PR shards
+      # collect; here nothing is deselected.
       - name: Run the complete non-data-lake suite
+        if: ${{ !cancelled() }}
         run: |
           mkdir -p TestResults
-          python -m pytest tests app/engine/tests app/engine/strategy/spec/tests \
+          python -m pytest \
             --ignore=tests/unit/data_lake \
             --ignore=tests/integration/data_lake \
             -q --tb=short \
             --junitxml=TestResults/python-full.xml
       - name: Run PostgreSQL-backed data-lake tests serially
+        if: ${{ !cancelled() }}
         run: |
+          mkdir -p TestResults
           python -m pytest tests/unit/data_lake tests/integration/data_lake \
             -q --tb=short \
             --junitxml=TestResults/python-data-lake.xml
       - name: Upload Python test results
-        if: failure()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: daily-python-test-results
@@ -128,14 +148,18 @@ jobs:
         working-directory: PythonDataService
     steps:
       - uses: actions/checkout@v4
+        if: ${{ !cancelled() }}
         with:
           persist-credentials: false
       - uses: actions/setup-python@v5
+        if: ${{ !cancelled() }}
         with:
           python-version: "3.12"
       - name: docker compose version
+        if: ${{ !cancelled() }}
         run: docker compose version
       - name: Run the isolated actual-role Compose qualification
+        if: ${{ !cancelled() }}
         env:
           DATA_PLANE_CONTROL_SECRET: ""
         run: |
@@ -156,9 +180,160 @@ jobs:
             --timeout-s 120 --build-timeout-s 1500 \
             --evidence-path TestResults/fleet-compose-qualification.json
       - name: Upload qualification evidence
-        if: always()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: fleet-compose-qualification
           path: PythonDataService/TestResults/fleet-compose-qualification.json
           if-no-files-found: warn
+
+  # Builds the Frontend, serves it on localhost:4200 and runs the hermetic
+  # Playwright suite: every state fixture is injected with page.route(), so
+  # the job needs no backend, database or broker.
+  cockpit-e2e:
+    name: Cockpit E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Frontend
+    steps:
+      - uses: actions/checkout@v4
+        if: ${{ !cancelled() }}
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        if: ${{ !cancelled() }}
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: Frontend/package-lock.json
+      - name: Install dependencies
+        if: ${{ !cancelled() }}
+        run: npm ci
+      # echarts-gl 2.0.9 imports internal echarts paths removed in echarts
+      # >= 5.5; the 5.4.3 / 2.0.9 / 5.4.4 triple is the verified-compatible set
+      # and is pinned exactly so npm dedupe cannot slide it.
+      - name: Verify echarts + echarts-gl + zrender pinned set
+        if: ${{ !cancelled() }}
+        run: npm ls echarts@5.4.3 echarts-gl@2.0.9 zrender@5.4.4
+      - name: Install Playwright browsers
+        if: ${{ !cancelled() }}
+        run: npx playwright install --with-deps chromium
+      - name: Build Frontend
+        if: ${{ !cancelled() }}
+        run: npm run build
+      # `--proxy "http://localhost:4200?"` sends a 404 back through the server
+      # as index.html, the SPA fallback; `-s` is only silent mode.
+      - name: Serve build on :4200
+        if: ${{ !cancelled() }}
+        run: |
+          npx http-server dist/frontend/browser -p 4200 -s --proxy "http://localhost:4200?" &
+          npx wait-on http://localhost:4200 -t 60000
+      - name: Run Playwright suite
+        if: ${{ !cancelled() }}
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: TestResults/e2e-junit.xml
+        run: npm run e2e -- --reporter=list,html,junit
+      - name: Upload e2e test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-e2e-test-results
+          path: Frontend/TestResults/e2e-junit.xml
+          if-no-files-found: ignore
+      - name: Archive Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            Frontend/playwright-report/
+            Frontend/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # A red run is a bug like any other: open one issue, or comment on the one
+  # already open, naming the jobs that did not succeed and the failed tests.
+  report-red-run:
+    name: Report a red run
+    if: ${{ !cancelled() }}
+    needs: [backend-full, python-full, fleet-compose-qualification, cockpit-e2e]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Decide whether the run is red
+        id: verdict
+        if: ${{ !cancelled() }}
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | select(.value.result != "success") | "- `\(.key)`: \(.value.result)"' \
+            <<< "$NEEDS" > unsuccessful-jobs.md
+          if [ -s unsuccessful-jobs.md ]; then red=true; else red=false; fi
+          echo "red=$red" >> "$GITHUB_OUTPUT"
+      # A missing results artifact must not stop the report: the issue then
+      # says no failed test was recorded and points at the job logs.
+      - uses: actions/download-artifact@v4
+        if: ${{ steps.verdict.outputs.red == 'true' }}
+        continue-on-error: true
+        with:
+          pattern: daily-*-test-results
+          path: results
+      - name: Open or comment on the daily-red issue
+        if: ${{ steps.verdict.outputs.red == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # JUnit XML (pytest, Playwright) and TRX (dotnet) both name each
+          # failed test; list them under the jobs that did not succeed.
+          python3 - <<'PY'
+          import pathlib
+          import xml.etree.ElementTree as ET
+
+          TRX = "{http://microsoft.com/schemas/VisualStudio/TeamTest/2010}"
+          failed, unreadable = [], []
+          for path in sorted(pathlib.Path("results").rglob("*")):
+              if path.suffix not in (".xml", ".trx"):
+                  continue
+              try:
+                  root = ET.parse(path).getroot()
+              except (ET.ParseError, OSError) as error:
+                  # A truncated result file must not stop the report.
+                  unreadable.append(f"- `{path}`: {error}")
+                  continue
+              if path.suffix == ".xml":
+                  for case in root.iter("testcase"):
+                      if case.find("failure") is not None or case.find("error") is not None:
+                          failed.append(f"{case.get('classname')}::{case.get('name')}")
+              else:
+                  for result in root.iter(f"{TRX}UnitTestResult"):
+                      if result.get("outcome") == "Failed":
+                          failed.append(result.get("testName"))
+          lines = [f"Failed tests ({len(failed)}):"]
+          lines += [f"- `{name}`" for name in failed[:200]] or ["- none recorded; read the job logs"]
+          if len(failed) > 200:
+              lines.append(f"- ... and {len(failed) - 200} more; read the run's test-result artifacts")
+          if unreadable:
+              lines += ["", "Unreadable test-result files (read the job logs):", *unreadable]
+          pathlib.Path("failed-tests.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+          {
+            echo "The daily run $RUN_URL is red."
+            echo
+            echo "Jobs that did not succeed:"
+            cat unsuccessful-jobs.md
+            echo
+            cat failed-tests.md
+          } > report.md
+          title="Daily Full Tests is red"
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+            --jq "map(select(.title == \"$title\")) | first | .number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file report.md
+          else
+            gh issue create --title "$title" --label bug --body-file report.md
+          fi

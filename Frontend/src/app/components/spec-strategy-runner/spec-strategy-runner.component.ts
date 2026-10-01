@@ -37,9 +37,6 @@ import {
 import {
   buildSummaryFragments,
   formatConditionLine,
-  formatEntryBlock,
-  formatExitBlock,
-  formatSurvivalBlock,
   SummaryFragment,
 } from './plain-english';
 import { collectIndicatorReferences, validateStrategy, ValidationIssue } from './validation';
@@ -128,7 +125,6 @@ export class SpecStrategyRunnerComponent {
   readonly comparisonOps: readonly ComparisonOp[] = ['<', '<=', '==', '>=', '>', '!='];
   readonly sources = ['open', 'high', 'low', 'close', 'hlc3', 'ohlc4'] as const;
   readonly barProperties = ['range', 'body', 'range_pct', 'body_pct'] as const;
-  readonly directions = ['up', 'down'] as const;
 
   // ---- Spec state -------------------------------------------------------
   /** Source of truth for everything the editor renders. */
@@ -207,13 +203,6 @@ export class SpecStrategyRunnerComponent {
   readonly savedStrategies = this.store.entries;
 
   // ---- Computed views ---------------------------------------------------
-  readonly entrySummary = computed(() =>
-    formatEntryBlock(this.spec().entry, this.spec().indicators),
-  );
-  readonly exitSummary = computed(() => formatExitBlock(this.spec().exit, this.spec().indicators));
-  readonly survivalSummary = computed(() =>
-    formatSurvivalBlock(this.spec().survival ?? [], this.spec().indicators),
-  );
   readonly specJson = computed(() => JSON.stringify(this.spec(), null, 2));
   readonly tradeCount = computed<number>(() => this.result()?.total_trades ?? 0);
 

@@ -3,7 +3,7 @@
 Formula: cents_i = floor(C * w_i / sum(w)); leftover cents go to the
 largest exact fractional remainders, ties ordered by custody subject ID.
 Reference: PRD #2540 fee attribution contract and Hamilton apportionment;
-  docs/references/alpaca-fee-attribution.md. Weights come exclusively from
+  ADR 0059 fee attribution amendment. Weights come exclusively from
   app.broker.alpaca.regulatory_fees (the pinned broker model).
 Canonical implementation: this file.
 Validated against: tests/services/test_alpaca_fee_attribution.py and

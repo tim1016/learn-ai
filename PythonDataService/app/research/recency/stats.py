@@ -11,13 +11,12 @@ per-trade ``pnl_pct`` returns, non-annualized, undefined below
 ``min_trades`` or when variance is zero — the Recency Chart's bar-opacity
 metric. (d) holding_sessions = the count of scheduled NYSE sessions a trade
 spans, via the canonical calendar module.
-Reference: PRD https://github.com/tim1016/learn-ai/issues/1577; design spec
-docs/superpowers/specs/2026-08-16-recency-chart-design.md §7.1.
+Reference: PRD https://github.com/tim1016/learn-ai/issues/1577.
 Canonical implementation: this file.
 Validated against: tests/research/recency/test_stats.py.
 
-Every number here is Python-authored per AGENTS.md #5 ("Python owns all
-math") — .NET only passes these through and Angular only renders them.
+Every number here is Python-authored per ADR 0068 (Python owns the
+canonical math) — .NET only passes these through and Angular only renders them.
 """
 
 from __future__ import annotations
@@ -26,12 +25,9 @@ import statistics
 from dataclasses import dataclass
 from datetime import date
 from math import fsum
-from zoneinfo import ZoneInfo
 
 from app.lean_sidecar.trading_calendar import trading_session_count
 from app.utils.session_anchors import et_date_at_ms
-
-_ET = ZoneInfo("America/New_York")
 
 
 @dataclass(frozen=True)
@@ -101,8 +97,8 @@ def trade_dollar_pnl(trade: TradeForStats, commission_per_order: float = 0.0) ->
     Formula: gross (pnl_pts * quantity) - 2 * commission_per_order — the same
     flat-fee branch as the canonical
     ``app.research.backtest_runs.engine_payload.persisted_trade_net_pnl`` (compatibility_profile=None),
-    which this mirrors rather than duplicates independently (CLAUDE.md
-    guiding philosophy #5). ``commission_per_order`` defaults to 0.0 so an
+    which this mirrors rather than duplicates independently (ADR 0068
+    Decision 4). ``commission_per_order`` defaults to 0.0 so an
     uncommissioned launch's PnL is exactly the gross figure.
     Validated against:
       ``tests/research/recency/test_stats.py::TestTradeDollarPnl::test_matches_the_canonical_engine_flat_fee_formula``.
@@ -131,8 +127,7 @@ def select_window_heroes(
 
     Formula: total_pnl(c, W) = fsum(t.pnl for t in c if t.entry_ms in W);
       hero(symbol, strategy, W) = argmax_c(total_pnl(c, W)).
-    Reference: docs/superpowers/specs/2026-08-16-recency-chart-design.md
-      D5 and section 7.1.
+    Reference: none external.
     Canonical implementation: this file.
     Validated against: tests/research/recency/test_stats.py::TestSelectWindowHeroes
       and tests/routers/test_recency_hero_endpoint.py.

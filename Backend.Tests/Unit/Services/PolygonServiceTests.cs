@@ -3,6 +3,7 @@ using System.Text.Json;
 using Backend.Configuration;
 using Backend.Models.DTOs.PolygonResponses;
 using Backend.Services.Implementation;
+using Backend.Services.Interfaces;
 using Backend.Tests.Helpers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -84,66 +85,6 @@ public class PolygonServiceTests
         Assert.Contains("Rate limit exceeded", ex.Message);
     }
 
-    [Fact]
-    public async Task FetchAggregatesAsync_PostsToCorrectEndpoint()
-    {
-        var response = new AggregateResponse
-        {
-            Success = true,
-            Ticker = "AAPL",
-            DataType = "aggregates",
-            Data = [],
-            Summary = new DataSummary()
-        };
-        var handler = CreateHandler(HttpStatusCode.OK, response);
-        var service = CreateService(handler);
-
-        await service.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-01", "2026-01-31");
-
-        Assert.Equal("/api/aggregates/fetch", handler.LastRequestUri?.AbsolutePath);
-        Assert.Equal(HttpMethod.Post, handler.LastRequestMethod);
-    }
-
-    #endregion
-
-    #region FetchTradesAsync
-
-    [Fact]
-    public async Task FetchTradesAsync_Success_ReturnsResponse()
-    {
-        var response = new TradeResponse
-        {
-            Success = true,
-            Ticker = "AAPL",
-            DataType = "trades",
-            Data = [],
-            Summary = new DataSummary { CleanedCount = 0 }
-        };
-        var handler = CreateHandler(HttpStatusCode.OK, response);
-        var service = CreateService(handler);
-
-        var result = await service.FetchTradesAsync("AAPL");
-
-        Assert.True(result.Success);
-    }
-
-    [Fact]
-    public async Task FetchTradesAsync_PythonReturnsError_Throws()
-    {
-        var response = new TradeResponse
-        {
-            Success = false,
-            Ticker = "BAD",
-            DataType = "trades",
-            Error = "No trades found"
-        };
-        var handler = CreateHandler(HttpStatusCode.OK, response);
-        var service = CreateService(handler);
-
-        await Assert.ThrowsAsync<HttpRequestException>(() =>
-            service.FetchTradesAsync("BAD"));
-    }
-
     #endregion
 
     #region FetchOptionsChainSnapshotAsync
@@ -187,56 +128,64 @@ public class PolygonServiceTests
 
     #endregion
 
-    #region FetchOptionsContractsAsync
+    #region Risk-free rate (#2764)
+
+    // Python owns the default risk-free rate. A caller that gives no rate must
+    // send no rate field, so Python's request model fills its one default.
 
     [Fact]
-    public async Task FetchOptionsContractsAsync_Success_ReturnsContracts()
+    public async Task AnalyzeOptionsStrategyAsync_NoRiskFreeRate_OmitsTheField()
     {
-        var response = new OptionsContractsResponse
-        {
-            Success = true,
-            Contracts = [new OptionsContractDto
-            {
-                Ticker = "O:AAPL260220C00230000",
-                UnderlyingTicker = "AAPL",
-                ContractType = "call",
-                StrikePrice = 230m,
-                ExpirationDate = "2026-02-20"
-            }],
-            Count = 1
-        };
-        var handler = CreateHandler(HttpStatusCode.OK, response);
+        var handler = CreateHandler(HttpStatusCode.OK, new StrategyAnalyzeResponseDto { Success = true, Symbol = "AAPL" });
         var service = CreateService(handler);
 
-        var result = await service.FetchOptionsContractsAsync("AAPL", contractType: "call");
+        await service.AnalyzeOptionsStrategyAsync("AAPL", [CallLeg()], "2026-02-20", 230m);
 
-        Assert.Single(result.Contracts);
-        Assert.Equal("AAPL", result.Contracts[0].UnderlyingTicker);
+        Assert.False(RequestCarriesRiskFreeRate(handler));
     }
 
-    #endregion
-
-    #region CancellationToken
-
     [Fact]
-    public async Task FetchAggregatesAsync_CancellationRequested_ThrowsOperationCanceled()
+    public async Task AnalyzeOptionsStrategyAsync_RiskFreeRateGiven_SendsIt()
     {
-        var response = new AggregateResponse
-        {
-            Success = true,
-            Ticker = "AAPL",
-            DataType = "aggregates",
-            Data = [],
-            Summary = new DataSummary()
-        };
-        var handler = CreateHandler(HttpStatusCode.OK, response);
+        var handler = CreateHandler(HttpStatusCode.OK, new StrategyAnalyzeResponseDto { Success = true, Symbol = "AAPL" });
         var service = CreateService(handler);
 
-        var cts = new CancellationTokenSource();
-        cts.Cancel();
+        await service.AnalyzeOptionsStrategyAsync("AAPL", [CallLeg()], "2026-02-20", 230m, 0.05m);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            service.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-01", "2026-01-31", true, cts.Token));
+        using var body = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.Equal(0.05m, body.RootElement.GetProperty("risk_free_rate").GetDecimal());
+    }
+
+    [Fact]
+    public async Task QuantLibPriceAsync_NoRiskFreeRate_OmitsTheField()
+    {
+        var handler = CreateHandler(HttpStatusCode.OK, new QuantLibPriceResponse { Success = true, Engine = "analytic_bs" });
+        var service = CreateService(handler);
+
+        await service.QuantLibPriceAsync(100m, 100m, null, 0.20m, "2026-02-20", "call");
+
+        Assert.False(RequestCarriesRiskFreeRate(handler));
+    }
+
+    [Fact]
+    public async Task PricingCompareAsync_NoRiskFreeRate_OmitsTheField()
+    {
+        var handler = CreateHandler(HttpStatusCode.OK, new PricingCompareResponse { Success = true, RiskFreeRate = 0.043m });
+        var service = CreateService(handler);
+
+        var result = await service.PricingCompareAsync(100m, 100m, 0.20m, "2026-02-20", "call");
+
+        Assert.False(RequestCarriesRiskFreeRate(handler));
+        Assert.Equal(0.043m, result.RiskFreeRate);
+    }
+
+    private static StrategyLegInput CallLeg() =>
+        new() { Strike = 230m, OptionType = "call", Position = "long", Premium = 5m, Iv = 0.30m };
+
+    private static bool RequestCarriesRiskFreeRate(FakeHttpMessageHandler handler)
+    {
+        using var body = JsonDocument.Parse(handler.LastRequestBody!);
+        return body.RootElement.TryGetProperty("risk_free_rate", out _);
     }
 
     #endregion

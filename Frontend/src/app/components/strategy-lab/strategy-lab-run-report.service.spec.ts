@@ -165,9 +165,9 @@ describe("StrategyLabRunReport", () => {
     TestBed.tick();
     await Promise.resolve();
 
-    // Nothing is destroyed before its replacement exists (spec §3.4): the
-    // stage keeps rendering the previous run — with its own markers and
-    // equity — while `run()` stays honest about nothing being loaded yet.
+    // Nothing is destroyed before its replacement exists: the stage keeps
+    // rendering the previous run — with its own markers and equity — while
+    // `run()` stays honest about nothing being loaded yet.
     expect(report.run()).toBeNull();
     expect(report.loading()).toBe(true);
     expect(report.notFound()).toBe(false);

@@ -109,12 +109,12 @@ describe('app menu projections', () => {
     expect(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery')).toBe('Accounts');
     expect(pageTitleFor('/brokers/alpaca?deploy=')).toBe('Accounts');
     expect(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9?deploy=')).toBe('Accounts');
-    expect(pageTitleFor('/jobs-demo')).toBeNull();
+    expect(pageTitleFor('/unlisted-page')).toBeNull();
   });
 
   it('highlights nothing for a route outside the menu', () => {
-    expect(activeMenuNodeFor('/jobs-demo')).toBeNull();
-    expect(menuItemsFor('/jobs-demo').every((group) => group.styleClass === undefined)).toBe(true);
+    expect(activeMenuNodeFor('/unlisted-page')).toBeNull();
+    expect(menuItemsFor('/unlisted-page').every((group) => group.styleClass === undefined)).toBe(true);
   });
 
   it('reaches the Data Lake Observatory from the Stocks group', () => {
@@ -153,14 +153,5 @@ describe('app menu projections', () => {
     expect(research?.items?.find((item) => item.label === 'Edge Analysis')?.routerLink).toBe('/edge');
     expect(research?.items?.find((item) => item.label === 'Regimes')?.styleClass).toBe(ACTIVE_ITEM_CLASS);
     expect(research?.styleClass).toBe(ACTIVE_GROUP_CLASS);
-  });
-
-  it('omits the retired Indicator Report and Design Lab surfaces', () => {
-    const groups = menuItemsFor('/data-lab');
-    const entries = groups.flatMap((group) => group.items ?? []);
-
-    expect(groups.map((group) => group.label)).not.toContain('Design Lab');
-    expect(entries.map((item) => item.label)).not.toContain('Indicator Report');
-    expect(entries.map((item) => item.routerLink)).not.toContain('/indicator-report');
   });
 });

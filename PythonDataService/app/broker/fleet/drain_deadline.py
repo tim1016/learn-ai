@@ -18,14 +18,14 @@ not guarantee one — drain at 15:55 ET and it buys five minutes of the
 session it was entered in; drain Wednesday at 15:55 ahead of a Thursday
 holiday and the entire remaining 24h is non-trading time. Reasoning a
 session boundary out of a wall-clock constant is what
-``.claude/rules/temporal-rigor.md`` bans outright, which is why the second
+ADR 0022 (b) bans outright, which is why the second
 leg derives from the canonical calendar module (``session_windows_ms_utc``)
 rather than a duration.
 
 The resolved ``max(...)`` is stored as an absolute instant on the clerk row
 at drain time (``clerks.drain_deadline_at_ms``) and never recomputed: both
 legs can move after the drain — a deployment may re-tune the duration, a
-calendar version bump may change a future session — and §7.3 forbids the
+calendar version bump may change a future session — and ADR 0063 §7.3 forbids the
 bound moving once a drain is entered.
 
 The canonical calendar is imported *inside* the function, deliberately: the

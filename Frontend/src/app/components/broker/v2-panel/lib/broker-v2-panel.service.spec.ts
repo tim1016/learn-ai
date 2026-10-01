@@ -553,20 +553,6 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     },
   );
 
-  it('falls back to /actions under a derived key when the quiesce route is not deployed yet', async () => {
-    const pending = service.runAction(target('acct-1', 'sid-1'), 'sid-1', request('stop_bot_decisions'));
-    http
-      .expectOne(QUIESCE_URL)
-      .flush({ detail: 'Not Found' }, { status: 404, statusText: 'Not Found' });
-    await tick();
-
-    const fallback = http.expectOne(ACTIONS_URL);
-    expect(fallback.request.body.idempotency_key).toBe('command-key-1:actions');
-    expect(fallback.request.body.command_context.idempotency_key).toBe('command-key-1:actions');
-    fallback.flush(done('stop_bot_decisions'));
-    await expect(pending).resolves.toMatchObject({ receipt_id: 'r-stop_bot_decisions' });
-  });
-
   it.each([
     ['a typed fleet refusal', { reason: 'clerk_not_found', message: 'No clerk carries this identity.' }],
     ['a typed panel refusal', { detail: { message: 'Unknown bot.' } }],

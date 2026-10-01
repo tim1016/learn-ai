@@ -30,7 +30,8 @@ from httpx import ASGITransport, AsyncClient
 
 from app.config import settings
 from app.data_lake import catalog_client
-from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
+from app.data_lake.root_identity import active_root_id, init_empty_root
+from app.data_lake.types import trading_date_to_calendar_anchor_ms
 from app.lean_sidecar import config as sidecar_config
 
 pytestmark = pytest.mark.asyncio
@@ -50,6 +51,9 @@ def tmp_lake(tmp_path: Path, monkeypatch):
     write_root = tmp_path / "writer-root"
     (write_root / "lake").mkdir(parents=True)
     (write_root / "staging").mkdir(parents=True)
+    # Readers admit lake files only under a root identity marker (#2456),
+    # which production startup refuses to run without.
+    init_empty_root(write_root, active_root_id())
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-polygon-key")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")
@@ -115,14 +119,6 @@ def _polygon_aggs_for(start_ms: int) -> dict:
             for i in range(390)
         ],
     }
-
-
-async def test_route_404_when_flag_off(make_data_lake_app):
-    """Route is absent when the router is not registered (flag-off behaviour)."""
-    flag_off_app = make_data_lake_app(include_data_lake=False)
-    async with AsyncClient(transport=ASGITransport(app=flag_off_app), base_url="http://test") as client:
-        r = await client.post("/api/data-lake/ensure-data", json={})
-    assert r.status_code == 404
 
 
 @respx.mock
@@ -270,35 +266,3 @@ async def test_ensure_data_range_over_max_cap_rejected(make_data_lake_app):
     )
     r = await _post_ensure_data(make_data_lake_app, payload)
     assert r.status_code == 422
-
-
-@pytest.mark.parametrize(
-    ("start", "end"),
-    [
-        pytest.param(date(2026, 1, 12), date(2026, 1, 16), id="est_date_range"),
-        pytest.param(date(2026, 7, 13), date(2026, 7, 17), id="edt_date_range"),
-        pytest.param(date(2026, 8, 29), date(2026, 8, 30), id="weekend_boundary"),  # Sat -> Sun
-        pytest.param(date(2026, 12, 25), date(2026, 12, 25), id="holiday_boundary"),  # Christmas
-    ],
-)
-async def test_ensure_data_body_shape_accepted_for_boundary_dates(start, end):
-    """The request-body validation DataRunSpec performs — the only gate this
-    slice owns — must not reject an EST/EDT/weekend/holiday-anchored window.
-
-    Deliberately validated in-process (no HTTP round trip): unlike the
-    rejection cases above, an *accepted* body reaches ensure_data(), which
-    requires live Postgres/launcher/Polygon — infrastructure this boundary
-    check has no business depending on. Full end-to-end acceptance for a
-    normal trading window is already covered by
-    test_post_ensure_data_known_symbol above; DataRunSpec is the identical
-    shared model /ensure-data and /backfill both validate against (see
-    BackfillJobRequest.spec in app/routers/data_lake.py), so this in-process
-    check generalizes to both routes without needing to repeat it per route.
-    """
-    payload = _valid_ensure_data_payload(
-        start_trading_date_ms=trading_date_to_calendar_anchor_ms(start),
-        end_trading_date_ms=trading_date_to_calendar_anchor_ms(end),
-    )
-    spec = DataRunSpec(**payload)
-    assert spec.start_trading_date == start
-    assert spec.end_trading_date == end

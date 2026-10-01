@@ -1,15 +1,7 @@
 """FastAPI router for the Edge feature.
 
-Endpoints (per docs/architecture/edge-feature-design.md):
+Endpoints:
 - POST /api/edge/realized-vs-iv/series
-- POST /api/edge/realized-vs-iv/signals
-- GET  /api/edge/realized-vs-iv/coverage/{symbol}
-- POST /api/edge/cross-asset/run
-- GET  /api/edge/cross-asset/strategies
-- POST /api/edge/regimes/cluster
-- POST /api/edge/regimes/strategy-fit
-- POST /api/edge/trade-sim/run
-- POST /api/edge/edge-score/series
 
 v1 implementation note:
 Real Polygon-backed bar fetching is delegated to the existing aggregates router.
@@ -31,14 +23,7 @@ from pydantic import BaseModel, Field
 from app.engine.edge.confidence import (
     DEFAULT_CONFIDENCE_FLOOR,
     confidence_with_explanation,
-    regime_feature_weight,
 )
-from app.engine.edge.cross_asset_runner import (
-    STRATEGY_REGISTRY,
-    CrossAssetRunRequest,
-    run_cross_asset,
-)
-from app.engine.edge.edge_score import DEFAULT_WEIGHTS, edge_score
 from app.engine.edge.features_realtime.hf_realized_vol import (
     Session,
     hf_realized_vol_trd252,
@@ -50,23 +35,12 @@ from app.engine.edge.features_realtime.realized_vol import (
     parkinson,
     yang_zhang,
 )
-from app.engine.edge.features_realtime.regime_features import (
-    build_full_features,
-    build_ohlcv_features,
-)
 from app.engine.edge.labels_oracle.forward_rv import forward_rv
 from app.engine.edge.labels_oracle.hf_forward_rv import hf_forward_rv_trd252
-from app.engine.edge.regime_clustering import (
-    fit_gaussian_hmm,
-    kmeans,
-    stability_filter,
-)
-from app.engine.edge.regime_strategy_eval import partition_by_regime
 from app.engine.edge.threshold_events import (
     log_confidence_floor_fired,
     log_imputed_prior_emitted,
 )
-from app.engine.edge.trade_simulator import TradeSimConfig, simulate
 from app.engine.edge.vrp import compute_vrp, vrp_signal
 from app.services.iv_recorder import get_iv_store
 from app.volatility.basis import convert_iv_act365_to_trading252
@@ -305,50 +279,6 @@ def _iv_series_from_recorder(symbol: str, bars_index: pd.Index) -> list[dict]:
     return out
 
 
-def _parse_iv_series_for_regime(
-    iv_series: list[dict] | None, bars_index: pd.Index
-) -> tuple[pd.Series | None, pd.Series | None]:
-    """Parse iv_series for the regime route — returns (iv30, feature_weight).
-
-    When the caller supplies ``health_score`` / ``variance_contribution_synthetic``
-    alongside ``iv30``, this builds a per-bar feature weight via Step F's
-    ``regime_feature_weight`` formula. When only iv30 is supplied,
-    ``feature_weight`` is None (default behavior — full weight).
-    """
-    if not iv_series:
-        return None, None
-
-    iv_map = {int(p["ts"]): float(p["iv30"]) for p in iv_series}
-    iv = pd.Series(iv_map).reindex(bars_index)
-
-    has_health = any("health_score" in p for p in iv_series)
-    has_vcs = any("variance_contribution_synthetic" in p for p in iv_series)
-    if not (has_health or has_vcs):
-        return iv, None
-
-    # Imputed-prior policy: when health_score is missing (key absent OR
-    # explicit null), the regime path emits feature_weight = 0 — "no
-    # evidence on stability" maps to "this bar contributes no IV signal
-    # to the regime classifier." The VRP path takes a different branch
-    # for the same shape (drop the health factor and let (1 - vcs) carry
-    # confidence) because confidence is a multiplier on a z-score, not a
-    # feature weight on a regime input — see _parse_iv_series for the
-    # asymmetry rationale.
-    weight_map: dict[int, float] = {}
-    for p in iv_series:
-        h_raw = p.get("health_score")
-        if "health_score" not in p or h_raw is None:
-            weight_map[int(p["ts"])] = 0.0
-            continue
-        s_raw = p.get("variance_contribution_synthetic")
-        s = 0.0 if s_raw is None else float(s_raw)
-        weight_map[int(p["ts"])] = regime_feature_weight(
-            health_score=float(h_raw), variance_contribution_synthetic=s
-        )
-    weight = pd.Series(weight_map).reindex(bars_index).fillna(0.0)
-    return iv, weight
-
-
 def _parse_iv_series(
     iv_series: list[dict] | None, bars_index: pd.Index
 ) -> tuple[pd.Series, pd.Series | None, pd.Series | None]:
@@ -372,8 +302,7 @@ def _parse_iv_series(
     surfaced via the returned ``health_imputed`` series so the UI can mark
     the bar visually rather than silently treat it as fully validated.
 
-    See ``docs/architecture/iv-ownership-research.md`` Reviewer Feedback Log
-    and ``docs/architecture/iv-research-chat-notes.md (pruned 2026-09-12, git history)`` §5.3.
+    See ADR 0071 decision 11.
     """
     if not iv_series:
         return pd.Series(index=bars_index, dtype=float), None, None
@@ -412,254 +341,16 @@ def _parse_iv_series(
     return iv, confidence, health_imputed
 
 
-class SignalsRequest(RealizedVsIvSeriesRequest):
-    rule: Literal["vrp_zscore"] = "vrp_zscore"
-    threshold: float = 1.0
-    lookback: int = 252
-
-
-class SignalsResponse(BaseModel):
-    symbol: str
-    ts: list[int]
-    signal_oracle: list[int]
-    signal_realtime: list[int]
-    vrp_z: list[float | None]
-
-
-@router.post("/realized-vs-iv/signals", response_model=SignalsResponse)
-async def realized_vs_iv_signals(req: SignalsRequest) -> SignalsResponse:
-    series = await realized_vs_iv_series(req)
-    iv = pd.Series(
-        [v if v is not None else np.nan for v in series.iv30],
-        index=series.ts,
-    )
-    estimator_key = next(iter(series.rv_forward))
-    rv_fwd = pd.Series(series.rv_forward[estimator_key], index=series.ts)
-    rv_trailing_key = next(iter(series.rv_trailing))
-    rv_trailing = pd.Series(series.rv_trailing[rv_trailing_key], index=series.ts)
-
-    sig_oracle = vrp_signal(iv=iv.ffill(), rv=rv_fwd.ffill(), lookback=req.lookback, threshold=req.threshold)
-    sig_real = vrp_signal(iv=iv.ffill(), rv=rv_trailing.ffill(), lookback=req.lookback, threshold=req.threshold)
-    return SignalsResponse(
-        symbol=req.symbol,
-        ts=series.ts,
-        signal_oracle=[int(x) for x in sig_oracle.side.fillna(0).tolist()],
-        signal_realtime=[int(x) for x in sig_real.side.fillna(0).tolist()],
-        vrp_z=_series_to_jsonable(sig_oracle.vrp_z),
-    )
-
-
-@router.get("/realized-vs-iv/coverage/{symbol}")
-async def realized_vs_iv_coverage(symbol: str) -> dict:
-    """Probe how much stored IV history is available for `symbol`.
-
-    v1 stub: returns a non-blocking placeholder so the UI can render the
-    coverage banner. Wires into the real OptionIvSnapshots query in v2.
-    """
-    return {
-        "symbol": symbol,
-        "iv_first_ts": None,
-        "iv_last_ts": None,
-        "n_iv_bars": 0,
-        "missing_pct": 1.0,
-        "note": "v1 placeholder; backed by OptionIvSnapshots in v2",
-    }
-
-
 # ── Cross-asset ────────────────────────────────────────────────────────────
-
-
-class CrossAssetBars(BaseModel):
-    symbol: str
-    bars: list[BarPayload]
-
-
-class CrossAssetRunBody(BaseModel):
-    strategy_name: str
-    symbols: list[str]
-    start_ms: int
-    end_ms: int
-    bar_size: Literal["15m", "1d"] = "1d"
-    split_mode: Literal["rolling", "calendar", "walkforward", "all"] = "all"
-    bars_by_symbol: list[CrossAssetBars]
-
-
-@router.post("/cross-asset/run")
-async def cross_asset_run(body: CrossAssetRunBody) -> dict:
-    if body.strategy_name not in STRATEGY_REGISTRY:
-        raise HTTPException(400, f"unknown strategy {body.strategy_name}")
-    bars_by_symbol = {p.symbol: _bars_payload_to_df(p.bars) for p in body.bars_by_symbol}
-    request = CrossAssetRunRequest(
-        strategy_name=body.strategy_name,
-        symbols=body.symbols,
-        start_ms=body.start_ms,
-        end_ms=body.end_ms,
-        bar_size=body.bar_size,
-        split_mode=body.split_mode,
-    )
-    return await run_cross_asset(request, bars_by_symbol)
-
-
-@router.get("/cross-asset/strategies")
-async def cross_asset_strategies() -> dict:
-    return {"available_strategies": [{"name": k, "params_schema": {}} for k in STRATEGY_REGISTRY]}
 
 
 # ── Regimes ─────────────────────────────────────────────────────────────────
 
 
-class RegimeClusterBody(BaseModel):
-    symbol: str
-    n_states: int = Field(3, ge=2, le=6)
-    algorithms: list[Literal["hmm", "kmeans"]] = Field(default_factory=lambda: ["hmm", "kmeans"])
-    p_min: float = 0.7
-    min_run_length: int = 5
-    bars: list[BarPayload]
-    iv_series: list[dict] | None = Field(
-        None,
-        description=(
-            "Optional [{ts, iv30, health_score?, variance_contribution_synthetic?}]. "
-            "When supplied, IV-derived features (iv30_z, d_iv_z, iv_vol_z) are added "
-            "to the regime feature matrix and weighted by regime_feature_weight (Step F)."
-        ),
-    )
-
-
-@router.post("/regimes/cluster")
-async def regimes_cluster(body: RegimeClusterBody) -> dict:
-    bars = _bars_payload_to_df(body.bars)
-    if len(bars) < 80:
-        raise HTTPException(400, "need at least 80 bars to cluster regimes")
-
-    # Same caller-wins-then-recorder fallback as realized-vs-iv. When neither
-    # supplies iv_series, regime features fall back to OHLCV-only.
-    if body.iv_series:
-        iv_series_for_parse: list[dict] | None = body.iv_series
-    else:
-        recorded = _iv_series_from_recorder(body.symbol, bars.index)
-        iv_series_for_parse = recorded if recorded else None
-    iv30, weight = _parse_iv_series_for_regime(iv_series_for_parse, bars.index)
-    if iv30 is not None:
-        feats = build_full_features(bars, iv30=iv30, iv_feature_weight=weight).dropna()
-    else:
-        feats = build_ohlcv_features(bars).dropna()
-    X = feats.to_numpy(dtype=np.float64)
-    out: dict = {"symbol": body.symbol, "ts": [int(t) for t in feats.index.tolist()]}
-
-    if "kmeans" in body.algorithms:
-        km = kmeans(X, n_clusters=body.n_states, seed=42)
-        out["kmeans_labels"] = km.labels.tolist()
-        out["kmeans_centroids"] = km.centroids.tolist()
-    if "hmm" in body.algorithms:
-        hmm = fit_gaussian_hmm(X, n_states=body.n_states, seed=42)
-        active = stability_filter(
-            hmm.labels,
-            posterior=hmm.posterior,
-            p_min=body.p_min,
-            min_run_length=body.min_run_length,
-        )
-        out["hmm_labels"] = hmm.labels.tolist()
-        out["hmm_posterior"] = hmm.posterior.tolist()
-        out["hmm_transition_matrix"] = hmm.transition_matrix.tolist()
-        out["hmm_means"] = hmm.means.tolist()
-        out["regime_active"] = active.tolist()
-
-    return out
-
-
-class RegimeStrategyFitBody(BaseModel):
-    trades: list[dict]
-    regime_labels: list[dict]
-
-
-@router.post("/regimes/strategy-fit")
-async def regimes_strategy_fit(body: RegimeStrategyFitBody) -> dict:
-    trades_df = pd.DataFrame(body.trades)
-    labels = pd.Series({int(p["ts"]): int(p["label"]) for p in body.regime_labels})
-    by_regime = partition_by_regime(trades=trades_df, regime_labels=labels)
-    return {"by_regime": {str(k): v for k, v in by_regime.items()}}
-
-
 # ── Trade sim ───────────────────────────────────────────────────────────────
 
 
-class TradeSimRunBody(BaseModel):
-    bars: list[BarPayload]
-    signals: list[dict]
-    instrument: Literal["stock", "option"] = "stock"
-    time_stop_bars: int = 5
-    slippage_pct: float = 0.0005
-    commission_per_unit: float = 0.005
-
-
-@router.post("/trade-sim/run")
-async def trade_sim_run(body: TradeSimRunBody) -> dict:
-    bars = _bars_payload_to_df(body.bars)
-    signals = pd.Series({int(p["ts"]): int(p["side"]) for p in body.signals}).reindex(bars.index).fillna(0).astype(int)
-    cfg = TradeSimConfig(
-        instrument=body.instrument,
-        time_stop_bars=body.time_stop_bars,
-        slippage_pct=body.slippage_pct,
-        commission_per_unit=body.commission_per_unit,
-    )
-    res = simulate(bars=bars, signals=signals, config=cfg)
-    return {
-        "trades": [t.__dict__ for t in res.trades],
-        "stats": res.stats,
-        "cost_attribution": res.cost_attribution,
-        "equity_curve": []
-        if res.equity_curve is None
-        else res.equity_curve.assign(ts=res.equity_curve["ts"].astype(int)).to_dict(orient="records"),
-    }
-
-
 # ── Edge Score ──────────────────────────────────────────────────────────────
-
-
-class EdgeScoreBody(BaseModel):
-    symbol: str
-    bars: list[BarPayload]
-    iv30: list[float | None]
-    regime_labels: list[int]
-    weights: dict[str, float] | None = None
-    regime_score_map: dict[str, float] | None = None
-
-
-@router.post("/edge-score/series")
-async def edge_score_series(body: EdgeScoreBody) -> dict:
-    bars = _bars_payload_to_df(body.bars)
-    if not (len(bars) == len(body.iv30) == len(body.regime_labels)):
-        raise HTTPException(400, "bars, iv30 and regime_labels must align in length")
-    iv = pd.Series(body.iv30, index=bars.index, dtype=float)
-    rv = yang_zhang(bars, window=20)
-    vrp = compute_vrp(iv, rv)
-    high = bars["high"]
-    low = bars["low"]
-    close = bars["close"]
-    atr = (high - low).rolling(14, min_periods=14).mean()
-    trend = close.rolling(20, min_periods=20).apply(
-        lambda y: float(np.polyfit(np.arange(len(y)), y, 1)[0]),
-        raw=True,
-    )
-    labels = pd.Series(body.regime_labels, index=bars.index, dtype=int)
-
-    score_map_int = {int(k): float(v) for k, v in body.regime_score_map.items()} if body.regime_score_map else None
-    res = edge_score(
-        vrp=vrp,
-        iv30=iv,
-        trend_slope=trend,
-        atr=atr,
-        regime_labels=labels,
-        weights=body.weights or DEFAULT_WEIGHTS,
-        regime_score_map=score_map_int,
-    )
-    return {
-        "symbol": body.symbol,
-        "ts": [int(t) for t in bars.index.tolist()],
-        "edge_score": _series_to_jsonable(res.score),
-        "components": {c: _series_to_jsonable(res.components[c]) for c in res.components.columns},
-        "action": [int(x) for x in res.action.tolist()],
-    }
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────

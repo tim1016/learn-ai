@@ -1,5 +1,4 @@
-"""Fault-injection coverage for FR-016 (issue #1728, PRD section 13.3/13.4):
-``docs/prds/sealed-signal-program-to-governed-alpaca-bot.md``.
+"""Fault-injection coverage for FR-016 (issue #1728).
 
 Replay must recreate a staged EMA candidate a crash left uncaptured -- one
 that reached ``SignalSession.advance()`` but never reached Clerk intake --
@@ -12,8 +11,7 @@ specific evaluation that never reached custody.
 Reuses the proven LEAN-parity EMA crossover fixture and Clerk test double
 from ``tests/_helpers/bot_runner/`` (``_ema_parity_bars_through_first_exit``,
 ``_FakeClerk``, ``_tradable_market_liveness``) instead of re-deriving a
-fresh crossover fixture -- see CLAUDE.md "don't duplicate utility
-functions". Modeled on the crash-simulation idiom in
+fresh crossover fixture. Modeled on the crash-simulation idiom in
 ``tests/broker/alpaca/clerk/sqlite/test_atomic_seam_fault_injection.py``:
 a crash is simulated by simply never performing the next step, not by
 throwing mid-function.
@@ -72,7 +70,7 @@ class _PhaseFeed:
     genuinely running process consumes and durably captures a receipt for
     every closed 15-minute bucket. ``retained_bars`` flow through
     ``recent_closed_bars`` -- exactly what a durable source-bar ledger hands
-    a booting process for warmup/replay (PRD section 13.1/13.3). Production
+    a booting process for warmup/replay. Production
     keeps these two channels just as separate: ``_RetainedSourceBarFeed``
     only appends to the ledger as bars stream live; it never treats one
     boot's ``stream_bars`` output as another boot's retained history.
@@ -165,7 +163,7 @@ async def test_replay_recreates_a_crashed_candidate_as_uncaptured_with_no_broker
         # Phase 2 ("resume/replay"): a fresh process, a new run_id, and no
         # live stream of its own -- its only input is the durable retained
         # ledger, which now includes the crash bar exactly as the real
-        # SourceBarLedger would hand a resumed bot (PRD section 13.1/13.3).
+        # SourceBarLedger would hand a resumed bot.
         await bot_trade_strategy.run_trade_bot(_binding(run_id="run-2"), _PhaseFeed(retained_bars=bars))
 
         # No new broker-bound call was ever made for the recovered candidate.

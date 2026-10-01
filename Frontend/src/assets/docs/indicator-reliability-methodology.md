@@ -1,15 +1,12 @@
 # Indicator Reliability — Methodology, Metrics & UI Reference
 
-> **Consolidated reference** for the Indicator Reliability feature. Covers the
-> statistical methodology (IC, Newey–West, FDR, regime conditioning, IR proxy),
-> the API contract, and the mission-control UI redesign (verdict hero,
-> WHEN/WHERE/HOW decision cells, 5-test checklist), plus the global app-shell
-> swap and the Research Lab information-architecture reorganisation.
+> **Methodology reference** for the Indicator Reliability page. Covers the
+> statistical methodology (IC, Newey–West, FDR, regime conditioning, IR proxy)
+> and the rules behind the page's confidence score, WHEN/WHERE/HOW decision
+> cells, 5-test checklist and noise-floor bar.
 >
-> **Primary reader:** a future engineer on this repo. Assumes familiarity with
-> time-series statistics and Angular 22 conventions. Cross-references
-> [Frontend/CLAUDE.md](../Frontend/CLAUDE.md) and
-> [PythonDataService/CLAUDE.md](../PythonDataService/CLAUDE.md) for house style.
+> **Primary reader:** anyone reading the page who wants the derivation behind a
+> number. Assumes familiarity with time-series statistics.
 
 ---
 
@@ -32,14 +29,14 @@
   - [3.12 IR proxy and tradeability](#312-ir-proxy-and-tradeability)
   - [3.13 Next-steps rule engine](#313-next-steps-rule-engine)
   - [3.14 Honesty footnotes](#314-honesty-footnotes)
-- [4. API contract](#4-api-contract)
 - [5. UI implementation](#5-ui-implementation)
-  - [5.1 Information architecture](#51-information-architecture)
-  - [5.2 App shell](#52-app-shell)
   - [5.3 Indicator Reliability page (mission control)](#53-indicator-reliability-page-mission-control)
-  - [5.4 Research Lab sub-nav](#54-research-lab-sub-nav)
-- [6. Code cross-reference](#6-code-cross-reference)
-- [7. Verification plan](#7-verification-plan)
+    - [5.3.2 Confidence score](#532-confidence-score)
+    - [5.3.5 WHEN cell](#535-when-cell)
+    - [5.3.6 WHERE cell](#536-where-cell)
+    - [5.3.7 HOW cell](#537-how-cell)
+    - [5.3.8 Five-test decision checklist](#538-five-test-decision-checklist)
+    - [5.3.9 Noise-floor bar](#539-noise-floor-bar)
 - [8. Limitations and future work](#8-limitations-and-future-work)
 - [9. References](#9-references)
 
@@ -244,7 +241,7 @@ z_{\text{rand}} = \frac{\overline{IC}_{\text{actual}} - \bar\mu}{\bar\sigma}
 $$
 
 The full 100-value distribution $\{\overline{IC}^{(k)}\}$ is serialised on the
-best-horizon result (payload-gated — see §4) and rendered as a 15-bin
+best-horizon result and rendered as a 15-bin
 histogram with the actual-IC bin highlighted.
 
 **Interpretation.** $|z_{\text{rand}}| \geq 2$ is treated as "distinguishable
@@ -521,353 +518,14 @@ limitations visible:
 
 ---
 
-## 4. API contract
-
-`POST /api/research/indicator-reliability` — the single endpoint driving the
-page. Request body:
-
-```
-ticker:           string        # e.g. "AAPL"
-indicator_name:   string        # pandas-ta name, e.g. "rsi"
-indicator_params: object        # e.g. { length: 14 }
-start_date:       string        # YYYY-MM-DD (IS+OOS window)
-end_date:         string
-horizons:         int[]         # e.g. [1, 5, 10, 15, 30]
-include_slope:    bool          # optional slope variant
-timespan:         string        # "minute" | "hour" | "day" | ...
-multiplier:       int           # Polygon bar multiplier
-```
-
-Response `IndicatorReliabilityResponse`:
-
-```
-# Echo + split metadata
-success, ticker, indicator_name, display_name, category
-start_date, end_date, bar_count
-train_start, train_end, test_start, test_end
-train_bars, test_bars, train_ratio
-
-# Per-horizon results
-results:       HorizonICResult[]         # one per requested horizon
-slope_results: HorizonICResult[] | null  # present iff include_slope
-
-# Daily IC series for the best-horizon sparkline
-daily_ic_values: float[]
-daily_ic_dates:  string[]
-
-# Summary + rollups
-best_horizon:                          int | null
-any_significant_after_bonferroni:      bool
-any_significant_after_fdr:             bool
-num_horizons_tested:                   int
-random_simulations:                    int  # == K (default 100)
-
-# Verdict + diagnostics
-verdict:          VerdictModel | null       # §3.7 + §3.12
-decay_curve:      DecayCurvePoint[]         # §3.10
-regime_results:   RegimeResults | null      # §3.11
-next_steps:       string[]                  # §3.13 (len ≤ 4)
-info_footnotes:   string[]                  # §3.14
-
-warnings:  string[]
-error:     string | null
-```
-
-**`HorizonICResult`** — one row per tested horizon:
-
-```
-horizon: int
-
-# In-sample
-is_mean_ic, is_t_stat, is_p_value:   float
-is_nw_t_stat, is_nw_p_value:         float | null
-is_effective_n:                       int
-is_hit_rate, is_daily_ic_std:         float
-
-# Out-of-sample (null if test_bars < MIN_OOS_OBSERVATIONS = 10)
-oos_mean_ic, oos_t_stat, oos_p_value: float | null
-oos_effective_n:                       int   | null
-oos_retention:                         float | null   # legacy ratio
-retention_delta_pct:                   float | null   # §3.8
-
-# Multiple testing
-bonferroni_p, fdr_p: float
-
-# Random baseline
-random_baseline_mean, random_baseline_std, ic_vs_random_zscore: float
-random_baseline_distribution: float[]   # populated only for best horizon
-
-# Verdict labels
-strength_label:  "Noise" | "Weak" | "Moderate" | "Strong"
-stability_label: "Low" | "Moderate" | "High"
-direction_label: "Mean-Reversion" | "Momentum" | "None"
-
-# IR proxy
-annualized_ir, sharpe_estimate, breadth_per_year: float
-
-# Slope decisions (populated only on slope_results rows)
-slope_adds_value, slope_recommended: bool | null
-
-# Legacy free-text
-is_interpretation, oos_interpretation: string | null
-```
-
-**`VerdictModel`**:
-
-```
-direction:             DirectionLabel
-strength:              StrengthLabel
-stability:             StabilityLabel
-tradeability:          "Likely tradeable" | "Marginal" | "Unlikely" | "Unknown"
-horizon:               int | null
-tradeability_caveat:   string | null
-```
-
-**`DecayCurvePoint`** — one per horizon on the decay curve:
-
-```
-horizon:   int
-ic:        float
-p_value:   float
-ic_stderr: float
-```
-
-**`RegimeResults`**:
-
-```
-high_vol:   RegimeICPoint[] | null
-low_vol:    RegimeICPoint[] | null
-vol_window: int                   # 20 by default
-```
-
-**`RegimeICPoint`**:
-
-```
-horizon, effective_n, bars_in_regime: int
-mean_ic, t_stat, p_value, hit_rate:    float
-```
-
-**Payload gating.** The 100-element `random_baseline_distribution` array is
-sent only on the best-horizon row to keep the response compact.
-`_to_horizon_ic_result(r, include_distribution=…)` in
-[routers/indicator_reliability.py](../PythonDataService/app/routers/indicator_reliability.py)
-is the gate.
-
----
-
 ## 5. UI implementation
 
-The frontend is Angular 22 (standalone components, `OnPush`, signals,
-`@if`/`@for`/`@switch` control flow). The codebase does not use class-based
-state or `NgModules` — see [Frontend/CLAUDE.md](../Frontend/CLAUDE.md) for the
-full conventions. This section documents three concurrent refactors:
-
-- **T1** — the Indicator Reliability page, redesigned as a mission-control
-  surface with a confidence gauge, WHEN/WHERE/HOW decision cells, and a
-  5-test checklist (§5.3).
-- **T2** — the global app shell. Previous top PrimeNG Menubar is replaced by a
-  persistent 240-px left sidebar (`AppSidebarComponent`) and the 1200/1400-px
-  page-container caps are removed across 14 files (§5.2).
-- **T3** — the Research Lab landing page re-rendered as three grouped sub-nav
-  sections (Validate / Inspect / Reference) backed by a signal-driven
-  `@switch` instead of the previous PrimeNG Tabs (§5.4).
-
-The redesign originated from a Claude Design bundle
-(`quant-trading-lab-design-system`). The variant chosen was *Variant B —
-Mission-control* (confidence-gauge-led) rather than *Variant A —
-Bloomberg-dense*. The variant choice was locked in before implementation and
-is not revisited here.
-
-### 5.1 Information architecture
-
-#### 5.1.1 Before
-
-The legacy top Menubar exposed **7 groups** with up to 13 flat sub-items each,
-for ~30+ routes total. Structure extracted from the previous
-`app.component.ts`:
-
-| Legacy group | Representative items |
-|--------------|----------------------|
-| Stocks (1 of 7) | Market Data, Tickers, Technical Analysis, Stock Analysis, Snapshots, Strategy Lab *(deprecated)*, Strategy Validation, Strategy Docs, Indicator Validation, Indicator Docs, Indicator Report, Data Lab, Data Lab Docs |
-| Data Quality | Quality Analysis, Pipeline Docs |
-| Options | Options Chain, Strategy Builder, Options Strategy Lab, Options History, Pricing Lab, Snapshots |
-| Engine | Engine Lab, Engine Docs |
-| Portfolio | single route |
-| Research Lab | single route |
-| Tracked Instruments | single route |
-
-**Problems identified** in the design chat: no persistent context, no search,
-cognitive load spiked at Stocks (13 items), and several sections overlapped
-conceptually (Data Lab appeared under Stocks; Data Quality was its own group).
-
-#### 5.1.2 After — five-group sidebar IA
-
-Adapted from the Claude Design bundle's proposed IA, with minor adjustments
-to preserve every existing route. The single authoritative declaration is in
-[app-sidebar.component.ts](../Frontend/src/app/shell/app-sidebar.component.ts)
-at the top-of-file `NAV` constant.
-
-| Sidebar group | PrimeIcon | Items |
-|---------------|-----------|-------|
-| **Stocks** | `pi-chart-line` | Market Data, Tickers, Technical Analysis, Stock Analysis, Snapshots, Strategy Lab *(deprecated)*, Strategy Validation, Strategy Docs, Indicator Validation, Indicator Docs, Indicator Report |
-| **Data Lab** | `pi-database` | Data Lab, Indicator Reference, Data Quality, Pipeline Docs |
-| **Options** | `pi-objects-column` | Options Chain, Strategy Builder, Options Strategy Lab, Options History, Pricing Lab |
-| **Research Lab** | `pi-search` | Research Lab |
-| **Portfolio** | `pi-wallet` | Dashboard, Engine Lab, Tracked Instruments |
-
-#### 5.1.3 Mapping rationale
-
-- **Data Lab ← Data Quality + Data Lab items.** The two Data Quality routes
-  conceptually belong with the other data-inspection pages. Folding collapses
-  a single-level group into a denser, more coherent one.
-- **Portfolio ← Portfolio + Engine + Tracked Instruments.** Engine Lab is
-  a backtester producing portfolio-level results; Tracked Instruments is a
-  per-position watchlist. Both are portfolio-adjacent; treating them as
-  separate top-level groups fragmented attention.
-- **Options stays.** Six routes, all tightly coupled, natural group.
-- **Stocks stays.** Eleven routes kept together because they share market-data
-  plumbing and Strategy/Indicator workflows. A nested sub-group inside Stocks
-  for "Strategy" and "Indicator" was considered and rejected for v1 —
-  two-level nav adds complexity without a matching user-benefit until the
-  Stocks set grows further.
-- **Research Lab kept as a single item** that opens a dedicated landing
-  page (§5.4). The 11 sub-surfaces live *inside* that page via the sub-nav,
-  not in the sidebar. This is an intentional design decision to keep the
-  sidebar depth shallow and to treat Research Lab as a "section" in the same
-  sense that Options is a section.
-
-#### 5.1.4 Route preservation invariants
-
-Every existing route (`Frontend/src/app/app.routes.ts`) is reachable via the
-new sidebar. No route was renamed, redirected, or removed. The IA rework is
-purely a re-grouping on top of unchanged URL space. This is the key safety
-property: deep-links and bookmarks continue to work.
-
-### 5.2 App shell
-
-`AppComponent` — [app.component.ts](../Frontend/src/app/app.component.ts):
-
-```
-<app-sidebar />
-<main class="main">
-  <router-outlet />
-</main>
-```
-
-The host is `display: flex; min-height: 100vh` — sidebar is a flex-child with
-`flex-shrink: 0`, main is `flex: 1; min-width: 0`. The `min-width: 0` is
-load-bearing: without it, wide children (e.g. data tables) would overflow
-horizontally instead of scrolling.
-
-The global `.page-container { max-width: 1200px }` wrapper is removed.
-
-#### 5.2.1 AppSidebarComponent architecture
-
-[app-sidebar.component.ts](../Frontend/src/app/shell/app-sidebar.component.ts).
-OnPush, standalone, signals-only. Key internal state:
-
-| Signal | Type | Purpose |
-|--------|------|---------|
-| `currentUrl` | `string` | Current route URL. Updated on `NavigationEnd` from Angular Router. Used by the `isActive` / `groupHasActive` / `groupContainsUrl` predicates. |
-| `openGroups` | `Record<string, boolean>` | Open/closed state per group. Initial value auto-opens the group containing the landing route. Subsequent `NavigationEnd` events auto-expand the group of the newly active route (never collapse others — user's manual toggles are preserved). |
-| `query` | `string` | Search query string. Non-empty enters flat-match mode. |
-| `filtered` | `computed(...)` | When `query` is non-empty, flattens all items across groups into a single list filtered by case-insensitive substring match on `"{label} {group}"`. Returns `null` to signal "render the grouped tree." |
-
-#### 5.2.2 Active-route detection
-
-`isActive(route)` returns true when `currentUrl === route` or
-`currentUrl.startsWith(route + '/')`. The prefix check is what makes
-`/research-lab/signal-report/:id` highlight the **Research Lab** parent item.
-
-#### 5.2.3 Search and ⌘K binding
-
-The ⌘K / Ctrl+K hotkey is wired via `@HostListener('window:keydown', …)`:
-
-```typescript
-@HostListener('window:keydown', ['$event'])
-handleKeydown(event: KeyboardEvent): void {
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-    event.preventDefault();
-    const el = this.searchInput()?.nativeElement;
-    if (el) { el.focus(); el.select(); }
-  }
-}
-```
-
-When `query` is non-empty, the template renders a flat list of matches
-(with the originating group name rendered in monospace next to each match).
-Clicking a match clears the query and navigates.
-
-#### 5.2.4 Width-cap removal
-
-Thirteen component files (plus the IR page from T1) previously capped their
-content at 1200 or 1400 pixels via a combination of `max-width` and
-`margin: 0 auto`. All were changed to `max-width: none` with the
-centering margin removed. A future engineer adding a new page should not
-re-introduce width caps without an explicit reason — the left sidebar already
-provides horizontal context; centered narrow columns on a dense research tool
-waste screen real estate.
-
-Files modified (line numbers in each file's initial `@use` block):
-
-- `options-strategy-lab/*.scss`, `lean-engine/*.scss`, `data-lab/*.scss`,
-  `portfolio/*.scss`, `technical-analysis/*.scss`, `tickers.component.ts`
-  (inline styles), `stock-analysis/*.scss` (+ chunk-detail + day-detail),
-  `market-data/*.scss`, `strategy-lab/*.scss`, `ticker-explorer/*.scss`,
-  `tracked-instruments/*.scss`. The IR page's cap was removed as part of T1.
+Only the page rules that the page's help tooltips link to are kept here.
 
 ### 5.3 Indicator Reliability page (mission control)
 
-[indicator-reliability.component.ts / .html / .scss](../Frontend/src/app/components/research-lab/indicator-reliability).
-
-#### 5.3.1 Layout anatomy
-
-Single component, no sub-components — all structural pieces are inlined in
-the template for co-location with their helpers. Top-to-bottom:
-
-```
-┌───────────────────────────────────────────────────────────────┐
-│ Title                                           [New analysis] │
-├───────────────────────────────────────────────────────────────┤
-│  Controls panel (form; ticker / indicator / dates / params)   │
-├───────────────────────────────────────────────────────────────┤
-│  Collapsed summary band (shown post-run)                      │
-├───────────────────────────────────────────────────────────────┤
-│  Warnings (p-message severity="warn")                         │
-├───────────────────────────────────────────────────────────────┤
-│  HERO                                                         │
-│  ┌────────────┬──────────────────────────┬────────────────┐   │
-│  │ Confidence │ Headline                 │ 3 stacked      │   │
-│  │ gauge      │ Description              │ action CTAs    │   │
-│  │ (SVG arc)  │ Reason pills             │                │   │
-│  └────────────┴──────────────────────────┴────────────────┘   │
-├───────────────────────────────────────────────────────────────┤
-│  DECISION CELLS — WHEN / WHERE / HOW                          │
-│  ┌────────────┬──────────────────────────┬────────────────┐   │
-│  │ 01 When    │ 02 Where                 │ 03 How         │   │
-│  └────────────┴──────────────────────────┴────────────────┘   │
-├───────────────────────────────────────────────────────────────┤
-│  CONTENT GRID (1.4 fr / 1 fr)                                 │
-│  ┌────────────────────────────┬─────────────────────────────┐ │
-│  │ IC-vs-horizon decay chart  │ 5-test decision checklist   │ │
-│  │  + horizon compact cards   │                             │ │
-│  │                            │ Random-baseline noise-floor │ │
-│  │ Regime cross-check panel   │  bar + histogram            │ │
-│  │                            │                             │ │
-│  │                            │ Daily IC sparkline          │ │
-│  └────────────────────────────┴─────────────────────────────┘ │
-├───────────────────────────────────────────────────────────────┤
-│  Suggested next steps (bulleted)                              │
-├───────────────────────────────────────────────────────────────┤
-│  Slope variant table (collapsed <details>)                    │
-├───────────────────────────────────────────────────────────────┤
-│  Methodology & caveats (collapsed <details>)                  │
-└───────────────────────────────────────────────────────────────┘
-```
-
-Below 1100 px, the hero collapses to 2-column (gauge + copy), with the action
-column wrapping to the next row. Below 900 px, the decision cells stack. Below
-1100 px, the content grid stacks.
+How the page turns the statistics in §3 into its verdict, decision cells,
+checklist and noise-floor bar.
 
 #### 5.3.2 Confidence score
 
@@ -911,57 +569,6 @@ $$
 
 Implementation: `computeConfidence`, `getConfidenceBucket`, `getConfidenceColor`,
 `getVerdictVerb` in [indicator-reliability.component.ts](../Frontend/src/app/components/research-lab/indicator-reliability/indicator-reliability.component.ts).
-
-#### 5.3.3 Gauge SVG math
-
-The gauge is a single SVG element with two concentric stroked circles, each
-showing a 3/4-arc (unfilled background track + filled colour arc). Geometry:
-
-```
-R = 90
-C = 2πR  ≈  565.487
-track_arc_length = C × 0.75  ≈  424.115      // unfilled background (a 3/4 circle)
-filled_arc_length = (score / 100) × track_arc_length
-```
-
-Both circles share `cx="110"`, `cy="110"`, `r="90"`, `stroke-linecap="round"`,
-and `transform="rotate(135 110 110)"`. The rotation positions the arc's open
-gap at the bottom (dial pointing south). The dash pattern
-`stroke-dasharray="{length} {C}"` paints the first `{length}` pixels of
-circumference then leaves the rest blank. Expressed as a signal helper:
-
-```typescript
-getGaugeDash(): { filled: number; full: number; circumference: number } {
-  const R = 90;
-  const C = 2 * Math.PI * R;
-  const arc = C * 0.75;
-  const filled = (this.getConfidenceScore() / 100) * arc;
-  return { filled, full: arc, circumference: C };
-}
-```
-
-The coloured arc also receives a `filter: drop-shadow(0 0 6px currentColor)`
-for a subtle glow matching the verdict bucket colour.
-
-#### 5.3.4 Reason pills
-
-The reason pills are ordered pass/fail chips driven directly by the response.
-Implementation: `getReasonPills()`. Ordered:
-
-1. FDR ✓ / ✗
-2. Bonferroni ✓ / ✗
-3. `OOS holds ({±retention_delta_pct}%)` — `good` if $\geq -30\%$, else `warn`
-4. `|IC| {val} {> 0.10 | ≤ 0.10}` — `good` iff $> 0.10$
-5. `Stronger in {regime}` — appended if `getRegimeComparison()` returns a
-   regime that dominates at the best horizon
-6. `Single asset only` — always appended, kind = `neutral`
-
-Colours (all applied via a `data-kind` attribute selector on the `.reason-pill`
-class):
-
-- `good` — `--bull` / `rgba(bull, 0.12)` background / `rgba(bull, 0.3)` border
-- `warn` — `--warn` analogues
-- `neutral` — `--text-muted` analogues
 
 #### 5.3.5 WHEN cell
 
@@ -1063,204 +670,18 @@ places.
 When $\sigma < 10^{-10}$ (degenerate), the bar is skipped and the histogram
 below still renders.
 
-#### 5.3.10 Action CTAs
-
-Three stacked buttons in the hero action column. Only **Run on another ticker**
-is functionally wired in v1:
-
-- **Send to Pre-flight** — primary style, `disabled`. Tooltip: *"Pre-flight
-  check not wired in v1."* Awaits a Strategy Pre-flight backend.
-- **Save to tested indicators** — ghost style, `disabled`. Tooltip: *"Save to
-  tested indicators not wired in v1."* Awaits a persistence table.
-- **Run on another ticker** — functional. `runOnAnotherTicker()` opens
-  `window.prompt(...)`, pre-fills with the current ticker, and — if a new,
-  cleaned-up ticker is returned — updates the `ticker` signal and calls the
-  existing `runAnalysis()`. `window.prompt` is the minimum viable UX; a PrimeNG
-  dialog is a follow-up (§8.4).
-
-### 5.4 Research Lab sub-nav
-
-[research-lab.component.ts / .html / .scss](../Frontend/src/app/components/research-lab).
-
-#### 5.4.1 Migration from PrimeNG Tabs
-
-The previous implementation used `p-tabs` with 11 tabs, keyed by a hard-coded
-numeric `value`. The redesign replaces this with a signal-driven pattern:
-
-```typescript
-readonly active = signal<TabId>('indicator-reliability');
-setActive(id: TabId): void { this.active.set(id); }
-```
-
-And the template renders via `@switch`:
-
-```html
-@switch (active()) {
-  @case ('indicator-reliability') { <app-indicator-reliability /> }
-  @case ('feature-runner')        { <app-feature-runner /> }
-  …
-}
-```
-
-Rationale: PrimeNG Tabs does not support visual sub-grouping of tabs within a
-single tablist (eyebrow labels across the tab strip), which is the design's
-intent. A signal + `@switch` gives total control over layout at the cost of
-losing the keyboard semantics of `role="tablist"` (§8.2 — an a11y follow-up).
-
-#### 5.4.2 Three-group layout
-
-Horizontal sub-nav with three labelled meta-sections:
-
-| Meta-section | Items |
-|--------------|-------|
-| **Validate** | Feature Runner, Indicator Reliability, Signal Engine |
-| **Inspect** | Cross-Sectional, Data Divergence, Pre-flight Check |
-| **Reference** | Experiments, Options Math, Signal Docs, Signal History, Feature Docs |
-
-Each section header is an uppercase monospace eyebrow at 10 px / 0.06 em
-letter-spacing. Tabs are click targets; the active tab gets an `--accent`
-bottom border and bumped font-weight. Sections are separated by a 14-px
-vertical divider.
-
-#### 5.4.3 Default landing tab
-
-Previously: Feature Runner (tab index 0). Now: **Indicator Reliability**.
-This is a deliberate behaviour change to match the design-bundle intent —
-Indicator Reliability is the showcase page for the mission-control redesign
-and the most-used surface in the section.
-
-Users who bookmarked `/research-lab` expecting Feature Runner will now land
-on Indicator Reliability. The sub-nav remembers no state between page loads
-(§8.2).
-
----
-
-## 6. Code cross-reference
-
-### 6.1 Backend (Python)
-
-| Concept | File | Symbol |
-|---------|------|--------|
-| Daily IC + NW + N_eff | [validation/ic.py](../PythonDataService/app/research/validation/ic.py) | `compute_information_coefficient`, `_compute_newey_west_t_stat`, `_compute_effective_sample_size` |
-| Hit rate | same | `_compute_hit_rate` |
-| FDR / Bonferroni | [indicator_reliability.py](../PythonDataService/app/research/indicator_reliability.py) | `apply_multiple_testing_correction` |
-| Random baseline (distribution) | same | `compute_random_baseline_ic` |
-| Verdict labels | same | `compute_strength_label`, `compute_stability_label`, `compute_direction_label` |
-| Retention delta | same | `compute_retention_delta_pct` |
-| Slope decisions | same | `compute_slope_decisions` |
-| IC decay curve | same | `compute_ic_decay_curve` |
-| Regime split | same | `split_by_volatility_regime`, `compute_regime_ic` |
-| IR proxy + tradeability | same | `bars_per_year`, `compute_ir_proxy`, `compute_tradeability` |
-| Next-steps engine | same | `generate_next_steps` |
-| Info footnotes | same | `generate_info_footnotes` |
-| Router (response assembly) | [routers/indicator_reliability.py](../PythonDataService/app/routers/indicator_reliability.py) | `calculate_indicator_reliability`, `_to_horizon_ic_result`, `_build_verdict` |
-| Response schema | [models/indicator_reliability_models.py](../PythonDataService/app/models/indicator_reliability_models.py) | `HorizonICResult`, `VerdictModel`, `DecayCurvePoint`, `RegimeICPoint`, `RegimeResults`, `IndicatorReliabilityResponse` |
-| Tests | [tests/research/test_indicator_reliability.py](../PythonDataService/tests/research/test_indicator_reliability.py) | 53 tests across 10 classes |
-
-### 6.2 Frontend (Angular)
-
-| Concept | File | Symbol |
-|---------|------|--------|
-| App shell | [app.component.ts](../Frontend/src/app/app.component.ts) | `AppComponent` |
-| Sidebar | [shell/app-sidebar.component.ts](../Frontend/src/app/shell/app-sidebar.component.ts) | `AppSidebarComponent`, `NAV` constant |
-| Mission-control page | [research-lab/indicator-reliability/](../Frontend/src/app/components/research-lab/indicator-reliability/) | `IndicatorReliabilityComponent` |
-| Confidence score | same `.ts` | `getConfidenceScore`, `getConfidenceBucket`, `getConfidenceColor`, `getGaugeDash`, `getVerdictVerb` |
-| Reason pills | same | `getReasonPills` |
-| WHEN / WHERE / HOW | same | `getWhenCell`, `getWhereCell`, `getHowCell`, `getRegimeComparison` |
-| 5-test checklist | same | `getChecklist`, `countFdrPasses` |
-| Noise-floor bar | same | `getNoiseFloorBar` |
-| Run-on-another-ticker CTA | same | `runOnAnotherTicker` |
-| Horizon compact cards | same | `getHorizonCards`, `getHorizonRows` |
-| Research Lab landing | [research-lab/research-lab.component.ts](../Frontend/src/app/components/research-lab/research-lab.component.ts) | `ResearchLabComponent`, `active` signal, `groups` |
-| Routes | [app.routes.ts](../Frontend/src/app/app.routes.ts) | All lazy-loaded standalone components |
-
----
-
-## 7. Verification plan
-
-### 7.1 Statistical verification (Python)
-
-```
-(cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest \
-    tests/research/test_indicator_reliability.py \
-    tests/research/test_ic.py \
-    -v)
-```
-
-Expected: 53 + 15 = 68 passing tests, zero failures. Covers:
-
-- IC correctness on synthetic data with known correlation structure.
-- Newey–West against reference values.
-- FDR / Bonferroni monotonicity.
-- Random baseline z-score scale.
-- Verdict label thresholds at boundary values.
-- Retention delta edge cases (null OOS, IS near-zero).
-- Slope decision flag logic.
-- IC decay curve shape on a monotonically-decaying synthetic signal.
-- Regime split balance.
-- IR proxy scaling with horizon and timespan.
-- Tradeability bucket cases.
-- Next-step rules (missing OOS, regime-dependent, no-trigger fall-through).
-
-### 7.2 Type / lint (Frontend)
-
-```
-podman exec my-frontend npx tsc --noEmit
-podman exec my-frontend npx eslint src/app/app.component.ts \
-    src/app/shell/ \
-    src/app/components/research-lab/indicator-reliability/ \
-    src/app/components/research-lab/research-lab.component.ts \
-    --max-warnings 0
-```
-
-Expected: silent output (no errors or warnings introduced by the UI work).
-Note: 309 pre-existing warnings across unrelated `*.spec.ts`, service, and
-utility files remain untouched.
-
-### 7.3 Manual UI smoke (representative path)
-
-1. Open `http://localhost:4200`. Verify the left sidebar renders at 240 px
-   with five collapsible groups, "Stocks" expanded (the landing route
-   `/market-data` is inside it).
-2. Press ⌘K (macOS) or Ctrl+K. The sidebar search input gains focus.
-3. Type `indicator`. Verify flat-match list shows "Indicator Validation",
-   "Indicator Docs", "Indicator Report" (Stocks group), and "Research Lab".
-4. Click Research Lab. Land on the sub-nav page with Indicator Reliability
-   active by default.
-5. Run an analysis: ticker `AAPL`, indicator `rsi` (length 14),
-   `2025-07-08 → 2026-04-04`, horizons `[1, 5, 10, 15, 30]`. Verify the
-   confidence gauge renders at or near 100/100 with a "TRADE" bucket, the
-   hero headline reads "Ready to trade at 30-bar", three decision cells are
-   populated, and the 5-test checklist is all green.
-6. Click "Run on another ticker", enter `MSFT` at the prompt. The analysis
-   re-runs without requiring the user to re-open the form.
-7. Navigate to `/market-data` and `/stock-analysis` in sequence. Verify each
-   page now uses the full viewport width — no 1200/1400-px cap, no centred
-   narrow column.
-
 ---
 
 ## 8. Limitations and future work
 
 ### 8.1 Explicit non-goals (not implemented by design)
 
-- **Variant A — Bloomberg-dense.** The design bundle shipped two variants
-  side-by-side; Variant B (mission-control) was chosen. Variant A's
-  verdict-strip + data-grid layout is not implemented.
 - **Strategy Pre-flight backend.** The "Send to Pre-flight" CTA is rendered
   disabled. A companion backend (route + page + persistence) is a prerequisite
   before wiring this up.
 - **Save-verdict persistence.** The "Save to tested indicators" CTA is
   rendered disabled. Requires a database table, a GraphQL mutation, and a
   tested-indicators index page to land together.
-- **Research Lab route restructure.** Sub-nav is visual only. A future PR
-  can convert each tab into a lazy-loaded route under
-  `/research-lab/validate/*`, `/research-lab/inspect/*`, etc., for
-  bookmarkable deep-links.
-- **No new unit-test coverage for the UI helpers.** Existing Angular tests
-  continue to pass; no tests were added for `computeConfidence`,
-  `getWhereCell`, or the noise-floor math. A follow-up should add Vitest
-  coverage for the four deterministic scoring helpers (§8.4).
 
 ### 8.2 Known design compromises / minor bugs
 
@@ -1271,42 +692,11 @@ utility files remain untouched.
 - **OOS retention delta does not detect sign flips** (§3.8). IS $= +0.08$
   vs OOS $= -0.08$ renders as `Δ = 0%`. Workaround: check sign of each raw
   IC. Fix: emit an `oos_sign_flip: bool` flag and a UI badge.
-- **Research Lab sub-nav state is not URL-backed.** Refreshing
-  `/research-lab` always lands on Indicator Reliability regardless of the
-  last-open tab. No browser back/forward integration. Acceptable for v1;
-  route restructure (§8.1) resolves this.
-- **⌘K binding.** On Linux, Ctrl+K is widely bound by browsers (focus URL
-  bar) and OS shortcuts. Our `preventDefault()` intercepts before the browser
-  sees it, but a user who expects the browser default may be surprised. We
-  preserve it because the sidebar is the intended focus target in our
-  context.
-- **`window.prompt` for Run-on-another-ticker.** Minimum viable UX. A
-  PrimeNG `p-dialog` with form validation is a small follow-up.
-- **`p-tabs → @switch` lost `role="tablist"` semantics.** The new sub-nav
-  is a set of `<button>` elements; PrimeNG Tabs ships ARIA tablist/tab/tabpanel
-  roles out of the box. An accessibility follow-up should either re-add
-  ARIA manually to the custom sub-nav or switch to a keyboard-arrow pattern
-  appropriate for three-group navigation.
 - **Hard-coded threshold values** appear throughout — strength buckets at
   0.03/0.07/0.12, stability at 0.52/0.58, direction at 0.02, OOS-holds at
   -30% / -40%, random-z at 3σ, IR proxy at 0.5/1.0, rule 4 at 2× regime
   ratio. These are single-asset intraday-equity calibrations; cross-asset or
   longer-horizon use requires recalibration.
-
-### 8.3 Technical debt introduced
-
-- Inline style content in `AppSidebarComponent` (~280 lines) is embedded in
-  the component's `styles` array. Extracting to a `.scss` side-car follows
-  the repo convention and eases future visual iteration.
-- Sidebar `NAV` constant is hard-coded in the component module. A future
-  refactor could move it to a route-metadata layer (derive the IA from the
-  route definitions themselves), which would remove duplication between
-  `app.routes.ts` and `NAV`.
-- The mission-control page has grown to ~900 lines between `.ts` and
-  `.html`. Candidate extractions: `ConfidenceGaugeComponent`,
-  `DecisionCellComponent`, `ChecklistPanelComponent`,
-  `NoiseFloorBarComponent`. Deferred to keep T1 focused; recommended before
-  the next behavioural change on this page.
 
 ### 8.4 Concrete follow-up items
 
@@ -1314,26 +704,13 @@ In priority order:
 
 1. **OOS sign-flip flag + badge.** Small backend field + UI tag. Closes the
    §8.2 gap.
-2. **Unit tests for UI helpers.** `computeConfidence`, `getConfidenceBucket`,
-   `getRegimeComparison`, `getNoiseFloorBar`, checklist-boundary cases. Use
-   Vitest with `@testing-library/angular`.
-3. **Indicator-specific direction semantics** (§3.7). RSI and Stoch have
+2. **Indicator-specific direction semantics** (§3.7). RSI and Stoch have
    "mean-reverting when IC negative" baked in; price-based indicators like
    SMA-crossover need a different mapping. Add a lookup table keyed by
    `indicator_name` in `compute_direction_label`.
-4. **Replace `window.prompt` with a PrimeNG dialog** for ticker re-run,
-   with client-side ticker format validation.
-5. **ARIA for the Research Lab sub-nav.** Keyboard arrow navigation,
-   `role="tablist"` + `role="tab"` + `role="tabpanel"`.
-6. **Research Lab sub-route breakup.** `/research-lab/indicator-reliability`
-   etc., with bookmarkable deep-links. Lazy-loaded.
-7. **Extract mission-control sub-components** per §8.3.
-8. **Wire Send-to-Pre-flight.** Requires the Pre-flight backend and page —
-   separate epic.
-9. **Wire Save-to-tested-indicators.** Requires persistence — separate epic.
-10. **Block-bootstrap confidence intervals** for the decay curve, instead of
-    the current NW-implied SE (§3.10). Would give more realistic coverage
-    under strong serial correlation.
+3. **Block-bootstrap confidence intervals** for the decay curve, instead of
+   the current NW-implied SE (§3.10). Would give more realistic coverage
+   under strong serial correlation.
 
 ---
 
@@ -1362,8 +739,3 @@ In priority order:
   consulted: `project/research_lab_redesign/variant-b-mission.jsx`,
   `project/research_lab_redesign/shared/sidebar.jsx`,
   `project/research_lab_redesign/shared/header.jsx`.
-- Repo conventions — [Frontend/CLAUDE.md](../Frontend/CLAUDE.md),
-  [PythonDataService/CLAUDE.md](../PythonDataService/CLAUDE.md),
-  [.claude/CLAUDE.md](../.claude/CLAUDE.md).
-- Previous version of this document (P1–P3 math-only) — superseded by the
-  present consolidated reference.

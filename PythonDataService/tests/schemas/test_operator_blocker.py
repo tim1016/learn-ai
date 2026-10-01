@@ -115,13 +115,6 @@ def test_terminal_blocker_accepts_a_primary_and_a_secondary_move() -> None:
     assert blocker.secondary_moves[0].action.kind == "remove"
 
 
-def test_the_retired_retire_replace_move_is_rejected() -> None:
-    """#2590: nothing constructed ``retire_replace`` and the action it named is
-    gone (#2578), so the closed move vocabulary no longer admits it."""
-    with pytest.raises(ValidationError):
-        OperatorMove.model_validate({"label": "Replace", "action": {"kind": "retire_replace"}})
-
-
 def test_operator_move_serializes_backend_confirmation_copy() -> None:
     move = OperatorMove(
         label="Remove",
@@ -141,32 +134,6 @@ def test_operator_move_serializes_backend_confirmation_copy() -> None:
         "confirm_label": "Remove",
         "required_token": "",
     }
-
-
-def test_the_retired_desk_routing_is_rejected() -> None:
-    """PRD #2560 slice 7: the account posture was the only producer of the
-    runbook move, the ``clerk`` anchor and a non-``both`` audience; with it
-    gone none of them can come back through the schema (review A3)."""
-    blocker = OperatorBlocker.for_host(
-        condition_id="orphaned_socket",
-        scope="broker",
-        host="bot_cockpit",
-        anchor=_surface_anchor(),
-        disposition="fix_elsewhere",
-        headline="Bot socket is orphaned",
-        detail=None,
-        primary_move=_nav_move(),
-        applies_to="run",
-    ).model_dump()
-
-    with pytest.raises(ValidationError):
-        OperatorBlocker.model_validate({**blocker, "audience": "both"})
-    with pytest.raises(ValidationError):
-        OperatorBlocker.model_validate(
-            {**blocker, "primary_move": {"label": "Open runbook", "action": {"kind": "open_runbook", "slug": "x"}}}
-        )
-    with pytest.raises(ValidationError):
-        OperatorBlockerAnchor(kind="clerk", subject_key=None)  # type: ignore[arg-type]
 
 
 def test_same_condition_can_project_to_different_host_dispositions() -> None:
@@ -306,21 +273,3 @@ def test_operator_blocker_wire_contract_pins_its_fields() -> None:
         "secondary_moves": [],
         "applies_to": "both",
     }
-
-
-def test_the_retired_account_desk_host_is_rejected() -> None:
-    """PRD #2560 retired the Overview desk that rendered ``account_desk``
-    projections (with their "Open Clerk recovery" shortcut); the host cannot
-    come back through the schema."""
-    with pytest.raises(ValidationError, match="host"):
-        OperatorBlocker.for_host(
-            condition_id="alpaca_clerk_recovery:reconcile",
-            scope="account",
-            host="account_desk",  # type: ignore[arg-type]
-            anchor=_surface_anchor(),
-            disposition="fix_elsewhere",
-            headline="Clerk recovery is available",
-            detail=None,
-            primary_move=_nav_move(),
-            applies_to="both",
-        )

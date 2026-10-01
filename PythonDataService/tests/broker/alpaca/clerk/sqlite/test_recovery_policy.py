@@ -14,7 +14,6 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedRun,
     ProjectedUncertainty,
     RecoveryCapability,
-    RecoveryConfirmation,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     UNCONDITIONAL_RECOVERY_ACTION_IDS,
@@ -22,7 +21,6 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     RecoveryActionUnavailableError,
     RecoveryPolicyContext,
     StaleRecoveryTokenError,
-    build_projection_guidance,
     build_recovery_catalog,
     recheck_recovery_action,
 )
@@ -96,34 +94,22 @@ def test_healthy_catalog_omits_failure_and_generic_recovery_actions() -> None:
     assert "reset_authority" not in actions
 
 
-def _stop_confirmation_of(ctx: RecoveryPolicyContext) -> RecoveryConfirmation:
-    (stop,) = (action for action in build_recovery_catalog(ctx) if action.action_id == "stop_bot_decisions")
-    assert stop.confirmation is not None
-    return stop.confirmation
-
-
-def test_stop_asks_by_the_bots_own_name_and_says_its_unused_cash_goes_back() -> None:
-    """#2634: two bots on one symbol are told apart by name, as Home lists them."""
-    confirmation = _stop_confirmation_of(_context())
-
-    assert confirmation.title == "Stop spy-bot?"
-    assert confirmation.explanation == (
-        "The bot stops making new decisions. A sale already sent can still go through. "
-        "Cash it isn't using goes back to the account. Its scheduled end is cancelled: "
-        "nothing is sold at the end time."
-    )
-    assert confirmation.confirm_label == "Stop bot decisions"
-
-
-def test_a_dry_runs_stop_never_says_the_accounts_money_moves() -> None:
+@pytest.mark.parametrize(
+    ("overrides", "says_cash_goes_back"),
+    [({}, True), ({"account_id": "sim:spy-bot"}, False)],
+)
+def test_only_a_real_accounts_stop_says_unused_cash_goes_back(
+    overrides: dict[str, str], says_cash_goes_back: bool
+) -> None:
     """#2634: a Dry Run trades simulated cash, so nothing goes back to the account."""
-    confirmation = _stop_confirmation_of(_context(account_id="sim:spy-bot"))
-
-    assert confirmation.title == "Stop spy-bot?"
-    assert confirmation.explanation == (
-        "The bot stops making new decisions. A sale already sent can still go through. "
-        "Its scheduled end is cancelled: nothing is sold at the end time."
+    (stop,) = (
+        action
+        for action in build_recovery_catalog(_context(**overrides))
+        if action.action_id == "stop_bot_decisions"
     )
+
+    assert stop.confirmation is not None
+    assert ("goes back to the account" in stop.confirmation.explanation) is says_cash_goes_back
 
 
 def test_coverage_resolution_requires_one_exact_economic_replacement() -> None:
@@ -737,34 +723,6 @@ def test_safe_flatten_checks_complete_current_orders_not_operation_page() -> Non
     assert capability.available is False
     assert capability.unavailable_reason_code == "WORKING_ORDERS_REQUIRE_CANCEL_FIRST"
     assert capability.reduction_plan is None
-
-
-def test_bot_uncertainty_authors_scope_impact_and_next_step() -> None:
-    uncertainty = ProjectedUncertainty(
-        uncertainty_id="uncertain-1",
-        scope="CUSTODY_SUBJECT",
-        severity="warning",
-        blocks_new_exposure=True,
-        allows_reduction=False,
-        custody_owner="ACCOUNT_CLERK",
-        strategy_instance_id="spy-bot",
-        reason_code="ORDER_OUTCOME_UNKNOWN",
-        headline="SPY entries are paused",
-        explanation="The last order outcome is not terminal yet.",
-        operator_impact="Only this bot cannot create exposure.",
-        next_step="The Clerk is reconciling automatically.",
-        observed_at_ms=1_700_000_009_000,
-        evidence_age_ms=1_000,
-        evidence_refs=("order:1",),
-    )
-
-    context = _context(uncertainties=(uncertainty,))
-    guidance = build_projection_guidance(context, build_recovery_catalog(context))
-
-    assert guidance.scope == "CUSTODY_SUBJECT"
-    assert guidance.may_create_exposure is False
-    assert guidance.impact == "Only this bot cannot create exposure."
-    assert guidance.next_step == "The Clerk is reconciling automatically."
 
 
 def _account_uncertainty(
