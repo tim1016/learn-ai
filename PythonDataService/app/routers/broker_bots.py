@@ -21,10 +21,7 @@ from app.broker.alpaca.clerk.account_authority import (
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.registry import get_broker_registry
 from app.routers.brokers import _raise_http
-from app.schemas.broker_bots import (
-    BotRunView,
-    BotStatusView,
-)
+from app.schemas.broker_bots import BotRunView
 from app.services.bot_runner import (
     BotRunnerError,
     BotTaskRegistry,
@@ -111,34 +108,6 @@ def _require_account_binding(
             f"No bot '{strategy_instance_id}' is bound to account '{account_id}'.",
             detail="Use the account recorded by the bot's sealed binding.",
         )
-
-
-@router.get(
-    "/{broker}/bots",
-    response_model=list[BotStatusView],
-    summary="List bots whose durable binding carries this broker tag",
-)
-async def list_bots(broker: str) -> list[BotStatusView]:
-    _resolve_broker(broker)
-    registry = _require_registry()
-    try:
-        return registry.list_bots(broker)
-    except BotRunnerError as error:
-        _raise_runner_error(error)
-
-
-@router.get(
-    "/{broker}/bots/{strategy_instance_id}",
-    response_model=BotStatusView,
-    summary="One bot's roster row (artifact-derived state + registry liveness)",
-)
-async def get_bot_status(broker: str, strategy_instance_id: str) -> BotStatusView:
-    _resolve_broker(broker)
-    registry = _require_registry()
-    try:
-        return registry.status(broker, strategy_instance_id)
-    except BotRunnerError as error:
-        _raise_runner_error(error)
 
 
 @router.get(

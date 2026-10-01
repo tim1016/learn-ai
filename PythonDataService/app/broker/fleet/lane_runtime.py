@@ -219,23 +219,9 @@ def compatibility_route_family(method: str, path: str) -> str | None:
         return "brokers_lane_extras"
     if tail[:1] == ("panel-profile",):
         return "broker_v2_panel"
-    if tail[:1] != ("bots",):
-        return None
-    if len(tail) >= 5 and tail[-3:] == ("runs", tail[-2], "replay-receipt"):
-        return "run_replay"
-    if tail[:2] == ("bots", "catalog"):
-        return "broker_v2_panel"
-    if len(tail) >= 3 and tail[0] == "bots" and tail[2] in {
-        "panel",
-        "actions",
-        "authority-facts",
-        "evidence",
-        "live-snapshot",
-    }:
-        return "broker_v2_panel"
-    if len(tail) >= 4 and tail[:2] == ("bots", tail[1]) and tail[2] == "chart":
-        return "broker_v2_panel"
-    return "broker_bots"
+    if tail[:1] == ("bots",):
+        return "broker_bots"
+    return None
 
 
 class CompatibilityReadEvidence:

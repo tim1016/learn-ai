@@ -392,7 +392,7 @@ def test_compatibility_inventory_is_fixed_and_excludes_canonical_internal_and_mu
     ) == "broker_configuration"
     assert compatibility_route_family(
         "GET", "/api/brokers/alpaca/bots/sid-1/runs/run-1/replay-receipt"
-    ) == "run_replay"
+    ) == "broker_bots"
     assert compatibility_route_family(
         "GET", "/api/brokers/alpaca/clerks/clrk_abc/account"
     ) is None
