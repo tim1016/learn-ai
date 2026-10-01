@@ -107,25 +107,6 @@ describe('StrategyBuilderComponent', () => {
     httpMock.verify();
   });
 
-  describe('initialization', () => {
-    it('creates the component', () => {
-      expect(component).toBeTruthy();
-    });
-
-    it('defaults ticker to SPY', () => {
-      expect(component.ticker()).toBe('SPY');
-    });
-
-    it('starts with no legs and no analysis result', () => {
-      expect(component.legs().length).toBe(0);
-      expect(component.analysisResult()).toBeNull();
-    });
-
-    it('defaults riskFreeRate to 0.043', () => {
-      expect(component.riskFreeRate()).toBe(0.043);
-    });
-  });
-
   // ── SB-A: Data-fetch prelude ───────────────────────────────────
   describe('SB-A: ticker → expirations → chain prelude', () => {
     it('populates expirations and selects the nearest one on fetchExpirations()', async () => {

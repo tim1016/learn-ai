@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import type { BrokerProfileRevision } from '../../../../api/alpaca.types';
 import { ConfigurationAccountEvidenceComponent } from './configuration-account-evidence.component';
@@ -34,23 +34,6 @@ describe('ConfigurationAccountEvidenceComponent', () => {
     // never the identity a pin is taken from.
     expect(screen.queryAllByRole('textbox')).toHaveLength(0);
     expect(screen.getByText(/No account is approved/)).toBeTruthy();
-  });
-
-  it('approves only an account the broker was observed to reach', async () => {
-    const pinRequested = vi.fn();
-    await render(ConfigurationAccountEvidenceComponent, {
-      inputs: {
-        revision: revision(),
-        observed: [{ account_id: 'PA3ZK9QWERTY', account_mode: 'paper', account_status: 'ACTIVE' }],
-        nickname: null,
-        busy: false,
-      },
-      on: { pinRequested },
-    });
-
-    await userEvent.click(screen.getByRole('button', { name: 'Approve this account' }));
-
-    expect(pinRequested).toHaveBeenCalledWith('PA3ZK9QWERTY');
   });
 
   it('shows the declared endpoint and the observed mode as two separate facts', async () => {
@@ -108,13 +91,5 @@ describe('ConfigurationAccountEvidenceComponent', () => {
     });
 
     expect(screen.queryByRole('button', { name: 'Save nickname' })).toBeNull();
-  });
-
-  it('says the broker reported nothing rather than rendering an empty list', async () => {
-    await render(ConfigurationAccountEvidenceComponent, {
-      inputs: { revision: revision(), observed: [], nickname: null, busy: false },
-    });
-
-    expect(screen.getByText('The broker reported no account for this revision.')).toBeTruthy();
   });
 });

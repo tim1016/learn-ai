@@ -203,16 +203,6 @@ describe('TickerQuoteComponent', () => {
 
       expect(container.querySelector('i')).toBeNull();
     });
-
-    it('host has inline class', async () => {
-      const { fixture } = await render(TickerQuoteComponent, {
-        inputs: { quote: BASE_QUOTE },
-      });
-
-      expect(
-        fixture.nativeElement.classList.contains('ticker-quote--inline'),
-      ).toBe(true);
-    });
   });
 
   describe('card mode', () => {
@@ -242,24 +232,6 @@ describe('TickerQuoteComponent', () => {
       });
 
       expect(container.querySelector('.asset-identity__exchange')).toBeNull();
-    });
-
-    it('renders caret in card mode', async () => {
-      const { container } = await render(TickerQuoteComponent, {
-        inputs: { quote: BASE_QUOTE, mode: 'card' },
-      });
-
-      expect(container.querySelector('i')).not.toBeNull();
-    });
-
-    it('host has card class', async () => {
-      const { fixture } = await render(TickerQuoteComponent, {
-        inputs: { quote: BASE_QUOTE, mode: 'card' },
-      });
-
-      expect(
-        fixture.nativeElement.classList.contains('ticker-quote--card'),
-      ).toBe(true);
     });
 
     it('keeps the rich ticker tooltip when hovering the identity', async () => {

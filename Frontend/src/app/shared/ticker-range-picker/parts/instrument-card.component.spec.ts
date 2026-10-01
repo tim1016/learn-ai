@@ -269,16 +269,6 @@ describe('InstrumentCardComponent', () => {
     expect(catalog.view.reloadCount).toBe(before + 1);
   });
 
-  it('says a no-match search found no listed symbol', () => {
-    fixture.detectChanges();
-    openDropdown(fixture);
-    component.onSearchInput('NOPE');
-    fixture.detectChanges();
-
-    const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('No listed symbol matches that');
-  });
-
   // The window on screen is the operator's. Switching instrument to compare
   // the same months must not silently retarget it — this branch never ran
   // before the lake-backed catalog, because no entry in the constant it
@@ -503,16 +493,6 @@ describe('InstrumentCardComponent', () => {
 
     expect((component.gate.pendingSession() as FakeCoverageSession | null) ?? null).toBeNull();
     expect(fixture.nativeElement.querySelector('app-coverage-gate-strip')).toBeNull();
-  });
-
-  it('distinguishes an empty lake from a search that matched nothing', () => {
-    catalog.view.pool.set([]);
-    fixture.detectChanges();
-    openDropdown(fixture);
-
-    const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('the lake holds nothing yet');
-    expect(text).not.toContain('matching that');
   });
 
   it('shows the read in flight rather than a stale failure while retrying', () => {

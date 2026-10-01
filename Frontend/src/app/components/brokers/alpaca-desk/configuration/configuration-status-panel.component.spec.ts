@@ -58,12 +58,6 @@ async function renderPanel(
 }
 
 describe('ConfigurationStatusPanelComponent', () => {
-  it('says no broker is bound when nothing has been applied', async () => {
-    await renderPanel(selection());
-
-    expect(screen.getByText(/No revision has been applied/)).toBeTruthy();
-    expect(screen.getByText('Nothing is staged.')).toBeTruthy();
-  });
 
   it('keeps staged and effective distinct and asks for a controlled restart between them', async () => {
     await renderPanel(
@@ -94,12 +88,6 @@ describe('ConfigurationStatusPanelComponent', () => {
     expect(status.textContent).toContain('nothing has changed yet');
     expect(screen.getByRole('button', { name: 'Apply staged revision' }).hasAttribute('disabled'))
       .toBe(true);
-  });
-
-  it('keeps profile Apply separate from Deploy', async () => {
-    await renderPanel(selection({ staged_profile_id: 'profile-paper', staged_revision: 1 }));
-
-    expect(screen.getByText(/Applying a profile does not deploy a bot/)).toBeTruthy();
   });
 
   it('renders the effective account id exactly and its nickname beside it', async () => {

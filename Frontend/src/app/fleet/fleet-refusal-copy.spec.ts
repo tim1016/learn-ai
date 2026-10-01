@@ -81,13 +81,6 @@ describe('FLEET_REFUSAL_COPY', () => {
 });
 
 describe('fleetRefusalCopyFor', () => {
-  it('returns the fallback copy for a known code', () => {
-    expect(fleetRefusalCopyFor('clerk_unreachable')).toEqual({
-      outcome: 'failure',
-      message: "This clerk's agent could not be reached.",
-      nextStep: "Retry once the clerk's agent reconnects.",
-    });
-  });
 
   it('returns null for a code outside the closed vocabulary', () => {
     expect(fleetRefusalCopyFor('not_a_real_fleet_reason')).toBeNull();

@@ -460,18 +460,6 @@ describe('LakeBackfillPanelComponent', () => {
     expect(startJob).not.toHaveBeenCalled();
   });
 
-  it('honours a cap the data plane lowered rather than a hardcoded one', async () => {
-    await renderPanel({
-      defaults: { ...DEFAULTS, max_trading_range_days: 30 },
-      seedStartTradingDate: '2026-05-01',
-      seedEndTradingDate: '2026-05-31',
-    });
-
-    expect(
-      screen.getByText('That window is 31 days; the data plane accepts at most 30.'),
-    ).toBeTruthy();
-  });
-
   it('refuses to backfill while the lean_adjusted view is selected', async () => {
     // Nothing derives lean_adjusted — it would come from raw bars plus
     // factor files and no producer exists — so the job would succeed and

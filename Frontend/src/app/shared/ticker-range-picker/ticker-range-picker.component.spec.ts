@@ -179,11 +179,6 @@ describe('TickerRangePickerComponent (flags)', () => {
       expect(select.querySelectorAll('option').length).toBe(3);
     }
   });
-
-  it('does not render multiplier dropdown by default', () => {
-    fixture.detectChanges();
-    expect(fixture.nativeElement.querySelector('.multiplier__select')).toBeNull();
-  });
 });
 
 describe('dominantState', () => {

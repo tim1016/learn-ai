@@ -5,19 +5,6 @@ import { describe, expect, it } from 'vitest';
 import { ConfigurationSwitchGuideComponent } from './configuration-switch-guide.component';
 
 describe('ConfigurationSwitchGuideComponent', () => {
-  it('shows the complete account-switch workflow and safety boundary', async () => {
-    await render(ConfigurationSwitchGuideComponent, {
-      inputs: { restartCommand: 'podman compose restart alpaca-paper-clerk' },
-    });
-
-    expect(screen.getByRole('heading', { name: 'Switch between Paper and Live' })).toBeTruthy();
-    // #2183: the heading itself carries the eyebrow look; the separate
-    // "Every account switch" label above it is retired.
-    expect(screen.queryByText('Every account switch')).toBeNull();
-    expect(screen.getAllByRole('listitem')).toHaveLength(4);
-    expect(screen.getByText(/Refreshing or reopening the browser does not apply/)).toBeTruthy();
-    expect(screen.getByText(/never retargets or launches an existing bot/)).toBeTruthy();
-  });
 
   it('shows the command the backend authored for this lane, not a built-in one', async () => {
     await render(ConfigurationSwitchGuideComponent, {

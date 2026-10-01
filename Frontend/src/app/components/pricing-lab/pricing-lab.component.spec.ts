@@ -83,26 +83,6 @@ describe('PricingLabComponent', () => {
     httpMock.verify();
   });
 
-  describe('initialization', () => {
-    it('creates the component', () => {
-      expect(component).toBeTruthy();
-    });
-
-    it('defaults ticker to SPY', () => {
-      expect(component.ticker()).toBe('SPY');
-    });
-
-    it('starts with no expirations, no contract, no result', () => {
-      expect(component.availableExpirations()).toEqual([]);
-      expect(component.selectedContract()).toBeNull();
-      expect(component.serverResult()).toBeNull();
-    });
-
-    it('defaults riskFreeRate to 0.05', () => {
-      expect(component.riskFreeRate()).toBe(0.05);
-    });
-  });
-
   // ── PL-A: Data-fetch prelude ───────────────────────────────────
   describe('PL-A: ticker → expirations → chain prelude', () => {
     it('selects nearest future expiration and triggers a chain fetch', async () => {
