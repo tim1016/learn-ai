@@ -73,6 +73,27 @@ def strip_absent_git_provenance(payload: dict) -> dict:
     return payload
 
 
+def strip_absent_qualification(payload: dict) -> dict:
+    """Drop an absent Golden Search qualification from a seal payload about to be content-hashed (#2696).
+
+    Seals minted before ``qualification_id`` existed hashed their configured
+    signal without it; serializing the ``None`` into the hashed payload would
+    invalidate every one of them, so a seal that pins no qualification hashes
+    exactly as it always did. A pinned id stays under the hash. Same contract
+    as :func:`strip_absent_git_provenance`: every hash over a configured
+    signal, on the construction and the validation side, goes through this.
+    Mutates ``payload`` in place and returns it. Covers both shapes the field
+    appears in: a configured-signal payload (top level) and an outer seal
+    payload (nested under ``configured_signal``).
+    """
+    if "qualification_id" in payload and payload["qualification_id"] is None:
+        del payload["qualification_id"]
+    configured = payload.get("configured_signal")
+    if isinstance(configured, dict) and "qualification_id" in configured and configured["qualification_id"] is None:
+        del configured["qualification_id"]
+    return payload
+
+
 class SignalDataContract(BaseModel):
     """Closed source-series and bar-semantics contract."""
 
@@ -175,8 +196,8 @@ class ExitEligibilityContract(BaseModel):
     * ``"fixed_bar_count_countdown"`` — ``ema_crossover_signal`` exits on a
       fixed decision-clock countdown
       (``EmaCrossoverSignalAlgorithm.commit_signal_decision`` sets
-      ``_bars_until_exit = 5`` at entry); ``countdown_decision_clocks`` is
-      required.
+      ``_bars_until_exit`` to its ``hold_bars`` parameter, default 5, at
+      entry); ``countdown_decision_clocks`` is required.
     * ``"level_true"`` — ``sma_crossover`` exits the instant its exit
       relation (a fresh death cross) is true on a decision clock, with no
       hold period or counter at all
@@ -288,9 +309,16 @@ class ConfiguredSignalProgramSeal(BaseModel):
     bar_integrity: SignalBarIntegrityContract
     exit_eligibility: ExitEligibilityContract
     numerical_provenance: NumericalProvenanceContract
+    # The Golden Search qualified version this configuration was admitted
+    # under (#2696, ADR 0074): set only when the registry's validated point
+    # does not cover the parameters and a ready qualification does. A seal
+    # pins that exact id, never whichever version is currently the default.
+    # Omitted from the hashed payload while unset, so every seal minted
+    # before it existed keeps its hash (``strip_absent_qualification``).
+    qualification_id: str | None = Field(default=None, min_length=1)
 
     def semantic_hash(self) -> str:
-        return semantic_payload_hash(self.model_dump(mode="json"))
+        return semantic_payload_hash(strip_absent_qualification(self.model_dump(mode="json")))
 
 
 class SealedBotProgram(BaseModel):
@@ -317,7 +345,7 @@ class SealedBotProgram(BaseModel):
     def validate_nested_hashes(self) -> SealedBotProgram:
         if self.configured_signal.semantic_hash() != self.configured_signal_hash:
             raise ValueError("configured signal hash does not match its payload")
-        payload = self.model_dump(mode="json", exclude={"bot_configuration_hash"})
+        payload = strip_absent_qualification(self.model_dump(mode="json", exclude={"bot_configuration_hash"}))
         if semantic_payload_hash(payload) != self.bot_configuration_hash:
             raise ValueError("bot configuration hash does not match its payload")
         return self
@@ -326,9 +354,13 @@ class SealedBotProgram(BaseModel):
 def seal_bot_program(**values: Any) -> SealedBotProgram:
     """Build the self-hashed outer seal without exposing hashing order."""
     payload = {**values, "schema_version": 2}
+    hashed = dict(payload)
+    configured = hashed.get("configured_signal")
+    if isinstance(configured, BaseModel):
+        hashed["configured_signal"] = configured.model_dump(mode="json")
     return SealedBotProgram(
         **payload,
-        bot_configuration_hash=semantic_payload_hash(payload),
+        bot_configuration_hash=semantic_payload_hash(strip_absent_qualification(hashed)),
     )
 
 
@@ -373,4 +405,5 @@ __all__ = [
     "SignalSeriesContract",
     "seal_bot_program",
     "semantic_payload_hash",
+    "strip_absent_qualification",
 ]

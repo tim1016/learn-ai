@@ -32,6 +32,14 @@ from typing import TYPE_CHECKING, Any, Literal
 import asyncpg
 
 from app.research.persistence.db import with_connection
+from app.schemas.run_admission import (
+    QUALIFICATION_ABSENT,
+    QUALIFICATION_COVERED,
+    QUALIFICATION_REVOKED,
+    QUALIFICATION_STALE,
+    QUALIFICATION_UNVERIFIABLE,
+    REGISTRY_POINT_COVERED,
+)
 from app.schemas.signal_program_seal import semantic_payload_hash
 
 if TYPE_CHECKING:
@@ -42,23 +50,6 @@ logger = logging.getLogger(__name__)
 QualificationStatus = Literal["ready", "stale", "revoked"]
 EventKind = Literal["reproved", "revoked"]
 CoverageState = Literal["COVERED", "UNCOVERED"]
-
-REGISTRY_POINT_COVERED = "This exact configuration is the program's registered validated point."
-QUALIFICATION_COVERED = (
-    "A ready Golden Search qualification covers this exact program version, stock and parameter set."
-)
-QUALIFICATION_STALE = (
-    "A Golden Search qualification approved this exact configuration, but the program changed since — "
-    "re-proof it before deploying."
-)
-QUALIFICATION_REVOKED = "The Golden Search qualification for this exact configuration was revoked."
-QUALIFICATION_ABSENT = (
-    "Neither the registered validated point nor a Golden Search qualification covers this exact "
-    "program version, stock and parameter set."
-)
-QUALIFICATION_UNVERIFIABLE = (
-    "Cannot verify the Golden Search qualification for this configuration: its records could not be read."
-)
 
 
 class DefaultChangedError(RuntimeError):
@@ -284,6 +275,15 @@ async def get_qualification(conn: asyncpg.Connection, qualification_id: str) -> 
     return None if row is None else _qualification(row)
 
 
+async def get_qualification_by_study(conn: asyncpg.Connection, study_id: str) -> QualificationRow | None:
+    """The qualified version a study published, if any: at most one, by the table's unique key."""
+    row = await conn.fetchrow(
+        f"SELECT {_QUALIFICATION_COLUMNS} FROM research_golden_qualifications WHERE study_id = $1",
+        study_id,
+    )
+    return None if row is None else _qualification(row)
+
+
 async def find_qualifications(
     conn: asyncpg.Connection,
     *,
@@ -435,6 +435,29 @@ async def append_event(
     return prior
 
 
+async def get_event_by_command(conn: asyncpg.Connection, command_id: str) -> QualificationEvent | None:
+    """The event a command already recorded, so a replayed command answers without redoing its work."""
+    row = await conn.fetchrow(
+        f"SELECT {_EVENT_COLUMNS} FROM research_golden_qualification_events WHERE command_id = $1",
+        command_id,
+    )
+    return None if row is None else _event(row)
+
+
+async def _lock_default_pointer(conn: asyncpg.Connection, program_key: str, symbol: str) -> None:
+    """Serialize every writer of one (program, stock) default until the caller's transaction ends.
+
+    A transaction-scoped advisory lock rather than only the pointer's row
+    lock: before the first pointer exists there is no row to lock, and a
+    revocation racing the first default would otherwise slip between the
+    default's revocation check and its insert.
+    """
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        f"golden_default:{program_key}\x1f{symbol}",
+    )
+
+
 async def get_default(conn: asyncpg.Connection, program_key: str, symbol: str) -> GoldenDefault | None:
     row = await conn.fetchrow(
         f"SELECT {_DEFAULT_COLUMNS} FROM research_golden_defaults WHERE program_key = $1 AND symbol = $2",
@@ -467,6 +490,7 @@ async def set_default_cas(
     if not reason.strip():
         raise ValueError("a default change records its reason")
     async with conn.transaction():
+        await _lock_default_pointer(conn, program_key, symbol)
         current = await conn.fetchrow(
             """
             SELECT qualification_id, revision FROM research_golden_defaults
@@ -567,6 +591,145 @@ async def set_default_cas(
     return revision
 
 
+class QualificationNotFoundError(LookupError):
+    """No qualified version has this id."""
+
+
+@dataclass(frozen=True, slots=True)
+class Revocation:
+    """A recorded revocation and whether it cleared the (program, stock) default."""
+
+    event: QualificationEvent
+    cleared_default: bool
+
+
+async def revoke_qualification(
+    conn: asyncpg.Connection,
+    *,
+    qualification_id: str,
+    reason: str,
+    actor: str,
+    command_id: str,
+    now_ms: int,
+) -> Revocation:
+    """Revoke one qualified version; when it is its stock's default, clear that pointer too.
+
+    One transaction under the default's lock (the advisory lock and the
+    pointer row ``FOR UPDATE``), so a concurrent approval either commits
+    before this and is cleared by it, or waits and then refuses the revoked
+    version. Idempotent per ``command_id``: a replay returns the recorded
+    revocation and changes nothing else. A revocation is never undone; a
+    re-proof does not revive it.
+    """
+    async with conn.transaction():
+        qualification = await get_qualification(conn, qualification_id)
+        if qualification is None:
+            raise QualificationNotFoundError(f"Golden Search qualification {qualification_id!r} was not found")
+        prior = await get_event_by_command(conn, command_id)
+        if prior is not None:
+            event = await append_event(
+                conn,
+                qualification_id=qualification_id,
+                kind="revoked",
+                actor=actor,
+                command_id=command_id,
+                created_at_ms=now_ms,
+                reason=reason,
+            )
+            return Revocation(event=event, cleared_default=False)
+        await _lock_default_pointer(conn, qualification.program_key, qualification.symbol)
+        pointer = await conn.fetchrow(
+            """
+            SELECT qualification_id FROM research_golden_defaults
+             WHERE program_key = $1 AND symbol = $2
+               FOR UPDATE
+            """,
+            qualification.program_key,
+            qualification.symbol,
+        )
+        event = await append_event(
+            conn,
+            qualification_id=qualification_id,
+            kind="revoked",
+            actor=actor,
+            command_id=command_id,
+            created_at_ms=now_ms,
+            reason=reason,
+        )
+        cleared = pointer is not None and pointer["qualification_id"] == qualification_id
+        if cleared:
+            await set_default_cas(
+                conn,
+                program_key=qualification.program_key,
+                symbol=qualification.symbol,
+                qualification_id=None,
+                expected_qualification_id=qualification_id,
+                reason=f"Qualification {qualification_id} revoked: {reason}",
+                actor=actor,
+                now_ms=now_ms,
+            )
+    return Revocation(event=event, cleared_default=cleared)
+
+
+@dataclass(frozen=True, slots=True)
+class DefaultQualification:
+    """One (program, stock) default pointer, the qualified version it names, and that version's events."""
+
+    default: GoldenDefault
+    qualification: QualificationRow
+    events: tuple[QualificationEvent, ...]
+
+
+async def read_default_qualifications(
+    conn: asyncpg.Connection,
+    *,
+    program_key: str | None = None,
+    symbol: str | None = None,
+) -> list[DefaultQualification]:
+    """Every set default pointer with its qualified version and events, read in one snapshot.
+
+    A cleared pointer (no qualification) is left out: it offers nothing.
+    Status is the caller's to judge against the build it runs.
+    """
+    if conn.is_in_transaction():
+        return await _read_defaults(conn, program_key=program_key, symbol=symbol)
+    async with conn.transaction(isolation="repeatable_read", readonly=True):
+        return await _read_defaults(conn, program_key=program_key, symbol=symbol)
+
+
+async def _read_defaults(
+    conn: asyncpg.Connection, *, program_key: str | None, symbol: str | None
+) -> list[DefaultQualification]:
+    pointers = await conn.fetch(
+        f"""
+        SELECT {_DEFAULT_COLUMNS} FROM research_golden_defaults
+         WHERE qualification_id IS NOT NULL
+           AND ($1::text IS NULL OR program_key = $1)
+           AND ($2::text IS NULL OR symbol = $2)
+         ORDER BY program_key, symbol
+        """,
+        program_key,
+        symbol,
+    )
+    defaults = [GoldenDefault(**row) for row in pointers]
+    named = [pointer.qualification_id for pointer in defaults if pointer.qualification_id is not None]
+    rows = {
+        row["id"]: _qualification(row)
+        for row in await conn.fetch(
+            f"SELECT {_QUALIFICATION_COLUMNS} FROM research_golden_qualifications WHERE id = ANY($1::text[])",
+            named,
+        )
+    }
+    events = await events_for(conn, list(rows))
+    return [
+        DefaultQualification(
+            default=pointer, qualification=rows[qualification_id], events=tuple(events[qualification_id])
+        )
+        for pointer in defaults
+        if (qualification_id := pointer.qualification_id) is not None and qualification_id in rows
+    ]
+
+
 # --------------------------------------------------------------------------
 # Status and coverage
 # --------------------------------------------------------------------------
@@ -647,6 +810,11 @@ class Coverage:
     state: CoverageState
     qualification_id: str | None
     explanation: str
+    # The running artifact digest a qualification's status was judged
+    # against; ``None`` when no qualification was judged (the registry point,
+    # or evidence that could not be read). A proof computed under another
+    # digest must not reuse this verdict.
+    artifact_digest: str | None = None
 
 
 def _matches_subject(row: QualificationRow, subject: QualificationSubject) -> bool:
@@ -659,23 +827,29 @@ def _matches_subject(row: QualificationRow, subject: QualificationSubject) -> bo
 
 
 def _coverage_from(
-    evidence: Sequence[QualificationEvidence], subject: QualificationSubject, running_artifact_digest: str
+    evidence: Sequence[QualificationEvidence],
+    subject: QualificationSubject,
+    running_artifact_digest: str,
+    *,
+    pinned_qualification_id: str | None = None,
 ) -> Coverage:
     # The lookup is trusted for nothing: a record of another tuple never covers this one.
     statuses = [
         (item.qualification, qualification_status(item.qualification, item.events, running_artifact_digest))
         for item in evidence
         if _matches_subject(item.qualification, subject)
+        and (pinned_qualification_id is None or item.qualification.id == pinned_qualification_id)
     ]
+    judged = {"artifact_digest": running_artifact_digest}
     ready = [row for row, status in statuses if status == "ready"]
     if ready:
         newest = max(ready, key=lambda row: (row.created_at_ms, row.id))
-        return Coverage(state="COVERED", qualification_id=newest.id, explanation=QUALIFICATION_COVERED)
+        return Coverage(state="COVERED", qualification_id=newest.id, explanation=QUALIFICATION_COVERED, **judged)
     if any(status == "stale" for _row, status in statuses):
-        return Coverage(state="UNCOVERED", qualification_id=None, explanation=QUALIFICATION_STALE)
+        return Coverage(state="UNCOVERED", qualification_id=None, explanation=QUALIFICATION_STALE, **judged)
     if statuses:
-        return Coverage(state="UNCOVERED", qualification_id=None, explanation=QUALIFICATION_REVOKED)
-    return Coverage(state="UNCOVERED", qualification_id=None, explanation=QUALIFICATION_ABSENT)
+        return Coverage(state="UNCOVERED", qualification_id=None, explanation=QUALIFICATION_REVOKED, **judged)
+    return Coverage(state="UNCOVERED", qualification_id=None, explanation=QUALIFICATION_ABSENT, **judged)
 
 
 async def resolve_coverage(
@@ -685,14 +859,18 @@ async def resolve_coverage(
     params: Mapping[str, Any],
     running_artifact_digest: str,
     lookup: QualificationLookup = load_qualification_evidence,
+    qualification_id: str | None = None,
 ) -> Coverage:
     """Corpus coverage for one sealed configuration (``params`` canonical, ``symbol`` included).
 
     The registered validated point is covered without a read. Otherwise the
     newest ready qualification of the exact (program, version, stock,
     parameter hash) covers it; a stale one is reported as needing a
-    re-proof, a revoked one as revoked. Fails closed: any failure to read or
-    interpret the evidence is UNCOVERED with a "cannot verify" explanation.
+    re-proof, a revoked one as revoked. ``qualification_id`` pins the answer
+    to that one qualified version — a seal re-verifying the version it was
+    admitted under is covered by it alone, never by whichever version is
+    ready or default now. Fails closed: any failure to read or interpret the
+    evidence is UNCOVERED with a "cannot verify" explanation.
     """
     if registry_point_matches(contract, params):
         return Coverage(state="COVERED", qualification_id=None, explanation=REGISTRY_POINT_COVERED)
@@ -703,7 +881,12 @@ async def resolve_coverage(
             symbol=str(params["symbol"]),
             params_sha256=params_sha256(params),
         )
-        return _coverage_from(await lookup(subject), subject, running_artifact_digest)
+        return _coverage_from(
+            await lookup(subject),
+            subject,
+            running_artifact_digest,
+            pinned_qualification_id=qualification_id,
+        )
     except Exception:
         # Admission must fail closed, not raise: an escaped error is not a refusal.
         logger.warning(
@@ -724,27 +907,34 @@ __all__ = [
     "Coverage",
     "CoverageState",
     "DefaultChangedError",
+    "DefaultQualification",
     "EventKind",
     "GoldenDefault",
     "QualificationEvent",
     "QualificationEventConflictError",
     "QualificationEvidence",
     "QualificationLookup",
+    "QualificationNotFoundError",
     "QualificationRow",
     "QualificationStatus",
     "QualificationSubject",
+    "Revocation",
     "append_event",
     "events_for",
     "find_qualifications",
     "get_default",
+    "get_event_by_command",
     "get_qualification",
+    "get_qualification_by_study",
     "insert_qualification",
     "list_qualifications",
     "load_qualification_evidence",
     "params_sha256",
     "qualification_status",
+    "read_default_qualifications",
     "read_qualification_evidence",
     "registry_point_matches",
     "resolve_coverage",
+    "revoke_qualification",
     "set_default_cas",
 ]
