@@ -96,7 +96,7 @@ def _envelope_invalid(error: CommandEnvelopeInvalid) -> Response:
     """A §10.3 contract violation never reached a routing decision."""
     return JSONResponse(
         status_code=422,
-        content={"reason": "command_envelope_invalid", "message": str(error)},
+        content={"reason": "command_envelope_invalid", "message": error.message},
     )
 
 

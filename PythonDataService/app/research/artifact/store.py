@@ -23,6 +23,7 @@ from typing import TypeVar
 
 from pydantic import BaseModel
 
+from app.engine.live.identity import confine_path_to_root
 from app.research.artifact.descriptor import ArtifactDescriptor
 from app.research.artifact.root import default_artifacts_root
 
@@ -82,31 +83,24 @@ class ArtifactStore:
 
         Defence in depth against path traversal: (1) the format check
         rejects ``../`` segments, absolute paths, and anything the
-        descriptor's regex doesn't whitelist; (2) the resolved-path
+        descriptor's regex doesn't whitelist; (2) the real-path
         containment check catches anything that slips past (e.g.
         symlinked roots, weird Windows separators). Artifact ids reach
         here from user-controlled URL path segments, so neither layer
         is optional.
 
-        Returns the **resolved** path. Returning the resolved-and-
-        validated variable (rather than re-constructing ``base /
-        artifact_id``) is also what CodeQL's path-injection sanitiser
-        model recognises — without it, CodeQL would taint every
-        downstream ``artifact_dir / filename`` as user-controlled
-        even though the regex + containment check guarantee safety.
+        Returns the **resolved** path from ``confine_path_to_root``,
+        whose prefix check is the shape CodeQL's path-injection model
+        recognises, so every downstream ``artifact_dir / filename`` is
+        clean to it as well.
         """
         pattern = self._descriptor.id_pattern
         if not artifact_id or not pattern.fullmatch(artifact_id):
             raise ValueError(
                 f"artifact_id must match {pattern.pattern} (got {artifact_id!r})"
             )
-        base_resolved = self._base().resolve()
-        candidate = (base_resolved / artifact_id).resolve()
-        if not candidate.is_relative_to(base_resolved):
-            raise ValueError(
-                f"artifact_id resolves outside the artifacts root: {artifact_id!r}"
-            )
-        return candidate
+        base = self._base()
+        return confine_path_to_root(base / artifact_id, base, label="artifact_id")
 
     # ---- public surface --------------------------------------------
 
