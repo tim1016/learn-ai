@@ -214,7 +214,7 @@ def test_static_series_and_exit_rule_describe_each_program_s_default_point() -> 
 
 
 def test_validated_settings_a_dump_omits_are_their_schema_defaults() -> None:
-    """``_parameters_match`` reads a name absent from a dump as its validated value.
+    """``registry_point_matches`` reads a name absent from a dump as its validated value.
 
     That is sound only while every validated setting a canonical dump can omit
     (an identity-neutral default, #2696) equals the schema default the omitted

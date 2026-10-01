@@ -471,7 +471,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # ("Regeneration 2026-09-17") for the reconciliation record.
             # The 5/10/5 lengths are the qualified point too (#2696); a
             # parameter dump omits them while they sit there, which
-            # `_parameters_match` reads as that default.
+            # `registry_point_matches` reads as that default.
             validated_settings={
                 "gap": 0.20,
                 "gap_bps": 0.0,
