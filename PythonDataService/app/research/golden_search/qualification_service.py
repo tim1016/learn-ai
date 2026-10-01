@@ -334,9 +334,14 @@ async def reprove_qualification(
             proof=reproved.as_dict(),
         )
     except qualifications.QualificationEventConflictError as exc:
-        raise QualificationRefusal(
-            "IDEMPOTENCY_CONFLICT", "That idempotency key already recorded a different command.", status_code=409
-        ) from exc
+        # A concurrent request with this key appended its own re-proof first:
+        # that is this command's outcome, not a conflict.
+        raced = await with_connection(qualifications.get_event_by_command, command_id)
+        if raced is None or raced.qualification_id != qualification_id or raced.kind != "reproved":
+            raise QualificationRefusal(
+                "IDEMPOTENCY_CONFLICT", "That idempotency key already recorded a different command.", status_code=409
+            ) from exc
+        return await _require_judged(qualification_id)
     logger.info(
         "Golden Search qualification re-proved",
         extra={"action": "golden_qualification_reproved", "qualification_id": qualification_id},

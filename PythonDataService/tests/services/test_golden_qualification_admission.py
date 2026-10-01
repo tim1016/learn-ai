@@ -10,9 +10,11 @@ the store itself is exercised in ``tests/research/golden_search``.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import asynccontextmanager
 
 import pytest
 
+from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.research.golden_search.qualifications import (
     Coverage,
@@ -22,6 +24,7 @@ from app.research.golden_search.qualifications import (
     QualificationSubject,
     params_sha256,
 )
+from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import (
     CORPUS_UNCOVERED_EXPLANATION,
     QUALIFICATION_ABSENT,
@@ -32,9 +35,13 @@ from app.schemas.run_admission import (
     QUALIFICATION_UNVERIFIABLE,
     REGISTRY_POINT_COVERED,
     ProgramBuildAdmissionFact,
+    RunAdmissionDecision,
+    RunProcessAdmissionFact,
+    StartRuntimeAdmissionFact,
     StrategyValidationAdmissionFact,
 )
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from app.services.bot_start_admission import BotStartAdmission, StartRequest
 from app.services.run_admission import evaluate_run_admission
 from app.services.signal_program_admission import (
     build_start_program_seal,
@@ -42,6 +49,7 @@ from app.services.signal_program_admission import (
     resolve_admission_coverage,
     running_build_digests,
 )
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.services.test_run_admission import _NOW as _ADMISSION_NOW
 from tests.services.test_run_admission import _bot, _clerk
 
@@ -420,3 +428,83 @@ async def test_evidence_override_cannot_bypass_an_unproven_build_of_a_qualified_
     assert proof.state == "UNPROVEN"
     assert decision.allowed is False
     assert decision.reason_code == "PROGRAM_BUILD_UNPROVEN"
+
+
+# ---------------------------------------------------------------------------
+# The Start path: resolve, seal, prove and decide in one admission
+# ---------------------------------------------------------------------------
+async def _preview(lookup) -> RunAdmissionDecision:
+    """Preview a log-only Start of the tuned EMA tuple through ``BotStartAdmission`` with ``lookup`` as the store."""
+
+    async def runtime_fact(_strategy_instance_id: str, observed_at_ms: int) -> StartRuntimeAdmissionFact:
+        return StartRuntimeAdmissionFact(state="READY", observed_at_ms=observed_at_ms, explanation="ready")
+
+    def process_fact(_binding: object, observed_at_ms: int) -> RunProcessAdmissionFact:
+        return RunProcessAdmissionFact(
+            state="ABSENT", run_id=None, process_identity=None, registry_generation="r-1", observed_at_ms=observed_at_ms
+        )
+
+    @asynccontextmanager
+    async def custody_guard(_binding: object):
+        yield (
+            _clerk(),
+            ProgramLegPolicy.regular_only(),
+            ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50).seal(),
+        )
+
+    async def activate(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("preview never activates")
+
+    async def validation_fact(_binding: object, observed_at_ms: int) -> StrategyValidationAdmissionFact:
+        return _validation().model_copy(update={"verified_at_ms": observed_at_ms})
+
+    async def coverage(binding: BrokerBotBinding) -> Coverage | None:
+        return await resolve_admission_coverage(binding, lookup=lookup)
+
+    def market_liveness(symbol: str, observed_at_ms: int):
+        return _bot(observed_at_ms=observed_at_ms).market_liveness
+
+    admission = BotStartAdmission(
+        now_ms=lambda: _ADMISSION_NOW,
+        feed_resolver=lambda: None,
+        custody_guard=custody_guard,
+        process_fact=process_fact,
+        runtime_fact=runtime_fact,
+        validation_fact=validation_fact,
+        activate=activate,
+        market_liveness=market_liveness,
+        coverage=coverage,
+    )
+    return await admission.preview(
+        StartRequest(
+            broker="alpaca",
+            strategy_instance_id="alpaca-start-1",
+            strategy_key=PROGRAM,
+            symbol="SPY",
+            use_rth=True,
+            mode="log_only",
+            quantity=1,
+            carryover_policy="FORBID",
+            evidence_override=None,
+            action_plan=alpaca_v1_action_plan("SPY"),
+            exit_terms=DEPLOY_EXIT_TERMS,
+            strategy_params=dict(_TUNED),
+            strategy_param_origins=dict(_TUNED_ORIGINS),
+        )
+    )
+
+
+async def test_start_admission_carries_the_approved_tuple_past_the_corpus_gate() -> None:
+    decision = await _preview(_Store(_ready("gq-1")))
+
+    assert "golden-qualification:gq-1" in decision.evidence_refs
+    assert "program-corpus-coverage:COVERED" in decision.evidence_refs
+    # Past the program gates; the harness installs no market-data feed.
+    assert decision.reason_code == "MARKET_DATA_UNAVAILABLE"
+
+
+async def test_start_admission_refuses_a_stale_approval_at_the_corpus_gate() -> None:
+    decision = await _preview(_Store(_ready("gq-1", artifact_digest="0" * 64)))
+
+    assert decision.reason_code == "PROGRAM_CORPUS_UNCOVERED"
+    assert not any(ref.startswith("golden-qualification:") for ref in decision.evidence_refs)
