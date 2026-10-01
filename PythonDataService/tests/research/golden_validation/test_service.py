@@ -9,6 +9,7 @@ import asyncpg
 import pytest
 
 from app.research.backtest_runs import repository as backtest_repo
+from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
 from app.research.backtest_runs.records import record_from_payload
 from app.research.golden_validation import repository as golden_repo
 from app.research.golden_validation import service
@@ -514,7 +515,9 @@ async def test_unknown_or_affected_conventions_need_deliberate_override_and_free
     assert accepted.review_is_current is True
     assert json.loads(accepted.latest_review.evidence_json)["acknowledge_provenance_risk"] is True
     assert accepted.golden_run.validation_case_json == original_case
-    assert accepted.validation_case["evidence_provenance"] == (None if provenance is None else {**provenance, "data_availability_hash": None})
+    assert accepted.validation_case["evidence_provenance"] == (
+        None if provenance is None else RunEvidenceProvenance.model_validate(provenance).model_dump(mode="json")
+    )
     repeated = await service.review(conn, **arguments, acknowledge_provenance_risk=True)
     assert repeated.latest_review.id == accepted.latest_review.id
     with pytest.raises(service.CommandConflictError):

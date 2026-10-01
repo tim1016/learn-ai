@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.lean_sidecar.closing_bar import ClosingBarConvention
+from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
+
 ENTRY_MS = 1_736_173_800_000  # 2025-01-06 09:30 ET
 EXIT_MS = 1_736_179_200_000  # 2025-01-06 11:00 ET
 
@@ -123,12 +126,15 @@ def engine_payload(symbol: str = "SPY", **overrides: Any) -> dict[str, Any]:
     """A complete engine-source payload: every column the row has is populated."""
     payload: dict[str, Any] = {
         "source": "engine",
-        "evidence_provenance_json": json.dumps({
-            "schema_version": 1,
-            "data_contract": "fixture_identity/v1",
-            "statistics_basis": "marked_equity_curve/v1",
-            "daily_return_convention": "initial_capital_first_session/v1",
-        }),
+        # Recorded as the engine producer records it. A us-equity-raw-ibkr-v1
+        # run uses the LEAN-compatibility fill model, so it names that
+        # closing-bar convention (#2607).
+        "evidence_provenance_json": RunEvidenceProvenance(
+            data_contract="fixture_identity/v1",
+            statistics_basis="marked_equity_curve/v1",
+            daily_return_convention="initial_capital_first_session/v1",
+            closing_bar_convention=ClosingBarConvention.LEAN_NEXT_OPEN,
+        ).model_dump_json(),
         "lean_run_id": None,
         "requested_engine": "python",
         "parity_group_id": None,
