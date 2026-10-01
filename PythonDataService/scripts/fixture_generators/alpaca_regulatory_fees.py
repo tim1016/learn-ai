@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "golden" / "broker-fees" / FIXTURE_ID / "v1"
 MANIFEST_PATH = ROOT / "tests" / "fixtures" / "golden" / "manifest.json"
 
-# Published rates in force on each case date (docs/references/alpaca-regulatory-fees.md).
+# Published rates in force on each case date.
 # ``None`` = not pinned for that date; the oracle emits null and the model must too.
 _RATES: dict[date, dict[str, Decimal | None]] = {
     date(2026, 9, 8): {

@@ -5,7 +5,7 @@ once and pinned here — not an external oracle. This is a
 ``reference_kind=internal_regression`` receipt: it does not certify that
 Strategy A/B/C are correct, only that a future refactor (the S3 intent
 port) reproduces the exact same ``trade_log`` the strategies produce
-today. See ``docs/references/strategy-abc-self-equivalence.md``.
+today.
 """
 
 from __future__ import annotations
