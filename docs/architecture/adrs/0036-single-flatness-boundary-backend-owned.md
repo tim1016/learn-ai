@@ -142,17 +142,21 @@ is unchanged.
    `filled_avg_price` is an average over the whole order. Copying it as the
    price of the latest clip is wrong whenever an order fills in clips at
    different prices.
-3. **At the same quantity, an average-price gap below one cent per share is
-   vendor rounding; a gap of one cent or more is a conflict.**
-   - The constant is `TOTAL_PRICE_CONFLICT_ATOL = 0.01` per share, `rtol=0`
-     (`sqlite/order_evidence.py`, #2460).
+3. **At the same quantity, an average-price gap below one valid price
+   increment of the reported average is vendor rounding; a gap of one
+   increment or more is a conflict.**
+   - The tolerance is `total_price_conflict_atol(reported_avg_price)` per
+     share, `rtol=0` (`sqlite/order_evidence.py`, #2460, #2770): $0.01 when
+     the broker's reported average is at or above $1, $0.0001 below.
+   - The increment is Alpaca's price precision, read from the canonical
+     tick rule, `price_increment` in `app/broker/alpaca/marketable_limit.py`.
    - Alpaca publishes prices in cents at or above $1, so a smaller gap
      cannot be told apart from rounding there. Below $1 the venue tick is
-     $0.0001, and the one-cent rule then reads a real sub-cent discrepancy
-     as rounding. A tick-aware tolerance is owed (#2770).
-   - A gap at or above one cent records a durable `EXECUTION_PRICE_CONFLICT`
-     episode. This is the same basis as the reconciliation `FILL_PRICE_DRIFT`
-     default (ADR 0069 §3).
+     $0.0001, so a one-cent rule there read a real sub-cent discrepancy,
+     such as $0.005 on a $0.50 fill, as rounding (#2770).
+   - A gap at or above the increment records a durable
+     `EXECUTION_PRICE_CONFLICT` episode. At or above $1 this is the same
+     basis as the reconciliation `FILL_PRICE_DRIFT` default (ADR 0069 §3).
    - The episode never rewrites recorded fills and never forbids reductions,
      because the quantity is the one thing both sides agree on. It clears
      when a later total agrees.

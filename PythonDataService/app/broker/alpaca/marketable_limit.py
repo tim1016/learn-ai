@@ -13,10 +13,12 @@ Formula:
 Reference:
     ADR 0059 Decision 5.3; Alpaca
     "Orders at Alpaca" § Extended Hours Trading (limit-only).
-Canonical implementation: this file.
+Canonical implementation: this file. :func:`price_increment` is the tick
+    rule; the Clerk's price-conflict tolerance reads it too (#2770).
 Validated against:
     tests/broker/alpaca/test_marketable_limit.py::test_marketable_limit_price,
-    tests/broker/alpaca/test_marketable_limit.py::test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price
+    tests/broker/alpaca/test_marketable_limit.py::test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price,
+    tests/broker/alpaca/test_marketable_limit.py::test_price_increment_changes_at_one_dollar
 
 **Why the tick rule exists twice** (a canonical rule may have a
 duplicate only for a real reason, with a parity test naming the canonical
@@ -47,6 +49,11 @@ _DOLLAR_TICK = Decimal("0.01")
 _SUB_DOLLAR_TICK = Decimal("0.0001")
 
 
+def price_increment(price: Decimal) -> Decimal:
+    """Alpaca's valid price increment at ``price``: 0.01 at or above $1, 0.0001 below."""
+    return _DOLLAR_TICK if price >= 1 else _SUB_DOLLAR_TICK
+
+
 def marketable_limit_price(*, side: OrderSide, anchor: Decimal, allowance_bps: Decimal) -> Decimal:
     """The limit price a leg carries outside the regular session.
 
@@ -68,8 +75,7 @@ def marketable_limit_price(*, side: OrderSide, anchor: Decimal, allowance_bps: D
     else:
         raw = anchor * (1 - fraction)
         rounding = ROUND_FLOOR
-    tick = _DOLLAR_TICK if raw >= 1 else _SUB_DOLLAR_TICK
-    price = raw.quantize(tick, rounding=rounding)
+    price = raw.quantize(price_increment(raw), rounding=rounding)
     if price <= 0:
         raise ValueError(
             f"a {side.value} anchored at {anchor} with {allowance_bps} bps quantises "

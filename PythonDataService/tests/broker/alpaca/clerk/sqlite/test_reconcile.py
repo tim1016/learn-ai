@@ -77,6 +77,7 @@ from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.contract.errors import BrokerUnavailable
 from app.broker.contract.models import (
+    BrokerActivityEvidence,
     BrokerOrder,
     BrokerOrderEvent,
     BrokerOrderLeg,
@@ -253,8 +254,9 @@ class _FakeTrade:
 
 
 class _FakeRead:
-    """A minimal ``BrokerReadPort`` double — only ``list_orders``/``list_positions``
-    are called by ``reconcile_account``."""
+    """A minimal ``BrokerReadPort`` double — ``reconcile_account`` calls
+    ``list_orders``/``list_positions``, and ``read_activity_evidence`` for a
+    manual order's executions (#2686): an account with no activity at all."""
 
     def __init__(
         self,
@@ -282,6 +284,14 @@ class _FakeRead:
         if self._error is not None:
             raise self._error
         return self._positions
+
+    async def read_activity_evidence(
+        self, *, page_token: str | None = None, after_ms: int | None = None
+    ) -> BrokerActivityEvidence:
+        del page_token, after_ms
+        if self._error is not None:
+            raise self._error
+        return BrokerActivityEvidence(activities=[], history_complete=True)
 
 
 class _SequentialRead(_FakeRead):

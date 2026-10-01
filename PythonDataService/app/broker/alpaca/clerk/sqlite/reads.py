@@ -699,6 +699,31 @@ def manual_chain_order_ref(conn: sqlite3.Connection, broker_order_id: str) -> st
     return row["order_ref"] if row is not None else None
 
 
+def manual_chain_member_ids(conn: sqlite3.Connection, order_ref: str) -> frozenset[str]:
+    """Every broker order id in one manual leg's Alpaca replacement chain (#2656, #2686).
+
+    The forward twin of :func:`manual_chain_order_ref`, with the same
+    members: the leg's current head and either end of each durable
+    ``MANUAL_ORDER_REPLACED`` link. Empty for a bot order and for a leg not
+    acknowledged yet.
+    """
+    rows = conn.execute(
+        "SELECT o.broker_order_id AS member FROM orders o "
+        "JOIN manual_order_legs l ON l.order_ref = o.order_ref "
+        "WHERE o.order_ref = ?1 AND o.broker_order_id IS NOT NULL "
+        "UNION "
+        "SELECT t.broker_order_id FROM custody_transitions t "
+        "WHERE t.order_ref = ?1 AND t.transition_kind = 'MANUAL_ORDER_REPLACED' "
+        "AND t.order_ref IN (SELECT order_ref FROM manual_order_legs WHERE order_ref IS NOT NULL) "
+        "UNION "
+        "SELECT json_extract(t.facts_json, '$.replaces') FROM custody_transitions t "
+        "WHERE t.order_ref = ?1 AND t.transition_kind = 'MANUAL_ORDER_REPLACED' "
+        "AND t.order_ref IN (SELECT order_ref FROM manual_order_legs WHERE order_ref IS NOT NULL)",
+        (order_ref,),
+    ).fetchall()
+    return frozenset(row["member"] for row in rows if row["member"])
+
+
 def entry_orders_for_strategy(conn: sqlite3.Connection, strategy_instance_id: str) -> list[OrderResource]:
     """Every entry order whose immutable origin belongs to one strategy, least recently updated first.
 
@@ -844,6 +869,12 @@ def reconcilable_effect_operations(
     ``trade_updates`` slice -- dropped at capture, or executed before the
     first ``listen`` -- is re-derived by the sweep's exact lookup, whose
     cumulative fold then closes the shortfall and drops it off the list.
+
+    A working manual leg stays on it whatever its order's broker state: a
+    filled leg ends only on exact executions, which the sweep reads from
+    account activity until they cover it (#2686). It is named here by kind,
+    like an EXIT and a CANCEL, because a manual order has no
+    ``operation_order_links`` row to read a broker state through.
     """
     subject_clause = "AND e.subject_id = ? " if subject_id is not None else ""
     params: tuple[object, ...] = (subject_id,) if subject_id is not None else ()
@@ -856,7 +887,7 @@ def reconcilable_effect_operations(
         "ON o.order_ref = l.order_ref WHERE e.kind IN ('ENTER','EXIT','MANUAL_ORDER','CANCEL') "
         "AND e.state NOT IN ('succeeded','failed','rejected') "
         + subject_clause +
-        "AND (e.state IN ('accepted','unknown') OR e.kind IN ('EXIT','CANCEL') "
+        "AND (e.state IN ('accepted','unknown') OR e.kind IN ('EXIT','CANCEL','MANUAL_ORDER') "
         "OR o.broker_state IS NULL OR lower(o.broker_state) NOT IN "
         f"({_TERMINAL_BROKER_STATES_SQL}) "
         "OR (lower(o.broker_state) = 'filled' AND NOT EXISTS ("

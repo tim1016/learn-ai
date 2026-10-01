@@ -13,8 +13,8 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     OperationClaimError,
 )
 from app.broker.contract.errors import BrokerError
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from app.broker.contract.ports import BrokerTradePort
+from app.broker.contract.models import BrokerActivityEvidence, BrokerOrder, BrokerOrderLeg
+from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerTradePort
 
 
 @dataclass(frozen=True)
@@ -141,6 +141,26 @@ class ClaimedBrokerIO:
                 f"broker returned order_id={observed.order_id!r}, expected {broker_order_id!r}"
             )
         return observed
+
+    async def observe_activity_evidence(
+        self, read: BrokerActivityEvidencePort, *, after_ms: int, page_token: str | None = None
+    ) -> BrokerActivityEvidence | BrokerError:
+        """One bounded read of the account's activity since ``after_ms``, or a value-domain error (#2686).
+
+        Read under the claim like every other broker contact of a resolution,
+        with :meth:`observe_broker_order`'s shape, so a failed read is the
+        caller's to contain and never escapes the pass. The answer says
+        whether it proved the window complete; ``page_token`` resumes an
+        earlier read's ``next_page_token``.
+        """
+        self._renew()
+        try:
+            evidence = await read.read_activity_evidence(page_token=page_token, after_ms=after_ms)
+        except BrokerError as exc:
+            self._renew()
+            return exc
+        self._renew()
+        return evidence
 
     async def observe_exact(
         self, client_order_id: str

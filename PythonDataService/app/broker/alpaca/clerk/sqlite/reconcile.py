@@ -363,6 +363,7 @@ async def _reconcile_effect(
     *,
     effect: EffectOperationResource,
     trigger: Trigger,
+    read: BrokerReadPort,
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
     pricing: RecoveryPricing,
@@ -425,6 +426,10 @@ async def _reconcile_effect(
             order_ref=order.order_ref,
             trade=trade,
             off_loop=to_thread,
+            # A manual leg ends only on exact executions; the sweep reads the
+            # ones a REST answer reports from account activity. The recovery
+            # acts on a live manual leg's chain head only (#2686).
+            activities=read,
         )
 
     def _verify_after_resolution() -> tuple[EffectOperationResource, OrderResource]:
@@ -899,6 +904,7 @@ async def _recover_operations(
     repo: ClerkSqliteRepository,
     *,
     trigger: Trigger,
+    read: BrokerReadPort,
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
     pricing: RecoveryPricing,
@@ -911,6 +917,7 @@ async def _recover_operations(
                 repo,
                 effect=effect,
                 trigger=trigger,
+                read=read,
                 trade=trade,
                 intake=intake,
                 pricing=pricing,
@@ -1186,6 +1193,7 @@ async def _reconcile_account_serialized(
     resolved_count = await _recover_operations(
         repo,
         trigger=trigger,
+        read=read,
         trade=trade,
         intake=intake,
         # An EXIT this pass creates a reduction for passes the same send-time

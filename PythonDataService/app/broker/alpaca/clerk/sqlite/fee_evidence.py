@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.broker.alpaca.adapter import execution_id_from_activity_id
 from app.broker.alpaca.clerk.money import MoneyInputError, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.custody_subjects import outside_order_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
@@ -553,15 +554,13 @@ def custody_fee_attribution(
     external_fills: list[FeeFill] = []
     pre_custody_quantities: dict[str, Decimal] = defaultdict(Decimal)
     execution_ids = {row[0] for row in conn.execute("SELECT execution_id FROM fills WHERE execution_id IS NOT NULL")}
-    from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import _execution_id_from_activity_id
-
     # ``None`` marks the pre-floor executions: they open no fee day.
     for day, rows in [*by_date.items(), (None, before_floor)]:
         for row in rows.values():
             if row.activity_type not in {"FILL", "PARTIAL_FILL"}:
                 continue
             if row.native_order_id in owned_orders:
-                if _execution_id_from_activity_id(row.activity_id) not in execution_ids:
+                if execution_id_from_activity_id(row.activity_id) not in execution_ids:
                     population_complete = False
                 continue
             if (

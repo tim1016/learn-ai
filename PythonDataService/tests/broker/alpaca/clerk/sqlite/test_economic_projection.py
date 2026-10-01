@@ -982,9 +982,9 @@ async def test_a_later_agreeing_total_clears_the_conflict(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_a_vendor_rounding_sized_difference_raises_no_conflict(tmp_path: Path) -> None:
-    """#2460: Alpaca publishes prices at cent precision, so a same-quantity
-    average-price difference below one cent per share is vendor rounding, not
-    an economic disagreement."""
+    """#2460: at or above $1 Alpaca publishes prices at cent precision, so a
+    same-quantity average-price difference below one cent per share is vendor
+    rounding, not an economic disagreement."""
     repo, accepted = _repository(tmp_path)
     try:
         now = repo.clock()
@@ -995,6 +995,34 @@ async def test_a_vendor_rounding_sized_difference_raises_no_conflict(tmp_path: P
         _fold_total(repo, accepted, quantity=3.0, price=100.0, updated_at_ms=now)
 
         assert _recorded_price_conflict_episode(repo) is None
+    finally:
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_a_sub_cent_difference_below_one_dollar_is_a_price_conflict(tmp_path: Path) -> None:
+    """#2770: below $1 the venue tick is $0.0001, so the tolerance is one tick
+    of the reported price, not one cent. A difference under that tick is
+    rounding and raises nothing; a $0.005 difference on a sub-dollar fill is a
+    real disagreement the one-cent rule used to read as rounding."""
+    repo, accepted = _repository(tmp_path)
+    try:
+        now = repo.clock()
+        _append_slice(
+            repo, accepted, execution_id="fill-original", side="BUY",
+            quantity=10.0, price=0.5050, occurred_at_ms=now,
+        )
+        _fold_total(repo, accepted, quantity=10.0, price=0.50503, updated_at_ms=now)
+        assert _recorded_price_conflict_episode(repo) is None
+
+        _fold_total(repo, accepted, quantity=10.0, price=0.5000, updated_at_ms=now + 1)
+
+        episode = _recorded_price_conflict_episode(repo)
+        assert episode is not None, "a $0.005 gap on a sub-dollar fill was read as vendor rounding"
+        cause = _episode_cause(repo)
+        [conflicted] = cause.orders
+        assert conflicted.reported_avg_price == pytest.approx(0.5000, abs=1e-12, rel=0)
+        assert conflicted.recorded_avg_price == pytest.approx(0.5050, abs=1e-12, rel=0)
     finally:
         repo.close()
 
@@ -1049,6 +1077,32 @@ def test_the_sweep_clears_a_conflict_only_when_recorded_fills_agree(
 
         assert reconcile_execution_price_conflicts(repo) == dropped
         assert (_recorded_price_conflict_episode(repo) is None) == bool(dropped)
+    finally:
+        repo.close()
+
+
+def test_the_sweep_keeps_a_sub_dollar_conflict_its_recorded_fills_still_disagree_with(
+    tmp_path: Path,
+) -> None:
+    """#2770: the sweep's re-derivation uses the same tick as the raise. Fills
+    recorded at $0.5050 still disagree by $0.005 with a reported $0.5000 --
+    fifty sub-dollar ticks -- so the episode stays open; under the one-cent
+    rule the sweep dropped it as agreeing."""
+    from app.broker.alpaca.clerk.sqlite.order_evidence import reconcile_execution_price_conflicts
+    from app.broker.alpaca.clerk.sqlite.uncertainty import raise_execution_price_conflict_uncertainty
+
+    repo, accepted = _repository(tmp_path)
+    try:
+        _append_slice(repo, accepted, execution_id="fill-1", side="BUY",
+                      quantity=10.0, price=0.5050, occurred_at_ms=repo.clock())
+        effect = repo.effect_operation(accepted.effect_operation_id)
+        assert effect is not None
+        assert raise_execution_price_conflict_uncertainty(
+            repo, effect=effect, order=_conflict_order(accepted.order_ref, reported=0.5000, recorded=0.5050)
+        ) == "raised"
+
+        assert reconcile_execution_price_conflicts(repo) == 0
+        assert _recorded_price_conflict_episode(repo) is not None
     finally:
         repo.close()
 
