@@ -22,7 +22,7 @@ of any numerical normalization.
 
 The supported integration observes:
 
-- connection and session capability;
+- connection health;
 - account summary, positions, P&L, orders, executions, and history;
 - option contracts, chains, surfaces, quotes, and real-time/historical bars;
 - broker API/error evidence and durable account/order projections.

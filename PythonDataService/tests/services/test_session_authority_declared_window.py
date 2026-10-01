@@ -106,6 +106,7 @@ def test_without_a_window_the_calendar_still_proves_only_rth_or_closed() -> None
     ("day", "hour", "minute", "proven"),
     [
         (_REGULAR, 4, 0, True),  # PRE opens at the declared open
+        (date(2026, 3, 9), 4, 0, True),  # PRE on the first EDT trading day (DST)
         (_REGULAR, 9, 29, True),
         (_REGULAR, 16, 0, True),  # POST
         (_REGULAR, 19, 59, True),

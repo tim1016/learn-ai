@@ -323,8 +323,9 @@ def liveness_blocks_entry(
     Exempting that caller needs **two** facts, not one, and both are
     consulted lazily so every other branch resolves without paying for a
     lookup. ``extended_phase_proven`` says the *schedule* puts this instant
-    in PRE or POST — the broker's declared window, never a live signal. ``extended_session_live`` says the venue is *actually*
-    printing bars for this symbol right now. The schedule alone would admit
+    in PRE or POST — the broker's declared window, never a live signal.
+    ``extended_session_live`` says the venue is *actually* printing bars for
+    this symbol right now. The schedule alone would admit
     new exposure straight through an unscheduled extended-hours closure,
     which the RTH-only clock reports exactly as it reports an ordinary
     extended session; the calendar answers "was this a scheduled session?"
@@ -347,7 +348,6 @@ def liveness_blocks_entry(
 class MarketEntryPolicy:
     """One configured entry policy shared by strategy, intake and submission."""
 
-    symbol: str
     use_rth: bool
     extended_window: ExtendedHoursWindow | None
     clock: Callable[[], int]

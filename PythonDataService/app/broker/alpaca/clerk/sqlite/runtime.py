@@ -1287,7 +1287,7 @@ class SqliteAlpacaClerkFacade:
                 if self.authority_kind in _LIVE_MARKET_CLOCK_AUTHORITIES:
                     liveness = market_liveness_fact(entry.instrument.underlying, self._repo.clock())
                     policy = MarketEntryPolicy(
-                        symbol=entry.instrument.underlying, use_rth=use_rth,
+                        use_rth=use_rth,
                         extended_window=self._program_leg_policy.window, clock=self._repo.clock,
                         extended_session_live=lambda: self._stream_health is not None
                         and self._stream_health.market_data_live(entry.instrument.underlying),

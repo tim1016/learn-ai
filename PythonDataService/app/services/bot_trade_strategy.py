@@ -445,7 +445,7 @@ def _liveness_blocks_entry(
     printing bars for this symbol right now.
     """
     policy = MarketEntryPolicy(
-        symbol=binding.symbol, use_rth=binding.use_rth, extended_window=session.window,
+        use_rth=binding.use_rth, extended_window=session.window,
         clock=now_ms_utc, extended_session_live=lambda: _market_data_live(feed, binding.symbol),
     )
     return policy.refusal(liveness) is not None
