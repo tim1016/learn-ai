@@ -46,8 +46,8 @@ A custody file no running Clerk has opened since a schema upgrade -- a Live
 account's retired Shadow world, a Dry Run from before one -- keeps its old
 schema. It is read through the Clerk's own chained migrations applied to a
 private in-memory copy (``read_custody_history``), so the file is never
-written; one no migration reaches (a newer build's, the offline v8 ceremony,
-one with no registered path) is ``CustodySchemaUnreadable`` (#2615).
+written; one no migration reaches (a newer build's, or one below the v13
+floor) is ``CustodySchemaUnreadable`` (#2615).
 """
 
 from __future__ import annotations
@@ -471,8 +471,7 @@ def _at_current_schema(snapshot: sqlite3.Connection) -> Iterator[sqlite3.Connect
         try:
             migrate_schema(copy, from_version=version)
         except ValueError as exc:
-            # No registered path from here: the offline v8 ceremony, a v6
-            # file holding rows, a version never migrated from.
+            # No registered path from here: a version below the v13 floor.
             raise CustodySchemaUnreadable(version) from exc
         copy.execute("PRAGMA query_only = ON")
         copy.execute("BEGIN")

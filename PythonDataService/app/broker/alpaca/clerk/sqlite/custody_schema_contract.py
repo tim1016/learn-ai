@@ -157,10 +157,10 @@ END;
 
 
 # Historical, and therefore frozen: this is the v9 shape, which
-# ``apply_v9_schema`` must keep reproducing byte-for-byte for the offline
-# upgrade ceremony and for every migration-chain test that starts from a real
-# v9 file. v12 drops these triggers along with the table they police; it does
-# not edit them here.
+# ``apply_v9_schema`` must keep reproducing byte-for-byte, because the fresh
+# schema and the v13 baseline every migration-chain test starts from are
+# layered on it. v12 drops these triggers along with the table they police; it
+# does not edit them here.
 HOLD_SUBJECT_COMPATIBILITY_DDL = """\
 CREATE TRIGGER trg_holds_subject_compatible_insert
 BEFORE INSERT ON holds
@@ -473,9 +473,4 @@ MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL = (
     _MANUAL_CANCELLATION_IDENTITY_DDL
     + _MANUAL_CANCELLATION_DELETE_DDL
     + _MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL
-)
-MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_STATEMENTS: tuple[str, ...] = (
-    _MANUAL_CANCELLATION_IDENTITY_DDL,
-    _MANUAL_CANCELLATION_DELETE_DDL,
-    _MANUAL_CANCELLATION_SUBJECT_COMPATIBILITY_DDL,
 )

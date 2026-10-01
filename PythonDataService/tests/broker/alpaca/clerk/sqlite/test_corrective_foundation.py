@@ -101,7 +101,7 @@ def test_v8_authority_fails_closed_on_open_until_offline_upgrade(tmp_path: Path)
     r._conn.commit()
     r.close()
 
-    with pytest.raises(SchemaVersionMismatch, match="offline v8-to-v9 Clerk upgrade"):
+    with pytest.raises(SchemaVersionMismatch, match="no registered migration from schema_version=8"):
         ClerkSqliteRepository.open(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
     db_path = tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
@@ -130,7 +130,7 @@ def test_read_only_verification_rejects_a_data_bearing_v6_authority(tmp_path: Pa
     repository.close()
 
     db_path = tmp_path / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
-    with pytest.raises(DatabaseVerificationFailed, match="data-bearing v6 authority"):
+    with pytest.raises(DatabaseVerificationFailed, match="schema_version=6, expected"):
         verify_database(db_path, expected_account_id=ACCOUNT_ID)
 
 
@@ -164,8 +164,10 @@ def test_read_only_verification_reports_a_malformed_schema_version_as_verificati
 
 def test_is_upgradable_to_current_reflects_the_registered_migration_chain() -> None:
     assert schema.is_upgradable_to_current(schema.SCHEMA_VERSION) is True
-    assert schema.is_upgradable_to_current(6) is True
-    assert schema.is_upgradable_to_current(4) is True
+    assert schema.is_upgradable_to_current(13) is True
+    assert schema.is_upgradable_to_current(12) is False
+    assert schema.is_upgradable_to_current(6) is False
+    assert schema.is_upgradable_to_current(4) is False
     assert schema.is_upgradable_to_current(1) is False
 
 
@@ -194,7 +196,8 @@ def test_fresh_v7_boot_preserves_hash_chain_and_passes_integrity_check(tmp_path:
         reopened.close()
 
 
-def test_migrate_schema_rejects_an_unregistered_version_without_mutating() -> None:
+@pytest.mark.parametrize("version", [1, 6, 8, 12])
+def test_migrate_schema_rejects_an_unregistered_version_without_mutating(version: int) -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     schema.configure_connection(conn)
@@ -202,15 +205,16 @@ def test_migrate_schema_rejects_an_unregistered_version_without_mutating() -> No
     conn.execute(
         "INSERT INTO control_meta (id, schema_version, broker, account_id, "
         "db_identity_token, authority_generation, control_revision, created_at_ms, "
-        "last_open_at_ms) VALUES (1, 1, 'alpaca', 'PA-TEST', 'tok', 1, 0, 1, 1)"
+        "last_open_at_ms) VALUES (1, ?, 'alpaca', 'PA-TEST', 'tok', 1, 0, 1, 1)",
+        (version,),
     )
     conn.commit()
 
     with pytest.raises(ValueError, match="no registered migration"):
-        schema.migrate_schema(conn, from_version=1)
+        schema.migrate_schema(conn, from_version=version)
 
     row = conn.execute("SELECT schema_version FROM control_meta WHERE id = 1").fetchone()
-    assert row["schema_version"] == 1
+    assert row["schema_version"] == version
 
 
 def test_genesis_prev_hash_column_is_not_null(repo: ClerkSqliteRepository) -> None:

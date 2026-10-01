@@ -19,7 +19,6 @@ every money read prices from.
 
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
@@ -32,9 +31,6 @@ from app.broker.alpaca.clerk.live_envelope import ENTRY_FEE_PROVISION_UNRECORDED
 from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGETS_NOT_SWITCHED_ON
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
-from app.broker.alpaca.clerk.sqlite.custody_schema_contract import (
-    HOLDS_COMPATIBILITY_VIEW_DDL,
-)
 from app.broker.alpaca.clerk.sqlite.enter import (
     EnterSubmission,
     EntrySubmissionRefusal,
@@ -59,12 +55,6 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     AdmissionBlockedError,
-    raise_account_hold,
-)
-from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
-    HOLD_REASON_CODE_SQL_PARAMS,
-    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
-    LossHoldCause,
 )
 from app.broker.contract.errors import BrokerOrderRejected, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
@@ -100,22 +90,6 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
 T1_TERMINAL_ACK = T0 + 1_000
 T2_OBSERVATION = T0 + 2_000
 T3_TRAILING_FILL = T0 + 3_000
-
-
-_CAUSE = LossHoldCause(
-    day_start_ms=1_788_000_000_000,
-    day_pnl_usd=-5_250.0,
-    loss_limit_usd=5_000.0,
-    last_equity_usd=100_000.0,
-    observed_at_ms=T0,
-)
-
-# The ``holds`` view a pre-ADR-0059 build baked into its file: same shape, two
-# codes instead of three. Derived from the current DDL rather than transcribed,
-# so it cannot silently stop being "the current view minus the loss hold".
-_V12_HOLDS_VIEW_DDL = HOLDS_COMPATIBILITY_VIEW_DDL.replace(
-    f"'{LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE}', ", ""
-)
 
 
 def _leg(**overrides: Any) -> BrokerOrderLeg:
@@ -172,34 +146,6 @@ def _observed_order(
     )
 
 
-def _db_path(artifacts_root: Path) -> Path:
-    return artifacts_root / "accounts" / "alpaca" / ACCOUNT_ID / "clerk.db"
-
-
-def _rewind_to_v12(db_path: Path) -> None:
-    """Make a real v13 file look like the v12 file a prior build left behind.
-
-    Both halves matter: no ``envelope_reservations`` table, and a ``holds``
-    view whose *stored* SQL still names only the two v12 codes — which is the
-    shape that would project a loss hold as an uncertainty.
-    """
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.executescript(
-            "DROP TABLE deployment_budgets;\n"
-            "DROP TABLE account_risk_policy;\n"
-            "DROP TABLE envelope_reservations;\n"
-            "DROP TRIGGER trg_budget_authority_monotonic;\n"
-            "ALTER TABLE control_meta DROP COLUMN authorization_version;\n"
-            "DROP VIEW holds;\n"
-            f"{_V12_HOLDS_VIEW_DDL}"
-            "UPDATE control_meta SET schema_version = 12 WHERE id = 1;\n"
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
 def test_a_fresh_authority_has_the_reservations_table_at_schema_v13(
     envelope_repo: ClerkSqliteRepository,
 ) -> None:
@@ -211,80 +157,6 @@ def test_a_fresh_authority_has_the_reservations_table_at_schema_v13(
         ).fetchone()
         is not None
     )
-
-
-def test_a_v12_authority_migrates_additively_to_v13(tmp_path: Path, envelope_clock: _TestClock) -> None:
-    """The upgrade adds the table and re-publishes the view from live code.
-
-    A view definition is stored text, baked in at the version that created it,
-    so a v12 file's ``holds`` still names two codes while a fresh v13 file
-    names three. Re-rendering it in the migration is what makes an upgraded
-    file and a fresh one project the loss hold identically.
-    """
-    assert _V12_HOLDS_VIEW_DDL != HOLDS_COMPATIBILITY_VIEW_DDL
-
-    clerk = ClerkSqliteRepository.initialize(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=envelope_clock
-    )
-    _start_legacy_run(clerk, envelope_clock, strategy_instance_id=SID, symbol="SPY", run_id=RUN_ID)
-    accept_enter(
-        clerk,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="d1",
-        lifecycle_run_id=RUN_ID,
-        leg=_leg(quantity=10),
-    )
-    before = [
-        tuple(row)
-        for row in clerk._conn.execute(
-            "SELECT sequence, row_hash FROM custody_transitions ORDER BY sequence"
-        )
-    ]
-    assert before
-    clerk.close()
-    _rewind_to_v12(_db_path(tmp_path))
-
-    reopened = ClerkSqliteRepository.open(
-        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=envelope_clock
-    )
-    try:
-        assert reopened.control_meta_snapshot().schema_version == schema.SCHEMA_VERSION
-        assert (
-            reopened._conn.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='envelope_reservations'"
-            ).fetchone()
-            is not None
-        )
-        assert [
-            tuple(row)
-            for row in reopened._conn.execute(
-                "SELECT sequence, row_hash FROM custody_transitions ORDER BY sequence"
-            )
-        ] == before
-
-        view_sql = reopened._conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'view' AND name = 'holds'"
-        ).fetchone()["sql"]
-        for reason_code in HOLD_REASON_CODE_SQL_PARAMS:
-            assert f"'{reason_code}'" in view_sql
-
-        assert (
-            raise_account_hold(
-                reopened,
-                reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
-                evidence_refs=[f"day-pnl:{_CAUSE.day_start_ms}"],
-                cause_facts=_CAUSE.to_mapping(),
-            )
-            == "raised"
-        )
-        assert [
-            (row["reason_code"], row["state"])
-            for row in reopened._conn.execute("SELECT reason_code, state FROM holds")
-        ] == [(LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE, "ACTIVE")]
-    finally:
-        reopened.close()
 
 
 def test_accepting_an_enter_records_its_price_and_fee_provision_in_the_same_commit(
