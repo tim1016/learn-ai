@@ -10,7 +10,8 @@ resumable from the checkpoint the caller persists between them:
    code it imported cannot name what it runs, and refuses (RESTART_NEEDED).
 2. Build the proof over the study's final interval — staged inputs, a lake
    replay and a replay restored from the blobs alone, one trace root — and
-   checkpoint it.
+   checkpoint it. A checkpointed proof that names another build, or lost a
+   staged input, is rebuilt under the running build rather than reused.
 3. Persist one Python-only full backtest of the candidate over the same
    interval, bound to the study's data receipt, as the Golden Validation
    source run; checkpoint its id.
@@ -23,8 +24,10 @@ resumable from the checkpoint the caller persists between them:
 Every failure before that commit publishes nothing and leaves the prior
 default where it was. A research override never reaches this module: proof
 mismatch, missing data, a changed program, a moved default or a refused
-review are technical failures, each with its own code. Cancellation
-(``JobCancelled``) propagates for the caller's lifecycle to record.
+review are technical failures, each with its own code. ``cancel_check`` runs
+before each step that does work and again before the publish, so a cancel
+requested while a step ran publishes nothing; cancellation (``JobCancelled``)
+propagates for the caller's lifecycle to record.
 """
 
 from __future__ import annotations
@@ -82,7 +85,6 @@ ApprovalFailureCode = Literal[
     "NOT_QUALIFIABLE",
     "PARAMETERS_CHANGED",
     "PROOF_MISMATCH",
-    "PROOF_STALE",
     "PUBLISH_REFUSED",
     "REQUEST_INVALID",
     "RESTART_NEEDED",
@@ -261,7 +263,17 @@ def _approve(
             "Restart the service, then retry the approval." + _UNCHANGED,
         ) from exc
 
-    if checkpoint.proof is None:
+    proof = (
+        None
+        if checkpoint.proof is None
+        else _reusable_proof(
+            checkpoint.proof, request, canonical, contract, artifact_digest, wiring_digest, blob_store
+        )
+    )
+    if proof is None:
+        # A cancel requested while an earlier step ran must stop here, before
+        # more work and long before anything is published.
+        cancel_check()
         if not checkpoint.proof_reserved:
             _consume(consume_reserved, PROOF_EVALUATIONS)
             checkpoint = dataclasses.replace(checkpoint, proof_reserved=True)
@@ -269,12 +281,11 @@ def _approve(
         proof = _build_proof(request, canonical, blob_store, artifact_digest, wiring_digest)
         checkpoint = dataclasses.replace(checkpoint, proof=proof.as_dict())
         save_checkpoint(checkpoint)
-    else:
-        proof = _checkpointed_proof(checkpoint.proof, request, canonical, contract, artifact_digest, wiring_digest)
     _require_blobs(proof, blob_store)
 
     run_id = checkpoint.run_id
     if run_id is None:
+        cancel_check()
         if not checkpoint.run_reserved:
             _consume(consume_reserved, RUN_EVALUATIONS)
             checkpoint = dataclasses.replace(checkpoint, run_reserved=True)
@@ -283,6 +294,7 @@ def _approve(
         checkpoint = dataclasses.replace(checkpoint, run_id=run_id)
         save_checkpoint(checkpoint)
 
+    cancel_check()
     return _store_call(
         _publish,
         request=request,
@@ -400,15 +412,25 @@ def _build_proof(
         raise _ApprovalFailure("PROOF_MISMATCH", f"The proof inputs cannot be proven: {exc}." + _UNCHANGED) from exc
 
 
-def _checkpointed_proof(
+def _reusable_proof(
     payload: Mapping[str, Any],
     request: ApprovalRequest,
     canonical: Mapping[str, Any],
     contract: SignalProgramContract,
     artifact_digest: str,
     wiring_digest: str,
-) -> ProofRecord:
-    """The proof an earlier attempt built, reused only if it still proves this exact candidate on this build."""
+    blob_store: BlobStore,
+) -> ProofRecord | None:
+    """The proof an earlier attempt built, if it still proves this exact candidate on this build.
+
+    ``None`` asks for a rebuild: a proof built under code that is no longer
+    the running build, or whose staged inputs are no longer intact, is
+    replaced by a fresh one from the receipted lake, exactly as a first
+    attempt under this build would have built it. Refusing instead would
+    strand the study, because a retry would meet the same checkpoint
+    forever. The rebuild draws nothing new: the reservation was drawn when
+    the checkpointed proof was first built.
+    """
     try:
         proof = ProofRecord.from_dict(payload)
     except ValueError as exc:
@@ -424,11 +446,24 @@ def _checkpointed_proof(
             "PROOF_MISMATCH", "The saved proof is for a different candidate or window than this approval." + _UNCHANGED
         )
     if (proof.artifact_digest, proof.wiring_digest) != (artifact_digest, wiring_digest):
-        raise _ApprovalFailure(
-            "PROOF_STALE",
-            "The program's code changed since this approval's proof was built, so the proof no longer names the "
-            "running build." + _UNCHANGED,
+        logger.info(
+            "A saved approval proof names another build; rebuilding it under the running build",
+            extra={"action": "golden_approval_proof_rebuilt", "study_id": request.study_id, "cause": "stale"},
         )
+        return None
+    try:
+        _require_blobs(proof, blob_store)
+    except _ApprovalFailure as lost:
+        logger.warning(
+            "A saved approval proof lost a staged input; rebuilding it from the receipted lake",
+            extra={
+                "action": "golden_approval_proof_rebuilt",
+                "study_id": request.study_id,
+                "cause": "blobs",
+                "reason": lost.reason,
+            },
+        )
+        return None
     return proof
 
 

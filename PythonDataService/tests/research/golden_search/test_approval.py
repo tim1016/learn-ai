@@ -24,11 +24,14 @@ import pytest
 
 from app.data_lake.path_policy import lake_subpath
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.jobs.progress import JobCancelled
 from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.backtest_runs import repository as backtest_repo
 from app.research.backtest_runs.records import record_from_payload
 from app.research.golden_search import approval as approval_module
 from app.research.golden_search.approval import (
+    PROOF_EVALUATIONS,
+    RUN_EVALUATIONS,
     ApprovalCheckpoint,
     ApprovalOutcome,
     ApprovalRequest,
@@ -41,13 +44,17 @@ from app.research.golden_search.qualifications import (
     get_default,
     get_qualification,
     get_qualification_by_study,
+    revoke_qualification,
 )
+from app.research.golden_search.zoom import BudgetExhausted
 from app.research.golden_validation import repository as golden_repo
 from app.research.golden_validation import service as golden_validation
 from app.research.persistence.db import run_sync, with_connection
 from app.research.sweep.snapshot import DataSnapshot, capture_data_snapshot
 from app.schemas.engine_backtest import EngineBacktestRequest, EngineBacktestResponse
+from app.schemas.run_admission import QUALIFICATION_REVOKED
 from app.services import signal_program_admission as admission_module
+from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.golden_qualification import canonical_point, seed_qualification
 from tests._helpers.lean_store import seed_store_day
@@ -117,11 +124,23 @@ async def _study(conn: asyncpg.Connection, study_id: str, symbol: str) -> None:
 
 
 class _Engine:
-    """The persisted final-interval run: records each request and saves one history row per call."""
+    """The persisted final-interval run: records each request and saves one history row per call.
 
-    def __init__(self, *, save_outcome: str = "saved") -> None:
+    ``saved_params`` makes the saved row record other parameters than it was
+    asked to run; ``on_run`` fires while the run is in progress.
+    """
+
+    def __init__(
+        self,
+        *,
+        save_outcome: str = "saved",
+        saved_params: dict[str, Any] | None = None,
+        on_run: Callable[[], None] = lambda: None,
+    ) -> None:
         self.requests: list[tuple[EngineBacktestRequest, dict[str, str] | None]] = []
         self.save_outcome = save_outcome
+        self.saved_params = saved_params or {}
+        self.on_run = on_run
 
     def __call__(
         self,
@@ -133,11 +152,14 @@ class _Engine:
         while_waiting: Callable[[], None] = lambda: None,
     ) -> EngineBacktestResponse:
         self.requests.append((request, None if data_manifest is None else dict(data_manifest)))
+        self.on_run()
         symbol = str(request.params["symbol"])
         run_id = None
         if self.save_outcome == "saved":
             payload = engine_payload(
-                symbol=symbol, parameters=dict(request.params), program_version=CONTRACT.program_version
+                symbol=symbol,
+                parameters={**request.params, **self.saved_params},
+                program_version=CONTRACT.program_version,
             )
             run_id = run_sync(with_connection(backtest_repo.insert_run, record_from_payload(payload))).run_id
         return EngineBacktestResponse.model_validate(
@@ -169,6 +191,8 @@ class _Caller:
         self.consumed: list[int] = []
         self.commits: list[tuple[bool, str]] = []
         self.fail_commit = False
+        self.cancel_requested = False
+        self.reservation_left = PROOF_EVALUATIONS + RUN_EVALUATIONS
 
     def save_checkpoint(self, checkpoint: ApprovalCheckpoint) -> None:
         # Persisted as the worker would: through its dict form.
@@ -176,7 +200,18 @@ class _Caller:
         self.saved.append(self.checkpoint)
 
     def consume_reserved(self, evaluations: int) -> None:
+        # The study's proof reservation: drawing past it is refused, as the evaluator refuses it.
+        if evaluations > self.reservation_left:
+            raise BudgetExhausted("the proof reservation is spent")
+        self.reservation_left -= evaluations
         self.consumed.append(evaluations)
+
+    def request_cancel(self) -> None:
+        self.cancel_requested = True
+
+    def cancel_check(self) -> None:
+        if self.cancel_requested:
+            raise JobCancelled("cancel requested")
 
     async def on_commit(self, conn: asyncpg.Connection, qualification_id: str) -> None:
         self.commits.append((conn.is_in_transaction(), qualification_id))
@@ -216,7 +251,30 @@ async def _approve(request: ApprovalRequest, caller: _Caller, blobs: BlobStore) 
         save_checkpoint=caller.save_checkpoint,
         consume_reserved=caller.consume_reserved,
         on_commit=caller.on_commit,
+        cancel_check=caller.cancel_check,
         blob_store=blobs,
+    )
+
+
+def _start_binding(symbol: str, params: dict[str, Any]) -> BrokerBotBinding:
+    """A fresh Start of ``params`` on ``symbol``, as admission resolves its coverage before sealing."""
+    return BrokerBotBinding.model_validate(
+        {
+            "strategy_instance_id": "golden-approval-start",
+            "strategy_key": PROGRAM,
+            "broker": "alpaca",
+            "symbol": symbol,
+            "use_rth": True,
+            "mode": "log_only",
+            "quantity": 1,
+            "carryover_policy": "FORBID",
+            "action_plan": alpaca_v1_action_plan(symbol.upper()),
+            "strategy_params": params,
+            "strategy_param_origins": {name: "deploy_override" for name in params},
+            "sealed_account_id": "paper-account",
+            "run_id": "run-1",
+            "created_at_ms": 1,
+        }
     )
 
 
@@ -508,7 +566,7 @@ async def test_a_publish_that_rolled_back_resumes_without_a_new_proof_or_run(
     assert await _study_state(conn, study_id) == "approved"
 
 
-async def test_a_checkpointed_proof_from_other_bytes_is_never_published(
+async def test_a_checkpointed_proof_from_other_bytes_is_rebuilt_never_published(
     conn: asyncpg.Connection,
     unique: str,
     symbol: str,
@@ -523,19 +581,211 @@ async def test_a_checkpointed_proof_from_other_bytes_is_never_published(
     caller = _Caller(study_id)
     await _approve(_request(study_id, symbol, snapshot, lake), caller, blobs)
     assert caller.checkpoint.proof is not None
-    # The proof was built under code that is no longer the running build.
-    caller.checkpoint = dataclasses.replace(
-        caller.checkpoint, proof={**caller.checkpoint.proof, "artifact_digest": "9" * 64}
-    )
+    # The proof was built under code that is no longer the running build (a deploy between attempts).
+    stale = {**caller.checkpoint.proof, "artifact_digest": "9" * 64}
+    caller.checkpoint = dataclasses.replace(caller.checkpoint, proof=stale)
     engine = _Engine()
     monkeypatch.setattr(approval_module, "execute_engine_backtest", engine)
 
     outcome = await _approve(_request(study_id, symbol, snapshot, lake), caller, blobs)
 
+    # A retry is never stranded on its own checkpoint: the proof is rebuilt under the running build.
+    assert outcome.status == "approved"
+    row = await get_qualification(conn, outcome.qualification_id or "")
+    assert row is not None
+    assert row.proof != stale
+    assert (row.artifact_digest, row.wiring_digest) == admission_module.running_build_digests(CONTRACT)
+    assert ProofRecord.from_dict(row.proof).artifact_digest == row.artifact_digest
+    # Rebuilt from the reservation already drawn: nothing new is consumed.
+    assert caller.consumed == [2, 1]
+    assert len(engine.requests) == 1
+
+
+async def test_a_checkpointed_proof_whose_inputs_were_lost_is_rebuilt_from_the_lake(
+    conn: asyncpg.Connection,
+    unique: str,
+    symbol: str,
+    snapshot: DataSnapshot,
+    lake: Path,
+    blobs: BlobStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study_id = f"study-{unique}"
+    await _study(conn, study_id, symbol)
+    monkeypatch.setattr(approval_module, "execute_engine_backtest", _Engine(save_outcome="failed"))
+    caller = _Caller(study_id)
+    await _approve(_request(study_id, symbol, snapshot, lake), caller, blobs)
+    assert caller.checkpoint.proof is not None
+    lost = next(iter(ProofRecord.from_dict(caller.checkpoint.proof).manifest.values()))
+    (blobs.root / lost[:2] / lost).unlink()
+    monkeypatch.setattr(approval_module, "execute_engine_backtest", _Engine())
+
+    outcome = await _approve(_request(study_id, symbol, snapshot, lake), caller, blobs)
+
+    assert outcome.status == "approved"
+    row = await get_qualification(conn, outcome.qualification_id or "")
+    assert row is not None
+    # Every input the published proof names is back in the store, so a later re-proof can replay it.
+    for digest in ProofRecord.from_dict(row.proof).manifest.values():
+        assert blobs.get(digest)
+    assert caller.consumed == [2, 1]
+
+
+# ---------------------------------------------------------------------------
+# Refusals that reach the publish, and before it
+# ---------------------------------------------------------------------------
+async def test_a_saved_run_that_does_not_record_the_exact_tuple_is_refused_and_rolled_back(
+    conn: asyncpg.Connection,
+    unique: str,
+    symbol: str,
+    snapshot: DataSnapshot,
+    lake: Path,
+    blobs: BlobStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study_id = f"study-{unique}"
+    await _study(conn, study_id, symbol)
+    prior = await _prior_default(conn, symbol, unique)
+    engine = _Engine(saved_params={"rsi_min": 46.0})
+    monkeypatch.setattr(approval_module, "execute_engine_backtest", engine)
+    caller = _Caller(study_id)
+
+    outcome = await _approve(_request(study_id, symbol, snapshot, lake, expected_default=prior), caller, blobs)
+
     assert outcome.status == "failed"
-    assert outcome.failure_code == "PROOF_STALE"
+    assert outcome.failure_code == "GOLDEN_VALIDATION_REFUSED"
+    assert await get_qualification_by_study(conn, study_id) is None
+    run_id = caller.checkpoint.run_id
+    assert run_id is not None
+    # The mismatched run was never left behind as an accepted Golden Validation case.
+    assert await golden_repo.get_golden_run_by_source(conn, run_id) is None
+    pointer = await get_default(conn, PROGRAM, symbol)
+    assert pointer is not None and pointer.qualification_id == prior and pointer.revision == 1
+    assert caller.commits == []
+
+
+async def test_a_cancel_requested_while_the_run_ran_publishes_nothing_and_resumes(
+    conn: asyncpg.Connection,
+    unique: str,
+    symbol: str,
+    snapshot: DataSnapshot,
+    lake: Path,
+    blobs: BlobStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study_id = f"study-{unique}"
+    await _study(conn, study_id, symbol)
+    caller = _Caller(study_id)
+    engine = _Engine(on_run=caller.request_cancel)
+    monkeypatch.setattr(approval_module, "execute_engine_backtest", engine)
+
+    with pytest.raises(JobCancelled):
+        await _approve(_request(study_id, symbol, snapshot, lake), caller, blobs)
+
+    assert await get_qualification_by_study(conn, study_id) is None
+    assert await get_default(conn, PROGRAM, symbol) is None
+    assert caller.commits == []
+    assert await _study_state(conn, study_id) == "qualification_pending"
+    assert caller.checkpoint.run_id is not None
+
+    caller.cancel_requested = False
+    resumed = await _approve(_request(study_id, symbol, snapshot, lake), caller, blobs)
+
+    assert resumed.status == "approved"
+    assert caller.consumed == [2, 1]
+    assert len(engine.requests) == 1
+
+
+async def test_a_spent_reservation_refuses_before_any_proof_or_run(
+    conn: asyncpg.Connection,
+    unique: str,
+    symbol: str,
+    snapshot: DataSnapshot,
+    lake: Path,
+    blobs: BlobStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study_id = f"study-{unique}"
+    await _study(conn, study_id, symbol)
+    engine = _Engine()
+    monkeypatch.setattr(approval_module, "execute_engine_backtest", engine)
+    caller = _Caller(study_id)
+    caller.reservation_left = 0
+
+    outcome = await _approve(_request(study_id, symbol, snapshot, lake), caller, blobs)
+
+    assert outcome.status == "failed"
+    assert outcome.failure_code == "BUDGET_EXHAUSTED"
+    assert caller.saved == []
+    assert not blobs.root.exists() or not any(blobs.root.iterdir())
     assert engine.requests == []
     assert await get_qualification_by_study(conn, study_id) is None
+
+
+async def test_a_candidate_not_in_its_canonical_form_is_never_published_under_another_identity(
+    conn: asyncpg.Connection,
+    unique: str,
+    symbol: str,
+    snapshot: DataSnapshot,
+    lake: Path,
+    blobs: BlobStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study_id = f"study-{unique}"
+    await _study(conn, study_id, symbol)
+    engine = _Engine()
+    monkeypatch.setattr(approval_module, "execute_engine_backtest", engine)
+    caller = _Caller(study_id)
+    # The canonical dump omits an identity-neutral default; spelling it out is another parameter hash.
+    spelled_out = dataclasses.replace(
+        _request(study_id, symbol, snapshot, lake), candidate_point={**_candidate(symbol), "fast_period": 5}
+    )
+
+    outcome = await _approve(spelled_out, caller, blobs)
+
+    assert outcome.status == "failed"
+    assert outcome.failure_code == "PARAMETERS_CHANGED"
+    assert caller.consumed == []
+    assert engine.requests == []
+    assert await get_qualification_by_study(conn, study_id) is None
+
+
+async def test_the_published_version_covers_its_tuple_at_start_until_it_is_revoked(
+    conn: asyncpg.Connection,
+    unique: str,
+    symbol: str,
+    snapshot: DataSnapshot,
+    lake: Path,
+    blobs: BlobStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The seam between approval and admission, through the real store: what one writes, the other finds."""
+    study_id = f"study-{unique}"
+    await _study(conn, study_id, symbol)
+    monkeypatch.setattr(approval_module, "execute_engine_backtest", _Engine())
+    approved = await _approve(_request(study_id, symbol, snapshot, lake), _Caller(study_id), blobs)
+    assert approved.status == "approved"
+    start = _start_binding(symbol.lower(), {k: v for k, v in _candidate(symbol).items() if k != "symbol"})
+
+    covered = await admission_module.resolve_admission_coverage(start)
+    await revoke_qualification(
+        conn,
+        qualification_id=approved.qualification_id or "",
+        reason="Withdrawn after review.",
+        actor="local:owner",
+        command_id=f"revoke-{unique}",
+        now_ms=2,
+    )
+    revoked = await admission_module.resolve_admission_coverage(start)
+
+    assert covered is not None
+    assert (covered.state, covered.qualification_id) == ("COVERED", approved.qualification_id)
+    assert revoked is not None
+    assert (revoked.state, revoked.qualification_id, revoked.explanation) == (
+        "UNCOVERED",
+        None,
+        QUALIFICATION_REVOKED,
+    )
 
 
 def test_approval_checkpoint_round_trips_through_its_dict_form() -> None:
