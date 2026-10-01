@@ -91,6 +91,17 @@ describe('GoldenSearchSearchStepComponent', () => {
     expect(aside.textContent).toMatch(/Global optimum\s*Not established/);
   });
 
+  it('a pair audit cut short by the budget says its missing cells read as untested; a complete one says nothing', async () => {
+    const study = studyDetail('awaiting_validation');
+    const view = await renderStep({ ...study, results: { ...study.results, search: searchView({ pair_maps_incomplete: true }) } });
+    const note = /pair audit stopped at its evaluation budget, so some cells are missing and are shown as untested/i;
+
+    expect(screen.getByText(note)).not.toBeNull();
+    view.fixture.componentRef.setInput('study', study);
+    await view.fixture.whenStable();
+    expect(screen.queryByText(note)).toBeNull();
+  });
+
   it('a procedure without pair audits shows no landscape', async () => {
     const study = studyDetail('awaiting_validation');
     await renderStep({ ...study, results: { ...study.results, search: searchView({ pair_maps: [] }) } });

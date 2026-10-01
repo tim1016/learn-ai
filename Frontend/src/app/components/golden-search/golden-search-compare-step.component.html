@@ -9,6 +9,11 @@
       </span>
     </p>
 
+    @if (e.incomplete) {
+      <p class="note" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+        <span>The candidate evidence stopped at its evaluation budget, so some results are missing and are shown as untested or not evaluated.</span></p>
+    }
+
     <section class="panel" aria-label="Candidates">
       <app-golden-search-candidate-table [rows]="rows()" [selected]="selectedKey()" [fixed]="s.exam_locked" [capital]="e.scope.capital" (pick)="pick($event)" />
       @if (caption(); as c) { <p class="caption"><strong>{{ c.label }}</strong> {{ c.detail }}</p> }

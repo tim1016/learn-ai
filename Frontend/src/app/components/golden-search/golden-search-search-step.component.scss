@@ -2,6 +2,7 @@
 .step { display: grid; gap: var(--space-4); }
 p { margin: 0; }
 .muted, .pending { color: var(--text-secondary); font-size: var(--fs-sm); }
+.note { display: flex; gap: var(--space-2); align-items: flex-start; padding: var(--space-3); border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--warn); font-size: var(--fs-xs); }
 .counts { display: flex; flex-wrap: wrap; gap: var(--space-4); margin: 0; font-size: var(--fs-xs); }
 .counts dt { color: var(--text-secondary); }
 .counts dd { margin: 0; font-variant-numeric: tabular-nums; }

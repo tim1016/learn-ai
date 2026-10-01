@@ -1,6 +1,9 @@
 @if (validation(); as v) {
   <div class="step">
     <p class="note note--blue" role="note"><i class="pi pi-shield" aria-hidden="true"></i> Original ranges and starting rules repeat in every fold. The all-period winner never seeds an earlier test.</p>
+    @if (v.incomplete) {
+      <p class="note" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i> Testing over time stopped at its evaluation budget, so some folds are missing: they are shown as failed, with the budget as the reason.</p>
+    }
     <p class="muted">{{ v.explanation }}</p>
 
     @if (v.verdict; as verdict) {

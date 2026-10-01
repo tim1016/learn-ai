@@ -60,6 +60,16 @@ describe('GoldenSearchTestStepComponent', () => {
     expect(foldRow(1).textContent).toContain('Same as the starting point');
   });
 
+  it('a test over time cut short by the budget says some folds are missing; a complete one says nothing', async () => {
+    const view = await renderStep(withValidation(validationView({ incomplete: true })));
+    const note = /testing over time stopped at its evaluation budget, so some folds are missing/i;
+
+    expect(screen.getByText(note)).not.toBeNull();
+    view.fixture.componentRef.setInput('study', withValidation(validationView()));
+    await view.fixture.whenStable();
+    expect(screen.queryByText(note)).toBeNull();
+  });
+
   it('shows the legacy verdict with the folds it is based on', async () => {
     await renderStep(studyDetail('awaiting_candidate'));
 
