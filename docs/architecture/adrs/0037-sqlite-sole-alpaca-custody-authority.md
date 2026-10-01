@@ -5,7 +5,7 @@
 - **Date:** 2026-08-17
 - **Context:** Wayfinder map [#1588](https://github.com/tim1016/learn-ai/issues/1588),
   decision ticket [#1596](https://github.com/tim1016/learn-ai/issues/1596); the
-  reachability audit in `docs/audits/clerk-lineage-reachability-2026-08-17.md`.
+  2026-08-17 clerk lineage reachability audit (in Git history).
   Grilling session: `grill-with-docs` + `domain-modeling`, 2026-08-17.
 - **Completes:** ADR 0035, which accepted SQLite as the Alpaca authority for an
   activated account but left the un-activated case selecting legacy JSONL.
@@ -111,8 +111,8 @@ complete external inventory at every deployment. A fresh inventory export and
 successful receipt remain an operational prerequisite for each deployment. Any
 account absent from that supplied inventory is outside the receipt; any account
 inside it that is absent or unqualified is refused. The implementation receipt
-and operator command are recorded in
-[`alpaca-sqlite-sole-authority-retirement-2026-08-19.md`](../../audits/alpaca-sqlite-sole-authority-retirement-2026-08-19.md).
+and operator command were recorded in the 2026-08-19 retirement receipt
+(issues #1618 and #1656–#1660; in Git history).
 
 ## Why this was worth an ADR
 

@@ -2,9 +2,8 @@
 
 A reusable realism layer that decouples strategy logic from broker
 simulation. Strategies stay focused on signal generation; this config
-owns slippage, commission, fill-mode selection, and limit-order
-penetration, threaded through the ``/api/engine/backtest`` request into
-``FillModel`` and the engine.
+owns slippage, commission and fill-mode selection, threaded through the
+``/api/engine/backtest`` request into ``FillModel`` and the engine.
 
 It holds no session wall-clock rule. The one rule that reads the
 session's end -- a decision on the bar that ends at the calendar's close

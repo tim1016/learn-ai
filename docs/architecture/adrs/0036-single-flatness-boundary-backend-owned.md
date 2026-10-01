@@ -5,7 +5,7 @@
 - **Date:** 2026-08-17
 - **Context:** Wayfinder map [#1588](https://github.com/tim1016/learn-ai/issues/1588),
   decision ticket [#1597](https://github.com/tim1016/learn-ai/issues/1597); the
-  numeric authority census in `docs/audits/numeric-authority-census-2026-08-17.md`.
+  2026-08-17 numeric authority census (in Git history).
   Grilling session: `grill-with-docs` + `domain-modeling`, 2026-08-17.
 - **Succeeds:** ADR 0013's "no frontend-derived verdicts" principle, which was
   marked *Superseded* when the IBKR Bot Control surface was removed and has had

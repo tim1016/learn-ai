@@ -335,10 +335,6 @@ ownership; curing it never resurrects the bot.
   state-explosion and dead-end field evidence.
 - `docs/architecture/adrs/0022-temporal-authority-calendar-and-timestamp.md`
   — calendar authority for `effective_stop` and session anchors.
-- `docs/architecture/adrs/0025-single-dominant-headline-notice-placement.md`
-  — the dominance pattern reused by the attention badge.
-- `docs/architecture/adrs/0019-daemon-diagnostics-composed-control-plane-authority.md`
-  — composed as evidence by `daemon_unreachable`.
 - Branch `codex/add-account-freeze-clear` — WIP account-triage service
   (slice-2 substrate; its clean≠flat hole is closed by the PRD's
   clear-freeze guard).

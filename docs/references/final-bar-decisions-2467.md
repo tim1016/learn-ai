@@ -251,6 +251,8 @@ Drafted, not filed; the orchestrator files them:
 
 ## Method and reproduction
 
+**The script is retired.** #2752 deleted `scripts/measure_final_bar_decisions.py` as a finished one-off: #2607 settled the question it measured. The last tree that holds it is `6a4d7d39`; recover it with `git show 6a4d7d39:PythonDataService/scripts/measure_final_bar_decisions.py` (or `git worktree add <dir> 6a4d7d39`) before running the command below.
+
 From `PythonDataService/` in any checkout or worktree. The lake lives beside the main checkout, so the command finds it through git. The ledger and clerk inputs are copies, opened with `mode=ro&immutable=1`. `POLYGON_API_KEY` is empty, so nothing can reach a vendor. The run took about 8 minutes.
 
 ```sh
