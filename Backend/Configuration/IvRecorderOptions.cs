@@ -3,9 +3,9 @@ namespace Backend.Configuration;
 /// <summary>
 /// Configuration for the IV recorder cron.
 ///
-/// See <c>docs/architecture/iv-ownership-research.md</c> §7.5 for the
-/// .NET-owned-cron rationale, §7.6 for the slot schedule, and §9 for the
-/// queued 15:55 slot experiment.
+/// See ADR 0071 Decision 6 for the
+/// .NET-owned-cron rationale, and Decision 7 for the slot schedule and the
+/// 15:55 slot trial.
 ///
 /// The .NET host owns the schedule; each slot fires a Quartz job that
 /// POSTs to the Python <c>/api/iv-recorder/snapshot</c> endpoint per

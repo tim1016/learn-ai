@@ -18,9 +18,8 @@ public class StrategyLegInput
 }
 
 /// <summary>
-/// Optional flags + what-if knobs for AnalyzeOptionsStrategyAsync. Phase 1.1 of
-/// `docs/architecture/numerical-authority-migration-plan.md`. Default values
-/// preserve the pre-Phase-1.1 response shape — existing callers don't need to change.
+/// Optional flags + what-if knobs for AnalyzeOptionsStrategyAsync. Default values
+/// preserve the original response shape — existing callers don't need to change.
 /// </summary>
 public class StrategyAnalyzeOptions
 {
