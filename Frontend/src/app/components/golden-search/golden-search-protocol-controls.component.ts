@@ -7,19 +7,20 @@ import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { RANKING_MEASURES } from '../grid-search/grid-search.types';
 import { percentInputValue } from './golden-search-display';
 import { dateProblemKey, numberProblemKey, type PlanEdit, type ProtocolDateField, type ProtocolFlag, type ProtocolNumberField } from './golden-search-plan-draft';
-import type { KnobPair, ProtocolRequest, RankingMeasure, StrategyCapability } from './golden-search.types';
+import type { ProtocolRequest, RankingMeasure, StrategyCapability } from './golden-search.types';
 
 const NUMBER_LABELS: readonly (readonly [ProtocolNumberField, string])[] = [
-  ['min_trades', 'Minimum trades per training winner'],
-  ['drawdown_percent', 'Drawdown ceiling'],
+  ['min_trades', 'Minimum completed trades'],
+  ['drawdown_percent', 'Maximum drawdown'],
   ['commission_per_order', 'Commission per order'],
   ['slippage_per_share', 'Slippage per share'],
   ['initial_cash', 'Starting capital'],
-  ['training_months', 'Training months per fold'],
-  ['test_months', 'Test months per fold'],
+  ['training_months', 'Training window (months)'],
+  ['test_months', 'Test window (months)'],
+  ['final_months', 'Final test (months)'],
   ['zoom_points', 'Points per round'],
-  ['zoom_refinements', 'Refinements per knob'],
-  ['zoom_passes', 'Passes over the knobs'],
+  ['zoom_refinements', 'Refinement rounds'],
+  ['zoom_passes', 'Maximum passes'],
   ['exam_min_trades', 'Minimum final-test trades'],
   ['budget_cap', 'Backtest cap'],
 ];
@@ -36,18 +37,13 @@ const FIELD_LABELS: readonly { key: string; label: string }[] = [
   ...DATE_LABELS.map(([field, label]) => ({ key: dateProblemKey(field), label })),
 ];
 
-interface PairOption {
-  readonly pair: KnobPair;
-  readonly label: string;
-  readonly included: boolean;
-}
-
 /**
- * The protocol controls frozen at lock (#2696): selection rules, execution
- * assumptions, the development and final-test intervals (ET dates), fold
- * lengths, Zoom settings, audits and the workload cap. Every value is a
- * starting policy the trader may change before lock; the server preflight
- * judges the result.
+ * What would make the trader reject a candidate (#2696), frozen at lock: the
+ * objective, drawdown ceiling and trade floor, the fold and final-test
+ * lengths in months (the server lays the dates out from them), and — on
+ * request — capital, fills and costs, and the dates themselves. Every value
+ * is a starting policy; the server preflight judges the plan. The list of
+ * unreadable values below covers every protocol field, wherever it sits.
  */
 @Component({
   selector: 'app-golden-search-protocol-controls',
@@ -60,6 +56,8 @@ export class GoldenSearchProtocolControlsComponent {
   readonly protocol = input.required<ProtocolRequest>();
   readonly capability = input.required<StrategyCapability | null>();
   readonly problems = input<ReadonlyMap<string, string>>(new Map());
+  /** The final test's length in months; undefined while the dates do not follow a month count. */
+  readonly finalMonths = input<number | undefined>(undefined);
   readonly edit = output<PlanEdit>();
 
   protected readonly measures = RANKING_MEASURES;
@@ -68,17 +66,6 @@ export class GoldenSearchProtocolControlsComponent {
   protected readonly dates = computed(() => {
     const p = this.protocol();
     return { development_start: etIsoDate(p.development_start_ms), final_start: etIsoDate(p.final_start_ms), final_end: etIsoDate(p.final_end_ms - 1) };
-  });
-  protected readonly pairOptions = computed<PairOption[]>(() => {
-    const labels = new Map((this.capability()?.knobs ?? []).map((knob) => [knob.name, knob.label]));
-    const chosen = this.protocol().pair_audits;
-    const offered = [...(this.capability()?.default_pair_audits ?? [])];
-    for (const pair of chosen) if (!offered.some((p) => p[0] === pair[0] && p[1] === pair[1])) offered.push(pair);
-    return offered.map((pair) => ({
-      pair,
-      label: `${labels.get(pair[0]) ?? pair[0]} × ${labels.get(pair[1]) ?? pair[1]}`,
-      included: chosen.some((p) => p[0] === pair[0] && p[1] === pair[1]),
-    }));
   });
 
   /** This panel's unreadable inputs, named; knob inputs report theirs in the knob table. */
@@ -108,10 +95,6 @@ export class GoldenSearchProtocolControlsComponent {
 
   protected onFlag(field: ProtocolFlag, event: Event): void {
     if (event.target instanceof HTMLInputElement) this.edit.emit({ kind: 'flag', field, value: event.target.checked });
-  }
-
-  protected onPair(pair: KnobPair, event: Event): void {
-    if (event.target instanceof HTMLInputElement) this.edit.emit({ kind: 'pair', pair, included: event.target.checked });
   }
 
   protected onObjective(event: Event): void {

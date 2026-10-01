@@ -34,7 +34,8 @@ describe('GoldenSearchSearchStepComponent', () => {
     await renderStep(studyDetail('awaiting_validation'));
     const allPeriod = screen.getByRole('region', { name: 'All-period search' });
 
-    expect(allPeriod.textContent).toMatch(/486 evaluated · 134 cached · 18 invalid\s*· 2 passes completed/);
+    expect(allPeriod.textContent).toContain('Zoom Search · 486 evaluated · 134 cached · 18 invalid');
+    expect(allPeriod.textContent).toContain('2 complete passes. “No improvement” describes the moves tested, not the best configuration everywhere.');
     const summary = within(allPeriod).getByRole('table', { name: /each searched knob/i });
     const fast = within(summary).getByRole('rowheader', { name: /fast ema length/i }).closest('tr');
     expect(fast?.textContent).toMatch(/5\s*8\s*moved\s*No better tested move/);
@@ -74,9 +75,28 @@ describe('GoldenSearchSearchStepComponent', () => {
     await renderStep(studyDetail('awaiting_validation', { method: 'grid', results: { ...studyDetail('awaiting_validation').results, search: grid, recent: null }, protocol: { ...studyDetail('locked').protocol, recent_window: false } }));
 
     expect(screen.getByText(/no path to show/i)).not.toBeNull();
-    expect(screen.queryByText(/passes completed/)).toBeNull();
+    expect(screen.queryByText(/complete pass/)).toBeNull();
+    expect(screen.getByText(/grid search · 486 evaluated/i)).not.toBeNull();
     expect(screen.queryByRole('table', { name: /round by round/i })).toBeNull();
     expect(screen.getByText(/run failed — engine refused the window/i)).not.toBeNull();
+  });
+
+  it('shows the all-period pair landscape beside why a pair grid checks a one-knob path', async () => {
+    await renderStep(studyDetail('awaiting_validation'));
+
+    expect(screen.getByRole('group', { name: /parameter map: fast ema length × slow ema length/i })).not.toBeNull();
+    const aside = screen.getByRole('complementary', { name: 'Use Grid to challenge Zoom' });
+    expect(aside.textContent).toMatch(/Pair audit · Fast EMA length × Slow EMA length\s*21 valid \/ 4 invalid/);
+    expect(aside.textContent).toMatch(/Other settings\s*Held fixed/);
+    expect(aside.textContent).toMatch(/Global optimum\s*Not established/);
+  });
+
+  it('a procedure without pair audits shows no landscape', async () => {
+    const study = studyDetail('awaiting_validation');
+    await renderStep({ ...study, results: { ...study.results, search: procedureView() } });
+
+    expect(screen.queryByRole('group', { name: /parameter map/i })).toBeNull();
+    expect(screen.queryByRole('complementary')).toBeNull();
   });
 
   it('before the search has run, says so and still accounts for the engine runs', async () => {

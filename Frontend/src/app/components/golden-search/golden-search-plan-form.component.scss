@@ -1,9 +1,12 @@
 @use '../../styles/eyebrow-heading' as *;
 
 :host { display: block; min-width: 0; }
-.plan { display: grid; gap: var(--space-4); border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-surface); padding: var(--space-4); min-width: 0; }
+.plan { display: grid; gap: var(--space-4); min-width: 0; }
 .plan__header { display: grid; gap: var(--space-1); }
-.plan__header h2 { @include eyebrow-heading; margin: 0; }
+.plan__header .eyebrow { @include eyebrow-heading; margin: 0; }
+.plan__header h2 { margin: 0; font-size: var(--fs-xl); letter-spacing: var(--ls-tight); }
+.panel { display: grid; gap: var(--space-3); background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-4); min-width: 0; }
+.panel h3 { margin: 0; font-size: var(--fs-sm); }
 p { margin: 0; }
 .muted { color: var(--text-secondary); font-size: var(--fs-xs); }
 .notice { border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-2) var(--space-3); font-size: var(--fs-xs); }
@@ -16,7 +19,7 @@ p { margin: 0; }
 .lock { display: grid; gap: var(--space-2); justify-items: end; }
 
 @media (max-width: 768px) {
-  .plan { padding: var(--space-3); }
+  .panel { padding: var(--space-3); }
   .plan__footer { grid-template-columns: minmax(0, 1fr); }
   .lock { justify-items: stretch; }
 }

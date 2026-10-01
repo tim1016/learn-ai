@@ -8,11 +8,12 @@ import type { GridSearchRefusal } from '../grid-search/grid-search.types';
 import { incumbentLabel } from './golden-search-display';
 import { GoldenSearchKnobTableComponent } from './golden-search-knob-table.component';
 import { GoldenSearchMethodChoiceComponent } from './golden-search-method-choice.component';
-import { applyPlanEdit, type PlanDraft, type PlanEdit } from './golden-search-plan-draft';
+import { applyPlanEdit, DEFAULT_FINAL_MONTHS, draftMonths, MONTH_FIELDS, withServerDates, type PlanDraft, type PlanEdit } from './golden-search-plan-draft';
 import { GoldenSearchPreflightPanelComponent } from './golden-search-preflight-panel.component';
 import { GoldenSearchProtocolControlsComponent } from './golden-search-protocol-controls.component';
+import { GoldenSearchRefinementControlsComponent } from './golden-search-refinement-controls.component';
 import { GoldenSearchRefusedError, GoldenSearchService, StageDispatchError, StudyConflictError } from './golden-search.service';
-import type { GoldenSearchMethod, GoldenSearchPreflight, StrategyCapability, StudyDetail } from './golden-search.types';
+import type { DefaultsMonths, GoldenSearchMethod, GoldenSearchPreflight, StrategyCapability, StudyDetail } from './golden-search.types';
 import { IdempotencyKeys } from './idempotency-keys';
 
 /**
@@ -20,8 +21,11 @@ import { IdempotencyKeys } from './idempotency-keys';
  * and an instrument, start from the server's defaults, edit the method,
  * knobs and protocol, and lock the plan into a study. Every edit is
  * preflighted (debounced); an answer for an edit that is no longer current is
- * dropped, so Lock always describes what the form shows. With `reviseFrom`
- * the form starts from a study's frozen plan and locks a new linked study.
+ * dropped, so Lock always describes what the form shows. Changing the
+ * final-test or fold months asks `/defaults` to lay the dates out again (the
+ * calendar authority stays in Python) and keeps every other edit; the plan
+ * is not checked until the new dates arrive. With `reviseFrom` the form
+ * starts from a study's frozen plan and locks a new linked study.
  */
 @Component({
   selector: 'app-golden-search-plan-form',
@@ -32,6 +36,7 @@ import { IdempotencyKeys } from './idempotency-keys';
     GoldenSearchMethodChoiceComponent,
     GoldenSearchPreflightPanelComponent,
     GoldenSearchProtocolControlsComponent,
+    GoldenSearchRefinementControlsComponent,
     ReceiptLabelPipe,
     SymbolPickerComponent,
   ],
@@ -63,14 +68,19 @@ export class GoldenSearchPlanFormComponent {
   readonly locking = signal(false);
   readonly lockRefusal = signal<GridSearchRefusal | null>(null);
   readonly lockError = signal<string | null>(null);
+  /** The server is laying the dates out for new month counts; the plan waits for them. */
+  readonly layingDates = signal(false);
+  readonly datesError = signal<string | null>(null);
 
   protected readonly available = computed(() => this.capabilities().filter((c) => c.available));
   protected readonly unavailable = computed(() => this.capabilities().filter((c) => !c.available));
   protected readonly capability = computed(() => this.capabilities().find((c) => c.strategy_key === this.strategyKey()) ?? null);
   protected readonly revising = computed(() => this.reviseFrom() !== null);
-  protected readonly blocked = computed(() =>
-    (this.draft()?.problems.size ?? 0) > 0 ? 'Some values cannot be read yet. Fix them and the plan is checked again.' : null,
-  );
+  protected readonly blocked = computed(() => {
+    if ((this.draft()?.problems.size ?? 0) > 0) return 'Some values cannot be read yet. Fix them and the plan is checked again.';
+    if (this.layingDates()) return 'Laying out the dates for these months…';
+    return this.datesError();
+  });
   protected readonly canLock = computed(() => {
     const plan = this.preflight();
     return this.draft() !== null && plan !== null && plan.refusals.length === 0 && this.blocked() === null && !this.checking() && !this.locking();
@@ -81,6 +91,9 @@ export class GoldenSearchPlanFormComponent {
   /** Generation of the latest strategy/instrument choice; older defaults are ignored. */
   private defaultsGeneration = 0;
   private debounce: ReturnType<typeof setTimeout> | null = null;
+  /** Generation of the latest month counts; dates laid out for older counts are ignored. */
+  private datesGeneration = 0;
+  private datesDebounce: ReturnType<typeof setTimeout> | null = null;
   private appliedRevision: StudyDetail | null = null;
   private readonly keys = new IdempotencyKeys();
 
@@ -102,7 +115,10 @@ export class GoldenSearchPlanFormComponent {
       const available = this.available();
       if (this.strategyKey() === null && available.length > 0) untracked(() => this.selectStrategy(available[0].strategy_key));
     });
-    this.destroyRef.onDestroy(() => this.clearDebounce());
+    this.destroyRef.onDestroy(() => {
+      this.clearDebounce();
+      this.clearDatesDebounce();
+    });
   }
 
   selectStrategy(key: string): void {
@@ -126,8 +142,13 @@ export class GoldenSearchPlanFormComponent {
   onEdit(edit: PlanEdit): void {
     const draft = this.draft();
     if (draft === null) return;
-    this.draft.set(applyPlanEdit(draft, edit, this.capability()));
-    this.scheduleCheck();
+    // A date typed by hand wins over dates still being laid out for a month count.
+    if (edit.kind === 'date') this.cancelDates();
+    const next = applyPlanEdit(draft, edit, this.capability());
+    this.draft.set(next);
+    const months = edit.kind === 'number' && MONTH_FIELDS.has(edit.field) ? draftMonths(next) : null;
+    if (months !== null) this.scheduleDates(months);
+    else this.scheduleCheck();
   }
 
   async lock(): Promise<void> {
@@ -173,6 +194,7 @@ export class GoldenSearchPlanFormComponent {
   private startRevision(study: StudyDetail): void {
     this.appliedRevision = study;
     this.defaultsGeneration += 1;
+    this.cancelDates();
     this.strategyKey.set(study.strategy_key);
     this.symbol.set(study.symbol);
     this.incumbentLabel.set(incumbentLabel(study.protocol.incumbent));
@@ -186,6 +208,7 @@ export class GoldenSearchPlanFormComponent {
     const strategyKey = this.strategyKey();
     const symbol = this.symbol();
     this.draft.set(null);
+    this.cancelDates();
     this.invalidateCheck();
     this.defaultsError.set(null);
     if (strategyKey === null || symbol === '') return;
@@ -194,13 +217,55 @@ export class GoldenSearchPlanFormComponent {
       const { incumbent_label, exposure: _exposure, ...protocol } = await this.service.defaults(strategyKey, symbol);
       if (generation !== this.defaultsGeneration) return;
       this.incumbentLabel.set(incumbent_label);
-      this.draft.set({ protocol, problems: new Map() });
+      this.draft.set({ protocol, problems: new Map(), finalMonths: DEFAULT_FINAL_MONTHS });
       this.scheduleCheck();
     } catch {
       if (generation === this.defaultsGeneration) this.defaultsError.set('The study defaults could not be loaded for this strategy and instrument. Check the service and pick again.');
     } finally {
       if (generation === this.defaultsGeneration) this.loadingDefaults.set(false);
     }
+  }
+
+  /** New month counts: after the debounce, the server lays the dates out for them. */
+  private scheduleDates(months: DefaultsMonths): void {
+    const generation = ++this.datesGeneration;
+    this.clearDatesDebounce();
+    this.datesError.set(null);
+    this.layingDates.set(true);
+    this.invalidateCheck();
+    this.datesDebounce = setTimeout(() => void this.layOutDates(months, generation), this.preflightDebounceMs());
+  }
+
+  private async layOutDates(months: DefaultsMonths, generation: number): Promise<void> {
+    const strategyKey = this.strategyKey();
+    const symbol = this.symbol();
+    if (strategyKey === null || symbol === '') return;
+    try {
+      const laidOut = await this.service.defaults(strategyKey, symbol, months);
+      const draft = this.draft();
+      if (generation !== this.datesGeneration || draft === null) return;
+      this.layingDates.set(false);
+      this.draft.set(withServerDates(draft, laidOut));
+      this.scheduleCheck();
+    } catch {
+      if (generation !== this.datesGeneration) return;
+      this.layingDates.set(false);
+      this.datesError.set('The dates could not be laid out for these months. Change a month count to try again.');
+      this.invalidateCheck();
+    }
+  }
+
+  /** Forgets any dates still being laid out: the plan they were for is gone. */
+  private cancelDates(): void {
+    this.datesGeneration += 1;
+    this.clearDatesDebounce();
+    this.layingDates.set(false);
+    this.datesError.set(null);
+  }
+
+  private clearDatesDebounce(): void {
+    if (this.datesDebounce !== null) clearTimeout(this.datesDebounce);
+    this.datesDebounce = null;
   }
 
   /** Drops whatever was preflighted: it no longer describes the form. */

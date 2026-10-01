@@ -7,11 +7,12 @@
 
 import { etDayEndMs, etMidnightMs } from '../../shared/date/et-midnight';
 import type { FillModeName } from '../../models/fill-mode';
-import type { GoldenSearchMethod, KnobMode, KnobPair, KnobPlan, ProtocolRequest, RankingMeasure, StrategyCapability } from './golden-search.types';
+import type { DefaultsMonths, GoldenSearchMethod, KnobMode, KnobPair, KnobPlan, ProtocolRequest, RankingMeasure, StrategyCapability } from './golden-search.types';
 
 export type KnobNumberField = 'low' | 'high' | 'fixed_value' | 'step';
 
 export type ProtocolNumberField =
+  | 'final_months'
   | 'min_trades'
   | 'drawdown_percent'
   | 'commission_per_order'
@@ -27,6 +28,7 @@ export type ProtocolNumberField =
 
 /** Counts the protocol carries as integers; a fraction is unreadable, never rounded. */
 const WHOLE_NUMBER_FIELDS: ReadonlySet<ProtocolNumberField> = new Set([
+  'final_months',
   'min_trades',
   'training_months',
   'test_months',
@@ -57,6 +59,30 @@ export interface PlanDraft {
   readonly protocol: ProtocolRequest;
   /** Inputs that could not be read, keyed by `problemKey`; while any exist the plan is not preflighted. */
   readonly problems: ReadonlyMap<string, string>;
+  /**
+   * The final test's length in months, from which the server lays the dates
+   * out. Absent when the dates did not come from a month count (a revised
+   * study's frozen dates): the protocol carries dates, not this count.
+   */
+  readonly finalMonths?: number;
+}
+
+/** The final-test length `GET /defaults` lays out when asked for none (#2696). */
+export const DEFAULT_FINAL_MONTHS = 3;
+
+/** Month counts that, once changed, have the server lay the development and final-test dates out again. */
+export const MONTH_FIELDS: ReadonlySet<ProtocolNumberField> = new Set(['final_months', 'training_months', 'test_months']);
+
+/** The month counts to ask `/defaults` for, or null while one is unknown or unreadable. */
+export function draftMonths(draft: PlanDraft): DefaultsMonths | null {
+  if (draft.finalMonths === undefined || [...MONTH_FIELDS].some((field) => draft.problems.has(numberProblemKey(field)))) return null;
+  return { final_months: draft.finalMonths, training_months: draft.protocol.training_months, test_months: draft.protocol.test_months };
+}
+
+/** The draft with the dates the server laid out for its month counts; every other edit, the counts included, is kept. */
+export function withServerDates(draft: PlanDraft, laidOut: ProtocolRequest): PlanDraft {
+  const { development_start_ms, development_end_ms, final_start_ms, final_end_ms } = laidOut;
+  return { ...draft, protocol: { ...draft.protocol, development_start_ms, development_end_ms, final_start_ms, final_end_ms } };
 }
 
 export function knobProblemKey(name: string, field: KnobNumberField): string {
@@ -111,7 +137,7 @@ function moveKnob(protocol: ProtocolRequest, name: string, offset: -1 | 1): Prot
   return { ...protocol, knobs };
 }
 
-function setNumber(protocol: ProtocolRequest, field: ProtocolNumberField, value: number): ProtocolRequest {
+function setNumber(protocol: ProtocolRequest, field: Exclude<ProtocolNumberField, 'final_months'>, value: number): ProtocolRequest {
   switch (field) {
     case 'min_trades':
       return { ...protocol, policy: { ...protocol.policy, min_trades: value } };
@@ -153,39 +179,42 @@ export function applyPlanEdit(draft: PlanDraft, edit: PlanEdit, capability: Stra
   const { protocol, problems } = draft;
   switch (edit.kind) {
     case 'method':
-      return { protocol: { ...protocol, method: edit.method }, problems };
+      return { ...draft, protocol: { ...protocol, method: edit.method }, problems };
     case 'knob-mode':
-      return { protocol: withSteps(patchKnob(protocol, edit.name, (knob) => ({ ...knob, mode: edit.mode })), capability), problems };
+      return { ...draft, protocol: withSteps(patchKnob(protocol, edit.name, (knob) => ({ ...knob, mode: edit.mode })), capability), problems };
     case 'knob-number': {
       const key = knobProblemKey(edit.name, edit.field);
       const value = readNumber(edit.raw);
-      if (value === null) return { protocol, problems: withProblem(problems, key, 'Enter a number.') };
-      return { protocol: patchKnob(protocol, edit.name, (knob) => ({ ...knob, [edit.field]: value })), problems: withProblem(problems, key, null) };
+      if (value === null) return { ...draft, protocol, problems: withProblem(problems, key, 'Enter a number.') };
+      return { ...draft, protocol: patchKnob(protocol, edit.name, (knob) => ({ ...knob, [edit.field]: value })), problems: withProblem(problems, key, null) };
     }
     case 'knob-move':
-      return { protocol: moveKnob(protocol, edit.name, edit.offset), problems };
+      return { ...draft, protocol: moveKnob(protocol, edit.name, edit.offset), problems };
     case 'objective':
-      return { protocol: { ...protocol, policy: { ...protocol.policy, objective: edit.objective } }, problems };
+      return { ...draft, protocol: { ...protocol, policy: { ...protocol.policy, objective: edit.objective } }, problems };
     case 'fill-mode':
-      return { protocol: { ...protocol, execution: { ...protocol.execution, fill_mode: edit.fillMode } }, problems };
+      return { ...draft, protocol: { ...protocol, execution: { ...protocol.execution, fill_mode: edit.fillMode } }, problems };
     case 'number': {
       const key = numberProblemKey(edit.field);
       const value = readNumber(edit.raw);
-      if (value === null) return { protocol, problems: withProblem(problems, key, 'Enter a number.') };
-      if (WHOLE_NUMBER_FIELDS.has(edit.field) && !Number.isInteger(value)) return { protocol, problems: withProblem(problems, key, 'Enter a whole number.') };
-      return { protocol: setNumber(protocol, edit.field, value), problems: withProblem(problems, key, null) };
+      if (value === null) return { ...draft, protocol, problems: withProblem(problems, key, 'Enter a number.') };
+      if (WHOLE_NUMBER_FIELDS.has(edit.field) && !Number.isInteger(value)) return { ...draft, problems: withProblem(problems, key, 'Enter a whole number.') };
+      if (edit.field === 'final_months') return { ...draft, finalMonths: value, problems: withProblem(problems, key, null) };
+      return { ...draft, protocol: setNumber(protocol, edit.field, value), problems: withProblem(problems, key, null) };
     }
     case 'date': {
       const key = dateProblemKey(edit.field);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(edit.raw)) return { protocol, problems: withProblem(problems, key, 'Enter a date as YYYY-MM-DD.') };
-      return { protocol: setDate(protocol, edit.field, edit.raw), problems: withProblem(problems, key, null) };
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(edit.raw)) return { ...draft, protocol, problems: withProblem(problems, key, 'Enter a date as YYYY-MM-DD.') };
+      // Dates typed by hand no longer follow a month count, so the count is dropped rather than left to contradict them.
+      const { finalMonths: _dated, ...rest } = draft;
+      return { ...rest, protocol: setDate(protocol, edit.field, edit.raw), problems: withProblem(problems, key, null) };
     }
     case 'flag':
-      if (edit.field === 'require_positive_net') return { protocol: { ...protocol, policy: { ...protocol.policy, require_positive_net: edit.value } }, problems };
-      return { protocol: { ...protocol, [edit.field]: edit.value }, problems };
+      if (edit.field === 'require_positive_net') return { ...draft, protocol: { ...protocol, policy: { ...protocol.policy, require_positive_net: edit.value } }, problems };
+      return { ...draft, protocol: { ...protocol, [edit.field]: edit.value }, problems };
     case 'pair': {
       const kept = protocol.pair_audits.filter((pair) => !samePair(pair, edit.pair));
-      return { protocol: { ...protocol, pair_audits: edit.included ? [...kept, edit.pair] : kept }, problems };
+      return { ...draft, protocol: { ...protocol, pair_audits: edit.included ? [...kept, edit.pair] : kept }, problems };
     }
   }
 }

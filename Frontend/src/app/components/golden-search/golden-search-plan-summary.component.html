@@ -13,22 +13,22 @@
   <app-golden-search-knob-table [knobs]="p.knobs" [capability]="capability()" [method]="p.method" [readonly]="true" />
 
   <dl class="facts">
-    <div><dt>Rank by</dt><dd>{{ p.policy.objective | receiptLabel }}</dd></div>
-    <div><dt>Minimum trades per training winner</dt><dd>{{ p.policy.min_trades }}</dd></div>
-    <div><dt>Drawdown ceiling</dt><dd>{{ p.policy.max_drawdown_ceiling | percent: '1.0-2' }} of peak equity</dd></div>
+    <div><dt>Primary objective</dt><dd>{{ p.policy.objective | receiptLabel }}</dd></div>
+    <div><dt>Minimum completed trades</dt><dd>{{ p.policy.min_trades }}</dd></div>
+    <div><dt>Maximum drawdown</dt><dd>{{ p.policy.max_drawdown_ceiling | percent: '1.0-2' }} of peak equity</dd></div>
     <div><dt>Positive net result</dt><dd>{{ p.policy.require_positive_net ? 'Required' : 'Not required' }}</dd></div>
-    <div><dt>Fill mode</dt><dd>{{ fillMode() }}</dd></div>
+    <div><dt>Fill assumption</dt><dd>{{ fillMode() }}</dd></div>
     <div><dt>Costs</dt><dd>{{ p.execution.commission_per_order | number: '1.2-2' }} per order · {{ p.execution.slippage_per_share | number: '1.2-4' }} per share</dd></div>
     <div><dt>Starting capital</dt><dd>{{ p.execution.initial_cash | number: '1.0-2' }}</dd></div>
     <div><dt>Development</dt><dd><app-timestamp-display [value]="p.development_start_ms" mode="date-et" /> → <app-timestamp-display [value]="p.development_end_ms - 1" mode="date-et" /></dd></div>
     <div><dt>Final test</dt><dd><app-timestamp-display [value]="p.final_start_ms" mode="date-et" /> → <app-timestamp-display [value]="p.final_end_ms - 1" mode="date-et" /></dd></div>
-    <div><dt>Folds</dt><dd>train {{ p.training_months }} mo / test {{ p.test_months }} mo{{ p.recent_window ? ' · recent-window candidate' : '' }}</dd></div>
+    <div><dt>Training / test window</dt><dd>{{ p.training_months }} / {{ p.test_months }} months{{ p.recent_window ? ' · recent-window candidate' : '' }}</dd></div>
     @if (p.method === 'zoom') {
       <div><dt>Zoom</dt><dd>{{ p.zoom.points }} points · {{ p.zoom.refinements }} refinements · {{ p.zoom.passes }} passes</dd></div>
     }
     <div><dt>Audits</dt><dd>{{ pairs().length > 0 ? 'Pair grids: ' + pairs().join(', ') : 'No pair grids' }}{{ p.neighbor_audit ? ' · neighbor audit' : '' }}</dd></div>
     <div><dt>Stress</dt><dd>@for (scenario of p.stress; track scenario.key) { <span class="item">{{ scenario.label }}</span> } @empty { None }</dd></div>
-    <div><dt>Final test needs</dt><dd>at least {{ p.exam_min_trades }} trades</dd></div>
+    <div><dt>Minimum final-test trades</dt><dd>at least {{ p.exam_min_trades }} trades</dd></div>
     <div><dt>Backtest cap</dt><dd>{{ p.budget_cap | number }}</dd></div>
     <div><dt>Starting point and benchmark</dt><dd>{{ incumbent() }}</dd></div>
   </dl>

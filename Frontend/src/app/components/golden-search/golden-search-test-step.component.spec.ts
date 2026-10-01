@@ -88,6 +88,14 @@ describe('GoldenSearchTestStepComponent', () => {
     expect(view.container.querySelectorAll('app-golden-search-linked-line path.line')).toHaveLength(1);
   });
 
+  it('summarizes the folds judged, the test trades and the median retention as the server worded them', async () => {
+    await renderStep(withValidation(validationView({ summary_pills: { judged: '5 of 6 folds judged', test_trades: 142, median_retention: 0.61 } })));
+
+    const pills = screen.getByRole('list', { name: 'Test-over-time summary' });
+    expect(within(pills).getAllByRole('listitem').map((item) => item.textContent?.trim())).toEqual(['5 of 6 folds judged', '142 test trades', '0.61 median retention']);
+    expect(screen.getByText(/not a probability of future profit/i)).not.toBeNull();
+  });
+
   it('before the procedure is tested over time, says what will happen instead of showing empty results', async () => {
     await renderStep(studyDetail('awaiting_validation'));
 

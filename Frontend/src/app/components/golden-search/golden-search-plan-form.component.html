@@ -1,7 +1,8 @@
 <section class="plan" aria-labelledby="gs-plan-title">
   <header class="plan__header">
-    <h2 id="gs-plan-title">{{ revising() ? 'Revise as a new study' : 'Plan a study' }}</h2>
-    <p class="muted">Give the study its rules before any result: which knobs may change, what would make you reject a candidate, and how much work it may take.</p>
+    <p class="eyebrow">{{ revising() ? 'Revise as a new study' : 'New study' }}</p>
+    <h2 id="gs-plan-title">Give the study rules before results</h2>
+    <p class="muted">{{ revising() ? 'These controls prepare a new protocol revision. Completed evidence keeps its original settings.' : 'Which knobs may change, what would make you reject a candidate, and how much work it may take — all fixed before any result.' }}</p>
     @if (reviseFrom(); as source) {
       <p class="notice" role="note">Starting from study {{ source.id.slice(0, 8) }}'s frozen plan. Locking creates a new linked study; the original study and its evidence stay as they are.</p>
     }
@@ -38,13 +39,18 @@
     @if (incumbentLabel(); as label) {
       <p class="muted">Starting point and benchmark: <strong>{{ label }}</strong>, frozen when you lock.</p>
     }
-    <app-golden-search-knob-table [knobs]="d.protocol.knobs" [capability]="capability()" [method]="d.protocol.method" [problems]="d.problems" (edit)="onEdit($event)" />
-    <app-golden-search-protocol-controls [protocol]="d.protocol" [capability]="capability()" [problems]="d.problems" (edit)="onEdit($event)" />
+    <section class="panel" aria-labelledby="gs-knobs-title">
+      <h3 id="gs-knobs-title">Choose what the search is allowed to change</h3>
+      <app-golden-search-knob-table [knobs]="d.protocol.knobs" [capability]="capability()" [method]="d.protocol.method" [problems]="d.problems" (edit)="onEdit($event)" />
+      <app-golden-search-refinement-controls [protocol]="d.protocol" [capability]="capability()" [problems]="d.problems" (edit)="onEdit($event)" />
+    </section>
+    <app-golden-search-protocol-controls [protocol]="d.protocol" [capability]="capability()" [problems]="d.problems" [finalMonths]="d.finalMonths" (edit)="onEdit($event)" />
     <footer class="plan__footer">
-      <app-golden-search-preflight-panel [preflight]="preflight()" [checking]="checking()" [error]="preflightError()" [blocked]="blocked()" />
+      <app-golden-search-preflight-panel [preflight]="preflight()" [checking]="checking()" [error]="preflightError()" [blocked]="blocked()" [method]="d.protocol.method" />
       <div class="lock">
         @if (lockRefusal(); as refusal) { <p class="refusal" role="alert"><strong>{{ refusal.code | receiptLabel }}</strong> — {{ refusal.message }}</p> }
         @if (lockError(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
+        <p class="muted">The final test stays sealed through every development step.</p>
         <button pButton type="button" [disabled]="!canLock()" (click)="lock()">
           <i class="pi pi-lock" aria-hidden="true"></i><span>{{ revising() ? 'Lock as a new study' : 'Lock plan' }}</span>
         </button>

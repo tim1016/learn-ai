@@ -5,8 +5,19 @@ import { describe, expect, it, vi } from 'vitest';
 import { fakePickerWorld, pickSymbol } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { GoldenSearchPlanFormComponent } from './golden-search-plan-form.component';
 import { GoldenSearchService, type CommandOutcome } from './golden-search.service';
-import type { CreateStudyRequest, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyCommandRequest, StudyDetail } from './golden-search.types';
+import { etMidnightMs } from '../../shared/date/et-midnight';
+import type { CreateStudyRequest, DefaultsMonths, GoldenSearchDefaults, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyCommandRequest, StudyDetail } from './golden-search.types';
 import { defaults, emaCapability, preflight as preflightFixture, studyDetail, unavailableCapability } from './testing/fixtures';
+
+/** The defaults laid out for a four-month final test: the development range ends where the final test starts. */
+function fourMonthDefaults(): GoldenSearchDefaults {
+  return defaults({
+    development_start_ms: etMidnightMs('2023-12-01'),
+    development_end_ms: etMidnightMs('2025-12-01'),
+    final_start_ms: etMidnightMs('2025-12-01'),
+    final_end_ms: etMidnightMs('2026-04-01'),
+  });
+}
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve: (value: T) => void = () => undefined;
@@ -15,7 +26,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 interface FakeService {
-  defaults: ReturnType<typeof vi.fn<(strategyKey: string, symbol: string) => Promise<ReturnType<typeof defaults>>>>;
+  defaults: ReturnType<typeof vi.fn<(strategyKey: string, symbol: string, months?: DefaultsMonths) => Promise<ReturnType<typeof defaults>>>>;
   preflight: ReturnType<typeof vi.fn<(protocol: ProtocolRequest) => Promise<GoldenSearchPreflight>>>;
   createStudy: ReturnType<typeof vi.fn<(request: CreateStudyRequest) => Promise<CommandOutcome>>>;
   command: ReturnType<typeof vi.fn<(studyId: string, request: StudyCommandRequest) => Promise<CommandOutcome>>>;
@@ -23,7 +34,7 @@ interface FakeService {
 
 function fakeService(): FakeService {
   return {
-    defaults: vi.fn(async (_strategyKey: string, _symbol: string) => defaults()),
+    defaults: vi.fn(async (_strategyKey: string, _symbol: string, _months?: DefaultsMonths) => defaults()),
     preflight: vi.fn(async (_protocol: ProtocolRequest) => preflightFixture()),
     createStudy: vi.fn(async (_request: CreateStudyRequest) => ({ study: studyDetail('locked'), jobId: null })),
     command: vi.fn(async (_id: string, _request: StudyCommandRequest) => ({ study: studyDetail('locked', { id: 'study-0002-bbbb', parent_study_id: 'study-0001-aaaa' }), jobId: null })),
@@ -99,7 +110,7 @@ describe('GoldenSearchPlanFormComponent', () => {
     const slow = deferred<GoldenSearchPreflight>();
     service.preflight.mockImplementationOnce(() => slow.promise);
 
-    const ceiling = screen.getByLabelText(/drawdown ceiling/i);
+    const ceiling = screen.getByLabelText(/maximum drawdown/i);
     fireEvent.input(ceiling, { target: { value: '15' } });
     await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
     fireEvent.input(ceiling, { target: { value: '25' } });
@@ -226,8 +237,80 @@ describe('GoldenSearchPlanFormComponent', () => {
 
     await waitFor(() => expect(service.defaults).toHaveBeenCalledWith('ema_crossover_signal', 'SPY'));
     await waitFor(() => expect(service.preflight.mock.lastCall?.[0].incumbent.source).toBe('registry'));
-    expect(screen.getByRole('heading', { name: 'Plan a study' })).not.toBeNull();
+    expect(screen.getByText('New study')).not.toBeNull();
     expect(screen.getByRole('button', { name: 'Lock plan' })).not.toBeNull();
+  });
+
+  it('changing the final-test months has the server lay the dates out again, keeping every other edit', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    fireEvent.input(screen.getByLabelText('Fast EMA length low'), { target: { value: '4' } });
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
+    service.defaults.mockResolvedValueOnce(fourMonthDefaults());
+
+    fireEvent.input(screen.getByLabelText('Final test (months)'), { target: { value: '4' } });
+
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(3));
+    expect(service.defaults.mock.lastCall).toEqual(['ema_crossover_signal', 'SPY', { final_months: 4, training_months: 6, test_months: 2 }]);
+    const sent = service.preflight.mock.lastCall?.[0];
+    expect(sent?.final_start_ms).toBe(etMidnightMs('2025-12-01'));
+    expect(sent?.development_end_ms).toBe(etMidnightMs('2025-12-01'));
+    expect(sent?.final_end_ms).toBe(etMidnightMs('2026-04-01'));
+    expect(sent?.knobs.find((k) => k.name === 'fast_period')?.low).toBe(4);
+    await waitFor(() => expect(lockButton().disabled).toBe(false));
+  });
+
+  it('holds the plan back while the dates are laid out, and ignores dates laid out for older month counts', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    const older = deferred<GoldenSearchDefaults>();
+    const newer = deferred<GoldenSearchDefaults>();
+    service.defaults.mockImplementationOnce(() => older.promise).mockImplementationOnce(() => newer.promise);
+
+    fireEvent.input(screen.getByLabelText('Training window (months)'), { target: { value: '9' } });
+    await waitFor(() => expect(service.defaults).toHaveBeenCalledTimes(2));
+    fireEvent.input(screen.getByLabelText('Training window (months)'), { target: { value: '12' } });
+    await waitFor(() => expect(service.defaults).toHaveBeenCalledTimes(3));
+
+    expect(screen.getByText('Laying out the dates for these months…')).not.toBeNull();
+    expect(lockButton().disabled).toBe(true);
+    newer.resolve(fourMonthDefaults());
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
+    older.resolve(defaults({ final_start_ms: etMidnightMs('2020-01-01') }));
+    await view.fixture.whenStable();
+
+    expect(service.defaults.mock.calls[2][2]).toEqual({ final_months: 3, training_months: 12, test_months: 2 });
+    expect(service.preflight.mock.lastCall?.[0].final_start_ms).toBe(etMidnightMs('2025-12-01'));
+    expect(service.preflight.mock.lastCall?.[0].training_months).toBe(12);
+    expect(service.preflight).toHaveBeenCalledTimes(2);
+  });
+
+  it('a failed layout says so and keeps the plan from being checked or locked', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    service.defaults.mockRejectedValueOnce(new Error('down'));
+
+    fireEvent.input(screen.getByLabelText('Test window (months)'), { target: { value: '3' } });
+
+    expect(await screen.findByText(/the dates could not be laid out for these months/i)).not.toBeNull();
+    expect(lockButton().disabled).toBe(true);
+    expect(service.preflight).toHaveBeenCalledTimes(1);
+  });
+
+  it('a revised plan keeps its frozen dates: no month count is assumed, and a fold change is checked as it is', async () => {
+    const service = fakeService();
+    await renderForm(service, { reviseFrom: studyDetail('awaiting_validation') });
+    await waitFor(() => expect(screen.getByText(/the server accepts this plan/i)).not.toBeNull());
+
+    expect((screen.getByLabelText('Final test (months)') as HTMLInputElement).value).toBe('');
+    fireEvent.input(screen.getByLabelText('Training window (months)'), { target: { value: '9' } });
+
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
+    expect(service.defaults).not.toHaveBeenCalled();
+    expect(service.preflight.mock.lastCall?.[0].training_months).toBe(9);
   });
 
   it('passes axe with the defaults loaded and a refusal shown', async () => {
