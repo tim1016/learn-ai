@@ -9,13 +9,13 @@ import { RouterLink } from '@angular/router';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [RouterLink],
   template: `
-    <main aria-labelledby="lane-unavailable-title">
+    <section aria-labelledby="lane-unavailable-title">
       <h1 id="lane-unavailable-title">Broker lane unavailable</h1>
       <p role="alert">
         This link cannot be matched to an accessible clerk and account. Its target was not changed.
       </p>
       <a routerLink="/brokers/alpaca">View the Alpaca lane directory</a>
-    </main>
+    </section>
   `,
 })
 export class BrokerLaneUnavailableComponent {}

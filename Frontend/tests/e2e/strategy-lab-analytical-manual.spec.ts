@@ -1,4 +1,17 @@
-import { expect, test } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
+import { expect, test, type Page } from '@playwright/test';
+
+/** The page as the app shell serves it passes AXE, landmarks and all (#2689:
+ *  the shell's <main> is the only one; the page root is a labelled section).
+ *  color-contrast is the one exclusion, the same one every unit AXE run in
+ *  this repo carries: `--text-muted` is held at >=3:1 against `--bg-surface`
+ *  by design (`_tokens.scss`), under AA's 4.5:1 for small text — an owner
+ *  token decision, not a page defect. Every other rule, the landmark rules
+ *  included, runs. */
+async function expectNoAxeViolations(page: Page): Promise<void> {
+  const axe = await new AxeBuilder({ page }).disableRules(['color-contrast']).analyze();
+  expect(axe.violations.map(({ id, nodes }) => `${id}: ${nodes.map((node) => node.target.join(' ')).join(' | ')}`)).toEqual([]);
+}
 
 test.describe('Strategy Lab analytical manual', () => {
   test('supports keyboard-addressable search, filters, contextual links, and a non-runtime case study', async ({ page }) => {
@@ -39,5 +52,7 @@ test.describe('Strategy Lab analytical manual', () => {
     await page.getByRole('button', { name: 'Clear filters' }).click();
     await expect(search).toHaveValue('');
     await expect(page.getByRole('link', { name: /Compare with/i })).toBeVisible();
+
+    await expectNoAxeViolations(page);
   });
 });

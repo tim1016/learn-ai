@@ -1,5 +1,5 @@
 <app-page-header title="Walk-Forward" icon="pi-forward" />
-<main class="walk-forward">
+<section class="walk-forward" aria-label="Walk-Forward">
   <p-tabs [value]="activeTab()" (valueChange)="setTab($event)">
     <p-tablist>
       <p-tab value="new"><i class="pi pi-sliders-h" aria-hidden="true"></i> New Study</p-tab>
@@ -24,4 +24,4 @@
       </p-tabpanel>
     </p-tabpanels>
   </p-tabs>
-</main>
+</section>

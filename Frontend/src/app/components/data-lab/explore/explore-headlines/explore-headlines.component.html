@@ -1,12 +1,12 @@
 <section class="explore__news" aria-label="Headlines">
-  <h3 class="explore__news-head">
+  <h2 class="explore__news-head">
     <button type="button" class="explore__news-toggle" (click)="toggleNews()" [attr.aria-expanded]="newsExpanded()">
       Headlines for {{ ticker() || '—' }}
     </button>
     @if (newsExpanded()) {
       <button type="button" (click)="refreshNews()" [disabled]="!hasCommittedScope()">Refresh</button>
     }
-  </h3>
+  </h2>
   @if (newsExpanded()) {
     @switch (newsState()) {
       @case ('loading') {
