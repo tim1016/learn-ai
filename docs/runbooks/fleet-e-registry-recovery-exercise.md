@@ -2,7 +2,7 @@
 
 **Status:** Delivery E host-only recovery procedure. The automated fake-provider exercise proves the ceremony control flow; it is not production qualification. Record a restricted, redacted transcript for every production exercise before claiming `operational rollout complete`.
 
-**Authority:** [ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md), the [multi-broker Clerk PRD](../prds/2026-09-12-multi-broker-clerk-control-plane.md), the [Delivery D recovery posture](fleet-d-recovery-and-rollback.md), and the provider-owned [Alpaca SQLite Clerk recovery procedure](alpaca-sqlite-clerk-recovery-and-cutover.md). This runbook recovers coordinator registry evidence. It does not replace the provider procedure for a Clerk volume, custody, lease, arming, or broker reconciliation.
+**Authority:** [ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md), the [Delivery D recovery posture](fleet-d-recovery-and-rollback.md), and the provider-owned [Alpaca SQLite Clerk recovery procedure](alpaca-sqlite-clerk-recovery-and-cutover.md). This runbook recovers coordinator registry evidence. It does not replace the provider procedure for a Clerk volume, custody, lease, arming, or broker reconciliation.
 
 ## Non-negotiable boundary
 

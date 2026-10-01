@@ -32,7 +32,7 @@ container per lane.
 
 One clerk lane also serves exactly one effective account by design:
 `installation_selection` is singular, and `FleetControlService._descriptor`
-flags multiple effective assignments as corruption (PRD §9.6).
+flags multiple effective assignments as corruption (ADR 0062 Decision 4).
 
 ## Topology on this machine
 

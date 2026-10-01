@@ -115,6 +115,15 @@ triage, reconciliation, events, and transaction endpoints are projections over
 durable/read evidence. `reconcile-now` may refresh and persist evidence; it does
 not place, cancel, or flatten an order.
 
+IBKR outside fact, carried over from the deleted ADR 0003 (2026-05-13): IB
+Gateway answers `reqRealTimeBars` with error 420 when the API client's source IP
+differs from the IP the Gateway logged in from, and it accepts API connections
+only from addresses on its Trusted IPs list. On the 2026-05 Windows topology the
+Podman/WSL bridge IP failed this check, so the bar client ran on the host. Clerks
+now reach the Gateway through `host.containers.internal`; when real-time bars
+fail with error 420 or a connection is refused, check the Gateway's Trusted IPs
+against the address the clerk connects from first.
+
 ## Safety and boundary invariants
 
 - Every wire/storage timestamp remains `int64` milliseconds UTC.

@@ -1,6 +1,6 @@
 # Broker configuration profile contract
 
-**Status:** supporting design for [ADR 0060](adrs/0060-broker-configuration-is-a-user-owned-profile-on-the-clerk-volume.md), Package A of the [user-owned broker configurations plan](../design/user-owned-broker-configurations-plan-2026-09-10.md). Lineage: live.
+**Status:** supporting design for [ADR 0060](adrs/0060-broker-configuration-is-a-user-owned-profile-on-the-clerk-volume.md), Package A of the user-owned broker configurations plan (in Git history). Lineage: live.
 **Audience:** packages B (persistence), C (credentials and verification), D (worker composition) and E (UI). **This is the shared contract they implement — not a starting point for four private designs.** Where it disagrees with a package's own convenience, this file wins; where it disagrees with ADR 0060, the ADR wins.
 **Baseline:** route and auth facts verified on disk at `037ffe12`, 2026-09-10.
 

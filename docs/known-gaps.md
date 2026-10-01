@@ -333,7 +333,7 @@ a defect.
   at 10 concurrent, 144 rows, with ~3.8× total-work inflation; GC ruled
   out).
   **Live remeasure 2026-08-31** on the deployed topology
-  (`docs/audits/read-latency-profile-live-2026-08-31.md` §3): the stated
+  (§3 of the 2026-08-31 live read-latency profile, in Git history): the stated
   deletion condition is now **satisfied — and it confirmed the defect
   rather than clearing it**, so the bullet is rewritten, not deleted. Ten
   concurrent catalog GETs against the live data plane at 52 rows with 50
@@ -360,13 +360,12 @@ branch.
 
 ## 10. 2026-08-25 fleet-stress findings (PR #1772, pruned 2026-08-26)
 
-The live 54-bot campaign is recorded in
-`docs/audits/bot-fleet-stress-2026-08-25.md`. S15c is safety-critical and lives
+The live 54-bot campaign's audit is in Git history. S15c is safety-critical and lives
 in §1; retire is tracked as F16 in §9 rather than duplicated here.
 
-**Pruned 2026-08-26**, each against an explicit live acceptance in
-`docs/audits/bot-fleet-stress-2026-08-26.md` §2 — the audit and git history
-carry the detail, this index carries only the pointer:
+**Pruned 2026-08-26**, each against an explicit live acceptance in §2 of
+the 2026-08-26 fleet stress audit — git history carries the audit and the
+detail, this index carries only the pointer:
 
 - **S9/S10** stream-blip entry freeze → A6 (#1777/#1784).
 - **S3b** crashed bots rendering innocent → T6 fix, live-verified (#1788/#1791).
@@ -384,7 +383,7 @@ The items below remain open.
   (high; did NOT reproduce 2026-08-31).** After mass stop, zero running bots
   still consumed 77% CPU until a data-plane restart. **Remeasured under
   #1801** at 144 rows with zero running bots
-  (`docs/audits/read-latency-profile-live-2026-08-31.md` §10): CPU held flat
+  (§10 of the 2026-08-31 live read-latency profile, in Git history): CPU held flat
   at **24–25% of one core** across three minutes with no upward drift, panel
   storm p50 was **0.77 s** and sequential catalog p50 **267 ms** (unchanged
   at 270 ms after further settling), and no restart was needed. Neither
@@ -406,8 +405,7 @@ The items below remain open.
 
 ## 11. 2026-08-26 fleet-stress findings (PR #1791, lifted 2026-08-26)
 
-The day-two 50-bot campaign is recorded in
-`docs/audits/bot-fleet-stress-2026-08-26.md`. It was the live-acceptance pass
+The day-two 50-bot campaign's audit is in Git history. It was the live-acceptance pass
 for the ten fixes out of the 2026-08-25 run: **all ten passed (A1–A13)**, and
 the four §10 items they closed were pruned above. T6 was found, fixed,
 regression-tested and live-verified inside the same session (#1791) and is
@@ -476,16 +474,14 @@ is the durable index, the issue is the working brief.
 
 ## 12. Alpaca Paper / Live workflow (verified 2026-09-09)
 
-Evidence and proposed sequencing are in the
-[Paper / Live workflow audit](audits/alpaca-paper-live-workflow-2026-09-09.md).
-The audit distinguishes defects from deliberately deferred capabilities; it
-is historical; current budget, risk-edit and mode behavior is recorded in ADRs 0059 and 0060.
+The 2026-09-09 Paper / Live workflow audit is historical and in Git history;
+current budget, risk-edit and mode behavior is recorded in ADRs 0059 and 0060.
 
 
 ## 13. Data Lab workspace redesign residuals (2026-09-12)
 
 Tracked open items left by the Data Lab redesign PR
-(PRD `docs/prds/2026-09-12-data-lab-workspace-redesign.md`). Implemented:
+(its PRD is in Git history). Implemented:
 child routes Explore/Export/Validate, workspace store, legacy URL ingress,
 searchable indicator picker, theme-token chart colors, `POST /api/dataset/plan`,
 additive `DataLabSession` ms-UTC columns (dual-read).

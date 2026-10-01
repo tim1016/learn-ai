@@ -68,8 +68,8 @@ refused. Readers themselves never infer or relax the missing scope.
 Lake-backed LEAN runs also retain an admitted copy of their interest-rate
 file in the private workspace so the existing native-statistics verifier can
 use the run's input after execution. The engine continues to read its
-read-only lake mount. See the [Strategy Lab repair receipt](../audits/strategy-lab-regression-investigation-2026-09-27.md)
-for reproduction and UI evidence.
+read-only lake mount. The Strategy Lab repair receipt (2026-09-27; in Git history)
+holds the reproduction and UI evidence.
 
 ## Evidence
 

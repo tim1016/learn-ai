@@ -6,9 +6,7 @@
 > with code, the code is right and this page must be updated in the same PR.
 >
 > **Sibling docs** (different jobs, do not duplicate):
-> - [`superpowers/specs/2026-05-09-ml-prediction-as-data-v05-design.md`](superpowers/specs/2026-05-09-ml-prediction-as-data-v05-design.md) — v0.5 design rationale (why predictions enter as a data artifact, not an in-engine model)
-> - [`superpowers/specs/2026-05-10-quantconnect-precomputed-predictions-parity.md`](superpowers/specs/2026-05-10-quantconnect-precomputed-predictions-parity.md) — QC tutorial parity Phase 1 design
-> - [`superpowers/specs/2026-05-11-phase3-pnl-parity-design.md`](superpowers/specs/2026-05-11-phase3-pnl-parity-design.md) — Phase 3 trade-level parity design (current)
+> - [ADR 0072](architecture/adrs/0072-research-run-identity-and-sealed-run-inputs.md) Decision 6 — why predictions enter as a content-hashed data artifact, not an in-engine model
 > - [`references/quantconnect-precomputed-predictions.md`](references/quantconnect-precomputed-predictions.md) — QC fixture capture reference (Phase 1)
 > - [`references/qc-aapl-phase3-capture-runbook.md`](references/qc-aapl-phase3-capture-runbook.md) — QC fixture capture runbook (Phase 3)
 > - [`references/reconciliations/qc-aapl-phase3.md`](references/reconciliations/qc-aapl-phase3.md) — Phase 3.0 reconciliation report
