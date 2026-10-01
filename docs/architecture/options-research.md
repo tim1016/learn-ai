@@ -480,9 +480,6 @@ component deletions) live in
 
 - The IV pipeline itself. `iv-ownership-research.md` is its truth
   doc; this doc cross-links where appropriate but does not duplicate.
-- The backtesting engine's internal options surface
-  (`PythonDataService/app/engine/options/`). Used only by the
-  backtest engine, not by any of the surviving routes in §5.
 - Non-options trading surfaces (`/data-lab` ex-options-sub-feature,
   `/strategy-lab`, `/lean-engine`, `/edge`, `/portfolio`). Each has
   its own truth doc or roadmap.
