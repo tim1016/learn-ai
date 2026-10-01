@@ -388,10 +388,10 @@ async def lock_paired_evidence_for_golden_case(
 ) -> asyncpg.Record | None:
     """Hold a landed verdict and companion run until designation commits.
 
-    ``delete_run`` locks its target run before consulting the Golden evidence
-    guard.  The ``NOWAIT`` run lock is therefore intentional: if a delete won
-    that race, designation rolls back with a retryable authored refusal rather
-    than deadlocking while each transaction holds half of the evidence pair.
+    The ``NOWAIT`` run lock is intentional: if another transaction already
+    holds a conflicting lock on the companion run, designation rolls back with
+    a retryable authored refusal rather than deadlocking while each
+    transaction holds half of the evidence pair.
     """
     verdict = await parity_verdict_for_case(conn, parity_group_id, lock=True)
     try:

@@ -107,13 +107,6 @@ EXTERNAL_REPOSITORY_WRITER_CENSUS = (
     ),
     ExternalRepositoryWriter(
         path="app/routers/alpaca_clerk_sqlite.py",
-        owner="reconcile_now",
-        call="reconcile_account",
-        classification=RepositoryWriterClassification.FACADE_WORKFLOW,
-        rationale="The HTTP route verifies broker account identity, then delegates the full write workflow to the active facade.",
-    ),
-    ExternalRepositoryWriter(
-        path="app/routers/alpaca_clerk_sqlite.py",
         owner="_execute_presented_recovery_action",
         call="execute_recovery_action",
         classification=RepositoryWriterClassification.FACADE_WORKFLOW,

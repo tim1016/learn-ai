@@ -187,8 +187,7 @@ class _RunReplayFeed:
     ``lookback_days`` -- the exact behavior of ``_RetainedSourceBarFeed``'s
     retained branch, which is what the live run's own warmup consumed. Both
     streams filter through the run's ``RunDecisionSession``, resolved once by
-    ``RunReplayProofService._compute``, so a replay decides on exactly the
-    bars the live run did.
+    the caller, so a replay decides on exactly the bars the live run did.
     Exposes no ``evaluation_mode_for``, so every bar replays in DECIDE mode
     (``bot_trade_strategy._evaluation_mode_for`` fallback); live OBSERVE_ONLY
     buckets are receipted ``blocked``/``STOPPED_OBSERVE_ONLY`` and classify as
@@ -267,11 +266,7 @@ async def run_fidelity_over_bars(
     as ``crash_recovered`` and are digest-verified against their protected
     receipts rather than trusted on presence.
 
-    ``session`` is the run's decision session, resolved by the caller
-    (``RunReplayProofService._compute``), which refuses replay outright when a
-    ``use_rth=False`` binding has no declared window rather than replaying an
-    empty stream (Task 4 review finding 1 -- an empty replay must never be
-    mistaken for a proven one).
+    ``session`` is the run's decision session, resolved by the caller.
     """
     feed = _RunReplayFeed(
         provider=provider,

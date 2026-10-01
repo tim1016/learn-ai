@@ -2856,8 +2856,9 @@ def test_the_router_surface_follows_the_role(
     """Combined keeps today's surface; the coordinator is narrowly bounded.
 
     Delivery B gives the coordinator the clerk-scoped routing surface under
-    ``/api/brokers/{broker}/clerks/…``. Delivery D adds exactly two retained
-    read aliases; the unscoped agent families stay on clerk-agent processes.
+    ``/api/brokers/{broker}/clerks/…``. Delivery D adds exactly one retained
+    read alias (``panel-profile``); the unscoped agent families stay on
+    clerk-agent processes.
     """
     paths = _route_paths_for_role(role)
     unscoped_broker_paths = {
@@ -2871,10 +2872,7 @@ def test_the_router_surface_follows_the_role(
         sorted(paths)[:5],
     )
     if role == "fleet_coordinator":
-        assert unscoped_broker_paths == {
-            "/api/brokers/{broker}/live-verdict",
-            "/api/brokers/{broker}/panel-profile",
-        }
+        assert unscoped_broker_paths == {"/api/brokers/{broker}/panel-profile"}
     has_internal = any(path.startswith("/internal/fleet") for path in paths)
     assert has_internal is expect_internal
     if role == "fleet_coordinator":
@@ -2925,7 +2923,7 @@ def test_the_coordinator_surface_appears_with_a_control_directory() -> None:
         paths = set(json.loads(completed.stdout.strip().splitlines()[-1]))
         assert any(path.startswith("/internal/fleet") for path in paths)
         # The coordinator owns the clerk-scoped routing surface plus exactly
-        # two D compatibility reads; agent families remain private.
+        # one D compatibility read (panel-profile); agent families remain private.
         brokers_paths = {
             path for path in paths if path.startswith("/api/brokers")
         }
@@ -2935,10 +2933,7 @@ def test_the_coordinator_surface_appears_with_a_control_directory() -> None:
             for path in brokers_paths
             if not path.startswith("/api/brokers/{broker}/clerks")
         }
-        assert unscoped == {
-            "/api/brokers/{broker}/live-verdict",
-            "/api/brokers/{broker}/panel-profile",
-        }
+        assert unscoped == {"/api/brokers/{broker}/panel-profile"}
 
 
 def _volume_with_effective_tuple(tmp_path: Path, *, binding_generation: int = 0) -> Path:
