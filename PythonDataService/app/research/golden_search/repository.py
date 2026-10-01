@@ -628,6 +628,8 @@ class Reservation:
 
 
 RETRY_EXHAUSTED = "retry allowance exhausted"
+# Marks a pending row whose run was cancelled, so a later attempt re-runs it without spending a retry.
+CANCELLED_BEFORE_RESULT = "cancelled before a result"
 
 
 async def reserve_evaluation(
@@ -693,6 +695,18 @@ async def reserve_evaluation(
                 payload={"evaluation_key": new.evaluation_key, "point_hash": new.point_hash, "attempt": attempt},
             )
             return Reservation(kind="cached", record=record, counted_as_cache_hit=1)
+        if record.error == CANCELLED_BEFORE_RESULT:
+            # A cancel is not a crash: the allowance bounds runs that died, not runs the owner stopped.
+            await conn.execute(
+                """
+                UPDATE research_golden_search_evaluations SET attempt = $3, error = NULL
+                 WHERE study_id = $1 AND evaluation_key = $2
+                """,
+                study_id,
+                new.evaluation_key,
+                attempt,
+            )
+            return Reservation(kind="run")
         if record.retries >= retry_allowance:
             failed = await conn.fetchrow(
                 f"""
@@ -727,6 +741,22 @@ async def reserve_evaluation(
             attempt,
         )
         return Reservation(kind="run")
+
+
+async def release_evaluation(conn: asyncpg.Connection, study_id: str, attempt: int, evaluation_key: str) -> None:
+    """Leave a cancelled run's row pending, marked so the next attempt re-runs it without spending a retry."""
+    async with conn.transaction():
+        await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
+        await conn.execute(
+            """
+            UPDATE research_golden_search_evaluations SET error = $4
+             WHERE study_id = $1 AND evaluation_key = $2 AND status = 'pending' AND attempt = $3
+            """,
+            study_id,
+            evaluation_key,
+            attempt,
+            CANCELLED_BEFORE_RESULT,
+        )
 
 
 def _finite(value: float | None) -> float | None:

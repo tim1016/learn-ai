@@ -25,7 +25,8 @@ Formula:
     reservations out of reach of the development stages. A recorded result
     is a cache hit and consumes nothing; a pending row left by a crashed
     attempt is re-run without new budget, at most ``RETRY_ALLOWANCE`` times,
-    then recorded failed.
+    then recorded failed. A run the owner cancelled stays pending and is
+    re-run without new budget or a retry.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Small
   interfaces with substantial behavior behind them" (Evaluator) and
   "Workload and progress"; the engine projection is
@@ -377,18 +378,23 @@ class StudyEvaluator:
                 results[key] = repo.metrics_of(reservation.record)
                 self.on_evaluated(self.new_runs + self.cache_hits)
                 continue
-            outcome = self._run(
-                EvaluationRequest(
-                    point=point,
-                    point_hash=digest,
-                    window=window,
-                    warmup_from=self.warmup_for(window[0]),
-                    scenario=scenario,
-                    detail=detail,
-                    stage=stage,
-                    fold_index=fold_index,
+            try:
+                outcome = self._run(
+                    EvaluationRequest(
+                        point=point,
+                        point_hash=digest,
+                        window=window,
+                        warmup_from=self.warmup_for(window[0]),
+                        scenario=scenario,
+                        detail=detail,
+                        stage=stage,
+                        fold_index=fold_index,
+                    )
                 )
-            )
+            except JobCancelled:
+                # The row stays pending for Finish; marked cancelled, its re-run does not spend a retry.
+                run_sync(with_connection(repo.release_evaluation, self.study_id, self.attempt, key))
+                raise
             run_sync(
                 with_connection(
                     repo.complete_evaluation, self.study_id, self.attempt, key, metrics=outcome.metrics, detail=outcome.detail

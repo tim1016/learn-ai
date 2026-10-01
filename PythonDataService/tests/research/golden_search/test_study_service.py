@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 from pathlib import Path
 
 import asyncpg
@@ -19,7 +20,14 @@ from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.jobs.progress import JobCancelled
 from app.research.golden_search import repository as repo
 from app.research.golden_search import service
-from app.research.golden_search.evaluator import CapabilityError, EvaluationCapability, StudyEvaluator
+from app.research.golden_search.evaluator import (
+    RETRY_ALLOWANCE,
+    CapabilityError,
+    EvaluationCapability,
+    EvaluationRequest,
+    EvaluationResult,
+    StudyEvaluator,
+)
 from app.research.golden_search.models import GoldenSearchRefusal, StudyRow
 from app.research.golden_search.selection import Metrics
 from app.research.golden_search.stages import StageRefusedError
@@ -32,6 +40,7 @@ from tests._helpers.golden_search_study import (
     Driver,
     FakeApproval,
     FakeEngine,
+    SimulatedCrash,
     plan_request,
     seed_lake,
     smooth_score,
@@ -339,6 +348,57 @@ async def test_closing_a_stopped_stage_seals_its_attempt_against_a_worker_still_
     with pytest.raises(StaleAttemptError):
         await repo.complete_evaluation(conn, row.id, interrupted.attempt, pending, metrics=Metrics.failed("late"), detail=None)
     assert (await service.get_row(row.id)).state == "closed"
+
+
+async def test_an_evaluation_that_keeps_killing_its_worker_is_recorded_failed_after_its_retries(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    row = await driver.lock(symbol)
+    seed = row.protocol["seed"]
+
+    def dies_on_the_seed(request: EvaluationRequest) -> EvaluationResult:
+        if request.point == seed and request.stage == "search":
+            raise SimulatedCrash("the worker died mid-evaluation")
+        return driver.engine(request)
+
+    outcome = await driver.command(row, "continue")
+    for _ in range(RETRY_ALLOWANCE + 1):
+        with pytest.raises(SimulatedCrash):
+            await driver.run(outcome, execute=dies_on_the_seed)
+        outcome = await driver.command(await service.get_row(row.id), "finish")
+    await driver.run(outcome, execute=dies_on_the_seed)  # the allowance is spent: the seed is not dispatched again
+
+    done = await service.get_row(row.id)
+    seeds = await conn.fetch(
+        "SELECT status, retries, error FROM research_golden_search_evaluations WHERE study_id = $1 AND stage = 'search' AND point_json = $2::jsonb",
+        row.id,
+        json.dumps(seed),
+    )
+    assert [(item["status"], item["retries"], item["error"]) for item in seeds] == [("failed", RETRY_ALLOWANCE, repo.RETRY_EXHAUSTED)]
+    assert done.state == "awaiting_validation"
+    assert done.consumed_evaluations == await conn.fetchval("SELECT COUNT(*) FROM research_golden_search_evaluations WHERE study_id = $1", row.id)
+
+
+async def test_a_cancel_mid_evaluation_never_spends_the_retry_allowance(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    reference = await driver.advance(await driver.lock(symbol), "continue")
+    row = await driver.lock(symbol)
+
+    def cancelled_while_waiting(request: EvaluationRequest) -> EvaluationResult:
+        raise JobCancelled("cancelled while waiting for the engine gate")
+
+    outcome = await driver.command(row, "continue")
+    for _ in range(RETRY_ALLOWANCE + 1):
+        with pytest.raises(JobCancelled):
+            await driver.run(outcome, execute=cancelled_while_waiting)
+        outcome = await driver.command(await service.get_row(row.id), "finish")
+    await driver.run(outcome)
+
+    done = await service.get_row(row.id)
+    assert done.results["search"]["procedure"] == reference.results["search"]["procedure"]
+    assert done.consumed_evaluations == reference.consumed_evaluations
+    assert await conn.fetchval(
+        "SELECT MAX(retries) FROM research_golden_search_evaluations WHERE study_id = $1", row.id
+    ) == 0
 
 
 # ── Leakage and capability ───────────────────────────────────────────────
