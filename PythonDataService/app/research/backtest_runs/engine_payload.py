@@ -46,8 +46,7 @@ def persisted_trade_net_pnl(
     """Return persisted round-trip dollar P&L under the executed fee policy.
 
     Formula: net P&L = quantity * (exit_fill - entry_fill) - entry_fee - exit_fee.
-    Reference: the Strategy Lab realized-equity accounting contract in
-      ``docs/references/realized-equity-staircase-v1.md``; compatibility fees
+    Reference: the Strategy Lab realized-equity accounting contract; compatibility fees
       use the QuantConnect IBKR equity tier cited by the canonical model.
     Canonical implementation: gross trade P&L is carried by ``EngineTradeResponse``;
       IBKR fees delegate to ``app.research.parity.ibkr_commission.IbkrEquityCommissionModel``.

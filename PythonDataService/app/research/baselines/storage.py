@@ -6,8 +6,7 @@ load-and-validate, scan+filter — live in
 specific surface: function signatures the runner and router already
 call, plus the phase-specific ``method`` filter on
 ``list_baselines`` that the artifact store's generic ``list_ids``
-doesn't carry. See
-``docs/architecture/research-artifact-seam.md`` for the design.
+doesn't carry.
 
 On-disk layout (unchanged from pre-seam):
 

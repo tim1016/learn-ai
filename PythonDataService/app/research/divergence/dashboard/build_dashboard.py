@@ -7,8 +7,7 @@ Sections rendered (per research plan §8):
   4. Per-indicator overlay charts — TV vs vetted pandas vs learn-ai engine.
   5. Methodology, variant definitions, and inline gotchas.
 
-Plotly.js is bundled inline so the HTML renders offline. See
-``docs/tv-polygon-validation-gotchas.md`` for the full gotchas catalog.
+Plotly.js is bundled inline so the HTML renders offline.
 """
 
 from __future__ import annotations

@@ -21,12 +21,8 @@ Formulas:
     as an explicit gate rather than relying on implicit propagation.
 
 Reference: Internal design — divergence taxonomy is the 8-category
-    ``DivergenceCategory`` `StrEnum` documented in
-    ``.claude/rules/numerical-rigor.md`` → "Trade-level reconciliation
-    taxonomy"; design rationale, acceptance gates, and tolerance defaults
-    in ``docs/superpowers/specs/2026-05-11-phase3-pnl-parity-design.md``;
-    Phase 3.0 / 3.5 Path A reconciliation summary at
-    ``docs/references/reconciliations/qc-aapl-phase3.md``.
+    ``DivergenceCategory`` `StrEnum` recorded in ADR 0069 §6, with its
+    acceptance gate; tolerance defaults are ADR 0069 §3.
 
 Canonical implementation: this file.
 Validated against:
@@ -57,7 +53,7 @@ _NY = ZoneInfo("America/New_York")
 
 
 class DivergenceCategory(StrEnum):
-    """Categorical divergence types — see numerical-rigor.md."""
+    """Categorical divergence types — see ADR 0069 §6."""
 
     FIXTURE_INSUFFICIENT = "fixture_insufficient"
     DECISION_MISMATCH = "decision_mismatch"
@@ -256,9 +252,7 @@ class FixtureSchemaError(ValueError):
     The reconciler does *not* try to be tolerant of every QC API response
     shape — the runbook's normalization step is responsible for producing a
     canonical payload, and this parser enforces that contract by failing
-    fast on deviations. See
-    ``docs/references/qc-aapl-phase3-capture-runbook.md`` § "Canonical
-    fixture schema".
+    fast on deviations.
     """
 
 

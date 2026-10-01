@@ -6,8 +6,7 @@ existing ``pytest.raises(...)`` sites and routers that map specific
 exceptions to specific HTTP codes keep working unchanged. Those
 phase-named classes now inherit from these shared bases, so new
 common code can ``except ArtifactError`` without enumerating every
-phase. See ``docs/architecture/research-artifact-seam.md`` §
-"Shared base errors".
+phase.
 """
 
 from __future__ import annotations

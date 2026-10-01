@@ -8,9 +8,7 @@ Phase A scope: ledger + result Pydantic models, canonical-JSON hashing,
 in-memory + file-backed storage, FastAPI endpoint. No GraphQL passthrough
 in v1; that ships with Phase B's research workbench when the UI needs it.
 
-See ``docs/architecture/build-alpha-style-features-1-8-research-spec.md``
-for the surrounding research-pipeline plan and ``docs/references/run-ledger.md``
-for the hashing-scheme rationale.
+See ADR 0072 for the run-identity and hashing-scheme rationale.
 """
 
 from __future__ import annotations

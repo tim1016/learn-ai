@@ -27,7 +27,7 @@ Runs/-specific twists vs the other three migrated phases:
     (parity-test invariant assertions, dual-write to a Postgres
     index) plug in here without changing ``runs/hashing.py``,
     which remains the canonical SHA-256-over-canonical-JSON
-    implementation per ``docs/references/run-ledger.md``.
+    implementation per ADR 0072 decision 3.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ def _hash_ledger(ledger: RunLedger) -> str:
 
     Wraps the canonical implementation in ``runs/hashing.py`` — that
     function stays the single source of truth for the
-    canonical-JSON encoding per ``docs/references/run-ledger.md``;
+    canonical-JSON encoding per ADR 0072 decision 3;
     this wrapper just adapts the ``(BaseModel) -> str`` shape the
     descriptor expects to the ``(dict) -> str`` shape
     ``hash_payload`` accepts. ``model_dump(mode='json')`` is the

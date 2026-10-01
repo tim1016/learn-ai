@@ -59,7 +59,6 @@ def make_data_snapshot_id(
     ``data_root_revision`` is the LEAN-data-root identifier. In v1 the
     runner passes the git HEAD of the data root if it's a git repo, else
     the mtime of the data root directory in seconds, else ``"unknown"``.
-    See ``docs/references/run-ledger.md`` for the rationale and the
-    upgrade path (content-addressable Parquet snapshots).
+    See ADR 0072 decision 2 for the rationale.
     """
     return f"{symbol}|{resolution_minutes}|{start_ms}|{end_ms}|{data_root_revision}"

@@ -1,7 +1,7 @@
 """Signal diagnostics, data sufficiency, and effective sample size.
 
 Formula: Sharpe CI per Lo (2002) SE = √((1 + SR²·(K₃/2) − SR²·(K₄−3)/4) / (n−1)); Deflated Sharpe (Bailey & López de Prado 2014); N_eff = N / (1 + 2·Σ rho_k); joint (vol×trend) regime coverage.
-Reference: Lo (2002) "The Statistics of Sharpe Ratios" FAJ 58(4); Bailey, López de Prado (2014) "The Deflated Sharpe Ratio" JPM 40(5); docs/signal-engine-authority.md §4.
+Reference: Lo (2002) "The Statistics of Sharpe Ratios" FAJ 58(4); Bailey, López de Prado (2014) "The Deflated Sharpe Ratio" JPM 40(5).
 Canonical implementation: app/research/signal/diagnostics.py
 Validated against: NONE — pending (pending-fixture per registry)
 
@@ -18,9 +18,6 @@ Also hosts the inferential helpers used by the graduation ladder:
   a true joint (vol × trend) bucket count plus an estimate of effective
   independent trades per bucket, so the "regime coverage" panel reflects
   decision-relevant sample size, not bars-of-data.
-
-See `docs/signal-engine-authority.md` § 4 for the authority on every
-formula in this module.
 """
 
 from __future__ import annotations

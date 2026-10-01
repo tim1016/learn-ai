@@ -1,7 +1,6 @@
 """Descriptor that parametrises an ``ArtifactStore`` for one phase.
 
-Per ``docs/architecture/research-artifact-seam.md`` decisions 1, 5, 6:
-the on-disk layout stays heterogeneous (each phase keeps its own
+The on-disk layout stays heterogeneous (each phase keeps its own
 subdir, filenames, and parent-id extractor), exception classes stay
 phase-named (supplied via the descriptor), and the store is bound at
 construction time rather than receiving these knobs per call.

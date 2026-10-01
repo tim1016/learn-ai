@@ -13,7 +13,7 @@ and deliberate: a snapshot redelivered for a cell the launch already holds
 of creating a second one — the cutover's "unknown commit outcome" question,
 answered by identity rather than by a retry policy.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/1927 revision 2;
-  docs/superpowers/specs/2026-08-16-recency-chart-design.md D14, D16, D17, D20.
+  ADR 0057 decision 5.
 Canonical implementation: this file.
 Validated against: tests/research/recency/test_repository.py.
 """

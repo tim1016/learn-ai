@@ -38,7 +38,7 @@ from app.research.runs.window import WindowSummary
 from app.utils.timestamps import now_ms_utc
 
 ENGINE_VERSION = "0.1.0"
-"""Bumped on engine semantic change. See ``docs/references/run-ledger.md``."""
+"""Bumped on engine semantic change. See ADR 0072 decision 1."""
 
 logger = logging.getLogger(__name__)
 
