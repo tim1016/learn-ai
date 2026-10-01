@@ -5,8 +5,7 @@ agent or operator. This is the *only* durable home for open defects; the
 point-in-time audit-finding files they came from (`docs/audits/auto-research/findings/`,
 `docs/audits/vibe-coded-app-research/findings/`, `architecture-investigation-2026-07-02.md`,
 and the auto-research run logs) were deleted on **2026-07-04** after their open
-items were lifted here. The closed findings live in git history and in the
-auto-research ledger (`docs/audits/auto-research/state.json`).
+items were lifted here. The closed findings live in git history.
 
 **Status convention.** Each item carries a severity and a code pointer captured
 on the verification date named with its section — verify the `file:line` against
@@ -110,7 +109,7 @@ not yet provide:
 
 - **Golden-fixture coverage gap** — most canonical math still lacks a registered
   golden fixture; the `iv30/` snapshot sits outside manifest governance.
-  *(was F-0026; deferred in `auto-research/state.json`)*
+  *(was F-0026)*
 - **Temporal wire/storage contracts outside Alpaca V2 remain non-numeric
   (medium).** The 2026-08-18 census confirmed 4 Pydantic, 29 C#, and 22 real
   TypeScript temporal field declarations using strings or native date types
@@ -146,8 +145,7 @@ not yet provide:
   over a 1-min equity-curve denominator — was fixed in #160, commit `1f512213`,
   and is guarded by `test_exposure_uses_consolidated_bar_resolution`; pruned from
   this backlog 2026-08-19 after verifying the test passes on master.)*
-- **ML-V-001** — Phase 3.0/3.5 canonical math not registered in
-  `docs/math-sources-of-truth.md`. **ML-V-002** — provenance blocks missing on
+- **ML-V-002** — provenance blocks missing on
   `research/parity/qc_reconciler.py` and the prediction-set `artifact.py`.
   *(2026-05-12 ML-predictions run)*
 
@@ -164,11 +162,10 @@ here (issues #1666, #1667, #1668) are closed and merged to master as of
   `spy_ema_crossover_options` strategy removed the last consumer of
   `chain_resolver.py` and `pricer.py`. Both modules remain in the tree, are
   imported by nothing, and have no direct test coverage
-  (`docs/math-sources-of-truth.md` records `NONE — pending` for the pricer).
+  (the pricer's provenance block records `Validated against: NONE`).
   They were **not** deleted with the strategy because the package is described
-  as live in four architecture documents (`options-math-authorities.md`,
-  `options-research.md`, `engine-authority-map.md`,
-  `math-sources-of-truth.md`; the routes cleanup record
+  as live in three architecture documents (`options-math-authorities.md`,
+  `options-research.md`, `engine-authority-map.md`; the routes cleanup record
   `options-routes-research.md` was pruned to git history 2026-09-12), and retiring a
   documented canonical math row is a decision with its own doc surface, not a
   side effect of a strategy deletion. Disposition — delete the package and its
@@ -185,7 +182,7 @@ here (issues #1666, #1667, #1668) are closed and merged to master as of
   is left alone deliberately.
 
 - **Doc paths predating this sweep (inherited, not introduced here).** A path
-  audit of `math-sources-of-truth.md` and `engine-authority-map.md` found ~30
+  audit of the math index (cut in #2750) and `engine-authority-map.md` found ~30
   cited `.py` files that no longer exist — almost all from the #1813 IBKR
   decommission (`app/engine/live/*`, `app/services/account_*`,
   `app/routers/broker_activity.py`, and neighbours), plus

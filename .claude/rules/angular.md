@@ -1,6 +1,11 @@
+---
+paths:
+  - "Frontend/**"
+---
+
 # Angular rules
 
-Targets Angular 22. Read when writing or editing code under `Frontend/`.
+Targets Angular 22.
 
 **Authoritative reference**: https://angular.dev (current version docs). When this file conflicts with angular.dev, angular.dev wins and this file should be updated.
 
@@ -30,6 +35,11 @@ Targets Angular 22. Read when writing or editing code under `Frontend/`.
 - **Signal Forms** for new forms.
 - **Reactive Forms** still valid for complex existing forms. Don't migrate just to migrate.
 - Never Template-driven forms.
+
+## Shared renderers
+
+- Raw backend identifiers in Frontend receipt/evidence UI (`reason_code`, `gate_id`, `source`, receipt labels, and known code-like receipt values such as `NO_LIVE_BINDING` or `broker.connection`) must render through the shared `receiptLabel` pipe. Preserve opaque audit tokens such as intent/order IDs, paths, hashes, refs, and URLs exactly. Do not pipe backend-authored trader/operator prose; that copy should arrive from the backend or from a closed operator-copy map.
+- Tradeable-instrument symbols in Frontend display UI must render through shared `app-asset-identity`, the canonical symbol renderer. Use its compact size in dense rows; plain symbol text remains appropriate in controls such as `<option>` elements and ticker pickers. Do not duplicate logo, slug-resolution, or initials-fallback logic in feature components.
 
 ## Symbol picking (ADR 0066)
 
@@ -77,14 +87,6 @@ Targets Angular 22. Read when writing or editing code under `Frontend/`.
 - SCSS per component, co-located.
 - CSS custom properties for theming. Tailwind where it already exists; don't introduce it to files that don't use it.
 
-## Testing
-
-- Vitest is the default in v22.
-- Angular Testing Library (`@testing-library/angular`): `render()` + `screen`.
-- Mock at the DI level via `providers: [...]`.
-- Assert on rendered output, not private signal values.
-- Name: `*.component.spec.ts`, `*.service.spec.ts`.
-
 ## Accessibility
 
 - All UI must pass AXE.
@@ -108,9 +110,4 @@ Targets Angular 22. Read when writing or editing code under `Frontend/`.
 
 ## Common pitfalls (v22-specific)
 
-- Relying on Zone.js patching `setTimeout`/`Promise` to trigger change detection — doesn't happen in zoneless
-- Using `@Input()` decorator — use the `input()` function
-- Setting `standalone: true` explicitly — it's the default
-- Using `mutate()` — removed semantics; use `set()` / `update()`
-- Using `ngClass`/`ngStyle` — the compiler will warn/error in strict templates
 - Safe-navigation expressions that distinguish `null` from `undefined`; preserve the former behavior explicitly when Angular's migration flags them.

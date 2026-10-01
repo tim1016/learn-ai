@@ -28,7 +28,7 @@ Execute these phases in strict order. Do not skip Phase 1 even if the reference 
 Before writing a single line of port code, pin down exactly what is being ported.
 
 1. **Locate the reference.** Ask the user for one of: (a) a file path in `references/`, (b) a GitHub URL with commit SHA, (c) a PDF in `references/papers/` with section and equation numbers, (d) pasted code with attribution.
-2. **Pin the version.** If it's a GitHub URL without a commit SHA, use the GitHub MCP to resolve the current HEAD SHA and record it. A port against `main` is worthless six months from now.
+2. **Pin the version.** If it's a GitHub URL without a commit SHA, resolve the current HEAD SHA (`git ls-remote <repo> HEAD`) and record it. A port against `main` is worthless six months from now.
 3. **Read the whole thing.** Read not just the indicator function but its callers, its state initialization, its warmup handling, and its unit tests if they exist. Mathematical bugs hide in initialization.
 4. **Identify dependencies in the reference.** Does the reference use a utility (rolling window, exponential smoother, bar aggregator) that we don't have yet? These get ported too, as prerequisites. List them before starting.
 
@@ -36,9 +36,9 @@ Before writing a single line of port code, pin down exactly what is being ported
 
 A golden fixture is a deterministic input → output record derived from the reference itself. It is the ground truth our port must reproduce.
 
-1. **Generate input.** Use either (a) real historical data from Postgres via the Postgres MCP, or (b) a synthetic sequence the user specifies (e.g., step function, sine wave, random walk with known seed).
+1. **Generate input.** Use either (a) real historical data from the data lake, or (b) a synthetic sequence the user specifies (e.g., step function, sine wave, random walk with known seed).
 2. **Run the reference against the input.** If the reference is C# (LEAN), run it via `dotnet script` or the user's LEAN setup. If it's Python, run it directly. If it's a paper, hand-compute the first 5–10 values using the equations.
-3. **Serialize the output.** Store the golden fixture as JSON or Parquet in `PythonDataService/tests/fixtures/golden/<indicator-name>/`. Include: input data, reference version (commit SHA or paper section), exact output values with full float precision, any state the reference exposed.
+3. **Serialize the output.** Store the golden fixture as JSON or Parquet in `PythonDataService/tests/fixtures/golden/<indicator-name>/`. Include: input data, reference version (commit SHA or paper section), exact output values with full float precision, any state the reference exposed, and the attribution file (`.claude/rules/numerical-rigor.md` → Golden fixtures).
 4. **Never regenerate the golden fixture without a reason.** If it needs to change, the change gets its own commit with a justification.
 
 ### PHASE 3: Write the port
@@ -54,21 +54,14 @@ A golden fixture is a deterministic input → output record derived from the ref
 1. **Write a test in `PythonDataService/tests/unit/`** that loads the golden fixture and asserts the port reproduces it within tolerance.
 2. **Default tolerance: `atol=1e-9, rtol=0`** for indicator values. Tighter if the reference is integer or exact rational; looser only with justification documented in the test.
 3. **Test edge cases:** empty input, single-value input, NaN in input, warmup region, mid-series discontinuity if the reference handles them.
-4. **If the test fails, do not relax the tolerance.** Use the `reconcile-backtest` skill's classification taxonomy to diagnose:
-   - `timestamp` — bar alignment or clock difference
-   - `warmup` — initialization or seeding difference
-   - `fill` — order fill assumption mismatch (for strategies)
-   - `commission` — commission model mismatch (for strategies)
-   - `precision` — floating-point accumulation (this is where `rtol` might be justified)
-   - `off-by-one` — window boundary or index slip
-   - `data-quality` — the inputs themselves differ
+4. **If the test fails, do not relax the tolerance.** Classify the divergence with the `reconcile-backtest` skill's taxonomy (`precision` is the only bucket where a looser `rtol` might be justified).
 5. **Fix the port, not the test.** The test is ground truth.
 
-### PHASE 5: Document and eliminate the dependency
+### PHASE 5: Eliminate the dependency
 
-1. **Create `docs/references/<indicator-name>.md`** with: what was ported, exact source (path or URL + commit), why this reference (over alternatives), tolerance used, any known divergences and why they were accepted.
-2. **Update the module docstring** to cite `docs/references/<indicator-name>.md`.
-3. **If the reference was vendored for this port only**, ask the user whether to keep it in `references/` (for future audit) or remove it. Default: keep. Disk is cheap; reproducibility is not.
+The golden fixture (with its attribution) and the tolerance-pinned test are all the paperwork a port needs. An accepted divergence is documented in the test and in the module docstring.
+
+1. **If the reference was vendored for this port only**, ask the user whether to keep it in `references/` (for future audit) or remove it. Default: keep. Disk is cheap; reproducibility is not.
 
 ## Output
 
@@ -77,7 +70,7 @@ After completing a port, report back to the user:
 - What was ported, from where (with SHA or paper ref)
 - Tolerance used, and the max absolute error observed against the golden fixture
 - Any divergences found during reconciliation and how they were resolved
-- Files created: port module, test, fixture, `docs/references/` note
+- Files created: port module, test, fixture and its attribution
 - Next steps: how to expose via FastAPI if that's the user's goal (delegate to `add-fastapi-endpoint`)
 
 ## Anti-patterns to avoid

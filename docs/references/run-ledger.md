@@ -4,7 +4,7 @@
 
 **Reference**: RFC 8785 (JSON Canonicalization Scheme) for the sort-keys + tight-separators contract; SHA-256 (FIPS 180-4) as the digest. We do not implement JCS literally — JCS demands `\uXXXX` escaping for non-ASCII and exact float formatting per ECMAScript ToString — because our hashed payloads are closed-vocabulary (Pydantic round-tripped `StrategySpec`, plus typed result fields) and the simpler contract is sufficient without pulling in a JCS dependency. This trade-off is locked in `app/research/runs/hashing.py` and exercised by `tests/research/runs/test_hashing.py` (key-order independence, non-ASCII stability, stable across calls).
 
-**Canonical implementation**: `PythonDataService/app/research/runs/hashing.py` (the canonical-JSON serializer + SHA-256 wrapper), `app/research/runs/ledger.py` (the `RunLedger` schema and identity columns), `app/research/runs/runner.py` (orchestration that assembles the hashes from a real engine run), `app/research/runs/storage.py` (atomic file-backed persistence). HTTP boundary at `app/routers/research_runs.py`. Registry row under § "Backtesting engine and statistics" of `docs/math-sources-of-truth.md`.
+**Canonical implementation**: `PythonDataService/app/research/runs/hashing.py` (the canonical-JSON serializer + SHA-256 wrapper), `app/research/runs/ledger.py` (the `RunLedger` schema and identity columns), `app/research/runs/runner.py` (orchestration that assembles the hashes from a real engine run), `app/research/runs/storage.py` (atomic file-backed persistence). HTTP boundary at `app/routers/research_runs.py`.
 
 ## Identity columns
 

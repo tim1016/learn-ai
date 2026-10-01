@@ -2,6 +2,8 @@
 
 A scientific platform for porting and validating trading logic. Reference implementations (LEAN, open-source backtesters, academic papers) are mined for math, then ported into this repo with strict numerical equivalence and vanishing external dependency.
 
+This file holds every rule Claude and Codex share. `CLAUDE.md` imports it, so edit rules here, never in a copy.
+
 ## REQUIRED: IBKR market data → Alpaca orders
 
 **Owner decision, 2026-09-16: retain Interactive Brokers as the live market-data
@@ -18,73 +20,20 @@ For provider wiring, account setup/removal, or launch failures, read
 [ADR 0062's provider decision](docs/architecture/adrs/0062-broker-clerk-fleet-control-plane.md#retained-market-data-provider--owner-decision-2026-09-16).
 Changing this provider boundary requires an explicit owner decision.
 
-## STOP: legacy IBKR bot control is deprecated
-
-The Interactive Brokers bot list and bot control panel are deprecated:
-
-- Legacy UI routes: `/broker/bots` and `/broker/bots/:id`
-- Legacy Angular areas: `Frontend/src/app/components/broker/bots/` and `Frontend/src/app/components/broker/bot-control/`
-- Legacy Python surface: **already deleted.** The IBKR bot catalog/control projections (`PythonDataService/app/routers/live_instances.py`, `live_runs.py`, `bot_events.py`, `broker_session.py`, `broker_activity.py` and their supporting surface-assembly services) were retired by PR-B of #1813 (2026-08-27); the account-authority half went in PR-A (2026-08-26). Do not go looking for these files, and do not reintroduce the surface — see PRD #1817
-
-**Do not build, extend, optimize, or conduct product/architecture research on these IBKR bot-control surfaces. Do not use them as the model for new bot-control work.** The canonical bot-control product is the Alpaca Broker V2 list and panel under `/brokers/alpaca/...` and `Frontend/src/app/components/broker/v2-panel/`.
-
-Work in the deprecated IBKR areas is allowed only when the task explicitly concerns removal, decommissioning, migration away from IBKR, or the user explicitly overrides this rule.
-
-## STOP: legacy IBKR broker navigation is deprecated
-
-The **Interactive Broker** sidebar group and its former application pages are
-deprecated and unmaintained. They must not be developed, maintained, expanded,
-or restored as a parallel product area. The Alpaca account desk is the sole
-broker-control entry point.
-
-- Retired sidebar group: `Interactive Broker`
-- Compatibility-only UI routes: `/broker`, `/broker/accounts`,
-  `/broker/accounts/:accountId`, `/broker/account-monitor`,
-  `/broker/reconciliation`, `/broker/orders`, `/broker/session-mirror`,
-  `/broker/paper-run`, `/broker/instances`, `/broker/instances/:id`,
-  `/broker/bots`, `/broker/bots/:id`, `/broker/offline-replay`,
-  and `/broker/deploy`
-
-Those URLs may exist only as redirects to an Alpaca surface for bookmarked
-links. Do not attach a component, provider, guard, API expansion, or new UI
-behavior to them. Work in these routes or the formerly routed Angular pages is
-allowed only for removal, decommissioning, or migration to Alpaca Broker V2.
-
 ## Guiding philosophy
 
 1. **Math rigor before stack hygiene.** This repo's primary job is porting mathematical logic from reference sources and proving numerical equivalence. Stack conventions matter but never override math correctness.
-2. **Numerical claims require receipts.** Every ported indicator, strategy, or calculation ships with (a) a golden fixture derived from the reference, (b) a tolerance-pinned test, and (c) a citation in `docs/references/`.
+2. **Numerical claims require receipts.** Every ported indicator, strategy, or calculation ships with a golden fixture derived from the reference (with its attribution file) and a tolerance-pinned test.
 3. **Sovereignty over the math.** Reference code is studied, ported, and then the dependency is eliminated. Vendored references in `references/` exist for audit, not for runtime use.
 4. **Strict equivalence is the default.** Warmup bars, timestamp alignment, commission, and fill models must match the reference exactly. If they can't, that fact is documented in the port's module docstring.
-5. **Python owns all math.** Every indicator, statistic, backtest calculation, fill model, Greek, and P&L computation lives in `PythonDataService/` and is exposed via FastAPI. `.NET` is transport — GraphQL, auth, persistence — and may only `decimal`-preserve passthrough from the Python response; it may not compute a number a user will compare against another number. Angular is visualization — it may downsample, format, and map for rendering, but may not compute strategy signals, P&L, or statistics. Two consequences: (a) there is exactly one authority for any given numerical answer in the system; (b) when `.NET` or Angular appears to be computing math, that's a bug to be fixed by moving the computation to Python, not a pattern to extend. See `docs/audits/computational-fidelity-2026-04-22-addendum.md` § 5 for the reasoning.
-6. **Timestamps are `int64 ms UTC` at all boundaries.** Wire and storage must always use Unix epoch milliseconds UTC; ISO strings and `DateTime` are disallowed as wire/storage formats. Language-native datetime types (`pd.Timestamp`, `DateTime`, `Date`) are permitted only for local arithmetic inside a single function and must be converted back to `int64 ms UTC` before returning, persisting, or serializing. Frontend rendering defaults to the viewer/user's local timezone unless a view explicitly states another display timezone. See `.claude/rules/numerical-rigor.md` → "Timestamp rigor" for the full policy, the two conversion boundaries, and the ban list.
-
-## Repo map
-
-- `Frontend/` — Angular 22 SPA (standalone components, signals, zoneless, Vitest)
-- `Backend/` — .NET 10 GraphQL API (Hot Chocolate v15, EF Core, Postgres)
-- `Backend.Tests/` — xUnit test suite for Backend
-- `PythonDataService/` — FastAPI data proxy + backtesting engine (pandas, Polygon.io)
-- `contracts/` — committed OpenAPI/GraphQL snapshots and shared cross-stack fixtures
-- `docs/architecture/` — ADRs and system diagrams
-- `docs/domain/` — Trading concepts, glossary, invariants
-- `docs/references/` — Per-port notes: what was ported, from where (repo + commit), with what tolerance
-- `references/` — Vendored reference code (LEAN snippets, backtesters) under version control
-- `.claude/skills/` — Lazy-loaded skills for recurring tasks
-- `.claude/rules/` — Stack-specific rules; Codex reads the relevant file explicitly before significant stack work
+5. **Python owns the math.** Every number a user compares against another number has one canonical implementation, in `PythonDataService/`. A .NET or Angular copy is allowed only as a named exception — a stated reason (latency, layer-locality) and a parity test naming the Python file — listed in the canonical-math ADR ([ADR 0068](docs/architecture/adrs/0068-python-owns-the-canonical-math.md)). The provenance block in each file records where its concept lives; there is no separate registry.
+6. **Time is `int64 ms UTC`, and the calendar is the source of truth.** Every temporal value in flight, at rest, or on the wire is `int64 ms UTC`; ISO strings and `DateTime` are disallowed as wire/storage formats. Language-native datetime types (`pd.Timestamp`, `DateTime`, `Date`) are permitted only for local arithmetic inside a single function and must be converted back to `int64 ms UTC` before returning, persisting, or serializing. All scheduled session structure (trading days, session open/close, early closes, alignment) derives from a single canonical calendar module — no hardcoded session times. Real-time market liveness (halts) is a separate concern owned by the live feed. `.claude/rules/temporal-rigor.md` holds the rules (ADR 0022).
 
 ## Codex and Claude compatibility
 
-`AGENTS.md` is Codex's repository entry point. It adds Codex guidance without
-changing the established Claude hierarchy. Do not delete, rename, reorder, scope,
-or otherwise reshape `CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/`,
-`.claude/skills/`, Claude hooks, commands, or settings merely to accommodate Codex.
-If a task independently requires a factual correction to one of those surfaces,
-make the smallest correction that preserves its existing intent.
-
-For Codex, paths under `.claude/skills/` and `.claude/rules/` are committed
-repository sources, not an assumed auto-discovery mechanism. Read the relevant
-source when this file's routing says it applies.
+- This file is the single source of shared rules. `CLAUDE.md` imports it with `@AGENTS.md` and adds only Claude-only lines.
+- Claude loads `.claude/rules/*.md` itself: `angular.md`, `dotnet.md` and `python.md` only when it works in that folder; `testing.md`, `numerical-rigor.md` and `temporal-rigor.md` always. Codex reads the matching rule file before stack work, and a skill's `.claude/skills/<name>/SKILL.md` when the list below says it applies.
+- The repo's skills are the real copies. A personal skill with the same name shadows the repo copy in Claude; delete the personal one.
 
 ## Authority by claim
 
@@ -93,11 +42,10 @@ ordering across unrelated domains.
 
 | Claim | Authority | If sources disagree |
 |---|---|---|
-| Codex behavior | `AGENTS.md` plus the routed repository rule or skill | Surface the conflict; do not modify Claude configuration as a resolution |
-| Claude behavior | Existing `CLAUDE.md` / `.claude/**` hierarchy | Preserve its current precedence and behavior |
+| Agent behavior | This file, then the routed rule file or skill | Surface the conflict |
 | Product or system decision | Accepted ADR, with later explicit supersession winning | Record or ask for an explicit decision |
-| Mathematical port target | Pinned vendored reference plus the math registry and golden/parity test | Surface the conflict; do not silently choose |
-| Engine ownership | `docs/architecture/engine-authority-map.md` and its migration plan | Follow the migration sequencing |
+| Mathematical port target | Pinned vendored reference, plus the golden fixture and parity test | Surface the conflict; do not silently choose |
+| Engine ownership | `docs/architecture/engine-authority-map.md` | Surface the conflict |
 | Current runtime or wire shape | Manifest/config, generated contract, implementation, and executable tests | Docs describe this evidence; they do not override it |
 | Framework behavior | Installed manifest version and official documentation for that version | Derive the version from the manifest, not a prose cache |
 | Open defect | `docs/known-gaps.md` | Closed findings belong in durable decision history or Git history |
@@ -107,16 +55,63 @@ supersession rules.
 
 ## Engine and math authority
 
-Two registries answer "where does the canonical implementation live?":
+- Which engine owns a job: `docs/architecture/engine-authority-map.md`. A PR that moves ownership edits it in the same PR.
+- Where a math concept's canonical implementation lives: the provenance block in its file (the `learn-ai-validation` skill).
 
-- **`docs/math-sources-of-truth.md`** — concept-level (one row per math concept; canonical file, legacy duplicates, reference, validating test, status).
-- **`docs/architecture/engine-authority-map.md`** — engine-level (which engine path owns interactive backtests, research scoring, options analysis, portfolio scenarios, etc.).
+## Gates
 
-Both must be updated in the same PR as any change that introduces, retires, or moves a math/engine path. Active migrations are sequenced in **`docs/architecture/numerical-authority-migration-plan.md`**.
+**Three tiers.** Locally, run lint for the stack you touched plus the test that proves your change. Every PR runs every quick test — not marked `slow`, no Postgres, no browser — wherever it sits. The daily run adds the rest. CI green is the gate.
 
-## Skills available in this repo
+- Each CI job keeps its 2-minute cap. When CI no longer fits, the slowest tests get `slow` and move to the daily run; no new jobs are added. The cap binds CI jobs, not local runs.
+- A red daily run opens an issue (or comments on the open one). Fixing it is ordinary bug work.
+- Master requires one `CI passed` roll-up plus CodeQL.
 
-Agent tooling auto-discovers these from `.claude/skills/`. Invoke directly or let them auto-trigger:
+**Regression tests.** A fix for a P0 or P1 bug ships with a regression test that fails before the fix and passes after. P0/P1 is the issue's label, or the author's call when there is no issue. Other fixes may skip it.
+
+**Thermo review.** Before the first push that opens a PR, an independent reviewer — a fresh subagent or Codex, never the author — runs the repo's `thermo-nuclear-code-quality-review` skill (`.claude/skills/thermo-nuclear-code-quality-review/SKILL.md`, not a personal copy) on the diff.
+
+- Size sets the most reviewers. Count lines added or changed in Python code and Frontend logic (TypeScript, not templates or styles); deletions, docs, generated files (contract snapshots, `broker.types.ts`) and lockfiles don't count.
+
+  | Added Python + Frontend logic | At most |
+  |---|---|
+  | under 1,000 lines | none |
+  | 1,000+ | 1 |
+  | 3,000+ | 2 |
+  | 8,000+ | 3 |
+
+  Use judgment under the cap: a mechanical diff (a move, a rename) may need fewer. Parallel reviewers split the deep focus so they don't overlap, and their findings merge into one fix batch.
+- A PR that only deletes code gets at most one reviewer, however big.
+- A money-path or math PR gets at least one reviewer at any size. The author decides whether a PR is one and says so in the PR description. Money path: orders, custody, flatten, arming budgets, kill switches, leases, fencing. Math: anything with a provenance block or a golden fixture.
+- Each reviewer runs once. After the fixes, one scoped re-review of them, then push, whatever it finds; name any deferred gap in the PR description. Re-pushes for review comments or CI never re-trigger thermo.
+- Major findings block: fix them, or record the owner's sign-off in the PR description. Minor findings are optional. File size is never a finding.
+- Every other PR ships on CodeRabbit plus green CI.
+
+**Math ports.** A port from a reference ships with a golden fixture (with attribution) and a tolerance-pinned test. That is all the paperwork: no `docs/references/` note, no reconciliation report. An accepted divergence is documented in the test and in the port's module docstring.
+
+## Code, comments and docs
+
+- **Code is the documentation.** A doc earns its place only by holding what code cannot: a decision and its why (an ADR in force), an operator procedure (a runbook), an outside fact (a reference note), or intent for work still being built (an open PRD, which lives in its issue). A doc that restates code goes, even when something links it.
+- **One-off notes stay off master.** Research findings, plans, specs and adversarial reviews live on their issue or on a throwaway `research/<slug>` branch, never merged. Anything lasting moves into an ADR, a runbook or a reference note.
+- **Comments cite ADRs and issues.** A code comment may name an ADR or an issue/PR number — never a plan, PRD file, audit, research note or rule file. A reason strong enough to cite needs an ADR; otherwise say it in the comment in one line. Two kinds may name a doc: a comment naming the file the code serves (a served doc, the runbook that runs a script), and a math `Reference:` line or a test's pinned numbers, which name the outside source — or a reference note when only that note holds the fact. Golden-fixture attribution files are fixture paperwork, not comments.
+
+## Keeping and cutting
+
+- Dead code — nothing reachable uses it: no route, caller, UI entry, scheduled job or running script, and registries that dispatch by name count as callers — goes with its tests, docs and config.
+- Two things stay even when nothing reads or calls them: money trails (orders, fills, fees, cash, positions, P&L, receipts, transactions) and validated volatility and options math (a test proves its numbers). Their routes and plumbing still go when dead. Clerk stores are never deleted or moved.
+- An opt-in feature that no checked-in config turns on is not dead.
+
+## Hard rules
+
+- Never commit secrets, API keys, or connection strings. `.env` files only.
+- Never leave `console.log`, `print()`, or `Console.WriteLine` in committed code. Use the structured logger for each stack.
+- Never write silent exception handlers (`catch {}`, `except: pass`). Handle explicitly or let it propagate with context.
+- When editing an existing file, follow the patterns already in that file. Don't reformat or restyle on the way through.
+- Don't introduce new dependencies without justification. State the alternative considered and why it was rejected.
+- Don't duplicate utility functions — search first.
+
+## Skills
+
+Codex: read the skill's `SKILL.md` when its task applies.
 
 - **port-indicator** — Port an indicator or strategy from a reference source into `PythonDataService/` with strict numerical equivalence
 - **reconcile-backtest** — Diff two backtest runs trade-by-trade and classify divergence sources
@@ -125,45 +120,13 @@ Agent tooling auto-discovers these from `.claude/skills/`. Invoke directly or le
 - **write-graphql-resolver** — Write or debug a Hot Chocolate v15 resolver
 - **build-angular-component** — Build or modify an Angular 22 component
 - **meta-propose-skill** — When the same task shape repeats, propose a new skill instead of just doing the task
+- **learn-ai-validation** — Add or touch math: the provenance block, the canonical-implementation search, parity tests
+- **thermo-nuclear-code-quality-review** — The independent pre-PR review the Gates call for
 
-## Stack rules
+## References
 
-Full conventions live in `.claude/rules/`. Read the relevant file before significant changes:
+If the task involves a reference repo, check `references/` for a vendored copy. If it is not there, ask the owner whether to vendor it.
 
-- `.claude/rules/angular.md` — Angular 22 conventions (signals, zoneless, Signal Forms, Vitest)
-- `.claude/rules/dotnet.md` — .NET 10 + Hot Chocolate v15 conventions
-- `.claude/rules/python.md` — FastAPI, pandas, async conventions
-- `.claude/rules/testing.md` — Per-stack testing standards
-- `.claude/rules/numerical-rigor.md` — The core scientific rules (tolerances, golden fixtures, reconciliation taxonomy)
-- `.claude/rules/temporal-rigor.md` — Timestamp, calendar, and display-time authority
-
-## Hard rules (apply to every task)
-
-- Never commit secrets, API keys, or connection strings. `.env` files only.
-- Never leave `console.log`, `print()`, or `Console.WriteLine` in committed code. Use the structured logger for each stack.
-- Never write silent exception handlers (`catch {}`, `except: pass`). Handle explicitly or let it propagate with context.
-- Every bug fix ships with a regression test that fails before the fix and passes after.
-- Every port from a reference source ships with (a) a golden fixture test, (b) a `docs/references/` note, (c) the tolerance used and why.
-- Raw backend identifiers in Frontend receipt/evidence UI (`reason_code`, `gate_id`, `source`, receipt labels, and known code-like receipt values such as `NO_LIVE_BINDING` or `broker.connection`) must render through the shared `receiptLabel` pipe. Preserve opaque audit tokens such as intent/order IDs, paths, hashes, refs, and URLs exactly. Do not pipe backend-authored trader/operator prose; that copy should arrive from the backend or from a closed operator-copy map.
-- Tradeable-instrument symbols in Frontend display UI must render through shared `app-asset-identity`, the canonical symbol renderer. Use its compact size in dense rows; plain symbol text remains appropriate in controls such as `<option>` elements and ticker pickers. Do not duplicate logo, slug-resolution, or initials-fallback logic in feature components.
-- Symbol selection in Frontend UI must go through the shared instrument card (`app-instrument-card` or its picker wrappers) on the joined listing+lake universe (ADR 0066: the listing catalog is the data-plane's Polygon reference walk; the lake decides what a run can read). Never add a free-text ticker input, a hand-rolled suggestion list, or a label-map-as-membership — `TICKER_LABELS` is display metadata, not membership. An unheld pick is gated on its lake backfill inside the card (`EnsureCoverageService`); hosts never implement their own backfill gating or fallback symbol lists.
-- When editing an existing file, follow the patterns already in that file. Don't reformat or restyle on the way through.
-- Don't introduce new dependencies without justification. State the alternative considered and why it was rejected.
-- Don't create new files when editing an existing one works. Don't duplicate utility functions — search first.
-- Validate inputs at system boundaries (API endpoints, external data ingestion). Internal trusted code doesn't need paranoid guards.
-
-## Session kickoff checklist
-
-When starting a session on this repo, before the first significant edit:
-
-1. Read the user's task. Identify the skill that matches, if any.
-2. Before touching stack code, read the relevant `.claude/rules/*.md`.
-3. If the task involves a reference repo, check `references/` for a vendored copy. If not present, ask the user whether to vendor it or fetch via GitHub MCP.
-
-## GitHub publishing environment
+## GitHub publishing environment (Codex only)
 
 Containerized agent sessions can fail to reach Podman or report unusable GitHub CLI credentials even when the host Git credential is valid. For a requested push, retry the host-side `git` operation with the permitted sandbox bypass; use the GitHub connector to create or update the pull request. Treat the container failure as an environment boundary, not as evidence that the remote is unavailable.
-
-## Disclaimers
-
-This repo is for research and education. Nothing produced here is financial advice. The backtesting engine is a research tool; live trading requires separately validated infrastructure.

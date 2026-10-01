@@ -60,7 +60,7 @@ before submitting a LEAN run.
 | Is this the canonical backtest engine? | **No.** `app/engine/` remains canonical. See `engine-authority-map.md` row "Interactive backtest (stocks, indicator strategies)". |
 | Does Engine Lab math get re-derived from LEAN runs? | **No.** Engine Lab math is canonical and pinned against the vendored extract at `references/lean/7986ed0aade3ae5de06121682409f05984e32ff7/`. |
 | What is LEAN Lab for? | (a) Running user-authored `QCAlgorithm` code for **compatibility** with QC's ecosystem. (b) Producing reference traces for **reconciliation** against Engine Lab on shared strategies. (c) Capturing **audit evidence** of "what real LEAN does on this input". |
-| Can LEAN Lab become canonical later? | Only via a deliberate change to `engine-authority-map.md` and `math-sources-of-truth.md` in the same PR. Not by drift. |
+| Can LEAN Lab become canonical later? | Only via a deliberate change to `engine-authority-map.md` and the affected provenance blocks in the same PR. Not by drift. |
 | Where do LEAN Lab outputs go in the math registry? | They do not. Outputs of arbitrary user-authored `QCAlgorithm` code are not registered math. The runner itself (the LEAN image at a pinned digest) is the reference; per-run outputs are evidence, not authority. |
 
 ---

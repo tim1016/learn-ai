@@ -83,7 +83,7 @@ def evaluate_operand(operand, ctx: EvalContext) -> Decimal | None:
     """Recursively evaluate an Operand AST node.
 
     Formula: Subtract(a,b)=a-b; DifferenceBps(a,b)=10,000*(a-b)/b.
-    Reference: docs/math-sources-of-truth.md ("Relative operand difference in basis points" / walk-forward rows; the retired SPY protocol note is in git history).
+    Reference: none external — plain arithmetic (1 bp = 1/10,000 of ``b``).
     Canonical implementation: app.engine.strategy.normalized_gap.difference_bps
     (``DifferenceBps`` delegates to it below; this file owns only ``Subtract``).
     Validated against: tests/engine/strategy/spec/test_difference_bps_operand.py.
