@@ -401,6 +401,50 @@ async def test_a_cancel_mid_evaluation_never_spends_the_retry_allowance(conn: as
     ) == 0
 
 
+async def test_a_superseded_attempt_can_neither_record_nor_spend(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    row = await driver.lock(symbol)
+    driver.engine = FakeEngine(crash_on_call=3)
+    with pytest.raises(SimulatedCrash):
+        await driver.run(await driver.command(row, "continue"))
+    stale = await service.get_row(row.id)
+    pending = await conn.fetchval("SELECT evaluation_key FROM research_golden_search_evaluations WHERE study_id = $1 AND status = 'pending'", row.id)
+
+    resumed = await driver.command(stale, "finish")
+    token = resumed.dispatch["payload"]["stage_token"]
+    await service.bind_dispatch(row.id, stage_token=token, job_id="job-next")
+    _, attempt = await repo.claim_stage(conn, row.id, stage_token=token, job_id="job-next")
+    assert attempt == stale.attempt + 1
+
+    old = _evaluator(stale, stale.attempt, driver)
+    calls = len(driver.engine.calls)
+    with pytest.raises(StaleAttemptError):
+        await asyncio.to_thread(old.evaluate, [{**stale.protocol["seed"], "gap": 0.55}], window=_development(stale), stage="search")
+    with pytest.raises(StaleAttemptError):
+        await repo.complete_evaluation(conn, row.id, stale.attempt, pending, metrics=Metrics.failed("late"), detail=None)
+    assert len(driver.engine.calls) == calls
+    assert (await service.get_row(row.id)).consumed_evaluations == stale.consumed_evaluations
+
+
+async def test_a_spent_development_budget_still_leaves_the_exam_and_proof_their_reservation(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    row = await driver.lock(symbol)
+    # The plan's bound fits 5000; a cap of 11 leaves the development stages 6 and holds 2 + 3 back.
+    await conn.execute("UPDATE research_golden_search_studies SET budget_cap = 11 WHERE id = $1", row.id)
+    row = await driver.advance(await service.get_row(row.id), "continue")
+    row = await driver.advance(row, "continue")
+    assert (row.state, row.consumed_evaluations) == ("awaiting_candidate", 6)
+    assert all(fold["failure_code"] == "BUDGET" for fold in row.results["validation"]["folds"])
+
+    row = await driver.advance(row, "select_candidate", {"candidate_key": "all_period"})
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+    assert (row.state, row.consumed_evaluations) == ("awaiting_review", 8)
+    assert row.results["exam"]["candidate_metrics"]["status"] == "completed"
+
+    row = await driver.advance(row, "approve", {**APPROVE, "acknowledge_research_weakness": True})
+    assert (row.state, row.consumed_evaluations, row.budget_cap) == ("approved", 11, 11)
+
+
 # ── Leakage and capability ───────────────────────────────────────────────
 
 
@@ -420,6 +464,21 @@ async def test_results_after_a_folds_training_window_never_change_its_selection(
 
     assert other[0]["winner"] == folds[0]["winner"] and other[0]["train_metrics"] == folds[0]["train_metrics"]
     assert other[1]["winner"] != folds[1]["winner"]  # the mutation reaches every later window
+
+
+async def test_every_fold_searches_from_the_protocol_seed_never_from_the_all_period_winner(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    row = await driver.to_candidate(symbol)
+    seed_gap = row.protocol["seed"]["gap"]
+    assert row.results["search"]["procedure"]["winner"]["gap"] != seed_gap  # the all-period search moved
+
+    rounds = [trial for trial in await repo.list_trials(conn, row.id, kind="round") if trial["stage"] == "validation"]
+    first_round = {}
+    for trial in rounds:
+        first_round.setdefault(trial["fold_index"], trial["payload"])
+    assert sorted(first_round) == [0, 1]
+    assert all((payload["knob"], payload["current_before"]) == ("gap", seed_gap) for payload in first_round.values())
 
 
 async def test_final_interval_results_change_nothing_before_the_exam(driver: Driver, symbol: str) -> None:
@@ -455,10 +514,24 @@ async def test_the_capability_refuses_a_final_interval_evaluation_in_a_developme
 # ── Exposure ─────────────────────────────────────────────────────────────
 
 
-async def test_two_concurrent_final_tests_on_one_symbol_cannot_both_claim_an_unopened_interval(driver: Driver, symbol: str) -> None:
+async def test_two_concurrent_final_tests_on_one_symbol_cannot_both_claim_an_unopened_interval(
+    driver: Driver, symbol: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     first = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
     second = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
+    read_ledger = repo.exposure_overlaps
+    reads = 0
 
+    async def first_claim_lingers(conn: asyncpg.Connection, **kwargs: object) -> repo.ExposureOverlaps:
+        nonlocal reads
+        reads += 1
+        overlaps = await read_ledger(conn, **kwargs)  # type: ignore[arg-type]
+        if reads == 1:
+            # The other request arrives while this claim is read but not yet written.
+            await asyncio.sleep(0.5)
+        return overlaps
+
+    monkeypatch.setattr(repo, "exposure_overlaps", first_claim_lingers)
     opened = await asyncio.gather(
         driver.command(first, "open_exam", {"acknowledge_final_test": True}),
         driver.command(second, "open_exam", {"acknowledge_final_test": True}),
@@ -573,8 +646,12 @@ async def test_a_technical_approval_failure_reads_back_failed_and_can_be_retried
     assert driver.approval.checkpoints[0].proof is not None
 
 
+def _development(row: StudyRow) -> tuple[int, int]:
+    return (row.protocol["development_start_ms"], row.protocol["development_end_ms"])
+
+
 def _evaluator(row: StudyRow, attempt: int, driver: Driver) -> StudyEvaluator:
-    development = (row.protocol["development_start_ms"], row.protocol["development_end_ms"])
+    development = _development(row)
     return StudyEvaluator(
         study_id=row.id,
         attempt=attempt,
