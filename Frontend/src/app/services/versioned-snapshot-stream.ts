@@ -22,7 +22,7 @@ export interface SnapshotStreamCallbacks<T extends VersionedSnapshot> {
   readonly onStale?: (message: string) => void;
 }
 
-/** ADR-0028 latest-wins adoption: new epochs replace, same-epoch versions advance. */
+/** ADR 0035 amendment (b) latest-wins adoption: new epochs replace, same-epoch versions advance. */
 export function adoptVersionedSnapshot<T extends VersionedSnapshot>(
   current: T | null,
   candidate: T,

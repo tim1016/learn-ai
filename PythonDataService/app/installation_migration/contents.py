@@ -96,7 +96,7 @@ EXCLUDED_BIND_MOUNTS: dict[str, str] = {
 #: token a process mints under ``artifacts/`` is minted afresh on the new
 #: host. ``LAUNCHER_TOKEN_FILENAME`` is the LEAN launcher's live token, named
 #: by its canonical definition. The retired host daemon's
-#: ``.host-daemon-token`` (ADR 0007) and the clerk host-binding capability
+#: ``.host-daemon-token`` and the clerk host-binding capability
 #: have no canonical definition left in code, so they are caught by shape:
 #: any ``*-token``/``*_token`` name, any hidden name mentioning a token or a
 #: capability, key material (``*.pem``, ``*.key``, SSH ``id_*`` keys, and
@@ -128,7 +128,7 @@ _SKIPPED_SECRET_NOTES = {
     LAUNCHER_TOKEN_FILENAME: (
         "The LEAN launcher's token; ensure_launcher_token mints a fresh one on the new host."
     ),
-    ".host-daemon-token": "Retired host-daemon token (ADR 0007); nothing reads it.",
+    ".host-daemon-token": "Retired host-daemon token; nothing reads it.",
     ".clerk-host-binding-capability": "Retired clerk host-binding capability; nothing reads it.",
 }
 _DEFAULT_SKIPPED_SECRET_NOTE = (

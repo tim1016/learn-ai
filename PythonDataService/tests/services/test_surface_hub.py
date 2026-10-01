@@ -1,4 +1,4 @@
-"""ADR-0028 Stage 2 tests for producer-owned versioned snapshots."""
+"""Tests for producer-owned versioned snapshots (ADR 0035 amendment (b))."""
 
 from __future__ import annotations
 
