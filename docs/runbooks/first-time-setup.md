@@ -207,14 +207,15 @@ podman build --target runtime -t learn-ai-python ./PythonDataService
 ```bash
 podman exec my-frontend npm test                                               # Frontend (Vitest)
 cd Backend.Tests && dotnet test --filter "Category!=PostgresIntegration"      # Backend (xUnit)
-cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m scripts.run_fast_tests  # Python
+cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/<path> -q  # Python
 ```
 
 The Python suite runs from a host venv; create it once with
-`./bootstrap-host-venv.sh`. Frontend and Python change-gating tests have a
-hard two-minute budget, and CI applies the same limit to backend tests. The
-complete Python suite, PostgreSQL-backed .NET integration tests, and browser
-end-to-end coverage run daily in GitHub Actions. See
+`./bootstrap-host-venv.sh`. Locally, run the tests your change touches. CI runs
+every quick test (Python in 16 shards, Frontend in 6), each job under a hard
+two-minute budget, and applies the same limit to backend tests. Slow and
+PostgreSQL-backed Python tests, PostgreSQL-backed .NET integration tests, and
+browser end-to-end coverage run daily in GitHub Actions. See
 [`.claude/rules/testing.md`](../../.claude/rules/testing.md).
 
 ## 7. Stopping
