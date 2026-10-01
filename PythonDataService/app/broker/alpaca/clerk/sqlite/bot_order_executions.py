@@ -17,9 +17,10 @@ order's quantity as its cap. They go through the one exact append flow,
 whose coverage proof supersedes the cumulative they account for; a stream
 frame that arrives later is a duplicate there. A manual leg is #2686's
 (:mod:`manual_order_executions`) and an outside order is not the Clerk's:
-neither is touched. Nor is an order with a coverage conflict open, whose
-quarantined evidence the operator settles, nor activity rows whose recorded
-copies disagree: the fee projection already refuses on them.
+neither is touched. Nor is an order of a bot with a coverage conflict open
+on any of its orders -- the store admits one per bot, and the operator
+settles it first -- nor activity rows whose recorded copies disagree: the
+fee projection already refuses on them.
 
 A batch is recorded only once it accounts for exactly the shares the order's
 fills hold, so an execution Alpaca has not posted yet leaves everything as it
@@ -28,8 +29,7 @@ instruction cannot be read is logged once per process and left as it was;
 the other orders are still recovered.
 
 An activity that contradicts an execution the order records raises the
-coverage conflict once (#2791); the order then leaves the held set, its
-quarantined evidence the operator's to settle.
+coverage conflict once (#2791), and the bot's orders then leave the held set.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.activity_executions import BOT_ORDER, first_report, record_activity_executions
-from app.broker.alpaca.clerk.sqlite.execution_coverage import active_execution_coverage_conflicts
+from app.broker.alpaca.clerk.sqlite.execution_coverage import custody_subject_has_coverage_conflict
 from app.broker.alpaca.clerk.sqlite.fee_evidence import retained_activities
 from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError, read_order_details
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -98,7 +98,7 @@ def _bot_orders_holding_a_cumulative(conn: sqlite3.Connection) -> tuple[_HeldCum
             broker_order_id=row["broker_order_id"],
         )
         for row in rows
-        if not active_execution_coverage_conflicts(conn, order_ref=row["order_ref"])
+        if not custody_subject_has_coverage_conflict(conn, effect_operation_id=row["effect_operation_id"])
     )
 
 

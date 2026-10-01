@@ -942,6 +942,43 @@ def active_execution_coverage_conflicts(
     return tuple(conflicts)
 
 
+def coverage_conflict_evidence_refs(conn: sqlite3.Connection, *, order_ref: str) -> frozenset[str]:
+    """Every evidence reference the order's coverage conflicts name, open or resolved.
+
+    A conflict whose raised facts are unreadable names nothing, as it
+    proves nothing in :func:`active_execution_coverage_conflicts`.
+    """
+    named: set[str] = set()
+    rows = conn.execute(
+        "SELECT facts_json FROM uncertainties WHERE reason_code = ?", (EXECUTION_COVERAGE_CONFLICT_REASON_CODE,)
+    ).fetchall()
+    for row in rows:
+        try:
+            raised = UncertaintyRaisedFacts.from_facts_json(row["facts_json"])
+            cause = ExecutionCoverageConflictCause.from_mapping(raised.cause_facts)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if cause.order_ref == order_ref:
+            named.update(raised.evidence_refs)
+    return frozenset(named)
+
+
+def custody_subject_has_coverage_conflict(conn: sqlite3.Connection, *, effect_operation_id: str) -> bool:
+    """Whether the custody subject owning ``effect_operation_id`` has an open coverage conflict on any of its orders.
+
+    The uncertainty store admits one open coverage conflict per custody
+    subject (``ux_uncertainties_one_active_cause``), so while one is open no
+    other order of that subject can raise its own (#2791).
+    """
+    row = conn.execute(
+        "SELECT 1 FROM uncertainties u JOIN effect_operations e ON u.subject_id IS e.subject_id "
+        "WHERE e.effect_operation_id = ? AND u.scope = 'CUSTODY_SUBJECT' AND u.reason_code = ? "
+        "AND u.resolved_at_ms IS NULL LIMIT 1",
+        (effect_operation_id, EXECUTION_COVERAGE_CONFLICT_REASON_CODE),
+    ).fetchone()
+    return row is not None
+
+
 def quarantined_executions_for_conflict(
     conn: sqlite3.Connection,
     *,
@@ -1218,9 +1255,9 @@ def exact_replaces_cumulative(
 
     Formula: same side, |q_cumulative − q_exact| < FILL_QTY_EPSILON shares,
       and |p_cumulative − p_exact| < tick(p_cumulative) per share
-      (total_price_conflict_atol, #2791). On a cumulative row that holds only
-      part of its order this is stricter than the set proof, which measures
-      the gap on the order's whole average.
+      (total_price_conflict_atol, #2791). It measures the gap on the one
+      cumulative row, where the set proof measures it on the order's whole
+      average; the two agree when that row is its order's only fill.
     Reference: Project-authored S0 operator contract retained during the
       execution-coverage migration in PRD #1543; the price rule is ADR 0036's
       vendor-rounding rule.

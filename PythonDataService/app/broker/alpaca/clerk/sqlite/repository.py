@@ -763,23 +763,17 @@ class ClerkSqliteRepository(
             return "appended"
 
     def exact_execution_contradicts_record(self, *, order_ref: str, facts: ExecutionSliceFilledFacts) -> bool:
-        """Whether :meth:`append_execution_slice_if_absent` would raise a new conflict on an execution the order holds.
+        """Whether the order holds ``facts``'s execution id with other economics (#2791).
 
-        True when the order holds ``facts``'s execution id with other
-        economics, either as an effective fill that no uncertainty names yet,
-        or as an exact an order-total proof (#2346) kept quarantined. Any
-        other recorded copy, such as a superseded fill, is a duplicate to the
-        append flow. An order an open coverage conflict fences keeps that one
-        (#2791).
+        Held as an effective fill, or as an exact an order-total proof
+        (#2346) kept quarantined, compared as the append flow compares a
+        redelivery (:meth:`_same_slice_economics`). A fill a correction
+        superseded is never compared: its correction's economics stand.
         """
         with self._write_lock:
-            if active_execution_coverage_conflicts(self._conn, order_ref=order_ref):
-                return False
             existing = reads.effective_execution_slice(self._conn, facts.execution_id)
             if existing is not None:
-                return not self._same_execution_slice(
-                    existing, facts=facts, order_ref=order_ref
-                ) and not reads.correction_uncertainty_exists(self._conn, facts.execution_id)
+                return not self._same_execution_slice(existing, facts=facts, order_ref=order_ref)
             if reads.execution_exists(self._conn, facts.execution_id):
                 return False
             retained = [

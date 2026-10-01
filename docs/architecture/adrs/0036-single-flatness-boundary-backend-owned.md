@@ -146,7 +146,7 @@ is unchanged.
    increment of the reported average is vendor rounding; a gap of one
    increment or more is a conflict.**
    - The tolerance is `total_price_conflict_atol(reported_avg_price)` per
-     share, `rtol=0` (`sqlite/order_evidence.py`, #2460, #2770): $0.01 when
+     share, `rtol=0` (`sqlite/execution_coverage.py`, #2460, #2770): $0.01 when
      the broker's reported average is at or above $1, $0.0001 below.
    - The increment is Alpaca's price precision, read from the canonical
      tick rule, `price_increment` in `app/broker/alpaca/marketable_limit.py`.

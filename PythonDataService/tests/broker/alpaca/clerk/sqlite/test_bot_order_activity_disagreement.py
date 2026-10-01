@@ -14,30 +14,40 @@ recorded the executions Alpaca's account activity names for it (#2787).
   account's P&L coverage still asks for attention.
 - An activity that contradicts an execution the order recorded is raised
   as a coverage conflict once, which the bot path used to drop silently.
+  The store admits one open coverage conflict per bot, so a bot it fences
+  waits rather than failing every read with a second.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
+from app.broker.alpaca.clerk.sqlite import execution_coverage
 from app.broker.alpaca.clerk.sqlite.activity_executions import BOT_ORDER, record_activity_executions
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
-from app.broker.alpaca.clerk.sqlite.execution_coverage import order_total_retained_exacts_explain_cumulative
+from app.broker.alpaca.clerk.sqlite.execution_coverage import (
+    order_total_retained_exacts_explain_cumulative,
+    strict_gross_cost_envelope,
+)
+from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.fee_evidence import retained_activities
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXECUTION_COVERAGE_CONFLICT_REASON_CODE
 from app.broker.contract.models import BrokerOrderLeg
-from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _broker_order_fixture
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _broker_order_fixture, _TestClock
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import _deploy, _new_budget_repo
 from tests.broker.alpaca.clerk.sqlite.test_manual_chain_foreign_member_fee_coverage import (
     _account_execution_coverage,
     _bot_entry,
     _bot_entry_filled_over_rest,
+    _filled_over_rest,
     _read_account_activity,
     _reading_after_every_execution,
     _recovery_actions,
@@ -45,6 +55,8 @@ from tests.broker.alpaca.clerk.sqlite.test_manual_chain_foreign_member_fee_cover
 from tests.broker.alpaca.clerk.sqlite.test_manual_order_filled_over_rest import (
     _EXEC_1,
     _EXEC_2,
+    _EXEC_A,
+    _EXEC_B,
     _ActivityFeed,
     _coverage_conflict_episodes,
     _credited,
@@ -52,6 +64,7 @@ from tests.broker.alpaca.clerk.sqlite.test_manual_order_filled_over_rest import 
     _sweep,
 )
 from tests.broker.alpaca.clerk.sqlite.test_manual_order_replaced_at_alpaca import _Website
+from tests.broker.alpaca.clerk.sqlite.test_reconcile import _FakeTrade
 
 
 def _another_bots_entry_is_admitted(repo: ClerkSqliteRepository) -> bool:
@@ -157,10 +170,11 @@ async def test_an_activity_contradicting_a_recorded_bot_execution_raises_one_cov
 ) -> None:
     """The stream recorded EXEC_1 as 2 of the bot's 4 shares; REST credited the other 2 as a cumulative.
 
-    Alpaca's fill history then says EXEC_1 was 3 shares and EXEC_2 1. That
-    contradicts what the order recorded, so the read raises one coverage
-    conflict naming EXEC_1; the order then leaves the recovery, and later
-    reads and sweeps add nothing.
+    Alpaca's fill history then says EXEC_1 was 3 shares and EXEC_2, posted
+    before it, 1. That contradicts what the order recorded, so the read
+    credits nothing and raises one coverage conflict naming EXEC_1 -- never
+    EXEC_2's first, which would leave EXEC_1's no room. The order then
+    leaves the recovery, and later reads and sweeps add nothing.
     """
     repo = _new_budget_repo(tmp_path)
     try:
@@ -176,8 +190,8 @@ async def test_an_activity_contradicting_a_recorded_bot_execution_raises_one_cov
         fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=filled)
         assert _fills(repo, order_ref) == [(None, "cumulative_recovery", 2.0, 100.0), (_EXEC_1, "websocket", 2.0, 100.0)]
         feed = _ActivityFeed()
+        feed.fill(execution_id=_EXEC_2, order_id=filled.order_id, quantity=1, price=100, at_ms=NOON - 5)
         feed.fill(execution_id=_EXEC_1, order_id=filled.order_id, quantity=3, price=100, at_ms=NOON)
-        feed.fill(execution_id=_EXEC_2, order_id=filled.order_id, quantity=1, price=100, at_ms=NOON + 1)
         caplog.set_level(logging.INFO)
 
         await _read_account_activity(repo, feed)
@@ -189,6 +203,62 @@ async def test_an_activity_contradicting_a_recorded_bot_execution_raises_one_cov
         assert _recovery_actions(caplog, "bot_order_execution_contradicted") == [order_ref]
         assert len(repo.transitions_for_order(order_ref)) == transitions
         assert _fills(repo, order_ref) == [(None, "cumulative_recovery", 2.0, 100.0), (_EXEC_1, "websocket", 2.0, 100.0)]
+    finally:
+        repo.close()
+
+
+async def test_a_bot_fenced_by_one_orders_conflict_leaves_its_other_orders_and_other_bots_recovering(
+    tmp_path: Path,
+) -> None:
+    """Bot a's entry has a contradicted activity and its exit an activity two cents off REST; bot b's is clean.
+
+    The store admits one open coverage conflict per bot. Whichever of bot
+    a's orders is read first raises it; the other waits instead of failing
+    the read with a second, so every read completes and bot b's execution
+    is still credited.
+    """
+    repo = _new_budget_repo(tmp_path)
+    try:
+        _deploy(repo, "a", 60_000)
+        _deploy(repo, "b", 30_000)
+        entry = _bot_entry(repo, decision_id="a-entry", quantity=4)
+        assert entry.order_ref is not None and entry.effect_operation_id is not None
+        bot_b = _bot_entry(repo, decision_id="b-entry", strategy_instance_id="b", quantity=2)
+        assert bot_b.order_ref is not None
+        filled_b = _filled_over_rest(repo, bot_b, quantity=2, order_id="broker-order-b")
+        partial = _broker_order_fixture(
+            entry.order_ref, order_id="broker-order-a", status="partially_filled", quantity=4, filled_quantity=2,
+            filled_avg_price=100,
+        ).model_copy(update={"updated_at_ms": NOON, "observed_at_ms": NOON})
+        assert await _fill_frame(repo, partial, execution_id=_EXEC_1, quantity=2, price=100) == "order_event"
+        filled_entry = partial.model_copy(update={"status": "filled", "filled_quantity": 4, "filled_at_ms": NOON})
+        fold_order_evidence(repo, effect_operation_id=entry.effect_operation_id, order=filled_entry)
+        exit_ = accept_exit(
+            repo, account_id=repo.account_id, strategy_instance_id="a", decision_id="a-exit",
+            lifecycle_run_id="run-a", entry_order_ref=entry.order_ref,
+        )
+        sent = await resolve_exit(
+            repo, effect_operation_id=exit_.effect_operation_id, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY
+        )
+        exit_order = repo.order(sent.reducing_order_ref)
+        assert exit_order is not None and exit_order.broker_order_id is not None
+        filled_exit = _broker_order_fixture(
+            exit_order.order_ref, order_id=exit_order.broker_order_id, status="filled", side="sell", quantity=4,
+            filled_quantity=4, filled_avg_price=100,
+        ).model_copy(update={"updated_at_ms": NOON + 10, "observed_at_ms": NOON + 10, "filled_at_ms": NOON + 10})
+        fold_order_evidence(repo, effect_operation_id=exit_.effect_operation_id, order=filled_exit)
+        feed = _ActivityFeed()
+        feed.fill(execution_id=_EXEC_1, order_id=filled_entry.order_id, quantity=3, price=100, at_ms=NOON)
+        feed.fill(execution_id=_EXEC_2, order_id=filled_entry.order_id, quantity=1, price=100, at_ms=NOON + 1)
+        feed.fill(execution_id=_EXEC_A, order_id=filled_exit.order_id, quantity=4, price=100.02, at_ms=NOON + 10)
+        feed.rows[-1][1]["side"] = "sell"
+        feed.fill(execution_id=_EXEC_B, order_id=filled_b.order_id, quantity=2, price=100, at_ms=NOON + 20)
+
+        for _ in range(3):
+            await _read_account_activity(repo, feed)
+
+        assert [state for state, _execution in _conflicts_naming(repo)] == ["active"]
+        assert _credited(repo, bot_b.order_ref) == [(_EXEC_B, "activity_recovery", 2.0, 100.0)]
     finally:
         repo.close()
 
@@ -230,6 +300,58 @@ async def test_executions_a_bot_order_already_accounts_for_past_its_quantity_are
         assert _coverage_conflict_episodes(repo) == []
     finally:
         repo.close()
+
+
+async def test_a_supersession_proven_at_float_precision_before_2791_still_replays(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A record written before #2791 carries the float-precision envelope, not one price increment.
+
+    The bot's REST total is replaced by its execution under that envelope,
+    as the Clerk recorded it then; a rebuild from the mirror under the
+    price-increment rule replays it to the same custody.
+    """
+    repo = _new_budget_repo(tmp_path)
+    repo_closed = False
+    rebuilt: ClerkSqliteRepository | None = None
+    try:
+        _deploy(repo)
+        order_ref, filled = _bot_entry_filled_over_rest(repo, decision_id="before-2791")
+        feed = _ActivityFeed()
+        feed.fill(execution_id=_EXEC_1, order_id=filled.order_id, quantity=5, price=100, at_ms=NOON)
+        with monkeypatch.context() as written_before_2791:
+            written_before_2791.setattr(
+                execution_coverage,
+                "execution_coverage_gross_cost_tolerance",
+                lambda *, exact, cumulative, **_order_totals: strict_gross_cost_envelope(exact=exact, cumulative=cumulative),
+            )
+            await _read_account_activity(repo, feed)
+        superseded = [
+            json.loads(row["facts_json"])
+            for row in repo.custody_transitions()
+            if row["transition_kind"] == "EXECUTION_COVERAGE_SUPERSEDED"
+        ]
+        assert [facts["gross_cost_tolerance"] for facts in superseded] == [
+            pytest.approx(5 * 1e-9 + 100 * 1e-9 + 1e-18, abs=1e-15, rel=0)
+        ]
+        transitions = repo.custody_transitions()
+        fills = repo.fills_for_order(order_ref)
+        db_path = repo.db_path
+        repo.close()
+        repo_closed = True
+        db_path.rename(db_path.with_suffix(".db.corrupt"))
+
+        rebuilt = ClerkSqliteRepository.rebuild_from_mirror(
+            account_id="BUDGET-PAPER", artifacts_root=tmp_path, clock=_TestClock(NOON)
+        )
+
+        assert rebuilt.custody_transitions() == transitions
+        assert rebuilt.fills_for_order(order_ref) == fills
+    finally:
+        if rebuilt is not None:
+            rebuilt.close()
+        if not repo_closed:
+            repo.close()
 
 
 @pytest.mark.parametrize(
