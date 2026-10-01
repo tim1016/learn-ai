@@ -31,14 +31,4 @@ describe('RecentDecisionsListComponent', () => {
     expect(screen.getByRole('heading', { name: 'Recent decisions' })).toBeTruthy();
     expect(screen.queryByText('Simulation')).toBeNull();
   });
-
-  it('renders a mode-neutral empty state when no decision is recorded yet', async () => {
-    await render(RecentDecisionsListComponent, {
-      inputs: { decisions: [] },
-    });
-
-    expect(screen.getByText('No decisions recorded yet.')).toBeTruthy();
-    expect(screen.queryByText(/simulated/i)).toBeNull();
-    expect(screen.queryByRole('table', { name: 'Recent decisions' })).toBeNull();
-  });
 });

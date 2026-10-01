@@ -29,9 +29,7 @@ export class PayoffChartComponent implements OnDestroy {
   selectedGreek = input<GreekType>('delta');
   breakevens = input<number[]>([]);
   spotPrice = input(0);
-  weightedIv = input(0.2);
   timeToExpiry = input(0);
-  riskFreeRate = input(0.043);
   height = input(450);
 
   // ── Template refs ──────────────────────────────────────────────────

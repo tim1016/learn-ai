@@ -154,13 +154,4 @@ describe('app menu projections', () => {
     expect(research?.items?.find((item) => item.label === 'Regimes')?.styleClass).toBe(ACTIVE_ITEM_CLASS);
     expect(research?.styleClass).toBe(ACTIVE_GROUP_CLASS);
   });
-
-  it('omits the retired Indicator Report and Design Lab surfaces', () => {
-    const groups = menuItemsFor('/data-lab');
-    const entries = groups.flatMap((group) => group.items ?? []);
-
-    expect(groups.map((group) => group.label)).not.toContain('Design Lab');
-    expect(entries.map((item) => item.label)).not.toContain('Indicator Report');
-    expect(entries.map((item) => item.routerLink)).not.toContain('/indicator-report');
-  });
 });

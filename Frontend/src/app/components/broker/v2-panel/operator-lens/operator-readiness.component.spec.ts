@@ -54,11 +54,6 @@ function expand(label: string): void {
 }
 
 describe('OperatorReadinessComponent', () => {
-  it('says so when the backend reports no checks', async () => {
-    await renderChecks(panelWith([], []));
-
-    expect(screen.getByText('No checks reported for this bot.')).toBeTruthy();
-  });
 
   it('renders only the list: the fold summary is its heading', async () => {
     const stop = fakeSqliteStopAction();

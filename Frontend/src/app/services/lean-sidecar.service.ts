@@ -6,8 +6,6 @@ import { environment } from "../../environments/environment";
 import type {
   LeanSidecarErrorEnvelope,
   LeanLauncherDiagnosticReport,
-  TrustedRunRequest,
-  TrustedRunResponse,
 } from "./lean-sidecar.types";
 
 /**
@@ -18,12 +16,6 @@ import type {
  * extracts the launcher's stable ``{reason, message}`` envelope into a
  * ``LeanSidecarApiError`` so the component can branch on the reason
  * label without parsing the raw ``HttpErrorResponse``.
- *
- * PR B.5 (2026-05-19) — surface narrowed to the unified Engine Lab's
- * ``startTrustedRun`` call. The standalone ``/lean-lab`` page's
- * inspection / reconciliation / manifest / log-tail helpers were
- * removed when that page retired; see git history for the prior shape
- * if a future feature needs to revive any of them.
  */
 
 export class LeanSidecarApiError extends Error {
@@ -41,16 +33,6 @@ export class LeanSidecarApiError extends Error {
 export class LeanSidecarService {
   private readonly http = inject(HttpClient);
   private readonly base = `${environment.pythonServiceUrl}/api/lean-sidecar`;
-
-  async startTrustedRun(request: TrustedRunRequest): Promise<TrustedRunResponse> {
-    try {
-      return await firstValueFrom(
-        this.http.post<TrustedRunResponse>(`${this.base}/trusted-runs`, request),
-      );
-    } catch (err) {
-      throw this.translate(err);
-    }
-  }
 
   async diagnose(): Promise<LeanLauncherDiagnosticReport> {
     try {

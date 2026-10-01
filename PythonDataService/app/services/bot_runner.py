@@ -188,7 +188,6 @@ from app.services.bot_start_admission import (
 from app.services.bot_trade_strategy import supported_alpaca_paper_strategy_keys
 from app.services.canary_admission import canary_gate_applies, evaluate_canary_rollback
 from app.services.go_live_hold import GoLiveHoldState
-from app.services.market_data_capability_service import get_market_data_capability_service
 from app.services.market_liveness import market_liveness_fact
 from app.services.run_replay_proof import RunReplayProofService, RunReplayUnavailableError
 from app.services.strategy_validation_admission import (
@@ -563,7 +562,6 @@ class BotTaskRegistry:
             runtime_fact=self._start_runtime_fact,
             validation_fact=active_validation_fact,
             activate=self._activate_start_binding,
-            session_capability=get_market_data_capability_service().read_latest_for,
             market_liveness=self._market_liveness,
         )
         self._run_evidence = BotRunEvidenceService(

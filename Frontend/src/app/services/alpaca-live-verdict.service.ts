@@ -149,7 +149,6 @@ export class AlpacaLiveVerdictService {
   private readonly destroyRef = inject(DestroyRef);
 
   private readonly _stateByClerkId = signal<ReadonlyMap<string, LaneVerdictState>>(new Map());
-  readonly stateByClerkId = this._stateByClerkId.asReadonly();
 
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private started = false;

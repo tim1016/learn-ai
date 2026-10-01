@@ -74,20 +74,6 @@
   }
 }
 
-.section-error-mathref {
-  margin: var(--space-2) 0 0;
-  font-size: var(--fs-xs);
-
-  a {
-    color: var(--accent);
-    text-decoration: none;
-
-    &:hover {
-      text-decoration: underline;
-    }
-  }
-}
-
 .section-error-details {
   margin-top: var(--space-2);
   border-top: 1px solid rgba(239, 83, 80, 0.25);

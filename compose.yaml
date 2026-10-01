@@ -226,8 +226,7 @@ services:
       - IBKR_LIVE_RUNS_ROOT=/app/artifacts/live_runs
       # PRD #684 — macOS/Podman bind mounts do not propagate inotify
       # reliably into the container. Force watchfiles polling when
-      # ``uvicorn --reload`` is explicitly enabled, and surface the mode
-      # via /api/broker/data-plane/health.
+      # ``uvicorn --reload`` is explicitly enabled.
       - WATCHFILES_FORCE_POLLING=${WATCHFILES_FORCE_POLLING:-true}
       # Default reload off: LEAN stages runnable Python algorithms under
       # /app/artifacts, and WatchFiles can treat those generated files as
@@ -431,13 +430,6 @@ services:
       # tsconfig maps @repo-contracts/* to ../contracts/* which resolves to
       # /contracts/* from the dev container's /app baseUrl.
       - ./contracts:/contracts:ro,z
-      # PRD #593 / ADR 0012 — cross-language ``ActionPlan`` parity
-      # fixtures live in PythonDataService so Pydantic stays
-      # authoritative; mount them read-only inside src/testing/ so the
-      # angular-compiler (which scopes module resolution to src/) can
-      # resolve them. See Frontend/src/app/api/action-plan-validator.spec.ts
-      # and tsconfig.spec.json's ``src/testing/**/*.json`` include.
-      - ./PythonDataService/tests/fixtures/action_plan:/app/src/testing/action_plan_fixtures:ro,z
     environment:
       # Angular 22's esbuild compiler runs worker threads; default Node heap
       # caps them at ~512MB which is not enough for this project's bundle

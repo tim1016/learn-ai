@@ -221,8 +221,6 @@ export class OptionsLabChainComponent implements OnInit {
     });
   });
 
-  atmRowIndex = computed(() => this.rows().findIndex(r => r.isAtm));
-
   spotChangeClass = computed(() => {
     const c = this.spotChange();
     if (c > 0) return 'pos';

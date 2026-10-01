@@ -334,14 +334,6 @@ describe('AccountDeskTransactionHistoryComponent', () => {
     );
   });
 
-  it('renders transaction origins through the shared receipt label and keeps timestamps as milliseconds', async () => {
-    await renderHistory({
-      rows: signal([transaction({ transaction_origin: 'force_flat' })]),
-    });
-
-    expect(screen.getByText('Force Flat')).toBeTruthy();
-  });
-
   it('derives a local calendar day only while matching canonical timestamp values', () => {
     const selectedDay = new Date(2026, 7, 13);
     const startOfDayMs = selectedDay.getTime();

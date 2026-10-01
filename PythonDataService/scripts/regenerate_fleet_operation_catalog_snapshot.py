@@ -9,9 +9,7 @@ builder all derive from the provider-declared
 This script writes **two identical** JSON snapshot files -- one in the
 PythonDataService tree, one in the Frontend tree -- so the two test
 containers (which do not share a working tree) each lock against their own
-copy, mirroring the established pattern for the broker-v2 panel vocabulary
-and the fleet refusal vocabulary (see
-``scripts/regenerate_broker_v2_vocabulary_snapshot.py`` and
+copy, mirroring the fleet refusal vocabulary (see
 ``scripts/regenerate_fleet_refusal_vocabulary_snapshot.py``):
 
 - pytest ``tests/broker/fleet/test_operation_catalog_snapshot.py`` asserts

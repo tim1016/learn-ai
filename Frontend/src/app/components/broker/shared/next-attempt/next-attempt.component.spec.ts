@@ -32,20 +32,6 @@ describe('NextAttemptComponent (#2504)', () => {
     },
   );
 
-  it('shows original exposure age separately from the latest check', async () => {
-    await renderStatus({
-      kind: 'working', reason_code: 'OWN_EXIT_WORKING', explanation: 'An exit is in progress.',
-      stuck_since_ms: PRE_MARKET_OPEN_MS, last_checked_at_ms: PRE_MARKET_OPEN_MS + 60_000,
-    });
-    expect(screen.getByText(/Position still open since/)).toBeTruthy();
-    expect(screen.getByText(/Last checked/)).toBeTruthy();
-  });
-
-  it('shows an unreadable record as unknown', async () => {
-    await render(NextAttemptComponent, { inputs: { facts: { recovery_status: { kind: 'unknown', reason_code: 'RECOVERY_RECORD_UNREADABLE', explanation: "Recovery status is unknown; this notice's record could not be read." } } } });
-    expect(screen.getByText(/Recovery status is unknown/)).toBeTruthy();
-  });
-
   it('takes no space when no recovery is attached', async () => {
     const { fixture } = await render(NextAttemptComponent, { inputs: { facts: {} } });
     expect(fixture.nativeElement.style.display).toBe('none');

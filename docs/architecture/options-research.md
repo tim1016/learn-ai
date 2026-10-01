@@ -480,9 +480,6 @@ component deletions) live in
 
 - The IV pipeline itself. `iv-ownership-research.md` is its truth
   doc; this doc cross-links where appropriate but does not duplicate.
-- The backtesting engine's internal options surface
-  (`PythonDataService/app/engine/options/`). Used only by the
-  backtest engine, not by any of the surviving routes in §5.
 - Non-options trading surfaces (`/data-lab` ex-options-sub-feature,
   `/strategy-lab`, `/lean-engine`, `/edge`, `/portfolio`). Each has
   its own truth doc or roadmap.
@@ -515,7 +512,7 @@ component deletions) live in
   — the migration roadmap that the R8 deferred item will close out.
 - [`docs/options-companion-format.md`](../options-companion-format.md)
   — to be absorbed into §5.4.
-- [`docs/options-cross-section-overview.md`](../options-cross-section-overview.md)
+- `docs/options-cross-section-overview.md` (removed; in Git history)
   — to be absorbed into §4.
 
 **PR audit trail** (this doc):

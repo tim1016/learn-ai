@@ -10,6 +10,7 @@ import pytest
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.services.session_authority import (
+    declared_extended_phase_at_ms,
     et_minute_of_day_ms,
     extended_session_bounds_ms,
     session_state_at_ms,
@@ -99,3 +100,33 @@ def test_without_a_window_the_calendar_still_proves_only_rth_or_closed() -> None
     assert state.phase == "CLOSED"
     assert state.source == "nyse_calendar"
     assert state.extended_phase_proven is False
+
+
+@pytest.mark.parametrize(
+    ("day", "hour", "minute", "proven"),
+    [
+        (_REGULAR, 4, 0, True),  # PRE opens at the declared open
+        (date(2026, 3, 9), 4, 0, True),  # PRE on the first EDT trading day (DST)
+        (_REGULAR, 9, 29, True),
+        (_REGULAR, 16, 0, True),  # POST
+        (_REGULAR, 19, 59, True),
+        (_EARLY, 13, 0, True),  # POST starts at a half-day's calendar close
+        (_REGULAR, 3, 59, False),  # before the declared open
+        (_REGULAR, 12, 0, False),  # RTH is not an extended phase
+        (_REGULAR, 20, 0, False),  # at the declared close
+        (_SUNDAY, 12, 0, False),  # not a trading day
+    ],
+)
+def test_only_a_declared_pre_or_post_phase_proves_extended_hours(
+    day: date, hour: int, minute: int, proven: bool
+) -> None:
+    """The ENTER gate's and the market pulse's one predicate (#1671): the
+    declared window is the only proof, and a resolved RTH or CLOSED never
+    counts as extended — so a use_rth=False bot cannot override a fresh
+    broker CLOSED outside the declared window."""
+    assert declared_extended_phase_at_ms(now_ms=_et(day, hour, minute), extended_window=_WINDOW) is proven
+
+
+def test_without_a_declared_window_no_instant_proves_extended_hours() -> None:
+    for hour in (6, 12, 18):
+        assert declared_extended_phase_at_ms(now_ms=_et(_REGULAR, hour, 0), extended_window=None) is False

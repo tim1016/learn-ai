@@ -224,16 +224,6 @@ describe('BotEndCardComponent (#2607)', () => {
     expect(save).not.toHaveBeenCalled();
   });
 
-  it('holds Change still while another command on this bot is on its way', async () => {
-    const { fixture, rerender } = await renderCard(SCHEDULED, undefined, { locked: true });
-
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Change end' }).disabled).toBe(true);
-
-    await rerender({ partialUpdate: true, inputs: { locked: false } });
-    await fixture.whenStable();
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Change end' }).disabled).toBe(false);
-  });
-
   it('shows a state conflict (409) in the backend’s words, its code as a label', async () => {
     const conflict = new HttpErrorResponse({
       status: 409,

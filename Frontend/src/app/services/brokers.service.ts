@@ -18,16 +18,12 @@ import type {
   ActivityPeriodRead,
   AlpacaLiveVerdict,
   BrokerAccountSnapshot,
-  BrokerActivity,
-  BrokerOrder,
   BrokerPortfolioHistory,
   PortfolioHistoryProof,
-  BrokerPosition,
   ClerkStatus,
   CustodyDiagnosis,
   ManualOrderCapability,
   ManualOrderCancelRequest,
-  ManualOrderCancellation,
   ManualOrderPreview,
   ManualOrderPreviewRequest,
   ManualOrderSubmitRequest,
@@ -172,35 +168,6 @@ export class BrokersService {
     );
   }
 
-  listPositions(target: ResourceTarget): Promise<BrokerPosition[]> {
-    return firstValueFrom(
-      this.http.get<BrokerPosition[]>(operationUrl('positions_read', target)),
-    );
-  }
-
-  /**
-   * Account-wide Alpaca activity, bounded by the data plane. `afterMs` is an
-   * int64 UTC cursor owned by the caller's selected activity window.
-   */
-  listActivities(
-    target: ResourceTarget,
-    options: { afterMs?: number; currentSession?: boolean; limit?: number } = {},
-  ): Promise<BrokerActivity[]> {
-    let params = new HttpParams();
-    if (options.afterMs != null) {
-      params = params.set('after_ms', options.afterMs);
-    }
-    if (options.limit != null) {
-      params = params.set('limit', options.limit);
-    }
-    if (options.currentSession) {
-      params = params.set('current_session', true);
-    }
-    return firstValueFrom(
-      this.http.get<BrokerActivity[]>(operationUrl('activities_read', target), { params }),
-    );
-  }
-
   /**
    * One Activity period's orders and cash moves, newest first, as far as one
    * bounded read reached. The data plane opens the window at the period's own
@@ -226,18 +193,14 @@ export class BrokersService {
   }
 
   /**
-   * Custody fee ownership: a deployment's lifetime, the account's lifetime,
-   * or — with `period` — the account's fees for one Activity period.
+   * Custody fee ownership: the account's lifetime, or — with `period` — the
+   * account's fees for one Activity period.
    */
   getFeeAttribution(
     target: ResourceTarget,
-    strategyInstanceId: string | null = null,
     period: ActivityPeriod | null = null,
   ): Promise<components['schemas']['DeploymentFeeAttribution']> {
     let params = new HttpParams();
-    if (strategyInstanceId !== null) {
-      params = params.set('strategy_instance_id', strategyInstanceId);
-    }
     if (period !== null) {
       params = params.set('period', period);
     }
@@ -266,23 +229,6 @@ export class BrokersService {
     const params = new HttpParams().set('range', historyRange);
     return firstValueFrom(
       this.http.get<PortfolioHistoryProof>(operationUrl('portfolio_history_proof_read', target), { params }),
-    );
-  }
-
-  listOrders(
-    clerkId: string,
-    options: { status?: 'open' | 'closed' | 'all'; limit?: number } = {},
-    broker = 'alpaca',
-  ): Promise<BrokerOrder[]> {
-    let params = new HttpParams();
-    if (options.status) {
-      params = params.set('status', options.status);
-    }
-    if (options.limit != null) {
-      params = params.set('limit', options.limit);
-    }
-    return firstValueFrom(
-      this.http.get<BrokerOrder[]>(operationUrl('orders_read', { broker, clerkId }), { params }),
     );
   }
 
@@ -361,20 +307,6 @@ export class BrokersService {
     return firstValueFrom(
       this.http.get<ManualOrderTicket>(
         operationUrl('manual_order_ticket_read', { broker: 'alpaca', clerkId, accountId, ticketId }),
-      ),
-    );
-  }
-
-  /** Cancel the exact SQLite-owned manual order reference once, durably. */
-  cancelSqliteManualOrder(
-    target: ResourceTarget,
-    orderRef: string,
-    request: ManualOrderCancelRequest,
-  ): Promise<ManualOrderCancellation> {
-    return firstValueFrom(
-      this.http.post<ManualOrderCancellation>(
-        operationUrl('manual_order_cancel', { ...target, orderRef }),
-        this.commandBody(target, 'manual_orders', request),
       ),
     );
   }

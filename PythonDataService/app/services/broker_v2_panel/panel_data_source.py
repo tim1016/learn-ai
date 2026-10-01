@@ -67,7 +67,6 @@ from app.services.bot_runner import (
 )
 from app.services.bot_runner_errors import BotRunnerError, InvalidStrategyInstanceIdError
 from app.services.bot_runner_errors import UnknownBotError as RunnerUnknownBotError
-from app.services.bot_start_admission import market_data_capability_account_id
 from app.services.broker_v2_panel.action_execution_service import (
     REVIVAL_OUTCOME_AUTHORITY_UNAVAILABLE,
     REVIVAL_OUTCOME_NO_SWEEP,
@@ -117,7 +116,6 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     read_sqlite_decision_receipts,
     read_sqlite_panel_evidence,
 )
-from app.services.market_data_capability_service import get_market_data_capability_service
 from app.services.signal_program_admission import prove_running_program_build
 from app.services.source_bar_ledger import (
     RetainedContinuityEvent,
@@ -464,7 +462,6 @@ async def _get_panel_with_entries_from_authority(
     from app.marketdata.ibkr_feed import get_market_data_feed
 
     market_data_feed = get_market_data_feed()
-    capability_account_id = market_data_capability_account_id(market_data_feed)
     source_evidence = _run_source_evidence_for(binding)
     panel = build_panel(
         status,
@@ -499,15 +496,6 @@ async def _get_panel_with_entries_from_authority(
             # the same reason.
             now_ms=now_ms_utc(),
             symbol=binding.symbol,
-            account_id=capability_account_id,
-            capability=(
-                get_market_data_capability_service().read_latest_for(
-                    symbol=binding.symbol,
-                    account_id=capability_account_id,
-                )
-                if capability_account_id is not None
-                else None
-            ),
             use_rth=binding.use_rth,
             bot_running=status.running,
             extended_window=facade.program_leg_policy.window,

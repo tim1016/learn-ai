@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
 import { TimestampDisplayComponent } from './timestamp-display.component';
-import { formatTimestampDisplay, formatTimestampIsoInZone } from './timestamp-display';
+import { formatTimestampDisplay } from './timestamp-display';
 import { TimestampDisplayPipe } from './timestamp-display.pipe';
 
 // 2026-06-19 16:00 America/New_York = 2026-06-19 20:00 UTC.
@@ -86,18 +86,6 @@ describe('formatTimestampDisplay', () => {
     it('returns the fallback for absent values', () => {
       expect(formatTimestampDisplay(undefined, { mode: 'et', granularity: 'chart' })).toBe('—');
     });
-  });
-});
-
-describe('formatTimestampIsoInZone', () => {
-  it('formats UTC with a Z suffix', () => {
-    expect(formatTimestampIsoInZone(EXPIRY_ANCHOR_MS, 'UTC')).toBe('2026-06-19T20:00:00Z');
-  });
-
-  it('formats exchange-local ISO with the instant-specific offset', () => {
-    expect(formatTimestampIsoInZone(EXPIRY_ANCHOR_MS, 'America/New_York')).toBe(
-      '2026-06-19T16:00:00-04:00',
-    );
   });
 });
 

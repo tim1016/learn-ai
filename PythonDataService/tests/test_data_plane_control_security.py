@@ -165,14 +165,9 @@ def test_always_guarded_reads_are_declared_in_shared_manifest() -> None:
     for safe ones. A route that carries the always-on guard but sits under
     no ``protected_read_prefixes`` entry therefore 403s from the browser as
     soon as ``DATA_PLANE_CONTROL_SECRET`` is configured, while every
-    server-side test still passes.
-
-    That is exactly how ``GET /api/market-data-feed/health`` shipped with
-    PR-A of #1813: guarded, undeclared, and invisible to
+    server-side test still passes — and
     ``test_guarded_control_routes_are_declared_in_shared_manifest``, which
-    only inspects unsafe-method routes. Fixed in PR-B of #1813 (2026-08-27)
-    by declaring ``/api/market-data-feed``; this assertion is what stops the
-    next one.
+    only inspects unsafe-method routes, cannot see it.
     """
     guarded_reads = [
         (route.path, sorted(_safe_read_methods(route)))

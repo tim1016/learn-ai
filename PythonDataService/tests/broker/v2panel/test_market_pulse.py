@@ -204,7 +204,7 @@ def test_extended_hours_bot_expects_premarket_bars(
     assert pulse.attention_required is True
 
 
-def test_extended_hours_without_capability_states_that_phase_is_unproved(
+def test_extended_hours_without_a_declared_window_states_that_phase_is_unproved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _session(monkeypatch, "CLOSED")
@@ -219,7 +219,7 @@ def test_extended_hours_without_capability_states_that_phase_is_unproved(
 
     assert pulse.session == "CLOSED"
     assert pulse.headline == "Extended-session phase unproved"
-    assert "capability" in pulse.explanation.lower()
+    assert "window" in pulse.explanation.lower()
 
 
 def test_idle_feed_does_not_claim_to_be_live(
@@ -312,8 +312,8 @@ def test_closed_liveness_during_a_proven_extended_phase_does_not_show_market_clo
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Regression: liveness_blocks_entry allows a non-RTH bot to trade
-    through a live-clock CLOSED reading once extended-hours capability is
-    proven (Alpaca's clock is RTH-only). The panel must not contradict that
+    through a live-clock CLOSED reading once a declared window proves an
+    extended phase (Alpaca's clock is RTH-only). The panel must not contradict that
     by showing "Market closed" anyway — it should fall through to the
     ordinary feed-state read, exactly like the execution gate does. The
     Market badge (market_state) renders right beside the headline in the V2
@@ -321,7 +321,7 @@ def test_closed_liveness_during_a_proven_extended_phase_does_not_show_market_clo
     "Bot market data live" headline would itself be the contradiction."""
     _session(monkeypatch, "PRE")
     _admission_fact(monkeypatch, state="AVAILABLE", last_bar_ms=120_000)
-    monkeypatch.setattr(market_pulse, "extended_phase_proven_at_ms", lambda **_kwargs: True)
+    monkeypatch.setattr(market_pulse, "declared_extended_phase_at_ms", lambda **_kwargs: True)
     liveness = compose_market_liveness(
         "SPY",
         now_ms=121_000,
@@ -340,7 +340,6 @@ def test_closed_liveness_during_a_proven_extended_phase_does_not_show_market_clo
         None,
         now_ms=121_000,
         symbol="SPY",
-        account_id="ibkr-acct",
         use_rth=False,
         bot_running=True,
         liveness=liveness,
@@ -359,7 +358,7 @@ def test_closed_liveness_without_proven_extended_phase_still_shows_market_closed
     default when extended hours are not proven."""
     _session(monkeypatch, "PRE")
     _admission_fact(monkeypatch, state="AVAILABLE", last_bar_ms=120_000)
-    monkeypatch.setattr(market_pulse, "extended_phase_proven_at_ms", lambda **_kwargs: False)
+    monkeypatch.setattr(market_pulse, "declared_extended_phase_at_ms", lambda **_kwargs: False)
     liveness = compose_market_liveness(
         "SPY",
         now_ms=121_000,
@@ -378,7 +377,6 @@ def test_closed_liveness_without_proven_extended_phase_still_shows_market_closed
         None,
         now_ms=121_000,
         symbol="SPY",
-        account_id="ibkr-acct",
         use_rth=False,
         bot_running=True,
         liveness=liveness,
@@ -406,7 +404,7 @@ def test_closed_liveness_during_a_proven_extended_phase_with_a_dead_feed_still_s
         reason="No bar arrived.",
         stale=True,
     )
-    monkeypatch.setattr(market_pulse, "extended_phase_proven_at_ms", lambda **_kwargs: True)
+    monkeypatch.setattr(market_pulse, "declared_extended_phase_at_ms", lambda **_kwargs: True)
     liveness = compose_market_liveness(
         "SPY",
         now_ms=121_000,
@@ -425,7 +423,6 @@ def test_closed_liveness_during_a_proven_extended_phase_with_a_dead_feed_still_s
         None,
         now_ms=121_000,
         symbol="SPY",
-        account_id="ibkr-acct",
         use_rth=False,
         bot_running=True,
         liveness=liveness,

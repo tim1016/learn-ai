@@ -49,7 +49,6 @@ from app.routers import (
     baselines,
     broker,
     broker_bots,
-    broker_capability,
     broker_configuration,
     broker_v2_gallery,
     broker_v2_panel,
@@ -70,7 +69,6 @@ from app.routers import (
     iv_recorder,
     jobs,
     lean_sidecar,
-    market_data_feed,
     market_monitor,
     monte_carlo,
     news,
@@ -1316,22 +1314,10 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     # carries its own prefix so we mount it bare.
     app.include_router(research_divergence.router)
 
-# Shared MarketDataFeed diagnostic surface — read-only feed health + fan-out
-# subscription count. Requires the always-on control secret (GET exposes live
-# broker state: connection status, last bar watermark, subscription count).
-if _ROLE_RUNS_CLERK:
-    app.include_router(
-        market_data_feed.router,
-        prefix="/api/market-data-feed",
-        dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
-    )
 # Interactive Brokers paper-trading endpoints (Phase 1: read-only chain).
 # Router carries its own /api/broker prefix.
 if _FLEET_ROLE == "combined":
     app.include_router(broker.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
-# IBKR account/session capability probe (issue #1005 Slice 0).
-if _FLEET_ROLE == "combined":
-    app.include_router(broker_capability.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Broker System v2 read surface (/api/brokers/{broker}/...). Broker account,
 # position, order, activity, asset, and clock evidence is sensitive operator
 # data, so every v2 read requires the always-on data-plane control secret.

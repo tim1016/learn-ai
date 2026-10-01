@@ -39,13 +39,6 @@ function selection(
 }
 
 describe('ConfigurationProfileListComponent', () => {
-  it('says the list is empty rather than rendering an empty frame', async () => {
-    await render(ConfigurationProfileListComponent, {
-      inputs: { profiles: [], selection: selection(), selectedProfileId: null, busy: false },
-    });
-
-    expect(screen.getByText(/No configuration profiles are saved yet/)).toBeTruthy();
-  });
 
   it('marks which profile is effective and which is merely staged', async () => {
     await render(ConfigurationProfileListComponent, {

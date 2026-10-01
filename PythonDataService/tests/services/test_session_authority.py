@@ -8,9 +8,7 @@ import pytest
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.lean_sidecar.trading_calendar import is_trading_day, session_window_for_date
 from app.lean_sidecar.trading_calendar import session_state_at_ms as calendar_session_state_at_ms
-from app.schemas.broker_capability import SessionCapability, SessionDataCapability
 from app.services.session_authority import (
-    CAPABILITY_MAX_AGE_MS,
     order_session_state_at_ms,
     scheduled_exchange_phase_at_ms,
     scheduled_extended_session_bounds,
@@ -23,62 +21,6 @@ def _ny_ms(year: int, month: int, day: int, hour: int, minute: int) -> int:
     return to_ms_utc(datetime(year, month, day, hour, minute, tzinfo=ZoneInfo("America/New_York")))
 
 
-def _capability() -> SessionDataCapability:
-    def session(open_ms: int | None, close_ms: int | None) -> SessionCapability:
-        return SessionCapability(
-            window_today_open_ms=open_ms,
-            window_today_close_ms=close_ms,
-            data="live" if open_ms is not None else "none",
-            tradeable="yes" if open_ms is not None else "no",
-            order_eligible_outside_rth=True,
-            evidence_codes=[],
-        )
-
-    return SessionDataCapability(
-        symbol="SPY",
-        con_id=756733,
-        account_mode="live",
-        account_id="U1234567",
-        probed_at_ms=_ny_ms(2026, 6, 23, 3, 0),
-        time_zone_id="America/New_York",
-        sessions={
-            "PRE": session(_ny_ms(2026, 6, 23, 4, 0), _ny_ms(2026, 6, 23, 9, 30)),
-            "RTH": session(_ny_ms(2026, 6, 23, 9, 30), _ny_ms(2026, 6, 23, 16, 0)),
-            "POST": session(_ny_ms(2026, 6, 23, 16, 0), _ny_ms(2026, 6, 23, 20, 0)),
-            "OVERNIGHT": session(_ny_ms(2026, 6, 23, 20, 0), _ny_ms(2026, 6, 24, 4, 0)),
-        },
-        raw_evidence=[],
-    )
-
-
-@pytest.mark.parametrize(
-    ("now_ms", "expected_phase", "expected_next"),
-    [
-        (_ny_ms(2026, 6, 23, 6, 0), "PRE", _ny_ms(2026, 6, 23, 9, 30)),
-        (_ny_ms(2026, 6, 23, 12, 0), "RTH", _ny_ms(2026, 6, 23, 16, 0)),
-        (_ny_ms(2026, 6, 23, 18, 0), "POST", _ny_ms(2026, 6, 23, 20, 0)),
-        (_ny_ms(2026, 6, 23, 22, 0), "OVERNIGHT", _ny_ms(2026, 6, 24, 4, 0)),
-    ],
-)
-def test_session_state_uses_ibkr_capability_windows(
-    now_ms: int,
-    expected_phase: str,
-    expected_next: int,
-) -> None:
-    capability = _capability()
-    state = session_state_at_ms(
-        now_ms=now_ms,
-        capability=capability,
-        symbol=capability.symbol,
-        account_id=capability.account_id,
-    )
-
-    assert state.source == "ibkr_capability"
-    assert state.phase == expected_phase
-    assert state.next_transition_ms == expected_next
-    assert state.permits_strategy_activity is (expected_phase == "RTH")
-
-
 @pytest.mark.parametrize(
     "now_ms",
     [
@@ -88,19 +30,13 @@ def test_session_state_uses_ibkr_capability_windows(
     ],
 )
 def test_session_state_rth_parity_with_nyse_calendar(now_ms: int) -> None:
-    capability = _capability()
-    state = session_state_at_ms(
-        now_ms=now_ms,
-        capability=capability,
-        symbol=capability.symbol,
-        account_id=capability.account_id,
-    )
+    state = session_state_at_ms(now_ms=now_ms)
 
     assert calendar_session_state_at_ms(now_ms) == "RTH_OPEN"
     assert state.phase == "RTH"
 
 
-def test_session_state_falls_back_to_nyse_calendar_without_capability() -> None:
+def test_session_state_reads_the_nyse_calendar_without_a_declared_window() -> None:
     window = session_window_for_date(date(2026, 6, 23))
 
     state = session_state_at_ms(now_ms=window.open_ms_utc)
@@ -108,109 +44,6 @@ def test_session_state_falls_back_to_nyse_calendar_without_capability() -> None:
     assert state.source == "nyse_calendar"
     assert state.phase == "RTH"
     assert state.next_transition_ms == window.close_ms_utc
-
-
-@pytest.mark.parametrize(
-    "account_id",
-    ["different-account", ""],
-)
-def test_extended_phase_requires_matching_account_capability(account_id: str) -> None:
-    state = session_state_at_ms(
-        now_ms=_ny_ms(2026, 6, 23, 18, 0),
-        capability=_capability(),
-        symbol="SPY",
-        account_id=account_id,
-        allowed_sessions=("POST",),
-    )
-
-    assert state.source == "nyse_calendar"
-    assert state.phase == "CLOSED"
-    assert state.extended_phase_proven is False
-    assert state.permits_strategy_activity is False
-
-
-def test_extended_phase_requires_matching_instrument_capability() -> None:
-    state = session_state_at_ms(
-        now_ms=_ny_ms(2026, 6, 23, 18, 0),
-        capability=_capability(),
-        symbol="AAPL",
-        account_id="U1234567",
-        allowed_sessions=("POST",),
-    )
-
-    assert state.source == "nyse_calendar"
-    assert state.phase == "CLOSED"
-    assert state.extended_phase_proven is False
-
-
-def test_extended_phase_requires_fresh_well_formed_capability() -> None:
-    capability = _capability()
-    stale = session_state_at_ms(
-        now_ms=capability.probed_at_ms + CAPABILITY_MAX_AGE_MS + 1,
-        capability=capability,
-        symbol=capability.symbol,
-        account_id=capability.account_id,
-    )
-    malformed = capability.model_copy(
-        update={
-            "sessions": {
-                **capability.sessions,
-                "POST": capability.sessions["POST"].model_copy(
-                    update={
-                        "window_today_open_ms": _ny_ms(2026, 6, 23, 20, 0),
-                        "window_today_close_ms": _ny_ms(2026, 6, 23, 16, 0),
-                    }
-                ),
-            }
-        }
-    )
-    invalid = session_state_at_ms(
-        now_ms=_ny_ms(2026, 6, 23, 18, 0),
-        capability=malformed,
-        symbol=malformed.symbol,
-        account_id=malformed.account_id,
-    )
-
-    assert stale.source == invalid.source == "nyse_calendar"
-    assert stale.extended_phase_proven is invalid.extended_phase_proven is False
-
-
-@pytest.mark.parametrize(
-    ("kind", "open_ms", "close_ms"),
-    [
-        ("PRE", _ny_ms(2026, 6, 23, 4, 0), _ny_ms(2026, 6, 23, 9, 31)),
-        ("POST", _ny_ms(2026, 6, 23, 15, 59), _ny_ms(2026, 6, 23, 20, 0)),
-    ],
-)
-def test_extended_phase_rejects_overlapping_day_capability_windows(
-    kind: str,
-    open_ms: int,
-    close_ms: int,
-) -> None:
-    capability = _capability()
-    malformed = capability.model_copy(
-        update={
-            "sessions": {
-                **capability.sessions,
-                kind: capability.sessions[kind].model_copy(
-                    update={
-                        "window_today_open_ms": open_ms,
-                        "window_today_close_ms": close_ms,
-                    }
-                ),
-            }
-        }
-    )
-
-    state = session_state_at_ms(
-        now_ms=_ny_ms(2026, 6, 23, 18, 0),
-        capability=malformed,
-        symbol=malformed.symbol,
-        account_id=malformed.account_id,
-    )
-
-    assert state.source == "nyse_calendar"
-    assert state.extended_phase_proven is False
 
 
 def test_calendar_fallback_honors_early_close_and_next_rth_open() -> None:
@@ -237,9 +70,7 @@ def test_calendar_fallback_keeps_weekends_closed_until_next_rth_open() -> None:
 def test_session_state_permits_strategy_activity_from_allowed_sessions() -> None:
     state = session_state_at_ms(
         now_ms=_ny_ms(2026, 6, 23, 18, 0),
-        capability=_capability(),
-        symbol="SPY",
-        account_id="U1234567",
+        extended_window=_ALPACA_WINDOW,
         allowed_sessions=("RTH", "POST"),
     )
 

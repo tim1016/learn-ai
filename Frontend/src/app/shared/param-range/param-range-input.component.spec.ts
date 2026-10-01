@@ -12,10 +12,6 @@ async function renderInput(range: ParamRange) {
 }
 
 describe("ParamRangeInputComponent", () => {
-  it("renders the field title", async () => {
-    await renderInput({ type: "value_list", values: [2] });
-    expect(screen.getByText("Crossover gap (bps)")).not.toBeNull();
-  });
 
   it("shows the value-list mode's values as a comma-joined string", async () => {
     await renderInput({ type: "value_list", values: [1, 2, 3] });

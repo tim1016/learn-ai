@@ -59,7 +59,6 @@ RETAINED_FEED_MODULES = [
     "app.broker.ibkr.market_data",
     "app.broker.ibkr.minute_assembler",
     "app.broker.ibkr.surface",
-    "app.services.market_data_capability_service",
 ]
 
 # Dotted-path prefixes considered "account/order/session bucket" — a

@@ -61,13 +61,11 @@ All preserved order-related operations are non-transmitting:
 
 | Capability | Current authority |
 |---|---|
-| Connection and diagnostics | `/api/broker/health`, `/data-plane/health`, `/diagnose`, plus explicit connect/disconnect/reconnect transport controls |
-| Session capability | `/api/broker/capability` and `/capability/probe`; the probe may call IBKR `whatIfOrderAsync` with `whatIf=True` but never `placeOrder` |
+| Connection and diagnostics | `/api/broker/health`, `/diagnose`, plus explicit connect/disconnect/reconnect transport controls |
 | Account state | `/api/broker/account`, `/positions`, and `/account-truth` |
 | Order evidence | `/api/broker/orders/open`, `/completed`, and `/stream` |
 | Order preview | `POST /api/broker/orders/what-if`; constructs a non-transmitting IBKR what-if request only |
-| API evidence | `/api/broker/ibkr/evidence` and `/ibkr/evidence/stream`, including historical callback names and error evidence |
-| Market data | symbol/contract discovery, option chain/surface streams, P&L streams, and 5-second/1-minute bar snapshots |
+| Market data | symbol/contract discovery, option chain/surface streams, and P&L streams |
 | Session history | session-mirror snapshots, events, streams, and history; local purge operations affect evidence storage only, never broker orders |
 | Account history | reconciliation receipt, account events, and transaction/history projections over durable evidence |
 | Broker activity | read-only REST/SSE projection of already captured historical broker activity |
@@ -117,6 +115,15 @@ triage, reconciliation, events, and transaction endpoints are projections over
 durable/read evidence. `reconcile-now` may refresh and persist evidence; it does
 not place, cancel, or flatten an order.
 
+IBKR outside fact, carried over from the deleted ADR 0003 (2026-05-13): IB
+Gateway answers `reqRealTimeBars` with error 420 when the API client's source IP
+differs from the IP the Gateway logged in from, and it accepts API connections
+only from addresses on its Trusted IPs list. On the 2026-05 Windows topology the
+Podman/WSL bridge IP failed this check, so the bar client ran on the host. Clerks
+now reach the Gateway through `host.containers.internal`; when real-time bars
+fail with error 420 or a connection is refused, check the Gateway's Trusted IPs
+against the address the clerk connects from first.
+
 ## Safety and boundary invariants
 
 - Every wire/storage timestamp remains `int64` milliseconds UTC.
@@ -142,8 +149,8 @@ proves:
 4. Frontend production sources contain no orphaned order/recovery clients;
 5. generated OpenAPI/TypeScript contracts omit every retired operation and
    offline replay route; and
-6. the preserved account, position, order/history, what-if, evidence, capability,
-   bars, session-history, reconciliation, event, and transaction reads remain.
+6. the preserved account, position, order/history, what-if, session-history,
+   reconciliation, event, and transaction reads remain.
 
 Engine ownership is recorded in
 `docs/architecture/engine-authority-map.md`; each math file's provenance

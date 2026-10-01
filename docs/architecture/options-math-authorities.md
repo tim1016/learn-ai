@@ -28,7 +28,6 @@ is the rule this document operationalizes.
 | **Skew metrics (RR-25, BF-25, slope)** | `app/volatility/analytics.py` | `compute_skew_metrics` | Per-expiry. |
 | **Forward price from put-call parity** | `app/volatility/analytics.py` | `compute_put_call_parity_forward` | Returns implied forward `F` per TTM; `q` is derived as `r - ln(F/S)/T` — there is no separate function for `q` yet. |
 | **QuantLib pricing engine + numerical Greeks** | `app/services/quantlib_pricer.py` | `price_option`, `price_strategy`, `implied_volatility` | Used when QuantLib's pricing path matters (multi-engine `/compare`, American/exotic options if added). Greeks here use QL analytical when supported, numerical bumps otherwise. **Note:** the QuantLib IV path (`quantlib_pricer.implied_volatility`) is *internal* to the QuantLib branch of `volatility/solver.implied_volatility`'s fallback chain — direct callers should use `volatility/solver.implied_volatility`, not this. |
-| **Engine-side option pricing (Lean-style strategies)** | `app/engine/options/pricer.py` | `price_contract`, `price_contract_from_market` | **Adapter** around `quantlib_pricer.price_option`. Repackages `GreeksResult` → engine `OptionGreeks` dataclass. Not a separate Greeks authority — do not add new Greeks formulas here. |
 
 ---
 
@@ -62,8 +61,8 @@ Implied volatility, any case
 
 A `compute_greeks(...)` dispatcher that encodes this is **not yet implemented**.
 It becomes worth it when there is a third caller that needs to pick by style.
-For now, three callers (`options_companion_service`, `engine/options/pricer`,
-`/api/quantlib/*`) each pick the right one explicitly.
+For now, two callers (`options_companion_service`, `/api/quantlib/*`) each pick
+the right one explicitly.
 
 ---
 

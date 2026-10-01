@@ -427,11 +427,6 @@ class MarketDataFeed(Protocol):
 
     feed_id: str
 
-    @property
-    def capability_account_id(self) -> str | None:
-        """Account whose broker capability snapshots authorize this feed."""
-        ...
-
     def stream_bars(
         self,
         symbol: str,

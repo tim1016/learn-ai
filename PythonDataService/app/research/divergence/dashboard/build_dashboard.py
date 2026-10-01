@@ -841,10 +841,10 @@ def build_dashboard(
     parts.append(
         f"<h1>SPY {timeframe.upper()} — Data divergence dashboard</h1>"
         f"<p class='subtitle lead'>"
-        f"<b>One question, one answer:</b> when learn-ai runs a strategy on SPY "
-        f"15-minute bars, does it produce the same trades a trader would see on "
-        f"a TradingView chart? This dashboard quantifies the gap, isolates its "
-        f"cause, and shows what changes with a specific code fix."
+        f"<b>One question, one answer:</b> when learn-ai computes its indicators on "
+        f"SPY 15-minute bars, does it produce the same values a trader would see on "
+        f"a TradingView chart? This dashboard quantifies the gap and isolates its "
+        f"cause."
         f"</p>"
     )
     parts.append(_section_nav())

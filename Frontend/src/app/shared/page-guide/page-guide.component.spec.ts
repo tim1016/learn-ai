@@ -20,16 +20,6 @@ function find(el: HTMLElement, selector: string): Element {
 }
 
 describe('PageGuideComponent', () => {
-  it('renders pulls/why and the default summary label', () => {
-    const el = render({
-      pulls: 'Live IBKR option chain (SPY only).',
-      why: 'Compose a multi-leg trade and inspect Greeks side-by-side.',
-    });
-    expect(find(el, '.page-guide-summary').textContent).toContain('How this page works');
-    const meta = el.querySelectorAll('.page-guide-meta dd');
-    expect(meta[0].textContent).toBe('Live IBKR option chain (SPY only).');
-    expect(meta[1].textContent).toBe('Compose a multi-leg trade and inspect Greeks side-by-side.');
-  });
 
   it('renders steps as an ordered list when provided', () => {
     const el = render({

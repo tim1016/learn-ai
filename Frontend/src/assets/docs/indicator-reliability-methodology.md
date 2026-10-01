@@ -813,8 +813,8 @@ Files modified (line numbers in each file's initial `@use` block):
 - `options-strategy-lab/*.scss`, `lean-engine/*.scss`, `data-lab/*.scss`,
   `portfolio/*.scss`, `technical-analysis/*.scss`, `tickers.component.ts`
   (inline styles), `stock-analysis/*.scss` (+ chunk-detail + day-detail),
-  `market-data/*.scss`, `strategy-lab/*.scss`, `ticker-explorer/*.scss`,
-  `tracked-instruments/*.scss`. The IR page's cap was removed as part of T1.
+  `market-data/*.scss`, `strategy-lab/*.scss`. The IR page's cap was removed
+  as part of T1.
 
 ### 5.3 Indicator Reliability page (mission control)
 

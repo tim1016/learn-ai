@@ -2,7 +2,7 @@
 
 **Status:** Incident and recovery procedure for the Alpaca broker desk's lane-directory failure state. Covers the combined-role dev deployment (`compose.yaml` + `compose.override.yaml`) and points to the overlay procedures where they apply.
 
-**Authority:** [ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md), the [multi-broker Clerk PRD](../prds/2026-09-12-multi-broker-clerk-control-plane.md) §10.1 (directory) and §13/FR-092 (canonical clerk routes), [Delivery D two-Clerk rollout](fleet-d-two-clerk-rollout.md) for the overlay posture, and [registry recovery](fleet-e-registry-recovery-exercise.md) for control-volume backup/restore.
+**Authority:** [ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md) Decision 1 (directory) and Decision 5 (canonical clerk routes), [Delivery D two-Clerk rollout](fleet-d-two-clerk-rollout.md) for the overlay posture, and [registry recovery](fleet-e-registry-recovery-exercise.md) for control-volume backup/restore.
 
 ## What the message means
 

@@ -46,7 +46,6 @@ export class IndicatorCatalogService {
   private readonly _error = signal<string | null>(null);
 
   readonly categories = this._categories.asReadonly();
-  readonly indicatorMap = this._indicatorMap.asReadonly();
   readonly loading = this._loading.asReadonly();
   readonly error = this._error.asReadonly();
 

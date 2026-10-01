@@ -2,7 +2,7 @@
 
 **Status:** Delivery D operating posture. It prepares recovery and rollback; it does not claim they have been exercised. Delivery E owns the required exercised backup/restore, reassignment, registry-recovery, and compatible-rollback evidence.
 
-**Authority:** [ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md), the [multi-broker Clerk PRD](../prds/2026-09-12-multi-broker-clerk-control-plane.md), and the existing [Alpaca SQLite Clerk recovery and cutover procedure](alpaca-sqlite-clerk-recovery-and-cutover.md). Use the latter for the provider-owned custody procedure. This document adds the fleet boundary; it never replaces a provider ceremony.
+**Authority:** [ADR 0062](../architecture/adrs/0062-broker-clerk-fleet-control-plane.md) and the existing [Alpaca SQLite Clerk recovery and cutover procedure](alpaca-sqlite-clerk-recovery-and-cutover.md). Use the latter for the provider-owned custody procedure. This document adds the fleet boundary; it never replaces a provider ceremony.
 
 ## Non-negotiable stop boundary
 

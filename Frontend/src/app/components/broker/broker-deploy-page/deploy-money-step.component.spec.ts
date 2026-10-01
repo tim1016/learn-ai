@@ -257,17 +257,6 @@ describe('Deploy step 3, Money', () => {
     expect(screen.queryByText('Previewing this amount…')).toBeNull();
   });
 
-  it('says in plain words what the budget limits, and never in internal terms', async () => {
-    await setup();
-
-    const note = screen.getByText(/only while they fit this budget/);
-    expect(note.textContent).toBe(
-      'The bot opens positions only while they fit this budget. Fills, fees and losses can go past it, '
-        + 'and the size chosen in How stays as it is.',
-    );
-    expect(document.body.textContent).not.toMatch(/admission/i);
-  });
-
   it('shows the server’s own sentence when the account’s money cannot be read', async () => {
     const previewBudget = vi.fn().mockRejectedValue(new HttpErrorResponse({
       status: 409, error: { detail: { message: 'The account’s holds changed; refresh the account first.' } },

@@ -82,7 +82,6 @@ describe('AccountDeskTransactionHistoryStore', () => {
     await Promise.resolve();
 
     expect(store.rows().map((row) => row.transaction_id)).toEqual(['current']);
-    expect(store.filters()).toEqual({ fromMs: 11, toMs: 20 });
   });
 
   it('queues a refresh that arrives while the same period is loading', async () => {

@@ -1,17 +1,7 @@
 // Production environment configuration
 // WARNING: Never commit API keys to version control
-// In production, use backend proxy instead of direct API calls
 export const environment = {
-  production: true,
   primeUiLicense: '', // Supply through a gitignored environment override
-  polygonApiKey: '', // Leave empty — use backend proxy in production
-  useBackendProxy: true, // Always use backend in production
   backendUrl: 'http://localhost:5000/graphql',
-  polygonProxyUrl: 'http://localhost:5000/api/polygon', // Backend proxy endpoint
   pythonServiceUrl: 'http://localhost:8000',
-  liveRunnerDaemonUrl: 'http://127.0.0.1:8765',
-  flags: {
-    replayInLeanEngine: true,
-    botCockpitStateStream: false,
-  },
 };

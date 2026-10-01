@@ -67,9 +67,6 @@ export class TradeSimDrawerComponent {
     return `${Math.abs(v / this.costMax()) * 50}%`;
   }
 
-  protected sideClass(side: string): string {
-    return side === "LONG VOL" ? "long" : "short";
-  }
   protected sideColor(side: string): string {
     return side === "LONG VOL" ? this.TOK.bull : this.TOK.bear;
   }

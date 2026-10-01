@@ -2,7 +2,6 @@ import { CommonModule, DecimalPipe } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
-  computed,
   inject,
   signal,
 } from '@angular/core';
@@ -59,8 +58,6 @@ export class StrategyRunsComponent {
   readonly running = signal(false);
   readonly error = signal<string | null>(null);
   readonly lastFixtureRunId = signal<string | null>(null);
-
-  readonly hasRuns = computed(() => this.runs().length > 0);
 
   constructor() {
     void this.refresh();

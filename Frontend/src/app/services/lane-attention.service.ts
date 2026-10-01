@@ -98,7 +98,6 @@ export class LaneAttentionService {
   private readonly destroyRef = inject(DestroyRef);
 
   private readonly _stateByClerkId = signal<ReadonlyMap<string, LaneAttentionState>>(new Map());
-  readonly stateByClerkId = this._stateByClerkId.asReadonly();
 
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private started = false;

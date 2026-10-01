@@ -102,31 +102,3 @@ export function formatTimestampDisplay(
     : joinParts(getParts(value, timeZone), granularity);
   return mode === 'et' ? `${text} ET` : text;
 }
-
-export function formatTimestampIsoInZone(
-  value: number | null | undefined,
-  timeZone: string,
-): string {
-  if (!isFiniteMs(value)) return '';
-  const instant = new Date(value);
-  if (Number.isNaN(instant.getTime())) return '';
-  if (timeZone === UTC_ZONE) return instant.toISOString().replace(/\.\d{3}Z$/, 'Z');
-
-  const parts = getParts(value, timeZone);
-  const hour = parts.hour === '24' ? '00' : parts.hour;
-  const local = `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}:${parts.second}`;
-  const asUtc = Date.UTC(
-    Number(parts.year),
-    Number(parts.month) - 1,
-    Number(parts.day),
-    Number(hour),
-    Number(parts.minute),
-    Number(parts.second),
-  );
-  const offsetMinutes = Math.round((asUtc - instant.getTime()) / 60000);
-  const sign = offsetMinutes >= 0 ? '+' : '-';
-  const abs = Math.abs(offsetMinutes);
-  const offH = String(Math.floor(abs / 60)).padStart(2, '0');
-  const offM = String(abs % 60).padStart(2, '0');
-  return `${local}${sign}${offH}:${offM}`;
-}

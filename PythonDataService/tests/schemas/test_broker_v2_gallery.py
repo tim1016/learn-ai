@@ -159,10 +159,7 @@ def test_live_update_fields_match_the_pinned_frontend_type(model: type[BaseModel
     a bare ``set(keys) == set(keys)`` check cannot see any of that.
 
     Skipped when ``Frontend/`` isn't part of this checkout (e.g. the
-    Python-only qualification container) — see
-    ``test_python_and_frontend_snapshots_are_byte_identical`` in
-    ``tests/broker/v2panel/test_vocabulary_snapshot.py`` for the same
-    reasoning.
+    Python-only qualification container).
     """
     if not _GALLERY_TYPES_TS_PATH.exists():
         pytest.skip(f"Frontend/ not present in this checkout ({_GALLERY_TYPES_TS_PATH})")

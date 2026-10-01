@@ -18,7 +18,6 @@ import { environment } from '../../environments/environment';
  * being hand-copied, so a field added on the Python side cannot silently go
  * missing here.
  */
-export type NewsPublisher = components['schemas']['NewsPublisher'];
 export type NewsInsight = components['schemas']['NewsInsight'];
 export type NewsArticle = components['schemas']['NewsArticle'];
 export type NewsResult = components['schemas']['NewsResponse'];

@@ -2,7 +2,7 @@
 
 **Status:** ✅ passed — single-fill scope. Multi-day round-trip P&L deferred (see "Open follow-ups" below).
 **Date:** 2026-05-12
-**Reference:** [Phase 3 design](../../superpowers/specs/2026-05-11-phase3-pnl-parity-design.md), [Phase 3.5 design](../../superpowers/specs/2026-05-11-phase35-path-a-intraday-fill-mode-design.md), [capture runbook](../qc-aapl-phase3-capture-runbook.md)
+**Reference:** Phase 3 design and Phase 3.5 design (both in Git history), [capture runbook](../qc-aapl-phase3-capture-runbook.md)
 **Fixture:** `PythonDataService/tests/fixtures/golden/qc-aapl-phase3/` (minute resolution, 2026-02-09 09:31 → 2026-02-11 16:00 NY, 1170 minute bars)
 **Captured QC backtest:** "Formal Black Rabbit" (truncated by QC free tier's minute-data trailing window — see "Why only one fill" below; algorithm code at `qc_algorithm_screenshot.png`)
 

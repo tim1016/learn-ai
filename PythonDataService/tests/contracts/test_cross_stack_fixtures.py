@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.broker.ibkr.models import DataPlaneHealth
 from app.models.responses import SanitizedDataResponse
 from app.routers.spec_strategy import SpecBacktestResponse
 
@@ -51,10 +50,3 @@ def test_spec_strategy_response_fixture_preserves_int64_trade_timestamps() -> No
     assert trade.entry_time == 1_704_153_600_000
     assert trade.exit_time == 1_704_157_200_000
     assert trade.indicators["ema_fast"] == 471.0
-
-
-def test_data_plane_health_fixture_is_the_direct_fastapi_to_angular_contract() -> None:
-    health = DataPlaneHealth.model_validate(_fixture("data-plane-health-v1.json"))
-
-    assert health.service == "polygon-data-service"
-    assert health.fetched_at_ms >= health.process_start_ms

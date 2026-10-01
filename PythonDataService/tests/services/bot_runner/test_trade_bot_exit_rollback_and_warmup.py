@@ -55,7 +55,6 @@ class _RejectFirstExitClerk(_FakeClerk):
         action_plan,
         quantity: int,
         use_rth: bool = True,
-        capability_account_id: str | None = None,
         retained_source_bar=None,
         decision_evidence=None,
     ) -> _FakeEffectResult:
@@ -70,7 +69,6 @@ class _RejectFirstExitClerk(_FakeClerk):
             action_plan=action_plan,
             quantity=quantity,
             use_rth=use_rth,
-            capability_account_id=capability_account_id,
             retained_source_bar=retained_source_bar,
             decision_evidence=decision_evidence,
         )

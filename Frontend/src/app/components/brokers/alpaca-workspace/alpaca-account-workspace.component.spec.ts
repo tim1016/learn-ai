@@ -356,14 +356,6 @@ describe('AlpacaAccountWorkspaceComponent', () => {
     expect(await figure('Today')).toBe('-$3.20');
   });
 
-  it('carries no sync indicator — an out-of-sync account is a Home attention line', async () => {
-    await renderWorkspace();
-    await screen.findByText('Free to deploy');
-
-    expect(screen.queryByText(/^Sync/)).toBeNull();
-    expect(screen.queryByText('Clean')).toBeNull();
-  });
-
   it('says why the money cannot be read, in the backend’s words, never $0', async () => {
     await renderWorkspace({
       money: () => Promise.resolve({

@@ -1,10 +1,9 @@
 /** Catalog-derived URL construction for clerk-scoped fleet operations (#2076, #2103).
  *
- * `clerk-scoped-url.ts`'s `laneUrl`/`accountUrl` take a free-form suffix, so
- * nothing ties a call site to a route the coordinator's operation catalog
- * actually declares — a typo in the suffix reaches the coordinator as a
- * silent 404. `operationUrl` builds the same clerk-scoped paths from the
- * committed catalog snapshot instead (`fleet-operation-catalog.snapshot.json`,
+ * A free-form path suffix would tie no call site to a route the
+ * coordinator's operation catalog actually declares — a typo reaches the
+ * coordinator as a silent 404. `operationUrl` builds clerk-scoped paths from
+ * the committed catalog snapshot instead (`fleet-operation-catalog.snapshot.json`,
  * regenerated from `PythonDataService/app/broker/alpaca/clerk/fleet_adapter.py`
  * by `scripts/regenerate_fleet_operation_catalog_snapshot.py` — see that
  * script's docstring for the CI-enforced generate-and-diff contract):

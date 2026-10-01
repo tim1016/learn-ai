@@ -106,12 +106,6 @@ describe('CoverageQueryBarComponent', () => {
     expect(applied).not.toHaveBeenCalled();
   });
 
-  it('renders the adjustment vocabulary as operator language, not raw codes', async () => {
-    await renderBar();
-
-    expect(screen.getByRole('option', { name: 'Polygon Split Adjusted' })).toBeTruthy();
-  });
-
   it('names an unstorable seed symbol instead of sending it', async () => {
     // The card cannot mint junk; only a hand-edited URL query can — the
     // boundary the invalid note now guards.

@@ -14,9 +14,7 @@ if (!Element.prototype.scrollIntoView) {
 
 // jsdom lacks HTMLCanvasElement.getContext — return a no-op 2d-context shim
 // so canvas-using components (edge-charts) can be instantiated without
-// crashing. lightweight-charts is already module-mocked in
-// /testing/mocks/lightweight-charts.mock.ts, so the upgrade from `() => null`
-// is safe for it. Any new ctx method shows up at runtime as
+// crashing. Any new ctx method shows up at runtime as
 // `ctx.foo is not a function`; the Proxy's catch-all `get` covers them.
 HTMLCanvasElement.prototype.getContext = ((kind: string) => {
   if (kind !== "2d") return null;

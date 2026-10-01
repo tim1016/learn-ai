@@ -535,92 +535,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/broker/bars-5s/snapshot": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Bars 5S Snapshot Endpoint
-         * @description Return the live raw 5-sec OHLCV buffer for ``symbol``.
-         *
-         *     Mirror of ``/bars/snapshot`` for the high-resolution chart. It owns an
-         *     independent 5-second buffer, but same-symbol 5-second and 1-minute
-         *     consumers multiplex onto one public-client ``reqRealTimeBars`` request.
-         *     Each bar's ``end_ms - start_ms`` window is 5 000.
-         */
-        get: operations["bars_5s_snapshot_endpoint_api_broker_bars_5s_snapshot_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/bars/snapshot": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Bars Snapshot Endpoint
-         * @description Return the live 1-min OHLCV buffer for ``symbol``.
-         *
-         *     Idempotent: first call lazily subscribes to ``reqRealTimeBars`` on the
-         *     public broker session; subsequent calls return the current buffer.
-         *     ``since_ms`` filters bars to ``start_ms > since_ms`` for incremental
-         *     polling. ``status`` reflects subscription health so the UI can
-         *     distinguish "no bars yet" (subscribing) from "broker disconnected"
-         *     (errored).
-         */
-        get: operations["bars_snapshot_endpoint_api_broker_bars_snapshot_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/capability": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Broker Capability */
-        get: operations["read_broker_capability_api_broker_capability_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/capability/probe": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Probe Broker Capability */
-        post: operations["probe_broker_capability_api_broker_capability_probe_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/broker/connect": {
         parameters: {
             query?: never;
@@ -639,26 +553,6 @@ export interface paths {
          *     /reconnect via a process-wide asyncio lock.
          */
         post: operations["connect_endpoint_api_broker_connect_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/data-plane/health": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Data Plane Health Endpoint
-         * @description Code-liveness diagnostic for the long-running FastAPI data plane.
-         */
-        get: operations["data_plane_health_endpoint_api_broker_data_plane_health_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -717,46 +611,6 @@ export interface paths {
          * @description Connection diagnostic. Never raises on disconnect.
          */
         get: operations["broker_health_api_broker_health_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/ibkr/evidence": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Ibkr Api Evidence Backfill
-         * @description Recent raw IBKR API evidence captured at broker adapter boundaries.
-         */
-        get: operations["ibkr_api_evidence_backfill_api_broker_ibkr_evidence_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/broker/ibkr/evidence/stream": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Ibkr Api Evidence Stream
-         * @description SSE stream of raw IBKR API evidence for cockpit diagnostics.
-         */
-        get: operations["ibkr_api_evidence_stream_api_broker_ibkr_evidence_stream_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6234,26 +6088,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/market-data-feed/health": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Shared IBKR market-data feed health
-         * @description Returns the current health snapshot for the process-level shared MarketDataFeed: connection state, stale flag, last bar timestamp, and active subscription count.  Returns 503 when the feed has not been installed (IBKR broker disabled).
-         */
-        get: operations["get_feed_health_api_market_data_feed_health_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/market/dashboard": {
         parameters: {
             query?: never;
@@ -10734,16 +10568,6 @@ export interface components {
             /** Tradable */
             tradable: boolean;
         };
-        /** BrokerCapabilityProbeResponse */
-        BrokerCapabilityProbeResponse: {
-            /** Snapshots */
-            snapshots: components["schemas"]["SessionDataCapability"][];
-        };
-        /** BrokerCapabilityReadResponse */
-        BrokerCapabilityReadResponse: {
-            /** Snapshots */
-            snapshots: components["schemas"]["SessionDataCapability"][];
-        };
         /**
          * BrokerClockEvidence
          * @description Market-wide broker-clock evidence — not scheduled-session authority.
@@ -13548,31 +13372,6 @@ export interface components {
             min_open_interest?: number;
         };
         /**
-         * DataPlaneHealth
-         * @description Code-liveness metadata for the long-running FastAPI data plane.
-         *
-         *     PRD #684 uses this as the operator's fast check for "fixed on disk"
-         *     versus "actually live in the process". All timestamps are int64 ms UTC.
-         */
-        DataPlaneHealth: {
-            /** Code Revision */
-            code_revision: string;
-            /** Fetched At Ms */
-            fetched_at_ms: number;
-            /** Process Start Ms */
-            process_start_ms: number;
-            /**
-             * Reload
-             * @enum {string}
-             */
-            reload: "disabled" | "watchfiles" | "watchfiles-polling" | "unknown";
-            /**
-             * Service
-             * @constant
-             */
-            service: "polygon-data-service";
-        };
-        /**
          * DataQualityRequest
          * @description Request schema for data quality analysis.
          *
@@ -16134,36 +15933,6 @@ export interface components {
             unresolved_count: number;
         };
         /**
-         * FeedHealth
-         * @description Point-in-time health snapshot for a MarketDataFeed.
-         *
-         *     ``connected`` — the underlying broker connection is alive.
-         *     ``stale``     — connected but required source liveness has not been proven
-         *                     within the implementation's stale threshold.
-         *     ``last_bar_ms`` — ``start_ms`` of the most recently emitted bar, or ``None``
-         *                       if no bar has been emitted yet.
-         *     ``reason``    — human-readable detail when unhealthy (empty string when healthy).
-         *     ``active_subscription_count`` — number of symbols currently subscribed.
-         *     ``observed_at_ms`` — wall-clock of this snapshot, int64 ms UTC.
-         */
-        FeedHealth: {
-            /** Active Subscription Count */
-            active_subscription_count: number;
-            /** Connected */
-            connected: boolean;
-            /** Last Bar Ms */
-            last_bar_ms: number | null;
-            /**
-             * Observed At Ms
-             * @description Snapshot wall-clock, int64 ms UTC.
-             */
-            observed_at_ms: number;
-            /** Reason */
-            reason: string;
-            /** Stale */
-            stale: boolean;
-        };
-        /**
          * FifoAttributionRowResponse
          * @description One backend-computed FIFO lot closure; the browser renders it verbatim.
          */
@@ -17489,83 +17258,6 @@ export interface components {
             strength_label?: "Noise" | "Weak" | "Moderate" | "Strong";
         };
         /**
-         * IbkrApiEvidenceEvent
-         * @description One observed IBKR API request/response pair.
-         */
-        IbkrApiEvidenceEvent: {
-            /** Account Id */
-            account_id?: string | null;
-            /** Error */
-            error?: string | null;
-            request: components["schemas"]["IbkrApiRequestEvidence"];
-            response?: components["schemas"]["IbkrApiResponseEvidence"] | null;
-            /** Seq */
-            seq: number;
-            /** Source */
-            source: string;
-            /** Strategy Instance Id */
-            strategy_instance_id?: string | null;
-            /** Symbol */
-            symbol?: string | null;
-            /** Ts Ms */
-            ts_ms: number;
-        };
-        /**
-         * IbkrApiRequestEvidence
-         * @description Typed envelope for one IBKR API request/call.
-         */
-        IbkrApiRequestEvidence: {
-            /**
-             * Call
-             * @enum {string}
-             */
-            call: "cancelMktData" | "qualifyContractsAsync" | "reqContractDetailsAsync" | "reqHistoricalDataAsync" | "reqMarketDataType" | "reqMktData" | "reqRealTimeBars" | "reqSecDefOptParamsAsync" | "whatIfOrderAsync";
-            /** Params */
-            params?: {
-                [key: string]: components["schemas"]["JsonValue"];
-            };
-        };
-        /**
-         * IbkrApiResponseEvidence
-         * @description Typed envelope for one IBKR callback/response.
-         */
-        IbkrApiResponseEvidence: {
-            /**
-             * Callback
-             * @enum {string}
-             */
-            callback: "contractDetails" | "historicalData" | "marketDataType" | "realTimeBar" | "realTimeBarList" | "securityDefinitionOptionParameter" | "tickSnapshot" | "whatIfOrder";
-            /** Fields */
-            fields?: {
-                [key: string]: components["schemas"]["JsonValue"];
-            };
-            /** Serializer Warnings */
-            serializer_warnings?: components["schemas"]["IbkrSerializerWarning"][];
-        };
-        /**
-         * IbkrBarsSnapshot
-         * @description A snapshot of the live 1-min OHLCV ring buffer for one symbol.
-         *
-         *     ``status`` reports the aggregator's subscription health so the UI can
-         *     show "Subscribing…" / "Streaming" / "Error: …" instead of an
-         *     inscrutable empty chart.
-         */
-        IbkrBarsSnapshot: {
-            /** Bars */
-            bars?: components["schemas"]["IbkrMinuteBar"][];
-            /** Last Bar Ms */
-            last_bar_ms?: number | null;
-            /** Last Error */
-            last_error?: string | null;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "idle" | "subscribing" | "streaming" | "errored" | "resubscribing";
-            /** Symbol */
-            symbol: string;
-        };
-        /**
          * IbkrConnectionHealth
          * @description Diagnostic snapshot used by ``GET /api/broker/health``.
          *
@@ -17665,83 +17357,6 @@ export interface components {
             successful_reconnect_count?: number;
             /** Unreachable Since Ms */
             unreachable_since_ms?: number | null;
-        };
-        /**
-         * IbkrMinuteBar
-         * @description One closed 1-minute TRADES bar from IBKR real-time bars.
-         *
-         *     IBKR delivers 5-second bars via ``reqRealTimeBars``. The broker
-         *     boundary aggregates those into closed 1-minute bars and stores all
-         *     boundary timestamps as ``int64`` ms UTC.
-         */
-        IbkrMinuteBar: {
-            /** Close */
-            close: string;
-            /**
-             * Contribution Count
-             * @description 5-second bars folded into this minute; None when unknown (historical).
-             */
-            contribution_count?: number | null;
-            /**
-             * End Ms
-             * @description UTC milliseconds since epoch, exclusive.
-             */
-            end_ms: number;
-            /** Fetched At Ms */
-            fetched_at_ms: number;
-            /** High */
-            high: string;
-            /** Low */
-            low: string;
-            /** Open */
-            open: string;
-            /**
-             * Provenance
-             * @default ibkr_realtime
-             * @enum {string}
-             */
-            provenance?: "ibkr_realtime" | "ibkr_historical" | "polygon_historical" | "mixed";
-            /**
-             * Session Phase
-             * @default UNKNOWN
-             * @enum {string}
-             */
-            session_phase?: "PRE" | "RTH" | "POST" | "OVERNIGHT" | "CLOSED" | "UNKNOWN";
-            /**
-             * Source
-             * @default ibkr
-             * @enum {string}
-             */
-            source?: "ibkr" | "polygon" | "mixed";
-            /**
-             * Spans Interruption
-             * @description Contributions arrived over more than one connection generation.
-             * @default false
-             */
-            spans_interruption?: boolean;
-            /**
-             * Start Ms
-             * @description UTC milliseconds since epoch, inclusive.
-             */
-            start_ms: number;
-            /** Symbol */
-            symbol: string;
-            /** Use Rth */
-            use_rth?: boolean | null;
-            /** Venue */
-            venue?: string | null;
-            /** Volume */
-            volume: number;
-        };
-        /**
-         * IbkrSerializerWarning
-         * @description Structured warning emitted when an IBKR object cannot be fully serialized.
-         */
-        IbkrSerializerWarning: {
-            /** Object Type */
-            object_type: string;
-            /** Serializer Error */
-            serializer_error: string;
         };
         /**
          * IbkrStrikeList
@@ -24773,51 +24388,6 @@ export interface components {
             /** Ticker */
             ticker: string;
         };
-        /** SessionCapability */
-        SessionCapability: {
-            /**
-             * Data
-             * @enum {string}
-             */
-            data: "live" | "delayed" | "frozen" | "delayed_frozen" | "none";
-            /** Evidence Codes */
-            evidence_codes?: number[];
-            /** Order Eligible Outside Rth */
-            order_eligible_outside_rth: boolean;
-            /**
-             * Tradeable
-             * @enum {string}
-             */
-            tradeable: "yes" | "needs_enablement" | "no";
-            /** Window Today Close Ms */
-            window_today_close_ms?: number | null;
-            /** Window Today Open Ms */
-            window_today_open_ms?: number | null;
-        };
-        /** SessionDataCapability */
-        SessionDataCapability: {
-            /** Account Id */
-            account_id: string;
-            /**
-             * Account Mode
-             * @enum {string}
-             */
-            account_mode: "live" | "paper";
-            /** Con Id */
-            con_id: number;
-            /** Probed At Ms */
-            probed_at_ms: number;
-            /** Raw Evidence */
-            raw_evidence?: components["schemas"]["IbkrApiEvidenceEvent"][];
-            /** Sessions */
-            sessions: {
-                [key: string]: components["schemas"]["SessionCapability"];
-            };
-            /** Symbol */
-            symbol: string;
-            /** Time Zone Id */
-            time_zone_id: string;
-        };
         /**
          * SessionFeeReconciliation
          * @description Predicted fees for one ET trade date against the FEE activities Alpaca posted.
@@ -29895,138 +29465,6 @@ export interface operations {
             };
         };
     };
-    bars_5s_snapshot_endpoint_api_broker_bars_5s_snapshot_get: {
-        parameters: {
-            query: {
-                symbol: string;
-                since_ms?: number | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IbkrBarsSnapshot"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    bars_snapshot_endpoint_api_broker_bars_snapshot_get: {
-        parameters: {
-            query: {
-                symbol: string;
-                since_ms?: number | null;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IbkrBarsSnapshot"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_broker_capability_api_broker_capability_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerCapabilityReadResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    probe_broker_capability_api_broker_capability_probe_post: {
-        parameters: {
-            query?: {
-                symbols?: string;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BrokerCapabilityProbeResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     connect_endpoint_api_broker_connect_post: {
         parameters: {
             query?: never;
@@ -30045,37 +29483,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IbkrConnectionHealth"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    data_plane_health_endpoint_api_broker_data_plane_health_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DataPlaneHealth"];
                 };
             };
             /** @description Validation Error */
@@ -30171,73 +29578,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IbkrConnectionHealth"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    ibkr_api_evidence_backfill_api_broker_ibkr_evidence_get: {
-        parameters: {
-            query?: {
-                after_seq?: number;
-                limit?: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IbkrApiEvidenceEvent"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    ibkr_api_evidence_stream_api_broker_ibkr_evidence_stream_get: {
-        parameters: {
-            query?: {
-                since_seq?: number;
-            };
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -39950,37 +39290,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrustedRunResponseModel"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_feed_health_api_market_data_feed_health_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FeedHealth"];
                 };
             };
             /** @description Validation Error */

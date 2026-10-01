@@ -61,42 +61,6 @@ describe('BrokersService', () => {
     await promise;
   });
 
-  it('GETs account activity with a bounded int64-ms cursor', async () => {
-    const promise = service.listActivities(TARGET, {
-      afterMs: 1_700_000_000_000,
-      limit: 25,
-    });
-
-    const req = httpMock.expectOne(
-      (request) =>
-        request.url === `/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/activities` &&
-        request.params.get('after_ms') === '1700000000000' &&
-        request.params.get('limit') === '25',
-    );
-    expect(req.request.method).toBe('GET');
-    req.flush([]);
-
-    await expect(promise).resolves.toEqual([]);
-  });
-
-  it('requests the backend-owned current trading session', async () => {
-    const promise = service.listActivities(TARGET, {
-      currentSession: true,
-      limit: 100,
-    });
-
-    const req = httpMock.expectOne(
-      (request) =>
-        request.url === `/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/activities` &&
-        request.params.get('current_session') === 'true' &&
-        request.params.get('limit') === '100' &&
-        !request.params.has('after_ms'),
-    );
-    req.flush([]);
-
-    await expect(promise).resolves.toEqual([]);
-  });
-
   it('coalesces concurrent account reads for the same broker', async () => {
     const first = service.getAccount(TARGET);
     const second = service.getAccount(TARGET);
@@ -109,21 +73,6 @@ describe('BrokersService', () => {
       { account_id: 'PA-SHARED' },
       { account_id: 'PA-SHARED' },
     ]);
-  });
-
-  it('keeps generic broker orders available only for diagnostics', async () => {
-    const promise = service.listOrders(TEST_CLERK_ID, { status: 'all', limit: 50 });
-
-    const req = httpMock.expectOne(
-      (request) =>
-        request.url === `/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/orders` &&
-        request.params.get('status') === 'all' &&
-        request.params.get('limit') === '50',
-    );
-    expect(req.request.method).toBe('GET');
-    req.flush([]);
-
-    await expect(promise).resolves.toEqual([]);
   });
 
   it('GETs the clerk status for the named broker', async () => {

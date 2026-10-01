@@ -500,10 +500,6 @@ class _RunReplayFeed:
         self._live_bars = list(live_bars)
         self._session = session
 
-    @property
-    def capability_account_id(self) -> None:
-        return None
-
     async def stream_bars(
         self,
         symbol: str,
