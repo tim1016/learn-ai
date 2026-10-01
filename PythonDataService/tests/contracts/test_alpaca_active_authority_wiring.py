@@ -178,28 +178,6 @@ def test_generated_contract_preserves_sqlite_custody_routes() -> None:
         assert method in paths[path], (method, path)
 
 
-def test_strict_historical_identity_reads_are_preserved() -> None:
-    """The IBKR transaction-projection half of this guard retired with
-    PR-A of #1813 (2026-08-26) — clerk_transaction_projection.py no longer
-    reads AccountClerkJournalEntry/ACCOUNT_CLERK_JOURNAL_FILENAME at all; it
-    holds only the shared ClerkTransactionProjectionUnavailable exception.
-    The strict-historical-identity guard below is unrelated and unaffected.
-    """
-    strict_reader_path = APPLICATION_ROOT / "engine/live/historical_run_identity.py"
-    strict_reader = strict_reader_path.read_text(encoding="utf-8")
-    assert "read_historical_strategy_instance_id" in strict_reader
-    assert "path.is_symlink() or not path.is_file()" in strict_reader
-    for writer_symbol in ("write_text", "write_bytes", ".open(\"w", ".open(\"a"):
-        assert writer_symbol not in strict_reader
-
-    identity_guard = (APPLICATION_ROOT / "services/alpaca_bot_identity.py").read_text(
-        encoding="utf-8"
-    )
-    assert "read_historical_strategy_instance_id" in identity_guard
-    assert "live_runs_root.is_symlink()" in identity_guard
-    assert "run_dir.is_symlink()" in identity_guard
-
-
 def test_alpaca_models_and_reads_have_no_legacy_custody_fallback() -> None:
     models = (APPLICATION_ROOT / "broker/alpaca/clerk/models.py").read_text(
         encoding="utf-8"
@@ -438,8 +416,6 @@ def test_the_shadow_composition_hands_the_envelope_the_live_read_port() -> None:
         "compose_repository_runtime; the shadow envelope would fall back to "
         "the synthesized read port and its unrealized P&L would always be 0"
     )
-
-
 
 
 def test_the_live_composition_binds_the_real_trade_port_and_its_envelope() -> None:

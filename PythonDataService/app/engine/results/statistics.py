@@ -492,34 +492,6 @@ def validate_trade_log(trades: Sequence[_TradeLike]) -> list[ValidationError]:
     return errors
 
 
-def validate_equity_curve(curve: Sequence[float]) -> list[ValidationError]:
-    errors: list[ValidationError] = []
-    if len(curve) < 1:
-        errors.append(
-            ValidationError(
-                code="empty_curve",
-                message="Equity curve has no points",
-            )
-        )
-        return errors
-    for i, value in enumerate(curve):
-        if math.isnan(value):
-            errors.append(
-                ValidationError(
-                    code="nan_equity",
-                    message=f"Equity point {i}: value is NaN",
-                )
-            )
-        if value < 0:
-            errors.append(
-                ValidationError(
-                    code="negative_equity",
-                    message=f"Equity point {i}: value is negative ({value})",
-                )
-            )
-    return errors
-
-
 def validate_statistics(stats: dict[str, float | int | None]) -> list[ValidationError]:
     errors: list[ValidationError] = []
     if "win_rate" in stats and stats["win_rate"] is not None:

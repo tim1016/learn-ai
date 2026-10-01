@@ -20,7 +20,6 @@ from app.jobs.progress import (
     ProgressEmitter,
     acquire_lease,
     release_lease,
-    renew_lease,
 )
 from app.jobs.runner import run_in_thread
 from app.research.persistence import lifecycle
@@ -58,7 +57,6 @@ def test_an_expired_lease_stays_expired_when_the_worker_emits_again(fake: _FakeR
     fake.strings.pop(LEASE)  # the TTL passed
 
     ProgressEmitter("lease-1").log("late emit")
-    renew_lease("lease-1")
 
     assert lifecycle.job_is_live("lease-1") is False
 

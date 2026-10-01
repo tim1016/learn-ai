@@ -14,8 +14,6 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import Any, Literal
 
-from pydantic import Field
-
 from app.engine.pine_generators import (
     generate_strategy_a_pine,
     generate_strategy_b_pine,
@@ -89,60 +87,6 @@ from app.schemas.signal_program_seal import (
     SignalSeriesContract,
 )
 from app.schemas.strategy_validation import StrategyCategory
-
-
-class EmaCrossoverOptionsParams(StrategyParamsBase):
-    """EMA crossover options spread strategy parameters.
-
-    Same signal engine as the equity EMA crossover, but trades bull call
-    or bull put spreads on the underlying's option chain instead.
-    """
-
-    # Signal parameters (same defaults as equity strategy)
-    symbol: str = Field("SPY", min_length=1, max_length=20)
-    ema_fast_period: int = Field(5, ge=2, le=200)
-    ema_slow_period: int = Field(10, ge=3, le=500)
-    rsi_period: int = Field(14, ge=2, le=200)
-    ema_gap_min: float = Field(0.20, ge=0)
-    rsi_min: float = Field(50.0, ge=0, lt=100)
-    rsi_max: float = Field(70.0, gt=0, le=100)
-    timeframe_minutes: int = Field(15, ge=1, le=1440)
-    bars_to_hold: int = Field(5, ge=1, le=200)
-
-    # Options parameters
-    spread_type: str = Field(
-        "BULL_CALL",
-        description="BULL_CALL or BULL_PUT",
-    )
-    min_dte: int = Field(7, ge=0, le=365)
-    max_dte: int = Field(30, ge=1, le=365)
-    long_call_delta_target: float = Field(0.60, ge=0, le=1)
-    short_call_delta_target: float = Field(0.30, ge=0, le=1)
-    short_put_delta_target: float = Field(-0.30, ge=-1, le=0)
-    long_put_delta_target: float = Field(-0.15, ge=-1, le=0)
-    min_open_interest: int = Field(100, ge=0)
-    min_volume: int = Field(10, ge=0)
-    max_bid_ask_spread_pct: float = Field(0.20, ge=0, le=1)
-    contracts_per_trade: int = Field(1, ge=1, le=100)
-    max_positions: int = Field(1, ge=1, le=10)
-    contract_multiplier: int = Field(100, ge=1)
-
-    # Pricing parameters
-    pricing_mode: str = Field(
-        "quantlib_only",
-        description="quantlib_only, market_preferred, or market_required",
-    )
-    pricing_engine: str = Field("analytic_bs")
-    risk_free_rate: float = Field(0.05, ge=0, le=1)
-    dividend_yield: float = Field(0.0, ge=0, le=1)
-    default_iv: float = Field(0.20, ge=0.01, le=5.0)
-    half_spread_pct: float = Field(0.01, ge=0, le=0.5)
-
-
-
-
-
-
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,13 +202,6 @@ class StrategyRegistration:
     # program's sealed sources: a byte edit there would break every seal.
     # ``None`` for a strategy with nothing to warn about.
     experimental_notice: str | None = None
-    # VCR-0004 / Phase 2 — the algorithm class the runner constructs. The
-    # registry key is the module name (``app.engine.strategy.algorithms.{key}``);
-    # ``class_name`` names the class inside that module. Together they retire
-    # the ``<PascalKey>Algorithm`` convention so a future class rename
-    # (``DeploymentValidationAlgorithm = DeploymentValidationConsecutiveGreen``
-    # was the smoking gun) cannot silently break the runner's class lookup.
-    class_name: str = ""
     # Which data resolutions the strategy can run against. Defaults to
     # minute-only because every currently-ported strategy consolidates
     # minute bars via a ``TradeBarConsolidator``. Daily-native strategies
@@ -380,12 +317,10 @@ def hidden_params_present(
     return sorted(hidden.intersection(params))
 
 
-
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     EMA_SIGNAL_PROGRAM_KEY: StrategyRegistration(
         display_name="EMA Crossover Signal",
         deploy_code="ema",
-        class_name="EmaCrossoverSignalAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=EMA_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
@@ -615,7 +550,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "sma_crossover": StrategyRegistration(
         display_name="SMA Crossover",
         deploy_code="sma",
-        class_name="SmaCrossoverAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=SMA_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
@@ -786,7 +720,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "rsi_mean_reversion": StrategyRegistration(
         display_name="RSI Mean Reversion",
         deploy_code="rsi",
-        class_name="RsiMeanReversionAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=RSI_MEAN_REVERSION_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
@@ -956,7 +889,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "deployment_validation": StrategyRegistration(
         display_name="Deployment Validation",
         deploy_code="dv",
-        class_name="DeploymentValidationConsecutiveGreen",
         strategy_category="operational_validation_harness",
         experimental_notice="Experimental validation only — not a trading strategy",
         signal_program_contract=SignalProgramContract(
@@ -1146,7 +1078,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "spy_strategy_a": StrategyRegistration(
         display_name="Strategy A — EMA-gap + MACD + RSI-range",
         deploy_code="sa",
-        class_name="SpyStrategyAAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
@@ -1366,7 +1297,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "spy_strategy_b": StrategyRegistration(
         display_name="Strategy B — Supertrend + ADX + MACD + RSI-range",
         deploy_code="sb",
-        class_name="SpyStrategyBAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
@@ -1586,7 +1516,6 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "spy_strategy_c": StrategyRegistration(
         display_name="Strategy C — ADX-rising + RSI-range",
         deploy_code="sc",
-        class_name="SpyStrategyCAlgorithm",
         signal_program_contract=SignalProgramContract(
             program_version=SPY_C_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,

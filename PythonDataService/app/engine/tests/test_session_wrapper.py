@@ -41,8 +41,6 @@ class _EntryThenExitStrategy(Strategy):
         *,
         exit_on_bar_index: int | None = None,
         exit_quantity: int | None = None,
-        take_profit: Decimal | None = None,
-        stop_loss: Decimal | None = None,
         skip_entry: bool = False,
     ) -> None:
         super().__init__()
@@ -50,8 +48,6 @@ class _EntryThenExitStrategy(Strategy):
         # None => full exit (-position). An explicit value queues a partial
         # reduction or a flip instead.
         self._exit_quantity = exit_quantity
-        self._tp = take_profit
-        self._sl = stop_loss
         self._skip_entry = skip_entry
         self._bar_count = 0
         self._symbol = "SPY"
@@ -75,8 +71,6 @@ class _EntryThenExitStrategy(Strategy):
                 quantity=100,
                 submitted_at_ms=bar.end_ms,
                 tag="entry",
-                take_profit_price=self._tp,
-                stop_loss_price=self._sl,
             )
         elif self._exit_on is not None and idx == self._exit_on:
             pos = self.ctx.portfolio.get_position(self._symbol)

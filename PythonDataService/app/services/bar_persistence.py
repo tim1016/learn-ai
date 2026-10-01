@@ -1,7 +1,7 @@
 """Persistent storage for live OHLCV bars (Slice 3).
 
 The aggregator owns an in-memory ring buffer; this module owns the
-disk-resident replay log + compaction so a restart can:
+disk-resident replay log so a restart can:
 
 1. Re-deliver today's bars to the chart immediately on subscribe.
 2. Detect a misbehaving feed by surfacing duplicates / corrections as
@@ -10,8 +10,6 @@ disk-resident replay log + compaction so a restart can:
 Storage layout (per-symbol, per-resolution, per-UTC-date):
 
     <root>/<symbol>/<resolution>/<YYYY-MM-DD>.jsonl
-    <root>/<symbol>/<resolution>/<YYYY-MM-DD>.parquet
-    <root>/<symbol>/<resolution>/<YYYY-MM-DD>.jsonl.compacted-<ts>
     <root>/<symbol>/<resolution>/<YYYY-MM-DD>.jsonl.quarantine-<ts>
 
 Each JSONL line carries ``{action, ts_ms, bar}`` where ``action`` is one
@@ -26,8 +24,7 @@ A non-monotonic ``start_ms`` (incoming < last accepted) is **never**
 silently repaired; per ``.claude/rules/numerical-rigor.md`` →
 "Timestamp rigor → Ban list" the day's JSONL is quarantined and
 ``BarPersistenceRegressionError`` is raised so the aggregator fails
-fast. The quarantined file is forensic evidence for the operator —
-retention leaves it in place.
+fast. The quarantined file is forensic evidence for the operator.
 """
 
 from __future__ import annotations
@@ -35,29 +32,22 @@ from __future__ import annotations
 import io
 import json
 import logging
-import os
 import threading
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Final
-
-import pyarrow as pa
-import pyarrow.parquet as pq
 
 from app.broker.alpaca.paths import resolve_contained_path, safe_path_component
 from app.broker.ibkr.bar_models import IbkrMinuteBar
 from app.utils.advisory_lock import advisory_file_lock
-from app.utils.atomic_parquet import atomic_parquet_write
 
 logger = logging.getLogger(__name__)
 
 # Suffix matchers + writers — kept as constants so every callsite uses the
 # same naming convention.
 _JSONL_SUFFIX: Final = ".jsonl"
-_PARQUET_SUFFIX: Final = ".parquet"
 _QUARANTINE_PREFIX: Final = "quarantine-"
-_COMPACTED_PREFIX: Final = "compacted-"
 
 # UTC-date / ms-of-day math constants. Storage is keyed on the UTC date of
 # the bar's ``start_ms``; the rigor rules require all wire/storage
@@ -153,23 +143,11 @@ def _record_to_bar(record: dict) -> IbkrMinuteBar:
     return IbkrMinuteBar.model_validate(record)
 
 
-def _publish_parquet_atomic(table: pa.Table, path: Path) -> None:
-    """Publish a complete Parquet file with same-filesystem atomic replace."""
-
-    atomic_parquet_write(
-        path,
-        lambda tmp_path: pq.write_table(table, tmp_path),
-        replace=os.replace,
-        cleanup_errors=(FileNotFoundError,),
-    )
-
-
 class BarPersistence:
-    """JSONL append-log + Parquet compaction for live OHLCV bars."""
+    """JSONL append-log for live OHLCV bars."""
 
-    def __init__(self, root: Path, *, retention_days: int = 30) -> None:
+    def __init__(self, root: Path) -> None:
         self._root = Path(root)
-        self._retention_days = int(retention_days)
         # Per-(symbol, resolution) cursor + counter map. Reconstructed on
         # demand from the JSONL when a process starts cold.
         self._cursors: dict[tuple[str, str], _Cursor] = {}
@@ -300,55 +278,8 @@ class BarPersistence:
                 by_start[bar.start_ms] = bar
         return sorted(by_start.values(), key=lambda b: b.start_ms)
 
-    def read_parquet(self, symbol: str, resolution: str, day: date) -> list[IbkrMinuteBar]:
-        """Read a compacted day's bars from Parquet. Empty list if absent."""
-        path = self._parquet_path(symbol, resolution, day)
-        if not path.is_file():
-            return []
-        try:
-            table = pq.read_table(path)
-        except (OSError, pa.ArrowInvalid) as exc:
-            logger.warning("bar_persistence: parquet read failed for %s: %s", path, exc)
-            return []
-        bars: list[IbkrMinuteBar] = []
-        for row in table.to_pylist():
-            try:
-                bars.append(_record_to_bar(row))
-            except (ValueError, TypeError) as exc:
-                logger.warning("bar_persistence: invalid parquet row skipped: %s", exc)
-        return sorted(bars, key=lambda b: b.start_ms)
-
-    def compact(self, symbol: str, resolution: str, day: date) -> Path:
-        """Write the day's bars to Parquet and archive the JSONL.
-
-        Returns the Parquet path. The JSONL is renamed to
-        ``<date>.jsonl.compacted-<now_ms>`` rather than deleted so an
-        operator can audit the source after compaction.
-        """
-        with self._lock:
-            jsonl = self._jsonl_path(symbol, resolution, day)
-            with advisory_file_lock(jsonl):
-                parquet = self._parquet_path(symbol, resolution, day)
-                if not jsonl.is_file() and parquet.is_file():
-                    return parquet
-                bars = self.replay(symbol, resolution, day)
-                parquet.parent.mkdir(parents=True, exist_ok=True)
-                rows = [_bar_to_record(b) for b in bars]
-                table = pa.Table.from_pylist(rows) if rows else pa.table({})
-                _publish_parquet_atomic(table, parquet)
-
-                # Archive the source only after the complete Parquet file is
-                # durably published. A failed write leaves JSONL replayable.
-                if jsonl.is_file():
-                    archive = jsonl.with_name(
-                        f"{jsonl.name}.{_COMPACTED_PREFIX}{_now_ms_utc()}"
-                    )
-                    jsonl.rename(archive)
-                return parquet
-
     def active_dates(self, symbol: str, resolution: str) -> list[date]:
-        """Sorted dates that have either a JSONL or a Parquet for
-        ``(symbol, resolution)``."""
+        """Sorted dates that have a dated JSONL file for ``(symbol, resolution)``."""
         day_dir = self._dir(symbol, resolution)
         if not day_dir.is_dir():
             return []
@@ -363,45 +294,6 @@ class BarPersistence:
             except ValueError:
                 continue
         return sorted(dates)
-
-    def apply_retention(self, *, now: datetime) -> int:
-        """Delete JSONL / Parquet files outside the retention window.
-
-        Quarantined files are preserved — they are forensic evidence of a
-        bad feed. Returns the number of files removed.
-        """
-        cutoff = (now.astimezone(UTC) - timedelta(days=self._retention_days)).date()
-        deleted = 0
-        if not self._root.is_dir():
-            return 0
-        for symbol_dir in self._root.iterdir():
-            if not symbol_dir.is_dir():
-                continue
-            for resolution_dir in symbol_dir.iterdir():
-                if not resolution_dir.is_dir():
-                    continue
-                for entry in resolution_dir.iterdir():
-                    name = entry.name
-                    if _QUARANTINE_PREFIX in name:
-                        continue
-                    stem = self._date_stem(name)
-                    if stem is None:
-                        continue
-                    try:
-                        entry_date = date.fromisoformat(stem)
-                    except ValueError:
-                        continue
-                    if entry_date < cutoff:
-                        try:
-                            entry.unlink()
-                            deleted += 1
-                        except OSError as exc:
-                            logger.warning(
-                                "bar_persistence: retention unlink failed for %s: %s",
-                                entry,
-                                exc,
-                            )
-        return deleted
 
     def counters(self, symbol: str, resolution: str) -> Counters:
         """Snapshot of the per-(symbol, resolution) observability counters."""
@@ -465,9 +357,6 @@ class BarPersistence:
     def _jsonl_path(self, symbol: str, resolution: str, day: date) -> Path:
         return self._dir(symbol, resolution) / f"{day.isoformat()}{_JSONL_SUFFIX}"
 
-    def _parquet_path(self, symbol: str, resolution: str, day: date) -> Path:
-        return self._dir(symbol, resolution) / f"{day.isoformat()}{_PARQUET_SUFFIX}"
-
     def _write_line(self, path: Path, action: str, bar: IbkrMinuteBar) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         record = {
@@ -494,10 +383,8 @@ class BarPersistence:
     def _date_stem(name: str) -> str | None:
         """Return the ``YYYY-MM-DD`` stem of a persistence file name.
 
-        Handles all four supported file shapes:
+        Handles both supported file shapes:
             * ``2026-04-01.jsonl``
-            * ``2026-04-01.parquet``
-            * ``2026-04-01.jsonl.compacted-<ts>``
             * ``2026-04-01.jsonl.quarantine-<ts>``
         """
         # Take everything up to the first dot — for the dated files in this

@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from time import monotonic
 from typing import Generic, TypeVar
@@ -443,22 +443,6 @@ class SurfaceHubRegistry(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runti
             )
             self._hubs[strategy_instance_id] = hub
         return hub
-
-    async def start_all(self, hubs: Iterable[SurfaceHub[SnapshotT]]) -> None:
-        owned_hubs = tuple(hubs)
-        results = await asyncio.gather(
-            *(hub.start() for hub in owned_hubs),
-            return_exceptions=True,
-        )
-        for hub, result in zip(owned_hubs, results, strict=True):
-            if isinstance(result, BaseException):
-                logger.error(
-                    "surface hub failed to start",
-                    extra={
-                        "strategy_instance_id": hub.strategy_instance_id,
-                        "exception": repr(result),
-                    },
-                )
 
     async def stop_all(self) -> None:
         hubs = tuple(self._hubs.values())

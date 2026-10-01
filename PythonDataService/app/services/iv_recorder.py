@@ -88,13 +88,6 @@ class RecordedIvSnapshot:
     health_score: float | None = None
 
 
-@dataclass
-class _RecorderResult:
-    """Internal carrier — never serialized."""
-
-    snapshot: RecordedIvSnapshot
-
-
 # ── Persistence interface ───────────────────────────────────────────────────
 
 

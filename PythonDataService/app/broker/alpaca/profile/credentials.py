@@ -167,20 +167,6 @@ def _injected_pair(
     return key_id, secret_key
 
 
-def credential_slot_available(
-    slot: object,
-    *,
-    environment: AlpacaCredentialEnvironment | None = None,
-) -> bool:
-    """Whether both halves of ``slot``'s pair are injected.
-
-    Raises :class:`CredentialSlotUnknown` for a slot off the allowlist, so an
-    unrecognised name is a refusal rather than a quiet ``False``.
-    """
-    known = require_known_credential_slot(slot)
-    return _injected_pair(_environment(environment), known) is not None
-
-
 def describe_credential_slots(
     *,
     environment: AlpacaCredentialEnvironment | None = None,
@@ -235,7 +221,6 @@ __all__ = [
     "AlpacaCredentialEnvironment",
     "CredentialSlotAvailability",
     "ResolvedCredentials",
-    "credential_slot_available",
     "describe_credential_slots",
     "is_known_credential_slot",
     "require_known_credential_slot",

@@ -20,10 +20,6 @@ from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReade
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.execution_config import ExecutionConfig
 from app.engine.execution.fill_model import DEFERRED_FILL_MODES, FillModel
-from app.engine.execution.intrabar_resolver import (
-    IntrabarOutcome,
-    resolve_bracket_pessimistic,
-)
 from app.engine.execution.order import Direction, FillMode, Order, OrderEvent, OrderType
 from app.engine.execution.portfolio import Portfolio
 from app.engine.execution.signal_intent_executor import SignalSymbolExecutor
@@ -52,19 +48,6 @@ class EquitySnapshot:
     equity: Decimal
     cash: Decimal
     holdings_value: Decimal
-
-
-@dataclass
-class _ActiveBracket:
-    """Engine-internal bracket watcher for an open position."""
-
-    entry_order_id: int
-    symbol: str
-    direction: Direction
-    quantity: int  # signed — matches the entry fill_quantity
-    take_profit_price: Decimal | None
-    stop_loss_price: Decimal | None
-    fill_time_ms: int
 
 
 @dataclass(frozen=True)
@@ -271,77 +254,10 @@ class BacktestEngine:
         equity_curve: list[EquitySnapshot] = []
         closing_bar_skips: list[ClosingBarSkip] = []
 
-        active_brackets: list[_ActiveBracket] = []
-        resting_limit_orders: list[Order] = []
-
-        # Bracket evaluation hook — invoked by the consolidator wrapper
-        # BEFORE the strategy's own handler runs, so the strategy sees
-        # the correct (possibly closed-out) position state when its
-        # ``on_bar`` executes for a bar that triggered a TP/SL exit.
-        def _evaluate_brackets(fired_bar: TradeBar) -> None:
-            if not active_brackets:
-                return
-            still_active: list[_ActiveBracket] = []
-            for bracket in active_brackets:
-                # Skip bars at or before the fill — those belong to the
-                # entry's own period, not the monitoring window.
-                if fired_bar.end_ms <= bracket.fill_time_ms:
-                    still_active.append(bracket)
-                    continue
-                if fired_bar.symbol != bracket.symbol:
-                    still_active.append(bracket)
-                    continue
-                resolution = resolve_bracket_pessimistic(
-                    fired_bar,
-                    bracket.direction,
-                    bracket.take_profit_price,
-                    bracket.stop_loss_price,
-                )
-                if resolution.outcome is IntrabarOutcome.NONE:
-                    still_active.append(bracket)
-                    continue
-                assert resolution.fill_price is not None
-                # Close the position with a signed quantity of the
-                # opposite sign to the entry.
-                exit_quantity = -bracket.quantity
-                exit_direction = Direction.SHORT if bracket.direction is Direction.LONG else Direction.LONG
-                exit_event = OrderEvent(
-                    order_id=portfolio._next_id(),
-                    symbol=bracket.symbol,
-                    filled_at_ms=fired_bar.end_ms,
-                    fill_price=resolution.fill_price,
-                    fill_quantity=exit_quantity,
-                    direction=exit_direction,
-                    fee=self.fill_model.compute_fee(quantity=int(exit_quantity), fill_price=resolution.fill_price),
-                    tag="TP" if resolution.outcome is IntrabarOutcome.TAKE_PROFIT else "SL",
-                )
-                portfolio.apply_fill(exit_event)
-                order_events.append(exit_event)
-                strategy.on_order_event(exit_event)
-            active_brackets[:] = still_active
-
-        ctx._pre_handler_hook = _evaluate_brackets
-
-        def _register_bracket_if_needed(order: Order, event: OrderEvent) -> None:
-            if order.take_profit_price is None and order.stop_loss_price is None:
-                return
-            active_brackets.append(
-                _ActiveBracket(
-                    entry_order_id=event.order_id,
-                    symbol=event.symbol,
-                    direction=event.direction,
-                    quantity=event.fill_quantity,
-                    take_profit_price=order.take_profit_price,
-                    stop_loss_price=order.stop_loss_price,
-                    fill_time_ms=event.filled_at_ms,
-                )
-            )
-
         def _record_fill(order: Order, event: OrderEvent) -> None:
             portfolio.apply_fill(event)
             order_events.append(event)
             strategy.on_order_event(event)
-            _register_bracket_if_needed(order, event)
 
         # ------------------------------------------------------------------
         # 2. Main loop over minute bars.
@@ -373,8 +289,6 @@ class BacktestEngine:
                     symbol=symbol,
                     evaluation_start_ms=evaluation_start_ms,
                     pending_fills=pending_fills,
-                    active_brackets=active_brackets,
-                    resting_limit_orders=resting_limit_orders,
                     order_events=order_events,
                     equity_curve=equity_curve,
                     retained_bars=retained_bars,
@@ -427,20 +341,15 @@ class BacktestEngine:
             self._settle_staged_signal_program(strategy, closing_bar_skips)
 
             # ----- Drain any pending orders the strategy just submitted.
-            #       LIMIT orders move to the resting book; MARKET orders
-            #       fill now (SIGNAL_BAR_CLOSE, and DECISION_MINUTE_OPEN when
-            #       this minute opened after the decision) or defer to a
-            #       later minute bar.
+            #       MARKET orders fill now (SIGNAL_BAR_CLOSE, and
+            #       DECISION_MINUTE_OPEN when this minute opened after the
+            #       decision) or defer to a later minute bar.
             if portfolio.pending_orders:
                 drained = list(portfolio.drain_pending())
-                limit_orders = [o for o in drained if o.order_type == OrderType.LIMIT]
                 market_orders = [o for o in drained if o.order_type == OrderType.MARKET]
-                other_orders = [o for o in drained if o.order_type not in (OrderType.LIMIT, OrderType.MARKET)]
+                other_orders = [o for o in drained if o.order_type != OrderType.MARKET]
                 if other_orders:
                     raise NotImplementedError(f"order types not yet supported: {[o.order_type for o in other_orders]}")
-                for order in limit_orders:
-                    assert order.limit_price is not None, "LIMIT order requires limit_price"
-                    resting_limit_orders.append(order)
                 if market_orders:
                     # The "signal bar" for a SIGNAL_BAR_CLOSE fill is the
                     # latest fired consolidated bar. For multi-consolidator
@@ -488,39 +397,6 @@ class BacktestEngine:
                             pending_fills.append((order, signal_bar))
                         else:
                             raise ValueError(f"unknown fill mode: {self.fill_model.mode}")
-
-            # ----- Evaluate resting limit orders against this minute's
-            #       [low, high] range. The penetration requirement is
-            #       measured against the adverse extreme (low for buy,
-            #       high for sell) per the user spec — fills happen at
-            #       the limit price exactly, with no slippage.
-            if resting_limit_orders:
-                penetration = self.execution_config.limit_penetration
-                still_resting: list[Order] = []
-                for order in resting_limit_orders:
-                    assert order.limit_price is not None
-                    if order.symbol != minute_bar.symbol:
-                        still_resting.append(order)
-                        continue
-                    if order.direction is Direction.LONG:
-                        fills = (order.limit_price - minute_bar.low) >= penetration
-                    else:
-                        fills = (minute_bar.high - order.limit_price) >= penetration
-                    if not fills:
-                        still_resting.append(order)
-                        continue
-                    event = OrderEvent(
-                        order_id=order.order_id,
-                        symbol=order.symbol,
-                        filled_at_ms=minute_bar.end_ms,
-                        fill_price=order.limit_price,
-                        fill_quantity=order.quantity,
-                        direction=order.direction,
-                        fee=self.fill_model.compute_fee(quantity=int(order.quantity), fill_price=order.limit_price),
-                        tag=order.tag,
-                    )
-                    _record_fill(order, event)
-                resting_limit_orders[:] = still_resting
 
             # ----- Score any expired insights against current prices.
             current_prices = {sym: portfolio.reference_price.get(sym, Decimal(0)) for sym in ctx.symbols}
@@ -586,8 +462,6 @@ class BacktestEngine:
         symbol: str,
         evaluation_start_ms: int,
         pending_fills: list[tuple[Order, TradeBar]],
-        active_brackets: list[_ActiveBracket],
-        resting_limit_orders: list[Order],
         order_events: list[OrderEvent],
         equity_curve: list[EquitySnapshot],
         retained_bars: list[TradeBar],
@@ -634,8 +508,6 @@ class BacktestEngine:
 
         portfolio.clear_pending()
         pending_fills.clear()
-        active_brackets.clear()
-        resting_limit_orders.clear()
         portfolio.rebase()
         strategy.on_force_flat()
         trade_log = getattr(strategy, "trade_log", None)

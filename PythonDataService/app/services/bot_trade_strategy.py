@@ -80,11 +80,6 @@ _EFFECT_PURPOSE_BY_INTENT = {
     SignalIntentKind.ENTER: EffectPurpose.ENTER,
     SignalIntentKind.EXIT: EffectPurpose.EXIT,
 }
-# Carryover is globally disabled until a future, separately reviewed slice can
-# prove replay equivalence, retained open-cycle coverage, and first-future-
-# decision safety for each individual program.  The empty set is deliberately
-# an explicit policy boundary, not an omitted configuration default.
-EXPOSURE_CARRYOVER_STRATEGY_KEYS: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -754,9 +749,9 @@ async def strategy_evaluations(
     durable decision identities to their outcomes (FR-016) -- pass it so
     warmup replay can reapply each bucket's own known disposition and
     recognize a candidate a crash left uncaptured. Omitting it (the
-    default) means no such recovery is attempted, which is correct for
-    :func:`strategy_intents`, a read-only stream with no custody seam to
-    record or discard a recovered candidate through.
+    default) means no such recovery is attempted, which is correct for a
+    read-only stream with no custody seam to record or discard a recovered
+    candidate through.
 
     ``quarantine_receipts`` is where a refused decision bar becomes durable
     evidence rather than only a log line (issue #1827). Pass a custody
@@ -791,22 +786,6 @@ def _validate_decision_session(binding: BrokerBotBinding, session: RunDecisionSe
     """
     if session is None:
         require_decision_session(binding)
-
-
-async def strategy_intents(
-    binding: BrokerBotBinding,
-    feed: MarketDataFeed,
-) -> AsyncIterator[SignalIntent]:
-    """Compatibility stream that commits each yielded staged evaluation.
-
-    Custody runners use :func:`strategy_evaluations` so they can atomically
-    choose a disposition.  This read-only convenience stream has no custody
-    seam, therefore its only sound disposition is an immediate commit.
-    """
-    async for evaluation in strategy_evaluations(binding, feed):
-        for intent in evaluation.intents:
-            yield intent
-        _settle_evaluation(evaluation, Settlement.COMMIT)
 
 
 def supported_alpaca_paper_strategy_keys() -> frozenset[str]:

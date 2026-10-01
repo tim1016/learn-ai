@@ -48,32 +48,6 @@ class AggregateRequest(BaseModel):
         return v
 
 
-class TradeRequest(BaseModel):
-    """Request schema for fetching trade data"""
-
-    ticker: str = Field(..., min_length=1, max_length=50)
-    timestamp: str | None = Field(None, description="Timestamp filter (YYYY-MM-DD)")
-    limit: int = Field(50000, ge=1, le=50000)
-
-
-class IndicatorRequest(BaseModel):
-    """Request schema for fetching technical indicators"""
-
-    ticker: str = Field(..., min_length=1, max_length=20)
-    indicator_type: str = Field(..., description="Indicator: sma, ema, rsi, macd")
-    timespan: str = Field("day", description="Timespan")
-    window: int = Field(50, ge=1, description="Window period")
-    timestamp: str | None = None
-
-    @field_validator("indicator_type")
-    @classmethod
-    def validate_indicator(cls, v: str) -> str:
-        valid = ["sma", "ema", "rsi", "macd"]
-        if v.lower() not in valid:
-            raise ValueError(f"indicator_type must be one of {valid}")
-        return v.lower()
-
-
 class SanitizeRequest(BaseModel):
     """Request schema for the standalone /api/sanitize endpoint"""
 

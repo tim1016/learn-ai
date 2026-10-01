@@ -1,8 +1,8 @@
 """Unit tests for the durable desired-state sidecar (PRD-A § 16.4
 Resolution 7 / PR-D).
 
-Mirrors test_live_state_sidecar's style: round-trip, atomic-write
-hygiene, default-when-absent, version bump, and corrupt-file refusal.
+Covers round-trip, atomic-write hygiene, default-when-absent, version
+bump, and corrupt-file refusal.
 """
 
 from __future__ import annotations

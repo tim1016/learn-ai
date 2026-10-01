@@ -1,12 +1,9 @@
 """Tests for app.broker.ibkr.contracts.search_option_contracts (Slice 1F).
 
-The wrapper is one step beyond ``build_option_contract``: it takes the
-concrete (symbol, expiry_ms, strike, right) drill-down picks from the
-cockpit and returns one ``OptionContractMatch`` per qualified contract.
-
-Unlike ``build_option_contract``, this returns the rich DTO
-(``con_id``, ``local_symbol``, ``trading_class``, ``multiplier``)
-because the picker persists those fields with the leg.
+The wrapper takes the concrete (symbol, expiry_ms, strike, right)
+drill-down picks from the cockpit and returns one ``OptionContractMatch``
+per qualified contract: the rich DTO (``con_id``, ``local_symbol``,
+``trading_class``, ``multiplier``) the picker persists with the leg.
 """
 
 from __future__ import annotations

@@ -90,20 +90,6 @@ _MINUTES_PER_DAY = 450
 _DAYS_PER_CHUNK = _POLYGON_MAX_BARS // _MINUTES_PER_DAY
 _ET = ZoneInfo("US/Eastern")
 
-# Default indicator configurations matching TradingView standard setup
-DEFAULT_INDICATORS: list[dict[str, Any]] = [
-    {"name": "ema", "params": {"length": 5}},
-    {"name": "ema", "params": {"length": 10}},
-    {"name": "ema", "params": {"length": 20}},
-    {"name": "ema", "params": {"length": 30}},
-    {"name": "ema", "params": {"length": 40}},
-    {"name": "ema", "params": {"length": 50}},
-    {"name": "ema", "params": {"length": 100}},
-    {"name": "ema", "params": {"length": 200}},
-    {"name": "bbands", "params": {"length": 20, "std": 2.0}},
-    {"name": "supertrend", "params": {"length": 10, "multiplier": 3.0}},
-    {"name": "macd", "params": {"fast": 12, "slow": 26, "signal": 9}},
-]
 
 # Configurable parameters for key indicators
 INDICATOR_CONFIGS: dict[str, list[dict[str, Any]]] = {

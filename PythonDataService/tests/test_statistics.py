@@ -26,7 +26,6 @@ from app.engine.results.statistics import (
     compute_trade_statistics,
     max_drawdown,
     summarize,
-    validate_equity_curve,
     validate_statistics,
     validate_trade_log,
 )
@@ -633,25 +632,6 @@ class TestValidateTradeLog:
         )
         errors = validate_trade_log([t])
         assert any(e.code == "nan_indicator" for e in errors)
-
-
-class TestValidateEquityCurve:
-    def test_valid_curve(self) -> None:
-        errors = validate_equity_curve([100.0, 101.0, 99.0, 102.0])
-        assert errors == []
-
-    def test_empty_curve(self) -> None:
-        errors = validate_equity_curve([])
-        assert len(errors) == 1
-        assert errors[0].code == "empty_curve"
-
-    def test_nan_value(self) -> None:
-        errors = validate_equity_curve([100.0, float("nan"), 102.0])
-        assert any(e.code == "nan_equity" for e in errors)
-
-    def test_negative_value(self) -> None:
-        errors = validate_equity_curve([100.0, -5.0, 102.0])
-        assert any(e.code == "negative_equity" for e in errors)
 
 
 class TestValidateStatistics:

@@ -35,7 +35,6 @@ from app.jobs.progress import (
     CancellationCheck,
     JobCancelled,
     ProgressEmitter,
-    create_job,
     fail_jobs_without_a_worker,
     get_redis,
 )
@@ -44,7 +43,6 @@ __all__ = [
     "CancellationCheck",
     "JobCancelled",
     "ProgressEmitter",
-    "create_job",
     "fail_jobs_without_a_worker",
     "get_redis",
 ]

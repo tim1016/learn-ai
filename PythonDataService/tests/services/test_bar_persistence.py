@@ -12,8 +12,7 @@ live bar aggregator (Slice 4) and the ``/chart-snapshot`` endpoint
   rules' ban on ``drop_duplicates`` / forward-fill (see
   ``.claude/rules/numerical-rigor.md`` → "Timestamp rigor").
 * Replay today's JSONL on subscribe.
-* Compact a closed day's JSONL into Parquet.
-* Enumerate active dates and apply a retention policy.
+* Enumerate active dates.
 * Emit structured counters for ``skipped_duplicate`` and
   ``applied_correction`` so an operator can spot a misbehaving feed.
 
@@ -24,8 +23,7 @@ All timestamps are ``int64`` ms UTC at every storage and wire boundary
 from __future__ import annotations
 
 import json
-import threading
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -173,156 +171,11 @@ def test_replay_returns_empty_when_no_jsonl(tmp_path: Path) -> None:
     assert store.replay("SPY", "1m", ANCHOR_DATE) == []
 
 
-def test_compact_emits_parquet_and_archives_jsonl(tmp_path: Path) -> None:
-    """``compact`` writes the day's bars to Parquet and renames the JSONL
-    into a ``.compacted`` archive so the aggregator stops appending to it."""
+def test_active_dates_lists_every_jsonl_day(tmp_path: Path) -> None:
+    """``active_dates`` includes every date that has a JSONL."""
     store = BarPersistence(root=tmp_path)
     store.append("SPY", "1m", _bar(ANCHOR_MS))
-    store.append("SPY", "1m", _bar(ANCHOR_MS + 60_000))
-
-    parquet_path = store.compact("SPY", "1m", ANCHOR_DATE)
-    assert parquet_path.is_file()
-    assert parquet_path.suffix == ".parquet"
-
-    # JSONL is archived, not deleted, so an operator can audit the source.
-    archived = list((tmp_path / "SPY" / "1m").glob("2026-04-01.jsonl.compacted-*"))
-    assert len(archived) == 1
-    assert not (tmp_path / "SPY" / "1m" / "2026-04-01.jsonl").exists()
-    assert list((tmp_path / "SPY" / "1m").glob(".*.tmp")) == []
-
-
-def test_compact_is_idempotent_after_jsonl_is_archived(tmp_path: Path) -> None:
-    """A second compactor must not replace the published dataset with empty."""
-    first = BarPersistence(root=tmp_path)
-    second = BarPersistence(root=tmp_path)
-    first.append("SPY", "1m", _bar(ANCHOR_MS))
-
-    first_path = first.compact("SPY", "1m", ANCHOR_DATE)
-    second_path = second.compact("SPY", "1m", ANCHOR_DATE)
-
-    assert second_path == first_path
-    assert [bar.start_ms for bar in second.read_parquet("SPY", "1m", ANCHOR_DATE)] == [
-        ANCHOR_MS
-    ]
-
-
-def test_compact_failed_publish_preserves_parquet_and_jsonl(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A failed atomic replace leaves both prior truth sources intact."""
-    from app.services import bar_persistence
-
-    store = BarPersistence(root=tmp_path)
-    store.append("SPY", "1m", _bar(ANCHOR_MS))
-    parquet = tmp_path / "SPY" / "1m" / "2026-04-01.parquet"
-    bar_persistence.pq.write_table(
-        bar_persistence.pa.table({"sentinel": [1]}),
-        parquet,
-    )
-    original = parquet.read_bytes()
-    monkeypatch.setattr(
-        bar_persistence.os,
-        "replace",
-        lambda *_args: (_ for _ in ()).throw(OSError("replace failed")),
-    )
-
-    with pytest.raises(OSError, match="replace failed"):
-        store.compact("SPY", "1m", ANCHOR_DATE)
-
-    assert parquet.read_bytes() == original
-    assert (tmp_path / "SPY" / "1m" / "2026-04-01.jsonl").is_file()
-    assert list((tmp_path / "SPY" / "1m").glob(".*.tmp")) == []
-
-
-def test_append_waits_for_compaction_and_preserves_both_bars(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Two store instances cannot place an append inside compaction's snapshot.
-
-    The compactor must publish and archive its exact JSONL snapshot before a
-    second instance creates the next active JSONL. Otherwise the second bar can
-    land only in the archived source and disappear from both replay surfaces.
-    """
-    from app.services import bar_persistence
-
-    compactor = BarPersistence(root=tmp_path)
-    appender = BarPersistence(root=tmp_path)
-    compactor.append("SPY", "1m", _bar(ANCHOR_MS))
-
-    publish_started = threading.Event()
-    allow_publish = threading.Event()
-    append_finished = threading.Event()
-    errors: list[BaseException] = []
-    real_publish = bar_persistence._publish_parquet_atomic
-
-    def paused_publish(table, path) -> None:
-        publish_started.set()
-        assert allow_publish.wait(timeout=5)
-        real_publish(table, path)
-
-    def compact() -> None:
-        try:
-            compactor.compact("SPY", "1m", ANCHOR_DATE)
-        except BaseException as exc:  # pragma: no cover - asserted below
-            errors.append(exc)
-
-    def append() -> None:
-        try:
-            appender.append("SPY", "1m", _bar(ANCHOR_MS + 60_000))
-        except BaseException as exc:  # pragma: no cover - asserted below
-            errors.append(exc)
-        finally:
-            append_finished.set()
-
-    monkeypatch.setattr(bar_persistence, "_publish_parquet_atomic", paused_publish)
-    compact_thread = threading.Thread(target=compact)
-    append_thread = threading.Thread(target=append)
-    compact_thread.start()
-    assert publish_started.wait(timeout=5)
-    append_thread.start()
-    assert not append_finished.wait(timeout=0.1)
-
-    allow_publish.set()
-    compact_thread.join(timeout=5)
-    append_thread.join(timeout=5)
-
-    assert not compact_thread.is_alive()
-    assert not append_thread.is_alive()
-    assert errors == []
-    assert [bar.start_ms for bar in compactor.read_parquet("SPY", "1m", ANCHOR_DATE)] == [
-        ANCHOR_MS
-    ]
-    assert [bar.start_ms for bar in appender.replay("SPY", "1m", ANCHOR_DATE)] == [
-        ANCHOR_MS + 60_000
-    ]
-
-
-def test_read_parquet_round_trips_bars(tmp_path: Path) -> None:
-    """``read_parquet`` returns the same bars that went in (start_ms-sorted,
-    Decimal OHLC preserved)."""
-    store = BarPersistence(root=tmp_path)
-    store.append("SPY", "1m", _bar(ANCHOR_MS, close="100.00"))
-    store.append("SPY", "1m", _bar(ANCHOR_MS + 60_000, close="100.50"))
-    store.compact("SPY", "1m", ANCHOR_DATE)
-
-    bars = store.read_parquet("SPY", "1m", ANCHOR_DATE)
-    assert [b.start_ms for b in bars] == [ANCHOR_MS, ANCHOR_MS + 60_000]
-    assert bars[0].close == Decimal("100.00")
-    assert bars[1].close == Decimal("100.50")
-
-
-def test_active_dates_lists_jsonl_and_parquet(tmp_path: Path) -> None:
-    """``active_dates`` includes any date that has either a JSONL OR a
-    Parquet — the operator's date picker shows the union, not the
-    intersection."""
-    store = BarPersistence(root=tmp_path)
-    # Day 1 — JSONL only (still streaming or pre-compaction)
-    store.append("SPY", "1m", _bar(ANCHOR_MS))
-    # Day 2 — JSONL then compacted to Parquet
     store.append("SPY", "1m", _bar(ANCHOR_MS + 86_400_000))
-    store.compact("SPY", "1m", ANCHOR_DATE + timedelta(days=1))
 
     dates = store.active_dates("SPY", "1m")
     assert dates == [ANCHOR_DATE, ANCHOR_DATE + timedelta(days=1)]
@@ -331,36 +184,6 @@ def test_active_dates_lists_jsonl_and_parquet(tmp_path: Path) -> None:
 def test_active_dates_empty_when_no_data(tmp_path: Path) -> None:
     store = BarPersistence(root=tmp_path)
     assert store.active_dates("SPY", "1m") == []
-
-
-def test_retention_deletes_files_older_than_window(tmp_path: Path) -> None:
-    """Files outside the retention window are removed; recent ones are kept."""
-    store = BarPersistence(root=tmp_path, retention_days=7)
-    # Day -10 — outside the 7-day window, should be deleted.
-    store.append("SPY", "1m", _bar(ANCHOR_MS - 10 * 86_400_000))
-    # Day -3 — inside the window, should be kept.
-    store.append("SPY", "1m", _bar(ANCHOR_MS - 3 * 86_400_000))
-
-    deleted = store.apply_retention(now=datetime(2026, 4, 1, tzinfo=UTC))
-    assert deleted == 1
-
-    remaining = store.active_dates("SPY", "1m")
-    assert remaining == [date(2026, 3, 29)]  # ANCHOR - 3 days
-
-
-def test_retention_keeps_quarantined_files(tmp_path: Path) -> None:
-    """Quarantined files survive retention until an operator audits them — they
-    are *forensic evidence* of a bad feed, not normal data."""
-    store = BarPersistence(root=tmp_path, retention_days=7)
-    store.append("SPY", "1m", _bar(ANCHOR_MS - 10 * 86_400_000 + 60_000))
-    # Force a regression to create a quarantine file.
-    with pytest.raises(Exception):
-        store.append("SPY", "1m", _bar(ANCHOR_MS - 10 * 86_400_000))
-
-    store.apply_retention(now=datetime(2026, 4, 1, tzinfo=UTC))
-    day_dir = tmp_path / "SPY" / "1m"
-    quarantined = list(day_dir.glob("*.quarantine-*"))
-    assert len(quarantined) == 1
 
 
 def test_counters_are_per_symbol_resolution(tmp_path: Path) -> None:

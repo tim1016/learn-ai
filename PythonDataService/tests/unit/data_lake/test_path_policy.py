@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path, PurePosixPath
-from uuid import UUID
 
 import pytest
 
@@ -24,7 +23,6 @@ from app.data_lake.path_policy import (
     resolve_lake_container,
     resolve_lake_root,
     resolve_staging_root,
-    staging_path_for,
     staging_root_within,
 )
 
@@ -98,26 +96,6 @@ class TestLeanMetadataPath:
     def test_symbol_properties(self):
         path = LeanMetadataPath(kind="symbol_properties").relative_path()
         assert path == PurePosixPath("symbol-properties/symbol-properties-database.csv")
-
-
-class TestStagingPathFor:
-    def test_staging_path_isolation(self):
-        rel = PurePosixPath("equity/usa/minute/spy/20240520_trade.zip")
-        request_id = UUID("12345678-1234-5678-1234-567812345678")
-        worker_id = "worker-7"
-        attempt = 2
-        staged = staging_path_for(rel, request_id, worker_id, attempt)
-        assert staged == PurePosixPath(
-            "staging/12345678-1234-5678-1234-567812345678/worker-7/attempt_2/"
-            "equity/usa/minute/spy/20240520_trade.zip.tmp"
-        )
-
-    def test_two_attempts_produce_distinct_paths(self):
-        rel = PurePosixPath("equity/usa/minute/spy/20240520_trade.zip")
-        request_id = UUID("12345678-1234-5678-1234-567812345678")
-        a1 = staging_path_for(rel, request_id, "worker-1", 1)
-        a2 = staging_path_for(rel, request_id, "worker-1", 2)
-        assert a1 != a2
 
 
 class TestLakeRoots:

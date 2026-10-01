@@ -15,7 +15,6 @@ import pytest
 from app.engine.execution.order import (
     Direction,
     OrderEvent,
-    OrderType,
 )
 from app.engine.execution.portfolio import Portfolio, Position
 from app.utils.timestamps import to_ms_utc
@@ -71,22 +70,6 @@ def test_submit_market_order_generates_incrementing_ids():
     assert o2.order_id == 2
     assert o1.direction == Direction.LONG
     assert o2.direction == Direction.SHORT
-
-
-def test_submit_limit_order_requires_non_zero_quantity():
-    portfolio = Portfolio(initial_cash=Decimal("10000"))
-
-    with pytest.raises(ValueError):
-        portfolio.submit_limit_order("SPY", 0, NOW, limit_price=Decimal("100"))
-
-
-def test_submit_limit_order_sets_order_type_limit():
-    portfolio = Portfolio(initial_cash=Decimal("10000"))
-
-    order = portfolio.submit_limit_order("SPY", 100, NOW, limit_price=Decimal("99.5"))
-
-    assert order.order_type == OrderType.LIMIT
-    assert order.limit_price == Decimal("99.5")
 
 
 def test_apply_fill_opens_long_position():
