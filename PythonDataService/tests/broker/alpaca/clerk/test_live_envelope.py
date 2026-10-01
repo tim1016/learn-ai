@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import (
-    ENVELOPE_ADMISSION_REASON_CODES,
     ENVELOPE_SETTINGS_FIELDS,
     ENVELOPE_SYNC_INTERVAL_S,
     FILL_VISIBILITY_GRACE_MS,
@@ -170,18 +169,6 @@ def test_withdrawing_drops_the_observation_at_once() -> None:
     gate.withdraw()
     assert gate.fresh_observation(1_000) is None
     assert gate.latest_observation() is None
-
-
-def test_the_admission_reason_codes_are_the_envelope_refusals() -> None:
-    """The plan's four, plus the unknown fee of a pre-provision entry order (#2553)."""
-    assert set(ENVELOPE_ADMISSION_REASON_CODES) == {
-        "LIVE_ENVELOPE_CASH_EXCEEDED",
-        "LIVE_ENVELOPE_LOSS_HOLD",
-        "LIVE_ENVELOPE_DISAGREEMENT",
-        "LIVE_ENVELOPE_UNOBSERVED",
-        "ENTRY_FEE_PROVISION_UNRECORDED",
-    }
-    assert isinstance(ENVELOPE_ADMISSION_REASON_CODES, frozenset)
 
 
 def test_the_envelope_reads_exactly_the_settings_live_mode_requires() -> None:

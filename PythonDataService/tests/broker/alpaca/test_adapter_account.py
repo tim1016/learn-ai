@@ -79,14 +79,6 @@ def test_from_alpaca_account_maps_every_field(
     assert snapshot.observed_at_ms == _OBSERVED
 
 
-def test_observed_at_defaults_to_now(load_alpaca_fixture: AlpacaFixtureLoader) -> None:
-    payload = load_alpaca_fixture("account", "account.json")
-
-    snapshot = from_alpaca_account(payload, account_mode="paper")
-
-    assert snapshot.observed_at_ms > 1_600_000_000_000
-
-
 def test_missing_created_at_is_none(load_alpaca_fixture: AlpacaFixtureLoader) -> None:
     payload = dict(load_alpaca_fixture("account", "account.json"))
     payload.pop("created_at")

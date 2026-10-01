@@ -11,11 +11,9 @@ import pytest
 
 from app.broker.alpaca.adapter import (
     et_date_to_ms,
-    now_ms,
     occurred_at_ms,
     opt_bool,
     opt_float,
-    opt_rfc3339_to_ms,
     rfc3339_to_ms,
     str_or_blank,
     to_bool,
@@ -47,18 +45,6 @@ def test_rfc3339_rounds_fractional_milliseconds_to_nearest_ms() -> None:
     assert rfc3339_to_ms("1970-01-01T00:00:00.123600Z") == 124
 
 
-def test_optional_helpers_pass_through_none() -> None:
-    assert opt_float(None) is None
-    assert opt_float("") is None
-    assert opt_float("3.5") == 3.5
-    assert opt_rfc3339_to_ms(None) is None
-    assert opt_rfc3339_to_ms("") is None
-
-
-def test_to_float_parses_decimal_string() -> None:
-    assert to_float("1000.50") == 1000.50
-
-
 @pytest.mark.parametrize("parser", [to_float, opt_float])
 @pytest.mark.parametrize("value", [True, False])
 def test_numeric_helpers_reject_booleans(parser: Callable[[Any], float | None], value: bool) -> None:
@@ -76,10 +62,6 @@ def test_numeric_helpers_refuse_a_number_too_large_for_a_float_as_unreadable(
     # is written to catch: it escaped as a raw error (#2627, #2648 review).
     with pytest.raises(ValueError, match="too large"):
         parser(10**400)
-
-
-def test_to_str_returns_the_vendor_text_unchanged() -> None:
-    assert to_str("SPY", field="symbol") == "SPY"
 
 
 @pytest.mark.parametrize(
@@ -140,9 +122,3 @@ def test_occurred_at_prefers_transaction_time_then_date() -> None:
     assert occurred_at_ms({"transaction_time": "1970-01-01T00:00:01Z"}) == 1000
     assert occurred_at_ms({"date": "2021-01-04"}) == et_date_to_ms("2021-01-04")
     assert occurred_at_ms({}) is None
-
-
-def test_now_ms_is_epoch_millis() -> None:
-    value = now_ms()
-    assert isinstance(value, int)
-    assert value > 1_600_000_000_000

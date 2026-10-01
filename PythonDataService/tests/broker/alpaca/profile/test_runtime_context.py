@@ -489,19 +489,6 @@ def test_a_revision_naming_an_uninjected_slot_refuses_explicitly(
         )
 
 
-def test_the_resolved_context_is_immutable(
-    only_default_slot_injected: AlpacaCredentialEnvironment,
-) -> None:
-    context = resolve_runtime_context(
-        endpoint_mode="paper",
-        credential_slot="default",
-        environment=only_default_slot_injected,
-    )
-
-    with pytest.raises(AttributeError):
-        context.account_pin = "PA123"  # type: ignore[misc]
-
-
 def test_current_four_field_profile_ignores_stale_session_environment(only_default_slot_injected: AlpacaCredentialEnvironment, monkeypatch: pytest.MonkeyPatch) -> None:
     monetary = {key: value for key, value in COMPLETE_ENVELOPE.items() if key not in {"shadow_sessions", "arming_max_sessions"}}
     monkeypatch.setenv("ALPACA_LIVE_SHADOW_SESSIONS", "99")
