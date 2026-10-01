@@ -37,6 +37,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from app.engine.edge.threshold_events import log_iv_dominance_gate
+from app.engine.live.identity import confine_path_to_root
 from app.routers.iv30 import _normalized_quotes_by_expiry, _pick_straddle_pair
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import RateAndDividend, get_rate_and_dividend
@@ -160,7 +161,9 @@ class JsonlIvSnapshotStore(IvSnapshotStore):
         # legitimate use.
 
     def _file_for(self, ticker: str) -> Path:
-        return self.base_dir / f"{ticker}.jsonl"
+        # The ticker reaches here from request bodies (edge.py), so a
+        # ``../`` ticker must not read or append outside ``base_dir``.
+        return confine_path_to_root(self.base_dir / f"{ticker}.jsonl", self.base_dir, label="IV recorder ticker")
 
     def write(self, snapshot: RecordedIvSnapshot) -> None:
         self.base_dir.mkdir(parents=True, exist_ok=True)

@@ -136,6 +136,11 @@ class CommandEnvelopeInvalid(ValueError):
     reached a routing decision. The public router maps it to 422.
     """
 
+    def __init__(self, message: str) -> None:
+        """Keep the authored message the 422 body echoes, never ``str(self)``."""
+        super().__init__(message)
+        self.message = message
+
 
 @dataclass(frozen=True, slots=True)
 class CommandEnvelope:

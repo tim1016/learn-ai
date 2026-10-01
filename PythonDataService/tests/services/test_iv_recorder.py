@@ -117,6 +117,14 @@ class TestJsonlStore:
         store = JsonlIvSnapshotStore(tmp_path)
         assert store.read_series("XYZ") == []
 
+    def test_read_series_refuses_a_ticker_that_escapes_the_store(self, tmp_path: Path):
+        # The ticker reaches read_series from a request body (edge.py).
+        store_dir = tmp_path / "store"
+        (tmp_path / "secret.jsonl").write_text("{}\n")
+        store = JsonlIvSnapshotStore(store_dir)
+        with pytest.raises(ValueError, match="escapes root"):
+            store.read_series("../secret")
+
     def test_legacy_jsonl_without_health_score_reads_back_as_none(
         self, tmp_path: Path
     ):

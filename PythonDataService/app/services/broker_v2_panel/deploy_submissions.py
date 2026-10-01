@@ -42,7 +42,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.models import EpochMs
 from app.engine.live.durable_append_log import create_atomic_exclusive_durable_file
-from app.engine.live.identity import strategy_instance_artifact_dir, validate_strategy_instance_id
+from app.engine.live.identity import (
+    confine_path_to_root,
+    strategy_instance_artifact_dir,
+    validate_strategy_instance_id,
+)
 from app.engine.live.order_identity import (
     InstanceIdTooLongError,
     validate_broker_owned_instance_id,
@@ -248,13 +252,17 @@ class DeploySubmissionLedger:
         return max(attempts, default=None)
 
     def _key_dir(self, submission_key: str) -> Path:
-        return self._root / "keys" / require_submission_key(submission_key)
+        keys = self._root / "keys"
+        return confine_path_to_root(keys / require_submission_key(submission_key), keys, label="submission key")
 
     def _attempt_path(self, submission_key: str, attempt: int) -> Path:
         return self._key_dir(submission_key) / f"{attempt}.json"
 
     def _name_path(self, strategy_instance_id: str) -> Path:
-        return self._root / "names" / f"{validate_strategy_instance_id(strategy_instance_id)}.json"
+        names = self._root / "names"
+        return confine_path_to_root(
+            names / f"{validate_strategy_instance_id(strategy_instance_id)}.json", names, label="bot name"
+        )
 
     def _publish(self, path: Path, record: DeploySubmission) -> None:
         serialized = json.dumps(record.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
