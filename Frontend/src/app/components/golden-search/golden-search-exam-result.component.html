@@ -1,20 +1,21 @@
 @let s = study();
 @let e = exam();
 <section class="panel" aria-label="Final test result">
+  <!-- Explicit table roles: the phone reflow sets display:block, which drops native table semantics. -->
   <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th scope="col"><app-timestamp-display [value]="e.window.start_ms" mode="date-et" /> – <app-timestamp-display [value]="e.window.end_ms - 1" mode="date-et" /></th>
-          <th scope="col" class="num">Net return</th><th scope="col" class="num">Worst fall</th><th scope="col" class="num">Trades</th><th scope="col" class="num">Sharpe</th>
+    <table role="table">
+      <thead role="rowgroup">
+        <tr role="row">
+          <th role="columnheader" scope="col"><app-timestamp-display [value]="e.window.start_ms" mode="date-et" /> – <app-timestamp-display [value]="e.window.end_ms - 1" mode="date-et" /></th>
+          <th role="columnheader" scope="col" class="num">Net return</th><th role="columnheader" scope="col" class="num">Worst fall</th><th role="columnheader" scope="col" class="num">Trades</th><th role="columnheader" scope="col" class="num">Sharpe</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody role="rowgroup">
         @for (row of rows(); track row.key) {
-          <tr [class.selected]="row.selected">
-            <th scope="row">{{ row.label }}@if (row.failure) { <small class="bad">{{ row.failure }}</small> }</th>
-            <td class="num" data-label="Net return">{{ row.netReturn }}</td><td class="num" data-label="Worst fall">{{ row.worstFall }}</td>
-            <td class="num" data-label="Trades">{{ row.trades }}</td><td class="num" data-label="Sharpe">{{ row.sharpe }}</td>
+          <tr role="row" [class.selected]="row.selected">
+            <th role="rowheader" scope="row">{{ row.label }}@if (row.failure) { <small class="bad">{{ row.failure }}</small> }</th>
+            <td role="cell" class="num" data-label="Net return">{{ row.netReturn }}</td><td role="cell" class="num" data-label="Worst fall">{{ row.worstFall }}</td>
+            <td role="cell" class="num" data-label="Trades">{{ row.trades }}</td><td role="cell" class="num" data-label="Sharpe">{{ row.sharpe }}</td>
           </tr>
         }
       </tbody>

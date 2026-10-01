@@ -27,6 +27,8 @@ export interface CandidateRow {
   readonly key: CandidateKey;
   readonly candidate: EvidenceCandidate;
   readonly origin: string;
+  /** Every candidate folded into this row, the representative included. */
+  readonly members: readonly CandidateKey[];
   /** The labels of other candidates that are exactly these settings, folded into this row. */
   readonly sameAs: readonly string[];
   readonly netReturn: string;
@@ -75,6 +77,7 @@ export function candidateRows(candidates: readonly EvidenceCandidate[]): Candida
       key: representative,
       candidate,
       origin: CANDIDATE_ORIGINS[representative],
+      members,
       sameAs: members.filter((member) => member !== representative).map((member) => byKey.get(member)?.label ?? member),
       ...metricTexts(candidate.development_metrics),
       drawdownFlags: candidate.flags.filter((flag) => DRAWDOWN_FLAGS.has(flag.code)),
@@ -89,7 +92,7 @@ export function candidateRows(candidates: readonly EvidenceCandidate[]): Candida
 /** The row a candidate key lives in after folding (`recent` may live in the all-period row). */
 export function rowKeyFor(rows: readonly CandidateRow[], key: CandidateKey | null): CandidateKey | null {
   if (key === null) return null;
-  const row = rows.find((candidate) => candidate.key === key || candidate.candidate.same_as.includes(key));
+  const row = rows.find((candidate) => candidate.members.includes(key));
   return row?.key ?? null;
 }
 

@@ -28,4 +28,11 @@ small { display: block; color: var(--text-secondary); font-size: var(--fs-xs); }
 @media (max-width: 680px) {
   .proof { grid-template-columns: minmax(0, 1fr); }
   .panel { padding: var(--space-3); }
+  /* Phone width: each run reads as labelled lines instead of a wide row. */
+  table, tbody, tr, th, td { display: block; }
+  thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  tr { padding: var(--space-2) var(--space-1); border-bottom: 1px solid var(--border-light); }
+  th, td { border: 0; padding: var(--space-1); }
+  td { display: flex; justify-content: space-between; gap: var(--space-2); }
+  td::before { content: attr(data-label); color: var(--text-secondary); }
 }
