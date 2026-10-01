@@ -419,8 +419,10 @@ class StudyEvaluator:
             )
             return EvaluationResult(metrics=Metrics.failed(_failure_message(exc)))
 
-    def consume(self, count: int, *, step: str) -> None:
-        """Atomically consume ``count`` units the caller runs outside this evaluator (the proof)."""
-        admitted = run_sync(with_connection(repo.consume_budget, self.study_id, self.attempt, count, limit=self.budget_limit, step=step))
+    def consume(self, count: int, *, step: str, once_key: str) -> None:
+        """Atomically consume ``count`` units the caller runs outside this evaluator (the proof), once per ``once_key``."""
+        admitted = run_sync(
+            with_connection(repo.consume_budget, self.study_id, self.attempt, count, limit=self.budget_limit, step=step, once_key=once_key)
+        )
         if not admitted:
             raise BudgetExhausted(f"the study's evaluation budget cannot admit {count} more {step} evaluation(s)")

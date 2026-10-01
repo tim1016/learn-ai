@@ -677,6 +677,9 @@ class GoldenSearchExamView(_Wire):
     retention: float | None = Field(description="Descriptive only, never a check.")
     candidate_metrics: GoldenSearchMetrics | None
     incumbent_metrics: GoldenSearchMetrics | None
+    weakness: list[GoldenSearchFinding] = Field(
+        description="What approving needs the owner to acknowledge as weak; empty when the evidence meets the rules."
+    )
 
 
 class GoldenSearchDeployHandoff(_Wire):

@@ -816,12 +816,32 @@ async def complete_evaluation(
         )
 
 
-async def consume_budget(conn: asyncpg.Connection, study_id: str, attempt: int, count: int, *, limit: int, step: str) -> bool:
-    """Atomically take ``count`` units for work run outside the evaluator (the proof); ``False`` when it does not fit."""
+async def consume_budget(
+    conn: asyncpg.Connection, study_id: str, attempt: int, count: int, *, limit: int, step: str, once_key: str
+) -> bool:
+    """Atomically take ``count`` units for work run outside the evaluator (the proof); ``False`` when it does not fit.
+
+    Each ``once_key`` is drawn at most once per study, whichever attempt drew
+    it: a worker that died between the draw and its checkpoint resumes
+    without drawing again, and the repeat reports ``True``.
+    """
     if count < 1:
         raise ValueError("consume at least one evaluation")
     async with conn.transaction():
         await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
+        drawn = await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM research_golden_search_trials
+                 WHERE study_id = $1 AND kind = 'approval'
+                   AND payload_json->>'event' = 'consumed' AND payload_json->>'key' = $2
+            )
+            """,
+            study_id,
+            once_key,
+        )
+        if drawn:
+            return True
         consumed = await conn.fetchval(f"SELECT consumed_evaluations FROM {STUDIES} WHERE id = $1", study_id)
         if consumed + count > limit:
             return False
@@ -831,7 +851,9 @@ async def consume_budget(conn: asyncpg.Connection, study_id: str, attempt: int, 
             count,
             now_ms_utc(),
         )
-        await insert_trial(conn, study_id, stage=step, kind="approval", payload={"event": "consumed", "evaluations": count, "attempt": attempt})
+        await insert_trial(
+            conn, study_id, stage=step, kind="approval", payload={"event": "consumed", "key": once_key, "evaluations": count, "attempt": attempt}
+        )
         return True
 
 

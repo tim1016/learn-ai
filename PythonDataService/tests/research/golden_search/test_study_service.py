@@ -29,6 +29,7 @@ from app.research.golden_search.evaluator import (
     StudyEvaluator,
 )
 from app.research.golden_search.models import GoldenSearchRefusal, StudyRow
+from app.research.golden_search.planning import registry_incumbent
 from app.research.golden_search.selection import Metrics
 from app.research.golden_search.stages import StageRefusedError
 from app.research.persistence import lifecycle
@@ -517,6 +518,23 @@ async def test_the_capability_refuses_a_final_interval_evaluation_in_a_developme
     assert await conn.fetchval("SELECT COUNT(*) FROM research_golden_search_evaluations WHERE study_id = $1", row.id) == 0
 
 
+async def test_a_proof_draw_lost_before_its_checkpoint_is_not_drawn_again_by_a_later_attempt(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    row = await driver.lock(symbol)
+    outcome = await driver.command(row, "continue")
+    token = outcome.dispatch["payload"]["stage_token"]
+    await service.bind_dispatch(row.id, stage_token=token, job_id="job-draw")
+    claimed, attempt = await repo.claim_stage(conn, row.id, stage_token=token, job_id="job-draw")
+
+    # The first attempt drew the proof, then died before saving its checkpoint; its retry draws the same step.
+    for _ in range(2):
+        assert await repo.consume_budget(conn, row.id, attempt, 2, limit=claimed.budget_cap, step="proof", once_key="approval:proof")
+    assert await repo.consume_budget(conn, row.id, attempt, 1, limit=claimed.budget_cap, step="proof", once_key="approval:run")
+
+    assert await conn.fetchval("SELECT consumed_evaluations FROM research_golden_search_studies WHERE id = $1", row.id) == 3
+
+
 # ── Exposure ─────────────────────────────────────────────────────────────
 
 
@@ -751,8 +769,15 @@ async def test_defaults_offer_the_ready_default_qualification_as_the_incumbent(
         "ema_crossover_signal", symbol, earliest_session=_no_lake_history, running_digest=lambda contract: "a" * 64
     )
     assert ready["incumbent"] == {"source": "qualification", "qualification_id": f"q-{unique}", "params": point}
-    assert ready["seed"] == point and ready["incumbent_label"].startswith("Golden configuration")
+    assert ready["incumbent_label"].startswith("Golden configuration")
+    # The qualified tuple is the benchmark, never where the folds' searches start: it was chosen on
+    # data those folds test. The plan starts from the registry point, and a plan seeded from it is refused.
+    registry = registry_incumbent("ema_crossover_signal", symbol).params
+    assert ready["seed"] == registry != point
     assert ready["exposure"]["state"] in ("not_opened", "previously_used", "history_unknown")
+    plan = {key: value for key, value in ready.items() if key not in ("final_months", "incumbent_label", "exposure")}
+    leaked = await service.preflight({**plan, "seed": point}, roots=driver.roots)
+    assert [item["code"] for item in leaked["refusals"]] == ["SEED_IS_QUALIFIED"]
 
     stale = await service.defaults(
         "ema_crossover_signal", symbol, earliest_session=_no_lake_history, running_digest=lambda contract: "b" * 64
