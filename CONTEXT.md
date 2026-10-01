@@ -79,7 +79,7 @@ is archived while the code it names still runs.
   market orders. So a refused EXIT is re-sent on the first pass after the other
   order ends, and Deploy warns when another bot in the account already trades
   the symbol (#2469, #2622).
-  _Avoid_: coexistence guard (retired with ADR 0009 §13)
+  _Avoid_: coexistence guard (retired in #1678)
 - **Released cash** — money no longer reserved by a stopped deployment.
   Outstanding orders, unobserved debits and unsettled fees remain separate claims.
   The amount is what the Stop released, recorded with the Stop; money that comes
@@ -89,7 +89,8 @@ is archived while the code it names still runs.
   charge replaces it. Priced by the canonical fee model at ENTER admission and,
   for the unfilled remainder of a pending order, by its own conservative quote;
   a stopped deployment's released cash still excludes its unsettled provisions.
-  See `docs/references/custody-budget-money.md` and
+  See ADR 0036's 2026-09-30 amendment
+  (`docs/architecture/adrs/0036-single-flatness-boundary-backend-owned.md`) and
   `docs/references/alpaca-fee-attribution.md`.
 - **Deployment consent** — the trader’s approval of one exact account, world,
   configuration, dollar budget, exit terms and current risk policy.
@@ -404,6 +405,9 @@ so they survive a broker change.
   hard-coded colors are avoided; PrimeNG components should be styled through the
   app theme/token layer so evidence panels remain readable in the supported
   themes.
+- **Asset identity** — the canonical rendering of one tradeable instrument:
+  its symbol with the recognisable mark that goes with it. One renderer owns
+  symbol presentation; feature surfaces do not re-derive logos or fallbacks.
 
 ## Account authority and custody proofs (sharpened 2026-05-30)
 
@@ -594,31 +598,6 @@ account overview (then called the Broker Desk) and the Bot Gallery.
 - **Operator top-strip ladder** — `INSTANCE / PROCESS / CURRENT RUN / DESIRED /
   BROKER`. Reads as an instance being operated, not a run being viewed.
 
-## Binding authority (resolved 2026-05-30)
-
-**Lineage: historical (ADR 0038; retired 2026-08-18).**
-
-Four distinct sources, never conflated:
-
-- **Live binding** — `strategy_instance_id → live bound run_id | null`. Owned by
-  the **process registry** (process truth: pid, state, start/exit). "Live" is a
-  *process fact, not an artifact fact* — only the registry can prove a process
-  is alive and currently writing a run. The registry carries
-  `strategy_instance_id, run_id, run_dir, process state, pid, start time, exit
-  state`.
-- **Evidence binding** — `strategy_instance_id → latest evidence run_id | null`.
-  *Derived* from the run scan / ledger index. Used to render artifact panels
-  when no process is live; always labeled as stale/completed evidence. **Never a
-  command-routing authority.**
-- **Durable operator intent** — the desired-state sidecar (see below).
-- **Run artifacts** — evidence only.
-
-Commands route **only** to a live binding. No live binding → command controls
-disabled; evidence panels still render, labeled "latest completed/stale run."
-Liveness is resolved **server-side** and returned with names that make misuse
-hard (`live_binding` vs `evidence_binding`) — the client never scans runs to
-infer liveness.
-
 ## Operator intent — Deploy and Stop (amended 2026-09-27)
 
 **Lineage: live.**
@@ -676,43 +655,6 @@ pending-files-plus-ack-files): `reserved` → `accepted` / `in_progress` →
 `succeeded` | `failed` | `rejected`, with `unknown` retained when the effect
 cannot yet be proved and may later reconcile to a terminal result. Staleness is
 judged against backend-authored freshness evidence, not a client-side constant.
-
-## Readiness gate (resolved 2026-05-30)
-
-**Lineage: historical (ADR 0038; retired 2026-08-18).**
-
-"Can this strategy act on the next bar?" is an **instance-scoped, structured
-verdict** — never a boolean, never recomputed from artifacts by the UI.
-
-- **Live-readiness is engine-authored.** *Engine owns it, backend transports it,
-  UI renders it.* The verdict is emitted by the **same runtime path that
-  enforces the gates** — otherwise the UI becomes a second control
-  implementation and will eventually lie (the repo's single-source-of-truth
-  principle, applied to operator state).
-- **Start-readiness is backend-derived** for dead instances, computed from
-  durable artifacts (`desired_state`, halt/poison sentinels, hydrate, latest
-  reconcile receipt). **Must be labeled `start_readiness`, not
-  `live_readiness`.**
-
-**Shape:** `{ kind: "live_readiness" | "start_readiness", as_of_ms, source:
-"engine" | "backend_derived", verdict, summary, gates: [{ name, status:
-pass|fail|unknown, severity: hard|soft, detail }] }`. Start-readiness also
-carries `live_readiness_available: false`.
-
-**Verdict rules:**
-- `READY` — all hard gates pass, no material soft warnings.
-- `BLOCKED` — at least one hard gate fails.
-- `DEGRADED` — hard gates pass, but soft gates warn/unknown.
-- `UNKNOWN` — no authoritative readiness source.
-
-Gate inputs (finding #7): `desired_state`, `broker_connection`,
-unexpected-position (namespace-scoped self-consistency), submission mode
-(readonly/shadow/live), `orders_cap` (used/cap), hydrate result, latest
-reconcile pass/fail, prior-day halt/poison sentinel, session/force-flat window,
-and **`data_provenance`** — a *soft* gate that warns (→ DEGRADED) when the
-latest decision's `bar_source` differs from the spec's expected primary (e.g.
-expected `ibkr_realtime`, latest used `polygon_backfill`); BLOCKED only if a
-spec explicitly disallows fallback data.
 
 ## Strategy-agnostic console (resolved 2026-05-30)
 
@@ -795,287 +737,16 @@ as read-only evidence.
 
 **Lineage: historical (ADR 0038; broker consumer retired by #1583).**
 
-The bullets below record the former IBKR live-sizing design for provenance; they
-are not current product authority. `LivePortfolio`, its pending-order boundary,
-and every registered IBKR submit path are gone. So are the policy adapter
-(`order_sizer.py`), the sizing-policy union, the audit-copy allow-list and the
-`LiveConfig` dataclass (#2602, #2609), and the registry's `sizing_surface` flag
-that no strategy set. The one piece of sizing math that remains,
-`LeanSetHoldingsSizing`, serves research and backtests only.
+The former IBKR live-sizing design is gone: `LivePortfolio`, its pending-order
+boundary, every registered IBKR submit path, the policy adapter, the
+sizing-policy union, the audit-copy allow-list and the `LiveConfig` dataclass
+(#2602, #2609). The one piece of sizing math that remains serves research and
+backtests only.
 
-- **live sizing policy** — the **canonical** sizing authority for a *live* bot:
-  `run_ledger.live_config.sizing`. Because `live_config` is hashed into `run_id`,
-  any sizing change mints a new audited deployment identity (no extra hashing
-  work — the hasher is already nested-dict-stable). The **launch page is the
-  operator boundary** where this account-risk decision is set; **Angular only
-  *selects* the policy, Python *resolves* the quantity** — Python stays the math
-  authority.
-- **reference / spec sizing** — the sizing declared in the strategy *spec*
-  (`spec.entry.size`, the existing `SetHoldings | FixedContracts` `SizeRule`) or
-  baked into a hand-coded algorithm (`ctx.set_holdings(symbol, 1.0)`). This is
-  **reference/default metadata, not the live authority.** The live runtime
-  executes hand-coded algorithms and does **not** run the spec, so treating
-  `spec.entry.size` as canonical-for-live would be a false source of truth
-  ("architectural theater — hashed but not executed"). `spec.entry.size` becomes
-  canonical *only* for a bot whose live runtime actually executes `SpecAlgorithm`
-  (a future state).
-- **sized-live derivative** — a live run whose **signal logic is QC-anchored** but
-  whose **sizing was overridden** by `live_config` (its sizing differs from the
-  bound QC audit algorithm's). It is **not** the exact QC execution anchor; the
-  ledger / reconciliation report must say so explicitly — *signal logic anchored
-  to QC, sizing overridden by live config.* Contrast a run whose live sizing
-  matches the QC audit algorithm, which **may** claim the QC execution anchor.
-- **`sizing_provenance`** — an **engine-derived** audit stamp on the ledger,
-  **never operator-supplied.** Records what the resolved live sizing claims
-  against the bound QC audit copy. The operator sends only
-  `live_config.sizing.{kind, value}`; the Python deploy/start boundary derives and
-  stamps `sizing_provenance`. Values:
-  - `reference_native` — resolved live sizing is equivalent (same sizing *rule*,
-    not a coincidental share count) to the bound QC audit copy's sizing.
-  - `live_override` — resolved live sizing differs from the QC audit copy, **or**
-    equivalence cannot be *proven* (**fail-closed default** — never over-claim
-    `reference_native`).
-  - `spec_default` — **reserved**: only when the live runtime executes
-    `SpecAlgorithm` and uses `spec.entry.size` with no live override. Not emitted
-    today.
-  Provenance is verified, not asserted (same spirit as "Provenance is not
-  identity" above): the operator never types it, so there is **no mismatch path**
-  today. A *future* optional "expected provenance" guard must **block** the deploy
-  on mismatch — never silently downgrade `reference_native` → `live_override`
-  (silent downgrade is bad audit UX: the operator believed they shipped a
-  reference-native run, the system quietly shipped a derivative).
-- **Sizing interception contract** — the deploy-page `live sizing policy` governs
-  **`set_holdings` only.** `set_holdings(symbol, fraction)` is a *target-position
-  intent* (direction + go-to-target); the policy reinterprets the **magnitude**:
-  `SetHoldings(f)` → fraction path; `FixedShares(n)` → target `n` shares
-  (`fraction > 0` → `n`, `fraction == 0` → flat; **long-only in v1**, no accidental
-  short); `FixedNotional(v)` → `floor(v / price)` shares. `market_order(symbol,
-  qty)` is **explicit strategy sizing, never overridden** (TradingView doctrine:
-  explicit qty wins); `liquidate(symbol)` is **always target-flat, never
-  size-policy modified.** A blanket quantity cap is **not** position sizing — if
-  ever needed it is a separately-named **risk overlay**, not this policy.
-- **`governed_by`** — engine-derived ledger metadata (not operator input),
-  *orthogonal* to `sizing_provenance`: `live_config` (quantity set by the
-  deploy-page policy through `set_holdings`) vs `strategy_explicit` (quantity set
-  by the strategy's own `market_order` / `contracts_per_trade` — e.g.
-  `spy_vwap_reversion`, the options strategy). A `strategy_explicit` run can still
-  be `reference_native` if its explicit quantity matches the bound QC audit copy.
-  Self-sized strategy registrations **disable the launch sizing control** in the
-  deploy form.
-- **Honest `reference_native` requires LEAN sizing.** A live `SetHoldings(1.0)`
-  claiming `reference_native` must resolve through `LeanSetHoldingsSizing`
-  (buffered, fee-aware — what QC's `SetHoldings` actually does), **not** the
-  current live default `SimpleFloorSizing`, or the quantity boundary is not
-  honestly LEAN-native. (`SimpleFloorSizing` leaves the live path entirely and
-  remains a research/backtest model only.)
-- **sizing skip** — when a policy resolves to a **zero** share target while flat
-  (e.g. `FixedNotional(v)` where `floor(v / price) == 0`, or a percent target too
-  small to buy one share), the engine **does not submit a zero order**; it logs a
-  *sizing skip* diagnostic so the operator can see why no entry fired.
-  Fail-loud-but-don't-crash; applies to every `kind`, not just `FixedNotional`.
-- **sizing deploy default** — every new live deploy **always writes an explicit**
-  `live_config.sizing`; the canonical default is `FixedShares(1)` (the safe
-  canary). **Absence** of `sizing` means **legacy/unknown** (pre-policy
-  `SimpleFloorSizing` all-in), *never* `FixedShares(1)` — so old empty-`live_config`
-  runs never hash-collide with the new safe default. All-in (`SetHoldings(1.0)`) is
-  **explicit opt-in**, never the default.
-- **sizing preset** — a named launch-page choice that fills `live_config.sizing`:
-  *Safe canary* (`FixedShares(1)`, the default) or *Reference parity*
-  (`SetHoldings(1.0)`). A preset may carry an **expected-provenance contract**:
-  *Reference parity* asserts `reference_native`, so if Python cannot **prove** the
-  resolved sizing matches the bound QC audit copy, the deploy is **blocked** —
-  never silently stamped `live_override`. The preset name is a promise; breaking it
-  silently is the bad audit UX the provenance design exists to prevent.
-- **canary fix is config-only** — switching `deployment_validation` to 1 share is a
-  pure `live_config.sizing = FixedShares(1)` deploy: **no strategy `.py` edit, no
-  spec edit, no QC re-cut.** The QC anchor stays `SetHoldings(1.0)`; the run is
-  stamped `governed_by = live_config`, `sizing_provenance = live_override`. (This
-  retires the handoff doc's assumption that a sizing change needs a fresh QC
-  parity anchor — that was an artifact of sizing being fused into the algorithm.)
-- **audit-copy sizing allow-list** — the **receipt** that backs a `reference_native`
-  claim: a single indexed JSON file
-  (`docs/references/audit-copy-sizing-allow-list.json`) of
-  `{audit_copy_sha256, audit_copy_path, rule, registered_at_ms, registered_by}`
-  entries, **not** AST-parsing of arbitrary LEAN code. The entry's `sha256` is
-  re-verified against the on-disk audit copy at load — a mismatch is *cannot prove*,
-  not a silent override. The proof has three outcomes — *proven match* / *proven
-  mismatch* / *cannot prove (sha absent or sha-mismatch)* — and the **Reference
-  parity** preset proceeds **only on proven match**; both other outcomes block. An
-  audit copy absent from the index makes Reference parity unavailable until its sha
-  + rule are registered.
-- **`sizing_surface`** — a declarative `StrategyRegistration` attribute
-  (`"policy" | "explicit"`) naming *which boundary sizes the strategy* (named for
-  the boundary, not a bare `self_sized` bool — leaves room for a future `mixed` /
-  `portfolio_model`). `policy`: the strategy targets via `set_holdings`, so
-  `live_config.sizing` (`FixedShares | FixedNotional | SetHoldings`) governs and
-  the deploy form's sizing control is **enabled**. `explicit`: the strategy
-  supplies its own quantity/contracts (`market_order` / internal accounting), so
-  the required `live_config.sizing` is `StrategyExplicit` and the deploy form's
-  sizing control is **disabled + labeled "self-sized"** (e.g.
-  `spy_vwap_reversion`, `spy_ema_crossover_options`).
-- **`StrategyExplicit`** — the `live_config.sizing.kind` meaning "the algorithm
-  supplied explicit quantity/contract sizing; `live_config` imposed no policy."
-  The **honest** sizing value for an `explicit`-surface registration — never a
-  misleading `FixedShares(1)`. It governs **who sized** (→ `governed_by =
-  strategy_explicit`), **not** whether it matches the QC anchor: `reference_native`
-  still requires a proven audit-copy allow-list match.
-- **order-surface mismatch** — the runtime records the actual order surface used
-  (`set_holdings | market_order | liquidate | internal_strategy_accounting`) and
-  compares it to the registration's `sizing_surface`. A mismatch on an **entry**
-  order is a registration bug → **fail-fast on the first mismatched entry order**,
-  never continue with a misleading ledger. `liquidate()` is a **flatten command,
-  not a sizing surface** — never a violation in either mode.
-- **Sizing card** — the dedicated instance-console card that displays the live
-  bot's sizing decision and its consequences. Three sections: (1) **static facts**
-  — the resolved `live_config.sizing.{kind, value}`, the preset that produced it
-  (Safe canary / Reference parity / Custom), `governed_by`, `sizing_provenance`,
-  and the audit-copy verdict (*proven match* / *proven mismatch* / *cannot prove*)
-  with the diff spelled out; (2) **live derivation** — the share count this policy
-  would resolve to at the latest price (for `SetHoldings` / `FixedNotional`),
-  and the **sizing-skip** counter for the session; (3) **per-trade audit list**.
-  The provenance card stays unchanged (run-identity fingerprints only); the Sizing
-  card is the sizing-specific surface. For `legacy/pre-policy runs`, the card
-  degrades to a "Pre-policy run" badge and hides the live and per-trade sections.
-- **per-trade audit list** — the bottom section of the Sizing card: one row per
-  broker fill in the current session, joining each fill to the policy that sized
-  the order (`policy_kind` → `intended_qty` → `actual_filled` at fill price). Lets
-  the operator sanity-check that the policy's outputs match the fills (partial-
-  fill drift, broker-side qty caps, etc.). Drives one new engine artifact named in
-  ADR 0009.
-- **legacy/pre-policy run** — a live run created before `live_config.sizing`
-  shipped (`live_config` lacks a `sizing` key). The provenance and Sizing cards
-  render this as an **honest "pre-policy" badge**, never a synthetic kind: the
-  ledger is **not backfilled** (that would mutate `run_id` hashes), `governed_by`
-  / `sizing_provenance` / audit-copy verdict / per-trade audit are all suppressed.
-  Re-deploying from a legacy run defaults the deploy form to **Safe canary**, not
-  to "whatever the legacy run effectively did" — the safe default applies on the
-  first sizing-aware deploy.
-
-## Page-wide collapse rule (resolved 2026-06-17)
-
-**Lineage: historical (ADR 0038; retired 2026-08-18).**
-
-A reactive layout principle for the operator console, generalized from the
-broker-instances page IA revision (see `docs/runbooks/broker-instance-operator-surface.md`
-§ "IA revision 2026-06-17"). It is *the same single-source-of-truth principle*
-ADR 0011 applies to the broker safety verdict — extended from a single pill to
-the whole page's expand/collapse behavior.
-
-- **Rule.** Cards collapse to a one-line summary in *steady state* and
-  auto-expand when the operator needs to act. The expand trigger is **always a
-  server-authored verdict** — readiness verdict, posture computed from
-  server-filtered positions, prior-run exit class, safety verdict. The frontend
-  never re-derives the trigger from raw fields.
-- **Why server-authored.** Two clients viewing the same status payload must
-  resolve to the same expanded/collapsed configuration. A frontend-derived
-  trigger (e.g., "expand if any gate label looks like sizing") would let two
-  clients disagree on what the operator should be looking at — the same failure
-  mode ADR 0011 § Decision 7 closes for the safety verdict.
-- **Implications.**
-  - A new card MUST identify its server-authored expand trigger before being
-    added to the page. "Always visible" is allowed as an explicit choice; "feels
-    off, let me expand it ambient-style" is not a valid trigger.
-  - Steady-state copy is the one-line summary — never a placeholder ("…") or a
-    spinner. If the verdict is `UNKNOWN`, the card auto-expands and the
-    `UNKNOWN` border surfaces that ambiguity honestly, never silently.
-  - Cards with no possible verdict (e.g., the fleet header, the sticky banner)
-    are always-visible by *design choice*, not by default — their always-on
-    status is documented in the runbook.
-- **What this is not.** It is not a CSS convention; it is a contract about
-  *which signal* an expand state is bound to. A card that uses `<details>` /
-  `<summary>` but expands on `localStorage` flip or a `(click)` toggle alone
-  does not satisfy the rule — the toggle is an operator override of the
-  server-authored default, never a replacement for it.
-- **Live anchors.** The current consumers of the rule are:
-  - `<app-configuration-card>` — expands when
-    `operator_surface.configuration.verdict !== 'READY'` (PRD #607 Slice 4)
-  - `<app-current-risk-card>` — collapses on
-    `operator_surface.current_risk.verdict === 'READY'`; expands on
-    `ATTENTION` / `UNKNOWN` (PRD #607 Slice 5)
-  - `<app-can-it-trade-card>` — collapses on `READY`; auto-expands on
-    `DEGRADED` / `BLOCKED` / `UNKNOWN`
-  - `<app-action-plan-card>` — expands when
-    `operator_surface.action_plan.anomaly_verdict !== 'READY'`.  Today the
-    server returns `READY` whenever a plan is present; PRD #593 Slice 4
-    flips it without a Frontend change (PRD #607 Slice 5)
-  - `<app-fleet-header>` (account/fleet disclosure) — collapsed by
-    default when `FleetContamination.verdict === 'clean'`; expanded with
-    NO toggle when `verdict === 'contaminated'` or `'unknown'`
-    (PRD #607 cockpit revision 2026-06-21).  The collapse target hides
-    the emergency-flatten controls behind a one-line summary; attention
-    states cannot be manually collapsed.
-
-## Operator-surface inclusion boundary (resolved 2026-06-20)
-
-**Lineage: historical (ADR 0038; retired 2026-08-18).**
-
-`operator_surface` contains **verdicts, semantic classifications,
-capabilities, attention-routing inputs, notices, and remediation
-descriptors**.  Decisions, trades, incidents, sizing audit rows,
-provenance, charts, and logs remain **evidence** on their canonical
-channels.  Angular may format evidence and map stable classifications
-to display copy.  Angular MUST NOT derive verdicts, action eligibility,
-or remediation behavior from evidence.
-
-- **Authority document.** ADR 0013 — operator-surface judgment vs
-  evidence (2026-06-20).  Inclusion test for new fields is in §5 of
-  that ADR.
-- **Structural enforcement.** Every Playwright scenario in the cockpit
-  suite asserts independent PROCESS, INTENT, READINESS, BROKER, and
-  SAFETY values — the meta-rule that catches synthetic-verdict
-  regressions when prose drifts.
-- **Inclusion examples.** `actions.resume.disabled_reasons` (operator
-  decision), `readiness_gates[].suggested_action` (remediation),
-  `broker.safety_verdict` (ADR-0011 final verdict), `fleet_account_summary.account_identity`
-  (cross-instance classification) all belong on `operator_surface`.
-  Raw decision rows, trade rows, incident rows belong on their
-  evidence channels with classification fields (`incident_category`)
-  separately surfaced.
-
-## Destructive-action canonical render site (resolved 2026-06-20)
-
-**Lineage: historical (ADR 0038; retired 2026-08-18).**
-
-Each destructive action (Stop, Mark Poisoned, Flatten-and-pause) has
-**exactly one** canonical render site in the cockpit (ADR 0010 §A2,
-PRD #617):
-
-- **Mark Poisoned** → Audit tab, typed-HALT confirmation.
-- **Stop** → identity-strip overflow menu, retirement confirmation.
-- **Flatten-and-pause** → identity-strip primary button.
-
-`OperatorGate.suggested_action` (PRD #616) authors only non-destructive
-actions inline (`invoke_capability`); destructive actions reach the
-operator only via `focus_action`, a navigation hint to the canonical
-render site, never an inline button.  A future cockpit change that
-adds a second render site for any destructive action is rejected at
-review.
-
-## Account identity vs position contamination (resolved 2026-06-20)
-
-**Lineage: historical/read-only evidence (ADR 0038; IBKR runtime retired by #1583).**
-
-The former fleet composition below is retained as terminology for historical
-evidence. It no longer feeds an IBKR start, resume, submit, or cancel decision;
-ADR 0037 removed the separate Alpaca legacy-custody family and did not adopt
-this IBKR evidence as an Alpaca fallback.
-
-The fleet altitude ships `FleetAccountSummary` (server-authored):
-
-- **Account identity** (`CONSISTENT` / `CONFLICTING` / `UNKNOWN` with
-  closed reason codes `ACCOUNT_ID_MISSING`, `INSTANCE_ACCOUNT_MISMATCH`,
-  `BROKER_ACCOUNT_UNAVAILABLE`, `BROKER_ACCOUNT_MISMATCH`).
-- **Position contamination** (`clean` / `contaminated` / `unknown` —
-  the existing `FleetContamination`).
-
-The two are **separate altitudes**: identity disagreement never raises
-the contamination verdict; position contamination never raises the
-identity verdict.  Cockpit attention is computed Frontend-side from a
-stable formula:
-`account_identity !== 'CONSISTENT' || contamination.verdict !== 'clean' || contamination.policy_blocks_starts`.
-`policy_blocks_starts` stays in the formula even when currently
-impossible-with-clean so future policy semantics do not require an
-Angular change.
+- **`LeanSetHoldingsSizing`** — buffered, fee-aware `SetHoldings` sizing: what
+  QC's `SetHoldings` actually does. A run that claims LEAN-native quantities
+  sizes through it, not through `SimpleFloorSizing`, the plain-floor
+  research/backtest model.
 
 ## Retired Pause, Continue and Resume (2026-09-27)
 
@@ -1101,130 +772,6 @@ socket enumeration, process-registry joins, orphaned-bot remediation, Bot
 Cockpit controls, ResumeGuard, and connectivity gate state machine retired with
 the IBKR execution runtime in #1583. ADR 0038 preserves their historical design
 record; they are not a model for current product work.
-
-## Daemon diagnostics — historical evaluator plane (retired 2026-08-18)
-
-**Retired vocabulary.** This section records the former IBKR evaluator/host-runner
-diagnostics design for provenance only. Issue #1636 removed its diagnostic routes,
-builders, fleet/process registry, connectivity monitor, lifecycle producers, and
-browser projection. Current daemon authority is limited to authenticated health,
-Gateway-socket evidence, and capability-lease renewal;
-Alpaca Broker V2 owns bot lifecycle and operator control. Do not use the terms or
-flows below to design current control-plane behavior.
-
-**Lineage: historical (ADR 0038; retired 2026-08-18).**
-
-A read-only, backend-authored self-test of the **host-daemon plumbing altitude**,
-the peer of `/api/broker/diagnose` (which self-tests the data-plane's *own* IBKR
-client). Its subject is the control plane, not the broker session.
-
-- **Daemon diagnostics (control-plane health)** — the plumbing-altitude report:
-  the daemon hop (reachable / auth / protocol-contract), daemon boot identity,
-  code freshness (running SHA vs on-disk HEAD), control-plane lease freshness,
-  process-registry integrity, and orphan-candidate presence. It is a **distinct
-  altitude** from the **broker session mirror** (socket roster, client identity,
-  recovery), which remains the single authority for session/socket facts. See
-  "Broker session mirror — client-connection observability".
-- **Composed authority** — one backend builder is the single brain. It *authors*
-  the plumbing checks (facts only the data plane can see — reachability, auth,
-  code/lease freshness, registry integrity, orphan presence) and *embeds by
-  reference* the mirror's already-authored socket-reconciliation attention codes
-  (`REGISTRY_SAYS_OFFLINE_BUT_SOCKET_LIVE`, `ORPHANED_BOT_SOCKET`, …). It **never
-  re-runs lsof and never re-classifies a client** — single authority per fact is
-  preserved even inside the superset.
-- **Two presentation surfaces, one report** — the same authored artifact is read
-  by its own snapshot endpoint (the full diagnostics panel) *and* embedded as a
-  control-plane header inside the broker session mirror page. "Available from both
-  places" is achieved by composition, never by mounting one handler at two routes
-  or fusing the snapshot self-test into the mirror's streaming/paginated payload.
-- **No bare "degraded."** The word "degraded" as a catch-all bucket does not
-  exist in this surface. Every distinct cause — daemon-down, auth-rejected,
-  stale-code, stale-lease, orphans-present, registry-amnesia, socket-probe-
-  unavailable — is its **own named check** with its own status, trader title,
-  cause, and remediation. The report never collapses distinct failures into one
-  amber word.
-- **Dominant condition** — the specific, closed-enum cause the report elevates to
-  its headline (e.g. `STALE_CODE`, `LEASE_STALE`, `UNREACHABLE`, `AUTH_REJECTED`,
-  `ORPHANS_PRESENT`, `REGISTRY_AMNESIA`, `SOCKET_PROBE_UNAVAILABLE`, `HEALTHY`).
-  Paired with backend-authored trader **headline** copy (`title` / `summary` /
-  `remediation`) — the frontend renders the copy and keys off the enum, exactly
-  as it does for reason codes and the event-narrative registry. `pass|warn|fail`
-  survives only as the severity colour, never rendered as a standalone word.
-- **Always 200.** The diagnose endpoint returns HTTP 200 with a full report even
-  when the daemon is down; the failure lives in the checks, never in the HTTP
-  status (contrast `/daemon-health`, which maps failures to 502/503 and returns
-  no body). A top-level `transport` field mirrors `DaemonResult.kind` so the
-  banner binds directly without scanning the checks list.
-- **Container-actuatable gate** — a diagnostic fix becomes an invocable *button*
-  only if the data plane can actually cause it from inside the container (the
-  daemon executes it in-process on an authenticated forward). v1's only such
-  action is `renew_lease`. Host-level fixes (start / restart the daemon) require
-  host process control the container does not have, so they are **structurally
-  never buttons** — only honest guidance. A diagnostics surface must **never
-  render a control it cannot actuate.** The action model forbids attaching a
-  `RECOVERY_MUTATION` to a host-only fix; those carry authored guidance instead.
-- **Platform-aware host guidance** — the daemon is a host process that ports
-  across Windows / Mac / Linux, so host-level remediation is authored per the
-  daemon's **reported OS/supervisor** (`systemctl restart …` on Linux,
-  `launchctl kickstart …` on Mac, the NSSM restart on Windows) — never one
-  generic "restart the daemon" string that is wrong on two of three platforms.
-  The daemon reports its platform/supervisor as an additive health fact.
-- **Backend-authored redaction** — the backend is the **sole** redaction
-  authority; nothing unsafe ever reaches the browser and the frontend never
-  decides what is safe. Host-absolute paths are reduced to repo-relative or
-  basename with the **home/user prefix and hostname stripped**
-  (`/Users/inkant/learn-ai/…/live_runs/<run_id>` → `artifacts/live_runs/<run_id>`);
-  raw tokens, connection strings, and full `sys.executable` argv are never
-  emitted. **Operator handles pass through** (`run_id`, `strategy_instance_id`,
-  short `boot_id`, `commits_behind`). There is **no per-check frontend exposure
-  gate** — a gate would make the frontend a redaction authority; instead reduced
-  fields carry an informational `redacted` marker, and export is just a
-  serialization of the already-redacted report. The pre-existing `HostRunnerHealth`
-  path/argv leak (`repo_root`, `live_runs_root`, `process.log_path`,
-  `process.command` shipped raw to the browser) is tightened in the same effort.
-- **Primary job — pinpoint why a *specific bot* is failing in the live daemon.**
-  The north star is not a flat global "is the daemon healthy" report; it is a
-  per-`strategy_instance_id` **diagnostic ladder** that walks: daemon reachable →
-  bot has a managed process → process alive vs exited-and-why → registry-consistent
-  (not amnesia) → has an IBKR socket → socket attributable/healthy (not
-  orphan/ghost/collision) → child runtime fresh → code/artifacts visible — and
-  surfaces the **first failing rung** as that instance's `dominant_condition`. The
-  broker session mirror owns the socket rungs (embedded by reference); daemon
-  diagnostics owns the process / registry / code / lease / runtime rungs. A global
-  report still exists for control-plane-wide faults that hit every bot at once
-  (unreachable, auth, stale code, stale lease); the per-instance ladder is the
-  primary operator-facing view.
-- **Fact sources (second-opinion-hardened 2026-07-04)** — the builder reads three
-  existing daemon-adjacent sources: `fetch_health` (code / lease / boot /
-  orphan-count), **`fetch_instances`** (the process registry — *required*, because
-  the mirror omits idle/exited bots with no socket row, so process rungs are blind
-  without it), and the mirror snapshot (socket reconciliation, embedded by
-  reference). Registry-read-unavailable is its **own** condition
-  (`REGISTRY_SNAPSHOT_UNAVAILABLE`), distinct from socket-probe-unavailable.
-  Additive `HostRunnerHealth` facts this requires: OS/supervisor (platform-aware
-  guidance), `lease_threshold_ms` + `lease_write_error` (split stale-lease from
-  unwritable `control_plane/`), per-orphan candidate **detail** (not just the
-  count), and `exit_reason` on the process status (single mapping authority —
-  `_exit_reason_from_code` on the daemon, not a data-plane re-implementation).
-- **One report, per-instance subreports** — a single global report carries
-  `per_instance` subreports from **one consistent snapshot** (one lsof pass, no
-  N+1); an optional per-sid projection route calls the same builder and projects
-  one instance. The mirror header embeds the global header from that same report.
-- **Linked authorities, not owned** — diagnostics never re-authors readiness or
-  runtime-freshness thresholds (it calls `evaluate_runtime_freshness` and treats
-  cockpit readiness/action gates as *linked* authorities), never uses the
-  data-plane `IbkrConnectionHealth` as **per-bot** truth (that is the
-  singleton/system client; per-bot broker state comes from the mirror row + child
-  runtime snapshot), and reuses `DaemonResult.kind` **verbatim** as the transport
-  field (`AUTH_FAILED`, not a renamed enum). Malformed-body (`PROTOCOL_ERROR`) and
-  schema-mismatch (`INCOMPATIBLE_CONTRACT`) stay distinct conditions — different
-  remediation.
-- **Reachability sourcing** — an explicit diagnose/refresh does a **fresh probe**
-  (current facts); the connectivity monitor's **folded state** refines the
-  reachability rung (`RETRYING` → warn "reconnecting" vs terminal `UNREACHABLE` →
-  fail "down") and is the only source that can prove `BOOT_CHANGED`. The
-  always-visible mirror header binds to the folded state alone, so passively
-  rendering it never probes the daemon.
 
 ## Strategy validation & signal stream (sharpened 2026-07-05)
 
@@ -1424,8 +971,8 @@ behaved. The strategy-validation half of the same 2026-07-05 sharpening is
 - **Actionable readiness gate** — a deploy readiness fact (Engine / Broker /
   Account / Fleet) rendered at **trader altitude** (a backend-authored named
   condition via `receiptLabel`, drill-down to its full page; never raw socket rows
-  inline). A blocking gate carries a **server-authored action envelope** (the same
-  `kind: recovery_mutation | navigation` model as daemon diagnostics). The strip
+  inline). A blocking gate carries a **server-authored action envelope** (a
+  `kind: recovery_mutation | navigation` model). The strip
   renders a **"clear this gate" button only when the backend attaches an actuatable
   `recovery_mutation`** — reusing the **canonical existing mutation** (Account
   `NOT_PROVEN` → `reconcileAccount` / `POST /api/accounts/{id}/reconciliation`;
@@ -1434,8 +981,7 @@ behaved. The strategy-validation half of the same 2026-07-05 sharpening is
   never buttons**. On success the gate **re-evaluates server-side**; a cleared gate
   unblocks deploy/start. The strip surfaces only **pre-deploy gate-clearing**
   actions; **bot lifecycle actions (RESUME/FLATTEN/STOP/PAUSE) keep their canonical
-  render site in the Bot Cockpit** and are not rendered here (see "Destructive-
-  action canonical render site").
+  render site in the Bot Cockpit** and are not rendered here.
 - **Launch-default posture (deploy)** — the deploy flow defaults to **paper orders
   enabled**, **start-immediately on (rendered *loud*)**, and a **daily order limit
   of 2000** (a practically-unthrottled ceiling). This inverts the earlier
@@ -1444,189 +990,6 @@ behaved. The strategy-validation half of the same 2026-07-05 sharpening is
   block, and account readiness gates the *start*. The standalone paper-confirm
   modal is replaced by the loud start treatment; a hard confirm/block is reserved
   for elevated conditions (live identity, account `NOT_PROVEN`).
-
-## Historical bot event stream — narrated gate pipeline (retired 2026-08-19)
-
-**Lineage: historical (ADR 0038; producer and control surface removed by #1583).**
-
-The deleted per-bot stream narrated a strategy instance's live pipeline — bar
-evaluation → gates → order → broker outcome — so an operator can answer both
-"why isn't my bot trading?" and "where exactly did that order die, and what was
-the most granular error we had?" The detailed vocabulary below is retained for
-historical receipts only. `bot_event_spine.py`, its engine producers, and its
-operator control surface are gone; the surviving broker-activity stream is
-read-only evidence and does not imply a running bot pipeline.
-
-- **Bot event stream** — the canonical name for the per-bot narrated pipeline
-  stream. _Avoid_: "event service", "activity feed" (the ADR-0014 broker-activity
-  stream is now the *tail* of this, not a peer). Extends [[Activity structural
-  cluster]], [[Usable activity row]], [[Stable activity stream]].
-- **Evaluation** — one bar-evaluation a bot performs. The spine unit *before* an
-  order exists, so a block that happens upstream of any order (stale data, session
-  closed, no signal) still has a home. Most evaluations are quiet.
-- **Terminal error** — the **most-granular error captured at the exact gate where
-  an evaluation or order actually failed**, preferring the external system's native
-  error (IBKR `errorCode`/`errorString`, subprocess exit + stderr, OS errno) over
-  any generic wrapper the engine puts around it. The operator sees a backend-authored
-  *useful derivation* of it (title/message) with the *exact* error kept as expandable
-  forensic evidence. _Avoid_: "last threaded error" (the originating phrase; fuzzy —
-  it does not mean "outermost" or "most recent", it means *most granular at the
-  failing gate*).
-- **Gate-walk** — the ordered sequence of gates one evaluation traverses (e.g.
-  `sizing ✓ → broker-safety ✓ → daily-cap ✗`). Drill-in detail, never a spine row.
-- **Gate-step** — a single gate traversal in a gate-walk, raw-captured **at
-  enforcement time** with `evaluation_id`, `gate_id`, `gate_result`
-  (`pass | skip | block`), `source_authority`, and structured facts. Never
-  reconstructed after the fact from the readiness sidecar — that is a "can it act
-  on the next bar?" now-vector, not a history log. The block-outcome gate-step is
-  where a [[Terminal error]] attaches.
-- **Spine event vs gate-step event** — the two altitudes of the stream. **Spine
-  events** are the sparse, authored, visible rows (`evaluation_idle`, `signal_fired`,
-  `order_submitted`, `order_filled`, `order_cancelled`, `order_rejected`, `blocked`,
-  `halted`, `launch_failed`). `order_cancelled` preserves existing ADR-0014
-  cancellation rows as non-escalating broker-tail outcomes. **Gate-step events** are
-  the drill-in detail beneath a row. A
-  quiet bar folds to one `evaluation_idle` heartbeat; it never scrolls.
-- **Order-cluster promotion** — a spine row **starts** keyed to its [[Evaluation]]
-  and is **promoted** to the order's `order_ref` identity the moment an intent is
-  minted, so the operator follows one unbroken row from *bar evaluated → signal →
-  gates → submitted → filled/rejected*. This is [[Activity structural cluster]]
-  extended across the full pipeline.
-- **BotEventRow / BotEventRaw** — the stream's versioned wire contracts:
-  `BotEventRaw` (the enforcement-point-captured raw event in the run-scoped WAL)
-  and `BotEventRow` (the authored projection row), with [[Gate-step]] and
-  [[Terminal error]] as child shapes. A **new** contract — broker executions are
-  terminal child event-types; `BrokerActivityRow` maps into the stream tail via an
-  explicit replacement map. _Avoid_: informally extending `BrokerActivityRow`
-  (its "one IBKR execution" identity is a load-bearing ADR-0014 contract).
-- **Enforcement-point authored** — the runtime that enforces *or observes* a gate
-  owns its raw capture: the engine loop for evaluation/submit gates, the
-  daemon/launcher for spawn failures and subprocess stderr, the broker session
-  layer for session collisions. The publisher authors the projection. _Avoid_:
-  "engine authored" as the blanket invariant — it is only the common case.
-- **Surface disposal (replace, don't add)** — exactly one current-verdict surface
-  (`operator_surface`) and one historical stream (the Bot event stream); every
-  other surface (Broker Activity table, working/pending orders, rejection rows,
-  incident headline, gate checklists) is a projection over one of the two, or is
-  deleted. Removal in service of truth and robustness is encouraged. The gates
-  themselves are the safety model and untouchable; only their duplicate
-  visualizations are disposed. _Avoid_: peer surfaces; "a sixth channel".
-- **The rejection break** — a broker rejection is *expected as a broker-callback
-  shape* but *terminal as an operator outcome*. The old `verdict=expected`
-  rejection row is **replaced** by `order_rejected`, never kept alongside a notice.
-- **Stream evidence vs cockpit verdict (single source, two projections)** — gate
-  outcomes are authored **once** per evaluation at the enforcement point. The
-  `operator_surface` readiness verdict renders the **current** "can it trade now"
-  summary (contract unchanged); the Bot event stream renders the **historical
-  walk** over time. Neither re-derives the other's verdict — the same facts, two
-  views. Honors the engine-authored-readiness doctrine and CLAUDE.md
-  single-source-of-truth #5.
-- **Terminal-outcomes escalate** — most stream events wait to be found; the terminal
-  outcomes (`halted`, `order_rejected`, `launch_failed`, submit-uncertain) also mint
-  an [[operator notice]] / OperatorIncident so the cockpit's `incident_headline` +
-  page-wide auto-expand surface them even when the operator is not watching the
-  stream. Self-protective, expected blocks (market closed, no signal) stay in-stream
-  at `info` — escalating those is how alarm fatigue is trained. Escalation is
-  deduped by incident key (instance + `order_ref`/`evaluation_id` + terminal code):
-  one failure, one visible terminal story.
-
-## Operator notice actionability & resolution (resolved 2026-07-08)
-
-**Lineage: neutral.**
-
-Every operator notice (ADR-0015) declares two orthogonal truths — how
-much to distrust the bot, and what (if anything) can be done. Neither
-implies the other.
-
-- **Tier** (`info` / `warning` / `critical`) is **trust-impact only**:
-  "how much should the operator distrust the bot right now." It never
-  encodes what the operator should do. `critical` with no remedy is a
-  legal, first-class state.
-- **Actionability** — required closed classification on every notice:
-  - **`actuatable`** — the cockpit performs or directly navigates to
-    the fix (renew lease, focus a cockpit action, redeploy).
-  - **`routed`** — a fix exists but lives elsewhere; the notice must
-    name the destination and what to look at there (runbook, IBKR
-    screen, host shell).
-  - **`self_resolving`** — no operator action needed; the notice must
-    name its clearing condition. Retires `wait`.
-  - **`no_remedy`** — no action exists anywhere; the notice must state
-    what the operator must not trust meanwhile. Carries a required
-    `remedy_status`: **`inherent`** (no remedy can exist — justified in
-    the authoring table) or **`unbuilt`** (remedy conceivable but not
-    built — must cross-reference `docs/known-gaps.md`, enforced by the
-    exhaustiveness gate). `no_remedy` is honest copy, never a
-    dumping ground: an unbuilt remedy stays visible as a feature gap.
-- **Resolution statement** — required on every notice: the condition
-  under which it clears and who observes it. "Resolution unknown —
-  requires manual reconciliation" is a legal truthful value; omission
-  is not. A notice whose author cannot state its resolution condition
-  is not ready to ship.
-- **The `none` conflation is dead.** "No action *needed*" and "no
-  action *exists*" are different states (`self_resolving` vs
-  `no_remedy`) and demand opposite operator responses; `action.kind =
-  "none"` survives only as "no clickable affordance."
-- **Silent states get reserved codes.** A state with trust impact that
-  emits nothing is a contract failure, same as an untruthful message.
-  Known silent-critical states are declared upfront as reserved notice
-  codes with honest pre-classification (`fleet.sibling_liveness_unproven`,
-  `reconciliation.divergence_while_submitting`), cross-referenced with
-  `docs/known-gaps.md`. Reserve first, implement second.
-
-Authority: ADR-0015 § Amendment 2026-07-08. Placement/prominence is
-resolved by the single-dominant-headline rule below.
-
-## Single dominant headline (resolved 2026-07-08)
-
-**Lineage: neutral.**
-
-Placement of every operator notice is a pure function of
-**tier × actionability** (ADR-0025). No surface opts out; no notice
-chooses its own placement.
-
-- **At most one banner, ever.** One arbitrated winner across all banner
-  sources (control-plane, broker-evidence, runtime-freshness, incident).
-  Highest tier wins; ties broken by blockage-ladder rung order.
-  Concurrent criticals fold behind a "+N more critical" affordance that
-  opens the ladder — one click away, never stacked.
-- **`critical` × anything** → the banner slot. `no_remedy` criticals
-  lead with the trust impact and the resolution statement.
-- **`warning` × `actuatable`/`routed`** → attention dropdown row with
-  the affordance inline. Never a banner.
-- **`warning` × `self_resolving`/`no_remedy`** → attention dropdown,
-  quiet (no pulse), resolution statement visible.
-- **`info` × anything** → the **quiet status region** (session card
-  tier). Never a banner, never the attention dropdown, and **never**
-  PRD #951's lower documentation section — that section is "no CTAs,
-  no live claims", and a live notice is a live claim.
-- **Arbitration is backend-authored** (ADR-0013 verbatim rule): the
-  banner winner, the "+N more" count, and the folded list are one
-  server-side projection; the frontend never re-derives dominance.
-
-Authority: ADR-0025.
-
-## Rung receipt (resolved 2026-07-08)
-
-**Lineage: neutral.**
-
-Every current mutation response carries a backend-authored
-**rung receipt**: a notice-shaped statement naming the **next blocking
-rung** from the blockage ladder — or the scoped all-clear ("no enforced
-gate blocks the next start"). It exists because a mutation can succeed
-while the thing the operator actually wanted (a running bot) is still
-blocked downstream; the receipt connects the click to the next blocker
-at the moment of the click.
-
-- Inherits the full notice contract: tier, [[actionability]], mandatory
-  resolution statement, verbatim rendering.
-- Claims only what the enforcement layer guarantees; observational
-  verdicts that disagree ride along as `warning`, never silently.
-- Authored from a fresh ladder evaluation inside the mutation request —
-  never from the client's pre-click poll.
-- Same resolver as the status projection's ladder (shared-resolver
-  pattern, ADR-0013 §6).
-
-Authority: ADR-0015 § Amendment 2026-07-08 (b).
 
 ## Account custody language (resolved 2026-07-27)
 
@@ -1751,51 +1114,6 @@ are counted in. The units differ deliberately and must not be summed together.
 - **Fee fidelity** — whether a fee was reported by the broker or simply not
   reported. A fee that is unknown is rendered unknown; it is never rendered as
   zero.
-
-## Broker Desk lenses (resolved 2026-08-12; retired 2026-09-28)
-
-**Lineage: historical.**
-
-Since PRD #2560 (D2) no page carries a lens. The account overview that held
-the account's lens pair is merged into the account's **Home**, the bot panel
-is one view (#2563), and the top bar's global Trader/Operator switch and the
-`?lens=` URL parameter are retired (#2567): an old link's `?lens=` is dropped
-on arrival. Every problem shows with its fix beside it, and audit depth folds
-into Details sections on the same page. The lens terms below are retained as
-vocabulary for older ADRs and receipts.
-
-- **Lens** (historical) — a manual, per-surface view mode that decided which
-  of two purpose-built views of the same account or bot was rendered. It was a
-  presentation choice, never an identity, a role, or an authorization decision.
-  _Avoid_: lens, Trader view, Operator view as current terms; role, mode,
-  persona, permission.
-- **Trader lens** (historical) — the outcomes view: *how am I doing?* Verified
-  account facts, activity, positions, and equity history.
-- **Operator lens** (historical) — the mechanism-and-repair view: *why is the
-  system working or not, and what fixes it?* The dominant posture headline with
-  its fix attached, plus forensic evidence.
-- **Historical audience** — the field that once routed an operator blocker to
-  the trader lens, the operator lens, or both. PRD #2560 (#2567) removed it
-  from the wire with the lenses: every blocker now renders on its one page.
-- **Historical account overview** — the account workspace's former first tab
-  for one broker account, carrying both lenses (formerly the Broker Desk,
-  renamed 2026-09-16; older ADRs keep that name). PRD #2560 retired it on
-  2026-09-28, merging it with the Bots and Gallery tabs into **Home**; its
-  Clerk recovery panel moved to Activity's order records. Retained as
-  vocabulary for older ADRs and receipts.
-  _Avoid_: Broker Desk (it reads as the whole workspace), Overview as a
-  current tab.
-- **Evidence drawer** — the shared, on-demand reader for one immutable projected
-  Clerk receipt, led by that receipt's custody timeline. It reads a receipt; it
-  never re-derives one.
-  _Avoid_: evidence modal, receipt viewer.
-- **Historical Deploy drawer** — the retired slide-over that hosted the deploy
-  workflow over the account workspace. ADR 0064's 2026-09-17 amendment made
-  Deploy a routed tab of its own; PRD #2560 (#2564) made it the account
-  header's "Deploy a bot" button, at the same URL.
-- **Asset identity** — the canonical rendering of one tradeable instrument:
-  its symbol with the recognisable mark that goes with it. One renderer owns
-  symbol presentation; feature surfaces do not re-derive logos or fallbacks.
 
 ## App shell (resolved 2026-08-13; revised 2026-09-16)
 
@@ -2109,7 +1427,7 @@ Decision record: ADR 0060; owner decisions D1–D5 and the accepted nickname, re
 
 **Lineage: live.**
 
-Decision record: ADR 0062; PRD `docs/prds/2026-09-12-multi-broker-clerk-control-plane.md`.
+Decision record: ADR 0062.
 
 - **Broker clerk agent** — one provider-specific process controlling a single clerk lane and its own physical volume. A future Tradier integration supplies a `TradierClerkAgent`, a future Webull integration a `WebullClerkAgent`; neither inherits Alpaca behaviour by registering a string.
 - **Clerk** — a durable execution lane identified by an opaque backend-issued `clerk_id`. Callers never mint, parse or infer it; retirement is terminal and IDs are never recycled. Alpaca Paper and Alpaca Live run as two different clerks.
@@ -2130,10 +1448,10 @@ Decision record: ADR 0062; PRD `docs/prds/2026-09-12-multi-broker-clerk-control-
 - **Confirmation evidence** — the additive, nonsecret file on the clerk volume recording the exact grant the clerk actually confirmed (registry, clerk, volume, assignment generation, effective tuple, binding generation, session). Evidence of a grant, never authority: with the coordinator unreachable it permits exactly the FR-066 offline recovery of the same tuple, nothing else.
 - **Enrolment ceremony** — the offline, resumable `migrate-existing` host ritual that issues identities onto an existing volume, seeds the binding generation's initial value, imports the effective account assignment, and writes the first confirmation evidence; interrupted runs resume onto the same identities and never remint.
 - **Lane delivery** — the one provider-operation path a routed call travels, with a local (in-process, stream-preserving) and an HTTP adapter to a real agent process. Responses echo the serving runtime's broker/clerk/epoch/generation; a mismatched echo after a possible dispatch is an uncertain outcome requiring identity-based reconciliation.
-- **Clerk-scoped surface** — the coordinator's public routes under `/api/brokers/{broker}/clerks/{clerk_id}`, one per catalog operation plus the directory. The coordinator resolves, fences and forwards; a clerk agent mounts none of the routing surface. The one exception is deliberate and bounded: during the pre-cutover compatibility window the coordinator also serves two unscoped agent-family **reads** — `GET /api/brokers/{broker}/live-verdict` and `GET /api/brokers/{broker}/panel-profile` (`app/routers/fleet_compatibility_reads.py`) — because the browser's fleet ingress is the coordinator and those two reads have no clerk-scoped successor yet. No agent, generic broker router or mutation surface is exposed by that bridge.
+- **Clerk-scoped surface** — the coordinator's public routes under `/api/brokers/{broker}/clerks/{clerk_id}`, one per catalog operation plus the directory. The coordinator resolves, fences and forwards; a clerk agent mounts none of the routing surface. The one exception is deliberate and bounded: during the pre-cutover compatibility window the coordinator also serves one unscoped agent-family **read** — `GET /api/brokers/{broker}/panel-profile` (`app/routers/fleet_compatibility_reads.py`) — because the browser's fleet ingress is the coordinator and that read has no clerk-scoped successor yet. No agent, generic broker router or mutation surface is exposed by that bridge.
 - **Command envelope** — the §10.3 context every effectful public request carries (`command_context`: capability, idempotency key, expected binding generation, target). Capability must match the routed operation, a durable-keyed operation requires its key, the body's own key identity must agree, and there is no implicit canonical command.
 - **Identity echo, per event** — streamed responses stamp every SSE frame with the serving runtime's broker/clerk/epoch/generation, read live at frame time; the coordinator validates each frame and closes the stream on the first violation, so a lane that re-registers mid-stream cannot keep feeding its old subscriber.
-- **Composed auth** — public routes demand the data-plane control secret; an internal forward presents the per-clerk coordinator service token, accepted at the same guard (`app/security/data_plane_control.py`). The browser secret is *intended* to terminate at the coordinator, and on a `clerk_agent` that intent is enforced in code: a mutation is refused `broker_and_clerk_required` before the handler unless it is the coordinator's own proven forward (`lane_forward_is_authorized`, not merely a request that echoes a known clerk id) or one of the two stranded operator-recovery routes with no coordinator successor — loss-hold clear and replay-receipt regenerate (`app/broker/fleet/agent_identity.py`). Deployment topology is the second layer, not the only one — clerk agents have no host port and sit on `fleet-private` (`compose.fleet.yaml`). Cleartext internal traffic never leaves the private network boundary — an `http://` destination naming a public address is refused before any byte is sent.
+- **Composed auth** — public routes demand the data-plane control secret; an internal forward presents the per-clerk coordinator service token, accepted at the same guard (`app/security/data_plane_control.py`). The browser secret is *intended* to terminate at the coordinator, and on a `clerk_agent` that intent is enforced in code: a mutation is refused `broker_and_clerk_required` before the handler unless it is the coordinator's own proven forward (`lane_forward_is_authorized`, not merely a request that echoes a known clerk id; `app/broker/fleet/agent_identity.py`). Deployment topology is the second layer, not the only one — clerk agents have no host port and sit on `fleet-private` (`compose.fleet.yaml`). Cleartext internal traffic never leaves the private network boundary — an `http://` destination naming a public address is refused before any byte is sent.
 
 ### Lane drain and handover (resolved 2026-09-15, ADR 0063)
 
@@ -2182,6 +1500,10 @@ How an operator moves around one broker account's pages. The account, not the pa
 - **Bot panel** (in the workspace) — one bot's page sits inside its account's workspace, under Home, and its way back returns to Home. (Before PRD #2560 it sat under the Bots or Gallery tab it was opened from.)
 - **Account list** — the broker's entry page and the only page that shows every account at once: each account by name, mode, readiness, equity and running-bot count, opening into that account's workspace. An account that is not ready still appears, says why, and opens with only its configuration usable. Lane mechanics (authority, binding generation, endpoint) are not shown here.
   _Avoid_: lane directory (the **fleet directory** is the underlying listing, not this page), surface chooser, account selection (that is the configuration act of choosing, staging and applying which account a lane serves — opening an account from this list selects nothing).
+- **Evidence drawer** — the shared, on-demand reader for one immutable projected
+  Clerk receipt, led by that receipt's custody timeline. It reads a receipt; it
+  never re-derives one.
+  _Avoid_: evidence modal, receipt viewer.
 
 ## Account money map (resolved 2026-09-28)
 
