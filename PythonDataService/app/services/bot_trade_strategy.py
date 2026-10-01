@@ -102,9 +102,8 @@ class StrategyEvaluation:
     # optional until issue #1736 removed the state; the guard that made it
     # unreachable already existed. Lets a caller that needs the complete
     # decision-meaning payload -- not just the identity/intents subset above
-    # -- read it without re-deriving strategy state. Shadow-mode
-    # trace-parity comparison (issue #1729 AC #2) is the first such caller;
-    # see `app/broker/alpaca/clerk/sqlite/qualification_shadow_trace.py`.
+    # -- read it without re-deriving strategy state; the run-replay fidelity
+    # classifier (`app/services/run_replay_proof.py`) is one such caller.
     trace: EvaluationTrace
     # This mode was captured with the source bar before a consolidator could
     # turn it into a semantic decision. It must never be sampled later.

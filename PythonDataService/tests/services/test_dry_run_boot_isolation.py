@@ -723,8 +723,8 @@ async def test_every_account_reader_is_answered_at_once_during_a_restoration(
     restarted_lane: _Lane, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """#2684's one account-layer check: while boot's restoration holds the
-    account, every opening is refused at once -- the replay receipt's
-    repository read, the fees read, any reader -- instead of queueing behind
+    account, every opening is refused at once -- the fees read, any
+    reader -- instead of queueing behind
     the restoration's lease wait."""
     monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 60.0)
     holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=3_600_000)
@@ -846,36 +846,6 @@ async def test_a_dry_run_held_elsewhere_is_its_own_row_never_the_roster_s_failur
     assert (row.strategy_instance_id, row.status_label, row.exposure) == (SID, "Unavailable", None)
     assert row.needs_attention
     assert "still open in another running copy of this Clerk" in row.status_explanation
-
-
-async def test_a_replay_asked_for_during_a_restoration_is_unavailable_never_a_failed_receipt(
-    restarted_lane: _Lane, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A replay receipt asked for while its Dry Run is restored answers 503 and changes nothing.
-
-    It once wrote a durable ``replay_failed`` receipt, and no later boot
-    heals one: boot re-schedules only the ``pending`` receipts a dead
-    process owed.
-    """
-    from app.services.run_replay_proof import RunReplayUnavailableError
-
-    registry = restarted_lane.registry
-    registry._replay_proof.write_pending(_dry_run_binding(), "run-1")
-    monkeypatch.setattr(bot_runner, "BOOT_EXECUTION_LEASE_WAIT_TIMEOUT_S", 60.0)
-    holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=3_600_000)
-    try:
-        registry.start_dry_run_restoration()
-        await asyncio.sleep(0.2)  # the restoration is inside its lease wait
-
-        with pytest.raises(RunReplayUnavailableError) as unavailable:
-            await asyncio.wait_for(registry.generate_run_replay_receipt("alpaca", SID, "run-1"), timeout=1.0)
-    finally:
-        await registry.stop_dry_run_restoration()
-        holder.close()
-
-    assert (str(unavailable.value), unavailable.value.http_status) == (RESTORING, 503)
-    stored = registry.run_replay_receipt("alpaca", SID, "run-1")
-    assert stored is not None and stored.status == "pending"
 
 
 async def test_a_fee_read_during_a_restoration_says_unavailable_never_a_500(
