@@ -19,6 +19,13 @@ export const EXPOSURE_LABELS: Readonly<Record<ExposureState, string>> = {
   history_unknown: 'History unknown',
 };
 
+/** What opening the final test would record, as the lock states it: only an untouched interval can be confirmatory. */
+export const EXPOSURE_PREVIEW_LABELS: Readonly<Record<ExposureState, string>> = {
+  not_opened: EXPOSURE_LABELS.not_opened,
+  previously_used: `${EXPOSURE_LABELS.previously_used} · exploratory only`,
+  history_unknown: `${EXPOSURE_LABELS.history_unknown} · exploratory only`,
+};
+
 /** What each exposure state allows the final test to claim. */
 export const EXPOSURE_CLAIMS: Readonly<Record<ExposureState, string>> = {
   not_opened: 'The final test can count as a fresh, confirmatory look.',

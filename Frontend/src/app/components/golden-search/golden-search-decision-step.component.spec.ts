@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { GoldenSearchDecisionStepComponent } from './golden-search-decision-step.component';
 import type { StudyStep } from './golden-search-steps';
 import type { ExamView, StudyCommand, StudyDetail } from './golden-search.types';
-import { emaCapability, examView, protocol, studyDetail } from './testing/fixtures';
+import { emaCapability, examView, exposure, protocol, studyDetail } from './testing/fixtures';
 
 async function renderStep(study: StudyDetail) {
   const view = await render(GoldenSearchDecisionStepComponent, {
@@ -59,6 +59,26 @@ describe('GoldenSearchDecisionStepComponent — before the final test', () => {
     expect(commands).toEqual([{ command: 'open_exam', payload: { acknowledge_final_test: true } }]);
     expect(steps).toEqual(['compare']);
     await noAxeViolations(view.container);
+  });
+
+  it.each([
+    ['not_opened', 'Not opened in recorded research'],
+    ['previously_used', 'Previously used · exploratory only'],
+    ['history_unknown', 'History unknown · exploratory only'],
+  ] as const)('states the exposure opening would record (%s) with the server explanation', async (state, label) => {
+    await renderStep(studyDetail('candidate_locked', { exposure_preview: exposure({ state, explanation: `Ledger says ${state}.` }) }));
+
+    const lock = screen.getByRole('region', { name: /is still sealed/i });
+    expect(lock.textContent).toMatch(new RegExp(`Recorded exposure\\s*${label}`));
+    expect(lock.textContent).toContain(`Ledger says ${state}.`);
+    expect(lock.textContent).toContain('Exposure outside this application cannot be verified.');
+    expect(lock.textContent).not.toContain('Checked when you open the test');
+  });
+
+  it('without an exposure preview says it is checked when the test opens', async () => {
+    await renderStep(studyDetail('candidate_locked', { exposure_preview: null }));
+
+    expect(screen.getByRole('region', { name: /is still sealed/i }).textContent).toMatch(/Recorded exposure\s*Checked when you open the test/);
   });
 
   it('a lock the server will not open stays disabled and says why', async () => {
