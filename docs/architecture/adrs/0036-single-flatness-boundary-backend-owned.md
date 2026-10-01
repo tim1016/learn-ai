@@ -109,3 +109,63 @@ needs a regression test that fails before and passes after, per `CLAUDE.md`.
 A future reader will find a UI guard asking the backend a question it could
 answer in one line, and a display cache calling a predicate from a module it
 otherwise does not depend on. Both look like accidental complexity and are not.
+
+## Amendment 2026-09-30 — every custody numeric boundary, not only flatness (#2749)
+
+Decision 1 records one numeric rule. The Clerk's other numeric boundaries
+kept their reasons only in reference notes and code comments (#2745 entry 2).
+Each one below is backend-owned under Decision 2 and decided here. Decision 1
+is unchanged.
+
+1. **Fill-quantity equality uses an absolute `1e-9`, the same as flatness.**
+   The constant is `FILL_QTY_EPSILON = 1e-9` with `rtol=0`
+   (`app/broker/alpaca/clerk/sqlite/execution_coverage.py`). It is shared by
+   `manual_order_completion.py`, `order_evidence.py` and the fill fold.
+   - Alpaca reports `filled_quantity` as a cumulative total. The fold
+     recovers the delta as `cumulative − Σ prior recorded fills`.
+   - A repeated observation of the same cumulative state can therefore
+     differ by float64 residue, about `1e-12` to `1e-13` at these
+     magnitudes, rather than by exactly zero. `1e-9` absorbs that residue
+     without treating a real fractional-share remainder as complete.
+   - The tolerance is absolute, not relative, because share quantities are
+     absolute. A relative tolerance would hide drift on small positions.
+   - A delta below the epsilon is never inserted. `fill_id` formats the
+     cumulative quantity to the same nine decimal places, so identical
+     states deduplicate.
+   - `FILL_QTY_EPSILON` is also the "pinned execution tolerance" in ADR
+     0035's `EXACT_REPLACES_CUMULATIVE` rule. The many-to-many coverage proof
+     uses `QTY_ATOL` and `PRICE_ATOL`, both `1e-9` with `rtol=0`.
+2. **A cumulative broker fill is priced on its delta.** The formula is
+   `delta_price = (cum_qty × cum_avg − prior_qty × prior_avg) / delta_qty`,
+   with the prior cost basis summed from the order's recorded fills
+   (`sqlite/folds.py::_fold_order_fill_observed`). Alpaca's
+   `filled_avg_price` is an average over the whole order. Copying it as the
+   price of the latest clip is wrong whenever an order fills in clips at
+   different prices.
+3. **At the same quantity, an average-price gap below one cent per share is
+   vendor rounding; a gap of one cent or more is a conflict.**
+   - The constant is `TOTAL_PRICE_CONFLICT_ATOL = 0.01` per share, `rtol=0`
+     (`sqlite/order_evidence.py`, #2460).
+   - Alpaca publishes prices in cents, so a smaller gap cannot be told
+     apart from rounding. A gap at or above one cent records a durable
+     `EXECUTION_PRICE_CONFLICT` episode. This is the same basis as the
+     reconciliation `FILL_PRICE_DRIFT` default (ADR 0069 §3).
+   - The episode never rewrites recorded fills and never forbids reductions,
+     because the quantity is the one thing both sides agree on. It clears
+     when a later total agrees.
+4. **Budget money is exact `Decimal` arithmetic.**
+   `app/broker/alpaca/clerk/money.py` is the one normalization boundary (PRD
+   #2540, #2545).
+   - Legacy floats enter as `Decimal(str(x))` before any arithmetic.
+   - A fixed 1,400-digit local context traps inexact arithmetic instead of
+     silently changing an admission answer.
+   - Consent is a positive whole-cent amount and never rounds.
+   - Required cents round up and spendable cents round down, and only at the
+     boundary where they are acted on.
+   - Affordability compares exact amounts with **no epsilon**.
+
+   Why: an epsilon on money admits any shortfall smaller than itself, and a
+   rounded consent is not the amount the operator agreed to. Precision
+   already lost in historical SQLite REAL values cannot be recovered, and
+   none is claimed. ADR 0059's budget amendment ("whole-cent dollar
+   commitment") rests on this rule.
