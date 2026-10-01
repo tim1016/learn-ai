@@ -1926,6 +1926,41 @@ Decision record: ADR 0037.
   _Avoid_: broker connection (conflates the feed with the trading path), data
   broker, shared broker.
 
+## Episode store (resolved 2026-09-30)
+
+**Lineage: live.**
+
+Decision record: ADR 0048. What the Alpaca custody authority records about the
+things it does not yet know, and how each record ends.
+
+- **Episode** — one durable record that something about an account's custody
+  is unknown or unsafe: a position drift, an order outcome nobody has seen, an
+  exit that is not yet flat, an account hold. It opens with a typed cause and
+  closes only on a later fact. At most one episode is open per cause. Episodes
+  are folds of the custody log, never an authority of their own. A hold is an
+  episode; there is no second hold store.
+  _Avoid_: hold (as a separate kind), incident, alert, flag.
+- **Age policy** — the declared answer to "what ends this episode?". Every
+  reason must declare one of three:
+  - **cause cleared**: the episode ends when its cause is proven gone;
+  - **void after**: it closes on its own after a grace window;
+  - **redrive then escalate**: it is retried a bounded number of times, then
+    succeeded by a more severe episode.
+
+  There is no default. A reason without an age policy cannot be registered.
+  _Avoid_: TTL, expiry, timeout (each implies a clock most episodes do not
+  have).
+- **Terminal disposition** — how a particular episode actually ended: resolved
+  because its cause cleared, voided by its age rule (and the receipt names that
+  rule), or escalated into its successor. An escalation target never voids on
+  age. Only proof or an operator ends it.
+  _Avoid_: closed (says nothing about why).
+- **Admission marker** — a file-based claim that once fenced an account-safety
+  critical section on the retired engine path. None exists today, because the
+  mechanism was removed together with its last callers. If one is ever
+  reintroduced, it is a fenced single-writer claim, never an episode.
+  _Avoid_: lock file, episode.
+
 ## Bot control plane (resolved 2026-08-17)
 
 **Lineage: live.**
