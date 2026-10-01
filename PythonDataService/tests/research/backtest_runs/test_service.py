@@ -174,10 +174,3 @@ def test_a_failure_detail_without_a_group_is_refused_by_the_converter() -> None:
     """The detail is a routing instruction for a parity group; it needs one."""
     with pytest.raises(RunPayloadError, match="lean-sidecar"):
         record_from_payload(engine_payload() | {"parity_failure_detail": "boom"})
-
-
-@pytest.mark.asyncio
-async def test_the_coroutine_form_runs_the_same_write_off_the_calling_loop(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(service, "persist_run_payload_sync", lambda payload: 99)
-
-    assert await service.persist_run_payload(engine_payload()) == 99

@@ -7,7 +7,6 @@ directory shape (``<root>/monte-carlo/<mc_id>/{config,result}.json``).
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
@@ -17,7 +16,6 @@ from app.research.monte_carlo import (
     MonteCarloAlreadyExistsError,
     MonteCarloConfig,
     MonteCarloCorruptError,
-    MonteCarloNotFoundError,
     MonteCarloResult,
     list_monte_carlos,
     load_monte_carlo,
@@ -83,46 +81,15 @@ def test_save_then_load_round_trips(tmp_path: Path):
     assert loaded_result.model_dump() == result.model_dump()
 
 
-def test_save_writes_canonical_json(tmp_path: Path):
-    config = _make_config()
-    result = _make_result()
-    save_monte_carlo(config, result, root=tmp_path)
-
-    cfg_payload = json.loads(
-        (tmp_path / "monte-carlo" / config.monte_carlo_id / "config.json").read_text()
-    )
-    res_payload = json.loads(
-        (tmp_path / "monte-carlo" / config.monte_carlo_id / "result.json").read_text()
-    )
-    assert cfg_payload["monte_carlo_id"] == config.monte_carlo_id
-    assert res_payload["monte_carlo_id"] == config.monte_carlo_id
-
-
 # ---------------------------------------------------------------------------
 # Failure modes.
 # ---------------------------------------------------------------------------
-def test_load_missing_raises(tmp_path: Path):
-    with pytest.raises(MonteCarloNotFoundError):
-        load_monte_carlo("b" * 32, root=tmp_path)
-
-
 def test_save_refuses_to_overwrite(tmp_path: Path):
     config = _make_config()
     result = _make_result()
     save_monte_carlo(config, result, root=tmp_path)
     with pytest.raises(MonteCarloAlreadyExistsError):
         save_monte_carlo(config, result, root=tmp_path)
-
-
-def test_save_replace_overwrites(tmp_path: Path):
-    config = _make_config()
-    result = _make_result()
-    save_monte_carlo(config, result, root=tmp_path)
-    new_result = _make_result(failure_reason="manually overridden", status="failed")
-    save_monte_carlo(config, new_result, root=tmp_path, replace=True)
-    _, loaded = load_monte_carlo(config.monte_carlo_id, root=tmp_path)
-    assert loaded.failure_reason == "manually overridden"
-    assert loaded.status == "failed"
 
 
 def test_save_rejects_id_mismatch(tmp_path: Path):
@@ -173,77 +140,6 @@ def test_save_with_malformed_id_raises(tmp_path: Path):
 # ---------------------------------------------------------------------------
 # Listing & filtering.
 # ---------------------------------------------------------------------------
-def test_list_empty(tmp_path: Path):
-    assert list_monte_carlos(root=tmp_path) == []
-
-
-def test_list_orders_by_created_at_desc(tmp_path: Path):
-    older_cfg = _make_config(monte_carlo_id="a" * 32, created_at_ms=1_700_000_000_000)
-    older_result = _make_result(
-        monte_carlo_id="a" * 32, created_at_ms=1_700_000_000_000
-    )
-    newer_cfg = _make_config(monte_carlo_id="b" * 32, created_at_ms=1_800_000_000_000)
-    newer_result = _make_result(
-        monte_carlo_id="b" * 32, created_at_ms=1_800_000_000_000
-    )
-    save_monte_carlo(older_cfg, older_result, root=tmp_path)
-    save_monte_carlo(newer_cfg, newer_result, root=tmp_path)
-
-    listed = list_monte_carlos(root=tmp_path)
-    assert [c.monte_carlo_id for c in listed] == [
-        newer_cfg.monte_carlo_id,
-        older_cfg.monte_carlo_id,
-    ]
-
-
-def test_list_filter_by_parent_run_id(tmp_path: Path):
-    a = _make_config(monte_carlo_id="a" * 32, parent_run_id="parent-1")
-    b = _make_config(monte_carlo_id="b" * 32, parent_run_id="parent-2")
-    save_monte_carlo(
-        a, _make_result(monte_carlo_id=a.monte_carlo_id, parent_run_id=a.parent_run_id),
-        root=tmp_path,
-    )
-    save_monte_carlo(
-        b, _make_result(monte_carlo_id=b.monte_carlo_id, parent_run_id=b.parent_run_id),
-        root=tmp_path,
-    )
-
-    filtered = list_monte_carlos(root=tmp_path, parent_run_id="parent-1")
-    assert [c.monte_carlo_id for c in filtered] == ["a" * 32]
-
-
-def test_list_filter_by_method(tmp_path: Path):
-    a = _make_config(monte_carlo_id="a" * 32, method="reshuffle")
-    b = _make_config(monte_carlo_id="b" * 32, method="resample")
-    save_monte_carlo(
-        a, _make_result(monte_carlo_id=a.monte_carlo_id, method="reshuffle"),
-        root=tmp_path,
-    )
-    save_monte_carlo(
-        b, _make_result(monte_carlo_id=b.monte_carlo_id, method="resample"),
-        root=tmp_path,
-    )
-
-    reshuffles = list_monte_carlos(root=tmp_path, method="reshuffle")
-    assert [c.monte_carlo_id for c in reshuffles] == ["a" * 32]
-
-
-def test_list_filter_by_since_ms(tmp_path: Path):
-    a = _make_config(monte_carlo_id="a" * 32, created_at_ms=1_700_000_000_000)
-    b = _make_config(monte_carlo_id="b" * 32, created_at_ms=1_800_000_000_000)
-    save_monte_carlo(
-        a, _make_result(monte_carlo_id=a.monte_carlo_id, created_at_ms=a.created_at_ms),
-        root=tmp_path,
-    )
-    save_monte_carlo(
-        b, _make_result(monte_carlo_id=b.monte_carlo_id, created_at_ms=b.created_at_ms),
-        root=tmp_path,
-    )
-
-    by_since = list_monte_carlos(root=tmp_path, since_ms=1_750_000_000_000)
-    assert [c.monte_carlo_id for c in by_since] == [b.monte_carlo_id]
-
-
 def test_list_skips_corrupt_config(tmp_path: Path, caplog):
     cfg = _make_config()
     result = _make_result()

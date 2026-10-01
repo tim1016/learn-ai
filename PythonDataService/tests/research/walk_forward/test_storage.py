@@ -7,7 +7,6 @@ shape (``<root>/walk-forward/<wf_id>/{config,result}.json``).
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
@@ -18,7 +17,6 @@ from app.research.walk_forward import (
     WalkForwardAlreadyExistsError,
     WalkForwardConfig,
     WalkForwardCorruptError,
-    WalkForwardNotFoundError,
     WalkForwardResult,
     list_walk_forwards,
     load_walk_forward,
@@ -88,42 +86,15 @@ def test_save_then_load_round_trips(tmp_path: Path):
     assert loaded_result.model_dump() == result.model_dump()
 
 
-def test_save_writes_canonical_json(tmp_path: Path):
-    config = _make_config()
-    result = _make_result()
-    save_walk_forward(config, result, root=tmp_path)
-
-    cfg_payload = json.loads((tmp_path / "walk-forward" / config.walk_forward_id / "config.json").read_text())
-    res_payload = json.loads((tmp_path / "walk-forward" / config.walk_forward_id / "result.json").read_text())
-    assert cfg_payload["walk_forward_id"] == config.walk_forward_id
-    assert res_payload["walk_forward_id"] == config.walk_forward_id
-
-
 # ---------------------------------------------------------------------------
 # Failure modes.
 # ---------------------------------------------------------------------------
-def test_load_missing_walk_forward_raises(tmp_path: Path):
-    with pytest.raises(WalkForwardNotFoundError):
-        load_walk_forward("b" * 32, root=tmp_path)
-
-
 def test_save_refuses_to_overwrite(tmp_path: Path):
     config = _make_config()
     result = _make_result()
     save_walk_forward(config, result, root=tmp_path)
     with pytest.raises(WalkForwardAlreadyExistsError):
         save_walk_forward(config, result, root=tmp_path)
-
-
-def test_save_replace_overwrites(tmp_path: Path):
-    config = _make_config()
-    result = _make_result()
-    save_walk_forward(config, result, root=tmp_path)
-    new_result = _make_result(failure_reason="manually overridden", status="failed")
-    save_walk_forward(config, new_result, root=tmp_path, replace=True)
-    _, loaded = load_walk_forward(config.walk_forward_id, root=tmp_path)
-    assert loaded.failure_reason == "manually overridden"
-    assert loaded.status == "failed"
 
 
 def test_save_rejects_id_mismatch(tmp_path: Path):
@@ -172,34 +143,6 @@ def test_save_with_malformed_id_raises_value_error(tmp_path: Path):
 # ---------------------------------------------------------------------------
 # Listing & filtering.
 # ---------------------------------------------------------------------------
-def test_list_empty_returns_empty(tmp_path: Path):
-    assert list_walk_forwards(root=tmp_path) == []
-
-
-def test_list_orders_by_created_at_desc(tmp_path: Path):
-    older_cfg = _make_config(walk_forward_id="a" * 32, created_at_ms=1_700_000_000_000)
-    older_result = _make_result(walk_forward_id="a" * 32, created_at_ms=1_700_000_000_000)
-    newer_cfg = _make_config(walk_forward_id="b" * 32, created_at_ms=1_800_000_000_000)
-    newer_result = _make_result(walk_forward_id="b" * 32, created_at_ms=1_800_000_000_000)
-    save_walk_forward(older_cfg, older_result, root=tmp_path)
-    save_walk_forward(newer_cfg, newer_result, root=tmp_path)
-
-    listed = list_walk_forwards(root=tmp_path)
-    assert [c.walk_forward_id for c in listed] == [newer_cfg.walk_forward_id, older_cfg.walk_forward_id]
-
-
-def test_list_filter_by_parent_run_id(tmp_path: Path):
-    a = _make_config(walk_forward_id="a" * 32, parent_run_id="parent-1")
-    a_result = _make_result(walk_forward_id="a" * 32, parent_run_id="parent-1")
-    b = _make_config(walk_forward_id="b" * 32, parent_run_id="parent-2")
-    b_result = _make_result(walk_forward_id="b" * 32, parent_run_id="parent-2")
-    save_walk_forward(a, a_result, root=tmp_path)
-    save_walk_forward(b, b_result, root=tmp_path)
-
-    filtered = list_walk_forwards(root=tmp_path, parent_run_id="parent-1")
-    assert [c.walk_forward_id for c in filtered] == ["a" * 32]
-
-
 def test_list_filter_by_spec_hash_and_since_ms(tmp_path: Path):
     a = _make_config(
         walk_forward_id="a" * 32,

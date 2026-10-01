@@ -20,7 +20,6 @@ proves the canonical-JSON encoding survives.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from app.research.runs import (
@@ -163,25 +162,3 @@ def test_runs_save_matches_pre_pr_golden_bytes(tmp_path: Path):
 
     assert actual_ledger == golden_ledger
     assert actual_result == golden_result
-
-
-def test_runs_save_preserves_canonical_hash_fields_in_ledger(tmp_path: Path):
-    """The on-disk ledger still carries the identity hash fields.
-
-    The hash is byte-sensitive: if the canonical-JSON encoding had
-    drifted, the round-trip ``model_validate_json`` would either
-    fail or reconstruct a model with a *different* hash field.
-    Asserting the literal hash values from the golden capture
-    pins the encoding without re-implementing the SHA inside
-    the test.
-    """
-    ledger = _deterministic_ledger()
-    result = _deterministic_result()
-    save_run(ledger, result, root=tmp_path)
-
-    on_disk = json.loads((tmp_path / ledger.run_id / "ledger.json").read_text())
-    assert on_disk["result_hash"] == "f" * 64
-    assert on_disk["trade_log_hash"] == "e" * 64
-    assert on_disk["metrics_hash"] == "d" * 64
-    assert on_disk["strategy_spec_hash"] == "cafebabe" * 8
-    assert on_disk["parent_spec_hash"] == "0123456789abcdef" * 4

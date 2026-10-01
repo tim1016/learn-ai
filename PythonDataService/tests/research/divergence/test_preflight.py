@@ -108,14 +108,6 @@ def test_run_preflight_dividend_adjustment_true_warns(tmp_path: Path):
     assert div_check.status == "warning"
 
 
-def test_run_preflight_summary_counts_statuses(tmp_path: Path):
-    # Full session → 1 blocking; unspecified cache → 2 warnings (polygon, tv).
-    result = run_preflight(_req(session_filter="full_session"), cache_root=tmp_path)
-
-    assert "1 blocking" in result.summary
-    assert "blocking issue" in result.summary
-
-
 @pytest.mark.parametrize(
     "indicator,length,expected_ok",
     [

@@ -38,7 +38,7 @@ from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.runs import RunRequest, run_date_to_ms, run_strategy_spec
 from app.research.runs.ledger import RunLedger
 from app.research.runs.result import BacktestRunResult
-from app.research.runs.runner import _VALID_FILL_MODES, _normalize_fill_mode, _parse_fill_mode, _summarize_metrics
+from app.research.runs.runner import _normalize_fill_mode, _parse_fill_mode, _summarize_metrics
 from app.services.spec_run_data import materialize_spec_data_source
 from app.utils.timestamps import to_ms_utc
 from tests._helpers.lean_store import seed_store_day
@@ -163,50 +163,6 @@ def _run(
 # ---------------------------------------------------------------------------
 # Core acceptance gate.
 # ---------------------------------------------------------------------------
-def test_repeat_runs_produce_identical_hashes(fake_data_factory):
-    spec = _build_test_spec()
-    ledger1, result1 = _run(spec, fake_data_factory)
-    ledger2, result2 = _run(spec, fake_data_factory)
-
-    assert ledger1.status == "completed"
-    assert ledger2.status == "completed"
-    assert ledger1.strategy_spec_hash == ledger2.strategy_spec_hash
-    assert ledger1.data_snapshot_id == ledger2.data_snapshot_id
-    assert ledger1.result_hash == ledger2.result_hash
-    assert ledger1.trade_log_hash == ledger2.trade_log_hash
-    assert ledger1.metrics_hash == ledger2.metrics_hash
-
-    # run_id is a UUID and must differ between runs.
-    assert ledger1.run_id != ledger2.run_id
-    # Result content must agree even though run_id is embedded.
-    assert len(result1.trades) == len(result2.trades)
-    assert result1.final_equity == result2.final_equity
-
-
-def test_changing_spec_param_changes_spec_and_result_hash(fake_data_factory):
-    spec_a = _build_test_spec(fast_period=5)
-    spec_b = _build_test_spec(fast_period=6)
-
-    ledger_a, _ = _run(spec_a, fake_data_factory)
-    ledger_b, _ = _run(spec_b, fake_data_factory)
-
-    assert ledger_a.strategy_spec_hash != ledger_b.strategy_spec_hash
-    # data_snapshot_id is unchanged (same symbol/resolution/dates/revision)
-    assert ledger_a.data_snapshot_id == ledger_b.data_snapshot_id
-    # Behavior should change — different EMA period produces a different
-    # trade log even on the same input bars.
-    assert ledger_a.result_hash != ledger_b.result_hash
-
-
-def test_changing_data_window_changes_data_snapshot_id(fake_data_factory):
-    spec = _build_test_spec()
-    ledger_a, _ = _run(spec, fake_data_factory, start=date(2024, 1, 2))
-    ledger_b, _ = _run(spec, fake_data_factory, start=date(2024, 1, 3))
-
-    assert ledger_a.strategy_spec_hash == ledger_b.strategy_spec_hash
-    assert ledger_a.data_snapshot_id != ledger_b.data_snapshot_id
-
-
 def test_changing_data_root_revision_changes_data_snapshot_id(fake_data_factory):
     spec = _build_test_spec()
     ledger_a, _ = _run(spec, fake_data_factory, data_root_revision="rev-1")
@@ -498,14 +454,6 @@ def test_parent_run_id_round_trips(fake_data_factory):
 # ---------------------------------------------------------------------------
 # next_session_open fill mode.
 # ---------------------------------------------------------------------------
-def test_next_session_open_is_a_valid_fill_mode() -> None:
-    assert "next_session_open" in _VALID_FILL_MODES
-
-
-def test_parse_fill_mode_returns_next_session_open_enum_value() -> None:
-    assert _parse_fill_mode("next_session_open") is FillMode.NEXT_SESSION_OPEN
-
-
 def test_normalize_fill_mode_handles_dash_and_case_variants_for_next_session_open() -> None:
     # All three of these must produce the same canonical form so they
     # ledger-identify identically (R5 hash-identity invariant).

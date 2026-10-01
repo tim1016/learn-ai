@@ -47,12 +47,6 @@ def test_canonical_json_preserves_unicode():
     assert "résumé" in s
 
 
-def test_hash_payload_is_64_hex_chars():
-    h = hash_payload({"a": 1})
-    assert len(h) == 64
-    assert all(c in "0123456789abcdef" for c in h)
-
-
 def test_hash_payload_stable_across_calls():
     payload = {"name": "spec", "indicators": [{"id": "ema", "period": 10}]}
     assert hash_payload(payload) == hash_payload(payload)

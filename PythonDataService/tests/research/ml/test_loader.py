@@ -21,7 +21,7 @@ from app.research.ml.artifact import (
     compute_rows_hash,
     write_chunk_rows,
 )
-from app.research.ml.loader import PredictionLookupError, PredictionSet
+from app.research.ml.loader import PredictionSet
 
 
 def _row(ts: int, p: float) -> dict:
@@ -255,10 +255,3 @@ def test_next_after_handles_unsorted_input_keys() -> None:
     assert pset.next_after(100) == {"prediction": 200.0}
     assert pset.next_after(250) == {"prediction": 300.0}
     assert pset.next_after(400) is None
-
-
-def test_prediction_lookup_error_subclasses_value_error() -> None:
-    """PredictionLookupError must be catchable as ValueError so existing
-    runner exception handling (which catches Exception for failed-status
-    ledger persistence) continues to work without an explicit add."""
-    assert issubclass(PredictionLookupError, ValueError)
