@@ -27,7 +27,6 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.broker.alpaca.clerk.account_authority import (
     account_route_matches_custody,
-    live_account_id_for_shadow_account,
 )
 from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
@@ -59,7 +58,6 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     recheck_recovery_action,
 )
 from app.broker.alpaca.clerk.sqlite.repository import (
-    ClerkSqliteRepository,
     ExecutionLeaseLost,
     RepositoryPoisoned,
 )
@@ -68,9 +66,7 @@ from app.broker.alpaca.clerk.sqlite.repository_execution_coverage_api import (
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.scheduled_end import SCHEDULED_END_REASON
-from app.broker.contract.errors import BrokerError, UnknownBrokerError
-from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
-from app.broker.contract.registry import get_broker_registry
+from app.broker.contract.errors import BrokerError
 from app.schemas.alpaca_clerk_sqlite import (
     ClerkProjectionResponse,
     CommandResponse,
@@ -78,7 +74,6 @@ from app.schemas.alpaca_clerk_sqlite import (
     HistoricalExecutionRecoveryPlanResponse,
     HistoricalExecutionRecoveryPrepareRequest,
     HistoricalExecutionRecoveryReceiptResponse,
-    ReconciliationResponse,
     RecoveryActionCheckRequest,
     RecoveryActionCheckResponse,
     RecoveryActionExecuteRequest,
@@ -88,7 +83,6 @@ from app.schemas.alpaca_clerk_sqlite import (
     TimelinePageResponse,
     safe_flatten_pricing_response,
 )
-from app.schemas.paper_live_experiments import ClerkDecisionEvidencePage
 from app.services.broker_v2_panel.bot_custody import bot_action_facade, bot_custody_facade
 from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 from app.services.broker_v2_panel.sqlite_panel_source import read_account_custody
@@ -112,11 +106,6 @@ _HISTORICAL_EXECUTION_RECOVERY_RESPONSES = {
     409: {"description": "The signed plan or exact-evidence proof is no longer safe to apply."},
     503: {"description": "SQLite projection or Alpaca evidence is temporarily unavailable."},
 }
-
-
-async def _repo(account_id: str) -> ClerkSqliteRepository:
-    """Resolve only the boot-selected, activation-verified SQLite authority."""
-    return _active_sqlite_facade(account_id).repository
 
 
 def _active_sqlite_facade(account_id: str) -> SqliteAlpacaClerkFacade:
@@ -275,53 +264,6 @@ def _historical_recovery_refusal(exc: HistoricalExecutionRecoveryRefused) -> HTT
     )
 
 
-@router.get(
-    "/accounts/{account_id}/bots/{strategy_instance_id}/decision-evidence",
-    response_model=ClerkDecisionEvidencePage,
-    summary="Paged, identity-bearing decision evidence for Paper/Live experiments",
-)
-async def decision_evidence(
-    account_id: str, strategy_instance_id: str,
-    after_seq: int = Query(default=0, ge=0),
-    through_seq: int | None = Query(default=None, ge=0),
-    limit: int = Query(default=500, ge=1, le=500),
-) -> ClerkDecisionEvidencePage:
-    async with _bot_facade(account_id, strategy_instance_id) as facade:
-        return await _decision_evidence_page(
-            facade, strategy_instance_id=strategy_instance_id, after_seq=after_seq, through_seq=through_seq, limit=limit,
-        )
-
-
-async def _decision_evidence_page(
-    facade: SqliteAlpacaClerkFacade, *, strategy_instance_id: str, after_seq: int, through_seq: int | None, limit: int,
-) -> ClerkDecisionEvidencePage:
-    try:
-        page = await asyncio.to_thread(
-            facade.repository.decision_receipt_page,
-            strategy_instance_id=strategy_instance_id, after_seq=after_seq,
-            through_seq=through_seq, limit=limit,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail={"reason": "unknown_strategy_instance"}) from exc
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"reason": "decision_evidence_cursor_conflict", "message": str(exc)},
-        ) from exc
-    try:
-        return ClerkDecisionEvidencePage.from_resource(
-            page, account_mode=facade.account_mode, authority_kind=facade.authority_kind,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "reason": "decision_evidence_invalid",
-                "message": "The Clerk's retained decision evidence could not be validated.",
-            },
-        ) from exc
-
-
 @router.post(
     "/accounts/{account_id}/bots/{strategy_instance_id}/runs/stop",
     response_model=CommandResponse,
@@ -385,18 +327,6 @@ async def stop_run(
     except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
         raise _unavailable_response(exc) from exc
     return CommandResponse.from_resource(submission.command)
-
-
-@router.get(
-    "/accounts/{account_id}/commands/{command_id}",
-    response_model=CommandResponse,
-)
-async def get_command(account_id: str, command_id: str) -> CommandResponse:
-    repo = await _repo(account_id)
-    resource = await asyncio.to_thread(repo.get_command, command_id)
-    if resource is None:
-        raise HTTPException(status_code=404, detail={"reason": "command_not_found"})
-    return CommandResponse.from_resource(resource)
 
 
 @router.get(
@@ -518,37 +448,6 @@ async def get_account_timeline(
         cursor=cursor,
         page_size=page_size,
     )
-
-
-@router.get(
-    "/accounts/{account_id}/bots/{strategy_instance_id}/timeline",
-    response_model=TimelinePageResponse,
-)
-async def get_bot_timeline(
-    account_id: str,
-    strategy_instance_id: str,
-    cursor: str | None = Query(default=None, max_length=_MAX_TIMELINE_CURSOR_LENGTH),
-    page_size: int = Query(default=25, ge=1, le=100),
-    order_ref: str | None = Query(default=None, min_length=1, max_length=512),
-    effect_operation_id: str | None = Query(default=None, min_length=1, max_length=512),
-    uncertainty_id: str | None = Query(default=None, min_length=1, max_length=256),
-    execution_id: str | None = Query(default=None, min_length=1, max_length=256),
-    transition_kind: TimelineTransitionKind | None = None,
-    sequence: int | None = Query(default=None, ge=1),
-) -> TimelinePageResponse:
-    async with _bot_facade(account_id, strategy_instance_id) as facade:
-        return await _timeline(
-            facade,
-            strategy_instance_id=strategy_instance_id,
-            order_ref=order_ref,
-            effect_operation_id=effect_operation_id,
-            uncertainty_id=uncertainty_id,
-            execution_id=execution_id,
-            transition_kind=transition_kind,
-            sequence=sequence,
-            cursor=cursor,
-            page_size=page_size,
-        )
 
 
 async def _check_recovery_action(
@@ -865,49 +764,3 @@ async def execute_bot_recovery_action(
             strategy_instance_id=strategy_instance_id,
             body=body,
         )
-
-
-@router.post(
-    "/accounts/{account_id}/reconcile",
-    response_model=ReconciliationResponse,
-)
-async def reconcile_now(account_id: str) -> ReconciliationResponse:
-    """Run the same fail-closed account pass used by the automatic sweep."""
-    facade = _active_sqlite_facade(account_id)
-    try:
-        port = get_broker_registry().resolve("alpaca")
-    except UnknownBrokerError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"reason": "alpaca_broker_unavailable", "message": str(exc)},
-        ) from exc
-    if not isinstance(port, BrokerReadPort) or not isinstance(port, BrokerTradePort):
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "reason": "alpaca_trade_port_unavailable",
-                "message": "The registered Alpaca adapter cannot reconcile order identity.",
-            },
-        )
-    try:
-        broker_account = await port.get_account()
-        if broker_account.account_id != live_account_id_for_shadow_account(facade.account_id):
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "reason": "broker_account_mismatch",
-                    "message": (
-                        f"Requested SQLite authority {account_id!r}, but the configured "
-                        f"Alpaca adapter is bound to {broker_account.account_id!r}."
-                    ),
-                },
-            )
-        result = await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
-    except (ExecutionLeaseLost, RepositoryPoisoned) as exc:
-        raise _unavailable_response(exc) from exc
-    except BrokerError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"reason": "broker_unavailable", "message": str(exc)},
-        ) from exc
-    return ReconciliationResponse.from_result(result)

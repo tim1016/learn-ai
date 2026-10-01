@@ -50,11 +50,7 @@ from app.broker.contract.errors import (
 )
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
-    BrokerActivity,
-    BrokerAsset,
-    BrokerClockEvidence,
     BrokerOrder,
-    BrokerOrderGroup,
     BrokerPortfolioHistory,
     BrokerPosition,
     PortfolioHistoryRange,
@@ -62,19 +58,13 @@ from app.broker.contract.models import (
 from app.broker.contract.ports import BrokerReadPort
 from app.broker.contract.registry import get_broker_registry
 from app.config import settings
-from app.lean_sidecar.trading_calendar import (
-    current_trading_session_window,
-    is_trading_day,
-    session_open_ms_utc,
-)
 from app.schemas.account_activity import ActivityPeriodRead, TodayStatement
 from app.schemas.account_pnl_attribution import (
     AccountPnlAttributionResponse,
     AccountPnlReconciliationResponse,
     PortfolioHistoryProofResponse,
 )
-from app.schemas.alpaca_fee_reconciliation import DeploymentFeeAttribution, SessionFeeReconciliation
-from app.schemas.alpaca_live_envelope import LossHoldClearOutcome
+from app.schemas.alpaca_fee_reconciliation import DeploymentFeeAttribution
 from app.schemas.alpaca_live_verdict import AlpacaLiveVerdict
 from app.schemas.broker_v2_panel import LaneAttentionRead
 from app.schemas.clerk_custody import CustodyDiagnosis
@@ -104,15 +94,13 @@ from app.security.data_plane_control import (
 )
 from app.services.account_activity import activity_period_read, today_statement
 from app.services.account_pnl_reconciliation import reconcile_broker_curve_to_local_pnl
-from app.services.alpaca_fee_reconciliation import deployment_fee_attribution, session_fee_reconciliation
-from app.services.alpaca_live_envelope import LiveEnvelopeNotInstalled, clear_loss_hold
+from app.services.alpaca_fee_reconciliation import deployment_fee_attribution
 from app.services.alpaca_live_verdict import (
     alpaca_live_verdict,
     observe_loss_hold,
 )
 from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_account_snapshot import resolve_broker_account_snapshot
-from app.services.broker_order_groups import group_orders_by_symbol
 from app.services.broker_v2_panel.lane_summary import lane_attention_read
 from app.services.clerk_transaction_projection import ClerkTransactionProjectionUnavailable
 from app.services.go_live_hold import GoLiveHoldUnreadableError, GoLiveReleaseFailedError
@@ -137,15 +125,12 @@ from app.services.sqlite_clerk_compat import (
     sqlite_custody_diagnosis,
     sqlite_projection,
 )
-from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
 router = APIRouter(prefix="/api/brokers", tags=["brokers-v2"])
 logger = logging.getLogger(__name__)
-
-_DEFAULT_READ_LIMIT = 100
 _MAX_READ_LIMIT = 500
-_MAX_ACTIVITY_LIMIT = 100
 
 
 def _raise_http(error: BrokerError) -> NoReturn:
@@ -182,19 +167,6 @@ def _sqlite_projection_unavailable() -> HTTPException:
             "message": "The Account Clerk order record could not be read safely.",
             "next_step": ("Keep broker actions blocked and retry after the Clerk projection is repaired."),
         },
-    )
-
-
-def _live_envelope_not_installed(message: str) -> HTTPException:
-    """The one 503 for "this authority carries no live envelope" (ADR 0059 D4).
-
-    Two seams reach it -- no active runtime at all, and a runtime whose
-    authority composed no envelope -- and an operator reads the same
-    condition either way, so they answer with one body.
-    """
-    return HTTPException(
-        status_code=503,
-        detail={"reason": "live_envelope_not_installed", "message": message},
     )
 
 
@@ -323,44 +295,6 @@ async def list_orders(
     )
 
 
-@router.get("/{broker}/order-groups", response_model=list[BrokerOrderGroup])
-async def list_order_groups(
-    broker: str,
-    status: Literal["open", "closed", "all"] | None = None,
-    limit: int | None = Query(default=None, ge=1, le=_MAX_READ_LIMIT),
-    after_ms: int | None = Query(default=None, ge=0, le=MAX_TIMESTAMP_MS),
-) -> list[BrokerOrderGroup]:
-    """Return recent orders grouped by symbol with Python-owned quantity totals."""
-    orders = await _run(
-        broker,
-        lambda port: port.list_orders(status=status, limit=limit, after_ms=after_ms),
-    )
-    return group_orders_by_symbol(orders)
-
-
-@router.get("/{broker}/activities", response_model=list[BrokerActivity])
-async def list_activities(
-    broker: str,
-    limit: int = Query(default=_DEFAULT_READ_LIMIT, ge=1, le=_MAX_ACTIVITY_LIMIT),
-    after_ms: int | None = Query(default=None, ge=0, le=MAX_TIMESTAMP_MS),
-    current_session: bool = Query(default=False),
-) -> list[BrokerActivity]:
-    if current_session and after_ms is not None:
-        raise HTTPException(
-            status_code=422,
-            detail="current_session and after_ms are mutually exclusive",
-        )
-    if current_session:
-        session = current_trading_session_window(now_ms_utc())
-        if session is None:
-            return []
-        after_ms = session.open_ms_utc
-    return await _run(
-        broker,
-        lambda port: port.list_activities(after_ms=after_ms, limit=limit),
-    )
-
-
 @router.get("/{broker}/activities/period", response_model=ActivityPeriodRead)
 async def get_activity_period(
     broker: str,
@@ -404,53 +338,6 @@ async def get_deployment_fee_attribution(
             detail="A fee period applies to the account's fees, not to one bot's.",
         )
     return await _run(broker, lambda _port: deployment_fee_attribution(strategy_instance_id, period=period))
-
-
-@router.get(
-    "/{broker}/fees/session-reconciliation",
-    response_model=SessionFeeReconciliation,
-)
-async def get_session_fee_reconciliation(
-    broker: str,
-    session_open_ms: int = Query(ge=0, le=MAX_TIMESTAMP_MS),
-) -> SessionFeeReconciliation:
-    """Predicted-vs-observed regulatory fees for one trade date (ADR 0059 D6)."""
-    # The fee model, its rate table and the SQLite fill window are all Alpaca's;
-    # nothing here generalizes to another broker on the shared ``{broker}`` path.
-    if broker != "alpaca":
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "reason": "fee_reconciliation_unsupported_broker",
-                "message": f"No fee reconciliation for broker '{broker}'.",
-            },
-        )
-    trade_date = et_date_at_ms(session_open_ms)
-    if not is_trading_day(trade_date) or session_open_ms_utc(trade_date) != session_open_ms:
-        raise HTTPException(
-            status_code=422,
-            detail="session_open_ms must be the calendar's session open (ET) of a trading day",
-        )
-    return await _run(
-        broker,
-        lambda port: session_fee_reconciliation(broker=broker, port=port, session_open_ms=session_open_ms),
-    )
-
-
-@router.get("/{broker}/assets", response_model=list[BrokerAsset])
-async def list_assets(
-    broker: str,
-    status: Literal["active", "inactive"] | None = None,
-    limit: int = Query(default=_DEFAULT_READ_LIMIT, ge=1, le=_MAX_READ_LIMIT),
-) -> list[BrokerAsset]:
-    return await _run(broker, lambda port: port.list_assets(status=status, limit=limit))
-
-
-@router.get("/{broker}/clock", response_model=BrokerClockEvidence)
-async def get_clock_evidence(broker: str) -> BrokerClockEvidence:
-    # Vendor evidence only — the canonical calendar module remains the sole
-    # authority for scheduled session structure (no authority change).
-    return await _run(broker, lambda port: port.get_clock_evidence())
 
 
 @router.get(
@@ -975,32 +862,6 @@ async def get_live_verdict(broker: str) -> AlpacaLiveVerdict:
         now_ms=observed_at_ms,
         loss_hold=observe_loss_hold(runtime),
     )
-
-
-@router.post(
-    "/{broker}/live-envelope/loss-hold/clear",
-    response_model=LossHoldClearOutcome,
-    dependencies=[Depends(require_data_plane_control_secret)],
-)
-async def clear_live_loss_hold(broker: str) -> LossHoldClearOutcome:
-    """The guarded loss-hold clear (ADR 0059 D4; ADR 0011 §6 shape): re-observes, refuses while the breach stands."""
-    # This docstring is the route's published OpenAPI description; the two
-    # 503 seams below share one body via ``_live_envelope_not_installed``.
-    if broker != "alpaca":
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "reason": "live_envelope_unsupported_broker",
-                "message": f"No live envelope for broker '{broker}'.",
-            },
-        )
-    runtime = get_active_clerk_runtime()
-    if runtime is None:
-        raise _live_envelope_not_installed("No Alpaca Clerk authority is installed.")
-    try:
-        return await clear_loss_hold(runtime, now_ms=now_ms_utc())
-    except LiveEnvelopeNotInstalled as exc:
-        raise _live_envelope_not_installed(str(exc)) from exc
 
 
 @router.get("/{broker}/clerk/custody-diagnosis", response_model=CustodyDiagnosis)

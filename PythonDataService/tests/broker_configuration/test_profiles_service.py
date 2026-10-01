@@ -46,15 +46,6 @@ def test_the_owner_is_generated_once_and_seeded_from_the_operator_identity(
     assert first.owner_id.startswith("owner_")
 
 
-def test_renaming_the_owner_keeps_the_owner_id(service: BrokerConfigurationService) -> None:
-    before = service.owner()
-
-    renamed = service.rename_owner(display_label="Desk operator")
-
-    assert renamed.owner_id == before.owner_id
-    assert service.owner().display_label == "Desk operator"
-
-
 def test_nickname_for_returns_the_set_nickname(service: BrokerConfigurationService) -> None:
     """#2182: the single-key read the fleet lane's per-beat path calls
     (``fleet_boot.py``'s ``_live_account_nickname``) agrees with
@@ -431,36 +422,6 @@ def test_an_unknown_profile_or_revision_is_not_found(service: BrokerConfiguratio
     created = paper_profile(service)
     with pytest.raises(RevisionNotFound):
         service.read_revision(created.profile.profile_id, 7)
-
-
-def test_the_event_log_records_every_change_newest_first(
-    service: BrokerConfigurationService,
-) -> None:
-    created = paper_profile(service)
-    service.rename_owner(display_label="Desk operator")
-    service.update_profile(created.profile.profile_id, display_name="Paper — renamed")
-
-    events = service.events(limit=10)
-
-    assert [event.action for event in events] == [
-        "profile_renamed",
-        "owner_renamed",
-        "profile_created",
-    ]
-    assert all(event.actor_owner_id == service.owner().owner_id for event in events)
-
-
-def test_the_event_log_pages_backwards(service: BrokerConfigurationService) -> None:
-    created = paper_profile(service)
-    service.update_profile(created.profile.profile_id, display_name="Second")
-    service.update_profile(created.profile.profile_id, display_name="Third")
-
-    newest = service.events(limit=1)
-    older = service.events(limit=10, before_event_id=newest[0].event_id)
-
-    assert len(newest) == 1
-    assert len(older) == 2
-    assert newest[0].event_id not in {event.event_id for event in older}
 
 
 @pytest.mark.parametrize("loss_usd", [12.34, 12.34 + 1e-15])

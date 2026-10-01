@@ -22,8 +22,6 @@ from app.broker.contract.errors import BrokerError
 from app.broker.contract.registry import get_broker_registry
 from app.routers.brokers import _raise_http
 from app.schemas.broker_bots import (
-    BotRunReadNotFoundResponse,
-    BotRunReadRunnerErrorResponse,
     BotRunView,
     BotStatusView,
 )
@@ -139,30 +137,6 @@ async def get_bot_status(broker: str, strategy_instance_id: str) -> BotStatusVie
     registry = _require_registry()
     try:
         return registry.status(broker, strategy_instance_id)
-    except BotRunnerError as error:
-        _raise_runner_error(error)
-
-
-@router.get(
-    "/{broker}/bots/{strategy_instance_id}/runs/current",
-    response_model=BotRunView,
-    summary="Read the current run without inferring process or terminal state",
-    responses={
-        404: {
-            "model": BotRunReadNotFoundResponse,
-            "description": "The broker or strategy-instance run is unknown.",
-        },
-        422: {
-            "model": BotRunReadRunnerErrorResponse,
-            "description": "The strategy-instance identifier is invalid.",
-        },
-    },
-)
-async def get_current_run(broker: str, strategy_instance_id: str) -> BotRunView:
-    _resolve_broker(broker)
-    registry = _require_registry()
-    try:
-        return registry.current_run(broker, strategy_instance_id)
     except BotRunnerError as error:
         _raise_runner_error(error)
 

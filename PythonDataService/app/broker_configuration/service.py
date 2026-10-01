@@ -254,21 +254,6 @@ class BrokerConfigurationService:
         """
         return self._store.read_owner()
 
-    def rename_owner(self, *, display_label: str) -> LocalOwner:
-        owner = self.owner()
-        now = self._clock()
-        with self._store.transaction() as conn:
-            self._store.update_owner_label(conn, display_label=display_label, updated_at_ms=now)
-            self._record_event(
-                conn,
-                actor=owner.owner_id,
-                action="owner_renamed",
-                previous_ref=owner.display_label,
-                next_ref=display_label,
-                recorded_at_ms=now,
-            )
-        return replace(owner, display_label=display_label, updated_at_ms=now)
-
     # ---- credential slots ----------------------------------------------
 
     def credential_slots(self) -> tuple[CredentialSlotStatus, ...]:

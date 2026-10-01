@@ -93,10 +93,6 @@ def _build_agent_app(
     async def account() -> JSONResponse:
         return JSONResponse({"account_id": ACCOUNT, "status": "ACTIVE"})
 
-    @agent.get("/api/brokers/alpaca/activities")
-    async def activities() -> JSONResponse:
-        return JSONResponse([{"activity_type": "FILL"}])
-
     @agent.get("/api/brokers/alpaca/portfolio-history")
     async def portfolio_history() -> JSONResponse:
         return JSONResponse({"timestamps": [], "equity": []})
@@ -122,10 +118,6 @@ def _build_agent_app(
     @agent.get("/api/brokers/alpaca/accounts/{account_id}/bot-history")
     async def bot_history(account_id: str) -> JSONResponse:
         return JSONResponse({"account_id": account_id, "bots": [], "gaps": []})
-
-    @agent.get("/api/alpaca-clerk-sqlite/accounts/{account_id}/bots/{sid}/decision-evidence")
-    async def decision_evidence(account_id: str, sid: str, request: Request) -> JSONResponse:
-        return JSONResponse({"account_id": account_id, "sid": sid, "query": dict(request.query_params)})
 
     @agent.get("/api/brokers/alpaca/configuration/selection")
     async def selection() -> JSONResponse:
@@ -433,7 +425,6 @@ async def test_b2_desk_reads_and_account_bound_run_evidence_route_through_the_la
     """The C desk's full operational read set stays inside one lane route."""
     async with fleet.client() as client:
         for path in (
-            "/activities?current_session=true",
             "/portfolio-history?range=1D",
             "/portfolio-history-proof?range=1D",
             "/clerk/status",
@@ -460,18 +451,6 @@ async def test_a_wrong_target_account_refuses_without_dispatch(fleet: _Fleet) ->
         )
         assert wrong.status_code == 409
         assert wrong.json()["reason"] == "clerk_account_mismatch"
-
-
-async def test_decision_evidence_routes_with_identity_and_sequence_bounds(fleet: _Fleet) -> None:
-    async with fleet.client() as client:
-        response = await client.get(
-            f"{fleet.base}/accounts/{ACCOUNT}/bots/sid-9/decision-evidence?after_seq=2&through_seq=9&limit=3"
-        )
-    assert response.status_code == 200
-    assert response.headers["x-fleet-clerk-id"] == fleet.lane.clerk_id
-    assert response.headers["x-fleet-binding-generation"] == "3"
-    assert response.json() == {"account_id": ACCOUNT, "sid": "sid-9",
-                               "query": {"after_seq": "2", "through_seq": "9", "limit": "3"}}
 
 
 async def test_an_unsupported_broker_or_lane_refuses(fleet: _Fleet) -> None:
@@ -932,62 +911,6 @@ async def test_a_spoofed_clerk_id_pin_does_not_bypass_the_mutation_fence() -> No
         server.stop()
 
 
-async def test_a_clerk_agent_still_answers_the_stranded_operator_mutations_unpinned() -> None:
-    """P1-A (Codex review, PR #2115): the fence must not sever operator recovery.
-
-    #2069/#2114 retain ``POST .../live-envelope/loss-hold/clear`` and
-    ``POST .../runs/{run_id}/replay-receipt`` with no coordinator successor
-    — an operator's only way to clear a live loss hold or regenerate a
-    missing receipt is to call the clerk agent directly, unpinned. The
-    mutation fence must exempt exactly these two, not sever them.
-    """
-    from app.config import settings
-    from app.security.data_plane_control import require_data_plane_control_secret
-
-    agent = _build_agent_app(
-        {"broker": "alpaca", "clerk_id": CLERK_ID,
-         "routing_epoch": EPOCH, "binding_generation": 3},
-        refuse_unpinned_mutations=True,
-    )
-
-    @agent.post(
-        "/api/brokers/{broker}/live-envelope/loss-hold/clear",
-        dependencies=[Depends(require_data_plane_control_secret)],
-    )
-    async def _loss_hold_clear(broker: str) -> PlainTextResponse:
-        return PlainTextResponse("ok")
-
-    @agent.post(
-        "/api/brokers/{broker}/bots/{strategy_instance_id}/runs/{run_id}/replay-receipt",
-        dependencies=[Depends(require_data_plane_control_secret)],
-    )
-    async def _replay_receipt(
-        broker: str, strategy_instance_id: str, run_id: str
-    ) -> PlainTextResponse:
-        return PlainTextResponse("ok")
-
-    server = _RealServer(agent)
-    server.start()
-    original_secret = settings.DATA_PLANE_CONTROL_SECRET
-    settings.DATA_PLANE_CONTROL_SECRET = "test-plane-secret"
-    try:
-        async with httpx.AsyncClient(base_url=server.base_url, timeout=5.0) as client:
-            loss_hold = await client.post(
-                "/api/brokers/alpaca/live-envelope/loss-hold/clear",
-                headers={"X-Data-Plane-Control-Secret": "test-plane-secret"},
-            )
-            assert loss_hold.status_code == 200
-
-            replay_receipt = await client.post(
-                "/api/brokers/alpaca/bots/sid-1/runs/run-1/replay-receipt",
-                headers={"X-Data-Plane-Control-Secret": "test-plane-secret"},
-            )
-            assert replay_receipt.status_code == 200
-    finally:
-        settings.DATA_PLANE_CONTROL_SECRET = original_secret
-        server.stop()
-
-
 def test_combined_role_still_serves_an_unpinned_mutation_at_200() -> None:
     """`combined` IS the browser's data plane; #2075's fence must not reach it.
 
@@ -1223,7 +1146,7 @@ def test_a_broker_without_the_operation_refuses_the_capability(
     from tests.broker.fleet.conftest import fake_alpha
 
     alpaca_ops = production_provider_adapters()["alpaca"].operations()
-    custody = next(op for op in alpaca_ops if op.operation_id == "custody_reconcile")
+    custody = next(op for op in alpaca_ops if op.operation_id == "custody_recovery_check")
     service = FleetControlService(
         store=FleetRegistryStore.open(control_dir=tmp_path / "capability-check"),
         provider_adapters={"fake_alpha": fake_alpha()},

@@ -20,7 +20,6 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Literal, NoReturn
 
-from app.broker.alpaca.clerk import get_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import (
     account_route_matches_custody,
     evidence_account_id_for,
@@ -43,7 +42,6 @@ from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.ibkr.config import live_artifacts_root
 from app.engine.live.identity import INSTANCE_ID_PATTERN
 from app.schemas.broker_bots import (
-    BotControlAuthorityFacts,
     BotStatusView,
 )
 from app.schemas.broker_v2_panel import (
@@ -99,7 +97,6 @@ from app.services.broker_v2_panel.panel_projection_service import (
     program_build_view_from_run_evidence,
 )
 from app.services.broker_v2_panel.panel_scope import (
-    bot_process_fact,
     clerk_status,
     validate_account,
 )
@@ -283,29 +280,6 @@ def _run_source_evidence_for(binding: BrokerBotBinding) -> RunSourceEvidence | N
             },
         )
         return None
-
-
-async def get_authority_facts(
-    broker: str,
-    account_id: str,
-    sid: str,
-) -> BotControlAuthorityFacts:
-    """Compose owner-authored facts without deriving a control decision."""
-    resolved_account_id = await validate_account(broker, account_id)
-    process = bot_process_fact(broker, sid)
-    clerk = get_alpaca_clerk()
-    if clerk is None:
-        raise PanelUnavailableError(
-            "Alpaca order management is not configured.",
-            detail="The Clerk cannot author current custody facts.",
-        )
-    custody = await clerk.custody_snapshot(sid)
-    if custody.account_id != custody_account_id_for_route(broker, resolved_account_id):
-        raise PanelUnavailableError(
-            "The Clerk custody account does not match the panel account.",
-            detail="Recover the account-scoped Clerk before using control actions.",
-        )
-    return BotControlAuthorityFacts(process=process, clerk=custody)
 
 
 async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
@@ -579,26 +553,6 @@ async def get_panel(
         transaction_ref=transaction_ref,
     )
     return panel
-
-
-async def get_live_chart(
-    broker: str,
-    account_id: str,
-    sid: str,
-    *,
-    resolution: Literal["5s", "1m"] = "1m",
-) -> ChartLiveResponse:
-    """Build the LIVE chart pane for one bot (§8)."""
-    from app.services.broker_v2_panel.panel_chart_data_source import (
-        get_live_chart as build_live_chart_response,
-    )
-
-    return await build_live_chart_response(
-        broker,
-        account_id,
-        sid,
-        resolution=resolution,
-    )
 
 
 async def get_live_snapshot_parts(

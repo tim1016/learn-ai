@@ -18,9 +18,6 @@ TransactionFeedState = Literal[
 TransactionOrigin = Literal[
     "manual", "strategy", "external", "unknown", "recovery", "emergency", "shutdown", "force_flat", "other"
 ]
-TRANSACTION_FEED_STATES = frozenset({
-    "live", "reconnecting", "rebuilding", "stale", "offline_but_saved", "corrupt", "projection_unavailable"
-})
 
 
 class ExternalOrderAcknowledgementRequest(BaseModel):

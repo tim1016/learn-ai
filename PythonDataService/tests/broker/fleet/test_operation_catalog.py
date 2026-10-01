@@ -118,7 +118,7 @@ def test_the_fake_providers_declare_valid_catalogs() -> None:
             assert operation.agent_path_template.startswith("/api/")
 
 
-def test_alpaca_declares_the_seven_desk_reads_at_their_pinned_routes() -> None:
+def test_alpaca_declares_the_six_desk_reads_at_their_pinned_routes() -> None:
     """C's desk has no operational fallback to a broker-global route."""
     from app.broker.alpaca.clerk.fleet_adapter import AlpacaProviderAdapter
 
@@ -127,7 +127,6 @@ def test_alpaca_declares_the_seven_desk_reads_at_their_pinned_routes() -> None:
         for operation in AlpacaProviderAdapter().operations()
     }
     expected = {
-        "activities_read": ("GET", "/activities"),
         "portfolio_history_read": ("GET", "/portfolio-history"),
         "portfolio_history_proof_read": ("GET", "/portfolio-history-proof"),
         "clerk_status_read": ("GET", "/clerk/status"),

@@ -386,7 +386,7 @@ async def test_stream_queue_wait_releases_request_capacity_for_ordinary_reads(
 
 def test_compatibility_inventory_is_fixed_and_excludes_canonical_internal_and_mutations() -> None:
     """Only retained, unpinned read families may enter the D measurement."""
-    assert compatibility_route_family("GET", "/api/brokers/alpaca/assets") == "brokers_lane_extras"
+    assert compatibility_route_family("GET", "/api/brokers/alpaca/clerk/status") == "brokers_lane_extras"
     assert compatibility_route_family(
         "HEAD", "/api/brokers/alpaca/configuration/selection"
     ) == "broker_configuration"
@@ -478,16 +478,16 @@ async def test_compatibility_evidence_separates_failed_probes_from_successful_re
     async def app(scope: dict[str, Any], receive: Receive, send: Send) -> None:
         headers = {name: value for name, value in scope["headers"]}
         status = 404 if scope["path"].endswith("/missing") else 200
-        if scope["path"].endswith("/assets") and b"x-test-auth" not in headers:
+        if scope["path"].endswith("/clerk/status") and b"x-test-auth" not in headers:
             status = 403
         await send({"type": "http.response.start", "status": status, "headers": []})
         await send({"type": "http.response.body", "body": b"result", "more_body": False})
 
     runtime = FleetLaneRuntimeMiddleware(app, config=_config(), evidence=evidence)
-    await _invoke(runtime, path="/api/brokers/alpaca/assets")
+    await _invoke(runtime, path="/api/brokers/alpaca/clerk/status")
     await _invoke(
         runtime,
-        path="/api/brokers/alpaca/assets",
+        path="/api/brokers/alpaca/clerk/status",
         headers=[(b"x-test-auth", b"accepted")],
     )
     await _invoke(runtime, path="/api/brokers/alpaca/activities/missing")
