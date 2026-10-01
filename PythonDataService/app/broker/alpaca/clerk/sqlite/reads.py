@@ -110,6 +110,35 @@ _EXTERNAL_ORDER_SELECT = (
 )
 
 
+def _manual_chain_order_ref_sql(broker_order_id: str) -> str:
+    """The manual legs whose Alpaca replacement chain holds the broker order ``broker_order_id`` names.
+
+    ``broker_order_id`` is an SQL expression: a parameter, or a column of the
+    enclosing query. The one statement of chain membership (#2656) that
+    :func:`manual_chain_order_ref` and :data:`OUTSIDE_ORDER_SQL` both read.
+    """
+    return (
+        "SELECT o.order_ref FROM orders o "
+        "JOIN manual_order_legs l ON l.order_ref = o.order_ref "
+        f"WHERE o.broker_order_id = {broker_order_id} "
+        "UNION "
+        "SELECT t.order_ref FROM custody_transitions t "
+        "WHERE t.order_ref IN (SELECT order_ref FROM manual_order_legs WHERE order_ref IS NOT NULL) "
+        "AND t.transition_kind = 'MANUAL_ORDER_REPLACED' "
+        f"AND (t.broker_order_id = {broker_order_id} OR json_extract(t.facts_json, '$.replaces') = {broker_order_id})"
+    )
+
+
+#: Whether an ``external_orders`` row (aliased ``eo``) is still an outside
+#: order. Alpaca gives a replacement a client id of its own, so the Clerk can
+#: take a replacement for a foreign order before it knows the manual leg's
+#: chain holds it (#2656). From the moment the chain holds it, the order is
+#: the leg's own and its executions are the leg's (#2787): its row stays as
+#: the record of what was observed, but no money read counts it outside the
+#: Clerk again, so its fill is counted once.
+OUTSIDE_ORDER_SQL = f"NOT EXISTS ({_manual_chain_order_ref_sql('eo.broker_order_id')})"
+
+
 def _row_to_command_resource(row: sqlite3.Row) -> CommandResource:
     return CommandResource(**{column: row[column] for column in _COMMAND_COLUMNS})
 
@@ -319,8 +348,16 @@ def external_order_by_broker_order_id(
 
 
 def external_orders(conn: sqlite3.Connection) -> list[ExternalOrderResource]:
+    """Every outside order custody tracks: each ``external_orders`` row a manual chain does not hold (#2787).
+
+    The lookups by identity (:func:`external_order`,
+    :func:`external_order_by_broker_order_id`) still answer for every row:
+    the folds, an acknowledgement and the account's history read the record
+    of what was observed.
+    """
     rows = conn.execute(
         f"SELECT {_EXTERNAL_ORDER_SELECT} FROM external_orders eo "
+        f"WHERE {OUTSIDE_ORDER_SQL} "
         "ORDER BY eo.observed_at_ms DESC, eo.external_order_id DESC"
     ).fetchall()
     return [_external_order_resource(row) for row in rows]
@@ -684,18 +721,7 @@ def manual_chain_order_ref(conn: sqlite3.Connection, broker_order_id: str) -> st
     ``ux_orders_broker_order_id`` and the link probe through the transitions'
     ``order_ref`` index, scoped to the manual legs.
     """
-    row = conn.execute(
-        "SELECT o.order_ref FROM orders o "
-        "JOIN manual_order_legs l ON l.order_ref = o.order_ref "
-        "WHERE o.broker_order_id = ?1 "
-        "UNION "
-        "SELECT t.order_ref FROM custody_transitions t "
-        "WHERE t.order_ref IN (SELECT order_ref FROM manual_order_legs WHERE order_ref IS NOT NULL) "
-        "AND t.transition_kind = 'MANUAL_ORDER_REPLACED' "
-        "AND (t.broker_order_id = ?1 OR json_extract(t.facts_json, '$.replaces') = ?1) "
-        "LIMIT 1",
-        (broker_order_id,),
-    ).fetchone()
+    row = conn.execute(f"{_manual_chain_order_ref_sql('?1')} LIMIT 1", (broker_order_id,)).fetchone()
     return row["order_ref"] if row is not None else None
 
 
