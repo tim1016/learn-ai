@@ -6,8 +6,8 @@
  * returns, never a number shown.
  */
 
-import { knobsByName, percentText, pointEntries, ratioText, signedPercentText } from './golden-search-display';
-import type { CandidateKey, EvidenceCandidate, Finding, Metrics, PairMap, PairMapCell, Point, PointValue, StrategyCapability } from './golden-search.types';
+import { knobsByName, metricTexts, pointEntries, signedPercentText, type MetricTexts } from './golden-search-display';
+import type { CandidateKey, CapabilityKnob, EvidenceCandidate, Finding, Metrics, PairMap, PairMapCell, Point, PointValue, StrategyCapability } from './golden-search.types';
 
 /** Candidates read the searches first and the frozen incumbent last. */
 const CANDIDATE_ORDER: readonly CandidateKey[] = ['all_period', 'recent', 'incumbent'];
@@ -23,7 +23,7 @@ export const CANDIDATE_ORIGINS: Readonly<Record<CandidateKey, string>> = {
 const DRAWDOWN_FLAGS: ReadonlySet<string> = new Set(['DRAWDOWN_ABOVE_CEILING', 'DRAWDOWN_UNDEFINED']);
 const TRADE_FLAGS: ReadonlySet<string> = new Set(['TOO_FEW_TRADES', 'NO_TRADES']);
 
-export interface CandidateRow {
+export interface CandidateRow extends MetricTexts {
   readonly key: CandidateKey;
   readonly candidate: EvidenceCandidate;
   readonly origin: string;
@@ -31,27 +31,9 @@ export interface CandidateRow {
   readonly members: readonly CandidateKey[];
   /** The labels of other candidates that are exactly these settings, folded into this row. */
   readonly sameAs: readonly string[];
-  readonly netReturn: string;
-  readonly worstFall: string;
-  readonly trades: string;
-  readonly sharpe: string;
   readonly drawdownFlags: readonly Finding[];
   readonly tradeFlags: readonly Finding[];
   readonly otherFlags: readonly Finding[];
-  /** The development run failed: its error, shown instead of numbers. */
-  readonly failure: string | null;
-}
-
-function metricTexts(metrics: Metrics | null): Pick<CandidateRow, 'netReturn' | 'worstFall' | 'trades' | 'sharpe' | 'failure'> {
-  if (metrics === null) return { netReturn: '—', worstFall: '—', trades: '—', sharpe: '—', failure: null };
-  if (metrics.status === 'failed') return { netReturn: '—', worstFall: '—', trades: '—', sharpe: '—', failure: metrics.error ?? 'The development run failed.' };
-  return {
-    netReturn: signedPercentText(metrics.total_return_pct),
-    worstFall: percentText(metrics.max_drawdown_pct),
-    trades: String(metrics.total_trades),
-    sharpe: ratioText(metrics.sharpe_ratio),
-    failure: null,
-  };
 }
 
 /**
@@ -131,18 +113,26 @@ export interface PairCellView {
   readonly reason: string | null;
 }
 
-export interface PairMapView {
+/** A pair map by name: the pair, and its knobs' declared labels. */
+interface PairNames {
   readonly id: string;
   readonly title: string;
   readonly xLabel: string;
   readonly yLabel: string;
+}
+
+export interface PairMapView extends PairNames {
   readonly unitNote: string;
   readonly xValues: readonly number[];
   readonly yValues: readonly number[];
   readonly rows: readonly (readonly PairCellView[])[];
+  readonly heldFixed: string;
+}
+
+/** A pair audit's name and how many of its grid positions were valid (tested or not) or ruled out. */
+export interface PairAudit extends PairNames {
   readonly valid: number;
   readonly invalid: number;
-  readonly heldFixed: string;
 }
 
 const STATUS_MARKS: Readonly<Record<Exclude<PairCellKind, 'tested'>, string>> = {
@@ -178,6 +168,18 @@ function fillFor(value: number | null, bestGain: number): { fill: string | null;
   return { fill: `color-mix(in srgb, var(--bull) ${Math.round(14 + 34 * share)}%, var(--bg-surface))`, loss: false };
 }
 
+function pairNames(map: PairMap, knobs: ReadonlyMap<string, CapabilityKnob>): PairNames {
+  const xLabel = knobs.get(map.x_knob)?.label ?? map.x_knob;
+  const yLabel = knobs.get(map.y_knob)?.label ?? map.y_knob;
+  return { id: `${map.y_knob}-${map.x_knob}`, title: `${yLabel} × ${xLabel}`, xLabel, yLabel };
+}
+
+/** A pair audit's counts from the server's cells: every grid position not ruled out is valid, tested or not. */
+export function pairAudit(map: PairMap, capability: StrategyCapability | null): PairAudit {
+  const invalid = map.cells.filter((cell) => cell.status === 'invalid' || cell.status === 'outside_domain').length;
+  return { ...pairNames(map, knobsByName(capability)), valid: map.x_values.length * map.y_values.length - invalid, invalid };
+}
+
 /**
  * The parameter map as the screen lays it out: rows are `y_knob`'s values
  * (top to bottom), columns `x_knob`'s, every cell named for a screen reader.
@@ -187,22 +189,18 @@ export function pairMapView(map: PairMap, capability: StrategyCapability | null,
   const knobs = knobsByName(capability);
   const xKnob = knobs.get(map.x_knob);
   const yKnob = knobs.get(map.y_knob);
-  const xLabel = xKnob?.label ?? map.x_knob;
-  const yLabel = yKnob?.label ?? map.y_knob;
+  const names = pairNames(map, knobs);
+  const { xLabel, yLabel } = names;
   const lookup = new Map(map.cells.map((cell) => [`${cell.y}|${cell.x}`, cell]));
   const valueAt = (name: string): number | null => (center === null ? null : (numberOf(center[name]) ?? knobs.get(name)?.default_value ?? null));
   const centerX = valueAt(map.x_knob);
   const centerY = valueAt(map.y_knob);
   const gains = map.cells.flatMap((cell) => (cellKind(cell) === 'tested' && (cell.metrics?.total_return_pct ?? 0) > 0 ? [cell.metrics?.total_return_pct ?? 0] : []));
   const bestGain = gains.length === 0 ? 0 : Math.max(...gains);
-  let valid = 0;
-  let invalid = 0;
   const rows = map.y_values.map((y, row) =>
     map.x_values.map((x, column): PairCellView => {
       const cell = lookup.get(`${y}|${x}`);
       const kind = cellKind(cell);
-      if (kind === 'invalid' || kind === 'outside_domain') invalid += 1;
-      else valid += 1;
       const where = `${yLabel} ${y}, ${xLabel} ${x}`;
       const reason = cell?.reason ?? null;
       const metrics = cell?.metrics ?? null;
@@ -226,16 +224,11 @@ export function pairMapView(map: PairMap, capability: StrategyCapability | null,
   const held = center === null ? [] : pointEntries(center, capability).filter((entry) => entry.name !== map.x_knob && entry.name !== map.y_knob);
   const unitNote = xKnob && yKnob && xKnob.unit === yKnob.unit ? `Both in ${xKnob.unit}` : `${yKnob?.unit ?? ''} ↓ · ${xKnob?.unit ?? ''} →`;
   return {
-    id: `${map.y_knob}-${map.x_knob}`,
-    title: `${yLabel} × ${xLabel}`,
-    xLabel,
-    yLabel,
+    ...names,
     unitNote,
     xValues: map.x_values,
     yValues: map.y_values,
     rows,
-    valid,
-    invalid,
     heldFixed: held.map((entry) => `${entry.label} ${entry.value ?? '—'}`).join(' · '),
   };
 }
@@ -251,7 +244,8 @@ export function cellDetail(view: PairMapView, cell: PairCellView): string {
   const where = `${view.yLabel} ${cell.y} · ${view.xLabel} ${cell.x}`;
   const m = cell.metrics;
   if (cell.kind === 'tested' && m !== null) {
-    return `${where} · ${signedPercentText(m.total_return_pct)} net return · Sharpe ${ratioText(m.sharpe_ratio)} · ${m.total_trades} trades · worst fall ${percentText(m.max_drawdown_pct)}`;
+    const figures = metricTexts(m);
+    return `${where} · ${figures.netReturn} net return · Sharpe ${figures.sharpe} · ${figures.trades} trades · worst fall ${figures.worstFall}`;
   }
   if (cell.kind === 'failed') return `${where} · the run failed${m?.error ? `: ${m.error}` : ''}`;
   if (cell.kind === 'invalid') return `${where} · not a valid pair${cell.reason ? `: ${cell.reason}` : ''}`;

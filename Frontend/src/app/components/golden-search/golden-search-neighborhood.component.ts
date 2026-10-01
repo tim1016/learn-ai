@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-import { knobsByName, percentText, ratioText, signedPercentText } from './golden-search-display';
-import type { CandidateNeighborhood, EvidenceCellStatus, Metrics, StrategyCapability, StressResult } from './golden-search.types';
+import { knobsByName, metricTexts } from './golden-search-display';
+import type { CandidateNeighborhood, EvidenceCellStatus, StrategyCapability, StressResult } from './golden-search.types';
 
 const STATUS_WORDS: Readonly<Record<EvidenceCellStatus, string>> = {
   center: 'This candidate',
@@ -11,18 +11,6 @@ const STATUS_WORDS: Readonly<Record<EvidenceCellStatus, string>> = {
   outside_domain: 'Outside the legal range',
   untested: 'Not tested',
 };
-
-interface MetricCells {
-  readonly netReturn: string;
-  readonly worstFall: string;
-  readonly trades: string;
-  readonly sharpe: string;
-}
-
-function cells(metrics: Metrics | null): MetricCells {
-  if (metrics === null || metrics.status === 'failed') return { netReturn: '—', worstFall: '—', trades: '—', sharpe: '—' };
-  return { netReturn: signedPercentText(metrics.total_return_pct), worstFall: percentText(metrics.max_drawdown_pct), trades: String(metrics.total_trades), sharpe: ratioText(metrics.sharpe_ratio) };
-}
 
 /**
  * The candidate's nearby settings and stress runs (#2696): each searched knob
@@ -49,8 +37,16 @@ export class GoldenSearchNeighborhoodComponent {
     return this.neighbors().map((hood) => ({
       knob: hood.knob,
       label: knobs.get(hood.knob)?.label ?? hood.knob,
-      rows: hood.rows.map((row) => ({ value: row.value, status: STATUS_WORDS[row.status], reason: row.reason ?? (row.metrics?.status === 'failed' ? row.metrics.error : null), center: row.status === 'center', ...cells(row.metrics) })),
+      rows: hood.rows.map((row) => {
+        const figures = metricTexts(row.metrics);
+        return { value: row.value, status: STATUS_WORDS[row.status], reason: row.reason ?? figures.failure, center: row.status === 'center', ...figures };
+      }),
     }));
   });
-  protected readonly stressRows = computed(() => this.stress().map((result) => ({ key: result.scenario, label: result.label, failed: result.metrics?.status === 'failed' ? (result.metrics.error ?? 'The run failed.') : null, ...cells(result.metrics) })));
+  protected readonly stressRows = computed(() =>
+    this.stress().map((result) => {
+      const figures = metricTexts(result.metrics);
+      return { key: result.scenario, label: result.label, failed: figures.failure, ...figures };
+    }),
+  );
 }

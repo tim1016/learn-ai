@@ -4,27 +4,21 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { evidenceRows } from './golden-search-decision';
-import { percentText, ratioText, signedPercentText } from './golden-search-display';
+import { metricTexts, percentText, type MetricTexts } from './golden-search-display';
 import type { ExamCheck, ExamView, Metrics, StudyDetail } from './golden-search.types';
 
 const CHECK_WORDS: Readonly<Record<ExamCheck['status'], string>> = { pass: 'Pass', fail: 'Fail', not_available: 'Not available' };
 
-interface ResultRow {
+interface ResultRow extends MetricTexts {
   readonly key: string;
   readonly label: string;
   readonly selected: boolean;
-  readonly netReturn: string;
-  readonly worstFall: string;
-  readonly trades: string;
-  readonly sharpe: string;
-  readonly failure: string | null;
 }
 
+/** One side of the final test; a side with no result says so where a failed run gives its error. */
 function resultRow(key: string, label: string, metrics: Metrics | null, selected: boolean): ResultRow {
-  if (metrics === null || metrics.status === 'failed') {
-    return { key, label, selected, netReturn: '—', worstFall: '—', trades: '—', sharpe: '—', failure: metrics === null ? 'No result recorded' : (metrics.error ?? 'The run failed') };
-  }
-  return { key, label, selected, netReturn: signedPercentText(metrics.total_return_pct), worstFall: percentText(metrics.max_drawdown_pct), trades: String(metrics.total_trades), sharpe: ratioText(metrics.sharpe_ratio), failure: null };
+  const figures = metricTexts(metrics);
+  return { key, label, selected, ...figures, failure: metrics === null ? 'No result recorded' : figures.failure };
 }
 
 /**
