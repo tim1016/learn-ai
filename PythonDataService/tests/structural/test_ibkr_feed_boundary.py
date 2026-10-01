@@ -8,7 +8,7 @@ consumer outside its scope; PR-B of #1813 (2026-08-27) retired all
 three consumers (``order_error_stream.py``, ``broker_session_events``
 emission, and ``app/broker/safety_verdict.py``), so the exception list
 is now empty. See
-``docs/superpowers/specs/2026-08-26-ibkr-decommission-slice-0-design.md``.
+ADR 0062 § "Retained market-data provider".
 
 **The module-retirement contract.** The single home for "retirement X
 deleted module M — prove M is still gone and that nothing names it",

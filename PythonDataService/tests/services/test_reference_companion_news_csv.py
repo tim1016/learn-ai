@@ -54,7 +54,7 @@ def test_build_news_csv_flattens_lists_and_publisher() -> None:
     assert record["tickers"] == "SPY,DIA"
     assert record["keywords"] == "markets,etf"
     assert record["publisher"] == "Example Wire"
-    # temporal-rigor: the durable artifact carries canonical ms, not the vendor string.
+    # The durable artifact carries canonical ms, not the vendor string.
     assert record["published_utc_ms"] == "1788528600000"
 
 

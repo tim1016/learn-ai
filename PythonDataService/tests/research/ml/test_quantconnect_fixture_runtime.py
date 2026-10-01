@@ -231,7 +231,7 @@ def test_qc_fixture_strategy_spec_result_hash_pinned(qc_spy_data_factory, qc_art
     """result_hash is the SHA256 of the BacktestRunResult payload — pins
     the (artifact, spec, bars, engine config) tuple end-to-end. Drift here
     means *something* in the run pipeline changed semantics; investigate
-    via the reconcile-backtest taxonomy before regenerating the pin."""
+    via the ADR 0069 §6 taxonomy before regenerating the pin."""
     pinned = json.loads(_KNOWN_HASHES_PATH.read_text(encoding="utf-8"))
     expected_result_hash = pinned["result_hash"]
 

@@ -145,8 +145,7 @@ def test_template_writes_observations_csv_and_state_csv() -> None:
 def test_template_observations_csv_header_matches_gate1_spec() -> None:
     """observations.csv must carry full OHLCV per the Gate 1 comparator schema.
 
-    Spec: docs/superpowers/specs/2026-05-21-cross-engine-golden-matrix-design.md
-    § "Gate 1 — Observations parity": ms_utc, open, high, low, close, volume.
+    Gate 1 comparator columns: ms_utc, open, high, low, close, volume.
     Must stay in sync with EXPECTED_HEADER in
     app/lean_sidecar/parity_matrix/observations_parity.py.
     """

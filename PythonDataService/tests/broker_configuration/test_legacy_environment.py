@@ -5,7 +5,7 @@ cutover: ``ALPACA_API_KEY_ID`` and ``ALPACA_API_SECRET_KEY`` look like legacy
 Alpaca variables and are named as such in casual descriptions of this work, but
 they **are** the ``default`` credential slot. Refusing a boot because they are
 present would break every deployment. The authority is
-``docs/architecture/alpaca-configuration-ownership-inventory.md`` §F.
+ADR 0060 (the credential slot reference; retired settings are refused).
 
 Every settings object here is built with ``_env_file=None`` so a developer's real
 ``PythonDataService/.env`` cannot decide the outcome — the same hazard the
@@ -174,7 +174,7 @@ def test_the_refusal_does_not_echo_a_value(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_legacy_values_declare_the_same_types_and_constraints() -> None:
-    """CLAUDE.md guiding philosophy #5: the duplicate is pinned to its canonical file.
+    """The duplicate is pinned to its canonical file.
 
     Comparing *declarations*, not one parsed sample. A sample-based check stays
     green if `config.py` widens `live_xh_entry_bps` to `lt=20_000`, drops
@@ -219,7 +219,7 @@ def _constraints(field: object) -> list[str]:
 def test_legacy_values_parse_exactly_as_alpaca_settings_does(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CLAUDE.md guiding philosophy #5: the duplicate is pinned to its canonical file.
+    """The duplicate is pinned to its canonical file.
 
     ``LegacyEnvironmentValues`` mirrors ``AlpacaSettings``' field types so an
     imported value is the value the environment boot would have used. If the two

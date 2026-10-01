@@ -1,7 +1,6 @@
 """PR 3 acceptance bar: byte-identical walk-forward persistence.
 
-Per ``docs/architecture/research-artifact-seam.md`` § "Per-PR
-acceptance bar", every strangler PR must demonstrate that the
+Every strangler PR must demonstrate that the
 migrated phase writes byte-identical artifact files to what the
 pre-seam ``storage.py`` would have written. This test encodes that
 contract for walk-forward: it constructs a deterministic config +

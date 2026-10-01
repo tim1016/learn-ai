@@ -1,8 +1,8 @@
 """Regression coverage for parameterizing the EMA-crossover *signal* strategy.
 
 The signal strategy historically hardcoded a 0.20 absolute gap and a 50–70
-RSI band. Per the repo rule "any tunable that can be a parameter is one"
-(Recency Chart), these become real parameters — with defaults preserved
+RSI band. Any tunable that can be a parameter is one
+(Recency Chart), so these become real parameters — with defaults preserved
 exactly so the validated LEAN-parity behaviour at the default point is
 unchanged (the golden-fixture parity suite is the regression gate).
 """

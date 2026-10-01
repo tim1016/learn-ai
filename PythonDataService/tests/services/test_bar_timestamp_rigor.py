@@ -1,7 +1,6 @@
 """Dual-field bar-timestamp regression test (Slice 7).
 
-Pins the timestamp contract documented in
-``docs/audits/bar-timestamp-rigor-2026-06-12.md`` for both 1-min and
+Pins the timestamp contract (ADR 0022 (a)) for both 1-min and
 5-second live bars:
 
 1. ``start_ms`` and ``end_ms`` are int64 ms UTC.

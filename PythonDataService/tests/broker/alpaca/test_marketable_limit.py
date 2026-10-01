@@ -124,7 +124,7 @@ def test_an_allowance_of_a_hundred_percent_or_more_will_not_load(bps: str) -> No
 def test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price(
     side: OrderSide, close: str, bps: str
 ) -> None:
-    """Parity for the duplicated $1 tick rule (CLAUDE.md guiding philosophy #5).
+    """Parity for the duplicated $1 tick rule.
 
     ``marketable_limit.py`` picks the tick from the *pre*-quantisation ``raw``;
     ``BrokerOrderLeg._limit_price_matches_order_type`` checks the *final*

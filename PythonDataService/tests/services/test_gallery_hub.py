@@ -532,7 +532,7 @@ async def test_build_snapshot_session_change_pct_uses_full_session_bars_for_a_fi
 def test_gallery_hub_reuses_canonical_markers_projection() -> None:
     """``GalleryHub`` must not redefine fill→marker mapping — it imports the
     exact ``chart_projection_service`` helper the single-bot detail chart
-    uses (CLAUDE.md single-source-of-truth rule), not a reimplementation."""
+    uses, not a reimplementation."""
     assert gallery_hub.markers_in_window is markers_in_window
 
 

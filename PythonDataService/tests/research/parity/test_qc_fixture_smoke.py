@@ -4,8 +4,6 @@ Skipped on master until ``tests/fixtures/golden/qc-aapl-phase3/`` is
 committed. The first test ensures the orders payload has every event
 field the reconciler reads; the second logs ``FEE_PRESENCE_BRANCH=A|B``
 so reviewers know whether commission parity is in scope for this fixture.
-
-See ``docs/superpowers/specs/2026-05-11-phase3-pnl-parity-design.md`` §2.1.2.
 """
 
 from __future__ import annotations

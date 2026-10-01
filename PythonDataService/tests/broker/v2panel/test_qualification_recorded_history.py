@@ -71,7 +71,7 @@ def test_recorded_bars_align_to_real_nyse_session_dates_for_day_bars() -> None:
     """No hardcoded session time: every daily bar is stamped at midnight
     America/New_York of the real NYSE session date (Polygon's own daily-bar
     convention -- see ``_session_midnight_et_ms_utc``), not a hardcoded
-    ``09:30``/``16:00`` (temporal-rigor.md)."""
+    ``09:30``/``16:00``."""
     start = date(2024, 1, 2)
     end = date(2024, 1, 5)
 

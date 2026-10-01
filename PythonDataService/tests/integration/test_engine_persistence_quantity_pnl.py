@@ -4,7 +4,7 @@ Regression roots: Bug A (QUANTITY_MISMATCH + PNL_DRIFT) in the engine
 auto-save. Before the fix, the persisted trade carried ``pnl_pts`` (per-share
 points) and no quantity, so a 140-share position with a $1.45/share move was
 recorded off by a factor of ~140 with no error path. See
-``.claude/rules/numerical-rigor.md`` → ``QUANTITY_MISMATCH`` / ``PNL_DRIFT``.
+ADR 0069 §6 → ``QUANTITY_MISMATCH`` / ``PNL_DRIFT``.
 
 The payload is built by the pure ``build_engine_run_payload`` (PRD #1929),
 so these rules are asserted on the payload itself, not on an HTTP body.

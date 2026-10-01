@@ -2117,7 +2117,7 @@ def test_a_stopped_bots_archive_leads_its_recovery_commands() -> None:
 
 
 def test_served_readiness_counts_partition_the_recovery_checks() -> None:
-    """The one readiness aggregate (``docs/references/broker-v2-readiness-summary.md``):
+    """The one readiness aggregate:
     the adapter counts its recovery checks once, exactly (``atol=0, rtol=0``),
     and Angular renders the two numbers verbatim."""
     served = adapt_sqlite_panel(

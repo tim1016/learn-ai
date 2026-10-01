@@ -238,8 +238,7 @@ def test_the_integer_predicate_agrees_with_the_sealed_record_validator(
     Canonical implementation: ``app/broker/alpaca/clerk/live_arming.py::_is_int``.
     The resolver restates it rather than importing it, so the historical
     arming-record module stays off the credential-resolution path. This pins
-    the two together so the restatement cannot drift (CLAUDE.md guiding
-    philosophy #5).
+    the two together so the restatement cannot drift.
     """
     from app.broker.alpaca.clerk.live_arming import _is_int
 

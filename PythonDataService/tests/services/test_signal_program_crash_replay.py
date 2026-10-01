@@ -26,7 +26,7 @@ indicators.
 
 Each consolidated bucket's close is a term from a seeded
 (``numpy.random.default_rng``) random walk with a small positive drift --
-reproducible per ``.claude/rules/python.md``, and unlike a monotonic ramp it
+reproducible, and unlike a monotonic ramp it
 produces genuine up-and-down moves so RSI/ADX/Supertrend-gated programs (not
 just EMA/SMA crossovers) actually clear their entry conditions. A pure
 monotonic ramp pins Wilder's RSI at 100 (no losses to average), which never

@@ -1,7 +1,7 @@
 """Explicit-tolerance comparator for golden fixture validation.
 
-The rule from numerical-rigor.md:
-  "np.allclose(a, b) without explicit tolerances is a bug."
+The rule from ADR 0069 §3:
+  "np.allclose(a, b) without explicit atol and rtol is a bug."
 
 Every call to this module must supply both atol and rtol. The caller also
 provides a tolerance_note explaining why those values are appropriate — this

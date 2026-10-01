@@ -35,7 +35,7 @@ Configuration page builds via ``operationUrl('configuration_selection_read',
 {broker, clerkId})``) when the lane declares a ``FLEET_CLERK_ID``, the
 combined posture's direct in-process route otherwise. The tests below pin
 that URL to the committed catalog snapshot and execute the script's own
-derivation lines — both sides run, per CLAUDE.md guiding philosophy #5 —
+derivation lines — both sides run —
 rather than pinning a second, hand-maintained expectation that could drift
 from the function it mirrors.
 """

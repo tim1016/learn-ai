@@ -169,8 +169,8 @@ async def test_custody_projection_answers_from_the_last_sweep_without_broker_con
     a hot loop at 77% CPU with *zero* bots running. The projection answers the
     same custody question from the sweep's own last verdict instead.
 
-    Measurements are the observed S12d figures recorded in
-    ``docs/audits/bot-fleet-stress-2026-08-25.md`` (S12 family; latency table).
+    Measurements are the observed S12d figures from the 2026-08-25 fleet
+    stress run (S12 family; latency table).
     They are cited history explaining why this test exists, not a threshold
     this test asserts -- what it pins is the invariant: zero broker reads.
     """

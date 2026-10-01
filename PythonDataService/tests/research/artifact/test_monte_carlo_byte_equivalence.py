@@ -1,7 +1,6 @@
 """PR 1 acceptance bar: byte-identical Monte Carlo persistence.
 
-Per ``docs/architecture/research-artifact-seam.md`` § "Per-PR
-acceptance bar", every strangler PR must demonstrate that the
+Every strangler PR must demonstrate that the
 migrated phase writes byte-identical artifact files to what the
 pre-seam ``storage.py`` would have written. This test encodes that
 contract for Monte Carlo: it constructs a deterministic config +

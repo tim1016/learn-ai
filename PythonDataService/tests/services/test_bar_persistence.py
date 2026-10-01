@@ -8,9 +8,8 @@ live bar aggregator (Slice 4) and the ``/chart-snapshot`` endpoint
   with idempotency on exact-duplicate redeliveries.
 * Apply mid-aggregate corrections (same ``start_ms``, different payload).
 * **Quarantine** the day's JSONL when a non-monotonic regression arrives
-  (``start_ms < last accepted``) — never silently repair, per the rigor
-  rules' ban on ``drop_duplicates`` / forward-fill (see
-  ``.claude/rules/numerical-rigor.md`` → "Timestamp rigor").
+  (``start_ms < last accepted``) — never silently repair, per ADR 0022 (h)
+  (no ``drop_duplicates`` / forward-fill).
 * Replay today's JSONL on subscribe.
 * Enumerate active dates.
 * Emit structured counters for ``skipped_duplicate`` and
@@ -115,8 +114,8 @@ def test_append_records_correction_when_payload_differs(tmp_path: Path) -> None:
 def test_append_quarantines_jsonl_on_non_monotonic_regression(tmp_path: Path) -> None:
     """A bar whose ``start_ms`` is earlier than the last accepted bar is a
     silent-data-corruption signal — the file is renamed (quarantined) and
-    a ``BarPersistenceRegressionError`` raised. Per numerical-rigor §
-    "Timestamp rigor" the persistence layer must NOT silently repair the
+    a ``BarPersistenceRegressionError`` raised. Per ADR 0022 (h)
+    the persistence layer must NOT silently repair the
     feed (no drop_duplicates, no reorder) — the regression must surface."""
     store = BarPersistence(root=tmp_path)
     store.append("SPY", "1m", _bar(ANCHOR_MS + 60_000))

@@ -9,7 +9,7 @@ is derived from the canonical NYSE calendar module
 (``app.lean_sidecar.trading_calendar``, the sole ``mcal.get_calendar``
 caller) or from ``ZoneInfo("America/New_York")`` directly -- never a
 hardcoded ``09:30``/``13:00``/``16:00`` literal -- per
-``.claude/rules/temporal-rigor.md``.
+ADR 0022 (b).
 
 Coverage is derived from the registry (``SEALED_KEYS``, see
 ``tests/_helpers/signal_program.py``), never a hand-written key list.
@@ -182,7 +182,7 @@ def _dst_spring_forward_trading_days() -> tuple[date, date]:
     """Return ``(last_est_trading_day, first_edt_trading_day)`` bracketing the
     US spring-forward transition, discovered by scanning real UTC-offset
     changes via ``ZoneInfo("America/New_York")`` -- never a hardcoded
-    month/day literal, per ``.claude/rules/temporal-rigor.md``.
+    month/day literal.
     """
     tz = ZoneInfo("America/New_York")
     year = 2024
@@ -202,8 +202,8 @@ def _dst_spring_forward_trading_days() -> tuple[date, date]:
 def _fixed_est_open_ms(d: date) -> int:
     """Simulate the BANNED fixed -05:00 conversion, purely as a contrast value.
 
-    Never used in production code -- ``.claude/rules/temporal-rigor.md``
-    explicitly bans a fixed ET offset. This exists only so the DST test below
+    Never used in production code -- a fixed ET offset is an hour wrong
+    across DST. This exists only so the DST test below
     can show the canonical module's real value differs from it.
     """
     naive_open = datetime(d.year, d.month, d.day, 9, 30)

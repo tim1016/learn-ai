@@ -169,7 +169,7 @@ class TestRunEngineLabOnWorkspace:
         assert isinstance(first_event, CrossRunOrderEvent)
         assert first_event.symbol == "SPY"
         assert first_event.direction == "Buy"
-        # ms_utc must be an int (numerical-rigor.md timestamp rigor).
+        # ms_utc must be an int.
         assert isinstance(first_event.ms_utc, int)
         # The fill happens on a trading-date bar; ms_utc must fall on
         # 2025-01-06 (UTC offset may push by minutes but not days).

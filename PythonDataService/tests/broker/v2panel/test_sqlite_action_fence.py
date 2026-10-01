@@ -1,7 +1,7 @@
 """Optimistic-concurrency fence of ``execute_sqlite_panel_action``.
 
 Regression coverage for the 2026-08-25 fleet stress run
-(docs/audits/bot-fleet-stress-2026-08-25.md, S16): the fence previously
+(S16): the fence previously
 required strict ``request.revision == panel.revision``, but every panel read
 bumps the projection revision — including the executor's own re-derivation
 during validation — so the fence could never pass. The action-scoped

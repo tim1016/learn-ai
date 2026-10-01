@@ -770,8 +770,7 @@ def test_reference_code_uses_service_fallback_when_repo_reference_absent(tmp_pat
         validation_state="validated",
         deployable=True,
         audit_copy_ref="references/qc-shadow/DeploymentValidationAlgorithm.py",
-        # #1672 changed the audit copy's session-boundary literals (see
-        # docs/references/deployment-validation-consecutive-green.md); this
+        # #1672 changed the audit copy's session-boundary literals; this
         # pins the current file's hash, not the manifest's — the manifest's
         # pinned hash is deliberately left stale until a fresh QC Cloud
         # reconciliation is run (see tests/routers/test_strategy_validation.py).

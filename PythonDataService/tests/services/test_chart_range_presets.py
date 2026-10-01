@@ -53,7 +53,7 @@ def test_presets_cover_the_full_key_table() -> None:
 
 
 def test_preset_wire_dicts_carry_no_date_strings() -> None:
-    """Temporal wire values are int64 ms UTC only (AGENTS.md hard rule);
+    """Temporal wire values are int64 ms UTC only;
     display strings are derived at the rendering boundary."""
     for preset in resolve_range_presets(SATURDAY_MS):
         assert "start_date" not in preset

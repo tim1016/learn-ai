@@ -1,7 +1,6 @@
 """Regression tests for the corrective foundation slice.
 
-Covers the required-test matrix in
-``docs/superpowers/plans/2026-08-05-alpaca-clerk-corrective-foundation-slice.md``
+Covers the slice's required-test matrix
 that isn't already exercised by ``test_schema_parity.py``,
 ``test_repository.py``, or ``test_commands.py`` (which were updated in
 place for the behavior changes this slice makes). These tests fail on the

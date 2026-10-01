@@ -42,8 +42,8 @@ def _assert_timedelta_minutes_call(node: ast.AST, minutes: int) -> None:
 def test_deployment_validation_qc_shadow_copy_is_parseable() -> None:
     """Regression for #1672: the session-boundary literals were replaced
     with calendar-derived offsets, so a half-day close still gets a real,
-    reachable stop/flatten barrier (see
-    docs/references/deployment-validation-consecutive-green.md)."""
+    reachable stop/flatten barrier (ADR 0022 (b): no hardcoded session
+    times)."""
     path = REPO_ROOT / "references" / "qc-shadow" / "DeploymentValidationAlgorithm.py"
     source = path.read_text(encoding="utf-8")
 
