@@ -1261,7 +1261,7 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
     # LEAN Sidecar Lab — data-plane API in front of the launcher service.
     # Phase 2a exposes only the trusted sample; Phase 3+ unlocks user
-    # algorithm source. See docs/architecture/lean-sidecar-lab.md.
+    # algorithm source.
     app.include_router(lean_sidecar.router, prefix="/api/lean-sidecar", tags=["lean-sidecar"])
     app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
     # QuantLib option pricing endpoints (/price, /compare).
@@ -1338,7 +1338,7 @@ if _ROLE_RUNS_CLERK:
         dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
     )
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
-# No live computation at request time (see docs/process/autonomous-decisions.md D-010).
+# No live computation at request time.
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])
 app.include_router(
     strategy_validation.router,

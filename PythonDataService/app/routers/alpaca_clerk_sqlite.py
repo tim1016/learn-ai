@@ -7,9 +7,8 @@ broker mutation capability.
 Every repository call is dispatched via ``asyncio.to_thread`` — the
 repository is synchronous blocking I/O (SQLite + fsync), and calling it
 directly from an ``async def`` handler would stall the FastAPI event loop
-for every other in-flight request for as long as the write takes
-(open-pr-review-2026-08-05.md P2 "Synchronous SQLite/fsync blocks the
-FastAPI event loop"). The one exception is a Stop, raw or through the
+for every other in-flight request for as long as the write takes.
+The one exception is a Stop, raw or through the
 recovery actions: it commits through the facade's ``stop_strategy_run``,
 which writes on the loop under the Clerk's intake lock, as every facade
 STOP does, so it keys with the stored account and serializes with intake.

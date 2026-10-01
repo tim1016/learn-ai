@@ -11,8 +11,7 @@ loop here would stall every other request in the service.
 Sentiment carried in ``insights`` is vendor-asserted; see ``app/schemas/news.py``
 for why that label is on the wire.
 
-**Deliberate deviation from ``.claude/rules/temporal-rigor.md``** (CLAUDE.md
-philosophy #4 requires this be stated rather than left silent): the five
+**Deliberate deviation from ADR 0022 (a)**, recorded in ADR 0022 (f): the five
 ``published_utc*`` *filter* parameters are vendor-format strings, not
 ``int64 ms UTC``. Polygon accepts a bare ``YYYY-MM-DD`` with whole-day
 semantics that an instant in milliseconds cannot express, so canonicalizing

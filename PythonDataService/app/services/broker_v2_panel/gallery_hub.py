@@ -24,8 +24,8 @@ router wiring (a later task) passes the real ``panel_data_source`` module and
 ``markers``/``markers_delta`` are populated per shown bot from that bot's
 today fills, reusing ``chart_projection_service.fill_to_marker``/
 ``markers_in_window`` verbatim — the same fill→marker projection the
-single-bot detail chart's LIVE pane uses (CLAUDE.md single-source-of-truth
-rule; see ``_fetch_markers``). ``fill_source`` is optional: when not
+single-bot detail chart's LIVE pane uses (see
+``_fetch_markers``). ``fill_source`` is optional: when not
 injected (e.g. tests exercising only the catalog/bars path), both stay
 empty, matching this module's prior hard-coded behavior.
 """
@@ -97,8 +97,7 @@ def _session_change_pct(bars: Sequence[ChartBar], *, open_ms: int) -> float | No
 
     Formula: session_change_pct = (last_session_close - first_session_open)
       / first_session_open for bars whose start_ms is at or after open_ms.
-    Reference: docs/superpowers/specs/2026-08-14-bot-gallery-redesign-design.md
-      section 3.4 (internal product contract; no external software port).
+    Reference: internal product contract; no external software port.
     Canonical implementation: this file.
     Validated against:
       tests/services/test_gallery_hub.py::test_build_snapshot_session_change_pct_excludes_a_prior_session_bar.

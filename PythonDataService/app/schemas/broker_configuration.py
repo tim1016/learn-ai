@@ -2,8 +2,7 @@
 
 Package B owns these and the generated OpenAPI artifacts until handoff (plan
 §6 dependency schedule); packages C, D and E build against them rather than
-each declaring their own. The shapes come from
-``docs/architecture/broker-configuration-profile-contract.md`` §2 and §4.
+each declaring their own.
 
 **This surface is provisional while ADR 0060 is Proposed** (contract §4): its
 open questions 2 and 5 can still change ``/credential-slots`` and the ``PATCH``
@@ -14,7 +13,7 @@ Conventions that are not negotiable here:
 
 * Every timestamp is ``int64 ms UTC`` and every such field ends ``_at_ms``,
   bounded by ``MAX_TIMESTAMP_MS`` — never ``2**63 - 1``
-  (`.claude/rules/temporal-rigor.md`).
+  (ADR 0022 (g)).
 * Every mutating request model is closed (``extra="forbid"``). Owner and actor
   are server-resolved; a body naming them is refused with
   ``owner_field_not_accepted``, never silently dropped.

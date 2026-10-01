@@ -15,8 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.action_plan import ActionPlan
 
-# Canonical home for "how was this parameter's effective value chosen" (CLAUDE.md
-# guiding philosophy #5 — one source of truth per concept). Every other module
+# Canonical home for "how was this parameter's effective value chosen".
+# Every other module
 # that needs this concept imports the alias rather than repeating the Literal.
 ParameterOrigin = Literal["registered_default", "deploy_override", "deployment_symbol"]
 
@@ -214,18 +214,17 @@ class ExitEligibilityContract(BaseModel):
 
 
 class NumericalProvenanceContract(BaseModel):
-    """The Math Provenance Contract (CLAUDE.md #2/#5), sealed as program identity.
+    """The Math Provenance Contract (ADR 0068 Decision 2), sealed as program identity.
 
     Mirrors the ``Formula``/``Reference``/``Canonical implementation``/
-    ``Validated against`` block already required by the
-    ``learn-ai-validation`` skill and present in
+    ``Validated against`` block already required by
+    ADR 0068 Decision 2 and present in
     ``ema_crossover_signal.py``'s own module docstring; this is that same
     fact, made part of the immutable seal rather than living only in prose
     that could drift unnoticed. ``tolerance_atol``/``tolerance_rtol`` are
     ``None`` at ``equivalence_level="bit_exact"`` — the trace/decision
     identity in ``signal_program.py`` is Decimal-exact and SHA-256-compared,
-    not tolerance-compared; the documented ``1e-9`` absolute tolerance in
-    ``docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md``
+    not tolerance-compared; the documented ``1e-9`` absolute tolerance
     applies one level down, to the EMA/RSI *value* parity against LEAN.
     """
 

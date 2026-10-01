@@ -67,8 +67,7 @@ class SpecBacktestRequest(BaseModel):
 class SpecTradeResponse(BaseModel):
     """Single trade emitted by a spec backtest.
 
-    Timestamps are ``int64 ms UTC`` per the repo-wide wire-format rule
-    (see ``.claude/rules/numerical-rigor.md`` § "Timestamp rigor"). UI
+    Timestamps are ``int64 ms UTC`` on the wire. UI
     callers convert to local-time strings at the display boundary; no
     other layer should be reading these fields as strings.
     """

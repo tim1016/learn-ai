@@ -22,7 +22,7 @@ Exit taxonomy (typed, durable, artifact-derived — never liveness-inferred):
 Trade mode delegates effects to the Alpaca Clerk; the runner never authors
 broker execution truth.
 
-All temporal fields are ``int64 ms UTC`` per ``.claude/rules/temporal-rigor.md``.
+All temporal fields are ``int64 ms UTC``.
 """
 
 from __future__ import annotations

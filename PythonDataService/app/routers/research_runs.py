@@ -11,8 +11,7 @@ Three endpoints under ``/api/research/strategy-runs``:
 
 GraphQL passthrough is intentionally not wired here. Phase B (research
 workbench) will decide whether to add one based on whether the UI is
-GraphQL-only or willing to call FastAPI directly. See
-``docs/architecture/build-alpha-style-features-1-8-research-spec.md``.
+GraphQL-only or willing to call FastAPI directly.
 
 The data-source dependency mirrors ``app/routers/spec_strategy.py``:
 production injects a real ``LeanMinuteDataReader``; tests override via
@@ -35,8 +34,7 @@ event loop responsive under concurrent requests. Converting to
 adopting ``aiofiles``) would actively *block* the loop and degrade
 throughput, so the threadpool path is the right one for Phase A. If
 the runner ever grows real async I/O (Phase D's MC could parallelise
-folds), revisit per-handler. See ``.claude/rules/python.md`` § FastAPI
-for the project's general async-by-default rule.
+folds), revisit per-handler.
 """
 
 from __future__ import annotations

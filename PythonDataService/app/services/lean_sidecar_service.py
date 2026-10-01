@@ -10,7 +10,7 @@ launcher-call sequence here means:
 - a Phase 3+ change to "accept arbitrary algorithm source" only has to
   touch the staging step here, not the router.
 
-Phase 2a constraints (per ``docs/architecture/lean-sidecar-lab.md``):
+Phase 2a constraints (since widened; caller source now runs per ADR 0070 decision 6):
 
 - no caller-supplied algorithm source — Phase 3 is the gating phase
   before that;
@@ -528,7 +528,7 @@ def _assert_adjustment_vocabulary_consistent(
       (adjusted=True,  "Adjusted")  -> reject (double-adjustment)
 
     The ``adjusted`` flag is the staging-pipeline policy, not LEAN's runtime
-    normalization mode. See docs/superpowers/specs/2026-05-19-pr-b-engine-lab-unified-design.md § 4.4.
+    normalization mode.
     """
     if data_normalization_mode == "Adjusted":
         raise LeanSidecarServiceError(

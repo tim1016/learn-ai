@@ -1,8 +1,7 @@
 """ET session anchors and the admissible instant range, as ``int64 ms UTC``.
 
 A trading date on the wire or at rest is one ms instant anchored at an ET
-session boundary — never a string, never a fixed offset (temporal-rigor.md,
-"Date-anchored and wall-clock values"; ADR 0022). These conversions used to be
+session boundary — never a string, never a fixed offset (ADR 0022). These conversions used to be
 re-derived at every seam that needed them (the recency job body, the engine
 router, the sweep service and the routers on top of it, and the tests beside
 each); this module is the one place they live.

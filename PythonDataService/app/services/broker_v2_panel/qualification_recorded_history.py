@@ -252,7 +252,7 @@ def _session_midnight_et_ms_utc(session_date: date) -> int:
     ``test_daily_bar_completes_at_session_close_not_midnight_plus_one_day``
     (``tests/broker/v2panel/test_chart_projection.py``), which builds its
     daily ``PolygonBar`` fixture at exactly this instant. ``time(0, 0)`` here
-    is not a market-session boundary (the kind ``temporal-rigor.md`` bans as
+    is not a market-session boundary (the kind banned as
     a hardcoded literal) -- it is the vendor's own midnight-anchored
     timestamp convention for a *daily* bar, unrelated to the NYSE open/close
     schedule. The conversion still goes through ``ZoneInfo("America/New_York")``
@@ -267,7 +267,7 @@ def _recorded_bars(symbol: str, start: date, end: date, multiplier: int, timespa
     Every scheduled session comes from :func:`session_windows_ms_utc` (the
     canonical NYSE calendar module) -- half-days, weekends, and holidays are
     handled exactly as the real Polygon walk expects them to be, with no
-    hardcoded session boundary (``temporal-rigor.md``). Daily bars are
+    hardcoded session boundary (ADR 0022 (b)). Daily bars are
     stamped at session midnight ET (see :func:`_session_midnight_et_ms_utc`);
     intraday bars are stamped at their real session-open-aligned start, per
     the canonical calendar.

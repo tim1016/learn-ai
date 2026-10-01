@@ -1,9 +1,7 @@
 """FR-016 crash-recovery warmup replay for live signal strategies.
 
-Extracted from ``bot_trade_strategy.py`` once that file's warmup /
-crash-recovery slice pushed it past the thermo-nuclear 1,000-line
-threshold (see ``docs/prds/sealed-signal-program-to-governed-alpaca-bot.md``
-section 13.3 for the PRD this implements). This module owns exactly the
+Extracted from ``bot_trade_strategy.py``; the disposition rule it applies
+is ADR 0042's. This module owns exactly the
 replay concern: reconstruct indicator/lifecycle state from recent closed
 bars, reapply each bucket's own already-durable Clerk disposition, and
 identify the one bucket a crash may have left staged but uncaptured.

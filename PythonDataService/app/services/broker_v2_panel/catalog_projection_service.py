@@ -287,8 +287,8 @@ def day_pnl(realized: float | None, open_pnl: float | None) -> float | None:
 
     Formula: day_pnl = realized_pnl_today + open_pnl, treating one absent
       component as zero and returning None iff both are absent.
-    Reference: docs/superpowers/specs/2026-08-14-bot-gallery-redesign-design.md
-      section 3.4; component economics follow docs/references/broker-v2-fifo-pnl.md.
+    Reference: none external; component economics follow
+      ``app.broker.alpaca.clerk.fifo_pnl``.
     Canonical implementation: this file.
     Validated against:
       tests/services/test_gallery_hub.py::test_day_pnl_null_safe_projection.

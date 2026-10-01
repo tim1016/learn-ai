@@ -46,7 +46,7 @@ missing parameters filled from the catalog defaults) before
 
 The bound this buys, measured against today's 1,000-bar lead-in: at most
 ~0.01 points on a 0–100 oscillator and ~1e-4 of the value on a price scale
-(``docs/references/data-lab-indicator-warmup.md`` holds the per-indicator
+(an accepted departure, ADR 0069 §8, whose receipt holds the per-indicator
 table and the derivation's check). At its edges:
 
 * Anything the families do not size keeps today's lead-in: an indicator the

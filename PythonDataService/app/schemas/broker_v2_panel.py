@@ -5,7 +5,7 @@ strictly from (spec §4, §5, §7, §8, §11). Everything here is a projection o
 the S0 evidence + durable lifecycle artifacts + the clerk's journal-derived
 state; no schema derives display prose the frontend must invent.
 
-Temporal fields are ``int64 ms UTC`` per ``.claude/rules/temporal-rigor.md``.
+Temporal fields are ``int64 ms UTC``.
 Every operator code (phase, verdict, station id/state, action id, ...) comes
 from the closed vocabulary in ``app.broker.v2panel.vocabulary`` and carries
 server-authored ``label`` / ``explanation`` copy so no raw enum reaches the UI.

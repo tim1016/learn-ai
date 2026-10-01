@@ -145,8 +145,7 @@ def _fetch_and_process(
 
     # Dividend adjustment (TV-style). Polygon's adjusted=True only does splits;
     # when the user opts in, we fetch the dividend reference file and subtract
-    # each dividend from bars dated before its ex-date. See
-    # docs/tv-polygon-validation-gotchas.md §1 for the reason this matters.
+    # each dividend from bars dated before its ex-date.
     if request.adjust_for_dividends:
         import pandas as pd
 

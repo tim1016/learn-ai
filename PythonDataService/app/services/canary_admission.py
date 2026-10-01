@@ -1,8 +1,7 @@
 """Exact-pairing admission gate and Clerk-proved rollback boundary for the
 guarded Alpaca Paper canary path.
 
-Issue #1729 (PRD Slice 3 — ``docs/prds/sealed-signal-program-to-governed-alpaca-bot.md``
-Sec 23). Two responsibilities, both additive to machinery that already
+Issue #1729 (PRD Slice 3; ADR 0042). Two responsibilities, both additive to machinery that already
 exists — this module invents no new proof of its own:
 
 * ``CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS`` gates every real Alpaca Paper

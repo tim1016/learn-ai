@@ -3,7 +3,7 @@
 Bounded/paged, size-capped, redaction re-verified at response time.
 Every read produces a server-side audit entry — tested through the HTTP seam.
 
-Wire temporal fields are ``int64 ms UTC`` per temporal-rigor.md.
+Wire temporal fields are ``int64 ms UTC``.
 """
 
 from __future__ import annotations

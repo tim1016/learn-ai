@@ -168,7 +168,7 @@ def aggregator_bars_to_chart_bars(bars: Sequence[IbkrMinuteBar]) -> list[ChartBa
 # Canonical fill→marker projection, shared by this module's LIVE/HISTORY panes
 # and the bot gallery wall (``gallery_hub.GalleryHub``) — promoted from a
 # module-private helper so the gallery reuses it instead of redefining fill→
-# marker mapping (CLAUDE.md single-source-of-truth rule, guiding philosophy #5).
+# marker mapping.
 def fill_to_marker(fill: FillRecord) -> ChartFillMarker:
     side = "buy" if fill.side is OrderSide.BUY else "sell"
     return ChartFillMarker(

@@ -807,8 +807,7 @@ def _compatibility_ledger_statistics(
     Formula: per-trade return = (exit_price - entry_price) / entry_price;
     portfolio metrics use ``statistics.summarize`` without an engine-native
     equity curve, so both engines consume the same closed-trade observations.
-    Reference: ``app.engine.results.statistics`` and the compatibility contract
-    in ``docs/references/reconciliations/engine-lab-runs-75-76-statistics-validation-plan.md``.
+    Reference: ``app.engine.results.statistics``.
     Canonical implementation: this adapter plus ``statistics.summarize``.
     Validated against: ``test_compatibility_pair_scores_the_same_closed_trade_ledger_contract``.
 
