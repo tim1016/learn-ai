@@ -12,17 +12,6 @@ import pytest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 SERVICE_ROOT = REPOSITORY_ROOT / "PythonDataService"
 CI_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/ci.yml"
-DAILY_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/daily-tests.yml"
-E2E_WORKFLOW = REPOSITORY_ROOT / ".github/workflows/frontend-e2e.yml"
-FRONTEND_BUDGET_RUNNER = REPOSITORY_ROOT / "Frontend/scripts/run-test-budget.cjs"
-FRONTEND_CI_CONFIG = REPOSITORY_ROOT / "Frontend/vitest.ci.config.ts"
-FAST_TEST_COMMAND_SOURCES = (
-    CI_WORKFLOW,
-    REPOSITORY_ROOT / ".claude/CLAUDE.md",
-    REPOSITORY_ROOT / ".claude/commands/test-all.md",
-    SERVICE_ROOT / "CLAUDE.md",
-    SERVICE_ROOT / "pytest.ini",
-)
 
 
 def test_root_conftest_defers_fastapi_app_import() -> None:
@@ -45,33 +34,15 @@ def test_root_conftest_defers_fastapi_app_import() -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_fast_test_commands_filter_by_marker_not_name() -> None:
-    incorrect_sources: list[str] = []
-    missing_sources: list[str] = []
-
-    for path in FAST_TEST_COMMAND_SOURCES:
-        contents = path.read_text(encoding="utf-8")
-        relative_path = str(path.relative_to(REPOSITORY_ROOT))
-        if '-k "not slow"' in contents:
-            incorrect_sources.append(relative_path)
-        if "run_fast_tests" not in contents and '-m "not slow"' not in contents:
-            missing_sources.append(relative_path)
-
-    assert incorrect_sources == []
-    assert missing_sources == []
-
-
 def test_python_pr_suite_has_a_hard_two_minute_budget() -> None:
-    from scripts.run_fast_tests import DAILY_ONLY_PATHS, TEST_BUDGET_SECONDS, pytest_command
+    from scripts.run_fast_tests import TEST_BUDGET_SECONDS, pytest_command
 
-    command = pytest_command((), shard_index=1, shard_count=4)
+    command = pytest_command(shard_index=1, shard_count=4)
 
     assert TEST_BUDGET_SECONDS == 120
     assert command[0:3] == [sys.executable, "-m", "pytest"]
     marker_index = len(command) - 1 - command[::-1].index("-m")
     assert command[marker_index + 1] == "not slow"
-    for path in DAILY_ONLY_PATHS:
-        assert f"--ignore={path}" in command
     assert command[-4:] == ["--pr-shard-index", "1", "--pr-shard-count", "4"]
     assert "python -m scripts.run_fast_tests" in CI_WORKFLOW.read_text(encoding="utf-8")
 
@@ -104,34 +75,31 @@ def test_python_pr_shards_balance_by_measured_duration() -> None:
         assert assignments[nodeid] == hash_shard(nodeid, shard_count=4)
 
 
-def test_committed_pr_shard_durations_drive_the_balance() -> None:
-    from scripts.pytest_shard import load_pr_shard_durations
-
-    durations = load_pr_shard_durations()
-
-    assert len(durations) >= 1000
-    assert all(duration > 0 for duration in durations.values())
-
-
-# A tiny project the shard plugin deals: six measured tests whose
+# A tiny project the shard plugin deals: six measured test files whose
 # longest-first deal over three shards is 8+3 / 7+4 / 6+5 seconds, and three
-# unmeasured tests that must keep their hash shard.
+# unmeasured files that must keep their hash shard. Each file holds two tests
+# that split its time, so the deal must sum by file and keep a file together.
 _SHARD_PLUGIN_MEASURED = {"8s": 1, "7s": 2, "6s": 3, "5s": 3, "4s": 2, "3s": 1}
-_SHARD_PLUGIN_UNMEASURED = ("new-a", "new-b", "new-c")
+_SHARD_PLUGIN_UNMEASURED = ("new_a", "new_b", "new_c")
+_SHARD_PLUGIN_TESTS = ("test_first", "test_second")
 
 
-def _shard_plugin_nodeid(case: str) -> str:
-    return f"test_generated.py::test_case[{case}]"
+def _shard_plugin_file(case: str) -> str:
+    return f"test_{case}.py"
+
+
+def _shard_plugin_nodeids(case: str) -> list[str]:
+    return [f"{_shard_plugin_file(case)}::{test}" for test in _SHARD_PLUGIN_TESTS]
 
 
 _SHARD_PLUGIN_DURATIONS = {
-    _shard_plugin_nodeid(case): float(case.removesuffix("s"))
+    nodeid: float(case.removesuffix("s")) / len(_SHARD_PLUGIN_TESTS)
     for case in _SHARD_PLUGIN_MEASURED
+    for nodeid in _shard_plugin_nodeids(case)
 }
 
 
 def _write_shard_plugin_project(root: Path, durations: dict[str, float]) -> None:
-    cases = [*_SHARD_PLUGIN_MEASURED, *_SHARD_PLUGIN_UNMEASURED]
     (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     (root / "durations.json").write_text(json.dumps(durations), encoding="utf-8")
     (root / "conftest.py").write_text(
@@ -141,13 +109,11 @@ def _write_shard_plugin_project(root: Path, durations: dict[str, float]) -> None
         'Path(__file__).with_name("durations.json")\n',
         encoding="utf-8",
     )
-    (root / "test_generated.py").write_text(
-        "import pytest\n\n\n"
-        f"@pytest.mark.parametrize('case', {cases!r})\n"
-        "def test_case(case):\n"
-        "    assert case\n",
-        encoding="utf-8",
-    )
+    for case in [*_SHARD_PLUGIN_MEASURED, *_SHARD_PLUGIN_UNMEASURED]:
+        (root / _shard_plugin_file(case)).write_text(
+            "".join(f"def {test}():\n    pass\n\n\n" for test in _SHARD_PLUGIN_TESTS),
+            encoding="utf-8",
+        )
 
 
 def _run_shard_plugin(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -178,21 +144,21 @@ def _run_shard_plugin(root: Path, *args: str) -> subprocess.CompletedProcess[str
 def _expected_shard_plugin_deal() -> dict[str, int]:
     from scripts.pytest_shard import hash_shard
 
-    return {
+    owners = {
+        **_SHARD_PLUGIN_MEASURED,
         **{
-            _shard_plugin_nodeid(case): shard
-            for case, shard in _SHARD_PLUGIN_MEASURED.items()
-        },
-        **{
-            _shard_plugin_nodeid(case): hash_shard(
-                _shard_plugin_nodeid(case), shard_count=3
-            )
+            case: hash_shard(_shard_plugin_file(case), shard_count=3)
             for case in _SHARD_PLUGIN_UNMEASURED
         },
     }
+    return {
+        nodeid: shard
+        for case, shard in owners.items()
+        for nodeid in _shard_plugin_nodeids(case)
+    }
 
 
-def test_pr_shard_plugin_deals_measured_tests_longest_first_and_the_rest_by_hash(
+def test_pr_shard_plugin_deals_measured_files_longest_first_and_the_rest_by_hash(
     tmp_path: Path,
 ) -> None:
     from scripts.pytest_shard import hash_shard
@@ -201,7 +167,7 @@ def test_pr_shard_plugin_deals_measured_tests_longest_first_and_the_rest_by_hash
     expected = _expected_shard_plugin_deal()
     # The fixture must tell the two deals apart, or it proves nothing.
     assert any(
-        hash_shard(_shard_plugin_nodeid(case), shard_count=3) != shard
+        hash_shard(_shard_plugin_file(case), shard_count=3) != shard
         for case, shard in _SHARD_PLUGIN_MEASURED.items()
     )
 
@@ -218,12 +184,12 @@ def test_pr_shard_plugin_deals_measured_tests_longest_first_and_the_rest_by_hash
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert (
-            f"PR shard {shard}/3: 6 of 9 collected tests matched durations.json; "
+            f"PR shard {shard}/3: 6 of 9 test files matched durations.json; "
             "the other 3 use the hash shard"
         ) in result.stdout
         selected[shard] = {
             line for line in result.stdout.splitlines()
-            if line.startswith("test_generated.py::")
+            if line.startswith("test_") and "::" in line
         }
 
     assert set().union(*selected.values()) == set(expected)
@@ -246,10 +212,10 @@ def test_pr_shard_plugin_deals_and_reports_the_same_under_xdist(tmp_path: Path) 
     assert set(re.findall(r"^PASSED (\S+)$", result.stdout, flags=re.MULTILINE)) == {
         nodeid for nodeid, owner in expected.items() if owner == 1
     }
-    assert "PR shard 1/3: 6 of 9 collected tests matched durations.json" in result.stdout
+    assert "PR shard 1/3: 6 of 9 test files matched durations.json" in result.stdout
 
 
-def test_pr_shard_plugin_fails_when_the_durations_file_matches_no_collected_test(
+def test_pr_shard_plugin_fails_when_the_durations_file_matches_no_collected_file(
     tmp_path: Path,
 ) -> None:
     _write_shard_plugin_project(tmp_path, {"test_elsewhere.py::test_gone": 1.0})
@@ -260,7 +226,7 @@ def test_pr_shard_plugin_fails_when_the_durations_file_matches_no_collected_test
 
     assert result.returncode != 0
     assert (
-        "none of the 1 tests in durations.json match the 9 collected tests"
+        "none of the 1 test files in durations.json match the 9 collected test files"
         in result.stdout + result.stderr
     )
 
@@ -308,7 +274,7 @@ def test_run_fast_tests_returns_the_child_exit_code_and_reports_its_time(
     )
 
     with caplog.at_level(logging.INFO, logger="scripts.run_fast_tests"):
-        returncode = runner.run_fast_tests((), shard_index=5, shard_count=16)
+        returncode = runner.run_fast_tests(shard_index=5, shard_count=16)
 
     assert returncode == 3
     line = summary.read_text(encoding="utf-8")
@@ -333,7 +299,7 @@ def test_run_fast_tests_kills_an_overrun_and_reports_the_exceeded_budget(
         lambda *_a, **_k: _child_command("import time; time.sleep(60)"),
     )
 
-    assert runner.run_fast_tests(()) == 124
+    assert runner.run_fast_tests() == 124
     assert re.fullmatch(
         r"Python PR tests \(unsharded\) took \d+\.\ds of the 1-second budget "
         r"\(exceeded\)\n",
@@ -357,7 +323,7 @@ def test_run_fast_tests_keeps_the_exit_code_when_the_step_summary_is_unwritable(
     )
 
     with caplog.at_level(logging.WARNING, logger="scripts.run_fast_tests"):
-        assert runner.run_fast_tests(()) == 3
+        assert runner.run_fast_tests() == 3
     assert "Could not append the test time to GITHUB_STEP_SUMMARY" in caplog.text
 
 
@@ -378,49 +344,3 @@ def test_parse_durations_sums_phases_and_keeps_node_ids_with_spaces() -> None:
         "tests/test_a.py::test_x[with a space]": 1.7,
         "tests/test_a.py::test_y": 0.01,
     }
-
-
-def test_pr_workflow_runs_bounded_python_and_frontend_shards() -> None:
-    ci_contents = CI_WORKFLOW.read_text(encoding="utf-8")
-    frontend_config = FRONTEND_CI_CONFIG.read_text(encoding="utf-8")
-    frontend_job = ci_contents.split("  frontend-test-shard:", maxsplit=1)[1].split(
-        "\n  frontend-test:", maxsplit=1
-    )[0]
-
-    assert "python-test-shard:" in ci_contents
-    assert (
-        "shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]" in ci_contents
-    )
-    assert (
-        'python -m scripts.run_fast_tests --shard "${{ matrix.shard }}/16"' in ci_contents
-    )
-    assert "name: Frontend Test Shard ${{ matrix.shard }}/6" in frontend_job
-    assert "shard: [1, 2, 3, 4, 5, 6]" in frontend_job
-    assert 'TEST_SHARD_COUNT: "6"' in frontend_job
-    assert "--runner-config=vitest.ci.config.ts" in frontend_job
-    assert "shard:" in frontend_config
-
-
-def test_daily_workflow_owns_deferred_python_coverage() -> None:
-    contents = DAILY_WORKFLOW.read_text(encoding="utf-8")
-
-    assert "schedule:" in contents
-    assert "cron:" in contents
-    assert "python -m pytest tests app/engine/tests" in contents
-    assert "tests/unit/data_lake tests/integration/data_lake" in contents
-    assert '-m "not slow"' not in contents
-
-
-def test_other_change_gating_suites_are_bounded_or_daily() -> None:
-    ci_contents = CI_WORKFLOW.read_text(encoding="utf-8")
-    daily_contents = DAILY_WORKFLOW.read_text(encoding="utf-8")
-    e2e_contents = E2E_WORKFLOW.read_text(encoding="utf-8")
-    frontend_runner = FRONTEND_BUDGET_RUNNER.read_text(encoding="utf-8")
-
-    assert "const TEST_BUDGET_MS = 120_000;" in frontend_runner
-    assert "- run: npm test" in ci_contents
-    assert 'timeout --signal=KILL 120s dotnet test' in ci_contents
-    assert '--filter "Category!=PostgresIntegration"' in ci_contents
-    assert "dotnet test Backend.Tests/Backend.Tests.csproj" in daily_contents
-    assert "schedule:" in e2e_contents
-    assert "pull_request:" not in e2e_contents

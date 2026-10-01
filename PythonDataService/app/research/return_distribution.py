@@ -20,8 +20,7 @@ Reference:
   Management" (2e) §2.2–2.3 (empirical quantile and tail-expectation
   estimators). Normal CDF via erf, identical to
   app/engine/results/lean_statistics.py::_normal_cdf.
-Canonical implementation: this file (registered in docs/math-sources-of-truth.md
-  as "Daily return distribution from minute bars").
+Canonical implementation: this file.
 Validated against: tests/research/test_return_distribution.py and the golden
   fixture tests/fixtures/golden/return-distribution/RD-001 (scipy.stats oracle).
 
@@ -95,8 +94,7 @@ _ET = ZoneInfo("America/New_York")
 ReturnKind = Literal["close_to_close", "session", "overnight"]
 RETURN_KINDS: tuple[ReturnKind, ...] = ("close_to_close", "session", "overnight")
 
-#: The full-24h session segmentation shown in the per-day drill-down, in
-#: chronological order. ``overnight``/``morning``/``afternoon`` are the
+
 class NonMonotonicBarError(ValueError):
     """A day's bars did not arrive in chronological order."""
 

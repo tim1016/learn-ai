@@ -2,9 +2,10 @@
 
 A reusable realism layer that decouples strategy logic from broker
 simulation. Strategies stay focused on signal generation; this config
-owns slippage, commission, fill-mode selection, and limit-order
-penetration, threaded through the ``/api/engine/backtest`` request into
-``FillModel`` and the engine.
+owns slippage, commission and fill-mode selection, threaded through the
+``/api/engine/backtest`` request into ``FillModel`` and the engine.
+``limit_penetration`` is still accepted on the request but unread since
+#2752: the engine raises ``NotImplementedError`` for any non-MARKET order.
 
 It holds no session wall-clock rule. The one rule that reads the
 session's end -- a decision on the bar that ends at the calendar's close
@@ -30,13 +31,9 @@ class ExecutionConfig:
     fill_mode: FillMode = FillMode.SIGNAL_BAR_CLOSE
     commission_per_order: Decimal = field(default_factory=lambda: Decimal("1.00"))
     slippage_per_share: Decimal = field(default_factory=lambda: Decimal(0))
-    # Dollar penetration required past a resting limit's price before
-    # the engine counts the bar as a fill. Measured against the bar's
-    # adverse extreme: the low for a buy limit, the high for a sell
-    # limit. Default 0 = touch fill (TradingView's permissive default).
-    # For US equities a ``Decimal("0.02")`` = 2 cents = 2 ticks gives
-    # a realistic queue-position model without simulating the order
-    # book directly.
+    # Unread since #2752: the resting-limit fill path was removed and the
+    # engine raises NotImplementedError for any non-MARKET order. Still
+    # accepted on the /api/engine/backtest request and recorded on runs.
     limit_penetration: Decimal = field(default_factory=lambda: Decimal(0))
 
     def build_fill_model(self) -> FillModel:

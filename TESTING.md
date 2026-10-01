@@ -17,8 +17,8 @@ cd Backend.Tests && dotnet test --filter "Category!=PostgresIntegration"
 BACKEND_TEST_POSTGRES_CONNECTION_STRING='Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=<password>' \
   dotnet test --filter "Category=PostgresIntegration"
 
-# Python — the checked-in runner enforces the 120-second PR budget
-cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m scripts.run_fast_tests
+# Python — the tests that prove your change; CI runs every quick test in 16 shards
+cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m pytest tests/<path> -q
 ```
 
 ---
@@ -291,11 +291,14 @@ tests return 403 against a developer's real secret.
 ```bash
 cd PythonDataService
 
-# The developer/PR gate — hard-stops at 120 seconds
-DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m scripts.run_fast_tests
+# The tests that prove your change
+DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m pytest tests/<path> -q
 
-# Full suite — normally run by .github/workflows/daily-tests.yml
-python -m pytest tests app/engine/tests -v
+# One CI shard of the quick tests (not `slow`), hard-stopped at 120 seconds
+DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m scripts.run_fast_tests --shard 1/16
+
+# Full suite (pytest.ini's testpaths) — normally run by .github/workflows/daily-tests.yml
+python -m pytest -v
 
 # Single file
 python -m pytest tests/test_strategy_engine.py -v

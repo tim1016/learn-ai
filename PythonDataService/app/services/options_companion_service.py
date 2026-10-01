@@ -11,7 +11,7 @@ IV is solved per bar via ``app.volatility.solver.implied_volatility``
 ``AnalyticEuropeanEngine`` using the solved IV. Surface-based IV is
 intentionally NOT used as input — it remains a deferred cross-check.
 Per-bar Greek values are pending a formal parity pass against LEAN /
-QuantLib's analytic engine; see ``docs/math-sources-of-truth.md``.
+QuantLib's analytic engine.
 """
 
 from __future__ import annotations
