@@ -1146,7 +1146,7 @@ def effective_fill_totals_for_order(conn: sqlite3.Connection, order_ref: str) ->
     for fills with no successor naming their ``execution_id`` as superseded.
     Reference: PRD #1441 S1.2 execution corrections.
     Canonical implementation: this query, reused by cumulative recovery.
-    Validated against: ``test_cumulative_recovery_fill_is_explicitly_tagged``.
+    Validated against: ``test_one_exact_auto_supersedes_many_cumulative_recovery_rows``.
     """
     return _effective_fill_totals_for_order(conn, order_ref)
 

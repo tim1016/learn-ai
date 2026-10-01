@@ -24,7 +24,6 @@ import pytest
 from eventkit import Event
 from ib_async import Ticker
 
-from app.broker.alpaca.clerk.sqlite.qualification_polygon_replay import _PolygonReplayClient
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.ibkr import bars as bars_mod
 from app.broker.ibkr.auto_reconnect_monitor import AutoReconnectMonitor
@@ -581,5 +580,4 @@ async def test_1101_with_no_replacement_ever_requested_leaves_nothing_stale(
 def test_every_bar_client_satisfies_the_realtime_bar_protocol() -> None:
     """The registry and gate read exactly these members; no client may default one silently."""
     assert isinstance(_client(_Transport()), RealtimeBarClient)
-    assert isinstance(_PolygonReplayClient([]), RealtimeBarClient)
     assert isinstance(_AdversarialIbkrClient(SimpleNamespace()), RealtimeBarClient)  # type: ignore[arg-type]

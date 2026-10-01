@@ -95,7 +95,7 @@ _ACCOUNT_CONDITIONS = tuple(
 )
 _CONDITION_PHRASES = dict(LANE_QUIET_CONDITIONS)
 #: Stop order: lanes before the coordinator, Postgres last.
-_STOP_RANK = {"clerk": 0, "qualification": 1, "fleet_control": 2, "postgres": 3}
+_STOP_RANK = {"clerk": 0, "fleet_control": 1, "postgres": 2}
 
 
 @dataclass(frozen=True, slots=True)

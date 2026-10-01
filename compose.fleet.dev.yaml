@@ -16,8 +16,8 @@
 x-alpaca-clerk-agent: &alpaca-clerk-agent
   build:
     context: ./PythonDataService
-    # Always-on: never the `qualification` stage, which the Dockerfile ends on
-    # (#2576).
+    # Always-on: name the stage, so a stage added after `runtime` never ships
+    # into it (#2576).
     target: runtime
   restart: unless-stopped
   # Deliberately no --reload: a clerk ships code by image rebuild, never by

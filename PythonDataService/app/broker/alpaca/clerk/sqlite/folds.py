@@ -1225,7 +1225,7 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
     Reference: docs/references/clerk-invariants.md §2.
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
-      test_folds_execution.py::test_cumulative_recovery_fill_is_explicitly_tagged.
+      test_folds_execution.py::test_one_exact_auto_supersedes_many_cumulative_recovery_rows.
 
     The evidence carries Alpaca's REST-reported *cumulative*
     ``filled_quantity``/``filled_avg_price`` for the order, not a

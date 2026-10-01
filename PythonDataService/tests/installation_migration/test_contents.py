@@ -139,7 +139,6 @@ def test_the_owner_listed_contents_are_all_present() -> None:
         "learn-ai_alpaca-fleet-control",
         "learn-ai-alpaca-clerk-data",
         "learn-ai-alpaca-paper-clerk-data",
-        "learn-ai-alpaca-clerk-qualification-data",
     }
     # Owner rule: every gitignored folder a container mounts goes in — which
     # carries the derived analytics cache too.

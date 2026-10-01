@@ -39,7 +39,6 @@ LIVE_VOLUME = "learn-ai-alpaca-clerk-data"
 PAPER_VOLUME = "learn-ai-alpaca-paper-clerk-data"
 CONTROL_VOLUME = "learn-ai_alpaca-fleet-control"
 PG_VOLUME = "learn-ai_pgdata"
-QUALIFICATION_VOLUME = "learn-ai-alpaca-clerk-qualification-data"
 LIVE_ACCOUNT = "PA-LIVE-1"
 PAPER_ACCOUNT = "PA-PAPER-1"
 
@@ -313,7 +312,7 @@ def write_host_env_files(repo_root: Path) -> None:
 
 
 def build_installation(tmp_path: Path, *, name: str = "source") -> Installation:
-    """A complete, flat scratch installation: five volumes, three folders."""
+    """A complete, flat scratch installation: four volumes, three folders."""
     repo_root = make_repo(tmp_path / name / "learn-ai")
     podman = FakePodman(tmp_path / name / "podman")
     for volume in BUNDLED_VOLUMES:
@@ -323,10 +322,6 @@ def build_installation(tmp_path: Path, *, name: str = "source") -> Installation:
     (pg / "base" / "5").mkdir(parents=True)
     (pg / "PG_VERSION").write_text("16\n", encoding="utf-8")
     (pg / "base" / "5" / "16384").write_bytes(os.urandom(4096))
-    (podman.volume_dir(QUALIFICATION_VOLUME) / "evidence").mkdir()
-    (podman.volume_dir(QUALIFICATION_VOLUME) / "evidence" / "rehearsal.json").write_text(
-        "{}", encoding="utf-8"
-    )
 
     clock = FrozenClock(T0)
     service = FleetControlService(

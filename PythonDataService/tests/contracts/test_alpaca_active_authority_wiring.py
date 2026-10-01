@@ -201,23 +201,6 @@ def test_alpaca_models_and_reads_have_no_legacy_custody_fallback() -> None:
     assert "Activated SQLite Clerk transaction detail is unavailable" in transaction_router
 
 
-def test_migration_gate_requires_an_explicit_nonempty_inventory() -> None:
-    gate = (
-        APPLICATION_ROOT
-        / "broker/alpaca/clerk/sqlite/activation_inventory.py"
-    ).read_text(encoding="utf-8")
-    cli = (
-        REPOSITORY_ROOT
-        / "PythonDataService/scripts/qualify_alpaca_activation_inventory.py"
-    ).read_text(encoding="utf-8")
-
-    assert "at least one in-use account" in gate
-    assert "store.resolve(" in gate
-    assert "verify_database(" in gate
-    assert "--inventory" in cli
-    assert "--output" in cli
-
-
 def test_every_reconciliation_sweep_publishes_its_verdict() -> None:
     """A sweep that does not publish makes pure panel reads permanently stale.
 

@@ -391,13 +391,13 @@ def test_a_secret_inside_a_bundled_folder_is_skipped_and_listed(tmp_path: Path) 
 
 def test_a_missing_volume_refuses_before_any_bot_stops(tmp_path: Path) -> None:
     installation = build_installation(tmp_path)
-    del installation.podman.volumes["learn-ai-alpaca-clerk-qualification-data"]
+    del installation.podman.volumes["learn-ai-alpaca-paper-clerk-data"]
 
     with pytest.raises(MigrationRefused) as refused:
         _export(installation, tmp_path / "bundle.tar")
 
     assert refused.value.reason == "volume_missing"
-    assert refused.value.details["volumes"] == ["learn-ai-alpaca-clerk-qualification-data"]
+    assert refused.value.details["volumes"] == ["learn-ai-alpaca-paper-clerk-data"]
     assert installation.lanes.stopped == []
 
 

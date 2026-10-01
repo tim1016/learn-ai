@@ -25,10 +25,6 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def atomic_write_text(path: Path, value: str) -> None:
-    atomic_write_bytes(path, value.encode())
-
-
 def confined_relative_path(root: Path, reference: str) -> Path:
     relative = Path(reference)
     if relative.is_absolute() or not relative.parts:
