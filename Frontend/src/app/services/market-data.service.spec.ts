@@ -3,7 +3,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { firstValueFrom } from 'rxjs';
 import { MarketDataService } from './market-data.service';
-import { createMockAggregate, createMockSummary, createMockIndicatorSeries } from '../../testing/factories/market-data.factory';
+import { createMockAggregate } from '../../testing/factories/market-data.factory';
 import { environment } from '../../environments/environment';
 
 const GRAPHQL_URL = environment.backendUrl;
@@ -24,14 +24,6 @@ describe('MarketDataService', () => {
   afterEach(() => httpMock.verify());
 
   describe('getOrFetchStockAggregates', () => {
-    it('should send POST to GraphQL endpoint', () => {
-      service.getOrFetchStockAggregates('AAPL', '2026-01-01', '2026-01-31').subscribe();
-
-      const req = httpMock.expectOne(GRAPHQL_URL);
-      expect(req.request.method).toBe('POST');
-      req.flush({ data: { getOrFetchStockAggregates: { ticker: 'AAPL', aggregates: [], summary: null } } });
-    });
-
     it('should send correct variables', () => {
       service.getOrFetchStockAggregates('MSFT', '2026-01-01', '2026-06-30', 'hour', 4).subscribe();
 
@@ -45,26 +37,24 @@ describe('MarketDataService', () => {
         forceRefresh: false,
         adjusted: true,
       });
-      req.flush({ data: { getOrFetchStockAggregates: { ticker: 'MSFT', aggregates: [], summary: null } } });
+      req.flush({ data: { getOrFetchStockAggregates: { ticker: 'MSFT', aggregates: [] } } });
     });
 
     it('should map response to SmartAggregatesResult', async () => {
       const aggregate = createMockAggregate();
-      const summary = createMockSummary();
 
       const promise = firstValueFrom(
         service.getOrFetchStockAggregates('AAPL', '2026-01-01', '2026-01-31')
       );
 
       httpMock.expectOne(GRAPHQL_URL).flush({
-        data: { getOrFetchStockAggregates: { ticker: 'AAPL', aggregates: [aggregate], summary } },
+        data: { getOrFetchStockAggregates: { ticker: 'AAPL', aggregates: [aggregate] } },
       });
 
       const result = await promise;
       expect(result.ticker).toBe('AAPL');
       expect(result.aggregates.length).toBe(1);
       expect(result.aggregates[0].open).toBe(aggregate.open);
-      expect(result.summary).toEqual(summary);
     });
 
     it('should throw on GraphQL errors', async () => {
@@ -190,46 +180,6 @@ describe('MarketDataService', () => {
       );
 
       await expect(promise).rejects.toThrow();
-    });
-  });
-
-  describe('calculateIndicators', () => {
-    it('should send correct variables', () => {
-      const indicators = [{ name: 'sma', window: 20 }];
-      service.calculateIndicators('AAPL', '2026-01-01', '2026-01-31', indicators).subscribe();
-
-      const req = httpMock.expectOne(GRAPHQL_URL);
-      expect(req.request.body.variables.ticker).toBe('AAPL');
-      expect(req.request.body.variables.indicators).toEqual(indicators);
-      req.flush({
-        data: {
-          calculateIndicators: {
-            success: true, ticker: 'AAPL',
-            indicators: [createMockIndicatorSeries()], error: null,
-          },
-        },
-      });
-    });
-
-    it('should map indicator response correctly', async () => {
-      const indicators = [{ name: 'sma', window: 20 }];
-
-      const promise = firstValueFrom(
-        service.calculateIndicators('AAPL', '2026-01-01', '2026-01-31', indicators)
-      );
-
-      httpMock.expectOne(GRAPHQL_URL).flush({
-        data: {
-          calculateIndicators: {
-            success: true, ticker: 'AAPL',
-            indicators: [createMockIndicatorSeries()], error: null,
-          },
-        },
-      });
-
-      const result = await promise;
-      expect(result.success).toBe(true);
-      expect(result.indicators.length).toBe(1);
     });
   });
 });

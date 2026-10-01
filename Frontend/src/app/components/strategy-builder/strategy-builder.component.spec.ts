@@ -456,7 +456,6 @@ describe('StrategyBuilderComponent', () => {
             aggregates: [
               { open: 5, high: 6, low: 4, close: 5.5, volume: 1000, timestamp: '2026-02-19T00:00:00Z' },
             ],
-            summary: null,
           },
         },
       });

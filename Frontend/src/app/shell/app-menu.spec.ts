@@ -109,12 +109,12 @@ describe('app menu projections', () => {
     expect(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9/gallery')).toBe('Accounts');
     expect(pageTitleFor('/brokers/alpaca?deploy=')).toBe('Accounts');
     expect(pageTitleFor('/brokers/alpaca/clerks/clrk_spec/accounts/PA9?deploy=')).toBe('Accounts');
-    expect(pageTitleFor('/jobs-demo')).toBeNull();
+    expect(pageTitleFor('/unlisted-page')).toBeNull();
   });
 
   it('highlights nothing for a route outside the menu', () => {
-    expect(activeMenuNodeFor('/jobs-demo')).toBeNull();
-    expect(menuItemsFor('/jobs-demo').every((group) => group.styleClass === undefined)).toBe(true);
+    expect(activeMenuNodeFor('/unlisted-page')).toBeNull();
+    expect(menuItemsFor('/unlisted-page').every((group) => group.styleClass === undefined)).toBe(true);
   });
 
   it('reaches the Data Lake Observatory from the Stocks group', () => {

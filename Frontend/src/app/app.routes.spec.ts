@@ -10,7 +10,6 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { appConfig } from './app.config';
-import { AlpacaBotControlExampleComponent } from './components/examples/alpaca-bot-control/alpaca-bot-control-example.component';
 import { AlpacaAccountWorkspaceComponent } from './components/brokers/alpaca-workspace/alpaca-account-workspace.component';
 import { DataLakeObservatoryComponent } from './components/data-lake-observatory/data-lake-observatory.component';
 import { AlpacaSurfaceNotReadyTabComponent } from './components/brokers/alpaca-workspace/alpaca-surface-not-ready-tab.component';
@@ -129,13 +128,6 @@ describe('routes', () => {
     await router.navigateByUrl(path);
 
     expect(router.url).toBe(expectedUrl);
-  });
-
-  it('keeps the Clerk diagnostic gallery unlinked beneath the examples route', async () => {
-    const route = routes.find((candidate) => candidate.path === 'examples/alpaca-bot-control');
-    if (route?.loadComponent === undefined) throw new Error('Alpaca bot control example route is missing.');
-
-    expect(await route.loadComponent()).toBe(AlpacaBotControlExampleComponent);
   });
 
   it('lazily loads the Data Lake Observatory and keeps it distinct from Data Lab', async () => {

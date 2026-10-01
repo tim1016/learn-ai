@@ -246,27 +246,6 @@ export interface ResearchExperiment {
   createdAt: number;
 }
 
-export interface FeatureInfo {
-  name: string;
-  display_name: string;
-  formula_latex: string;
-  variables: string;
-  example: string;
-  interpretation: string;
-  implementation_note: string;
-  window: number;
-  category: string;
-}
-
-export interface RunFeatureResearchInput {
-  ticker: string;
-  featureName: string;
-  fromDate: string;
-  toDate: string;
-  timespan?: string;
-  multiplier?: number;
-}
-
 // ─── Signal Engine Interfaces ─────────────────────────────────
 
 export interface SignalBacktestResult {
@@ -538,18 +517,6 @@ export interface SignalExperiment {
   createdAt: number;
 }
 
-export interface RunSignalEngineInput {
-  ticker: string;
-  featureName: string;
-  fromDate: string;
-  toDate: string;
-  flipSign: boolean;
-  regimeGateEnabled: boolean;
-  timespan?: string;
-  multiplier?: number;
-  forceRefresh?: boolean;
-}
-
 // ─── Batch / Cross-Sectional Interfaces ──────────────────
 
 export type TickerValidity = 'valid' | 'invalid_iv' | 'invalid_data' | 'error';
@@ -566,9 +533,8 @@ export interface TickerBatchResult {
   passedValidation: boolean;
   dataPoints: number;
   error?: string;
-  /** New: distinguishes "FAIL — IC ran, signal weak" from "INVALID — IV
-   *  diagnostics failed, no IC computation". The legacy GraphQL endpoint
-   *  doesn't supply this; the new SSE-driven path does. */
+  /** Distinguishes "FAIL — IC ran, signal weak" from "INVALID — IV
+   *  diagnostics failed, no IC computation". */
   validity?: TickerValidity;
   /** True when the ticker is technically valid (IC ran) but its
    *  effective sample size is below the trust threshold (default 10).
@@ -635,8 +601,7 @@ export interface BatchResearchResult {
   aggregateIc: number;
   tickerResults: TickerBatchResult[];
   summary: string;
-  // Optional — populated by the new SSE-driven path. The legacy GraphQL
-  // mutation will leave these undefined.
+  // Optional — populated by the SSE-driven job path.
   tickersTestedRaw?: number;
   tickersValid?: number;
   validitySummary?: ValiditySummary;
@@ -652,102 +617,7 @@ export interface BatchResearchResult {
   error?: string;
 }
 
-export interface RunBatchOptionsInput {
-  featureName: string;
-  tickers: string[];
-  fromDate: string;
-  toDate: string;
-  targetType?: string;
-}
-
-export interface RunOptionsFeatureInput {
-  ticker: string;
-  featureName: string;
-  fromDate: string;
-  toDate: string;
-  targetType?: string;
-}
-
 // ─── GraphQL Queries ───────────────────────────────────────
-
-const RUN_FEATURE_RESEARCH_MUTATION = `
-  mutation RunFeatureResearch(
-    $ticker: String!
-    $featureName: String!
-    $fromDate: String!
-    $toDate: String!
-    $timespan: String! = "minute"
-    $multiplier: Int! = 1
-  ) {
-    runFeatureResearch(
-      ticker: $ticker
-      featureName: $featureName
-      fromDate: $fromDate
-      toDate: $toDate
-      timespan: $timespan
-      multiplier: $multiplier
-    ) {
-      success ticker featureName startDate endDate barsUsed
-      meanIC icTStat icPValue nwTStat nwPValue effectiveN
-      icValues icDates
-      adfPvalue kpssPvalue isStationary
-      quantileBins { binNumber lowerBound upperBound meanReturn count }
-      isMonotonic monotonicityRatio
-      passedValidation
-      robustness {
-        monthlyBreakdown { month meanIC tStat observationCount }
-        pctPositiveMonths pctSignificantMonths
-        bestMonthIC worstMonthIC stabilityLabel
-        pctSignConsistentMonths signConsistentStabilityLabel
-        rollingTStat { month tStatSmoothed }
-        volatilityRegimes { regimeLabel meanIC tStat observationCount }
-        trendRegimes { regimeLabel meanIC tStat observationCount }
-        trainTest {
-          trainStart trainEnd testStart testEnd
-          trainMeanIC trainTStat trainDays
-          testMeanIC testTStat testDays
-          overfitFlag oosRetention oosRetentionLabel
-        }
-        structuralBreaks { date icBefore icAfter tStat significant }
-      }
-      featureSpec {
-        featureName defaultTarget expectedDirection expectedShape
-        stationarityRequired monotonicityRequired isSignedTargetAppropriate
-        intent notes
-      }
-      targetMetadata {
-        targetName horizonMinutes horizonBars barMinutes timezone
-        validCount totalCount validRatio
-        invalidReasonCounts { reason count }
-      }
-      validationVerdict {
-        statisticalScreen { name description passed requiredForStage1 failureReasons }
-        economicScreen { name description passed requiredForStage1 failureReasons }
-        oosScreen { name description passed requiredForStage1 failureReasons }
-        multipleTestingScreen { name description passed requiredForStage1 failureReasons }
-        regimeStabilityScreen { name description passed requiredForStage1 failureReasons }
-        multipleTesting { rawNwPValue holmPValue nFamily note }
-        costViability {
-          grossSpreadBpsSigned directionalSpreadBps
-          costAssumptionOneWayBps costErasureOneWayBps
-          netSpreadBpsAtAssumption viableAtAssumption specDirection note
-        }
-        icCi {
-          point se ciLower ciUpper confidenceLevel nEffUsed valid seApproximationNote
-        }
-        directionMatchesSpec
-        targetSignedAppropriate
-        stageInfo {
-          stage label description nextStageLabel
-          advanceCriteria { name description currentValue requiredRepr met }
-          failedScreens
-        }
-        finalDecision
-      }
-      error
-    }
-  }
-`;
 
 const GET_RESEARCH_EXPERIMENTS_QUERY = `
   query GetResearchExperiments($ticker: String!) {
@@ -756,124 +626,6 @@ const GET_RESEARCH_EXPERIMENTS_QUERY = `
       meanIC icTStat icPValue adfPValue kpssPValue
       isStationary passedValidation
       monotonicityRatio isMonotonic createdAt
-    }
-  }
-`;
-
-const GET_RESEARCH_EXPERIMENT_QUERY = `
-  query GetResearchExperiment($id: Int!) {
-    getResearchExperiment(id: $id) {
-      id ticker featureName startDate endDate barsUsed
-      meanIC icTStat icPValue adfPValue kpssPValue
-      isStationary passedValidation
-      monotonicityRatio isMonotonic createdAt
-    }
-  }
-`;
-
-const RUN_SIGNAL_ENGINE_MUTATION = `
-  mutation RunSignalEngine(
-    $ticker: String!
-    $featureName: String! = "momentum_5m"
-    $fromDate: String!
-    $toDate: String!
-    $flipSign: Boolean! = true
-    $regimeGateEnabled: Boolean! = true
-    $timespan: String! = "minute"
-    $multiplier: Int! = 1
-    $forceRefresh: Boolean! = false
-  ) {
-    runSignalEngine(
-      ticker: $ticker
-      featureName: $featureName
-      fromDate: $fromDate
-      toDate: $toDate
-      flipSign: $flipSign
-      regimeGateEnabled: $regimeGateEnabled
-      timespan: $timespan
-      multiplier: $multiplier
-      forceRefresh: $forceRefresh
-    ) {
-      success ticker featureName startDate endDate barsUsed
-      flipSign thresholdsTested costBpsOptions bestThreshold bestCostBps
-      backtestGrid {
-        threshold costBps dates cumulativeReturns positions
-        grossSharpe netSharpe maxDrawdown annualizedTurnover
-        avgHoldingBars winRate avgWinLossRatio totalTrades
-        netTotalReturn grossTotalReturn
-      }
-      walkForward {
-        windows {
-          foldIndex trainStart trainEnd testStart testEnd
-          trainBars testBars mu sigma bestThreshold
-          oosNetSharpe oosGrossSharpe oosMaxDrawdown
-          oosNetReturn oosWinRate oosTotalTrades
-          oosDates oosCumulativeReturns
-        }
-        meanOosSharpe stdOosSharpe medianOosSharpe
-        pctWindowsProfitable pctWindowsPositiveSharpe
-        worstWindowSharpe bestWindowSharpe totalOosBars
-        combinedOosDates combinedOosCumulativeReturns
-        oosSharpeTrendSlope
-        alphaDecay {
-          slope intercept tStat pValue rSquared
-          nFoldsUsed isTestValid isSignificant
-        }
-      }
-      graduation {
-        criteria {
-          name description passed value threshold label failureReason
-        }
-        overallPassed overallGrade summary statusLabel
-        parameterStability {
-          sharpeValuesByThreshold { threshold sharpe }
-          stabilityScore stabilityLabel
-        }
-        stage0Rejection {
-          rejected
-          failedCriteria { criterionName value thresholdRepr message }
-        }
-        stageInfo {
-          stage label description nextStageLabel
-          advanceCriteria { name description currentValue requiredRepr met }
-        }
-      }
-      signalDiagnostics {
-        signalMean signalStd pctTimeActive avgAbsSignal
-        pctFilteredByThreshold pctGatedByRegime
-      }
-      dataSufficiency {
-        totalBars trainBars testBars walkForwardFolds
-        effectiveOosBars regimesCovered
-        regimeCoverage { regime count }
-        coverageWarnings
-      }
-      effectiveSample {
-        rawN effectiveN autocorrelationLag1 independentBets
-        maxLagUsed rhoSum
-      }
-      regimeCoverage { regime count }
-      jointRegimeCoverage {
-        volLabel trendLabel days effectiveTrades badge
-      }
-      signalBehavior {
-        avgForwardReturnWhenActive skewnessActiveReturns
-        avgWinReturn avgLossReturn hitRate
-      }
-      oosSharpeCi {
-        point se ciLower ciUpper confidenceLevel nEffUsed valid
-      }
-      deflatedSharpe {
-        rawSharpe expectedMaxUnderNull dsrProbability
-        nTrials skewness kurtosis valid
-      }
-      methodology {
-        trainMonths testMonths windowType optimizationTarget
-        annualizationFactor barsPerDay horizon defaultCostBps
-        minBarsForSignal flipSign regimeGateEnabled
-        thresholds costBpsOptions
-      }
-      researchLog error
     }
   }
 `;
@@ -976,141 +728,10 @@ const GET_SIGNAL_EXPERIMENT_REPORT_QUERY = `
   }
 `;
 
-const RUN_OPTIONS_FEATURE_MUTATION = `
-  mutation RunOptionsFeatureResearch(
-    $ticker: String!
-    $featureName: String!
-    $fromDate: String!
-    $toDate: String!
-    $targetType: String! = "directional"
-  ) {
-    runOptionsFeatureResearch(
-      ticker: $ticker
-      featureName: $featureName
-      fromDate: $fromDate
-      toDate: $toDate
-      targetType: $targetType
-    ) {
-      success ticker featureName startDate endDate barsUsed
-      meanIC icTStat icPValue nwTStat nwPValue effectiveN
-      icValues icDates
-      adfPvalue kpssPvalue isStationary
-      quantileBins { binNumber lowerBound upperBound meanReturn count }
-      isMonotonic monotonicityRatio
-      passedValidation
-      robustness {
-        monthlyBreakdown { month meanIC tStat observationCount }
-        pctPositiveMonths pctSignificantMonths
-        bestMonthIC worstMonthIC stabilityLabel
-        pctSignConsistentMonths signConsistentStabilityLabel
-        rollingTStat { month tStatSmoothed }
-        volatilityRegimes { regimeLabel meanIC tStat observationCount }
-        trendRegimes { regimeLabel meanIC tStat observationCount }
-        trainTest {
-          trainStart trainEnd testStart testEnd
-          trainMeanIC trainTStat trainDays
-          testMeanIC testTStat testDays
-          overfitFlag oosRetention oosRetentionLabel
-        }
-        structuralBreaks { date icBefore icAfter tStat significant }
-      }
-      featureSpec {
-        featureName defaultTarget expectedDirection expectedShape
-        stationarityRequired monotonicityRequired isSignedTargetAppropriate
-        intent notes
-      }
-      targetMetadata {
-        targetName horizonMinutes horizonBars barMinutes timezone
-        validCount totalCount validRatio
-        invalidReasonCounts { reason count }
-      }
-      validationVerdict {
-        statisticalScreen { name description passed requiredForStage1 failureReasons }
-        economicScreen { name description passed requiredForStage1 failureReasons }
-        oosScreen { name description passed requiredForStage1 failureReasons }
-        multipleTestingScreen { name description passed requiredForStage1 failureReasons }
-        regimeStabilityScreen { name description passed requiredForStage1 failureReasons }
-        multipleTesting { rawNwPValue holmPValue nFamily note }
-        costViability {
-          grossSpreadBpsSigned directionalSpreadBps
-          costAssumptionOneWayBps costErasureOneWayBps
-          netSpreadBpsAtAssumption viableAtAssumption specDirection note
-        }
-        icCi {
-          point se ciLower ciUpper confidenceLevel nEffUsed valid seApproximationNote
-        }
-        directionMatchesSpec
-        targetSignedAppropriate
-        stageInfo {
-          stage label description nextStageLabel
-          advanceCriteria { name description currentValue requiredRepr met }
-          failedScreens
-        }
-        finalDecision
-      }
-      error
-    }
-  }
-`;
-
-const RUN_BATCH_OPTIONS_MUTATION = `
-  mutation RunBatchOptionsResearch(
-    $featureName: String!
-    $tickers: [String!]!
-    $fromDate: String!
-    $toDate: String!
-    $targetType: String! = "directional"
-  ) {
-    runBatchOptionsResearch(
-      featureName: $featureName
-      tickers: $tickers
-      fromDate: $fromDate
-      toDate: $toDate
-      targetType: $targetType
-    ) {
-      success featureName
-      tickersTested tickersPassed passRate
-      crossSectionalConsistent aggregateIc
-      tickerResults {
-        ticker meanIc icTStat icPValue
-        nwTStat nwPValue effectiveN
-        isStationary passedValidation
-        dataPoints error
-      }
-      summary error
-    }
-  }
-`;
-
 // ─── Response Types ────────────────────────────────────────
-
-interface RunOptionsFeatureResponse {
-  data: { runOptionsFeatureResearch: ResearchResult };
-  errors?: { message: string }[];
-}
-
-interface RunBatchOptionsResponse {
-  data: { runBatchOptionsResearch: BatchResearchResult };
-  errors?: { message: string }[];
-}
-
-interface RunResearchResponse {
-  data: { runFeatureResearch: ResearchResult };
-  errors?: { message: string }[];
-}
 
 interface GetExperimentsResponse {
   data: { getResearchExperiments: ResearchExperiment[] };
-  errors?: { message: string }[];
-}
-
-interface GetExperimentResponse {
-  data: { getResearchExperiment: ResearchExperiment | null };
-  errors?: { message: string }[];
-}
-
-interface RunSignalEngineResponse {
-  data: { runSignalEngine: SignalEngineResult };
   errors?: { message: string }[];
 }
 
@@ -1132,29 +753,6 @@ interface GetSignalExperimentReportResponse {
 export class ResearchService {
   private http = inject(HttpClient);
 
-  runFeatureResearch(input: RunFeatureResearchInput): Observable<ResearchResult> {
-    return this.http
-      .post<RunResearchResponse>(GRAPHQL_URL, {
-        query: RUN_FEATURE_RESEARCH_MUTATION,
-        variables: {
-          ticker: input.ticker,
-          featureName: input.featureName,
-          fromDate: input.fromDate,
-          toDate: input.toDate,
-          timespan: input.timespan ?? 'minute',
-          multiplier: input.multiplier ?? 1,
-        }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.runFeatureResearch)
-      );
-  }
-
   getExperiments(ticker: string): Observable<ResearchExperiment[]> {
     return this.http
       .post<GetExperimentsResponse>(GRAPHQL_URL, {
@@ -1168,48 +766,6 @@ export class ResearchService {
           }
         }),
         map(response => response.data.getResearchExperiments)
-      );
-  }
-
-  runSignalEngine(input: RunSignalEngineInput): Observable<SignalEngineResult> {
-    return this.http
-      .post<RunSignalEngineResponse>(GRAPHQL_URL, {
-        query: RUN_SIGNAL_ENGINE_MUTATION,
-        variables: {
-          ticker: input.ticker,
-          featureName: input.featureName,
-          fromDate: input.fromDate,
-          toDate: input.toDate,
-          flipSign: input.flipSign,
-          regimeGateEnabled: input.regimeGateEnabled,
-          timespan: input.timespan ?? 'minute',
-          multiplier: input.multiplier ?? 1,
-          forceRefresh: input.forceRefresh ?? false,
-        }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.runSignalEngine)
-      );
-  }
-
-  getExperiment(id: number): Observable<ResearchExperiment | null> {
-    return this.http
-      .post<GetExperimentResponse>(GRAPHQL_URL, {
-        query: GET_RESEARCH_EXPERIMENT_QUERY,
-        variables: { id }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.getResearchExperiment)
       );
   }
 
@@ -1242,50 +798,6 @@ export class ResearchService {
           }
         }),
         map(response => response.data.getSignalExperimentReport)
-      );
-  }
-
-  runOptionsFeatureResearch(input: RunOptionsFeatureInput): Observable<ResearchResult> {
-    return this.http
-      .post<RunOptionsFeatureResponse>(GRAPHQL_URL, {
-        query: RUN_OPTIONS_FEATURE_MUTATION,
-        variables: {
-          ticker: input.ticker,
-          featureName: input.featureName,
-          fromDate: input.fromDate,
-          toDate: input.toDate,
-          targetType: input.targetType ?? 'directional',
-        }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.runOptionsFeatureResearch)
-      );
-  }
-
-  runBatchOptionsResearch(input: RunBatchOptionsInput): Observable<BatchResearchResult> {
-    return this.http
-      .post<RunBatchOptionsResponse>(GRAPHQL_URL, {
-        query: RUN_BATCH_OPTIONS_MUTATION,
-        variables: {
-          featureName: input.featureName,
-          tickers: input.tickers,
-          fromDate: input.fromDate,
-          toDate: input.toDate,
-          targetType: input.targetType ?? 'directional',
-        }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.runBatchOptionsResearch)
       );
   }
 }
