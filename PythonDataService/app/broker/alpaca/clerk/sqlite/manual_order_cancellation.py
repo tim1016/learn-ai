@@ -360,26 +360,29 @@ async def _resolve_claimed_manual_order_cancellation(
         return
 
     simulated_authority = trade_port_folds_simulated_evidence(broker.trade)
-    await run(
-        lambda: fold_exact_order_evidence(
-            repo,
-            effect_operation_id=source_effect.effect_operation_id,
-            order_ref=target.order_ref,
-            order=observed,
-            simulated_authority=simulated_authority,
+
+    async def _fold(answer: BrokerOrder) -> None:
+        await run(
+            lambda: fold_exact_order_evidence(
+                repo,
+                effect_operation_id=source_effect.effect_operation_id,
+                order_ref=target.order_ref,
+                order=answer,
+                simulated_authority=simulated_authority,
+            )
         )
-    )
+
+    await _fold(observed)
     # An order Alpaca replaced is settled by its chain head's own answer
     # (#2656): the client-id lookup still reports the original, whose
     # ``replaced`` says nothing about the order that took its place.
     head = await follow_manual_replacement_chain(
         repo,
         broker=broker,
-        effect_operation_id=source_effect.effect_operation_id,
         order_ref=target.order_ref,
         observed=observed,
         run=run,
-        simulated_authority=simulated_authority,
+        fold=_fold,
     )
     if not isinstance(head, BrokerOrder):
         head_failed_why = unobserved_chain_head_why(head)

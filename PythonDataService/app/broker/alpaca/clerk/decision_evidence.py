@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
 
 class EffectDecisionEvidence(BaseModel):
     """One effect-bearing Signal Program decision before custody acceptance."""
@@ -16,14 +18,14 @@ class EffectDecisionEvidence(BaseModel):
     bar_ref: str = Field(min_length=1)
     symbol: str = Field(min_length=1)
     outcome: Literal["enter_intent", "exit_intent"]
-    observed_at_ms: int = Field(ge=0)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     # Direction 2 (run-scoped replay proof): the canonical per-bucket trace
     # digest (`trace_root([trace])`) and the decision bucket's close, captured
     # at live time so a replay can compare decision CONTENT, not just intent
     # direction. Optional: legacy callers and traceless compatibility
     # strategies omit them; the replay receipt discloses digest coverage.
     trace_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    decision_bar_close_ms: int | None = Field(default=None, ge=0)
+    decision_bar_close_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     # #2303/#2345: how far past its close this decision was taken, when that
     # exceeded the delivery allowance. Only an EXIT can carry one -- a late
     # ENTER never reaches the Clerk, while a late EXIT does (the liveness
@@ -37,7 +39,7 @@ class EffectDecisionEvidence(BaseModel):
     # for a newer reading until then, and is dropped after it. ``None`` on an
     # EXIT, which never waits for a reading, and from callers that set none:
     # such an ENTER is dropped at once.
-    decision_valid_until_ms: int | None = Field(default=None, ge=0)
+    decision_valid_until_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
 
     @property
     def reason_code(self) -> str:

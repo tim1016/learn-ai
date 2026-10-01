@@ -191,7 +191,7 @@ class VolSurfaceBuilder:
     def __init__(
         self,
         spot: float,
-        rate: float = 0.05,
+        rate: float,
         dividend: float = 0.0,
         eval_date: str = "",
         min_contracts_per_slice: int = 5,

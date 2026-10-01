@@ -63,6 +63,7 @@ from app.research.runs import (
     save_run,
 )
 from app.services.spec_run_data import SpecDataSourceFactory, materialize_spec_data_source
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -291,7 +292,9 @@ def list_runs_endpoint(
     ),
     parent_run_id: str | None = Query(None, description="Filter by lineage — fold/MC/sweep parent"),
     parent_spec_hash: str | None = Query(None, description="Filter by sensitivity-grid parent"),
-    since_ms: int | None = Query(None, ge=0, description="Only return runs created at or after this ``int64 ms UTC``"),
+    since_ms: int | None = Query(
+        None, ge=0, le=MAX_TIMESTAMP_MS, description="Only return runs created at or after this ``int64 ms UTC``"
+    ),
     limit: int | None = Query(None, ge=1, description="Cap result count after sorting newest-first"),
     artifacts_root: Path | None = Depends(get_artifacts_root),
 ) -> StrategyRunListResponse:

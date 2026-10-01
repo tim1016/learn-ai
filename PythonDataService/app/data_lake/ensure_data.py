@@ -40,6 +40,7 @@ from app.data_lake.bar_validation import (
     assert_publishable_minute_bars,
     assert_publishable_stored_minute_bars,
 )
+from app.data_lake.cache_import import import_minute_trade_dch
 from app.data_lake.data_contract import data_contract_hash as _dch
 from app.data_lake.derived_daily import (
     MinuteBarReadError,
@@ -468,6 +469,20 @@ def _cache_matches(row: ArtifactRecord, dch: str, lake_root: Path, version: str 
         return False  # Missing/invalid evidence is rebuilt, never blessed in place.
 
 
+def _minute_trade_cache_matches(row: ArtifactRecord, dch: str, lake_root: Path, version: str | None) -> bool:
+    """:func:`_cache_matches`, plus a raw day the lean-cache import committed.
+
+    An imported raw day is the same Polygon recipe as a live fetch; its data
+    contract hash differs only to record that it was imported. Reusing it is
+    what the import is for (#1839), and #2454's version pinning was never to
+    touch raw data (#2660). An adjusted import records no corporate-action
+    version, so it still rebuilds.
+    """
+    if version is None and row.data_contract_hash == import_minute_trade_dch(adjusted=False):
+        return True
+    return _cache_matches(row, dch, lake_root, version)
+
+
 async def _cached_bars_still_valid(cached: ArtifactRecord, spec: DataRunSpec) -> bool:
     """Does a contract-matching cache hit still hold contract-valid bars?
 
@@ -593,8 +608,9 @@ async def _process_minute_trade_artifact(
         )
         if existing:
             cached = existing[0]
-            if _cache_matches(cached, dch, resolve_lake_root(spec.price_adjustment_mode), adjustment_version) \
-                    and await _cached_bars_still_valid(cached, spec):
+            if _minute_trade_cache_matches(
+                cached, dch, resolve_lake_root(spec.price_adjustment_mode), adjustment_version
+            ) and await _cached_bars_still_valid(cached, spec):
                 return cached, None, True
             prior = await catalog_client.refresh_complete_artifact(
                 artifact_id=cached.id, worker_id=_WORKER_ID, lease_ttl_ms=_LEASE_TTL_MS,

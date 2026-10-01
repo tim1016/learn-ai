@@ -3,6 +3,7 @@ using System.Text.Json;
 using Backend.Configuration;
 using Backend.Models.DTOs.PolygonResponses;
 using Backend.Services.Implementation;
+using Backend.Services.Interfaces;
 using Backend.Tests.Helpers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -123,6 +124,68 @@ public class PolygonServiceTests
 
         await Assert.ThrowsAsync<HttpRequestException>(() =>
             service.FetchOptionsChainSnapshotAsync("AAPL"));
+    }
+
+    #endregion
+
+    #region Risk-free rate (#2764)
+
+    // Python owns the default risk-free rate. A caller that gives no rate must
+    // send no rate field, so Python's request model fills its one default.
+
+    [Fact]
+    public async Task AnalyzeOptionsStrategyAsync_NoRiskFreeRate_OmitsTheField()
+    {
+        var handler = CreateHandler(HttpStatusCode.OK, new StrategyAnalyzeResponseDto { Success = true, Symbol = "AAPL" });
+        var service = CreateService(handler);
+
+        await service.AnalyzeOptionsStrategyAsync("AAPL", [CallLeg()], "2026-02-20", 230m);
+
+        Assert.False(RequestCarriesRiskFreeRate(handler));
+    }
+
+    [Fact]
+    public async Task AnalyzeOptionsStrategyAsync_RiskFreeRateGiven_SendsIt()
+    {
+        var handler = CreateHandler(HttpStatusCode.OK, new StrategyAnalyzeResponseDto { Success = true, Symbol = "AAPL" });
+        var service = CreateService(handler);
+
+        await service.AnalyzeOptionsStrategyAsync("AAPL", [CallLeg()], "2026-02-20", 230m, 0.05m);
+
+        using var body = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.Equal(0.05m, body.RootElement.GetProperty("risk_free_rate").GetDecimal());
+    }
+
+    [Fact]
+    public async Task QuantLibPriceAsync_NoRiskFreeRate_OmitsTheField()
+    {
+        var handler = CreateHandler(HttpStatusCode.OK, new QuantLibPriceResponse { Success = true, Engine = "analytic_bs" });
+        var service = CreateService(handler);
+
+        await service.QuantLibPriceAsync(100m, 100m, null, 0.20m, "2026-02-20", "call");
+
+        Assert.False(RequestCarriesRiskFreeRate(handler));
+    }
+
+    [Fact]
+    public async Task PricingCompareAsync_NoRiskFreeRate_OmitsTheField()
+    {
+        var handler = CreateHandler(HttpStatusCode.OK, new PricingCompareResponse { Success = true, RiskFreeRate = 0.043m });
+        var service = CreateService(handler);
+
+        var result = await service.PricingCompareAsync(100m, 100m, 0.20m, "2026-02-20", "call");
+
+        Assert.False(RequestCarriesRiskFreeRate(handler));
+        Assert.Equal(0.043m, result.RiskFreeRate);
+    }
+
+    private static StrategyLegInput CallLeg() =>
+        new() { Strike = 230m, OptionType = "call", Position = "long", Premium = 5m, Iv = 0.30m };
+
+    private static bool RequestCarriesRiskFreeRate(FakeHttpMessageHandler handler)
+    {
+        using var body = JsonDocument.Parse(handler.LastRequestBody!);
+        return body.RootElement.TryGetProperty("risk_free_rate", out _);
     }
 
     #endregion

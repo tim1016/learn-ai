@@ -15,6 +15,7 @@ import hmac
 import math
 from dataclasses import asdict, dataclass
 
+from app.broker.alpaca.adapter import execution_id_from_activity_id
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     CumulativeRecoveryFill,
     exact_replaces_cumulative,
@@ -151,7 +152,7 @@ def _require_exact_activity(
     matches = [
         activity
         for activity in activities
-        if _execution_id_from_activity_id(activity.activity_id) == execution_id
+        if execution_id_from_activity_id(activity.activity_id) == execution_id
     ]
     if not matches:
         raise HistoricalExecutionRecoveryRefused(
@@ -201,20 +202,6 @@ def _require_exact_activity(
             "The retained Alpaca activity has invalid exact execution economics.",
         )
     return activity
-
-
-def _execution_id_from_activity_id(activity_id: str) -> str:
-    """Recover Alpaca's execution identity from its account-activity identity.
-
-    Trade updates expose the bare execution UUID, while account activities may
-    prefix that same UUID with the vendor timestamp and ``::``. The full
-    activity ID remains opaque everywhere else; only this evidence bridge
-    compares the embedded execution identity retained by Clerk custody.
-    """
-    timestamp_prefix, separator, embedded_execution_id = activity_id.rpartition("::")
-    if separator and timestamp_prefix.isdigit() and embedded_execution_id:
-        return embedded_execution_id
-    return activity_id
 
 
 def _require_matching_economics(

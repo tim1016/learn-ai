@@ -438,6 +438,7 @@
             "title": "Fee Total"
           },
           "from_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "From Ms",
             "type": "integer"
@@ -487,6 +488,7 @@
             "title": "Start Open Pnl Total"
           },
           "to_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "To Ms",
             "type": "integer"
@@ -1560,6 +1562,7 @@
             "type": "string"
           },
           "recorded_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Recorded At Ms",
             "type": "integer"
@@ -1869,6 +1872,7 @@
             "$ref": "#/components/schemas/AlpacaPaperDeployEligibility"
           },
           "evaluated_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Evaluated At Ms",
             "type": "integer"
@@ -5330,6 +5334,7 @@
         "description": "Process-registry observation for one strategy run.\n\nThis fact reports only process presence. It never implies broker custody,\nexposure, order state, or permission to trade.",
         "properties": {
           "observed_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Observed At Ms",
             "type": "integer"
@@ -5422,6 +5427,7 @@
             "type": "string"
           },
           "recorded_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Recorded At Ms",
             "type": "integer"
@@ -5472,6 +5478,7 @@
             "type": "string"
           },
           "started_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Started At Ms",
             "type": "integer"
@@ -8707,6 +8714,7 @@
           "a0_custody_accepted_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -8719,6 +8727,7 @@
           "broker_ack_recorded_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -8731,6 +8740,7 @@
           "broker_call_returned_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -8743,6 +8753,7 @@
           "broker_write_started_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -8755,6 +8766,7 @@
           "clerk_intake_admitted_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -8767,6 +8779,7 @@
           "clerk_request_received_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -8782,6 +8795,7 @@
           "earliest_broker_source_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -8794,6 +8808,7 @@
           "economic_terminal_recorded_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -8806,6 +8821,7 @@
           "first_callback_arrived_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -8818,6 +8834,7 @@
           "first_callback_recorded_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -8830,6 +8847,7 @@
           "inbox_fsynced_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -8842,6 +8860,7 @@
           "intent_created_at_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
                 "minimum": 0.0,
                 "type": "integer"
               },
@@ -9372,6 +9391,7 @@
             "type": "object"
           },
           "recorded_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Recorded At Ms",
             "type": "integer"
@@ -9699,6 +9719,7 @@
             "type": "object"
           },
           "recorded_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Recorded At Ms",
             "type": "integer"
@@ -9977,6 +9998,7 @@
             "title": "Perm Id"
           },
           "recorded_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Recorded At Ms",
             "type": "integer"
@@ -11428,6 +11450,7 @@
             "type": "array"
           },
           "end_trading_date_ms": {
+            "maximum": 253402300799999.0,
             "title": "End Trading Date Ms",
             "type": "integer"
           },
@@ -11507,6 +11530,7 @@
             "type": "string"
           },
           "start_trading_date_ms": {
+            "maximum": 253402300799999.0,
             "title": "Start Trading Date Ms",
             "type": "integer"
           },
@@ -11778,6 +11802,7 @@
           "exchange_session_opens_ms_utc": {
             "description": "Calendar-derived session-open anchor for each entry of exchange_sessions, in the same order (int64 ms UTC). The canonical wire form of the session list.",
             "items": {
+              "maximum": 253402300799999.0,
               "type": "integer"
             },
             "title": "Exchange Session Opens Ms Utc",
@@ -11846,11 +11871,13 @@
           },
           "window_end_ms_utc": {
             "description": "Resolved EXCLUSIVE window end (int64 ms UTC). Date-only intent resolves to the next session open.",
+            "maximum": 253402300799999.0,
             "title": "Window End Ms Utc",
             "type": "integer"
           },
           "window_start_ms_utc": {
             "description": "Resolved half-open window start (int64 ms UTC). Date-only intent resolves to the session open.",
+            "maximum": 253402300799999.0,
             "title": "Window Start Ms Utc",
             "type": "integer"
           }
@@ -13951,6 +13978,7 @@
           },
           "missing_session_ms_utc": {
             "items": {
+              "maximum": 253402300799999.0,
               "type": "integer"
             },
             "title": "Missing Session Ms Utc",
@@ -13980,6 +14008,7 @@
             "type": "array"
           },
           "from_ms_utc": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "From Ms Utc",
             "type": "integer"
@@ -14035,6 +14064,7 @@
             "type": "string"
           },
           "to_ms_utc": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "To Ms Utc",
             "type": "integer"
@@ -15328,6 +15358,7 @@
             "type": "string"
           },
           "acknowledged_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Acknowledged At Ms",
             "type": "integer"
@@ -15667,6 +15698,7 @@
         "description": "One backend-computed FIFO lot closure; the browser renders it verbatim.",
         "properties": {
           "closed_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Closed At Ms",
             "type": "integer"
@@ -15729,6 +15761,7 @@
             "title": "Fee"
           },
           "opened_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Opened At Ms",
             "type": "integer"
@@ -24349,8 +24382,8 @@
             "type": "boolean"
           },
           "risk_free_rate": {
-            "default": 0.05,
-            "description": "Flat annualized risk-free rate used in IV/Greeks solves",
+            "default": 0.043,
+            "description": "Flat annualized risk-free rate used in IV/Greeks solves (omit for the Python default)",
             "maximum": 0.25,
             "minimum": 0.0,
             "title": "Risk Free Rate",
@@ -25440,7 +25473,8 @@
             "type": "string"
           },
           "risk_free_rate": {
-            "default": 0.05,
+            "default": 0.043,
+            "description": "Annualized risk-free rate (omit for the Python default)",
             "title": "Risk Free Rate",
             "type": "number"
           },
@@ -25526,6 +25560,11 @@
             "title": "Option Type",
             "type": "string"
           },
+          "risk_free_rate": {
+            "description": "The rate every curve was priced at, so a client overlay can price at the same one",
+            "title": "Risk Free Rate",
+            "type": "number"
+          },
           "strike": {
             "title": "Strike",
             "type": "number"
@@ -25545,6 +25584,7 @@
           "option_type",
           "expiration_date",
           "time_to_expiry_years",
+          "risk_free_rate",
           "models"
         ],
         "title": "PricingCompareResponse",
@@ -25922,6 +25962,7 @@
             "type": "string"
           },
           "verified_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Verified At Ms",
             "type": "integer"
@@ -26818,8 +26859,8 @@
             "type": "string"
           },
           "risk_free_rate": {
-            "default": 0.05,
-            "description": "Annualized risk-free rate",
+            "default": 0.043,
+            "description": "Annualized risk-free rate (omit for the Python default)",
             "title": "Risk Free Rate",
             "type": "number"
           },
@@ -27308,10 +27349,12 @@
             "type": "array"
           },
           "windowEndMs": {
+            "maximum": 253402300799999.0,
             "title": "Windowendms",
             "type": "integer"
           },
           "windowStartMs": {
+            "maximum": 253402300799999.0,
             "title": "Windowstartms",
             "type": "integer"
           }
@@ -29325,6 +29368,7 @@
             "type": "string"
           },
           "evaluated_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Evaluated At Ms",
             "type": "integer"
@@ -29511,6 +29555,7 @@
             "title": "Completed At Ms"
           },
           "created_at_ms": {
+            "maximum": 253402300799999.0,
             "title": "Created At Ms",
             "type": "integer"
           },
@@ -30569,6 +30614,7 @@
             "type": "string"
           },
           "sealed_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Sealed At Ms",
             "type": "integer"
@@ -32292,7 +32338,7 @@
           },
           "risk_free_rate": {
             "default": 0.043,
-            "description": "Risk-free rate (default ~4.3%)",
+            "description": "Annualized risk-free rate (omit for the Python default)",
             "maximum": 0.5,
             "minimum": 0.0,
             "title": "Risk Free Rate",
@@ -34069,6 +34115,7 @@
             "type": "string"
           },
           "flagged_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Flagged At Ms",
             "type": "integer"
@@ -34161,6 +34208,7 @@
             "type": "string"
           },
           "refreshed_at_ms": {
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Refreshed At Ms",
             "type": "integer"
@@ -36034,6 +36082,7 @@
           },
           "end_ms": {
             "description": "UTC epoch milliseconds",
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "End Ms",
             "type": "integer"
@@ -36105,6 +36154,7 @@
           },
           "start_ms": {
             "description": "UTC epoch milliseconds",
+            "maximum": 253402300799999.0,
             "minimum": 0.0,
             "title": "Start Ms",
             "type": "integer"
@@ -39476,6 +39526,7 @@
             "schema": {
               "description": "Expiry timestamp in int64 ms UTC.",
               "exclusiveMinimum": 0,
+              "maximum": 253402300799999,
               "title": "Expiry Ms",
               "type": "integer"
             }
@@ -39578,6 +39629,7 @@
             "schema": {
               "description": "Expiry timestamp in int64 ms UTC.",
               "exclusiveMinimum": 0,
+              "maximum": 253402300799999,
               "title": "Expiry Ms",
               "type": "integer"
             }
@@ -39675,6 +39727,7 @@
               "anyOf": [
                 {
                   "items": {
+                    "maximum": 253402300799999,
                     "type": "integer"
                   },
                   "type": "array"
@@ -39849,6 +39902,7 @@
             "schema": {
               "description": "Expiry timestamp in int64 ms UTC.",
               "exclusiveMinimum": 0,
+              "maximum": 253402300799999,
               "title": "Expiry Ms",
               "type": "integer"
             }
@@ -56442,6 +56496,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 253402300799999,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -56594,6 +56649,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 253402300799999,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -56789,6 +56845,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 253402300799999,
                   "minimum": 0,
                   "type": "integer"
                 },
@@ -57016,6 +57073,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maximum": 253402300799999,
                   "minimum": 0,
                   "type": "integer"
                 },

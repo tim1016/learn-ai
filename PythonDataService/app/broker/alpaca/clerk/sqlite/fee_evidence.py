@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.broker.alpaca.adapter import execution_id_from_activity_id
 from app.broker.alpaca.clerk.money import MoneyInputError, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.custody_subjects import outside_order_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
@@ -41,7 +42,7 @@ from app.services.alpaca_fee_attribution import (
     attribute_session_fees,
     collapse_activity_deliveries,
 )
-from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, et_midnight_ms
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -63,7 +64,7 @@ class FeeEvidenceFacts(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    checked_at_ms: int = Field(ge=0)
+    checked_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     activities: list[BrokerActivity]
     # Oldest dated row anywhere in the read's newest-first window. Coverage
     # never reads it as reach: a date-only row's midnight stamp may lie long
@@ -553,15 +554,13 @@ def custody_fee_attribution(
     external_fills: list[FeeFill] = []
     pre_custody_quantities: dict[str, Decimal] = defaultdict(Decimal)
     execution_ids = {row[0] for row in conn.execute("SELECT execution_id FROM fills WHERE execution_id IS NOT NULL")}
-    from app.broker.alpaca.clerk.sqlite.historical_execution_recovery import _execution_id_from_activity_id
-
     # ``None`` marks the pre-floor executions: they open no fee day.
     for day, rows in [*by_date.items(), (None, before_floor)]:
         for row in rows.values():
             if row.activity_type not in {"FILL", "PARTIAL_FILL"}:
                 continue
             if row.native_order_id in owned_orders:
-                if _execution_id_from_activity_id(row.activity_id) not in execution_ids:
+                if execution_id_from_activity_id(row.activity_id) not in execution_ids:
                     population_complete = False
                 continue
             if (

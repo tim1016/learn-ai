@@ -292,7 +292,7 @@ public class Query
         List<StrategyLegInput> legs,
         string expirationDate,
         decimal spotPrice,
-        decimal riskFreeRate = 0.043m,
+        decimal? riskFreeRate = null,
         bool includeCurrentCurve = false,
         bool includeGreekCurves = false,
         bool includeLegDiagnostics = false,
@@ -472,7 +472,7 @@ public class Query
         decimal volatility,
         string expirationDate,
         string optionType,
-        decimal riskFreeRate = 0.05m,
+        decimal? riskFreeRate = null,
         string? evaluationDate = null,
         decimal dividendYield = 0m,
         string engine = "analytic_bs")
@@ -522,7 +522,7 @@ public class Query
         decimal volatility,
         string expirationDate,
         string optionType,
-        decimal riskFreeRate = 0.05m,
+        decimal? riskFreeRate = null,
         decimal dividendYield = 0m,
         string? evaluationDate = null,
         decimal? spotMin = null,
@@ -543,6 +543,7 @@ public class Query
                 OptionType = response.OptionType,
                 ExpirationDate = response.ExpirationDate,
                 TimeToExpiryYears = response.TimeToExpiryYears,
+                RiskFreeRate = response.RiskFreeRate,
                 Models = response.Models.Select(m => new PricingModelCurveResult
                 {
                     Model = m.Model,
@@ -826,6 +827,7 @@ public class PricingCompareResult
     public string OptionType { get; set; } = "";
     public string ExpirationDate { get; set; } = "";
     public decimal TimeToExpiryYears { get; set; }
+    public decimal? RiskFreeRate { get; set; }
     public List<PricingModelCurveResult> Models { get; set; } = [];
     public string? Error { get; set; }
 }

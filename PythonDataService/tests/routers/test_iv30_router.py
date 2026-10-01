@@ -215,6 +215,17 @@ class TestPolygonFailureModes:
             assert resp.status_code == 502
             assert "spot" in resp.text.lower()
 
+    async def test_failed_dividend_lookup_returns_502(self, client, mock_snapshot):
+        from app.services.rate_dividend_service import RateAndDividend
+
+        no_dividend = RateAndDividend(
+            rate=mock_snapshot["rate"], dividend_yield=None, source_rate="FRED", source_dividend=None
+        )
+        with patch("app.routers.iv30.get_rate_and_dividend", return_value=no_dividend):
+            resp = await client.post("/api/edge/iv30/vix-style", json={"symbol": "SPY"})
+        assert resp.status_code == 502
+        assert "dividend" in resp.text.lower()
+
     async def test_no_contracts_returns_502(self, client):
         from app.routers import iv30 as iv30_router_module
 

@@ -19,6 +19,7 @@ from app.engine.live.account_artifacts import (
     _safe_account_path_segment,
     account_artifacts_root,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 BINDING_COMMAND_LEDGER_FILENAME = "binding_commands.jsonl"
 ACCOUNT_BINDING_LEDGER_READ_ENABLED_ENV = "ACCOUNT_BINDING_LEDGER_READ_ENABLED"
@@ -48,7 +49,7 @@ class AccountBindingCommand(BaseModel):
     run_id: str = Field(min_length=1, max_length=128)
     bot_order_namespace: str = Field(min_length=1, max_length=256)
     lifecycle_state: Literal["DEPLOYED", "ACTIVE", "RETIRED"]
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     source: str = Field(min_length=1, max_length=256)
     proposal_seq: int | None = Field(default=None, ge=1)
 

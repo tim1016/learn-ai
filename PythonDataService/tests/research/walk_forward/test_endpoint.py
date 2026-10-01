@@ -25,6 +25,7 @@ from app.routers.research_runs import (
     get_artifacts_root,
     get_data_source_factory,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 def _spec_dict() -> dict:
@@ -217,6 +218,79 @@ async def test_post_invalid_timestamp_returns_422(client):
     assert response.status_code == 422
 
 
+_WALK_FORWARD = "/api/research/strategy-runs/walk-forward"
+_ENGINE_CHART = "/api/engine/chart"
+
+
+def _engine_chart_body() -> dict:
+    return {
+        "strategy_name": "ema_crossover_signal",
+        "parameters": {"symbol": "TEST"},
+        "symbol": "TEST",
+        "from_ms_utc": date_str_to_ms("2024-01-02"),
+        "to_ms_utc": date_str_to_ms("2024-02-22"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("path", "field"),
+    [
+        (_WALK_FORWARD, "start_ms"),
+        (_WALK_FORWARD, "end_ms"),
+        (_ENGINE_CHART, "from_ms_utc"),
+        (_ENGINE_CHART, "to_ms_utc"),
+    ],
+)
+async def test_post_over_ceiling_timestamp_returns_422(client, path: str, field: str):
+    """An instant past ``MAX_TIMESTAMP_MS`` is refused at the schema boundary
+    (ADR 0022 (g)), not carried into datetime conversion to overflow (#2771)."""
+    if path == _WALK_FORWARD:
+        body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.7})
+    else:
+        body = _engine_chart_body()
+    body[field] = MAX_TIMESTAMP_MS + 1
+    response = await client.post(path, json=body)
+    assert response.status_code == 422, response.text
+
+
+async def test_post_start_ms_at_ceiling_passes_the_schema(client):
+    """``start_ms == MAX_TIMESTAMP_MS`` is admissible; the handler, not the
+    schema, refuses it because no later ``end_ms`` exists."""
+    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.7})
+    body["start_ms"] = MAX_TIMESTAMP_MS
+    body["end_ms"] = MAX_TIMESTAMP_MS
+    response = await client.post(_WALK_FORWARD, json=body)
+    assert response.status_code == 400, response.text
+    assert "strictly before" in response.json()["detail"]
+
+
+async def test_post_end_ms_at_ceiling_is_a_400_not_a_500(client):
+    """``end_ms == MAX_TIMESTAMP_MS`` passes the schema, but the trading
+    calendar's holiday rules for a window ending in 9999 reach year 10000:
+    that is a request the service cannot serve, refused as a 400 (#2771)."""
+    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.7})
+    body["end_ms"] = MAX_TIMESTAMP_MS
+    response = await client.post(_WALK_FORWARD, json=body)
+    assert response.status_code == 400, response.text
+    assert "year 10000 is out of range" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        _WALK_FORWARD,
+        "/api/research/strategy-runs",
+        "/api/research/strategy-runs/baselines",
+        "/api/research/strategy-runs/monte-carlo",
+    ],
+)
+async def test_list_since_ms_admits_the_ceiling_and_refuses_past_it(client, path: str):
+    at_ceiling = await client.get(path, params={"since_ms": MAX_TIMESTAMP_MS})
+    assert at_ceiling.status_code == 200, at_ceiling.text
+    past_ceiling = await client.get(path, params={"since_ms": MAX_TIMESTAMP_MS + 1})
+    assert past_ceiling.status_code == 422, past_ceiling.text
+
+
 async def test_post_unknown_split_kind_returns_400(client):
     body = _request_body(split_policy={"kind": "totally_made_up"})
     response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
@@ -390,3 +464,13 @@ async def test_walk_forward_path_does_not_clash_with_run_id_route(client):
     # with a ``walk_forwards`` envelope.
     assert response.status_code == 200
     assert "walk_forwards" in response.json()
+
+
+async def test_engine_chart_to_ms_at_ceiling_is_a_400_not_a_500(client):
+    """``to_ms_utc == MAX_TIMESTAMP_MS`` passes the schema, but a window ending
+    in 9999 cannot become a nanosecond timestamp: a request the service cannot
+    serve, refused as a 400 rather than a raw overflow 500 (#2771)."""
+    body = _engine_chart_body()
+    body["to_ms_utc"] = MAX_TIMESTAMP_MS
+    response = await client.post(_ENGINE_CHART, json=body)
+    assert response.status_code == 400, response.text

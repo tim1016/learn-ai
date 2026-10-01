@@ -19,6 +19,7 @@ from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.live.live_state_sidecar import _file_lock, fsync_parent_dir
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.canary_admission import CanaryRollbackDecision
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 class BotLifecycleStateCorruptError(RuntimeError):
@@ -43,7 +44,7 @@ class BotDutyOutcome(BaseModel):
 
     kind: BotDutyOutcomeKind
     reason_code: str = Field(min_length=1, max_length=128)
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     run_id: str | None = None
     # #1729 AC10: present only for an operator Stop of a canary (Signal-
     # Program-backed trade-mode) instance -- see

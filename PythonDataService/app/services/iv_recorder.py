@@ -38,7 +38,7 @@ from app.engine.edge.threshold_events import log_iv_dominance_gate
 from app.engine.live.identity import confine_path_to_root
 from app.routers.iv30 import _normalized_quotes_by_expiry, _pick_straddle_pair
 from app.services.polygon_client import PolygonClientService
-from app.services.rate_dividend_service import RateAndDividend, get_rate_and_dividend
+from app.services.rate_dividend_service import get_rate_and_dividend
 from app.volatility.iv30_health import compute_iv30_health_normalized
 from app.volatility.iv_provenance import IvProvenance
 from app.volatility.vix_replication import vix_style_iv30_with_provenance
@@ -271,13 +271,11 @@ def record_iv_snapshot(
             error=f"insufficient_snapshot: spot={spot} contracts={len(contracts)}",
         )
 
-    try:
-        rd = get_rate_and_dividend(
-            ticker=ticker, spot_price=spot, polygon=polygon, dte_days=target_calendar_days
-        )
-    except Exception as exc:
-        logger.warning("[iv-recorder] %s slot=%s rate/div failure: %s", ticker, slot, exc)
-        rd = RateAndDividend(rate=0.0, dividend_yield=0.0, source_rate="unknown", source_dividend="unknown")
+    # The rate always resolves. Rows store a failed dividend lookup as q=0
+    # with source "unknown" (#2764).
+    rd = get_rate_and_dividend(
+        ticker=ticker, spot_price=spot, polygon=polygon, dte_days=target_calendar_days
+    )
 
     by_expiry = _normalized_quotes_by_expiry(contracts, asof)
     iv_vix: float | None = None
@@ -347,9 +345,9 @@ def record_iv_snapshot(
         slot=slot,
         spot=spot,
         rate=rd.rate,
-        dividend_yield=rd.dividend_yield,
+        dividend_yield=0.0 if rd.dividend_yield is None else rd.dividend_yield,
         rate_source=rd.source_rate,
-        dividend_source=rd.source_dividend,
+        dividend_source=rd.source_dividend or "unknown",
         iv30_vix_style=iv_vix,
         iv30_parametric=iv_parametric,
         iv_provenance=prov_dict,

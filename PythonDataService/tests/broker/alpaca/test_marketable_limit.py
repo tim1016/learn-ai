@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeValues
 from app.broker.alpaca.config import AlpacaSettings
-from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances, marketable_limit_price
+from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances, marketable_limit_price, price_increment
 from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, TimeInForce
 
 
@@ -33,6 +33,19 @@ from app.broker.contract.models import BrokerOrderLeg, OrderSide, OrderType, Tim
 )
 def test_marketable_limit_price(side: OrderSide, close: Decimal, bps: Decimal, expected: Decimal) -> None:
     assert marketable_limit_price(side=side, anchor=close, allowance_bps=bps) == expected
+
+
+@pytest.mark.parametrize(
+    ("price", "increment"),
+    [
+        # Alpaca's tick: a hundredth of a cent just below $1, a cent from $1 up.
+        (Decimal("0.9999"), Decimal("0.0001")),
+        (Decimal("1.00"), Decimal("0.01")),
+    ],
+)
+def test_price_increment_changes_at_one_dollar(price: Decimal, increment: Decimal) -> None:
+    """#2770: the Clerk's price-conflict tolerance reads this tick rule, so its $1 boundary is pinned here."""
+    assert price_increment(price) == increment
 
 
 def test_a_negative_allowance_is_refused() -> None:

@@ -244,6 +244,7 @@ type PricingCompareResult {
   optionType: String!
   expirationDate: String!
   timeToExpiryYears: Decimal!
+  riskFreeRate: Decimal
   models: [PricingModelCurveResult!]!
   error: String
 }
@@ -282,12 +283,12 @@ type Query {
   getOptionsExpirations(underlyingTicker: String! contractType: String expirationDateGte: String expirationDateLte: String): OptionsExpirationsResult! @cost(weight: "10")
   getOptionsChainSnapshot(underlyingTicker: String! expirationDate: String): OptionsChainSnapshotResult! @cost(weight: "10")
   getStockSnapshot(ticker: String!): StockSnapshotResult! @cost(weight: "10")
-  analyzeOptionsStrategy(symbol: String! legs: [StrategyLegInput!]! expirationDate: String! spotPrice: Decimal! riskFreeRate: Decimal! = 0.043 includeCurrentCurve: Boolean! = false includeGreekCurves: Boolean! = false includeLegDiagnostics: Boolean! = false whatIfTimeShiftDays: Decimal! = 0 whatIfIvShift: Decimal! = 0): StrategyAnalyzeResult! @cost(weight: "10")
+  analyzeOptionsStrategy(symbol: String! legs: [StrategyLegInput!]! expirationDate: String! spotPrice: Decimal! riskFreeRate: Decimal includeCurrentCurve: Boolean! = false includeGreekCurves: Boolean! = false includeLegDiagnostics: Boolean! = false whatIfTimeShiftDays: Decimal! = 0 whatIfIvShift: Decimal! = 0): StrategyAnalyzeResult! @cost(weight: "10")
   getResearchExperiments(ticker: String!): [ResearchExperimentType!]! @cost(weight: "10")
   getSignalExperiments(ticker: String!): [SignalExperimentType!]! @cost(weight: "10")
   getSignalExperimentReport(id: Int!): SignalEngineResultType @cost(weight: "10")
-  quantlibPrice(spot: Decimal! strike: Decimal! volatility: Decimal! expirationDate: String! optionType: String! riskFreeRate: Decimal! = 0.05 evaluationDate: String dividendYield: Decimal! = 0 engine: String! = "analytic_bs"): QuantLibPriceResult! @cost(weight: "10")
-  pricingModelComparison(spot: Decimal! strike: Decimal! volatility: Decimal! expirationDate: String! optionType: String! riskFreeRate: Decimal! = 0.05 dividendYield: Decimal! = 0 evaluationDate: String spotMin: Decimal spotMax: Decimal numPoints: Int! = 100): PricingCompareResult! @cost(weight: "10")
+  quantlibPrice(spot: Decimal! strike: Decimal! volatility: Decimal! expirationDate: String! optionType: String! riskFreeRate: Decimal evaluationDate: String dividendYield: Decimal! = 0 engine: String! = "analytic_bs"): QuantLibPriceResult! @cost(weight: "10")
+  pricingModelComparison(spot: Decimal! strike: Decimal! volatility: Decimal! expirationDate: String! optionType: String! riskFreeRate: Decimal dividendYield: Decimal! = 0 evaluationDate: String spotMin: Decimal spotMax: Decimal numPoints: Int! = 100): PricingCompareResult! @cost(weight: "10")
   dataLabSessions(where: DataLabSessionFilterInput @cost(weight: "10") order: [DataLabSessionSortInput!] @cost(weight: "10")): [DataLabSession!]! @cost(weight: "10")
   dataLabSession(id: UUID!): DataLabSession @cost(weight: "10")
 }

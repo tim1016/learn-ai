@@ -135,6 +135,18 @@ describe('MarketDataService', () => {
     });
   });
 
+  // Python owns the default rate: an unset rate travels as null, so the
+  // Backend omits it and Python fills its one default (#2764).
+  describe('risk-free rate', () => {
+    it('analyzeOptionsStrategy sends no rate unless given one', () => {
+      service.analyzeOptionsStrategy('SPY', [], '2099-01-01', 100).subscribe();
+
+      const req = httpMock.expectOne(GRAPHQL_URL);
+      expect(req.request.body.variables.riskFreeRate).toBeNull();
+      req.flush({ data: { analyzeOptionsStrategy: {} } });
+    });
+  });
+
   describe('network error handling', () => {
     it('should propagate HTTP errors', async () => {
       const promise = firstValueFrom(

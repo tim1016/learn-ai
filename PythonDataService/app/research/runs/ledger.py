@@ -35,6 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.data_lake.path_policy import resolve_lake_root
 from app.research.runs.window import WindowSummary
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
 ENGINE_VERSION = "0.1.0"
@@ -276,7 +277,7 @@ class RunLedger(BaseModel):
     metrics_hash: str | None = None
 
     # Lifecycle.
-    created_at_ms: int = Field(default_factory=now_ms_utc)
+    created_at_ms: int = Field(default_factory=now_ms_utc, le=MAX_TIMESTAMP_MS)
     completed_at_ms: int | None = None
     status: Literal["running", "completed", "failed"] = "running"
     failure_reason: str | None = None

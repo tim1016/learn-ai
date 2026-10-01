@@ -41,6 +41,7 @@ from app.research.monte_carlo import (
 )
 from app.research.monte_carlo.result import MonteCarloMethod
 from app.routers.research_runs import get_artifacts_root
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -177,7 +178,7 @@ def list_monte_carlos_endpoint(
     parent_run_id: str | None = Query(None, description="Filter by parent run"),
     method: MonteCarloMethod | None = Query(None, description="reshuffle | resample"),
     since_ms: int | None = Query(
-        None, ge=0, description="Only return MCs created at or after this ms-since-epoch"
+        None, ge=0, le=MAX_TIMESTAMP_MS, description="Only return MCs created at or after this ms-since-epoch"
     ),
     limit: int | None = Query(None, ge=1, description="Newest-first cap"),
     artifacts_root: Path | None = Depends(get_artifacts_root),

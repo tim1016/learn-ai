@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -65,7 +66,7 @@ class DecisionReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     seq: int = Field(ge=1)
-    ts_ms: int = Field(ge=0)
+    ts_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     bar_ref: str
     outcome: DecisionOutcome
     reason_code: str

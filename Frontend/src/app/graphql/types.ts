@@ -270,6 +270,8 @@ export interface PricingCompareResult {
   optionType: string;
   expirationDate: string;
   timeToExpiryYears: number;
+  /** The rate Python priced every curve at; null only when the Backend call failed. */
+  riskFreeRate: number | null;
   models: PricingModelCurve[];
   error: string | null;
 }

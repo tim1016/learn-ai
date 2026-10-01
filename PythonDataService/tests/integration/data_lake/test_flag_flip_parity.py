@@ -5,12 +5,12 @@ These two tests hold the part of that claim no native-lake test repeats: a
 window imported from the old cache is served by the chart split-read and by an
 engine backtest without a single provider call.
 
-**Daily infrastructure.** The pull-request shards have no Postgres. Since
-#2456 a reader admits a lake file only against a root identity and a committed
-catalog receipt, so the chart test carries the ``slow`` mark and runs daily
-only (it is red there until #2660 lands); the engine test goes through
-``ensure_data`` and therefore needs the disposable, migrated catalog the daily
-suite supplies.
+**Daily infrastructure.** The pull-request shards have no Postgres, so both
+tests skip there and run daily against the disposable, migrated catalog the
+daily suite supplies. Both run the real import: since #2456 a reader admits a
+lake file only against a root identity and the committed catalog receipt the
+import writes, and ``ensure_data`` finds imported days only through their
+catalog rows.
 """
 
 from __future__ import annotations
@@ -24,14 +24,10 @@ from uuid import uuid4
 import pytest
 
 from app.config import settings
-from app.data_lake.atomic import atomic_write_and_promote
-from app.data_lake.cache_import import verify_and_read_zip
-from app.data_lake.path_policy import LeanMinuteBarPath, resolve_lake_root, resolve_staging_root
-from app.data_lake.types import PriceAdjustmentMode
+from app.data_lake.path_policy import resolve_lake_root
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
 from tests._helpers.lean_store import seed_store_day
 
-SYMBOL = "SPY"
 DAY_ONE = date(2026, 1, 5)  # Monday
 DAY_TWO = date(2026, 1, 6)
 DAY_THREE = date(2026, 1, 7)
@@ -43,10 +39,17 @@ WINDOW = [DAY_ONE, DAY_TWO, DAY_THREE]
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-def cache_root(tmp_path: Path) -> Path:
-    """The pre-import state: a policy-keyed cache written by the policy writer."""
-    return _seed_cache(tmp_path / "lean-cache" / "polygon-raw", SYMBOL)
+def _run_symbol() -> str:
+    """A symbol of this run's own.
+
+    The scratch Postgres outlives tmp_path, so a fixed ticker would inherit
+    catalog rows from the previous run of a test -- including a half-written
+    one from a run that failed -- and the import would report
+    ``in_flight_or_incomplete`` for a day whose bytes are right there.
+    Uniqueness makes the tests independent of the database's history instead
+    of requiring it to be clean.
+    """
+    return f"T{uuid4().hex[:10].upper()}"
 
 
 def _seed_cache(policy_root: Path, symbol: str) -> Path:
@@ -55,56 +58,35 @@ def _seed_cache(policy_root: Path, symbol: str) -> Path:
     return policy_root
 
 
-@pytest.fixture
-def imported_lake(tmp_path: Path, cache_root: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The post-import state, produced the way ``cache_import`` produces it.
+def _import_cache_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, symbol: str) -> Path:
+    """Write a policy cache for ``symbol``, import it for real, return the raw lake root.
 
-    Byte-for-byte the importer's own path: ``verify_and_read_zip`` to reject
-    anything malformed, then ``atomic_write_and_promote`` of ``raw_bytes``.
-    What is deliberately absent is the catalog -- the claim/lease bookkeeping,
-    which decides *whether* to write and records *that* it was written, and
-    which the chart's catalog-free read never consults (see the module
-    docstring). Nothing it does changes a byte.
+    The import is ``import_cache_root`` itself, not a copy of its byte path:
+    the catalog rows it commits are both what lake admission verifies a read
+    against (#2456) and what makes the days findable to ``ensure_data``.
     """
-    # Same location the autouse ``_isolate_data_lake_write_root`` guard in
-    # tests/conftest.py already pinned; re-stated (and re-pinned) here so the
-    # fixture reads on its own terms rather than depending on a default two
-    # files away.
+    from app.data_lake import catalog_client, root_identity
+    from app.data_lake.cache_import import ImportReport, import_cache_root
+
+    cache_root = _seed_cache(tmp_path / "lean-cache" / "polygon-raw", symbol)
     write_root = tmp_path / "lean-data-writer"
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    return _import_cache_bytes(cache_root, "raw")
+    # import_cache_root requires any --lake-root to carry a valid marker
+    # (issue #1878, PR B of #1861) -- stamped with the service's own default
+    # active root so the readers' later catalog reads (which default to that
+    # same root) actually find what this import writes.
+    root_identity.init_empty_root(write_root, root_identity.active_root_id())
+    _write_cache_provenance(cache_root, symbol)
 
+    async def _import() -> ImportReport:
+        try:
+            return await import_cache_root(cache_root, write_root)
+        finally:
+            await catalog_client.close_pool()
 
-def _import_cache_bytes(cache_root: Path, mode: PriceAdjustmentMode) -> Path:
-    lake_dir = resolve_lake_root(mode)
-    staging_dir = resolve_staging_root(mode)
-    lake_dir.mkdir(parents=True, exist_ok=True)
-    staging_dir.mkdir(parents=True, exist_ok=True)
-
-    run_id = uuid4()
-    for trading_date in WINDOW:
-        source = _cache_zip_path(cache_root, trading_date)
-        verified = verify_and_read_zip(source, SYMBOL, trading_date)
-        atomic_write_and_promote(
-            content=verified.raw_bytes,
-            lake_root=lake_dir,
-            staging_root=staging_dir,
-            rel_lake_path=_lake_relative_path(trading_date),
-            request_id=run_id,
-            worker_id="parity-test",
-            attempt=1,
-        )
-    return lake_dir
-
-
-def _cache_zip_path(cache_root: Path, trading_date: date) -> Path:
-    return cache_root / "equity" / "usa" / "minute" / SYMBOL.lower() / f"{trading_date:%Y%m%d}_trade.zip"
-
-
-def _lake_relative_path(trading_date: date):
-    return LeanMinuteBarPath(
-        market="usa", symbol=SYMBOL, trading_date=trading_date, data_type="trade"
-    ).relative_path()
+    report = asyncio.run(_import())
+    assert len(report.imported) == len(WINDOW), report
+    return resolve_lake_root("raw")
 
 
 # ---------------------------------------------------------------------------
@@ -112,9 +94,8 @@ def _lake_relative_path(trading_date: date):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow  # reads through lake admission: needs the catalog
 def test_chart_serves_a_covered_completed_window_with_zero_provider_calls(
-    imported_lake: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC: a previously-fetched window costs nothing at the provider.
 
@@ -127,24 +108,34 @@ def test_chart_serves_a_covered_completed_window_with_zero_provider_calls(
     coverage" criterion: the bars below come out of the artifacts the import
     produced, not out of a lake seeded by the chart tests' own writer.
     """
+    _requires_postgres()
+
+    from app.data_lake import catalog_client
     from app.services.chart_bar_source import compose_chart_bars
+
+    symbol = _run_symbol()
+    imported_lake = _import_cache_window(tmp_path, monkeypatch, symbol)
 
     def _provider_must_not_be_called(from_date: str, to_date: str):
         raise AssertionError(f"the provider was called for {from_date}..{to_date} over a fully-covered window")
 
-    composed = compose_chart_bars(
-        ticker=SYMBOL,
-        from_date=DAY_ONE.isoformat(),
-        to_date=DAY_THREE.isoformat(),
-        adjusted=False,
-        fetch_provider=_provider_must_not_be_called,
-        session="rth",
-        # Well past the window's last close, so no session is still forming
-        # and there is no live tail to fetch. Pinned rather than "now" so the
-        # test does not change meaning as the calendar moves.
-        now_ms=_ms_after_the_window(),
-        lake_root=imported_lake,
-    )
+    try:
+        composed = compose_chart_bars(
+            ticker=symbol,
+            from_date=DAY_ONE.isoformat(),
+            to_date=DAY_THREE.isoformat(),
+            adjusted=False,
+            fetch_provider=_provider_must_not_be_called,
+            session="rth",
+            # Well past the window's last close, so no session is still forming
+            # and there is no live tail to fetch. Pinned rather than "now" so the
+            # test does not change meaning as the calendar moves.
+            now_ms=_ms_after_the_window(),
+            lake_root=imported_lake,
+        )
+    finally:
+        # Admission checks each read's receipt on the shared background loop.
+        _close_materialization_pool(catalog_client)
 
     assert len(composed.bars) == 3 * 390
     assert [span.source for span in composed.spans] == ["lake"]
@@ -171,7 +162,7 @@ def _requires_postgres() -> None:
     import os
 
     if not (settings.POSTGRES_URL or os.getenv("POSTGRES_URL", "")):
-        pytest.skip("POSTGRES_URL not configured — the catalog-backed half of the parity proof")
+        pytest.skip("POSTGRES_URL not configured — the import commits its days to the catalog")
 
 
 def test_engine_backtest_over_an_imported_window_makes_zero_provider_calls(
@@ -179,22 +170,18 @@ def test_engine_backtest_over_an_imported_window_makes_zero_provider_calls(
 ) -> None:
     """AC: end to end, through the catalog, with no Polygon call at all.
 
-    The catalog-backed companion to the chart test above, and the
-    production sequence in miniature: write a policy cache, import it, then
-    back-test the window it covers. This is the only assertion in this file
-    that needs Postgres, and the one that cannot be made without it -- "zero
-    provider calls" is a statement about what ``ensure_data`` decides after
-    consulting the catalog, and a fake catalog would be making that decision
-    for us: the exact shape of test double that hides the bug it was written
-    to catch.
+    The engine companion to the chart test above, and the production
+    sequence in miniature: write a policy cache, import it, then back-test
+    the window it covers. "Zero provider calls" is a statement about what
+    ``ensure_data`` decides after consulting the catalog, and a fake catalog
+    would be making that decision for us: the exact shape of test double that
+    hides the bug it was written to catch.
 
-    The import is real (``import_cache_root``), not simulated. That matters
-    for a reason the chart fixture above deliberately does not cover:
-    artifacts on disk with no catalog rows are **invisible** to the lake.
-    ``ensure_data`` asks the catalog what exists, so a lake populated by
-    copying files -- which is what the fixture above does, correctly, for the
-    chart's catalog-free read -- would send this run straight to Polygon for every
-    day. Only the import makes the bytes findable.
+    The import is real (``import_cache_root``), not simulated: artifacts on
+    disk with no catalog rows are **invisible** to the lake. ``ensure_data``
+    asks the catalog what exists, so a lake populated by copying files would
+    send this run straight to Polygon for every day. Only the import makes the
+    bytes findable.
 
     ``respx`` asserts at the transport layer rather than by mocking the
     Polygon client, so a call through any code path -- the fetcher, the
@@ -213,31 +200,13 @@ def test_engine_backtest_over_an_imported_window_makes_zero_provider_calls(
     import httpx
     import respx
 
-    from app.data_lake import catalog_client, root_identity
-    from app.data_lake.cache_import import import_cache_root
+    from app.data_lake import catalog_client
     from app.data_lake.run_materialization import materialize_engine_run
 
-    # A symbol of this run's own. The scratch Postgres outlives tmp_path, so
-    # a fixed ticker would inherit catalog rows from the previous run of this
-    # test -- including a half-written one from a run that failed -- and the
-    # import would report ``in_flight_or_incomplete`` for a day whose bytes
-    # are right there. Uniqueness makes the test independent of the database's
-    # history instead of requiring it to be clean.
-    symbol = f"T{uuid4().hex[:10].upper()}"
-    cache_root = _seed_cache(tmp_path / "lean-cache" / "polygon-raw", symbol)
-    write_root = tmp_path / "lean-data-writer"
-    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    # import_cache_root requires any --lake-root to carry a valid marker
-    # (issue #1878, PR B of #1861) -- stamped with the service's own default
-    # active root so materialize_engine_run's later catalog reads (which
-    # default to that same root) actually find what this import writes.
-    root_identity.init_empty_root(write_root, root_identity.active_root_id())
-    _write_cache_provenance(cache_root, symbol)
+    symbol = _run_symbol()
+    _import_cache_window(tmp_path, monkeypatch, symbol)
 
     try:
-        report = asyncio.run(import_cache_root(cache_root, write_root))
-        assert len(report.imported) == len(WINDOW), report
-
         with respx.mock(assert_all_called=False) as router:
             polygon = router.route(host="api.polygon.io")
             router.post(path="/extract-metadata").mock(

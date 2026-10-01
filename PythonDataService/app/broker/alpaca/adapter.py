@@ -635,6 +635,20 @@ def from_alpaca_activity(
     )
 
 
+def execution_id_from_activity_id(activity_id: str) -> str:
+    """Recover Alpaca's execution identity from its account-activity identity.
+
+    Trade updates expose the bare execution UUID, while account activities may
+    prefix that same UUID with the vendor timestamp and ``::``. The full
+    activity ID remains opaque everywhere else; only the evidence bridges
+    between the two compare the embedded execution identity.
+    """
+    timestamp_prefix, separator, embedded_execution_id = activity_id.rpartition("::")
+    if separator and timestamp_prefix.isdigit() and embedded_execution_id:
+        return embedded_execution_id
+    return activity_id
+
+
 def from_alpaca_asset(payload: Mapping[str, Any]) -> BrokerAsset:
     """Map a raw Alpaca asset payload to a ``BrokerAsset``.
 

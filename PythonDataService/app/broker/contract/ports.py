@@ -97,10 +97,12 @@ class BrokerActivityEvidencePort(Protocol):
     out, and the read completes on a short page or on the dated page after
     the one that crossed the window's start -- the page that confirms nothing
     in-window lies further back. A walk that is out of order raises instead.
+    ``activity_type`` walks one type of activity only, as ``list_activities``
+    filters it.
     """
 
     async def read_activity_evidence(
-        self, *, page_token: str | None = None, after_ms: int | None = None,
+        self, *, page_token: str | None = None, after_ms: int | None = None, activity_type: str | None = None,
     ) -> BrokerActivityEvidence: ...
 
 

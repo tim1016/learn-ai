@@ -39,6 +39,7 @@ from app.schemas.exit_terms import ExitTerms
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import ParameterOrigin, SealedBotProgram
 from app.services.bot_carryover import configuration_hash
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +215,7 @@ class ProgramBuildRunEvidence(BaseModel):
     golden_trace_root: str = Field(pattern=r"^[0-9a-f]{64}$")
     running_artifact_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     qualification_receipt_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    verified_at_ms: int = Field(ge=0)
+    verified_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     # The wiring half of the build proof (#1735), recorded so a frozen run
     # replays the verdict it actually ran under instead of an unknown (#1828).
     # A schema_version 1 record has none and defaults here; that default is a
@@ -271,7 +272,7 @@ class BotRunOutcomeRecord(BaseModel):
     run_id: str = Field(pattern=_RUN_ID_PATTERN)
     kind: BotDutyOutcomeKind
     reason_code: str = Field(min_length=1, max_length=128)
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     crash_diagnostic: BotCrashDiagnostic | None = None
     # #1729 AC10: the Clerk-proved canary rollback verdict for this exact
     # Stop, when one was computed. See ``BotDutyOutcome.canary_rollback``.

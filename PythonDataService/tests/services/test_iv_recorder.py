@@ -173,6 +173,28 @@ class TestRecorderService:
         assert row.health_score is not None
         assert 0.0 <= row.health_score <= 1.0
 
+    def test_a_failed_dividend_lookup_keeps_the_real_rate(self):
+        """IV30 is solved and stored at the FRED rate, not at r=0, when only q is missing (#2764)."""
+        store = InMemoryIvSnapshotStore()
+        polygon = MagicMock()
+        rate = 0.045
+        asof = datetime(2026, 4, 28, 13, 35, tzinfo=UTC)
+        polygon.list_snapshot_options_chain.return_value = _bs_chain_payload(
+            spot=591.0, sigma=0.20, rate=rate, asof=asof,
+            expiry_days=[21, 28, 35, 42],
+            strikes=[float(k) for k in range(540, 651, 5)],
+        )
+
+        with (
+            patch("app.services.rate_dividend_service.get_risk_free_rate_and_source", return_value=(rate, "FRED")),
+            patch("app.services.rate_dividend_service.compute_dividend_yield", side_effect=RuntimeError("timeout")),
+        ):
+            row = record_iv_snapshot(ticker="SPY", slot="09:35", store=store, polygon=polygon, asof=asof)
+
+        assert row.error is None
+        assert (row.rate, row.rate_source) == (rate, "FRED")
+        assert (row.dividend_yield, row.dividend_source) == (0.0, "unknown")
+
     def test_polygon_failure_persists_error_row(self):
         store = InMemoryIvSnapshotStore()
         polygon = MagicMock()

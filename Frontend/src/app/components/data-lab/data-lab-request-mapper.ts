@@ -106,7 +106,8 @@ export interface OptionsCompanionWireConfig {
   include_vega: boolean;
   include_rho: boolean;
   include_discontinuity: boolean;
-  risk_free_rate: number;
+  /** Absent when the rate field is empty; Python fills its one default (#2764). */
+  risk_free_rate?: number;
   dividend_yield: number;
 }
 

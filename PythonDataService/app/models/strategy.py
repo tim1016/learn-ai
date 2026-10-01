@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
+
 
 class StrategyLeg(BaseModel):
     """A single option leg in a strategy."""
@@ -45,7 +47,9 @@ class StrategyAnalyzeRequest(BaseModel):
     legs: list[StrategyLeg] = Field(..., min_length=1, max_length=8, description="Strategy legs")
     expiration_date: str = Field(..., description="Expiration date (YYYY-MM-DD)")
     spot_price: float = Field(..., gt=0, description="Current underlying price")
-    risk_free_rate: float = Field(0.043, ge=0, le=0.5, description="Risk-free rate (default ~4.3%)")
+    risk_free_rate: float = Field(
+        DEFAULT_RISK_FREE_RATE, ge=0, le=0.5, description="Annualized risk-free rate (omit for the Python default)"
+    )
     curve_points: int = Field(300, ge=50, le=1000, description="Number of payoff curve points")
     price_range_pct: float = Field(0.30, gt=0, le=1.0, description="Price range as fraction of spot (±)")
     # ------------------------------------------------------------------

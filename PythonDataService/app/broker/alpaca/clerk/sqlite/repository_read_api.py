@@ -473,6 +473,10 @@ class ClerkSqliteRepositoryReadApi:
         with self._write_lock:
             return reads.manual_chain_order_ref(self._conn, broker_order_id)
 
+    def manual_chain_member_ids(self: ClerkSqliteRepository, order_ref: str) -> frozenset[str]:
+        with self._write_lock:
+            return reads.manual_chain_member_ids(self._conn, order_ref)
+
     def order_for_effect_operation(
         self: ClerkSqliteRepository,
         effect_operation_id: str,

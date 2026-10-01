@@ -88,14 +88,14 @@ class RetainedSourceBar(BaseModel):
     symbol: str
     bar_identity: str
     bar_ref: str
-    start_ms: int = Field(ge=0)
-    end_ms: int = Field(ge=0)
+    start_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    end_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     open: Decimal
     high: Decimal
     low: Decimal
     close: Decimal
     volume: int = Field(ge=0)
-    fetched_at_ms: int = Field(ge=0)
+    fetched_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     session_phase: str
     provenance: str = "realtime"
     authorization_id: str | None = None

@@ -268,6 +268,28 @@ class TestBuildCommand:
         monkeypatch.setattr(runner.os, "getgid", lambda: 1000, raising=False)
         assert runner._container_user_spec() == "1000:1000"
 
+    def test_build_command_refuses_to_launch_under_a_root_euid(
+        self,
+        tmp_artifacts_root: Path,
+        _allow_dummy_digest: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Regression (#2769): driving ``build_command`` under a root
+        launcher refuses with ``RunnerConfigurationError`` — the error
+        class the launcher service maps to a
+        ``runner_configuration_error`` launch rejection — instead of
+        emitting ``--user=0:0``."""
+        from app.lean_sidecar import runner
+
+        monkeypatch.setattr(runner.os, "getuid", lambda: 0, raising=False)
+        monkeypatch.setattr(runner.os, "getgid", lambda: 0, raising=False)
+        monkeypatch.setattr(runner.os, "geteuid", lambda: 0, raising=False)
+        ws = resolve_workspace("run_root_launcher", tmp_artifacts_root)
+        ws.ensure_layout()
+
+        with pytest.raises(RunnerConfigurationError, match="must not run as root"):
+            build_command(ws, DUMMY_DIGEST)
+
     def test_container_user_spec_falls_back_when_getuid_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """On Windows where ``os.getuid`` does not exist, the helper
         returns ``10001:10001`` — non-root, fixed, audit-explicit. The

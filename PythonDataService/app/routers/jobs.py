@@ -28,7 +28,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
 from fastapi.encoders import jsonable_encoder
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 from pydantic.alias_generators import to_camel
 
 from app.jobs import cache as result_cache
@@ -61,6 +61,7 @@ from app.schemas.ticker_request import (
 from app.services.dataset_service import RunCancelledError
 from app.services.engine_backtest_service import execute_engine_backtest
 from app.services.polygon_client import PolygonClientService
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -209,8 +210,8 @@ class RecencyChartSpecRequest(_CamelCaseModel):
 
     strategies: list[StrategyGridConfigRequest] = Field(min_length=1)
     symbols: list[str] = Field(min_length=1)
-    window_start_ms: int
-    window_end_ms: int
+    window_start_ms: int = Field(le=MAX_TIMESTAMP_MS)
+    window_end_ms: int = Field(le=MAX_TIMESTAMP_MS)
     data_policy: str = "polygon-adjusted-regular-minute"
     fill_mode: str = "signal_bar_close"
     commission_per_order: float = 0.0
@@ -518,7 +519,16 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
         refusal = recency_service.resume_refusal(launch_row, live=live)
         if refusal is not None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": "NOT_RESUMABLE", "message": refusal})
-        stored = RecencyChartSpecRequest.model_validate_json(launch_row.config_json)
+        try:
+            stored = RecencyChartSpecRequest.model_validate_json(launch_row.config_json)
+        except ValidationError as exc:
+            # The stored row no longer parses (a request bound tightened since
+            # the launch, e.g. the ADR 0022 (g) ceiling); it cannot run as recorded.
+            reasons = "; ".join(f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors())
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": "NOT_RESUMABLE", "message": f"the stored launch configuration no longer validates: {reasons}"},
+            ) from exc
         try:
             launch = recency_service.validate_launch(
                 launch_id=launch_row.launch_id,

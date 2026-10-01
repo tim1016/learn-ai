@@ -107,9 +107,9 @@ class TestSurfaceConventionsDataclass:
         assert hash_dict["dividend_yield"] == 0.02
         assert hash_dict["calendar"] == "NullCalendar"
 
-    def test_to_hash_dict_is_dict(self) -> None:
+    def test_to_hash_dict_is_dict(self, rate: float) -> None:
         """to_hash_dict returns a dict (not frozen)."""
-        conventions = SurfaceConventions()
+        conventions = SurfaceConventions(rate=rate)
         hash_dict = conventions.to_hash_dict()
 
         assert isinstance(hash_dict, dict)
@@ -189,16 +189,16 @@ class TestUnsupportedDayCount:
         with pytest.raises(ValueError, match="Unsupported day_count"):
             ttm_to_dte(0.1, day_count="InvalidConvention")
 
-    def test_forward_unsupported_model_raises(self) -> None:
+    def test_forward_unsupported_model_raises(self, rate: float) -> None:
         """Unsupported forward_model raises NotImplementedError."""
-        conventions = SurfaceConventions(forward_model="unsupported_model")
+        conventions = SurfaceConventions(rate=rate, forward_model="unsupported_model")
 
         with pytest.raises(NotImplementedError):
             conventions.forward(100.0, 1.0)
 
-    def test_discount_unsupported_model_raises(self) -> None:
+    def test_discount_unsupported_model_raises(self, rate: float) -> None:
         """Unsupported discount_model raises NotImplementedError."""
-        conventions = SurfaceConventions(discount_model="unsupported_model")
+        conventions = SurfaceConventions(rate=rate, discount_model="unsupported_model")
 
         with pytest.raises(NotImplementedError):
             conventions.discount_factor(1.0)

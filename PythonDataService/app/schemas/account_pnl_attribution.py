@@ -12,6 +12,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
 from app.broker.contract.models import BrokerPortfolioHistory
 from app.research.parity.qc_reconciler import DivergenceCategory
 from app.services.account_pnl_reconciliation import AccountPnlReconciliation
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
 class FifoAttributionRowResponse(BaseModel):
@@ -23,8 +24,8 @@ class FifoAttributionRowResponse(BaseModel):
     quantity: float
     entry_price: float
     exit_price: float
-    opened_at_ms: int = Field(ge=0)
-    closed_at_ms: int = Field(ge=0)
+    opened_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    closed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     realized_pnl: float
     fee: float | None = None
     entry_strategy_instance_id: str | None = Field(default=None, min_length=1, max_length=128)
@@ -41,8 +42,8 @@ class AccountPnlAttributionResponse(BaseModel):
     account_id: str = Field(min_length=1, max_length=64)
     authority_generation: int = Field(ge=0)
     control_revision: int = Field(ge=0)
-    from_ms: int = Field(ge=0)
-    to_ms: int = Field(ge=0)
+    from_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    to_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     attribution_rows: list[FifoAttributionRowResponse]
     realized_pnl_total: float
     start_open_pnl_total: float | None

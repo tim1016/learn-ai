@@ -7,13 +7,16 @@ from unittest.mock import patch
 import pytest
 
 from app.services.fred_service import (
-    FALLBACK_RATE,
+    RATE_SOURCE_DEFAULT,
+    RATE_SOURCE_FRED,
     TENOR_MAP,
     _interpolate_rate,
     _parse_latest_rate,
     clear_cache,
     get_risk_free_rate,
+    get_risk_free_rate_and_source,
 )
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 
 
 class TestInterpolateRate:
@@ -40,7 +43,7 @@ class TestInterpolateRate:
         assert _interpolate_rate(rates, 500) == 0.05
 
     def test_empty_rates_returns_fallback(self):
-        assert _interpolate_rate({}, 30) == FALLBACK_RATE
+        assert _interpolate_rate({}, 30) == DEFAULT_RISK_FREE_RATE
 
     def test_30_day_interpolation(self):
         """Typical use case: interpolate to ~30 DTE."""
@@ -85,13 +88,19 @@ class TestGetRiskFreeRate:
 
         # Verify all 4 tenor series were fetched
         assert mock_fetch.call_count == len(TENOR_MAP)
+        assert get_risk_free_rate_and_source(dte_days=30, observation_date="2025-01-15")[1] == RATE_SOURCE_FRED
 
     @patch("app.services.fred_service._fetch_series")
     def test_fallback_on_failure(self, mock_fetch):
         mock_fetch.return_value = []
 
         rate = get_risk_free_rate(dte_days=30, observation_date="2025-01-15")
-        assert rate == FALLBACK_RATE
+        assert rate == DEFAULT_RISK_FREE_RATE
+        # A fallback is never reported as FRED's answer (#2764).
+        assert get_risk_free_rate_and_source(dte_days=30, observation_date="2025-01-15") == (
+            DEFAULT_RISK_FREE_RATE,
+            RATE_SOURCE_DEFAULT,
+        )
 
     @patch("app.services.fred_service._fetch_series")
     def test_cache_prevents_refetch(self, mock_fetch):

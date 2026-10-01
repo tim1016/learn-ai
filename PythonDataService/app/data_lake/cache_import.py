@@ -451,7 +451,7 @@ def provenance_covers_date(provenance: dict[str, Any], trading_date: date) -> bo
     return False
 
 
-def _import_minute_trade_dch(adjusted: bool) -> str:
+def import_minute_trade_dch(adjusted: bool) -> str:
     return _dch(
         provider="polygon",
         provider_params=_IMPORT_MINUTE_TRADE_PARAMS_ADJUSTED if adjusted else _IMPORT_MINUTE_TRADE_PARAMS_RAW,
@@ -1092,7 +1092,7 @@ async def import_cache_root(cache_root: Path, lake_root: Path) -> ImportReport:
         # creates. See path_policy.
         ensure_lean_readable_layout(lake_dir)
 
-        dch = _import_minute_trade_dch(adjusted)
+        dch = import_minute_trade_dch(adjusted)
         provider_params = build_provider_params(cache_root, provenance)
 
         for ref in covered_refs:

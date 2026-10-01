@@ -19,6 +19,7 @@ See ADR 0049 §3 (concurrent ``ensure_data`` callers converge on one fetch).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -36,6 +37,7 @@ from app.data_lake import catalog_client
 from app.data_lake.backfill import run_backfill
 from app.data_lake.metadata_bundle import metadata_data_contract_hash as _metadata_dch
 from app.data_lake.path_policy import lake_subpath
+from app.data_lake.root_identity import active_root_id, init_empty_root
 from app.data_lake.types import DataRunSpec, trading_date_to_calendar_anchor_ms
 from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.lake_mount import resolve_lake_artifacts
@@ -122,6 +124,9 @@ def tmp_lake(tmp_path: Path, monkeypatch):
     write_root = tmp_path / "writer-root"
     (write_root / "lake").mkdir(parents=True)
     (write_root / "staging").mkdir(parents=True)
+    # Readers admit lake files only under a root identity marker (#2456),
+    # which production startup refuses to run without.
+    init_empty_root(write_root, active_root_id())
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     monkeypatch.setattr(settings, "POLYGON_API_KEY", "test-polygon-key")
     monkeypatch.setattr(settings, "LEAN_LAUNCHER_URL", "http://launcher-mock:8090")
@@ -267,7 +272,10 @@ async def test_backfill_window_a_then_wider_window_b_converges_through_the_gate_
     # succeed cleanly: mount/root-mode/trade-coverage/quote-coverage/
     # daily-artifact/metadata, gates 1-6 of resolve_lake_artifacts. ---
     lake_root = tmp_lake / lake_subpath("raw")
-    artifacts = resolve_lake_artifacts(
+    # Off the event loop, as the sidecar service calls it: lake admission
+    # refuses a loop thread (#2456).
+    artifacts = await asyncio.to_thread(
+        resolve_lake_artifacts,
         lake_root=lake_root,
         symbol=SYMBOL,
         start=date(2024, 5, 20),

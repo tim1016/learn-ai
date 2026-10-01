@@ -177,6 +177,8 @@ def main() -> None:
         ticker=SYMBOL, spot_price=spot, polygon=polygon,
         dte_days=30, observation_date=GOLDEN_DATE,
     )
+    if rd.dividend_yield is None:
+        raise RuntimeError(f"dividend lookup failed for {SYMBOL} on {GOLDEN_DATE}")
     logger.info("rate=%.4f dividend=%.4f (%s / %s)", rd.rate, rd.dividend_yield, rd.source_rate, rd.source_dividend)
 
     quotes_by_expiry = build_quotes_per_expiry(rows)

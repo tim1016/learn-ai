@@ -70,7 +70,7 @@ class BotProcessFact(BaseModel):
     process_identity: str | None
     state: Literal["RUNNING", "STOPPING", "EXITED", "UNKNOWN"]
     registry_generation: str
-    observed_at_ms: int = Field(ge=0)
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 def normalized_symbol(value: str) -> str:
@@ -423,7 +423,7 @@ class AlpacaPaperDeployView(BaseModel):
     account_id: str
     account_mode: Literal["paper", "live"]
     account_label: str
-    evaluated_at_ms: int = Field(ge=0)
+    evaluated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     # Paper eligibility (name kept as-is: renaming would ripple across the
     # existing test suite for no behavioral gain). `dry_run_eligibility`
     # (#1702) is the parallel, deliberately narrower verdict for the Dry Run
@@ -482,7 +482,7 @@ class BotRunView(BaseModel):
     run_id: str
     configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     launch_reason: Literal["deploy", "resume", "legacy"]
-    started_at_ms: int = Field(ge=0)
+    started_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     process: BotProcessFact
     terminal_outcome: BotRunTerminalOutcomeView | None
 
@@ -495,7 +495,7 @@ class AlpacaPaperDeployReceipt(BaseModel):
     status: Literal["deployed"]
     outcome: Literal["success"] = "success"
     receipt_id: str
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     message: str
     explanation: str
     next_action: str
