@@ -566,6 +566,80 @@ async def test_a_publish_that_rolled_back_resumes_without_a_new_proof_or_run(
     assert await _study_state(conn, study_id) == "approved"
 
 
+def _commit_then_lose_the_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The publish commits, then the store fails before its answer arrives (a COMMIT-time timeout)."""
+    real_publish = approval_module._publish
+
+    async def publish(conn: asyncpg.Connection, **kwargs: Any) -> str:
+        await real_publish(conn, **kwargs)
+        raise TimeoutError("the command timed out waiting for COMMIT's answer")
+
+    monkeypatch.setattr(approval_module, "_publish", publish)
+
+
+async def test_a_publish_whose_answer_was_lost_after_commit_reports_the_version(
+    conn: asyncpg.Connection,
+    unique: str,
+    symbol: str,
+    snapshot: DataSnapshot,
+    lake: Path,
+    blobs: BlobStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study_id = f"study-{unique}"
+    await _study(conn, study_id, symbol)
+    monkeypatch.setattr(approval_module, "execute_engine_backtest", _Engine())
+    _commit_then_lose_the_answer(monkeypatch)
+    caller = _Caller(study_id)
+
+    outcome = await _approve(_request(study_id, symbol, snapshot, lake), caller, blobs)
+
+    # Never "nothing was published" about a version that was.
+    assert outcome.status == "approved"
+    assert outcome.qualification_id == qualification_id_for(study_id)
+    pointer = await get_default(conn, PROGRAM, symbol)
+    assert pointer is not None and pointer.qualification_id == outcome.qualification_id
+    assert await _study_state(conn, study_id) == "approved"
+
+
+async def test_a_store_still_down_after_the_publish_never_claims_nothing_was_published(
+    conn: asyncpg.Connection,
+    unique: str,
+    symbol: str,
+    snapshot: DataSnapshot,
+    lake: Path,
+    blobs: BlobStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study_id = f"study-{unique}"
+    await _study(conn, study_id, symbol)
+    monkeypatch.setattr(approval_module, "execute_engine_backtest", _Engine())
+    _commit_then_lose_the_answer(monkeypatch)
+    real_lookup = approval_module.qualifications.get_qualification_by_study
+    lookups = 0
+
+    async def lookup_until_the_store_drops(conn: asyncpg.Connection, study: str):
+        nonlocal lookups
+        lookups += 1
+        if lookups > 2:  # the opening check and the one inside the publish succeed; the look afterwards cannot
+            raise ConnectionRefusedError("research store is down")
+        return await real_lookup(conn, study)
+
+    monkeypatch.setattr(approval_module.qualifications, "get_qualification_by_study", lookup_until_the_store_drops)
+    caller = _Caller(study_id)
+
+    outcome = await _approve(_request(study_id, symbol, snapshot, lake), caller, blobs)
+
+    assert outcome.status == "failed"
+    assert outcome.failure_code == "STORE_UNAVAILABLE"
+    assert "is not known" in (outcome.failure_reason or "")
+    assert "Nothing was published" not in (outcome.failure_reason or "")
+    # It had in fact committed; a retry once the store is back answers with it.
+    monkeypatch.setattr(approval_module.qualifications, "get_qualification_by_study", real_lookup)
+    retried = await _approve(_request(study_id, symbol, snapshot, lake), caller, blobs)
+    assert (retried.status, retried.qualification_id) == ("approved", qualification_id_for(study_id))
+
+
 async def test_a_checkpointed_proof_from_other_bytes_is_rebuilt_never_published(
     conn: asyncpg.Connection,
     unique: str,

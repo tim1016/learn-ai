@@ -94,7 +94,14 @@ ApprovalFailureCode = Literal[
 ]
 
 _UNCHANGED = " Nothing was published and the current default is unchanged."
-_STORE_ERRORS = (asyncpg.PostgresError, CatalogUnavailableError, OSError, TimeoutError, CallerStoppedWaitingError)
+_STORE_ERRORS = (
+    asyncpg.PostgresError,
+    asyncpg.InterfaceError,
+    CatalogUnavailableError,
+    OSError,
+    TimeoutError,
+    CallerStoppedWaitingError,
+)
 
 
 @dataclass(frozen=True)
@@ -295,16 +302,47 @@ def _approve(
         save_checkpoint(checkpoint)
 
     cancel_check()
-    return _store_call(
-        _publish,
-        request=request,
-        canonical=canonical,
-        contract=contract,
-        proof=proof,
-        run_id=run_id,
-        on_commit=on_commit,
-        wait_for_outcome=True,
+    try:
+        return _store_call(
+            _publish,
+            request=request,
+            canonical=canonical,
+            contract=contract,
+            proof=proof,
+            run_id=run_id,
+            on_commit=on_commit,
+            wait_for_outcome=True,
+        )
+    except _ApprovalFailure as failure:
+        if failure.code != "STORE_UNAVAILABLE":
+            raise
+        return _published_despite(request.study_id, failure)
+
+
+def _published_despite(study_id: str, failure: _ApprovalFailure) -> str:
+    """Look before reporting a store failure around the publish: its commit may have landed.
+
+    A command timeout or a dropped connection at COMMIT leaves the outcome
+    unknown, and "nothing was published" would then be a false claim about
+    the default Deploy offers. The publish is all or nothing, so the study's
+    qualification existing means every part of it committed.
+    """
+    try:
+        published = _store_call(qualifications.get_qualification_by_study, study_id)
+    except _ApprovalFailure as unreadable:
+        raise _ApprovalFailure(
+            "STORE_UNAVAILABLE",
+            f"The research store failed while publishing ({failure.__cause__.__class__.__name__}), so whether the "
+            "version was published is not known. Retry the approval: a retry answers with the version if it was "
+            "published, and publishes it once if it was not.",
+        ) from unreadable
+    if published is None:
+        raise failure
+    logger.warning(
+        "Golden Search publish reported a store failure but its commit landed",
+        extra={"action": "golden_approval_publish_outcome_recovered", "study_id": study_id},
     )
+    return published.id
 
 
 def _store_call[T](fn: Callable[..., Awaitable[T]], /, *args: Any, wait_for_outcome: bool = False, **kwargs: Any) -> T:
