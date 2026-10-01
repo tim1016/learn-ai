@@ -272,10 +272,6 @@ class _RetainedSourceBarFeed:
         return live
 
     @property
-    def capability_account_id(self) -> str | None:
-        return getattr(self._source, "capability_account_id", None)
-
-    @property
     def observe_only(self) -> bool:
         """Whether the enclosing run is progressing without custody effects."""
         return bool(getattr(self._source, "observe_only", False))

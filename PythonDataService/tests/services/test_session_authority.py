@@ -8,7 +8,6 @@ import pytest
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.lean_sidecar.trading_calendar import is_trading_day, session_window_for_date
 from app.lean_sidecar.trading_calendar import session_state_at_ms as calendar_session_state_at_ms
-from app.schemas.broker_capability import SessionCapability, SessionDataCapability
 from app.services.session_authority import (
     order_session_state_at_ms,
     scheduled_exchange_phase_at_ms,
@@ -20,33 +19,6 @@ from app.utils.timestamps import to_ms_utc
 
 def _ny_ms(year: int, month: int, day: int, hour: int, minute: int) -> int:
     return to_ms_utc(datetime(year, month, day, hour, minute, tzinfo=ZoneInfo("America/New_York")))
-
-
-def _capability() -> SessionDataCapability:
-    def session(open_ms: int | None, close_ms: int | None) -> SessionCapability:
-        return SessionCapability(
-            window_today_open_ms=open_ms,
-            window_today_close_ms=close_ms,
-            data="live" if open_ms is not None else "none",
-            tradeable="yes" if open_ms is not None else "no",
-            order_eligible_outside_rth=True,
-            evidence_codes=[],
-        )
-
-    return SessionDataCapability(
-        symbol="SPY",
-        con_id=756733,
-        account_mode="live",
-        account_id="U1234567",
-        probed_at_ms=_ny_ms(2026, 6, 23, 3, 0),
-        time_zone_id="America/New_York",
-        sessions={
-            "PRE": session(_ny_ms(2026, 6, 23, 4, 0), _ny_ms(2026, 6, 23, 9, 30)),
-            "RTH": session(_ny_ms(2026, 6, 23, 9, 30), _ny_ms(2026, 6, 23, 16, 0)),
-            "POST": session(_ny_ms(2026, 6, 23, 16, 0), _ny_ms(2026, 6, 23, 20, 0)),
-            "OVERNIGHT": session(_ny_ms(2026, 6, 23, 20, 0), _ny_ms(2026, 6, 24, 4, 0)),
-        },
-    )
 
 
 @pytest.mark.parametrize(

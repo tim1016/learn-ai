@@ -136,10 +136,6 @@ class _QualifiedBarFeed:
         self._symbol = symbol
         self._bars = tuple(bars)
 
-    @property
-    def capability_account_id(self) -> str | None:
-        return None
-
     async def stream_bars(
         self,
         symbol: str,

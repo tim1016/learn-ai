@@ -10,7 +10,7 @@ from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.lean_sidecar import trading_calendar
 from app.lean_sidecar.trading_calendar import is_trading_day, next_trading_day, session_window_for_date
 from app.marketdata.feed import BarSessionPhase
-from app.schemas.broker_capability import SessionDataCapability, SessionKind
+from app.schemas.broker_capability import SessionKind
 from app.utils.timestamps import to_ms_utc
 
 # Not a second definition of the phase set: this is the canonical object from
