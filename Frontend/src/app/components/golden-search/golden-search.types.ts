@@ -4,9 +4,11 @@
  * PythonDataService/app/schemas/golden_search.py), so a field the server adds,
  * drops or retypes is a compile error here rather than a silent drift. The
  * contract types a parameter point as an empty object, so every field that
- * carries one is re-typed as `Point`; nothing else is overridden. Requests
- * stay hand-written in snake_case, which the server accepts beside its
- * camelCase aliases. Every temporal value is int64 ms UTC; interval
+ * carries one is re-typed as `Point`; the only other overrides keep pair
+ * tuples readonly and key action refusals by command. The plan sent to the
+ * server reuses the frozen protocol echo's snake_case shape, which the
+ * server accepts beside its camelCase request aliases; command envelopes
+ * stay hand-written. Every temporal value is int64 ms UTC; interval
  * boundaries are ET-midnight instants with exclusive ends. Every number
  * shown is computed in Python — these types carry it, the browser never
  * derives it.
