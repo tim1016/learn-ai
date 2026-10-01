@@ -94,12 +94,13 @@ class GuardedBrokerReadPort:
         )
 
     async def read_activity_evidence(
-        self, *, page_token: str | None = None, after_ms: int | None = None,
+        self, *, page_token: str | None = None, after_ms: int | None = None, activity_type: str | None = None,
     ) -> BrokerActivityEvidence:
         self._assert_unfenced("read_activity_evidence")
+        activity_filter = {} if activity_type is None else {"activity_type": activity_type}
         reader = getattr(self._inner, "read_activity_evidence", None)
         if callable(reader):
-            return await reader(page_token=page_token, after_ms=after_ms)
+            return await reader(page_token=page_token, after_ms=after_ms, **activity_filter)
         if page_token is not None:
             # The fallback can only read the newest rows; answering a
             # continuation with them would fake a contiguous history walk.
@@ -108,7 +109,9 @@ class GuardedBrokerReadPort:
                 detail="Its read port has no paged activity evidence.",
             )
         return BrokerActivityEvidence(
-            activities=await self._inner.list_activities(after_ms=0 if after_ms is None else after_ms, limit=100),
+            activities=await self._inner.list_activities(
+                after_ms=0 if after_ms is None else after_ms, limit=100, **activity_filter
+            ),
             history_complete=False,
         )
 

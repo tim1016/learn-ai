@@ -81,6 +81,18 @@ ACTIVITY_EXACT_CONFLICT_COPY = ExactExecutionConflictCopy(
     next_step="Reconcile the broker order and its execution slices before resuming.",
 )
 
+#: The account-activity recovery's own refusal (#2686): no execution is held
+#: aside, so the copy sends the operator to Alpaca rather than to a reconcile.
+ACTIVITY_OVER_ORDER_QUANTITY_CONFLICT_COPY = ExactExecutionConflictCopy(
+    headline="Alpaca's fill history reports more shares than the order asked for",
+    explanation=(
+        "Alpaca's fill history reports more shares for this manual order than it "
+        "asked for, so nothing was credited."
+    ),
+    operator_impact="New exposure is blocked while this conflict stands.",
+    next_step="Check the order at Alpaca.",
+)
+
 
 def append_exact_execution_slice(
     repo: ClerkSqliteRepository,

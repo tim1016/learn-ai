@@ -26,7 +26,8 @@ whole chain against the head's quantity.
 
 The activity is read at most once per resolution, and refreshed once: a
 later head that reports ``filled`` and is still uncovered may have filled
-after the first read, which was taken for an earlier answer.
+after the first read, which was taken for an earlier answer. Only one head of
+a resolution can report ``filled``, since a filled order ends its chain.
 
 Each execution is credited once. Alpaca's activity id embeds the execution id
 the stream carries (:func:`execution_id_from_activity_id`), and the one exact
@@ -40,13 +41,16 @@ all, and only while its exact total stays within the head's quantity -- no
 chain can execute more. A batch that would pass it records nothing and
 raises ``EXECUTION_COVERAGE_CONFLICT``.
 
-The read walks the account's activity newest first, a bounded number of
-reads per resolution, and says whether it reached the start of the window
-(``read_activity_evidence``). Every pass walks from the newest row again, so
+The read walks the account's ``FILL`` activity newest first, a bounded number
+of reads per resolution, and says whether it reached the start of the window
+(``read_activity_evidence``). Every walk starts from the newest row again, so
 an execution further back than the walk reaches is never read: a leg still
 uncovered by a walk that stopped short is logged
-``manual_order_executions_beyond_reach`` on every pass, and stays
-outstanding until it is reconciled. A failed read is logged, and the
+``manual_order_executions_beyond_reach`` and stays outstanding until it is
+reconciled. Walking again would spend the same reads for the same answer, so
+the leg is not walked again until its head's answer changes or
+:data:`BEYOND_REACH_REWALK_INTERVAL_MS` passes; each pass in between logs
+``manual_order_executions_walk_deferred``. A failed read is logged, and the
 resolution folds as before.
 """
 
@@ -54,13 +58,16 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.adapter import execution_id_from_activity_id
 from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
     ACTIVITY_EXACT_CONFLICT_COPY,
+    ACTIVITY_OVER_ORDER_QUANTITY_CONFLICT_COPY,
     append_exact_execution_slice,
     exact_execution_coverage_conflict,
 )
@@ -87,6 +94,10 @@ logger = logging.getLogger(__name__)
 
 _EXECUTION_ACTIVITY_TYPES = frozenset({"FILL", "PARTIAL_FILL"})
 
+#: The one activity type the walk reads. Alpaca reports every execution,
+#: partial or full, as a ``FILL`` activity, so no other row takes a read's room.
+_FILL_ACTIVITY_TYPE = "FILL"
+
 #: An activity's side, as the leg spells it. A sale from a flat or short
 #: position is reported ``sell_short``; it is still the leg's sell.
 _LEG_SIDE_OF_ACTIVITY = {"buy": OrderSide.BUY, "sell": OrderSide.SELL, "sell_short": OrderSide.SELL}
@@ -94,6 +105,10 @@ _LEG_SIDE_OF_ACTIVITY = {"buy": OrderSide.BUY, "sell": OrderSide.SELL, "sell_sho
 #: The bounded activity reads one walk of the window takes, each at most
 #: three pages of 100 rows, before it stops short of the window's start.
 ACTIVITY_READS_PER_WALK = 4
+
+#: How long a leg whose executions lay beyond one walk waits, on the Clerk's
+#: clock, before it is walked again for an unchanged head answer.
+BEYOND_REACH_REWALK_INTERVAL_MS = 10 * 60_000
 
 
 @dataclass(frozen=True)
@@ -107,10 +122,33 @@ class _ActivityWindow:
 
 
 @dataclass(frozen=True)
-class RecoveredExecutions:
-    """What one recording did: how many executions it added, or that the head's quantity refused them."""
+class _BeyondReach:
+    """A leg's last walk stopped short of its executions: for which head answer, and when to walk again."""
 
-    recorded: int
+    answer: tuple[str, str, float | None, float]
+    rewalk_at_ms: int
+
+
+#: Each account's legs whose last walk stopped short of their executions,
+#: by order ref. In memory only: a restart walks each of them once more.
+_BEYOND_REACH: WeakKeyDictionary[ClerkSqliteRepository, dict[str, _BeyondReach]] = WeakKeyDictionary()
+_BEYOND_REACH_GUARD = threading.Lock()
+
+
+def _beyond_reach(repo: ClerkSqliteRepository) -> dict[str, _BeyondReach]:
+    with _BEYOND_REACH_GUARD:
+        return _BEYOND_REACH.setdefault(repo, {})
+
+
+def _answer_key(answer: BrokerOrder) -> tuple[str, str, float | None, float]:
+    """What a head's answer says of its executions: a change in it may mean a new execution to read."""
+    return (answer.order_id, answer.status.strip().lower(), answer.quantity, answer.filled_quantity)
+
+
+@dataclass(frozen=True)
+class RecoveredExecutions:
+    """What one recording did: whether the head's quantity refused the chain's executions."""
+
     over_head_quantity: bool = False
 
 
@@ -132,43 +170,57 @@ class ManualLegExecutionRecovery:
     since_ms: int
     run: OffLoop
     _window: _ActivityWindow | None = field(default=None, init=False)
-    _refreshed: bool = field(default=False, init=False)
     _unreadable: bool = field(default=False, init=False)
 
     async def recover(self, answer: BrokerOrder) -> None:
         """Record the chain's executions before ``answer`` folds, when it is the head and lacks some."""
-        if self._unreadable or not await self._lacking(answer):
+        if self._unreadable or not await self._lacking(answer) or self._deferred(answer):
             return
         window = await self._walk(answer)
         if window is None:
             return
         outcome = await self._record(answer, window)
         lacking = not outcome.over_head_quantity and await self._lacking(answer)
-        if (
-            lacking
-            and window.read_for != answer.order_id
-            and not self._refreshed
-            and answer.status.strip().lower() == "filled"
-        ):
-            self._refreshed = True
+        if lacking and window.read_for != answer.order_id and answer.status.strip().lower() == "filled":
             self._window = None
             window = await self._walk(answer)
             if window is None:
                 return
             outcome = await self._record(answer, window)
             lacking = not outcome.over_head_quantity and await self._lacking(answer)
-        if lacking and not window.complete:
-            logger.warning(
-                "A manual order's executions lie beyond the account activity one pass reads",
-                extra={
-                    "action": "manual_order_executions_beyond_reach",
-                    "order_ref": self.order_ref,
-                    "broker_order_id": answer.order_id,
-                    "since_ms": self.since_ms,
-                    "activity_reads": window.reads,
-                    "activities_read": len(window.activities),
-                },
-            )
+        if not lacking or window.complete:
+            _beyond_reach(self.repo).pop(self.order_ref, None)
+            return
+        rewalk_at_ms = self.repo.clock() + BEYOND_REACH_REWALK_INTERVAL_MS
+        _beyond_reach(self.repo)[self.order_ref] = _BeyondReach(answer=_answer_key(answer), rewalk_at_ms=rewalk_at_ms)
+        logger.warning(
+            "A manual order's executions lie beyond the account activity one pass reads",
+            extra={
+                "action": "manual_order_executions_beyond_reach",
+                "order_ref": self.order_ref,
+                "broker_order_id": answer.order_id,
+                "since_ms": self.since_ms,
+                "activity_reads": window.reads,
+                "activities_read": len(window.activities),
+                "rewalk_at_ms": rewalk_at_ms,
+            },
+        )
+
+    def _deferred(self, answer: BrokerOrder) -> bool:
+        """Whether the leg's last walk stopped short for this same answer, too recently to walk again."""
+        stuck = _beyond_reach(self.repo).get(self.order_ref)
+        if stuck is None or stuck.answer != _answer_key(answer) or self.repo.clock() >= stuck.rewalk_at_ms:
+            return False
+        logger.info(
+            "A manual order's executions beyond the account activity one pass reads are not walked again yet",
+            extra={
+                "action": "manual_order_executions_walk_deferred",
+                "order_ref": self.order_ref,
+                "broker_order_id": answer.order_id,
+                "rewalk_at_ms": stuck.rewalk_at_ms,
+            },
+        )
+        return True
 
     async def _lacking(self, answer: BrokerOrder) -> bool:
         return await self.run(lambda: head_lacks_executions(self.repo, order_ref=self.order_ref, answer=answer))
@@ -190,7 +242,7 @@ class ManualLegExecutionRecovery:
         reads = 0
         while reads < ACTIVITY_READS_PER_WALK:
             evidence = await self.broker.observe_activity_evidence(
-                self.read, after_ms=self.since_ms, page_token=page_token
+                self.read, after_ms=self.since_ms, activity_type=_FILL_ACTIVITY_TYPE, page_token=page_token
             )
             reads += 1
             if isinstance(evidence, BrokerError):
@@ -271,7 +323,7 @@ def record_manual_leg_executions(
         row = repo.order(order_ref)
         owner = None if row is None else live_manual_effect(repo, row)
         if owner is None or head.quantity is None:
-            return RecoveredExecutions(recorded=0)
+            return RecoveredExecutions()
         leg = accepted_manual_leg(repo, order_ref=order_ref)
         members = repo.manual_chain_member_ids(order_ref) | {head.order_id}
         executions: list[tuple[BrokerActivity, BrokerOrderEvent]] = []
@@ -310,8 +362,7 @@ def record_manual_leg_executions(
                 exact_quantity=exact_quantity,
                 recovered_quantity=recovered_quantity,
             )
-            return RecoveredExecutions(recorded=0, over_head_quantity=True)
-        recorded = 0
+            return RecoveredExecutions(over_head_quantity=True)
         for fill, event in executions:
             executed_on = (fill.native_order_id or "").strip()
             outcome = append_exact_execution_slice(
@@ -329,7 +380,6 @@ def record_manual_leg_executions(
             )
             if outcome == "duplicate":
                 continue
-            recorded += 1
             logger.info(
                 "A manual order's execution was recovered from Alpaca's account activity",
                 extra={
@@ -340,7 +390,7 @@ def record_manual_leg_executions(
                     "outcome": outcome,
                 },
             )
-        return RecoveredExecutions(recorded=recorded)
+        return RecoveredExecutions()
 
 
 def _refuse_over_head_quantity(
@@ -381,7 +431,7 @@ def _refuse_over_head_quantity(
             broker_order_id=(fill.native_order_id or "").strip(),
             order_ref=order_ref,
             owner=owner,
-            conflict_copy=ACTIVITY_EXACT_CONFLICT_COPY,
+            conflict_copy=ACTIVITY_OVER_ORDER_QUANTITY_CONFLICT_COPY,
             proof_reference=fill.activity_id,
             extra_evidence_refs=[item.activity_id for item, _ in executions],
         )
@@ -409,6 +459,7 @@ def _exact_execution(fill: BrokerActivity, *, leg: BrokerOrderLeg) -> BrokerOrde
 
 __all__ = [
     "ACTIVITY_READS_PER_WALK",
+    "BEYOND_REACH_REWALK_INTERVAL_MS",
     "ManualLegExecutionRecovery",
     "RecoveredExecutions",
     "head_lacks_executions",

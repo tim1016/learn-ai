@@ -7,7 +7,7 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from typing import Literal
+from typing import Literal, Protocol
 from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
@@ -91,7 +91,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 )
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerOrder, BrokerPosition
-from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerReadPort, BrokerTradePort
 from app.engine.live.order_identity import (
     build_bot_order_namespace,
     order_ref_namespace_matches,
@@ -136,6 +136,14 @@ class ReconciliationInvariantError(ClerkSqliteError):
 
 class ReconciliationLockOrderError(ClerkSqliteError):
     """Reconciliation was entered while owning intake, which would invert locks."""
+
+
+class ReconciliationReadPort(BrokerReadPort, BrokerActivityEvidencePort, Protocol):
+    """What a pass reads: the account's open work, and the activity a manual leg's executions come from (#2686).
+
+    The Clerk's guarded read port is one over any broker read port: it walks
+    the activity evidence even for a port that cannot.
+    """
 
 
 def _invariant_failure_outcome(effect_kind: str) -> ReconciliationOutcome:
@@ -363,7 +371,7 @@ async def _reconcile_effect(
     *,
     effect: EffectOperationResource,
     trigger: Trigger,
-    read: BrokerReadPort,
+    read: ReconciliationReadPort,
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
     pricing: RecoveryPricing,
@@ -904,7 +912,7 @@ async def _recover_operations(
     repo: ClerkSqliteRepository,
     *,
     trigger: Trigger,
-    read: BrokerReadPort,
+    read: ReconciliationReadPort,
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
     pricing: RecoveryPricing,
@@ -993,7 +1001,7 @@ def _direct_reconciliation_intake(
 async def reconcile_account(
     repo: ClerkSqliteRepository,
     *,
-    read: BrokerReadPort,
+    read: ReconciliationReadPort,
     trade: BrokerTradePort,
     trigger: Trigger = "AUTOMATIC",
     intake: ReentrantAsyncLock | None = None,
@@ -1151,7 +1159,7 @@ def _fold_one_snapshot_order(
 async def _reconcile_account_serialized(
     repo: ClerkSqliteRepository,
     *,
-    read: BrokerReadPort,
+    read: ReconciliationReadPort,
     trade: BrokerTradePort,
     trigger: Trigger,
     intake: ReentrantAsyncLock,
@@ -1383,6 +1391,7 @@ __all__ = [
     "ReconcilePlan",
     "ReconciliationInvariantError",
     "ReconciliationLockOrderError",
+    "ReconciliationReadPort",
     "plan_account_reconciliation",
     "read_account_open_work",
     "reconcile_account",
