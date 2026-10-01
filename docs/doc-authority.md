@@ -12,9 +12,8 @@ artifacts were **hard-deleted to Git history**. Git history
 is their provenance record. Open defects belong in `docs/known-gaps.md`; current
 Alpaca Broker V2 behavior belongs in `docs/broker-clerk-fleet-authority.md`.
 
-**Agent instructions:** `AGENTS.md` is the Codex entry point. The committed
-`CLAUDE.md` / `.claude/**` hierarchy remains the Claude-specific configuration;
-adding Codex guidance must not restructure it.
+**Agent instructions:** `AGENTS.md` holds every rule Claude and Codex share;
+`CLAUDE.md` imports it, and `.claude/**` holds the Claude-only configuration.
 
 ## Classification contract
 
@@ -40,28 +39,13 @@ held to the same live-navigation guarantee.
 
 | Claim | Primary authority | Conflict rule |
 |---|---|---|
-| Agent behavior | Native client hierarchy (`AGENTS.md` for Codex; existing `CLAUDE.md` / `.claude/**` for Claude) | Preserve Claude's configuration; surface a cross-client safety conflict |
+| Agent behavior | `AGENTS.md`, then the routed rule file or skill | Surface the conflict |
 | Product/system decision | Accepted ADR | A later explicit supersession wins |
-| Mathematical port target | Pinned vendored reference, math registry, and golden/parity test | Surface unresolved disagreement |
+| Mathematical port target | Pinned vendored reference, plus the golden fixture and parity test | Surface unresolved disagreement |
 | Engine ownership | `docs/architecture/engine-authority-map.md` | Follow its migration plan |
 | Current runtime/wire shape | Manifest/config, generated contract, implementation, and executable tests | Docs describe evidence; they do not override it |
 | Framework behavior | Installed manifest plus official version-matched docs | Do not rely on prose version caches |
 | Open defect | `docs/known-gaps.md` | Closed findings are deleted or retained only in durable decision history |
-
----
-
-## Protected canonicals (never edit without owner sign-off)
-
-| Doc | Domain | Owner | Last reviewed |
-|---|---|---|---|
-| `docs/CURRENT.md` | Short current-docs entry point | Tim | 2026-05-23 |
-| `docs/agent-start-here.md` | Minimal AI-agent loading guide | Tim | 2026-05-23 |
-| `docs/architecture/engine-authority-map.md` | Engine ownership map | Tim | 2026-05-04 |
-| `docs/architecture/numerical-authority-migration-plan.md` | Math authority consolidation | Tim | 2026-05-04 |
-| `docs/math-sources-of-truth.md` | All mathematical authorities | Tim | ongoing |
-| `README.md` | Short personal-project note (deliberately modest; setup lives in `docs/runbooks/`) | Tim | 2026-09-28 |
-| `AGENTS.md` | Agent operating instructions | Tim | — |
-| `CLAUDE.md` | Claude Code project instructions | Tim | — |
 
 ---
 
@@ -151,6 +135,12 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | 0065 | Research-job **liveness is a worker lease, not the Redis status** (#1938): a dispatched worker acquires `job:{id}:lease` (300 s) and renews it only by progressing — every emit and every gated cancellation check — so no heartbeat thread can vouch for a hung worker; `job_is_live` answers "queued/running **and** the lease exists", a dead worker reads `interrupted` within the lease TTL, an expired lease never renews back into existence, and the startup sweep still closes every job a restart orphaned (deleting their leases). An **interrupted Recency launch resumes Finish-style**: `resume_launch_id` on the recency-chart job route binds a new job id to the old durable record through `RecencyLaunches`' new attempt-fence columns (schema v9, `Attempt`/`JobId`/`Incomplete`/`FailureReason`, the fence generalized to column names and status vocabulary so every launch — fresh included — claims a generation and all launch writes are fenced); the stored `ConfigJson` governs (spec fields on a resume are ignored, re-validated), recorded cells are skipped by identity, terminal accounting is read from the persisted record (`SucceededRuns` stays the per-persist count, `FailedRuns` is this execution's), a completed launch is immutable, deleted launches refuse until restored, and **cancelled launches are resumable** (owner decision, matching grid/walk-forward). A closed job replayed under its original id still answers 409 — the four replay hazards stay avoided structurally; no auto-resume; .NET untouched |
 | 0066 | The symbol picker **offers the listing universe and populates the lake on selection** (#1960; owner decision 2026-09-20): one picker family (`app-instrument-card` and its wrappers, rows rendered through `app-asset-identity`) whose universe is the trimmed, TTL-cached listing catalog (`GET /api/tickers/catalog`, a coordinator-owned Polygon reference walk — a listing universe is market reference data, not broker-operator evidence, and FR-041 keeps broker clients off the coordinator; US-equity actives only — delisted behind the backfill panel's explicit toggle so survivorship-biased universes stay a choice, crypto never offered because `market='usa'` cannot backfill it) joined with per-row lake coverage (held span / not held / delisted); an unheld pick is gated inside the card by `EnsureCoverageService` — full-allowed-history trade-bar backfill through the standard #1836 job, progress streamed into the dropdown, the selection emitted only after a **fresh** lake read (never the still-cached pool) confirms the bars landed, a cancelled or superseded gate disarmed so a late frame cannot select anything, and no gate may run while the lake verdict is unknown; a dark vendor catalog degrades visibly (banner + lake holdings + retry), never a canned fallback; the lake remains the sole market-data authority (ADR 0049 unchanged) and `TICKER_LABELS` is display metadata, never membership; AGENTS.md hard rule and `.claude/rules/angular.md` § "Symbol picking" bind both agent stacks |
 | 0067 | Server-owned IBKR subscriptions separate connection health, callback-owned data readiness, halt state and decision-data freshness; durable halt latching, bounded independent recovery and a final clerk submission recheck replace ADR 0062's not-halted-or-recent-trade rule without changing providers or widening the five-second decision-data budget |
+| 0068 | Python owns the canonical math. There is one canonical implementation per concept, and its provenance block is the only record of it (no registry). A .NET or Angular copy is allowed only as a named exception with a stated reason and a parity test. There are two, both Frontend: the Strategy Builder's live Black-Scholes curves (latency; parity proven for price only) and the loss-cap whole-cent check (inline validation, re-checked by Python). .NET has none. An in-Python duplicate needs a real reason plus a parity test. The ADR covers math only |
+| 0069 | Numerical rigor: a port is done when a golden fixture with attribution and a tolerance-pinned test prove it. Strict float (`atol=1e-9, rtol=0`) is the default level. The per-kind tolerance table covers indicator, accumulated P&L (`1e-6`; stricter allowed), Greeks, probability, and reconciliation fill price and commission ($0.01). A tolerance is loosened only for a precision divergence. Warmup and accumulation order follow the reference. The eight-category taxonomy stays in lockstep with `DivergenceCategory`, under the acceptance gate. Ports are sovereign. Three named accepted departures |
+| 0070 | The LEAN sidecar is a reference engine, never canonical. A separate launcher alone owns Podman. The image is pinned by digest. Every run gets the same hardened container with mandatory limits, and every flag maps to a boundary. Caller source runs only inside that container. Reconciliation-grade runs pin the data, brokerage, fill-forward, normalization and window policies. The ADR also carries the owner decisions on the determinism gate, reconciler scope, data sources and reconciler output schema |
+| 0071 | Python re-solves implied volatility from raw quotes and never trusts the vendor's IV, with no fallback tier. VIX-style IV30 is primary and parametric is the alternate, never blended. Recording parametric IV30 is owed; the recorder writes only VIX-style today. The synthetic share is gated by variance. An opt-in .NET Quartz schedule owns the capture slots. Samples go to JSONL during burn-in, then Postgres. Recorder data is never forward-filled. The confidence floor is 0.1. A missing health score drops its factor |
+| 0072 | Research run identity is a canonical-JSON SHA-256 over fixed input columns, including `ENGINE_VERSION` and `data_snapshot_id`, with stated exclusions. The run ledger is immutable and hash-addressed, and hashing is opt-in for other phases. `params_hash` is the one sweep cell identity, with grid rails and no cap. A trade's evidence fingerprint is never params alone. Model output enters a run only as a precomputed, content-hashed prediction set |
+| 0073 | Research verdicts are fixed rules. Signal graduation is a Stage 0–3 ladder with a kill switch first. The alpha-decay test needs at least 5 folds. The spec-path walk-forward uses fixed split semantics and a compounded combined OOS curve. The run verdict is a complete-or-nothing contract of 17 sub-scores with fixed weights and no reweighting |
 
 ---
 
@@ -199,7 +189,7 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | `docs/references/alpaca-sqlite-clerk-source-guarantees.md` | Alpaca guarantee-to-implementation matrix | Official-source provenance for adapter constraints |
 | `docs/references/clerk-invariants.md` | Clerk custody invariants (EXIT reducing quantity, fill-quantity tolerance/delta pricing, position-drift tolerance) | Consolidated 2026-09-12 from three per-invariant stubs; defers to the pinned contracts doc |
 | `docs/references/pandas-ta-dispatch.md` | Port attributions for the sixteen pandas-ta pass-through indicators dispatched by Data Lab | Consolidated 2026-09-12 from sixteen per-indicator stubs; ported indicators keep their own notes |
-| `docs/math-rigor.md` | Variance-time and FRED rate backing | Cited by `math-sources-of-truth.md` — keep for traceability |
+| `docs/math-rigor.md` | Variance-time and FRED rate backing | Cited by the IV and FRED-rate provenance blocks |
 | `docs/options-companion-format.md` | Options companion data format | Operational reference |
 | `docs/options-cross-section-overview.md` | Options cross-section research | Useful pipeline context |
 | `docs/portfolio-validation-plan.md` | Portfolio validation tests | 10 core tests; likely partially actionable — flag before archiving |

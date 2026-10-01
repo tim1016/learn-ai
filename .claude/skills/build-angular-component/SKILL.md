@@ -1,11 +1,11 @@
 ---
 name: build-angular-component
-description: Build or modify an Angular 21 component in the Frontend. Use when user says "create a component", "add a chart", "build a page", "update the component", "make an Angular", or asks for any frontend UI work.
+description: Build or modify an Angular 22 component in the Frontend. Use when user says "create a component", "add a chart", "build a page", "update the component", "make an Angular", or asks for any frontend UI work.
 ---
 
 # Build Angular Component
 
-Build or modify a component in `Frontend/src/`. Targets Angular 21: zoneless by default, signals-first, standalone-only, Vitest as the test runner, Signal Forms where appropriate.
+Build or modify a component in `Frontend/src/`. Targets Angular 22: zoneless by default, signals-first, standalone-only, Vitest as the test runner, Signal Forms where appropriate.
 
 ## When to use
 
@@ -16,25 +16,9 @@ Build or modify a component in `Frontend/src/`. Targets Angular 21: zoneless by 
 
 ## Before starting
 
-1. Read `Frontend/.claude/rules/angular.md` if present, or the root `.claude/rules/angular.md` fallback.
+1. Follow `.claude/rules/angular.md` (the Angular conventions; Claude loads it for `Frontend/**`).
 2. Search for an existing component that does something similar. Don't duplicate patterns.
 3. Identify whether this is a **presentation** component (pure inputs → template) or a **container** component (injects services, manages state). Build the two separately if the logic is non-trivial.
-
-## Angular 21 conventions (critical)
-
-- **Zoneless by default**. New apps don't ship Zone.js. Any code relying on Zone.js side effects (e.g., `setTimeout` triggering change detection automatically) is a bug. Use signals.
-- **`standalone: true` is implicit**. Do NOT set `standalone: true` in `@Component` — it's the default in v20+, setting it explicitly is noise.
-- **Signals everywhere**: `signal()` for state, `computed()` for derived, `effect()` for side effects.
-- **`input()` and `output()` functions**, not `@Input()` / `@Output()` decorators.
-- **`model()` for two-way binding** instead of `input()` + `output()` pairs.
-- **`resource()` / `rxResource()` for async** — prefer over manual `toSignal(httpClient...)` patterns.
-- **`inject()` for DI**, not constructor injection.
-- **Modern control flow**: `@if`, `@for`, `@switch`. Every `@for` must include `track` (prefer a stable ID over `$index`).
-- **`@let` in templates** to avoid type narrowing awkwardness.
-- **`ChangeDetectionStrategy.OnPush`** on every component.
-- **No `@HostBinding` / `@HostListener` decorators**. Use the `host` object on `@Component` instead.
-- **No `ngClass` / `ngStyle`**. Use `[class.foo]` and `[style.color]` bindings.
-- **No `*ngIf` / `*ngFor` / `ngSwitch`** — use the `@if` / `@for` / `@switch` control flow.
 
 ## File organization
 
@@ -88,7 +72,7 @@ Template uses `@let`, `@if`, `@for` with `track`. Avoid embedding complex expres
 
 ## Forms
 
-- **Signal Forms** (new in v21) for new forms. These are signal-based, reactive, and simpler than `ReactiveFormsModule` for most cases.
+- **Signal Forms** for new forms. These are signal-based, reactive, and simpler than `ReactiveFormsModule` for most cases.
 - **Reactive Forms** (`ReactiveFormsModule`) still valid for complex, multi-field forms with heavy validation. Never use Template-driven forms.
 - Never use Template-driven forms (`ngModel`, `FormsModule`).
 
@@ -110,7 +94,7 @@ For trading charts, prefer `lightweight-charts`. Wrap it in a thin component tha
 
 ## Testing
 
-- **Vitest** is the default test runner in v21.
+- **Vitest** is the default test runner.
 - Use **Angular Testing Library** (`@testing-library/angular`): `render()` + `screen` queries.
 - Test **behavior**, not implementation. Assert what the user sees, not internal signal values.
 - Mock services at the DI level via `providers: [{ provide: MarketDataService, useValue: fakeService }]`.
@@ -137,7 +121,7 @@ it('shows a loading state while data is fetching', async () => {
 
 - **Lazy-loaded** via `loadComponent` in the route config.
 - **Functional guards** and resolvers, not class-based.
-- **Route data as signals** (v21 feature); prefer over `ActivatedRoute` subscribe patterns.
+- **Route data as signals**; prefer over `ActivatedRoute` subscribe patterns.
 
 ## Output
 

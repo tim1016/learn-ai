@@ -1,6 +1,12 @@
+---
+paths:
+  - "Backend/**"
+  - "Backend.Tests/**"
+---
+
 # .NET rules
 
-Targets .NET 10 with Hot Chocolate v15 and EF Core. Read when writing or editing code under `Backend/` or `Backend.Tests/`.
+Targets .NET 10 with Hot Chocolate v15 and EF Core.
 
 **Authoritative references**:
 - https://learn.microsoft.com/dotnet (framework, language, EF Core)
@@ -28,7 +34,7 @@ Targets .NET 10 with Hot Chocolate v15 and EF Core. Read when writing or editing
 ## Hot Chocolate v15
 
 - **Always use `[GraphQLName("...")]`** to control exposed field names. HC v15 strips the `Get` prefix; don't rely on inference.
-- **Static resolver classes** with `[QueryType]` / `[MutationType]` attributes.
+- **Resolvers live in `[ExtendObjectType]` classes** registered with `AddTypeExtension<T>()` on the `AddQueryType<Query>()` root.
 - **`[Service]` attribute** for resolver service injection (not constructor injection).
 - **`DataLoader` for N+1** prevention in list resolvers.
 - **Union result types** for domain errors instead of throwing exceptions. Throw only for unexpected conditions.
@@ -46,22 +52,3 @@ Targets .NET 10 with Hot Chocolate v15 and EF Core. Read when writing or editing
 
 - **`JsonNamingPolicy.SnakeCaseLower`** for deserializing Python service responses (PythonDataService uses snake_case).
 - **Strongly-typed clients** (typed `HttpClient` via `IHttpClientFactory`) for calling internal services.
-
-## Testing (see testing.md for cross-stack standards)
-
-- **xUnit** with `[Fact]` and `[Theory]`. Prefer `[Theory, InlineData(...)]` for parameterized tests.
-- **Arrange → Act → Assert** with blank-line separation.
-- **NSubstitute or Moq** for mocking interfaces. Mock interfaces, not concrete classes.
-- **Async test methods** return `Task`. Never `.Result` or `.Wait()`.
-- **Name pattern**: `MethodName_Scenario_ExpectedResult`.
-- **GraphQL tests**: use `IRequestExecutor` to run raw queries against the schema.
-
-## Common pitfalls
-
-- Relying on HC's `Get` prefix stripping without `[GraphQLName]` — schema becomes fragile to rename refactors
-- Constructor injection on resolver classes (they're static; use `[Service]`)
-- Throwing for domain errors (use union result types)
-- N+1 in list resolvers (use DataLoader)
-- Raw `IConfiguration` reads scattered through code (use `IOptions<T>`)
-- Message-template interpolation in logs: `logger.LogInformation($"Fetched {count}")` — breaks structured logging
-- `.Result` / `.Wait()` in async code paths (deadlock risk)

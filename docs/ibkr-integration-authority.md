@@ -145,7 +145,7 @@ proves:
 6. the preserved account, position, order/history, what-if, evidence, capability,
    bars, session-history, reconciliation, event, and transaction reads remain.
 
-The paired authority registries are
-`docs/architecture/engine-authority-map.md` and
-`docs/math-sources-of-truth.md`. The historical rationale for the original
+Engine ownership is recorded in
+`docs/architecture/engine-authority-map.md`; each math file's provenance
+block records its canonical implementation. The historical rationale for the original
 integration is marked retired in `docs/architecture/ibkr-integration-tdd.md`.

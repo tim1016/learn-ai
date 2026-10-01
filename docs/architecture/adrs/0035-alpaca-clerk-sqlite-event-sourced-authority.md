@@ -332,12 +332,21 @@ from the canonical NYSE calendar, including half-days.
 
 ## Pinned implementation contracts
 
-The concrete schema DDL, PRAGMA set, transaction matrix, hash-chain row
-format, write-only mirror line format, and fail-closed startup checks this
-ADR requires are pinned in
+The schema DDL and the PRAGMA set are code: `SCHEMA_DDL` and
+`configure_connection` in `app/broker/alpaca/clerk/sqlite/schema.py`. The
+write-only mirror line format is code too, in `sqlite/mirror.py`. The binding
+annex holds what the code alone cannot state:
 [`docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md`](../alpaca-clerk-sqlite-pinned-contracts.md)
-(PRD Phase 0 / issue #1374). That document is binding on Slice 2 onward; this
-ADR's Status is unchanged by its existence.
+(PRD Phase 0 / issue #1374). It covers:
+
+- §1/§1a, database identity and the established-accounts registry;
+- §3a–§3g.i, why each fact type exists;
+- §4–§7: the transaction matrix, the command lifecycle, operation-first
+  custody, and the hash-chain row format;
+- §9, the ordered fail-closed startup checks.
+
+This ADR's Status is unchanged by the annex's existence. *(Reworded
+2026-09-30, #2749.)*
 
 ## Qualification gate
 
@@ -355,3 +364,57 @@ the execution PRD linked above. Remaining injected-fault and multi-session rows
 are tracked in [issue #1440](https://github.com/tim1016/learn-ai/issues/1440) as
 post-acceptance hardening and are not claims of completed live execution.
 Live-money trading stays disabled throughout.
+
+## Amendment 2026-09-30 — the store's filesystem, and live snapshot semantics under D12 (#2749)
+
+Two rules that run today but were recorded only in a compose comment, a
+startup guard, a soak report and the retired ADR 0028 (#2745 entry 3). D1–D13
+are unchanged.
+
+**(a) A clerk SQLite store lives on VM-local persistent storage, never on a
+host bind mount.**
+
+- WAL needs every connection to share one host's locking and shared-memory
+  domain. SQLite's own WAL documentation says WAL does not work across hosts
+  or over a network filesystem.
+- On macOS, Podman's host bind mount is `virtiofs`, which falls outside that
+  domain. In the 2026-08-07 paper soak, a clerk database under the
+  `./PythonDataService/artifacts` bind mount was written by the container's
+  SQLite and read by the host's. After an immediate container restart and
+  that cross-boundary access, its `runs` btree and index were damaged.
+- So `compose.yaml` masks `/app/artifacts/alpaca_clerk` with the named
+  VM-local volume `alpaca-clerk-data` (XFS inside the service), and operator
+  tooling runs in a one-shot service container against the same volume.
+- A startup guard refuses to create or open a WAL authority on a FUSE,
+  remote or `virtiofs` filesystem
+  (`sqlite/repository_lifecycle.py::assert_wal_filesystem_supported`).
+- Host and container SQLite clients never alternate against one WAL
+  authority.
+
+**(b) Live snapshots under D12 are owned by one producer, versioned, and
+latest-wins.** D12 moved the live roster onto `SurfaceHub` and
+`versioned-snapshot-stream`. Those semantics came from the retired ADR 0028 §3
+and §4 and are kept here:
+
+- One producer (`app/services/surface_hub.py`) owns each versioned snapshot.
+  REST and SSE read the same stored snapshot, and neither gathers inputs on
+  its own.
+- A snapshot's identity is `{stream_epoch, surface_version}`.
+  - `stream_epoch` is opaque and changes whenever the producer's lifecycle
+    restarts.
+  - `surface_version` increases only when the semantic document changes. A
+    fingerprint that excludes transport-only motion (epoch, version,
+    generation and age stamps) decides this. A freshness threshold crossing
+    *is* a semantic change.
+- A client adopts a new epoch unconditionally. Inside one epoch, it adopts
+  only a higher version
+  (`Frontend/src/app/services/versioned-snapshot-stream.ts::adoptVersionedSnapshot`).
+- Each client queue holds one slot, and a newer complete snapshot replaces an
+  unsent older one. A reconnect to an epoch the server no longer owns gets
+  the current full snapshot. State channels never replay intermediate
+  documents.
+
+Why: an operator surface must show the latest truth after a producer
+restart, never a merged or replayed backlog. Full documents were chosen over
+JSON Patch. The document is small, replacement is deterministic, and
+patch-order bugs buy nothing.

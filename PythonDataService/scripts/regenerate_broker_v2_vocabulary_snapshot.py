@@ -16,13 +16,13 @@ a working tree) each lock against their own copy:
   snapshot and asserts every code carries a non-empty server-authored label
   and explanation. There is no client-side copy map: the server authors it.
 
-A CI job (``broker-v2-vocabulary-contract``) regenerates both files from live
-source on every PR and diffs them against the committed copies, so a hand-edit
-to either file — even one applied identically to both, which neither file's
-own drift alone would catch — fails CI. ``test_vocabulary_snapshot.py``
-additionally asserts the two committed copies are byte-identical to each other
-and that every code's committed ``copy`` matches live ``OPERATOR_COPY``
-exactly, not merely non-trivially.
+``test_vocabulary_snapshot.py`` regenerates the snapshot from live source on
+every PR and requires the committed Python copy to match it byte for byte, and
+requires the two committed copies to be byte-identical to each other, so a
+hand-edit to either file — even one applied identically to both, which neither
+file's own drift alone would catch — fails CI. It also asserts every code's
+committed ``copy`` matches live ``OPERATOR_COPY`` exactly, not merely
+non-trivially.
 
 Usage::
 

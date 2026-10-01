@@ -73,7 +73,7 @@ For the first disagreement:
 
 Not all divergences get fixed. Some are acceptable — e.g., LEAN uses integer commission rounding that we've consciously chosen not to mirror. When accepting a divergence:
 
-1. **Add an entry** to `docs/references/reconciliations/<strategy-name>.md` describing: the divergence, its classification, why it's accepted, the cumulative impact on PnL over the test window.
+1. **Document it in the reconciliation test and in the port's module docstring**: the divergence, its classification, why it's accepted, the cumulative impact on PnL over the test window.
 2. **Encode the tolerance in the reconciliation test** so future regressions fail loudly.
 
 ## Output
