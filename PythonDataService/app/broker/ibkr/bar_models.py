@@ -20,6 +20,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.marketdata.feed import BarSessionPhase
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 BarProvenance = Literal["ibkr_realtime", "ibkr_historical", "polygon_historical", "mixed"]
 
@@ -35,8 +36,8 @@ class IbkrMinuteBar(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     symbol: str
-    start_ms: int = Field(..., description="UTC milliseconds since epoch, inclusive.")
-    end_ms: int = Field(..., description="UTC milliseconds since epoch, exclusive.")
+    start_ms: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, description="UTC milliseconds since epoch, inclusive.")
+    end_ms: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, description="UTC milliseconds since epoch, exclusive.")
     open: Decimal
     high: Decimal
     low: Decimal

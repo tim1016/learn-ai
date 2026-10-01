@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from app.lean_sidecar.manifest import sha256_file
 from app.lean_sidecar.workspace import Workspace
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 # Bumped any time the parser's output schema changes in a non-additive
 # way. The manifest records this; a different value invalidates
@@ -69,7 +70,7 @@ class NormalizedEquityPoint(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    ms_utc: int = Field(..., description="Timestamp as int64 ms UTC.")
+    ms_utc: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, description="Timestamp as int64 ms UTC.")
     value: float = Field(..., description="Equity value (close).")
     open: float
     high: float
@@ -104,6 +105,8 @@ class NormalizedOrderEvent(BaseModel):
     symbol_value: str = Field(..., alias="symbolValue")
     ms_utc: int = Field(
         ...,
+        ge=0,
+        le=MAX_TIMESTAMP_MS,
         description="Event time as int64 ms UTC (LEAN writes unix seconds).",
     )
     status: str
@@ -208,10 +211,10 @@ class NormalizedResult(BaseModel):
     total_closed_trades: int = 0
     total_rolling_windows: int = 0
     total_analyses: int = 0
-    first_equity_ms_utc: int | None = Field(default=None)
-    last_equity_ms_utc: int | None = Field(default=None)
-    first_summary_equity_ms_utc: int | None = Field(default=None)
-    last_summary_equity_ms_utc: int | None = Field(default=None)
+    first_equity_ms_utc: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    last_equity_ms_utc: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    first_summary_equity_ms_utc: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    last_summary_equity_ms_utc: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
 
 
 # ---------------------------------------------------------------------------

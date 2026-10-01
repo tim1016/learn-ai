@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.external_orders import (
         UnfoldableBrokerOrderAcknowledgement,
@@ -43,7 +45,7 @@ class ExternalOrderAcknowledgementResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     external_order_id: str = Field(min_length=1, max_length=256)
-    acknowledged_at_ms: int = Field(ge=0)
+    acknowledged_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     ack_operator: str = Field(min_length=1, max_length=64)
 
     @classmethod
@@ -98,7 +100,7 @@ class ClerkTransactionEventRow(BaseModel):
     execution_quantity: float | None = None
     execution_price: float | None = None
     journal_seq: int = Field(ge=1)
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     receipt: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -120,18 +122,18 @@ class ClerkCustodyTimeline(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    intent_created_at_ms: int | None = Field(default=None, ge=0)
-    clerk_request_received_at_ms: int | None = Field(default=None, ge=0)
-    clerk_intake_admitted_at_ms: int | None = Field(default=None, ge=0)
-    inbox_fsynced_at_ms: int | None = Field(default=None, ge=0)
-    a0_custody_accepted_at_ms: int | None = Field(default=None, ge=0)
-    broker_write_started_at_ms: int | None = Field(default=None, ge=0)
-    broker_call_returned_at_ms: int | None = Field(default=None, ge=0)
-    broker_ack_recorded_at_ms: int | None = Field(default=None, ge=0)
-    earliest_broker_source_at_ms: int | None = Field(default=None, ge=0)
-    first_callback_arrived_at_ms: int | None = Field(default=None, ge=0)
-    first_callback_recorded_at_ms: int | None = Field(default=None, ge=0)
-    economic_terminal_recorded_at_ms: int | None = Field(default=None, ge=0)
+    intent_created_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    clerk_request_received_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    clerk_intake_admitted_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    inbox_fsynced_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    a0_custody_accepted_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    broker_write_started_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    broker_call_returned_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    broker_ack_recorded_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    earliest_broker_source_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    first_callback_arrived_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    first_callback_recorded_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    economic_terminal_recorded_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     durations: ClerkCustodyDurations = Field(default_factory=ClerkCustodyDurations)
 
 
@@ -144,7 +146,7 @@ class ClerkTransactionRow(BaseModel):
     broker: Literal["ibkr", "alpaca"] = "ibkr"
     account_id: str = Field(min_length=1, max_length=64)
     journal_seq: int = Field(ge=1)
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     transaction_kind: str = Field(min_length=1, max_length=64)
     transaction_origin: TransactionOrigin = "manual"
     order_instruction: ClerkOrderInstruction = Field(default_factory=ClerkOrderInstruction)
@@ -179,7 +181,7 @@ class ClerkTransactionSummaryRow(BaseModel):
     broker: Literal["ibkr", "alpaca"] = "ibkr"
     account_id: str = Field(min_length=1, max_length=64)
     journal_seq: int = Field(ge=1)
-    recorded_at_ms: int = Field(ge=0)
+    recorded_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     transaction_kind: str = Field(min_length=1, max_length=64)
     transaction_origin: TransactionOrigin = "manual"
     order_instruction: ClerkOrderInstruction = Field(default_factory=ClerkOrderInstruction)

@@ -54,6 +54,7 @@ from app.routers.research_runs import (
     get_artifacts_root,
     get_data_source_factory,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -68,8 +69,8 @@ class WalkForwardHttpRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     spec: StrategySpec = Field(..., description="Validated StrategySpec")
-    start_ms: int = Field(..., ge=0, strict=True, description="UTC epoch milliseconds")
-    end_ms: int = Field(..., ge=0, strict=True, description="UTC epoch milliseconds")
+    start_ms: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, strict=True, description="UTC epoch milliseconds")
+    end_ms: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, strict=True, description="UTC epoch milliseconds")
     initial_cash: float = Field(
         100_000.0,
         ge=0,

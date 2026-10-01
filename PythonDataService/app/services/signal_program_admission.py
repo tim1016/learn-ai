@@ -46,6 +46,7 @@ from app.services.program_source_anchor import (
     _IMPORTED_SOURCE_DIGESTS,
     record_imported_program_sources,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_QUALIFICATION_MANIFEST = _SERVICE_ROOT / "app/data/signal_program_build_receipts.json"
@@ -66,7 +67,7 @@ class ProgramBuildQualificationReceipt(BaseModel):
     # isolation.
     wiring_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     qualification_suite: str
-    qualified_at_ms: int = Field(ge=0)
+    qualified_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     # Recorded lineage of the qualified bytes (see ProgramBuildGitProvenance).
     # Optional so the receipts minted before it existed keep their committed
     # hashes: an absent provenance is omitted from the hashed payload, never

@@ -376,8 +376,8 @@ class RecoveryEvaluationObservation(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    evaluation_started_at_ms: int = Field(ge=0)
-    last_pass_completed_at_ms: int | None = Field(default=None, ge=0)
+    evaluation_started_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    last_pass_completed_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
 
 
 class AccountFreezeState(BaseModel):

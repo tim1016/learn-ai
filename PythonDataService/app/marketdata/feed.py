@@ -32,6 +32,8 @@ from typing import TYPE_CHECKING, Literal, Protocol, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
 if TYPE_CHECKING:
     # Type-only: ``decision_session`` sits above this port and imports from it
     # (through ``session_authority``), so a runtime import here would close a
@@ -172,14 +174,19 @@ class MarketDataBar(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     symbol: str
-    start_ms: int = Field(..., description="Bar-open boundary, int64 ms UTC, inclusive.")
-    end_ms: int = Field(..., description="Bar-close boundary, int64 ms UTC, exclusive.")
+    start_ms: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, description="Bar-open boundary, int64 ms UTC, inclusive.")
+    end_ms: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, description="Bar-close boundary, int64 ms UTC, exclusive.")
     open: Decimal
     high: Decimal
     low: Decimal
     close: Decimal
     volume: int
-    fetched_at_ms: int = Field(..., description="Wall-clock at which the bar was assembled, int64 ms UTC.")
+    fetched_at_ms: int = Field(
+        ...,
+        ge=0,
+        le=MAX_TIMESTAMP_MS,
+        description="Wall-clock at which the bar was assembled, int64 ms UTC.",
+    )
     feed_id: str = Field(
         ...,
         description=(
@@ -221,7 +228,7 @@ class FeedHealth(BaseModel):
     last_bar_ms: int | None
     reason: str
     active_subscription_count: int
-    observed_at_ms: int = Field(..., description="Snapshot wall-clock, int64 ms UTC.")
+    observed_at_ms: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS, description="Snapshot wall-clock, int64 ms UTC.")
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +273,12 @@ class FeedContinuityEvent(BaseModel):
     kind: ContinuityEventKind
     feed_id: str
     symbol: str
-    observed_at_ms: int = Field(..., description="Wall-clock at which the fact was observed, int64 ms UTC.")
+    observed_at_ms: int = Field(
+        ...,
+        ge=0,
+        le=MAX_TIMESTAMP_MS,
+        description="Wall-clock at which the fact was observed, int64 ms UTC.",
+    )
     cause: InterruptionCause | GapCause | None = Field(
         default=None,
         description=(

@@ -18,6 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 GateResultStatus = Literal[
     "pass",
@@ -46,7 +47,7 @@ class GateResult(BaseModel):
     source: str
     operator_reason: str
     operator_next_step: str | None = None
-    evidence_at_ms: int = Field(ge=0)
+    evidence_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
 class BotDutyOutcomeView(BaseModel):

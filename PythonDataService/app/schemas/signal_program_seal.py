@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.action_plan import ActionPlan
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 # Canonical home for "how was this parameter's effective value chosen".
 # Every other module
@@ -309,7 +310,7 @@ class SealedBotProgram(BaseModel):
     carryover_policy: Literal["FORBID", "ALLOW"]
     validation_event_id: str
     validation_snapshot_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    sealed_at_ms: int = Field(ge=0)
+    sealed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     bot_configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")

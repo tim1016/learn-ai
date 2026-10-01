@@ -42,7 +42,7 @@ from app.services.alpaca_fee_attribution import (
     attribute_session_fees,
     collapse_activity_deliveries,
 )
-from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_date_at_ms, et_midnight_ms
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
@@ -64,7 +64,7 @@ class FeeEvidenceFacts(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    checked_at_ms: int = Field(ge=0)
+    checked_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     activities: list[BrokerActivity]
     # Oldest dated row anywhere in the read's newest-first window. Coverage
     # never reads it as reach: a date-only row's midnight stamp may lie long
