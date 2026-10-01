@@ -920,7 +920,7 @@ def _fold_order_submit_uncertain(conn: sqlite3.Connection, payload: dict[str, An
 
 #: Numerical-rigor tolerance for "is this position flat/drifted" — same
 #: absolute-tolerance rationale as ``FILL_QTY_EPSILON`` above (see
-#: ``docs/references/clerk-invariants.md §3``). Lives here, not in
+#: ADR 0036 Decision 1). Lives here, not in
 #: ``reconcile.py`` (its original logical home), so both ``reconcile.py`` and
 #: ``exit.py`` can import it without either depending on the other —
 #: account reconciliation needs to call ``exit.resolve_exit`` for an
@@ -932,7 +932,7 @@ def position_quantity_is_nonzero(quantity: float) -> bool:
     """Return whether custody must treat ``quantity`` as exposure.
 
     Formula: ``nonzero(q) = abs(q) >= POSITION_QTY_EPSILON``.
-    Reference: ``docs/references/clerk-invariants.md §3``.
+    Reference: ADR 0036 Decision 1.
     Canonical implementation: this file.
     Validated against:
       ``tests/broker/alpaca/clerk/sqlite/test_reconcile.py::test_position_quantity_boundary_is_unambiguous``.
@@ -1006,8 +1006,7 @@ def _fold_execution_slice_filled(conn: sqlite3.Connection, payload: dict[str, An
     """Fold one idempotent broker execution slice into exposure.
 
     Formula: attributed_qty' = attributed_qty + sign(side) * slice_qty.
-    Reference: docs/prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md
-      § Task S1.2 (execution-slice facts + folds).
+    Reference: none external.
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
       test_folds_execution.py::test_execution_slice_filled_records_exact_slices.
@@ -1100,7 +1099,7 @@ def _fold_execution_coverage_resolved(conn: sqlite3.Connection, payload: dict[st
     exact and cumulative quantity/price/side agree within the Clerk's pinned
     execution tolerance.  The raw cumulative and exact observations remain
     custody transitions; ``fills`` is rebuilt from the selected coverage.
-    Reference: docs/prds/2026-08-13-sqlite-clerk-manual-orders.md §11.
+    Reference: none external.
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
       test_folds_execution.py::test_coverage_resolution_replaces_one_cumulative_fill_once.
@@ -1222,7 +1221,7 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
 
     Formula: delta_qty = cumulative_qty - prior_effective_qty; attributed_qty'
       = attributed_qty + sign(side) * delta_qty.
-    Reference: docs/references/clerk-invariants.md §2.
+    Reference: ADR 0036, 2026-09-30 amendment, item 2.
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
       test_folds_execution.py::test_one_exact_auto_supersedes_many_cumulative_recovery_rows.

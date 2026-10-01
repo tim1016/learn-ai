@@ -4,7 +4,7 @@ The adapter is the **single ingestion boundary**: it consumes Alpaca's raw JSON
 mappings (from the ``raw_data=True`` client) and produces broker-contract
 models. Every vendor→contract conversion happens here, exactly once:
 
-- RFC-3339 timestamp strings → ``int64`` ms UTC (temporal-rigor: the one
+- RFC-3339 timestamp strings → ``int64`` ms UTC (the one
   conversion boundary on ingestion).
 - Decimal money/quantity strings → ``float`` (read-only display surface; the
   verbatim decimals remain in the capture journal).
@@ -181,7 +181,7 @@ def et_date_to_ms(value: str) -> int:
 
     Non-trade activity rows carry a settlement/record *date*, not an instant.
     Anchoring at the start of the ET calendar day keeps the value from drifting
-    a calendar day when rendered in ``date-et`` mode (temporal-rigor).
+    a calendar day when rendered in ``date-et`` mode (ADR 0022 (a), (e)).
     """
     day = date.fromisoformat(value)
     anchored = datetime(day.year, day.month, day.day, tzinfo=_ET)

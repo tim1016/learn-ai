@@ -62,8 +62,7 @@ class EstablishedAccountsRegistry:
             os.fsync(handle.fileno())
         if not existed:
             # Same durability gap as the mirror's first write, closed for
-            # the same reason (open-pr-review-2026-08-05.md P2 "First
-            # registry creation lacks parent-directory fsync").
+            # the same reason.
             fsync_directory(self._path.parent)
 
     def is_established(self, account_id: str) -> bool:

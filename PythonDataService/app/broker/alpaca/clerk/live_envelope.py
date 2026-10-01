@@ -74,7 +74,7 @@ OBSERVATION_MAX_AGE_MS = 45_000
 # account values are "updated Real-Time post trade executions" (Broker API
 # FAQ), and neither the account endpoint nor the ``trade_updates`` stream
 # states an ordering or consistency guarantee between the two
-# (docs/references/alpaca-live-envelope.md cites each page). So a fill recorded
+# (ADR 0059, 2026-09-30 amendment). So a fill recorded
 # within this margin before the stamp stays reserved, even though the cash may
 # already include it (``AccountObservation.fills_seen_before_ms``):
 # over-reserving refuses an ENTER that would have fit, under-reserving admits a

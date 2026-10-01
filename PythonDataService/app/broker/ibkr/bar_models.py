@@ -3,11 +3,9 @@
 Split out of ``app/broker/ibkr/models.py`` (IBKR decommission Slice 0,
 issue #1813) so the live-chart/gallery/bar-aggregator path can depend
 on bar types without importing account/order/session models from the
-same file. See
-``docs/superpowers/specs/2026-08-26-ibkr-decommission-slice-0-design.md``.
+same file.
 
-All timestamps are ``int64`` ms UTC per the project's numerical-rigor
-rules.
+All timestamps are ``int64`` ms UTC.
 
 ``BarSessionPhase`` is not defined here: it is broker-neutral, so its
 single definition lives in ``app.marketdata.feed`` and this module

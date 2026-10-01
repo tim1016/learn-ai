@@ -18,15 +18,15 @@ The function is the single authority that feeds:
 - The rollup cache (``rollup_cache.py``).
 
 Dedup rule: each ``(account_id, event_key)`` is counted exactly once; a
-re-delivery with the same event_key is absorbed idempotently (temporal-rigor
-live-subscription relaxation).
+re-delivery with the same event_key is absorbed idempotently (ADR 0035 D3
+and its live-idempotent websocket dedup invariant).
 
 Canonical normalized-fill fold gate (``normalize_fill_event``):
     Formula: fill attribution = {owned ORDER_EVENT entries where event_type in
         {"fill", "partial_fill"} AND event_key non-empty AND leg/order_ref
         non-None}, deduplicated on (account_id, event_key).
-    Reference: Alpaca trade_updates stream event taxonomy; temporal-rigor.md
-        §"Finite ingestion vs. live subscriptions" (idempotent redelivery).
+    Reference: Alpaca trade_updates stream event taxonomy; ADR 0035 D3 and
+        its live-idempotent websocket dedup invariant.
     Canonical implementation: this file (normalize_fill_event).
     Validated against:
         PythonDataService/tests/broker/alpaca/clerk/test_fills.py and
@@ -161,8 +161,8 @@ def project_instance_fills(
     Only entries whose ``order_ref`` resolves to namespace
     ``learn-ai/{sid}/v1`` (exact structural match per ADR 0008 §1) are
     included.  Each ``(account_id, event_key)`` is deduped — a re-delivered
-    fill event is absorbed idempotently (temporal-rigor live-subscription
-    relaxation).
+    fill event is absorbed idempotently (ADR 0035 D3 and its live-idempotent
+    websocket dedup invariant).
 
     ``entries`` is consumed once; pass ``journal.read_all()`` for the full
     history or a pre-filtered slice for bounded reads.

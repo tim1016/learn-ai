@@ -11,15 +11,14 @@ Formula:
     Rounding is always in the marketable direction, so the anchor never
     understates the allowance the operator set.
 Reference:
-    ADR 0059 Decision 5.3; CONTEXT.md "Marketable limit anchor"; Alpaca
-    "Orders at Alpaca" § Extended Hours Trading (limit-only) — see
-    docs/references/alpaca-extended-hours.md.
+    ADR 0059 Decision 5.3; Alpaca
+    "Orders at Alpaca" § Extended Hours Trading (limit-only).
 Canonical implementation: this file.
 Validated against:
     tests/broker/alpaca/test_marketable_limit.py::test_marketable_limit_price,
     tests/broker/alpaca/test_marketable_limit.py::test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price
 
-**Why the tick rule exists twice** (CLAUDE.md guiding philosophy #5 permits a
+**Why the tick rule exists twice** (a canonical rule may have a
 duplicate only for a real reason, with a parity test naming the canonical
 file). ``BrokerOrderLeg._limit_price_matches_order_type`` enforces Alpaca's
 precision rule on the *final* price, at the contract boundary, where it guards

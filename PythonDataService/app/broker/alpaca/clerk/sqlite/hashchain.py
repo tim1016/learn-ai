@@ -3,7 +3,7 @@
 ``row_hash = H(prev_hash || canonical(payload))``, where ``||`` is UTF-8
 string concatenation (not raw hash-byte concatenation) and ``canonical``
 is a fixed-key-order, no-whitespace JSON serialization. See
-``docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md`` §7 for the full
+ADR 0035 D8 and its binding annex §7 for the full
 rationale; this module is the canonical implementation of that pin.
 """
 

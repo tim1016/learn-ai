@@ -11,7 +11,7 @@ this facts string — is therefore sufficient to reconstruct the command
 resource on rebuild without a live database or a caller closure.
 
 ``ENTER_ACCEPTED`` facts are pinned in
-``docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md`` §3.d; #1377 adds
+ADR 0035's binding annex, §3.d; #1377 adds
 the dataclass here alongside the fold that consumes it
 (``folds._fold_enter_accepted``). The evidence-fold kinds that follow it
 (``ORDER_SUBMIT_UNCERTAIN``, ``ORDER_SUBMIT_FAILED``, ``ORDER_FILL_OBSERVED``)
@@ -326,8 +326,8 @@ _ACCEPTED_SHAPE_DEFAULTS: Mapping[str, Any] = {
 def _omit_defaults(payload: dict[str, Any], defaults: Mapping[str, Any]) -> dict[str, Any]:
     """Drop every field holding its default, so old rows stay byte-identical.
 
-    The one canonical omit-when-default rule for durable facts (see the
-    hash-chained-schema rule in ``.claude/rules/numerical-rigor.md``): a
+    The one canonical omit-when-default rule for durable facts (the log is
+    hash-chained, ADR 0035 D8): a
     field added by a later schema version must not appear in the canonical
     JSON of a row that does not use it.
     """
@@ -484,7 +484,7 @@ class ExitReducingOrderCreatedFacts:
     for the reducing/close order — symbol and side are needed to place the
     order; ``quantity`` is the Clerk-proven remaining attributed quantity at
     the moment cancellation resolved (the acceptance criterion this fact
-    exists to prove — see ``docs/references/clerk-invariants.md §1``).
+    exists to prove — ADR 0030).
     ``order_type``, ``time_in_force``, ``limit_price`` and ``extended_hours``
     carry the decision's session-dependent leg shape (ADR 0059 D5.3), so a
     resumed submission rebuilds the identical leg without being told it
@@ -1084,8 +1084,7 @@ def validate_execution_slice_facts(facts: ExecutionSliceFilledFacts) -> None:
     """Reject malformed broker-execution inputs before a custody transition.
 
     Formula: n/a — input-boundary validation for the execution-slice fold.
-    Reference: docs/prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md
-      § Task S1.2.
+    Reference: none external.
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
       test_folds_execution.py::test_execution_slice_filled_rejects_invalid_facts.
@@ -1203,7 +1202,7 @@ def leg_instruction_payload(leg: BrokerOrderLeg) -> dict[str, object]:
     ``BrokerOrderLeg`` — the manual instruction hash, the manual command's
     ``payload_hash``, and the bot-driven ENTER decision's ``payload_hash`` —
     routes through this function rather than dumping the leg itself, so
-    there is exactly one payload rule (CLAUDE.md guiding philosophy #5).
+    there is exactly one payload rule.
 
     ``extended_hours`` is omitted when ``False`` so every leg accepted
     before the field existed keeps validating against its stored hash

@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 
 # Contract §6 refusal codes. Code-like and stable: the Frontend renders them
 # through the shared ``receiptLabel`` pipe, and the prose beside them is
-# backend-authored (CLAUDE.md hard rule).
+# backend-authored (ADR 0035 D12).
 BROKER_UNCONFIGURED: Final = "broker_unconfigured"
 PROFILES_DATABASE_UNAVAILABLE: Final = "profiles_database_unavailable"
 APPLY_PREFLIGHT_REFUSED: Final = "apply_preflight_refused"

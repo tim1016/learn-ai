@@ -5,9 +5,8 @@ stopped being the runtime's source of truth when an installation cut over to a
 saved profile. This module owns three things that must not drift apart:
 
 1. **Which variables are retired** — :data:`RETIRED_SETTINGS`. Exactly seven, and
-   the list is closed. ``docs/architecture/alpaca-configuration-ownership-inventory.md``
-   §F is the authority; :data:`NEVER_RETIRED_SETTINGS` records the other side of
-   that table so the distinction is asserted rather than remembered.
+   the list is closed (ADR 0060); :data:`NEVER_RETIRED_SETTINGS` records the other
+   side so the distinction is asserted rather than remembered.
 2. **How to read them without ever refusing to construct** — the two readers
    below.
 3. **The refusal their presence produces when a cut-over installation is asked
@@ -31,8 +30,8 @@ path, where an exception is a crash loop (#2014), so it must not have one.
 
 :class:`LegacyEnvironmentValues` mirrors ``AlpacaSettings``' field *types* so a
 parsed value is bit-identical to what the environment boot would have produced —
-which is what makes the imported envelope's ``sha`` equal the legacy one. Per
-CLAUDE.md guiding philosophy #5 this deliberate duplicate carries a parity test
+which is what makes the imported envelope's ``sha`` equal the legacy one. This
+deliberate duplicate carries a parity test
 naming its canonical file: ``tests/broker_configuration/test_legacy_environment.py``
 pins every field and the resulting envelope ``sha`` against ``AlpacaSettings``.
 

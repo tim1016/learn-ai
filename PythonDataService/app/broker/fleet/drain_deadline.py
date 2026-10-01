@@ -18,7 +18,7 @@ not guarantee one — drain at 15:55 ET and it buys five minutes of the
 session it was entered in; drain Wednesday at 15:55 ahead of a Thursday
 holiday and the entire remaining 24h is non-trading time. Reasoning a
 session boundary out of a wall-clock constant is what
-``.claude/rules/temporal-rigor.md`` bans outright, which is why the second
+ADR 0022 (b) bans outright, which is why the second
 leg derives from the canonical calendar module (``session_windows_ms_utc``)
 rather than a duration.
 

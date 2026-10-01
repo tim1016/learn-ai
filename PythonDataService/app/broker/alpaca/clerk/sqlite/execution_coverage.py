@@ -44,7 +44,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 )
 
 #: Numerical-rigor tolerance for an exact slice that replaces an aggregate
-#: recovery row. See ``docs/references/clerk-invariants.md §2``.
+#: recovery row. See ADR 0036, 2026-09-30 amendment, item 1.
 FILL_QTY_EPSILON = 1e-9
 
 #: Set-proof quantity tolerance in shares. The comparison is intentionally strict.

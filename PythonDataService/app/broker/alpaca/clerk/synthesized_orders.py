@@ -21,8 +21,7 @@ durable synthesized fills. Same-direction fills add signed entry notional;
 reductions retain the prior average cost for the remaining quantity; a flip
 opens only the residual at the flip fill price. A position is emitted iff
 ``position_quantity_is_nonzero(quantity)``.
-Reference: average-cost broker position convention, recorded in
-``docs/references/synthetic-broker-position-projection.md``.
+Reference: average-cost broker position convention.
 Canonical implementation: ``project_positions`` in this module.
 Validated against: ``tests/services/test_source_bar_ledger.py`` exact
 buy/reduce/add/flip parity fixture (``atol=0``, ``rtol=0``).

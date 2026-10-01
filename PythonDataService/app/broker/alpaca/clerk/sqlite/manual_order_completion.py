@@ -34,7 +34,7 @@ def manual_order_has_exact_terminal_coverage(
     """Whether exact evidence proves one manual tracer leg has fully filled.
 
     Formula: ``abs(exact_effective_qty - governing_qty) <= FILL_QTY_EPSILON``.
-    Reference: docs/references/clerk-invariants.md §2 — an absolute
+    Reference: ADR 0036, 2026-09-30 amendment, item 1 — an absolute
     ``1e-9`` tolerance admits float64 aggregation residue without treating a
     material fractional-share remainder as complete.
     Canonical implementation: this predicate, reused by order evidence.

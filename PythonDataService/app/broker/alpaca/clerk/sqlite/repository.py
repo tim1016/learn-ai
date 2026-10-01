@@ -2,7 +2,7 @@
 by the corrective foundation slice.
 
 Implements the pinned contract in
-``docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md``: the
+ADR 0035 and its binding annex: the
 account-scoped ``clerk.db``, the R9 two-phase mirror fence, the fail-closed
 startup checks, and a durable, renewed per-account execution lease. SQL stays
 private to this storage package (principally ``reads.py``, ``writes.py``, and
@@ -11,8 +11,7 @@ private to this storage package (principally ``reads.py``, ``writes.py``, and
 :meth:`append_transition` for kinds with no idempotent-admission concept, e.g.
 bot registration) and read back typed snapshots.
 
-Corrective foundation slice (see ``docs/audits/open-pr-review-2026-08-05.md``
-and ``docs/superpowers/plans/2026-08-05-alpaca-clerk-corrective-foundation-slice.md``):
+Corrective foundation slice:
 the prior ``reserve_command()`` + public ``serialized()`` design let a command
 become durable as a bare ``commands`` row with no ``custody_transitions``
 insert and no mirror fence — directly contradicting PRD §4 goal 3 and §9.3,
@@ -1041,9 +1040,7 @@ class ClerkSqliteRepository(
             # Checked here too, not only inside append_transition: an
             # existing-command retry short-circuits *before* ever calling
             # append_transition, so without this it could return a command
-            # whose mirror fence is unconfirmed while the handle is poisoned
-            # (open-pr-review-2026-08-05.md P2 "Block retries on poisoned
-            # handles").
+            # whose mirror fence is unconfirmed while the handle is poisoned.
             self._assert_not_poisoned()
             authority_generation = self._conn.execute(
                 "SELECT authority_generation FROM control_meta WHERE id = 1"

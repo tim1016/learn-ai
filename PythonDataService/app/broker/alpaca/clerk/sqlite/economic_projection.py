@@ -15,8 +15,7 @@ Correction time semantics are deliberately split in two:
 Formula: FIFO lots over effective SQLite execution slices; realized session
 P&L is the sum of closed lots whose close time is in the NYSE half-open
 session window.
-Reference: ``docs/prds/2026-08-10-sqlite-sole-authority-alpaca-execution.md``
-  S2 and ``app.broker.alpaca.clerk.fifo_pnl``.
+Reference: ``app.broker.alpaca.clerk.fifo_pnl``.
 Canonical implementation: ``app.broker.alpaca.clerk.fifo_pnl`` (this module
   is a SQLite read/projection adapter and calls its FIFO primitives directly).
 Validated against: ``PythonDataService/tests/broker/alpaca/clerk/sqlite/``

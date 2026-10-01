@@ -23,7 +23,7 @@ Two duplicate policies govern how a repeated source timestamp is treated
 
 * ``"strict"`` (default) — any duplicate or non-monotonic source timestamp
   fails fast. This is the finite-historical-ingestion contract from
-  ``.claude/rules/numerical-rigor.md`` and keeps the parity tests honest.
+  ADR 0022 (h) and keeps the parity tests honest.
 * ``"live_idempotent"`` — used only by the live 5-second subscription.
   IBKR's docs do not promise duplicate-free delivery for an active
   ``reqRealTimeBars`` subscription, so a redelivery of the most recent
@@ -576,7 +576,7 @@ class MinuteAssembler:
         never a rebuild -- and surfaced on
         ``LiveBarCounters.ignored_post_emit_correction`` and a WARNING. IBKR
         does redeliver the latest 5-second bar on a live subscription (the
-        live relaxation in ``.claude/rules/temporal-rigor.md``), and a minute
+        live relaxation in ADR 0053 §14), and a minute
         emitted on its twelfth print would otherwise die on the correction the
         open minute used to absorb. Any *earlier* timestamp inside the flushed
         minute belongs to an already-emitted aggregate and stays fatal,
