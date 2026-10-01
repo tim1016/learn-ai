@@ -3,15 +3,15 @@ import { RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 
 import { GOLDEN_DEPLOY_HANDOFF_ROUTE, GOLDEN_QUALIFICATION_QUERY_PARAM } from '../../fleet/account-workspace';
-import { expectedDefault, factualNote, weaknesses, weaknessRequired } from './golden-search-decision';
+import { expectedDefault, factualNote } from './golden-search-decision';
 import { GoldenSearchRetainComponent, RETAIN_KINDS, type RetainDecision } from './golden-search-retain.component';
 import { isLive, type ExamView, type RetainKind, type StudyCommand, type StudyDetail } from './golden-search.types';
 
 /**
  * The decision panel (#2696): a written reason, the acknowledgement that
  * independent engine agreement is missing (unchecked; it names the program
- * version), and — only when the final test was weak — a separate
- * acknowledgement naming the weakness. "Approve golden configuration" stays
+ * version), and — only when the server names a weakness of the final test
+ * — a separate acknowledgement in the server's words. "Approve golden configuration" stays
  * disabled until all three hold. Keeping the current settings (or waiting,
  * or retaining as exploration) is always a complete decision, also when an
  * approval stopped before it published, whenever the server permits it.
@@ -43,8 +43,8 @@ export class GoldenSearchApprovalComponent {
   protected readonly retry = computed(() => this.study().state === 'qualification_failed');
   protected readonly canApproveState = computed(() => this.study().permitted_actions.includes('approve'));
   protected readonly canRetain = computed(() => this.study().permitted_actions.includes('retain'));
-  protected readonly weak = computed(() => weaknessRequired(this.exam()));
-  protected readonly weaknessText = computed(() => weaknesses(this.exam()).join(' and '));
+  protected readonly weak = computed(() => this.exam().weakness.length > 0);
+  protected readonly weaknessText = computed(() => this.exam().weakness.map((item) => item.text).join(' and '));
   protected readonly programVersion = computed(() => this.study().results.qualification?.deploy?.program_version ?? this.study().receipt.program_version ?? 'unversioned');
   protected readonly qualificationId = computed(() => this.study().results.qualification?.qualification_id ?? this.study().qualification_id);
   protected readonly deployQuery = computed(() => ({ [GOLDEN_QUALIFICATION_QUERY_PARAM]: this.qualificationId() }));

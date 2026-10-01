@@ -1,11 +1,10 @@
 /**
- * The Final decision step's closed operator copy and its approval rules
- * (#2696). The exam outcome, checks, claim and exposure are the server's; this
- * module only names them and decides which acknowledgements approval needs.
- * Approval needs a written reason and the missing-parity acknowledgement
- * always, and a separate weak-evidence acknowledgement whenever the outcome
- * is not "meets the stated rules" or the claim is not confirmatory — a
- * missing outcome counts as weak, never as a pass.
+ * The Final decision step's closed operator copy (#2696). The exam outcome,
+ * checks, claim, exposure and weakness are the server's; this module only
+ * names them. Approval needs a written reason and the missing-parity
+ * acknowledgement always, and a separate weak-evidence acknowledgement
+ * whenever the server names a weakness (`exam.weakness`) — a missing outcome
+ * is never read as a pass.
  */
 
 import { EXPOSURE_LABELS } from './golden-search-display';
@@ -27,44 +26,16 @@ export interface EvidenceRow {
   readonly detail: string;
 }
 
-/** True when approving needs the separate acknowledgement of weak research evidence. */
-export function weaknessRequired(exam: ExamView): boolean {
-  return exam.outcome !== 'meets_rules' || exam.claim !== 'confirmatory';
+/** The server's word that the evidence meets the rules: a judged outcome, and no weakness named. */
+function meetsRules(exam: ExamView): boolean {
+  return exam.outcome !== null && exam.weakness.length === 0;
 }
 
-/** What is weak about the final test, in the words the acknowledgement names. */
-export function weaknesses(exam: ExamView): string[] {
-  const found: string[] = [];
-  const failed = exam.checks.filter((check) => check.status === 'fail').map((check) => check.label.toLowerCase());
-  switch (exam.outcome) {
-    case 'meets_rules':
-      break;
-    case 'does_not_meet_rules':
-      found.push(failed.length > 0 ? `failing the stated rules (${failed.join(', ')})` : 'failing the stated rules');
-      break;
-    case 'not_enough_evidence':
-      found.push('not enough final-test evidence');
-      break;
-    case 'could_not_evaluate':
-      found.push('a final test that could not be evaluated');
-      break;
-    case null:
-      found.push('a final test without an outcome');
-      break;
-  }
-  if (exam.claim !== 'confirmatory') {
-    if (exam.exposure_state === 'previously_used') found.push('the previously used test interval');
-    else if (exam.exposure_state === 'history_unknown') found.push('the unknown history of this test interval');
-    else found.push('an exploratory, not confirmatory, final test');
-  }
-  return found;
-}
-
-/** The reason prefilled only for a confirmatory final test that met the rules — a fact, not an opinion. */
+/** The reason prefilled only when the server names no weakness in a judged final test — a fact, not an opinion. */
 export function factualNote(exam: ExamView): string {
-  return weaknessRequired(exam)
-    ? ''
-    : 'The candidate meets the stated rules on a confirmatory final test. The evidence is Python-only; independent engine agreement is not available.';
+  return meetsRules(exam)
+    ? 'The candidate meets the stated rules on a confirmatory final test. The evidence is Python-only; independent engine agreement is not available.'
+    : '';
 }
 
 /** The research row: the outcome, the exposure claim when it is exploratory, and why. */
@@ -73,7 +44,7 @@ export function researchRow(exam: ExamView): EvidenceRow {
   const exploratory = exam.claim === 'confirmatory' ? '' : ` · ${EXPOSURE_LABELS[exam.exposure_state]}, exploratory`;
   const failing = exam.checks.filter((check) => check.status !== 'pass').map((check) => check.detail);
   const detail = exam.outcome === 'meets_rules' && failing.length === 0 ? 'Observed advantage on this interval; no promise of future profit.' : failing.join(' ') || 'The final test did not produce a judged result.';
-  return { title: 'Research evidence', chip: `${outcome}${exploratory}`, tone: weaknessRequired(exam) ? 'warn' : 'good', detail };
+  return { title: 'Research evidence', chip: `${outcome}${exploratory}`, tone: meetsRules(exam) ? 'good' : 'warn', detail };
 }
 
 /** The four separate evidence rows of the decision panel, by study state (closed copy). */
