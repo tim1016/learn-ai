@@ -52,7 +52,7 @@ from app.lean_sidecar.trading_calendar import expected_sessions
 from app.research.golden_search import repository as repo
 from app.research.golden_search.declarations import point_hash as hash_point
 from app.research.golden_search.evidence import daily_equity
-from app.research.golden_search.protocol import ExecutionAssumptions, StressScenario, canonical_json
+from app.research.golden_search.protocol import BASE_SCENARIO, ExecutionAssumptions, StressScenario, canonical_json
 from app.research.golden_search.selection import Metrics
 from app.research.golden_search.zoom import BudgetExhausted
 from app.research.grid_search.service import window_dates
@@ -65,7 +65,6 @@ logger = logging.getLogger(__name__)
 
 METRIC_CONVENTION = "engine-statistics/v1"
 RETRY_ALLOWANCE = 2
-BASE_SCENARIO = "base"
 EXIT_AT_WINDOW_END = "Closed at the end of the tested window"
 # Provenance of the code, not its meaning: two clean trees at different commits with the
 # same sources evaluate identically.

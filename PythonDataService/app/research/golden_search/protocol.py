@@ -112,6 +112,8 @@ DEFAULT_STRESS: tuple[StressScenario, ...] = (
     StressScenario("slippage_1c", "Extra 1¢/share slippage", slippage_add=0.01),
     StressScenario("commission_1", "Extra $1 per order", commission_add=1.0),
 )
+#: The scenario name of an unstressed evaluation; a stress scenario may not take it, or its runs would read back as base runs.
+BASE_SCENARIO = "base"
 
 
 @dataclass(frozen=True)
@@ -625,6 +627,8 @@ def _validate_execution(p: GoldenSearchProtocol, refusals: _Refusals) -> None:
     keys = [scenario.key for scenario in p.stress]
     if len(set(keys)) != len(keys):
         refusals.add("STRESS_INVALID", "stress", "Each stress scenario needs its own key.")
+    if BASE_SCENARIO in keys:
+        refusals.add("STRESS_INVALID", "stress", f"The key {BASE_SCENARIO!r} names the unstressed run; give the stress scenario another key.")
     for scenario in p.stress:
         adds = (scenario.slippage_add, scenario.commission_add)
         adds_ok = _finite(*adds) and min(adds) >= 0
