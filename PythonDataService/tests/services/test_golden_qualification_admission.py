@@ -305,7 +305,11 @@ async def test_pinned_seal_reverifies_only_its_own_qualification() -> None:
     proof = prove_running_program_build(sealed, verified_at_ms=_VERIFIED_AT, coverage=coverage)
 
     assert coverage == Coverage(
-        state="UNCOVERED", qualification_id=None, explanation=QUALIFICATION_REVOKED, artifact_digest=_running_digest()
+        state="UNCOVERED",
+        qualification_id=None,
+        explanation=QUALIFICATION_REVOKED,
+        artifact_digest=_running_digest(),
+        params_sha256=params_sha256(_canonical("SPY", _TUNED)),
     )
     assert proof.corpus_coverage == "UNCOVERED"
     assert QUALIFICATION_REVOKED in proof.explanation
@@ -336,13 +340,61 @@ async def test_pinned_seal_without_reverification_is_uncovered() -> None:
 async def test_coverage_judged_against_other_bytes_is_not_reused() -> None:
     sealed, _proof = await _admit(_binding(), _Store(_ready("gq-1")))
     elsewhere = Coverage(
-        state="COVERED", qualification_id="gq-1", explanation=QUALIFICATION_COVERED, artifact_digest="9" * 64
+        state="COVERED",
+        qualification_id="gq-1",
+        explanation=QUALIFICATION_COVERED,
+        artifact_digest="9" * 64,
+        params_sha256=params_sha256(_canonical("SPY", _TUNED)),
     )
 
     proof = prove_running_program_build(sealed, verified_at_ms=_VERIFIED_AT, coverage=elsewhere)
 
     assert proof.corpus_coverage == "UNCOVERED"
     assert QUALIFICATION_NOT_REVERIFIED in proof.explanation
+
+
+async def test_coverage_by_another_version_never_covers_a_pinned_seal() -> None:
+    sealed, _proof = await _admit(_binding(), _Store(_ready("gq-1")))
+    # Ready, for these bytes and this very tuple, but not the version this seal was admitted under.
+    other = Coverage(
+        state="COVERED",
+        qualification_id="gq-2",
+        explanation=QUALIFICATION_COVERED,
+        artifact_digest=_running_digest(),
+        params_sha256=params_sha256(_canonical("SPY", _TUNED)),
+    )
+
+    proof = prove_running_program_build(sealed, verified_at_ms=_VERIFIED_AT, coverage=other)
+
+    assert proof.corpus_coverage == "UNCOVERED"
+    assert QUALIFICATION_NOT_REVERIFIED in proof.explanation
+    assert not any(ref.startswith("golden-qualification:") for ref in proof.evidence_refs)
+
+
+async def test_coverage_resolved_for_another_tuple_never_covers_a_seal() -> None:
+    """The proof re-checks the tuple itself: a ready answer for another parameter set never vouches for this one."""
+    other_values = {**_TUNED, "rsi_min": 40.0}
+    other_tuple = _ready("gq-other", values=other_values)
+    # Exactly what the resolver answers for the OTHER tuple: ready, these bytes.
+    misattributed = await resolve_admission_coverage(_binding(params=other_values), lookup=_Store(other_tuple))
+    assert misattributed is not None and misattributed.qualification_id == "gq-other"
+    binding = _binding()
+    seal = build_start_program_seal(
+        binding, _validation(), parameter_origins=binding.strategy_param_origins, coverage=misattributed
+    )
+    assert seal is not None and seal.configured_signal.qualification_id == "gq-other"
+    sealed = binding.model_copy(update={"sealed_program": seal})
+
+    first_start = prove_running_program_build(sealed, verified_at_ms=_VERIFIED_AT, coverage=misattributed)
+    reverified = await resolve_admission_coverage(sealed, lookup=_Store(other_tuple))
+    later_start = prove_running_program_build(sealed, verified_at_ms=_VERIFIED_AT, coverage=reverified)
+
+    assert first_start.corpus_coverage == "UNCOVERED"
+    assert QUALIFICATION_NOT_REVERIFIED in first_start.explanation
+    assert reverified is not None and (reverified.state, reverified.explanation) == ("UNCOVERED", QUALIFICATION_ABSENT)
+    assert later_start.corpus_coverage == "UNCOVERED"
+    for proof in (first_start, later_start):
+        assert not any(ref.startswith("golden-qualification:") for ref in proof.evidence_refs)
 
 
 async def test_pinned_seal_with_an_unreadable_store_says_cannot_verify() -> None:

@@ -832,6 +832,9 @@ class Coverage:
     # or evidence that could not be read). A proof computed under another
     # digest must not reuse this verdict.
     artifact_digest: str | None = None
+    # The canonical tuple (``params_sha256``) that was judged, under the same
+    # rule: a seal of any other parameter set or stock must not reuse it.
+    params_sha256: str | None = None
 
 
 def _matches_subject(row: QualificationRow, subject: QualificationSubject) -> bool:
@@ -857,7 +860,7 @@ def _coverage_from(
         if _matches_subject(item.qualification, subject)
         and (pinned_qualification_id is None or item.qualification.id == pinned_qualification_id)
     ]
-    judged = {"artifact_digest": running_artifact_digest}
+    judged = {"artifact_digest": running_artifact_digest, "params_sha256": subject.params_sha256}
     ready = [row for row, status in statuses if status == "ready"]
     if ready:
         newest = max(ready, key=lambda row: (row.created_at_ms, row.id))

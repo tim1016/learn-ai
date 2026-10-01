@@ -14,7 +14,7 @@ v2 seal is append-only evidence and never rewrites v1 identity bytes.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -23,11 +23,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from app.config import settings
 from app.engine.strategy.params import StrategyParamsBase, decision_timeframe_ms_for
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
+from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract, StrategyRegistration
 from app.research.golden_search.qualifications import (
     Coverage,
     QualificationLookup,
     load_qualification_evidence,
+    params_sha256,
     registry_point_matches,
     resolve_coverage,
 )
@@ -404,7 +405,9 @@ def prove_running_program_build(
     # admission policy decides whether an uncovered point may start (ADR 0054).
     # A Golden Search qualification extends that corpus to one exact tuple
     # (#2696), only while it stays ready for these running bytes.
-    corpus_coverage, coverage_note = _corpus_coverage(configured, coverage, running_digest)
+    corpus_coverage, coverage_note = _corpus_coverage(
+        configured, coverage, running_digest, _sealed_tuple_sha256(registration, configured)
+    )
     explanation, next_step = proven_build_copy(
         wiring=wiring,
         corpus_coverage=corpus_coverage,
@@ -447,14 +450,25 @@ def _corpus_coverage(
     configured: ConfiguredSignalProgramSeal,
     coverage: Coverage | None,
     running_digest: str,
+    sealed_tuple_sha256: str | None,
 ) -> tuple[Literal["COVERED", "UNCOVERED"], str | None]:
-    """The coverage stamp for a proven build, and the qualification sentence behind it if one decided it."""
+    """The coverage stamp for a proven build, and the qualification sentence behind it if one decided it.
+
+    A qualification covers only when the answer judged the pinned id ready
+    for these running bytes AND for this seal's own canonical tuple: an
+    answer resolved for any other parameter set or stock never vouches for it.
+    """
     if configured.parameters_match_validated_settings:
         return "COVERED", None
     pinned = configured.qualification_id
     if pinned is None:
         return "UNCOVERED", None
-    if coverage is not None and coverage.artifact_digest == running_digest:
+    if (
+        coverage is not None
+        and coverage.artifact_digest == running_digest
+        and sealed_tuple_sha256 is not None
+        and coverage.params_sha256 == sealed_tuple_sha256
+    ):
         if coverage.state == "COVERED" and coverage.qualification_id == pinned:
             return "COVERED", QUALIFICATION_COVERED
         if coverage.state == "UNCOVERED":
@@ -463,6 +477,27 @@ def _corpus_coverage(
         # Its evidence could not be read: say so, never "not on record".
         return "UNCOVERED", coverage.explanation
     return "UNCOVERED", QUALIFICATION_NOT_REVERIFIED
+
+
+def _canonical_tuple(
+    registration: StrategyRegistration, values: Mapping[str, Any], symbol: str
+) -> dict[str, Any] | None:
+    """A configuration as a qualification stores it: the schema's canonical dump, stock upper-cased.
+
+    ``None`` when the values no longer validate; the seal and the proof
+    refuse such a configuration on their own.
+    """
+    try:
+        return registration.param_schema.model_validate({**values, "symbol": symbol.upper()}).model_dump(mode="json")
+    except ValidationError:
+        return None
+
+
+def _sealed_tuple_sha256(registration: StrategyRegistration, configured: ConfiguredSignalProgramSeal) -> str | None:
+    """The canonical tuple a seal attests to, as the coverage it pins must have judged it."""
+    values = {name: parameter.value for name, parameter in configured.parameters.items()}
+    canonical = _canonical_tuple(registration, values, configured.data.symbol)
+    return None if canonical is None else params_sha256(canonical)
 
 
 class RestartNeededError(RuntimeError):
@@ -517,11 +552,8 @@ async def resolve_admission_coverage(
         else dict(binding.strategy_params or {})
     )
     symbol = seal.configured_signal.data.symbol if seal is not None else binding.symbol
-    try:
-        params = registration.param_schema.model_validate({**values, "symbol": symbol.upper()}).model_dump(
-            mode="json"
-        )
-    except ValidationError:
+    params = _canonical_tuple(registration, values, symbol)
+    if params is None:
         return None
     if registry_point_matches(contract, params):
         return Coverage(state="COVERED", qualification_id=None, explanation=REGISTRY_POINT_COVERED)
