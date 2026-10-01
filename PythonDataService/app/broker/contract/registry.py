@@ -43,10 +43,6 @@ class BrokerRegistry:
         """Return the sorted list of registered broker ids."""
         return sorted(self._ports)
 
-    def reset(self) -> None:
-        """Drop all registrations — test hygiene only."""
-        self._ports.clear()
-
 
 _registry: BrokerRegistry | None = None
 

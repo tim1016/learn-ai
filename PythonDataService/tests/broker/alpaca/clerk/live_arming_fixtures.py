@@ -18,7 +18,6 @@ from pathlib import Path
 
 from app.broker.alpaca.clerk.account_authority import shadow_account_id_for_live_account
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationRecord, ShadowActivationStore
-from app.broker.alpaca.config import AlpacaSettings
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,
     ExitEligibilityContract,
@@ -47,10 +46,6 @@ ARMING_SID = "ema-shadow-1"
 # exactly one session and the weekend that follows spends none.
 ARMED_AT_MS = et_minute_of_day_ms(date(2026, 9, 11), 10 * 60)
 _ONE_DAY_MS = 86_400_000
-
-
-def paper_settings() -> AlpacaSettings:
-    return AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper")
 
 
 def activate_shadow_fence(
@@ -182,25 +177,10 @@ def record_sealed_binding(
 
 
 
-def arming_ready(
-    artifacts_root: Path,
-    live_state_root: Path,
-    *,
-    strategy_instance_id: str = ARMING_SID,
-) -> SealedBotProgram:
-    """Every input ``observe_arming_inputs`` needs, on disk, for one instance."""
-    if not ShadowActivationStore(artifacts_root).account_ids():
-        activate_shadow_fence(artifacts_root)
-    seal = record_sealed_binding(live_state_root, strategy_instance_id=strategy_instance_id, artifacts_root=artifacts_root)
-    return seal
-
-
 __all__ = [
     "ARMED_AT_MS",
     "ARMING_SID",
     "activate_shadow_fence",
-    "arming_ready",
-    "paper_settings",
     "record_sealed_binding",
     "sealed_program",
 ]

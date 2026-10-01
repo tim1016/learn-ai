@@ -94,6 +94,24 @@ def test_healthy_catalog_omits_failure_and_generic_recovery_actions() -> None:
     assert "reset_authority" not in actions
 
 
+@pytest.mark.parametrize(
+    ("overrides", "says_cash_goes_back"),
+    [({}, True), ({"account_id": "sim:spy-bot"}, False)],
+)
+def test_only_a_real_accounts_stop_says_unused_cash_goes_back(
+    overrides: dict[str, str], says_cash_goes_back: bool
+) -> None:
+    """#2634: a Dry Run trades simulated cash, so nothing goes back to the account."""
+    (stop,) = (
+        action
+        for action in build_recovery_catalog(_context(**overrides))
+        if action.action_id == "stop_bot_decisions"
+    )
+
+    assert stop.confirmation is not None
+    assert ("goes back to the account" in stop.confirmation.explanation) is says_cash_goes_back
+
+
 def test_coverage_resolution_requires_one_exact_economic_replacement() -> None:
     conflict = ProjectedExecutionCoverageConflict(
         uncertainty_id="uncertainty:coverage-1",

@@ -14,6 +14,7 @@ from app.broker.alpaca.adapter import (
     occurred_at_ms,
     opt_bool,
     opt_float,
+    opt_rfc3339_to_ms,
     rfc3339_to_ms,
     str_or_blank,
     to_bool,
@@ -43,6 +44,11 @@ def test_rfc3339_trims_overlong_fraction() -> None:
 
 def test_rfc3339_rounds_fractional_milliseconds_to_nearest_ms() -> None:
     assert rfc3339_to_ms("1970-01-01T00:00:00.123600Z") == 124
+
+
+@pytest.mark.parametrize("parser", [opt_float, opt_rfc3339_to_ms])
+def test_optional_helpers_read_a_vendor_blank_as_absent(parser: Callable[[Any], object]) -> None:
+    assert parser("") is None
 
 
 @pytest.mark.parametrize("parser", [to_float, opt_float])

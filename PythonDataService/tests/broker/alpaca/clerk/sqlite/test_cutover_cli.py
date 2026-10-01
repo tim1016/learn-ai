@@ -259,12 +259,11 @@ def test_read_cutover_evidence_reads_the_real_effective_revision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The same proof once, end to end, against a real profiles database.
+    """The paper-only gate, end to end, against a real profiles database.
 
-    The test above patches the resolver by name, which pins the wiring but not
-    what the name resolves *to*. This one applies a paper revision and then a
-    live one for real, so the paper-only gate is demonstrated against the
-    installation's actual effective selection rather than a double of it.
+    This applies a paper revision and then a live one for real, so the gate is
+    demonstrated against the installation's actual effective selection rather
+    than a double of it.
     """
     payload = {
         "account_id": ACCOUNT_ID,

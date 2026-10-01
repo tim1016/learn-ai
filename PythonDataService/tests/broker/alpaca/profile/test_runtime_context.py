@@ -37,13 +37,6 @@ from tests.broker.alpaca.profile.conftest import (
     make_environment,
 )
 
-_LIVE_SETTINGS_KWARGS = {
-    "live_loss_fraction": 0.02,
-    "live_loss_usd": 500.0,
-    "live_xh_entry_bps": 10.0,
-    "live_xh_exit_bps": 12.5,
-}
-
 
 def test_a_paper_revision_resolves_without_an_envelope(
     only_default_slot_injected: AlpacaCredentialEnvironment,

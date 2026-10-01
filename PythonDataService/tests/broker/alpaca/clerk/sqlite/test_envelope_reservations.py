@@ -404,10 +404,6 @@ def _append_slice(
     )
 
 
-def _refuse_correction_uncertainty(reason: str) -> TransitionInput:
-    raise AssertionError(f"the correction fixture must be valid: {reason}")
-
-
 def test_an_unseen_recorded_fill_reserves_at_its_actual_cost(
     envelope_repo: ClerkSqliteRepository,
     envelope_clock: _TestClock,

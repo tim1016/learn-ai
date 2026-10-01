@@ -848,6 +848,19 @@ async def test_a_boolean_numeric_is_a_parse_error_not_a_reconnect(
 # ── (d) attribution: owned vs unexplained (NO hold — that is S6) ─────────────
 
 
+async def test_foreign_client_order_id_journals_unexplained_and_counts(tmp_path: Path) -> None:
+    frame = _load_frames()[0]
+    frame["data"]["order"]["client_order_id"] = "someone-elses-order-id"
+    consumer, clerk, _ = await _consumer(tmp_path, [frame])
+
+    await consumer.run()
+
+    entries = clerk._journal.read_entries()  # type: ignore[union-attr]
+    unexplained = [e for e in entries if e.kind is ClerkEntryKind.UNEXPLAINED_ORDER]
+    assert len(unexplained) == 1
+    assert consumer.counters.unexplained == 1
+
+
 async def test_done_for_day_does_not_hide_a_later_terminal_transition(tmp_path: Path) -> None:
     done_for_day = _load_frames()[0]
     done_for_day["data"]["event"] = "done_for_day"

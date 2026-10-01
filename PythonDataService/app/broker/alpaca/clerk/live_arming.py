@@ -30,6 +30,7 @@ from app.broker.alpaca.clerk.live_envelope import (
     envelope_domain_violation,
 )
 from app.broker.alpaca.clerk.sealed_ledger import canonical_sha256, verify_sealed_record
+from app.broker.contract.errors import BrokerAccountModeDisagreement
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 # The codes the retired ENTER-time arming check refused under (slice 7, ADR
@@ -45,10 +46,8 @@ LIVE_ARMING_LAPSED = "LIVE_ARMING_LAPSED"
 LIVE_ARMING_REVOKED = "LIVE_ARMING_REVOKED"
 LIVE_ARMING_SEAL_CHANGED = "LIVE_ARMING_SEAL_CHANGED"
 LIVE_ARMING_FUTURE_DATED = "LIVE_ARMING_FUTURE_DATED"
-# The adapter's own refusal (`BrokerAccountModeDisagreement.reason_code`),
-# restated only because the retired arming gate refused ENTERs under it; a
-# test pins the two strings equal.
-LIVE_MODE_DISAGREEMENT = "LIVE_MODE_DISAGREEMENT"
+# The adapter's own refusal; the retired arming gate refused ENTERs under it.
+LIVE_MODE_DISAGREEMENT = BrokerAccountModeDisagreement.reason_code
 
 ARMING_ADMISSION_REASON_CODES: frozenset[str] = frozenset(
     {
