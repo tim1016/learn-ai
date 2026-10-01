@@ -16,6 +16,7 @@ from app.broker.alpaca.clerk.shadow_authority import activate_shadow_clerk_autho
 from app.broker.alpaca.config import AlpacaSettings
 from app.broker_configuration.cli_binding import effective_alpaca_settings
 
+
 class ShadowOperatorRefusal(ValueError):
     """This command cannot be run as asked -- named evidence or a required value is absent."""
 
