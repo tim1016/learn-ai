@@ -16,20 +16,10 @@ fixture, the security-flag viability matrix, and three end-to-end
 sidecar runs (baseline, with `--cap-drop=ALL`, and the xfailed
 `--read-only` documented in the security section).
 
-**Pinned LEAN image (Phase 1c derivative):**
-`localhost/learn-ai/lean-sandbox@sha256:3dd003372f1ef1981b4e80038e3f1c557f1fe414d1be531f485ef870f81a5771`
-
-Built locally from upstream base
-`docker.io/quantconnect/lean@sha256:4934c22c2b080a688f25b571746603e01533c5e581499d8457e5624a132ba77b`
-via `PythonDataService/lean_sidecar/Dockerfile.arm64-dotnet109`. The
-derivative keeps the upstream LEAN payload at `lean_version=17748`,
-relaxes `/root` from mode 0700 to 0755 so the Phase-1c
-`--user=10001:10001 --read-only` sandbox can exec
-`/root/.dotnet/dotnet`, and installs .NET Host/Runtime 10.0.9 from
-`mcr.microsoft.com/dotnet/runtime@sha256:62b592e657ceebbfd24203430542232559dcb7b73e45cc3ebb48c7bba8c2e2f0`
-side-by-side with the image's original 10.0.2 runtime. The 10.0.9
-runtime is the accepted AppleHV/CoreCLR SIGILL fix for wide-window
-native arm64 LEAN runs on this host.
+**Pinned LEAN image:** the digests live only in
+`PythonDataService/app/lean_sidecar/config.py`; the local arm64 derivative
+and why it exists are in
+`PythonDataService/lean_sidecar/Dockerfile.arm64-dotnet109`.
 
 **Local-image readiness is mandatory.** This pinned reference must be
 present in the launcher's *local* Podman image store. The launcher
@@ -297,14 +287,14 @@ The plan explicitly asks whether `lean backtest` (the official CLI from `lean-cl
 
 - **Use the Docker image directly,** not the CLI, for the first implementation.
 - Pinned image: a thin local derivative `learn-ai/lean-sandbox` of
-  `quantconnect/lean`, at the digest in the callout above. Upstream
+  `quantconnect/lean`, at the digest pinned in `config.py`. Upstream
   `:latest` is never resolved at runtime. Phase 1c added the
   derivative because the upstream image we pinned ships `/root` as
   0700, incompatible with `--user=10001:10001`. The derivative
   `FROM`s the upstream digest (not `:latest`) so every rebuild is
   bit-deterministic w.r.t. upstream. Upgrades are deliberate: bump
   the `FROM` digest, rebuild, capture the new derivative digest,
-  update `config.py` + this section in one PR.
+  update `config.py` in one PR.
 - The official `lean-cli` is a convenience wrapper that ultimately invokes the same image, and it adds account/auth steps and login state we don't want in a CI/server flow. Calling the image directly keeps the dependency surface to "podman + a pinned image digest".
 
 ### LEAN compatibility posture
