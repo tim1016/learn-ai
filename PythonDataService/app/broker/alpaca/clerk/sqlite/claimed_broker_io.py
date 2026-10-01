@@ -13,8 +13,13 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     OperationClaimError,
 )
 from app.broker.contract.errors import BrokerError
-from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
-from app.broker.contract.ports import BrokerTradePort
+from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderLeg
+from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
+
+#: Alpaca's account-activity type for an execution, and the page size its
+#: activities endpoint allows at most.
+_FILL_ACTIVITY_TYPE = "FILL"
+_FILL_ACTIVITY_PAGE_SIZE = 100
 
 
 @dataclass(frozen=True)
@@ -141,6 +146,27 @@ class ClaimedBrokerIO:
                 f"broker returned order_id={observed.order_id!r}, expected {broker_order_id!r}"
             )
         return observed
+
+    async def observe_fill_activities(
+        self, read: BrokerReadPort, *, after_ms: int
+    ) -> list[BrokerActivity] | BrokerError:
+        """The account's ``FILL`` activities since ``after_ms``, or a value-domain error (#2686).
+
+        Read under the claim like every other broker contact of a resolution,
+        with :meth:`observe_broker_order`'s shape, so a failed read is the
+        caller's to contain and never escapes the pass. The read is the
+        broker's bounded newest-first walk; it never claims to be complete.
+        """
+        self._renew()
+        try:
+            activities = await read.list_activities(
+                after_ms=after_ms, limit=_FILL_ACTIVITY_PAGE_SIZE, activity_type=_FILL_ACTIVITY_TYPE
+            )
+        except BrokerError as exc:
+            self._renew()
+            return exc
+        self._renew()
+        return activities
 
     async def observe_exact(
         self, client_order_id: str

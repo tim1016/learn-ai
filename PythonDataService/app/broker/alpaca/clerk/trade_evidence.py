@@ -256,7 +256,9 @@ class SqliteTradeUpdateEvidenceSink:
                 append_exact_execution_slice(
                     self._repo,
                     event=exact_slice,
-                    order=order,
+                    symbol=order.symbol,
+                    side=order.side,
+                    broker_order_id=order.order_id,
                     order_ref=order_ref,
                     owner=owner,
                     evidence_source="websocket",

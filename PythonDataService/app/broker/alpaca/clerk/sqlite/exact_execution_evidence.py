@@ -1,8 +1,10 @@
 """One exact-execution append flow shared by every evidence source (#2178).
 
-Both producers of exact execution slices — the trade-updates websocket sink
-(``trade_evidence.py``) and the deterministic no-submit adapters'
-authoritative aggregates (``order_evidence.py``) — must build the same
+Every producer of exact execution slices — the trade-updates websocket sink
+(``trade_evidence.py``), the deterministic no-submit adapters'
+authoritative aggregates (``order_evidence.py``) and the sweep's recovery of
+a manual leg's executions from Alpaca's account activity
+(``manual_order_executions.py``, #2686) — must build the same
 ``EXECUTION_SLICE_FILLED`` transition, the same typed
 ``EXECUTION_COVERAGE_CONFLICT`` uncertainty, and route through the same
 ``append_execution_slice_if_absent`` discipline: identity dedup,
@@ -30,7 +32,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     ExecutionCoverageConflictCause,
 )
-from app.broker.contract.models import BrokerOrder, BrokerOrderEvent
+from app.broker.contract.models import BrokerOrderEvent
 
 
 @dataclass(frozen=True)
@@ -67,12 +69,26 @@ SIMULATED_EXACT_CONFLICT_COPY = ExactExecutionConflictCopy(
     next_step="Reconcile the simulated order and its execution evidence before resuming.",
 )
 
+ACTIVITY_EXACT_CONFLICT_COPY = ExactExecutionConflictCopy(
+    headline="Recovered execution conflicts with prior immutable evidence",
+    explanation=(
+        "An execution read from Alpaca's account activity cannot be safely merged "
+        "with the order's prior execution evidence."
+    ),
+    operator_impact=(
+        "New exposure is blocked until this order's execution coverage is reconciled."
+    ),
+    next_step="Reconcile the broker order and its execution slices before resuming.",
+)
+
 
 def append_exact_execution_slice(
     repo: ClerkSqliteRepository,
     *,
     event: BrokerOrderEvent,
-    order: BrokerOrder,
+    symbol: str,
+    side: str,
+    broker_order_id: str,
     order_ref: str,
     owner: EffectOperationResource,
     evidence_source: str,
@@ -81,6 +97,11 @@ def append_exact_execution_slice(
     extra_conflict_evidence_refs: Sequence[str] = (),
 ) -> str:
     """Append one exact execution slice under the shared custody discipline.
+
+    ``symbol``, ``side`` and ``broker_order_id`` name the broker order that
+    executed: the observed order for a stream frame, the activity's own order
+    for a recovered execution, which may be an earlier member of a manual
+    leg's replacement chain (#2656).
 
     Returns ``append_execution_slice_if_absent``'s outcome
     (``"appended"``/``"duplicate"``/``"coverage_superseded"``/...), so a
@@ -100,8 +121,8 @@ def append_exact_execution_slice(
         raise ValueError(f"invalid exact-execution evidence source {evidence_source!r}")
     facts = ExecutionSliceFilledFacts(
         execution_id=event.execution_id,
-        symbol=order.symbol,
-        side=order.side.upper(),
+        symbol=symbol,
+        side=side.upper(),
         slice_qty=event.quantity,
         slice_price=event.price,
         fee=None,
@@ -118,7 +139,7 @@ def append_exact_execution_slice(
             command_id=owner.command_id,
             effect_operation_id=owner.effect_operation_id,
             order_ref=order_ref,
-            broker_order_id=order.order_id,
+            broker_order_id=broker_order_id,
             transition_kind="EXECUTION_SLICE_FILLED",
             custody_owner="ACCOUNT_CLERK",
             execution_authority="ACCOUNT_CLERK",
@@ -152,7 +173,7 @@ def append_exact_execution_slice(
             command_id=owner.command_id,
             effect_operation_id=owner.effect_operation_id,
             order_ref=order_ref,
-            broker_order_id=order.order_id,
+            broker_order_id=broker_order_id,
             transition_kind="UNCERTAINTY_RAISED",
             custody_owner="ACCOUNT_CLERK",
             execution_authority="ACCOUNT_CLERK",

@@ -13,7 +13,9 @@ an observed (or absent, or lost) ``BrokerOrder`` snapshot means.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.money import normalize_money
@@ -38,6 +40,7 @@ from app.broker.alpaca.clerk.sqlite.manual_order_completion import (
     manual_order_ending_copy,
     manual_order_has_exact_terminal_coverage,
 )
+from app.broker.alpaca.clerk.sqlite.manual_order_executions import ManualLegExecutionRecovery
 from app.broker.alpaca.clerk.sqlite.manual_order_replacement import (
     MANUAL_ORDER_REPLACED_TRANSITION,
     live_manual_effect,
@@ -73,9 +76,10 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionPriceConflictOrder,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
+from app.broker.alpaca.marketable_limit import price_increment
 from app.broker.contract.errors import BrokerError, BrokerOrderNotPermitted
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
-from app.broker.contract.ports import AuthoritativeSubmissionEvidencePort, BrokerTradePort
+from app.broker.contract.ports import AuthoritativeSubmissionEvidencePort, BrokerReadPort, BrokerTradePort
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
@@ -93,19 +97,27 @@ def submit_absence_grace_ms() -> int:
     return reason_age_policy(ORDER_OUTCOME_UNKNOWN_REASON_CODE, VoidAfter).grace_ms
 
 
-#: Numerical-rigor tolerance for the #2460 economic price conflict, in
-#: currency units per share. Alpaca publishes price fields at cent precision,
-#: so a same-quantity average-price difference below one cent per share cannot
-#: be distinguished from vendor rounding and raises nothing; a difference at or
-#: above it is a real economic disagreement and is recorded as
-#: ``EXECUTION_PRICE_CONFLICT``. Same $0.01/share basis as the
-#: ``FILL_PRICE_DRIFT`` default in the reconciliation taxonomy
-#: (ADR 0069 §3). See ADR 0036, 2026-09-30 amendment, item 3.
-TOTAL_PRICE_CONFLICT_ATOL = 0.01
+def total_price_conflict_atol(reported_avg_price: float) -> float:
+    """The #2460 price-conflict tolerance at one reported average, per share (#2770).
+
+    Formula: ``price_increment(reported_avg_price)``, ``rtol=0`` -- $0.01 at or
+      above $1, $0.0001 below. A same-quantity average-price difference below
+      one valid increment of the reported price cannot be told from vendor
+      rounding and raises nothing; one at or above it is a real economic
+      disagreement and is recorded as ``EXECUTION_PRICE_CONFLICT``.
+    Reference: ADR 0036, 2026-09-30 amendment, item 3; the tick rule is
+      Alpaca's price precision (``app/broker/alpaca/marketable_limit.py``).
+    Canonical implementation: this function, on
+      ``marketable_limit.price_increment``.
+    Validated against: tests/broker/alpaca/clerk/sqlite/test_economic_projection.py::
+      test_a_sub_cent_difference_below_one_dollar_is_a_price_conflict,
+      test_a_vendor_rounding_sized_difference_raises_no_conflict and
+      test_the_sweep_keeps_a_sub_dollar_conflict_its_recorded_fills_still_disagree_with.
+    """
+    return float(price_increment(Decimal(str(reported_avg_price))))
 
 
 __all__ = [
-    "TOTAL_PRICE_CONFLICT_ATOL",
     "UNFILLED_TERMINAL_STATES",
     "BrokerRefusal",
     "broker_refusal",
@@ -130,6 +142,7 @@ __all__ = [
     "reconcile_execution_price_conflicts",
     "resolve_order_submission",
     "submit_absence_grace_ms",
+    "total_price_conflict_atol",
     "trade_port_folds_simulated_evidence",
     "unobserved_chain_head_why",
     "unresolved_order_refs",
@@ -457,7 +470,7 @@ def fold_execution_price_conflict(
     if recorded_qty < FILL_QTY_EPSILON:
         return
     recorded_avg_price = recorded_cost / recorded_qty
-    if abs(order.filled_avg_price - recorded_avg_price) >= TOTAL_PRICE_CONFLICT_ATOL:
+    if abs(order.filled_avg_price - recorded_avg_price) >= total_price_conflict_atol(order.filled_avg_price):
         outcome = raise_execution_price_conflict_uncertainty(
             repo,
             effect=effect,
@@ -543,9 +556,8 @@ def reconcile_execution_price_conflicts(repo: ClerkSqliteRepository) -> int:
             if recorded_qty < FILL_QTY_EPSILON:
                 continue
             corrected_avg_price = recorded_cost / recorded_qty
-            if (
-                abs(conflicted.reported_avg_price - corrected_avg_price)
-                >= TOTAL_PRICE_CONFLICT_ATOL
+            if abs(conflicted.reported_avg_price - corrected_avg_price) >= total_price_conflict_atol(
+                conflicted.reported_avg_price
             ):
                 continue
             owning_order = repo.order(conflicted.order_ref)
@@ -659,7 +671,9 @@ def _fold_simulated_execution_evidence(
         append_exact_execution_slice(
             repo,
             event=event,
-            order=order,
+            symbol=order.symbol,
+            side=order.side,
+            broker_order_id=order.order_id,
             order_ref=order_ref,
             owner=effect,
             evidence_source="simulated_execution",
@@ -1435,6 +1449,7 @@ async def resolve_order_submission(
     order_ref: str,
     trade: BrokerTradePort,
     off_loop: OffLoop | None = None,
+    activities: BrokerReadPort | None = None,
 ) -> None:
     """Recover any captured order by its exact client identity.
 
@@ -1445,6 +1460,14 @@ async def resolve_order_submission(
     A manual order Alpaca replaced (#2656) is then followed to its chain
     head by broker id (:func:`follow_manual_replacement_chain`); a head read
     that fails folds this one order uncertain, never the account's pass.
+
+    ``activities`` is the sweep's read port, for a manual leg only. Before
+    each answer of the leg's chain is folded, the executions it reports that
+    the leg has no exact record of are read from Alpaca's account activity
+    and recorded first (:class:`ManualLegExecutionRecovery`, #2686): only
+    exact executions end a filled leg, and a replacement's REST cumulative
+    may leave out its original's fills. A simulated authority has no broker
+    activity to read.
 
     ``off_loop`` moves each synchronous repository run onto a worker thread
     (#1993); the default keeps the pre-#1993 inline behavior for every
@@ -1521,6 +1544,20 @@ async def resolve_order_submission(
             )
         else:
             simulated_authority = trade_port_folds_simulated_evidence(trade)
+            executions = (
+                None
+                if activities is None or simulated_authority
+                else ManualLegExecutionRecovery(
+                    repo=repo,
+                    broker=broker,
+                    read=activities,
+                    order_ref=order_ref,
+                    since_ms=order.created_at_ms if order.created_at_ms is not None else 0,
+                    run=guarded,
+                )
+            )
+            if executions is not None:
+                await executions.before_fold(order)
             await guarded(
                 lambda: fold_exact_order_evidence(
                     repo,
@@ -1538,6 +1575,7 @@ async def resolve_order_submission(
                 observed=order,
                 run=guarded,
                 simulated_authority=simulated_authority,
+                before_fold=None if executions is None else executions.before_fold,
             )
             if not isinstance(head, BrokerOrder):
                 head_failed_why = unobserved_chain_head_why(head)
@@ -1606,6 +1644,7 @@ async def follow_manual_replacement_chain(
     observed: BrokerOrder,
     run: OffLoop,
     simulated_authority: bool = False,
+    before_fold: Callable[[BrokerOrder], Awaitable[None]] | None = None,
 ) -> BrokerOrder | BrokerError | None:
     """Fold each later member of a manual leg's chain until its head is the order observed.
 
@@ -1616,7 +1655,8 @@ async def follow_manual_replacement_chain(
     the last answer: the head's observation (``observed`` itself for every
     unreplaced and every bot order), or the error or ``None`` of a head read
     that failed -- which the caller folds as its own uncertainty, never
-    letting it escape the pass.
+    letting it escape the pass. ``before_fold`` runs on each answer before
+    it is folded (the sweep's execution recovery, #2686).
     """
     last: BrokerOrder = observed
     for _ in range(MAX_REPLACEMENT_HOPS_PER_PASS):
@@ -1628,6 +1668,8 @@ async def follow_manual_replacement_chain(
         answer = await broker.observe_broker_order(head_id)
         if not isinstance(answer, BrokerOrder):
             return answer
+        if before_fold is not None:
+            await before_fold(answer)
         await run(
             lambda answer=answer: fold_exact_order_evidence(
                 repo,
