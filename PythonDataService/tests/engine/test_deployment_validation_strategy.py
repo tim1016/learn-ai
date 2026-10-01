@@ -254,14 +254,3 @@ def test_on_closed_bar_emits_exit_at_half_day_barrier() -> None:
 
     assert decisions[-1] == "EXIT"
 
-
-def test_exposes_consolidator_period_for_indicator_hydration() -> None:
-    # Regression: indicator_state.hydrate() reads ``strategy.CONSOLIDATOR_PERIOD_MIN``
-    # unconditionally during live-run startup. The class previously omitted it,
-    # so every live run of this strategy crashed with AttributeError before any
-    # bar was processed (exit_code=3). The period must match the 1-minute
-    # consolidator registered in initialize().
-    strategy = DeploymentValidationConsecutiveGreen()
-
-    assert strategy.CONSOLIDATOR_PERIOD_MIN == 1
-

@@ -101,9 +101,6 @@ def _finite(name: str, value: Decimal | float) -> Decimal:
 class EmaCrossoverSignalAlgorithm(Strategy):
     """Generate EMA crossover decisions without selecting the traded asset."""
 
-    STRATEGY_KEY = "ema_crossover_signal"
-    CONSOLIDATOR_PERIOD_MIN = 15
-
     def _gap_is_sufficient(self, ema_fast: Decimal, ema_slow: Decimal) -> bool:
         """Apply both entry floors: absolute price gap and normalized gap.
 

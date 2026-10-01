@@ -77,9 +77,6 @@ class _DeploymentDecisionSnapshot:
 class DeploymentValidationConsecutiveGreen(Strategy):
     """Deterministic minute-bar strategy for validating deployment plumbing."""
 
-    STRATEGY_KEY = "deployment_validation"
-    CONSOLIDATOR_PERIOD_MIN = 1
-
     def __init__(self, symbol: str = "SPY", trade_symbol: str | None = None) -> None:
         super().__init__()
         self._signal_symbol_name = symbol.upper()
