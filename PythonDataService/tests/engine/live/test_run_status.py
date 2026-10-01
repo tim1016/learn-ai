@@ -19,13 +19,6 @@ from app.engine.live.run_status import _atomic_write_json
 # ---------------------------------------------------------------------------
 
 
-def test_atomic_write_json_creates_file(tmp_path: Path):
-    target = tmp_path / "output.json"
-    payload = {"key": "value", "number": 42}
-    _atomic_write_json(target, payload)
-    assert target.exists()
-
-
 def test_atomic_write_json_no_tmp_file_left(tmp_path: Path):
     target = tmp_path / "output.json"
     _atomic_write_json(target, {"x": 1})

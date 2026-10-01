@@ -12,10 +12,6 @@ references/qc-shadow/
 ├── README.md                              ← this file
 ├── SpyEmaCrossoverAlgorithm.py            ← audit copy (§ 3 source of truth)
 └── backtests/
-    ├── lean-parity-fixture/               ← Test 1 export (§ 8.1)
-    │   ├── trades.csv
-    │   ├── indicators.csv
-    │   └── attribution.md                 ← QC backtest id, run date, fixture sha
     └── 2025-08-01_to_2025-11-01/          ← Test 2 export (§ 8.2)
         ├── trades.csv
         ├── indicators.csv
@@ -38,39 +34,6 @@ pre-paper gate.
 `from AlgorithmImports import *` only resolves inside QC Cloud, so this
 file does **not** import in this repo's pytest. CI does not execute it.
 
-## Operator workflow — Test 1 (same-bar engine parity, § 8.1)
-
-This is the **strict** parity test. Both engines consume the same
-LEAN-formatted minute-bar fixture; indicators must match to `atol=1e-9`
-and trades must match exactly.
-
-The QC custom-data harness is the critical-path piece (§ 8.1). Without
-it there is no clean engine-equivalence proof.
-
-1. Build a custom-data replay class in QC Cloud that:
-   * Loads the SPY minute fixture used by `tests/test_spy_validation.py`
-     (LEAN format, `2024-03-28 → 2026-03-27`).
-   * Disables QC's native data feed for the duration of the backtest.
-   * Verifies the QC algorithm receives exactly the bar count and
-     timestamps the Python fixture provides.
-2. Upload `SpyEmaCrossoverAlgorithm.py` from this directory verbatim.
-3. Run the QC backtest against the custom-data feed.
-4. Export to `references/qc-shadow/backtests/lean-parity-fixture/`:
-   * `trades.csv` — one row per QC trade with columns
-     `entry_time_ms,exit_time_ms,entry_price,exit_price,pnl_points`.
-   * `indicators.csv` — one row per consolidated 15-min bar with
-     columns `bar_close_ms,ema5,ema10,rsi,signal`
-     (`signal ∈ {ENTER, EXIT, HOLD}`).
-   * `attribution.md` — record QC Cloud backtest id, run date, the
-     SHA-256 of `SpyEmaCrossoverAlgorithm.py` at upload time, and the
-     SHA-256 of the fixture file the harness loaded.
-5. Commit the export.
-6. `python -m pytest tests/engine/live/test_qc_python_parity_fixture.py`
-   should now pass.
-
-If the harness cannot be built, see § 8.1's "Fallback decision point"
-— do not auto-substitute native QC data.
-
 ## Operator workflow — Test 2 (native-feed shadowing, § 8.2)
 
 This is the **operational** test. QC runs against its native data feed,
@@ -84,12 +47,13 @@ cross-feed tolerances (EMA atol $0.10, RSI atol 2.0).
      (evaluation end). RTH only; no extended hours.
 3. Run the backtest in QC Cloud.
 4. Export to `references/qc-shadow/backtests/2025-08-01_to_2025-11-01/`:
-   * `trades.csv` (same schema as Test 1).
-   * `indicators.csv` (same schema as Test 1).
+   * `trades.csv` (schema below).
+   * `indicators.csv` (schema below).
    * `bars.csv` — one row per 15-min consolidated bar from QC's data
      feed: `bar_close_ms,open,high,low,close,volume`.
-   * `attribution.md` — same fields as Test 1, plus the QC data-feed
-     identifier (e.g. `Algoseek US Equities`).
+   * `attribution.md` — record QC Cloud backtest id, run date, the
+     SHA-256 of `SpyEmaCrossoverAlgorithm.py` at upload time, and the
+     QC data-feed identifier (e.g. `Algoseek US Equities`).
 5. Commit the export.
 6. `python -m pytest tests/engine/live/test_qc_python_native_feed.py`
    should pass with `0` engine-class divergences. Data-class

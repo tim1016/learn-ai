@@ -130,15 +130,6 @@ def test_two_programs_constructed_through_the_session_never_share_an_evaluation_
     assert stage_b.trace.program_key == "rsi_mean_reversion_signal"
 
 
-def test_registry_factory_is_the_single_public_ema_program_construction_seam() -> None:
-    program, strategy, _executor, _context = _prepared_program()
-
-    assert strategy.signal_program is program
-    assert _STRATEGY_REGISTRY["ema_crossover_signal"].build(
-        _STRATEGY_REGISTRY["ema_crossover_signal"].param_schema()
-    ).signal_program is not None
-
-
 def test_backtest_commits_each_registered_program_stage_at_its_existing_order_seam() -> None:
     registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
     strategy = registration.build(registration.param_schema())

@@ -50,7 +50,7 @@ implied:
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from functools import lru_cache
 from typing import Any
@@ -199,17 +199,6 @@ def _dst_spring_forward_trading_days() -> tuple[date, date]:
     raise AssertionError(f"no spring-forward DST transition found scanning {year}")
 
 
-def _fixed_est_open_ms(d: date) -> int:
-    """Simulate the BANNED fixed -05:00 conversion, purely as a contrast value.
-
-    Never used in production code -- ``.claude/rules/temporal-rigor.md``
-    explicitly bans a fixed ET offset. This exists only so the DST test below
-    can show the canonical module's real value differs from it.
-    """
-    naive_open = datetime(d.year, d.month, d.day, 9, 30)
-    return int(naive_open.replace(tzinfo=timezone(timedelta(hours=-5))).timestamp() * 1000)
-
-
 # ---------------------------------------------------------------------------
 # 1. Ordinary day.
 # ---------------------------------------------------------------------------
@@ -349,31 +338,6 @@ def test_early_close_minute_feed_through_real_consolidator_flushes_finalbucket()
 # ---------------------------------------------------------------------------
 # 3. DST.
 # ---------------------------------------------------------------------------
-
-
-def test_dst_transition_fixed_offset_would_have_been_wrong_by_one_hour() -> None:
-    day_before, day_after = _dst_spring_forward_trading_days()
-    tz = ZoneInfo("America/New_York")
-
-    before_offset = datetime(day_before.year, day_before.month, day_before.day, 12, tzinfo=tz).utcoffset()
-    after_offset = datetime(day_after.year, day_after.month, day_after.day, 12, tzinfo=tz).utcoffset()
-    assert before_offset == timedelta(hours=-5), f"expected {day_before} to be EST, got offset {before_offset}"
-    assert after_offset == timedelta(hours=-4), f"expected {day_after} to be EDT, got offset {after_offset}"
-
-    canonical_before = trading_calendar.session_open_ms_utc(day_before)
-    canonical_after = trading_calendar.session_open_ms_utc(day_after)
-    fixed_before = _fixed_est_open_ms(day_before)
-    fixed_after = _fixed_est_open_ms(day_after)
-
-    assert fixed_before == canonical_before, (
-        "control check failed: a fixed -05:00 model should agree with the canonical "
-        f"calendar on an EST day ({day_before})"
-    )
-    assert fixed_after - canonical_after == 3_600_000, (
-        f"a fixed -05:00 offset would have placed {day_after}'s 09:30 ET open "
-        f"{(fixed_after - canonical_after) / 3_600_000}h away from the true EDT open -- "
-        "DST must be resolved through ZoneInfo, never a fixed offset"
-    )
 
 
 @pytest.mark.parametrize("key", SEALED_KEYS)

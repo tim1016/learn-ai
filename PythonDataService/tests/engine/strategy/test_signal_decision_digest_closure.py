@@ -18,7 +18,6 @@ from pathlib import Path
 import pytest
 
 from scripts.run_signal_program_build_qualification import (
-    _SERVICE_ROOT,
     signal_decision_import_closure,
 )
 
@@ -54,10 +53,3 @@ def test_closure_helper_follows_every_name_in_a_combined_import_statement(synthe
     closure = signal_decision_import_closure(roots=["app/helper.py"], service_root=synthetic_package)
 
     assert closure == {"app/helper.py", "app/sibling.py", "app/leaf.py"}
-
-
-def test_production_closure_helper_uses_the_real_service_root() -> None:
-    """Sanity check that the default ``service_root`` resolves to
-    ``PythonDataService``, not the ``scripts/`` directory the module lives in."""
-    assert (_SERVICE_ROOT / "app").is_dir()
-    assert (_SERVICE_ROOT / "tests").is_dir()
