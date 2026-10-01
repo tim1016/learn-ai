@@ -255,6 +255,7 @@ def validation_view(stored: Mapping[str, Any]) -> dict[str, Any]:
             "test_metrics": fold["test_metrics"],
             "incumbent_test_metrics": fold["incumbent_test_metrics"],
             "failure_reason": fold["failure_reason"],
+            "failure_code": fold["failure_code"],
         }
         for fold in stored["folds"]
     ]

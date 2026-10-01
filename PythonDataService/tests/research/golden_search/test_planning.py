@@ -17,6 +17,7 @@ from app.research.golden_search.planning import (
     _sessions_needed,
     default_protocol,
     preflight_view,
+    prepare_lock,
     protocol_from_request,
     registry_incumbent,
     review_plan,
@@ -180,3 +181,12 @@ def test_interval_lengths_below_one_month_are_refused() -> None:
     with pytest.raises(GoldenSearchRefusal) as refused:
         _intervals(earliest_session=None, final_months=0)
     assert refused.value.code == "INTERVALS_INVALID"
+
+
+def test_a_lock_refused_for_several_reasons_carries_every_refusal(tmp_path: Path) -> None:
+    request = plan_request("SPY", budget_cap=10)
+    request["zoom"]["points"] = 2
+    with pytest.raises(GoldenSearchRefusal) as refused:
+        prepare_lock(protocol_from_request(request), idempotency_key="k", roots=[tmp_path])
+    assert refused.value.code == "ZOOM_SETTINGS_INVALID"
+    assert [item["code"] for item in refused.value.refusals] == ["ZOOM_SETTINGS_INVALID", "WORKLOAD_LIMIT"]

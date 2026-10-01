@@ -404,7 +404,10 @@ def prepare_lock(
     if not plan.lockable:
         first = plan.refusals[0]
         raise GoldenSearchRefusal(
-            "; ".join(refusal.message for refusal in plan.refusals), code=first.code, field=first.field
+            "; ".join(refusal.message for refusal in plan.refusals),
+            code=first.code,
+            field=first.field,
+            refusals=tuple(refusal.as_dict() for refusal in plan.refusals),
         )
     assert plan.run_up is not None
     try:

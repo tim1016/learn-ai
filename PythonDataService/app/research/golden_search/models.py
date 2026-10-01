@@ -35,8 +35,8 @@ CommandName = Literal[
 ]
 CandidateKey = Literal["incumbent", "all_period", "recent"]
 RetainKind = Literal["keep_current", "wait_for_fresh_data", "retain_exploration"]
-#: How the HTTP layer answers a refusal: 400, 409 or 404.
-RefusalKind = Literal["invalid", "conflict", "not_found"]
+#: How the HTTP layer answers a refusal: 400, 409, 404 or 503.
+RefusalKind = Literal["invalid", "conflict", "not_found", "unavailable"]
 
 COMMANDS: tuple[CommandName, ...] = (
     "continue", "select_candidate", "open_exam", "approve", "retain", "close", "cancel", "finish", "revise"
@@ -73,7 +73,8 @@ class GoldenSearchRefusal(ValueError):
     """A request the owner can act on was refused: ``code`` names it, ``kind`` how HTTP answers it.
 
     ``study`` carries the current row when the refusal is about it (a stale
-    revision answers with the study as it now stands).
+    revision answers with the study as it now stands); ``refusals`` carries
+    every plan refusal when a lock is refused for more than one reason.
     """
 
     def __init__(
@@ -84,12 +85,14 @@ class GoldenSearchRefusal(ValueError):
         kind: RefusalKind = "invalid",
         field: str | None = None,
         study: StudyRow | None = None,
+        refusals: tuple[dict[str, str | None], ...] = (),
     ) -> None:
         super().__init__(message)
         self.code = code
         self.kind = kind
         self.field = field
         self.study = study
+        self.refusals = refusals
 
 
 @dataclass(frozen=True, slots=True)

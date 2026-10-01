@@ -12,7 +12,9 @@ from pathlib import Path
 
 import asyncpg
 import pytest
+import redis
 
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.jobs.progress import JobCancelled
 from app.research.golden_search import repository as repo
 from app.research.golden_search import service
@@ -20,6 +22,7 @@ from app.research.golden_search.evaluator import CapabilityError, EvaluationCapa
 from app.research.golden_search.models import GoldenSearchRefusal, StudyRow
 from app.research.persistence import lifecycle
 from tests._helpers.golden_search_study import (
+    DEVELOPMENT,
     FINAL,
     Driver,
     FakeApproval,
@@ -171,6 +174,32 @@ async def test_an_unclaimed_stage_reads_queued_cannot_be_finished_and_cancel_the
     with pytest.raises(GoldenSearchRefusal) as taken:
         await service.bind_dispatch(row.id, stage_token=token, job_id="job-b")
     assert taken.value.code == "NOTHING_PENDING"
+
+
+async def test_cancelling_a_bound_stage_asks_its_worker_and_an_unreachable_job_store_records_nothing(
+    conn: asyncpg.Connection, driver: Driver, symbol: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = await driver.lock(symbol)
+    outcome = await driver.command(row, "continue")
+    await service.bind_dispatch(row.id, stage_token=outcome.dispatch["payload"]["stage_token"], job_id="job-live")
+    driver.live = True
+    bound = await service.get_row(row.id)
+
+    def unreachable(job_id: str) -> None:
+        raise redis.ConnectionError("down")
+
+    monkeypatch.setattr(lifecycle, "request_cancel", unreachable)
+    key = driver.key()
+    with pytest.raises(GoldenSearchRefusal) as refused:
+        await driver.command(bound, "cancel", idempotency_key=key)
+    assert (refused.value.code, refused.value.kind) == ("JOB_STORE_UNREACHABLE", "unavailable")
+    assert (await service.get_row(row.id)).revision == bound.revision
+    assert await repo.get_command(conn, row.id, key) is None
+
+    asked: list[str] = []
+    monkeypatch.setattr(lifecycle, "request_cancel", asked.append)
+    cancelled = await driver.command(bound, "cancel", idempotency_key=key)
+    assert asked == ["job-live"] and cancelled.study.status == "queued"  # the worker acknowledges by cancelling
 
 
 # ── Budget, crash and Finish ─────────────────────────────────────────────
@@ -456,7 +485,8 @@ async def test_defaults_offer_the_ready_default_qualification_as_the_incumbent(
     )
     assert reviewed.latest_review is not None
     point = canonical_point("ema_crossover_signal", symbol, {"gap": 0.35, "hold_bars": 7})
-    contract = service._STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
+    contract = _STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
+    assert contract is not None
     await qualifications.insert_qualification(
         conn,
         qualification_id=f"q-{unique}",
@@ -510,3 +540,80 @@ async def test_preflight_answers_refusals_as_data_with_the_run_up_and_exposure(d
 
     refused = await service.preflight(plan_request(symbol, budget_cap=10), roots=driver.roots)
     assert [item["code"] for item in refused["refusals"]] == ["WORKLOAD_LIMIT"] and refused["run_up"] is None
+
+
+# ── Grid, failed folds, decisions and reads ──────────────────────────────
+
+
+def _grid_plan(symbol: str) -> dict:
+    request = plan_request(symbol, method="grid")
+    for knob in request["knobs"]:
+        if knob["name"] == "gap":
+            knob["step"] = 0.1
+        if knob["name"] == "hold_bars":
+            knob["step"] = 2.0
+    return request
+
+
+async def test_a_grid_search_scores_every_listed_combination_once(driver: Driver, symbol: str) -> None:
+    row = await service.lock_study(_grid_plan(symbol), idempotency_key=driver.key(), roots=driver.roots)
+    row = await driver.advance(row, "continue")
+
+    search = (await driver.detail(row))["results"]["search"]
+    assert search["counts"] == {"evaluated": 7 * 6, "cached": 0, "invalid": 0}
+    assert search["stop_explanation"].startswith("Tested every valid combination")
+    assert {item["stop_explanation"] for item in search["knob_summary"]} == {"Every listed value tested"}
+    # Hold 6 and 8 tie around the peak at 7; the canonical ranking breaks the tie by point hash.
+    assert search["passes_completed"] == 1 and search["winner"]["hold_bars"] in (6, 8)
+
+
+async def test_a_fold_without_an_eligible_training_winner_is_recorded_failed_never_skipped(driver: Driver, symbol: str) -> None:
+    january = window_ms((DEVELOPMENT[0], DEVELOPMENT[0].replace(month=2)))
+
+    def january_loses(point: dict, window: tuple[int, int], scenario: str) -> float:
+        return -1.0 if window[1] <= january[1] + 3 * 24 * 3_600_000 and window[0] >= january[0] else smooth_score(point, window, scenario)
+
+    driver.engine.score = january_loses
+    row = await driver.to_candidate(symbol)
+    validation = (await driver.detail(row))["results"]["validation"]
+
+    first, second = validation["folds"]
+    assert (first["status"], first["failure_code"], first["winner"]) == ("failed", "NO_ELIGIBLE_CANDIDATE", None)
+    assert first["incumbent_test_metrics"] is not None  # the benchmark still ran on the test window
+    assert second["status"] == "completed"
+    assert validation["verdict"]["label"] == "could not be judged"
+    assert validation["linked"][0]["linked_return"] is None and validation["linked"][1]["linked_return"] is None
+
+
+async def test_keeping_the_current_settings_ends_the_study_without_opening_the_final_test(driver: Driver, symbol: str) -> None:
+    row = await driver.to_candidate(symbol)
+    row = await driver.advance(row, "retain", {"kind": "keep_current", "note": "The fit is fragile."})
+    detail = await driver.detail(row)
+
+    assert detail["state"] == "retained" and detail["decision"]["kind"] == "keep_current"
+    assert detail["guidance"]["detail"].endswith("The final test has not been opened.")
+    assert detail["permitted_actions"] == ["revise"]
+    with pytest.raises(GoldenSearchRefusal) as refused:
+        await driver.command(row, "retain", {"kind": "maybe", "note": ""})
+    assert refused.value.code == "COMMAND_NOT_PERMITTED"
+
+    closed = await driver.advance(await driver.lock(symbol), "close", {"note": "Wrong plan."})
+    assert closed.state == "closed" and (await driver.detail(closed))["guidance"]["headline"] == "Study closed"
+
+
+async def test_candidate_detail_and_the_evaluation_ledger_read_back_after_the_exam(driver: Driver, symbol: str) -> None:
+    row = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+
+    chosen = await service.candidate(row.id, "all_period")
+    assert chosen["development"]["window"] == {"start_ms": row.protocol["development_start_ms"], "end_ms": row.protocol["development_end_ms"]}
+    assert chosen["development"]["cumulative_return"] and chosen["development"]["monthly"] and chosen["development"]["trades"]
+    assert chosen["exam"]["window"] == {"start_ms": row.protocol["final_start_ms"], "end_ms": row.protocol["final_end_ms"]}
+    assert (await service.candidate(row.id, "recent"))["exam"] is not None  # the same point
+    assert (await service.candidate(row.id, "incumbent"))["exam"] is not None  # the benchmark
+
+    page = await service.evaluations(row.id, stage="exam", page=1, page_size=10)
+    assert page["total"] == 2 and {item["detail"] for item in page["rows"]} == {True}
+    with pytest.raises(GoldenSearchRefusal) as refused:
+        await service.evaluations(row.id, page=0)
+    assert refused.value.code == "PAGE_INVALID"

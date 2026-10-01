@@ -70,13 +70,13 @@ logger = logging.getLogger(__name__)
 #: Development stages may never touch the exam and proof reservations; the exam may not touch the proof's.
 GENERAL_RESERVE = EXAM_EVALUATIONS + PROOF_EVALUATIONS
 EXAM_RESERVE = PROOF_EVALUATIONS
-NO_ELIGIBLE_CANDIDATE = "No setting met your rules in this fold's training window (NO_ELIGIBLE_CANDIDATE)."
+NO_ELIGIBLE_CANDIDATE = "No setting met your rules in this fold's training window."
 FOLD_BUDGET_REACHED = "The evaluation budget ran out before this fold finished."
 
 
 @dataclass(frozen=True)
 class ApprovalBinding:
-    """Track Q2's frozen approval interface (``approval.approve_study`` and its two types), injectable for tests."""
+    """The approval workflow's interface (``approval.approve_study`` and its two types), injectable for tests."""
 
     request_type: Callable[..., Any]
     checkpoint_from_dict: Callable[[Mapping[str, Any] | None], Any]
@@ -84,7 +84,8 @@ class ApprovalBinding:
 
 
 def default_approval() -> ApprovalBinding:
-    from app.research.golden_search import approval  # Track Q2 (#2696); imported only when a qualification runs
+    # Imported when a qualification runs: the approval workflow (#2696) loads the proof and Golden Validation stacks.
+    from app.research.golden_search import approval
 
     return ApprovalBinding(
         request_type=approval.ApprovalRequest,
@@ -642,7 +643,7 @@ def execute_stage(
     """Run the stage a guarded command authorized, on the calling worker thread.
 
     ``execute`` defaults to the engine (``evaluator.engine_executor``) and
-    ``approval`` to Track Q2's ``approve_study``; tests inject both. A
+    ``approval`` to ``approval.approve_study``; tests inject both. A
     cancelled stage keeps its results and reads back ``cancelled``; any other
     failure reads back ``failed`` with its reason; both may be finished.
     """

@@ -25,6 +25,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import redis
+
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
 from app.research.golden_search import repository as repo
 from app.research.golden_search.actions import LIVE_PRESENTATIONS, action_refusals, presented_status, unclaimed
@@ -569,8 +571,6 @@ async def run_command(
         await repo.record_command(
             conn, study_id=study_id, idempotency_key=key, command=command, request_sha256=digest, response=response
         )
-    if command == "cancel" and seen.job_id is not None and not unclaimed(seen):
-        lifecycle.request_cancel(seen.job_id)
     logger.info(
         "golden search command applied",
         extra={"action": "golden_search_command", "study_id": study_id, "command": command, "revision": outcome.study.revision},
@@ -591,7 +591,12 @@ async def _apply(conn: Any, row: StudyRow, command: str, body: Mapping[str, Any]
     if command in ("retain", "close"):
         return await _decide(conn, row, command, body)
     if command == "cancel":
-        changes: dict[str, Any] = {"status": "cancelled", "stage_token": None, "incomplete": True} if unclaimed(row) else {}
+        if unclaimed(row):
+            changes: dict[str, Any] = {"status": "cancelled", "stage_token": None, "incomplete": True}
+        else:
+            # Delivered before the command is recorded: an unreachable job store records nothing.
+            await _request_cancel(str(row.job_id))
+            changes = {}
         return CommandOutcome(study=await repo.update_study(conn, row.id, changes=changes), dispatch=None)
     if command == "finish":
         stage = row.pending_stage
@@ -600,6 +605,17 @@ async def _apply(conn: Any, row: StudyRow, command: str, body: Mapping[str, Any]
         return CommandOutcome(study=await repo.update_study(conn, row.id, changes=changes), dispatch=_dispatch(row.id, token))
     created, _ = await repo.insert_study(conn, prepared)
     return CommandOutcome(study=created, dispatch=None)
+
+
+async def _request_cancel(job_id: str) -> None:
+    try:
+        await asyncio.to_thread(lifecycle.request_cancel, job_id)
+    except redis.RedisError as exc:
+        raise GoldenSearchRefusal(
+            "The job store is unreachable, so the cancel could not be delivered; try again shortly.",
+            code="JOB_STORE_UNREACHABLE",
+            kind="unavailable",
+        ) from exc
 
 
 def _evidence_candidate(row: StudyRow, key: str) -> Mapping[str, Any] | None:

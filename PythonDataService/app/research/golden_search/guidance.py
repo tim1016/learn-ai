@@ -14,7 +14,7 @@ from typing import Any
 from app.research.golden_search.declarations import SearchDeclaration, knob_values
 from app.research.golden_search.protocol import ExecutionAssumptions, KnobPlan, Method
 
-# ── Study guidance by state (§4.6) ───────────────────────────────────────
+# ── Study guidance by state ──────────────────────────────────────────────
 
 WEAK_EVIDENCE_DETAIL = (
     "You can keep the incumbent, or approve with a written reason and explicit acceptance of the weak evidence."

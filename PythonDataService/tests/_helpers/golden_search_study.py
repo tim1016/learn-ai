@@ -154,7 +154,7 @@ def fake_detail(window: tuple[int, int], sharpe: float) -> dict[str, Any]:
     return {"initial_cash": CAPITAL, "daily_equity": daily, "trades": [trade]}
 
 
-# ── A fake of Track Q2's approval (the frozen interface) ─────────────────
+# ── A fake of the approval workflow's interface ──────────────────────────
 
 
 @dataclass(frozen=True, kw_only=True)
