@@ -20,6 +20,10 @@ _COMPOSE_TOKEN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 # nothing outside the repo root and can smuggle no second word into the command
 # the operator runs.
 _COMPOSE_FILE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}\.ya?ml$")
+# ``PythonDataService/artifacts`` — the durable artifacts directory compose
+# mounts at ``/app/artifacts``. Anchored to this file so the default is the
+# same directory whatever the process's working directory.
+_SERVICE_ARTIFACTS_ROOT = Path(__file__).resolve().parents[1] / "artifacts"
 
 
 def _split_compose_files(value: str) -> tuple[str, ...]:
@@ -329,6 +333,11 @@ class Settings(BaseSettings):
     # http://host.containers.internal:8090.
     LEAN_LAUNCHER_URL: str = "http://127.0.0.1:8090"
     LEAN_LAUNCHER_TOKEN: str = ""
+    # Golden Search proof blobs (#2696): the content-addressed copies of the
+    # exact lake bytes a qualification's proof replayed, so a re-proof can
+    # restore them after the lake moves on. Durable like the other artifact
+    # stores; losing it leaves every qualification un-re-provable.
+    GOLDEN_SEARCH_PROOF_ROOT: Path = _SERVICE_ARTIFACTS_ROOT / "golden_search" / "blobs"
 
 settings = Settings()
 fleet_settings = FleetSettings()
