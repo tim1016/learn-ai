@@ -34,9 +34,9 @@ def tracked_compose_files() -> list[str]:
 
 
 def render_module() -> object:
-    """Load scripts/render_fleet_topology.py directly (same dynamic-import
-    pattern as test_documentation_contract.py's `_checker_module()`), so its
-    Compose-tag-tolerant YAML loader has exactly one implementation."""
+    """Load scripts/render_fleet_topology.py directly by file path (it is a
+    script, not an importable package module), so its Compose-tag-tolerant
+    YAML loader has exactly one implementation."""
     spec = importlib.util.spec_from_file_location("render_fleet_topology", RENDER_SCRIPT)
     if spec is None or spec.loader is None:
         raise RuntimeError("render_fleet_topology could not be loaded")

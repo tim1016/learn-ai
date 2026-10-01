@@ -2637,8 +2637,6 @@
 "tests/contracts/test_data_plane_image_stage.py::test_every_service_built_from_the_data_plane_context_names_its_stage": 0.04,
 "tests/contracts/test_data_plane_image_stage.py::test_the_always_on_services_are_all_covered": 0.03,
 "tests/contracts/test_data_plane_image_stage.py::test_two_stages_never_build_into_one_image_tag": 0.04,
-"tests/contracts/test_documentation_contract.py::test_served_documents_fail_when_a_diagram_class_has_no_style": 0.02,
-"tests/contracts/test_documentation_contract.py::test_validate_repository_current_repository_passes": 0.11,
 "tests/contracts/test_fleet_agent_path_templates_resolve.py::test_every_catalog_agent_path_resolves_to_a_mounted_route": 0.01,
 "tests/contracts/test_fleet_env_example_completeness.py::test_discovery_finds_every_committed_compose_overlay": 0.02,
 "tests/contracts/test_fleet_env_example_completeness.py::test_no_committed_compose_file_carries_a_fleet_secret_literal": 0.04,

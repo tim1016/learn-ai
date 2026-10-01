@@ -50,9 +50,6 @@ ordering across unrelated domains.
 | Framework behavior | Installed manifest version and official documentation for that version | Derive the version from the manifest, not a prose cache |
 | Open defect | `docs/known-gaps.md` | Closed findings belong in durable decision history or Git history |
 
-`docs/doc-authority.md` is the router for domain documentation and its
-supersession rules.
-
 ## Engine and math authority
 
 - Which engine owns a job: `docs/architecture/engine-authority-map.md`. A PR that moves ownership edits it in the same PR.
