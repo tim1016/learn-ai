@@ -139,6 +139,16 @@ def test_registry_point_matches_only_the_validated_point_on_a_validated_symbol()
     assert not registry_point_matches(CONTRACT, {**REGISTRY_POINT, "symbol": "MSFT"})
 
 
+def test_registry_point_matches_reads_a_setting_the_dump_omits_as_its_validated_value() -> None:
+    # A canonical dump leaves an identity-neutral default out (#2696); that
+    # absence is the validated value, not a mismatch. A present value must equal it.
+    omitted = next(iter(CONTRACT.validated_settings))
+    dump = {name: value for name, value in REGISTRY_POINT.items() if name != omitted}
+
+    assert registry_point_matches(CONTRACT, dump)
+    assert not registry_point_matches(CONTRACT, {**dump, omitted: None})
+
+
 # ---------------------------------------------------------------------------
 # qualification_status
 # ---------------------------------------------------------------------------

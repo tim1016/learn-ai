@@ -136,9 +136,14 @@ def params_sha256(canonical_params: Mapping[str, Any]) -> str:
 
 
 def registry_point_matches(contract: SignalProgramContract, effective: Mapping[str, Any]) -> bool:
-    """Whether ``effective`` (canonical, ``symbol`` included) is the program's registered validated point."""
+    """Whether ``effective`` (canonical, ``symbol`` included) is the program's registered validated point.
+
+    A canonical dump omits a parameter at its identity-neutral default
+    (#2696), and every validated setting a dump can omit is that default, so
+    an absent name reads as the validated value.
+    """
     return str(effective.get("symbol", "")).upper() in contract.validated_symbols and all(
-        effective.get(name) == value for name, value in contract.validated_settings.items()
+        effective.get(name, value) == value for name, value in contract.validated_settings.items()
     )
 
 
@@ -216,43 +221,59 @@ async def insert_qualification(
     approved_by: str,
     created_at_ms: int,
 ) -> QualificationRow:
-    """Append one qualified version. Its parameter and proof hashes are derived here, never supplied."""
+    """Append one qualified version. Its parameter and proof hashes are derived here, never supplied.
+
+    Refused, and nothing written, when the stored JSON no longer hashes to
+    those digests: JSONB rewrites some floats (``-0.0`` reads back as
+    ``0.0``), and a point whose stored form hashes differently could never
+    be found by its own identity. Runs in its own transaction, a savepoint
+    when the caller already holds one.
+    """
     if params.get("symbol") != symbol:
         raise ValueError(f"the qualified parameters name symbol {params.get('symbol')!r}, not {symbol!r}")
-    row = await conn.fetchrow(
-        f"""
-        INSERT INTO research_golden_qualifications (
-            id, program_key, program_version, parameter_schema_version, symbol,
-            params_json, params_sha256, artifact_digest, wiring_digest, study_id,
-            golden_run_id, golden_review_id, proof_json, proof_sha256, research_json,
-            note, approved_by, created_at_ms
-        ) VALUES (
-            $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15::jsonb, $16, $17, $18
+    async with conn.transaction():
+        row = await conn.fetchrow(
+            f"""
+            INSERT INTO research_golden_qualifications (
+                id, program_key, program_version, parameter_schema_version, symbol,
+                params_json, params_sha256, artifact_digest, wiring_digest, study_id,
+                golden_run_id, golden_review_id, proof_json, proof_sha256, research_json,
+                note, approved_by, created_at_ms
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15::jsonb, $16, $17, $18
+            )
+            RETURNING {_QUALIFICATION_COLUMNS}
+            """,
+            qualification_id,
+            program_key,
+            program_version,
+            parameter_schema_version,
+            symbol,
+            json.dumps(dict(params)),
+            params_sha256(params),
+            artifact_digest,
+            wiring_digest,
+            study_id,
+            golden_run_id,
+            golden_review_id,
+            json.dumps(dict(proof)),
+            semantic_payload_hash(dict(proof)),
+            json.dumps(dict(research)),
+            note,
+            approved_by,
+            created_at_ms,
         )
-        RETURNING {_QUALIFICATION_COLUMNS}
-        """,
-        qualification_id,
-        program_key,
-        program_version,
-        parameter_schema_version,
-        symbol,
-        json.dumps(dict(params)),
-        params_sha256(params),
-        artifact_digest,
-        wiring_digest,
-        study_id,
-        golden_run_id,
-        golden_review_id,
-        json.dumps(dict(proof)),
-        semantic_payload_hash(dict(proof)),
-        json.dumps(dict(research)),
-        note,
-        approved_by,
-        created_at_ms,
-    )
-    if row is None:
-        raise RuntimeError(f"qualification {qualification_id!r} was not returned by its own insert")
-    return _qualification(row)
+        if row is None:
+            raise RuntimeError(f"qualification {qualification_id!r} was not returned by its own insert")
+        stored = _qualification(row)
+        if params_sha256(stored.params) != stored.params_sha256 or (
+            semantic_payload_hash(stored.proof) != stored.proof_sha256
+        ):
+            raise ValueError(
+                f"qualification {qualification_id!r} does not survive storage: its stored parameters or proof "
+                "hash differently from what was approved"
+            )
+    return stored
 
 
 async def get_qualification(conn: asyncpg.Connection, qualification_id: str) -> QualificationRow | None:

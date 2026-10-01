@@ -211,6 +211,24 @@ def test_stage_proof_inputs_refuses_a_session_missing_from_the_lake(
     assert excinfo.value.code == "INPUT_MISSING"
 
 
+def test_stage_proof_inputs_refuses_sessions_split_across_raw_and_adjusted_roots(
+    lake: Path, blobs: BlobStore, tmp_path: Path
+) -> None:
+    # One proof replays one data root: a window whose sessions resolve to a
+    # raw root and an adjusted one could not be restored as either.
+    raw = tmp_path / "raw-writer" / lake_subpath("raw")
+    raw.mkdir(parents=True)
+    moved = date(2025, 2, 5)
+    seed_store_day(raw, SYMBOL, moved)
+    (lake / _zip(moved)).unlink()
+    split = capture_data_snapshot(
+        roots=[lake, raw], symbol=SYMBOL, resolution="minute", data_start=SNAPSHOT_START, data_end=SNAPSHOT_END
+    )
+
+    with pytest.raises(ValueError, match="more than one"):
+        stage_proof_inputs(split, roots=[lake, raw], window=WINDOW, blob_store=blobs)
+
+
 def test_materialize_writes_every_input_at_its_relative_path(
     snapshot: DataSnapshot, lake: Path, blobs: BlobStore, tmp_path: Path
 ) -> None:
@@ -300,6 +318,25 @@ def test_decision_trace_refuses_a_cold_start_at_the_window(snapshot: DataSnapsho
         decision_trace(PROGRAM, SYMBOL, VALIDATED, cold, roots=[lake], manifest=snapshot.artifacts)
 
 
+def test_decision_trace_refuses_a_window_without_a_decision(lake: Path) -> None:
+    # The scored session holds five regular minutes: the replay crosses into
+    # evaluation primed, but no fifteen-minute decision bar closes inside it.
+    seed_store_day(lake, SYMBOL, date(2025, 2, 4), count=5)
+    short = capture_data_snapshot(
+        roots=[lake], symbol=SYMBOL, resolution="minute", data_start=SNAPSHOT_START, data_end=SNAPSHOT_END
+    )
+    window = ProofWindow(
+        start_ms=et_midnight_ms(date(2025, 2, 4)),
+        end_ms=et_midnight_ms(date(2025, 2, 5)),
+        warmup_from_ms=et_midnight_ms(date(2025, 2, 3)),
+    )
+
+    with pytest.raises(ProofMismatchError) as excinfo:
+        decision_trace(PROGRAM, SYMBOL, VALIDATED, window, roots=[lake], manifest=short.artifacts)
+
+    assert excinfo.value.code == "EMPTY_REPLAY"
+
+
 def test_decision_trace_refuses_parameters_for_another_symbol(snapshot: DataSnapshot, lake: Path) -> None:
     with pytest.raises(ValueError, match="name symbol"):
         decision_trace(
@@ -317,7 +354,11 @@ def test_build_proof_restored_replay_equals_lake_replay(snapshot: DataSnapshot, 
     assert record.lake_trace_root == record.restored_trace_root == lake_only.trace_root
     assert record.trace_count == lake_only.trace_count
     assert record.program_version == CONTRACT.program_version
-    assert record.params == {**VALIDATED, "symbol": "SPY"}
+    # The canonical point is the schema's own dump, symbol included (it omits
+    # identity-neutral defaults, #2696), not the caller's mapping.
+    canonical = _STRATEGY_REGISTRY[PROGRAM].param_schema.model_validate({**VALIDATED, "symbol": "SPY"})
+    assert record.params == canonical.model_dump(mode="json")
+    assert record.params["symbol"] == "SPY"
     assert record.manifest == stage_proof_inputs(snapshot, roots=[lake], window=WINDOW, blob_store=blobs).artifacts
     assert (record.artifact_digest, record.wiring_digest) == (ARTIFACT_DIGEST, WIRING_DIGEST)
 
@@ -372,6 +413,29 @@ def test_reprove_reproduces_the_recorded_root_from_blobs_alone(
     assert (reproved.artifact_digest, reproved.wiring_digest) == ("c" * 64, "d" * 64)
     assert reproved.created_at_ms == 1_738_900_000_000
     assert reproved.manifest == record.manifest
+
+
+def test_build_proof_over_a_raw_lake_restores_and_reproves_without_adjustment_receipts(
+    blobs: BlobStore, tmp_path: Path
+) -> None:
+    raw = tmp_path / "raw-writer" / lake_subpath("raw")
+    raw.mkdir(parents=True)
+    for day in PROOF_SESSIONS:
+        seed_store_day(raw, SYMBOL, day)
+    raw_snapshot = capture_data_snapshot(
+        roots=[raw], symbol=SYMBOL, resolution="minute", data_start=PROOF_SESSIONS[0], data_end=PROOF_SESSIONS[-1]
+    )
+
+    record = _build(raw_snapshot, raw, blobs)
+    restored_root = materialize(record.inputs, blobs, tmp_path / "restore")
+    shutil.rmtree(raw)
+    reproved = reprove(record, blobs, artifact_digest=ARTIFACT_DIGEST, wiring_digest=WIRING_DIGEST)
+
+    assert record.adjusted is False
+    assert restored_root.name == "raw"
+    assert sorted(record.manifest) == [_zip(day) for day in PROOF_SESSIONS]
+    assert record.lake_trace_root == record.restored_trace_root
+    assert reproved.restored_trace_root == record.restored_trace_root
 
 
 def test_reprove_refuses_a_tampered_blob(snapshot: DataSnapshot, lake: Path, blobs: BlobStore) -> None:

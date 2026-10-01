@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import date
 
 import asyncpg
 import pytest
@@ -17,6 +18,7 @@ import pytest
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.research.backtest_runs import repository as backtest_repo
 from app.research.backtest_runs.records import record_from_payload
+from app.research.golden_search.proof import ProofRecord, ProofWindow
 from app.research.golden_search.qualifications import (
     QUALIFICATION_COVERED,
     QUALIFICATION_REVOKED,
@@ -40,6 +42,7 @@ from app.research.golden_search.qualifications import (
 )
 from app.research.golden_validation import service as golden_validation
 from app.schemas.signal_program_seal import semantic_payload_hash
+from app.utils.session_anchors import et_midnight_ms
 from tests.research.backtest_runs.payloads import engine_payload
 
 PROGRAM = "ema_crossover_signal"
@@ -162,6 +165,80 @@ async def test_insert_qualification_round_trips_and_derives_its_hashes(
     assert fetched.proof_sha256 == semantic_payload_hash(fetched.proof)
     assert (fetched.golden_run_id, fetched.golden_review_id) == golden_review
     assert await get_qualification(conn, f"absent-{unique}") is None
+
+
+async def test_insert_qualification_stores_a_proof_record_that_reads_back_to_its_own_hash(
+    conn: asyncpg.Connection, golden_review: tuple[int, int], unique: str, symbol: str
+) -> None:
+    # A re-proof reads the stored proof back: it must rebuild the record that
+    # was approved, and that record must still hash to proof_sha256.
+    point = _point(symbol, gap_bps=0.0)
+    window = ProofWindow(
+        start_ms=et_midnight_ms(date(2025, 2, 4)),
+        end_ms=et_midnight_ms(date(2025, 2, 7)),
+        warmup_from_ms=et_midnight_ms(date(2025, 2, 3)),
+    )
+    record = ProofRecord(
+        program_key=PROGRAM,
+        program_version=CONTRACT.program_version,
+        symbol=symbol,
+        params=point,
+        window=window,
+        adjusted=True,
+        manifest={"equity/usa/minute/x/20250204_trade.zip": "f" * 64, "adjustment_versions/x.json": "e" * 64},
+        lake_trace_root="d" * 64,
+        restored_trace_root="d" * 64,
+        trace_count=104,
+        artifact_digest=RUNNING,
+        wiring_digest="w" * 64,
+        created_at_ms=1_738_800_000_000,
+    )
+    study_id = f"study-{unique}"
+    await conn.execute(
+        """
+        INSERT INTO research_golden_search_studies (
+            id, strategy_key, symbol, state, created_at_ms, updated_at_ms,
+            protocol_json, protocol_hash, receipt_json, budget_cap
+        ) VALUES ($1, $2, $3, 'qualification_pending', 1, 1, '{}'::jsonb, $4, '{}'::jsonb, 100)
+        """,
+        study_id,
+        PROGRAM,
+        symbol,
+        "h" * 64,
+    )
+
+    stored = await insert_qualification(
+        conn,
+        qualification_id=f"q-{unique}",
+        program_key=PROGRAM,
+        program_version=CONTRACT.program_version,
+        parameter_schema_version=CONTRACT.parameter_schema_version,
+        symbol=symbol,
+        params=point,
+        artifact_digest=RUNNING,
+        wiring_digest="w" * 64,
+        study_id=study_id,
+        golden_run_id=golden_review[0],
+        golden_review_id=golden_review[1],
+        proof=record.as_dict(),
+        research={},
+        note="Approved after the final test.",
+        approved_by="local:owner",
+        created_at_ms=1_000,
+    )
+
+    assert stored.proof_sha256 == record.sha256()
+    assert ProofRecord.from_dict(stored.proof) == record
+
+
+async def test_insert_qualification_refuses_a_point_storage_would_rewrite(
+    conn: asyncpg.Connection, golden_review: tuple[int, int], unique: str, symbol: str
+) -> None:
+    # JSONB reads -0.0 back as 0.0: stored, this point could never be found by its own hash.
+    with pytest.raises(ValueError, match="does not survive storage"):
+        await _qualify(conn, golden_review, f"q-{unique}", params=_point(symbol, gap_bps=-0.0))
+
+    assert await get_qualification(conn, f"q-{unique}") is None
 
 
 async def test_insert_qualification_refuses_parameters_for_another_symbol(
