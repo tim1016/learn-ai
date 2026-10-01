@@ -31,19 +31,14 @@ if TYPE_CHECKING:
 class DecisionSnapshot:
     """One per-bar decision-time snapshot a Strategy may publish.
 
-    Optional, observability-only: strategies that opt in stash this on
-    ``Strategy.last_decision_snapshot`` after each consolidated bar
-    fires; historical artifact and reconciliation consumers may project it to
-    ``decisions.parquet``. The retired IBKR runtime is no longer a consumer.
+    Observation only: strategies that opt in stash this on
+    ``Strategy.last_decision_snapshot`` after each consolidated bar fires,
+    and no app code reads it. Tests that need each bar's decision without
+    driving a Signal Program read it -- the LEAN-vs-engine parity test
+    compares it with LEAN's ``state.csv``. Strategies that don't publish
+    leave ``last_decision_snapshot=None``; backtest paths are unaffected.
 
-    Strategies that don't care leave ``last_decision_snapshot=None``
-    and nothing reads it. Backtest paths and existing tests are
-    unaffected — there is no behavior change unless an external reader
-    explicitly observes this attribute.
-
-    Schema mirrors ``app.engine.live.artifacts.DECISION_COLUMNS`` so historical
-    writer integrations can convert one-to-one without bookkeeping. ``signal``
-    is the per-bar action the strategy took:
+    ``signal`` is the per-bar action the strategy took:
     ``ENTER`` if it newly entered a position on this bar, ``EXIT`` if
     it newly liquidated, ``HOLD`` for any other state (warmup-skip,
     bars-until-exit countdown, no signal fired). The strategy is
@@ -227,10 +222,8 @@ class Strategy(ABC):
         self.start_date: datetime | None = None
         self.end_date: datetime | None = None
         self.initial_cash: Decimal = Decimal(100000)
-        # Optional per-bar snapshot subclasses may publish for
-        # downstream observers (the live runtime's DecisionWriter).
-        # Default None — strategies opt in by setting this from inside
-        # their bar handler. See DecisionSnapshot.
+        # Optional per-bar snapshot a subclass may publish from inside its
+        # bar handler; see DecisionSnapshot. Default None.
         self.last_decision_snapshot: DecisionSnapshot | None = None
 
     # ------------------------------------------------------------------

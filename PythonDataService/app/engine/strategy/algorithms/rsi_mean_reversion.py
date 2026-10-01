@@ -2,7 +2,7 @@
 
 Formula: Long-only RSI mean reversion. Entry: RSI(window) drops strictly below `oversold` threshold (typically 30). Exit: RSI(window) rises strictly above `overbought` threshold (typically 70). End-of-run: any open position closed on `on_end_of_algorithm`.
 Reference: Internal strategy retained from the retired pandas-ta service implementation. LEAN inspiration but no line-for-line port.
-Canonical implementation: this file. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `spec/fixtures/rsi_mean_reversion.spec.json` reproduces the hand-coded twin trade-by-trade. Divergence-research-only parallel: `app/research/divergence/strategies/s2_rsi_mean_reversion.py` (vectorized pandas).
+Canonical implementation: this file. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `spec/fixtures/rsi_mean_reversion.spec.json` reproduces the hand-coded twin trade-by-trade.
 Validated against: PythonDataService/tests/test_strategy_engine.py; spec ↔ hand-coded parity at `app/engine/strategy/spec/tests/test_spec_rsi_mean_reversion_parity.py`; `tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[rsi_mean_reversion]`.
 
 Historical source: retired pandas-ta service implementation

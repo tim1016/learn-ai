@@ -1,8 +1,8 @@
 """Tests for the per-bar DecisionSnapshot publication on SpyEmaCrossover.
 
-The strategy's ``last_decision_snapshot`` attribute is the
-observability hook the live runtime's ``DecisionWriter`` will read
-post-handler to populate ``decisions.parquet``. This file pins:
+The strategy's ``last_decision_snapshot`` attribute is the per-bar
+observation seam the LEAN-vs-engine parity test reads after each
+handler. This file pins:
 
   - warmup bars publish nothing (snapshot stays None)
   - post-warmup bars publish a HOLD snapshot

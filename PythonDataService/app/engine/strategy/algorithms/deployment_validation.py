@@ -14,8 +14,7 @@ Hold through the third, fourth, and fifth signal-bar closes, then submit
 At the stop/flatten barrier, stop detecting new entries and liquidate any
 open position.
 Reference: Internal strategy specification from user session 2026-06-02;
-half-day cutoff contract decided in #1672 — see
-``docs/references/deployment-validation-consecutive-green.md``.
+half-day cutoff contract decided in #1672.
 Canonical implementation: this file. LEAN companion:
 ``app/lean_sidecar/trusted_samples/deployment_validation.py``.
 Validated against: ``tests/engine/test_deployment_validation_strategy.py``,
