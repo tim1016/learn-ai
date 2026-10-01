@@ -3,9 +3,8 @@
  *
  * No Angular imports. Operates only on plain data and a
  * `CanvasRenderingContext2D` so it is directly unit-testable and reusable
- * outside a component (a future `candle-sparkline`, per
- * `docs/superpowers/specs/2026-08-14-bot-gallery-redesign-design.md` §3.1/§3.2
- * risk note). The caller (`home-sparkline.component`) owns the DOM canvas, resize
+ * outside a component.
+ * The caller (`home-sparkline.component`) owns the DOM canvas, resize
  * observer, and pointer events; this module owns math and pixels only.
  *
  * Bars are laid out by index, not by time-scale — every column is the same
@@ -72,7 +71,7 @@ export interface CandleRendererConfig {
    * Whether to paint the floating last-price tag. It is on by default (a
    * sparkline's one glance value); Home's Wall tiles turn it off so the canvas
    * derives no price or session direction of its own — those are server-computed
-   * (single numerical authority, CLAUDE.md #5).
+   * (ADR 0068).
    */
   readonly showLastPriceTag: boolean;
 }
@@ -355,7 +354,7 @@ function drawTimeLabels(
 /**
  * The last-price tag reads only `bars[bars.length - 1].close` — never a
  * separately fetched live quote — so the painted value can never disagree
- * with the last drawn candle (temporal-rigor.md display discipline). Session
+ * with the last drawn candle. Session
  * direction (tag colour) compares `bars[0].open` to that same close, not the
  * last bar's own direction.
  */

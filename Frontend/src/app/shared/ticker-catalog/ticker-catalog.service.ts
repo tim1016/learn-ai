@@ -149,7 +149,7 @@ function toOption(span: SymbolCoverageSpan): TickerOption {
     // spans 2024-06 to 2026-08 holding 69 scattered days, none of them in
     // 2025. Named `firstHeld`/`lastHeld` so no consumer reads density into it.
     //
-    // Both are ET-anchored trading dates on the wire (temporal-rigor.md);
+    // Both are ET-anchored trading dates on the wire (ADR 0022 (a), (e));
     // rendering them in the viewer's zone would drift a day west of UTC, so
     // they go through the ET resolver.
     firstHeld: span.first_trading_date_ms === null ? null : etIsoDate(span.first_trading_date_ms),

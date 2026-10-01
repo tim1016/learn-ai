@@ -1,5 +1,4 @@
-// Reads the broker-configuration surface's refusal contract
-// (`docs/architecture/broker-configuration-profile-contract.md` §6): a `detail`
+// Reads the broker-configuration surface's refusal contract: a `detail`
 // object carrying a code-like `reason` plus backend-authored `message` and an
 // optional `next_step`.
 //

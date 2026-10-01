@@ -2,7 +2,7 @@
  * Broker API model aliases and SSE payload types.
  *
  * The REST schemas live in ``broker.types.ts`` (regenerated from the
- * Python service's OpenAPI spec — see ``Frontend/AGENTS.md``). SSE
+ * Python service's OpenAPI spec by ``npm run codegen:openapi``). SSE
  * endpoints emit ``text/event-stream`` so FastAPI does not surface
  * their payload shape via OpenAPI; we mirror those Pydantic models
  * here by hand to keep one source of typed truth in the frontend.

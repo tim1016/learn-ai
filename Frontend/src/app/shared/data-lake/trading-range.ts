@@ -61,7 +61,7 @@ export function tradingRangeRejection(
 /**
  * A `YYYY-MM-DD` trading date as the `int64 ms UTC` value the wire carries.
  *
- * `.claude/rules/temporal-rigor.md` allows one representation on the wire and
+ * ADR 0022 (a) and (f) allow one representation on the wire and
  * a trading date is not an exception to it. Every data-lake endpoint that
  * takes a trading-date window — `GET /coverage`'s `start_trading_date_ms`/
  * `end_trading_date_ms` query params, and (since #1877) `POST /ensure-data`'s

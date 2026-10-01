@@ -7,10 +7,9 @@
  * event payload, so it is not an OpenAPI exception. `GalleryLiveUpdate` is
  * genuinely stream-only (no REST response uses it) and stays hand-declared,
  * pinned to its backend authority — see its comment. `ChartBar` and `ChartFillMarker` are reused from the
- * sibling panel types rather than redefined, per the
- * single-canonical-implementation rule.
+ * sibling panel types rather than redefined.
  *
- * Temporal fields are `int64 ms UTC` per `.claude/rules/temporal-rigor.md`.
+ * Temporal fields are `int64 ms UTC`.
  */
 import type { components } from '../../../../../api/broker.types';
 import type { ChartBar, ChartFillMarker } from '../../lib/broker-v2-panel.types';

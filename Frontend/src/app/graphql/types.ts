@@ -129,9 +129,8 @@ export interface StrategyLegInput {
 }
 
 /**
- * Phase 1.1 opt-in flags for `analyzeOptionsStrategy`. Default-false; setting
+ * Opt-in flags for `analyzeOptionsStrategy`. Default-false; setting
  * any of these to true causes the corresponding response field to be populated.
- * See `docs/architecture/numerical-authority-migration-plan.md`.
  */
 export interface StrategyAnalyzeOptions {
   includeCurrentCurve?: boolean;

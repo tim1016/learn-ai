@@ -14,8 +14,7 @@ import {
 /**
  * Banner-rendering tests for the IV-source/confidence panel added in
  * the Step E + recorder-fallback follow-up. Asserts on the rendered
- * DOM (data-testid hooks), not on private signal values, per
- * .claude/rules/angular.md "Testing".
+ * DOM (data-testid hooks), not on private signal values.
  */
 describe("RealizedVsIvComponent — IV confidence banner", () => {
   let fixture: ComponentFixture<RealizedVsIvComponent>;

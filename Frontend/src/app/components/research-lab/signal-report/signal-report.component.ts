@@ -171,8 +171,7 @@ export class SignalReportComponent {
   /** Execution model as actually implemented in the backtest kernel. The
    *  text was rewritten in this redesign — the previous "Next bar open"
    *  label did not match what the code computes (1-bar lag with
-   *  close-to-close measurement). See ``docs/signal-engine-authority.md``
-   *  § 6 for the full timing model and the realism caveats. */
+   *  close-to-close measurement). */
   get executionAssumptions(): { label: string; value: string; note?: string }[] {
     const r = this.result();
     return [
