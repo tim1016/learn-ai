@@ -24,8 +24,12 @@ copies disagree: the fee projection already refuses on them.
 A batch is recorded only once it accounts for exactly the shares the order's
 fills hold, so an execution Alpaca has not posted yet leaves everything as it
 was, and a later read that retains it picks it up. An order whose accepted
-instruction cannot be read is logged and left as it was; the other orders
-are still recovered.
+instruction cannot be read is logged once per process and left as it was;
+the other orders are still recovered.
+
+An activity that contradicts an execution the order records raises the
+coverage conflict once (#2791); the order then leaves the held set, its
+quarantined evidence the operator's to settle.
 """
 
 from __future__ import annotations
@@ -36,7 +40,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from app.broker.alpaca.clerk.sqlite.activity_executions import BOT_ORDER, record_activity_executions
+from app.broker.alpaca.clerk.sqlite.activity_executions import BOT_ORDER, first_report, record_activity_executions
 from app.broker.alpaca.clerk.sqlite.execution_coverage import active_execution_coverage_conflicts
 from app.broker.alpaca.clerk.sqlite.fee_evidence import retained_activities
 from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError, read_order_details
@@ -123,7 +127,7 @@ def _record_order(repo: ClerkSqliteRepository, *, order: _HeldCumulative, fills:
 
 
 def _accepted_leg(repo: ClerkSqliteRepository, *, order: _HeldCumulative) -> BrokerOrderLeg | None:
-    """The order's accepted instruction, or ``None``, logged, when it cannot be read."""
+    """The order's accepted instruction, or ``None`` when it cannot be read, logged once per process."""
     try:
         details = read_order_details(repo._conn, (order.order_ref,))[order.order_ref]
     except OrderProjectionReadError as error:
@@ -132,10 +136,12 @@ def _accepted_leg(repo: ClerkSqliteRepository, *, order: _HeldCumulative) -> Bro
         if details.symbol is not None and details.side is not None and details.quantity is not None:
             return BrokerOrderLeg(symbol=details.symbol, side=details.side.lower(), quantity=details.quantity)
         reason = "the accepted instruction names no symbol, side or quantity"
-    logger.warning(
-        "A bot order's executions cannot be recovered without its accepted instruction",
-        extra={"action": "bot_order_instruction_unreadable", "order_ref": order.order_ref, "error": reason},
-    )
+    action = "bot_order_instruction_unreadable"
+    if first_report(repo, (action, order.order_ref, reason)):
+        logger.warning(
+            "A bot order's executions cannot be recovered without its accepted instruction",
+            extra={"action": action, "order_ref": order.order_ref, "error": reason},
+        )
     return None
 
 

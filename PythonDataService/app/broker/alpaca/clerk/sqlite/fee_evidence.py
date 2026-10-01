@@ -24,6 +24,8 @@ from app.broker.alpaca.adapter import execution_id_from_activity_id
 from app.broker.alpaca.clerk.money import MoneyInputError, money_context, normalize_money
 from app.broker.alpaca.clerk.sqlite.custody_subjects import outside_order_subject_id
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
+from app.broker.alpaca.clerk.sqlite.execution_coverage import order_total_retained_exacts_explain_cumulative
+from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import order_total_retained_exact_provenance
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.reads import external_orders as tracked_external_orders
@@ -430,12 +432,7 @@ def _effective_fills(
     account = conn.execute("SELECT account_id FROM control_meta WHERE id = 1").fetchone()[0]
     records = effective_fill_records(conn, account_id=account)
     grouped: dict[date, list[FeeFill]] = defaultdict(list)
-    complete = (
-        conn.execute(
-            "SELECT 1 FROM fills WHERE evidence_source = 'cumulative_recovery' AND NOT EXISTS (SELECT 1 FROM fills successor WHERE successor.superseded_execution_ref = fills.execution_id) LIMIT 1"
-        ).fetchone()
-        is None
-    )
+    complete = True
     # A terminal acknowledgement may arrive before its exact execution. Its
     # missing population cannot become a zero-fee day just because no fill
     # row (or separately raised uncertainty) exists yet. Reuse the existing
@@ -482,6 +479,31 @@ def _effective_fills(
     return grouped, orders, complete and conflicts is None
 
 
+def _witnessed_executions(conn: sqlite3.Connection) -> tuple[frozenset[str], bool]:
+    """Every broker execution custody names, and whether they explain every cumulative-recovery fill.
+
+    A recorded fill names its execution. So does an exact an order-total
+    proof (#2346) kept quarantined: the broker's final total counts it,
+    behind its order's cumulative-recovery fill, though no fill names it
+    (#2791). A cumulative fill names no execution, so it is explained only
+    once its order's retained exacts are every share it holds
+    (:func:`order_total_retained_exacts_explain_cumulative`).
+    """
+    execution_ids = {row[0] for row in conn.execute("SELECT execution_id FROM fills WHERE execution_id IS NOT NULL")}
+    cumulative: dict[str, list[float]] = defaultdict(list)
+    for row in conn.execute("SELECT order_ref, qty FROM fills WHERE evidence_source = 'cumulative_recovery'"):
+        cumulative[row[0]].append(float(row[1]))
+    explained = True
+    for order_ref, quantities in cumulative.items():
+        retained = order_total_retained_exact_provenance(conn, order_ref=order_ref)
+        execution_ids.update(item.exact_execution.execution_id for item in retained)
+        explained = explained and order_total_retained_exacts_explain_cumulative(
+            retained_quantities=tuple(item.exact_execution.slice_qty for item in retained),
+            cumulative_quantities=tuple(quantities),
+        )
+    return frozenset(execution_ids), explained
+
+
 @money_context()
 def custody_fee_attribution(
     conn: sqlite3.Connection, *, now_ms: int, evidence_checked_at_ms: int | None = None,
@@ -522,6 +544,8 @@ def custody_fee_attribution(
     grouped, owned_orders, population_complete = _effective_fills(
         conn, simulated_fill_cutoff_ms=simulated_fill_cutoff_ms
     )
+    execution_ids, cumulative_explained = _witnessed_executions(conn)
+    population_complete = population_complete and cumulative_explained
     snapshots = [] if simulated else _recorded_evidence(conn)
     window = _evidence_window(snapshots)
     by_date: dict[date, dict[str, BrokerActivity]] = defaultdict(dict)
@@ -559,7 +583,6 @@ def custody_fee_attribution(
     witnessed_external: set[str] = set()
     external_fills: list[FeeFill] = []
     pre_custody_quantities: dict[str, Decimal] = defaultdict(Decimal)
-    execution_ids = {row[0] for row in conn.execute("SELECT execution_id FROM fills WHERE execution_id IS NOT NULL")}
     # ``None`` marks the pre-floor executions: they open no fee day.
     for day, rows in [*by_date.items(), (None, before_floor)]:
         for row in rows.values():

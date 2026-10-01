@@ -347,8 +347,8 @@ async def test_a_bot_order_whose_instruction_cannot_be_read_leaves_another_bots_
 ) -> None:
     """Two bots' orders hold a cumulative; the one read first has an instruction the Clerk cannot read.
 
-    It is named and left as it was, and the other order's execution is still
-    recorded in the same read.
+    It is named once, however many reads follow, and left as it was; the
+    other order's execution is still recorded in the same read.
     """
     repo = _new_budget_repo(tmp_path)
     try:
@@ -377,8 +377,9 @@ async def test_a_bot_order_whose_instruction_cannot_be_read_leaves_another_bots_
         caplog.set_level(logging.INFO)
 
         assert await FeeEvidenceSync(repo=repo, read=_AlpacaAccount(feed=feed, spy_held=7.0), intake=ReentrantAsyncLock()).tick()
+        await FeeEvidenceSync(repo=repo, read=_AlpacaAccount(feed=feed, spy_held=7.0), intake=ReentrantAsyncLock()).tick()
 
-        assert _recovery_actions(caplog, "bot_order_instruction_unreadable") == [unreadable]
+        assert _recovery_actions(caplog, "bot_order_instruction_unreadable") == [unreadable], "reported once, not per tick"
         assert _credited(repo, unreadable) == [(None, "cumulative_recovery", refs[unreadable], 100.0)]
         assert [(source, shares) for _, source, shares, _ in _credited(repo, readable)] == [
             ("activity_recovery", refs[readable])

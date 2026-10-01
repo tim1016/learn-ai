@@ -196,3 +196,33 @@ is unchanged.
    row a fold reads holds it, so the coverage folds no longer complete a
    replaced leg against the accepted quantity, which could end a raised leg
    early; the head's next acknowledgement completes it.
+
+## Amendment 2026-10-01 — coverage compares prices at the price increment (#2791)
+
+Owner, 2026-10-01: a price match at float precision "does not make any
+sense" for coverage. This supersedes the price half of the 2026-09-30
+amendment's item 1; the share rule is unchanged.
+
+1. **Exact executions explain a cumulative within one price increment.**
+   The set proof (`execution_coverage.py::prove_execution_coverage_set`)
+   still needs `|Q_E − Q_R| < QTY_ATOL`. Its price rule is now item 3's
+   vendor-rounding rule, measured on the order's whole average:
+   `|C_E − C_R| < tick(C_O / Q_O) × Q_O + max(|P_E|, |P_R|) × |Q_E − Q_R|`,
+   where `Q_O` and `C_O` are the order's effective fills and `tick` is
+   `total_price_conflict_atol`.
+   - Why the whole order: a cumulative row is priced on its delta (item 2)
+     from the broker's rounded order average, so it carries that rounding
+     for every share of the order, however few shares the row holds.
+   - The one-to-one operator predicate `exact_replaces_cumulative` uses
+     `tick(p_cumulative)` per share.
+   - Records proven at float precision still replay: the fold also accepts
+     their recorded envelope.
+2. **A real disagreement keeps the broker's total, but every execution is
+   named.** A gap of one increment or more is still refused, and the
+   order-level proof (#2346) closes the episode on quantity alone, as before.
+   When the exacts that proof keeps quarantined hold every share of the
+   order's cumulative-recovery rows
+   (`order_total_retained_exacts_explain_cumulative`), the fee population
+   counts them as the order's executions. Budget admission then proceeds.
+   Account P&L coverage stays incomplete, which marks the bot as needing
+   attention: whose price stands is not settled.

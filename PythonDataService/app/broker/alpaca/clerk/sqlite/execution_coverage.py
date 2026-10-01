@@ -1,12 +1,16 @@
 """Closed proof vocabulary for exact executions that overlap aggregate recovery.
 
-Formula: Q = fsum(qty); C = fsum(qty × price); P = C / Q. The canonical
-  set proof accepts only abs(Q_E - Q_R) < 1e-9 shares,
-  abs(P_E - P_R) < 1e-9 currency/share, and
-  abs(C_E - C_R) <= max(|Q_E|, |Q_R|) × 1e-9
-  + max(|P_E|, |P_R|) × 1e-9 + 1e-18 currency.
+Formula: Q = fsum(qty); C = fsum(qty × price); P = C / Q. The canonical set
+  proof accepts only abs(Q_E - Q_R) < 1e-9 shares and
+  abs(C_E - C_R) < tick(C_O / Q_O) × Q_O + max(|P_E|, |P_R|) × abs(Q_E - Q_R)
+  currency, where Q_O and C_O are the order's effective fills and tick is
+  one valid price increment (total_price_conflict_atol): putting the exacts
+  in place of the cumulative moves the order's average price by less than
+  one increment, beyond the priced share residue the quantity rule accepts.
 Reference: Project-authored execution-coverage contract in PRD #1543, stories
   18, 19, 28, and 33; this is authored project logic, not a reused proof.
+  The price rule is ADR 0036's vendor-rounding rule (2026-09-30 amendment,
+  item 3), applied to coverage on 2026-10-01 (#2791).
 Canonical implementation: this file's prove_execution_coverage_set. The
   direct exact-to-one-cumulative replacement is consumed by the #1554 Clerk
   fold; the existing exact_replaces_cumulative remains the temporary S0
@@ -26,6 +30,7 @@ import json
 import math
 import sqlite3
 from dataclasses import asdict, dataclass, field
+from decimal import Decimal
 from enum import StrEnum
 
 from app.broker.alpaca.clerk.sqlite.facts import (
@@ -42,6 +47,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_CONFLICT_REASON_CODE,
     ExecutionCoverageConflictCause,
 )
+from app.broker.alpaca.marketable_limit import price_increment
 
 #: Numerical-rigor tolerance for an exact slice that replaces an aggregate
 #: recovery row. See ADR 0036, 2026-09-30 amendment, item 1.
@@ -50,8 +56,34 @@ FILL_QTY_EPSILON = 1e-9
 #: Set-proof quantity tolerance in shares. The comparison is intentionally strict.
 QTY_ATOL = 1e-9
 
-#: Set-proof gross-cost tolerance basis in currency units per share.
+#: The per-share price basis of the strict envelope coverage was proven with
+#: before #2791 (:func:`strict_gross_cost_envelope`), kept so those records replay.
 PRICE_ATOL = 1e-9
+
+
+def total_price_conflict_atol(reported_avg_price: float) -> float:
+    """One valid price increment at a reported average, per share (#2460, #2770).
+
+    Formula: ``price_increment(reported_avg_price)``, ``rtol=0`` -- $0.01 at or
+      above $1, $0.0001 below. A same-quantity average-price difference below
+      one valid increment of the reported price cannot be told from vendor
+      rounding; one at or above it is a real economic disagreement. A broker
+      total that disagrees with its recorded fills by that much is recorded
+      as ``EXECUTION_PRICE_CONFLICT``; exact executions that would move their
+      order's average by that much cannot replace its cumulative (#2791).
+    Assumes Alpaca reports a sub-dollar ``filled_avg_price`` to at least
+      $0.0001; a coarser report would read its own rounding as a conflict.
+    Reference: ADR 0036, 2026-09-30 amendment, item 3; the tick rule is
+      Alpaca's price precision (``app/broker/alpaca/marketable_limit.py``).
+    Canonical implementation: this function, on
+      ``marketable_limit.price_increment``.
+    Validated against: tests/broker/alpaca/clerk/sqlite/test_economic_projection.py::
+      test_a_sub_cent_difference_below_one_dollar_is_a_price_conflict,
+      test_a_vendor_rounding_sized_difference_raises_no_conflict and
+      test_the_sweep_keeps_a_sub_dollar_conflict_its_recorded_fills_still_disagree_with;
+      tests/broker/alpaca/clerk/sqlite/test_execution_coverage_set_proof.py.
+    """
+    return float(price_increment(Decimal(str(reported_avg_price))))
 
 
 @dataclass(frozen=True)
@@ -233,11 +265,19 @@ class ExecutionCoverageChainTotalProvenFacts:
 
 @dataclass(frozen=True)
 class ExecutionCoverageSetCandidate:
-    """All immutable observations required for one automatic set-proof attempt."""
+    """All immutable observations required for one automatic set-proof attempt.
+
+    ``order_effective_quantity`` and ``order_effective_gross_cost`` are the
+    order's effective fills before the swap -- its effective exacts and the
+    cumulative-recovery rows -- whose average the swap may move by less than
+    one price increment.
+    """
 
     cumulative_recovery: tuple[CumulativeCoverageObservation, ...]
     prior_quarantined_exact: tuple[ExactCoverageObservation, ...]
     incoming_exact: ExactCoverageObservation
+    order_effective_quantity: float
+    order_effective_gross_cost: float
     active_episode_ids: tuple[str, ...] = ()
     effective_exact_source_ids: frozenset[str] = field(default_factory=frozenset)
     unreadable_source_ids: tuple[str, ...] = ()
@@ -268,9 +308,9 @@ class ExecutionCoverageSetProofRefusalReason(StrEnum):
     NONFINITE_FEE = "nonfinite_fee"
     NONFINITE_GROSS_COST = "nonfinite_gross_cost"
     NONFINITE_AGGREGATE = "nonfinite_aggregate"
+    INVALID_ORDER_TOTAL = "invalid_order_total"
     QUANTITY_MISMATCH = "quantity_mismatch"
     VWAP_MISMATCH = "vwap_mismatch"
-    COST_MISMATCH = "cost_mismatch"
 
 
 @dataclass(frozen=True)
@@ -299,6 +339,12 @@ def prove_execution_coverage_set(
     candidate: ExecutionCoverageSetCandidate,
 ) -> ExecutionCoverageSetProofResult:
     """Prove whether complete cumulative and exact sets carry equal economics.
+
+    Quantities must agree strictly. Prices are compared at Alpaca's price
+    precision, never at float precision (#2791): the cumulative's price comes
+    from the broker's rounded order average, so exact executions explain it
+    when they move the order's average by less than one valid increment
+    (:func:`execution_coverage_gross_cost_tolerance`).
 
     Fees are deliberately absent from the arithmetic because cumulative recovery
     has no fee observation. The success result returns the exact observations
@@ -369,19 +415,29 @@ def prove_execution_coverage_set(
             ExecutionCoverageSetProofRefusalReason.QUANTITY_MISMATCH,
             "Exact and cumulative coverage quantities differ outside the strict share tolerance.",
         )
-    if abs(exact_aggregate.vwap - cumulative_aggregate.vwap) >= PRICE_ATOL:
+    order_quantity = candidate.order_effective_quantity
+    order_gross_cost = candidate.order_effective_gross_cost
+    if (
+        not _is_finite(order_quantity)
+        or not _is_finite(order_gross_cost)
+        or order_quantity <= 0
+        or order_gross_cost < 0
+        or cumulative_aggregate.quantity - order_quantity >= QTY_ATOL
+    ):
         return _set_refusal(
-            ExecutionCoverageSetProofRefusalReason.VWAP_MISMATCH,
-            "Exact and cumulative VWAPs differ outside the strict currency-per-share tolerance.",
+            ExecutionCoverageSetProofRefusalReason.INVALID_ORDER_TOTAL,
+            "The order's effective fills are not a positive total that holds its cumulative recovery.",
         )
     cost_tolerance = execution_coverage_gross_cost_tolerance(
         exact=exact_aggregate,
         cumulative=cumulative_aggregate,
+        order_quantity=order_quantity,
+        order_gross_cost=order_gross_cost,
     )
-    if abs(exact_aggregate.gross_cost - cumulative_aggregate.gross_cost) > cost_tolerance:
+    if not abs(exact_aggregate.gross_cost - cumulative_aggregate.gross_cost) < cost_tolerance:
         return _set_refusal(
-            ExecutionCoverageSetProofRefusalReason.COST_MISMATCH,
-            "Exact and cumulative gross costs differ outside the inclusive currency tolerance.",
+            ExecutionCoverageSetProofRefusalReason.VWAP_MISMATCH,
+            "The exact executions would move the order's average price by one valid increment or more.",
         )
     return ExecutionCoverageSetProofSuccess(
         exact=exact_aggregate,
@@ -501,6 +557,38 @@ def chain_total_proves_coverage(evidence: ChainTotalCoverageEvidence) -> bool:
     return abs(math.fsum(exact) - head_quantity) < QTY_ATOL
 
 
+def order_total_retained_exacts_explain_cumulative(
+    *,
+    retained_quantities: tuple[float, ...],
+    cumulative_quantities: tuple[float, ...],
+) -> bool:
+    """Whether the exacts an order-total proof kept quarantined are every share of the order's cumulative (#2791).
+
+    The order-level proof above closes an episode without moving a fill, so
+    an order whose exacts disagree with its broker total by a price
+    increment or more keeps its cumulative-recovery rows for ever, and no
+    fill names the executions behind them. When the retained exacts hold
+    every share those rows hold, each of those executions is still named:
+    the effective exacts and the retained ones together are the broker's
+    final total. A fee population needs only that: which executions there
+    were, not whose price stands. Quantities only, as in the proof itself.
+
+    Formula: every q finite and > 0
+      ∧ |fsum(q_retained) − fsum(q_cumulative)| < QTY_ATOL (shares, rtol = 0).
+    Reference: Project-authored for issue #2791, on the #2346 order-level
+      proof (:func:`order_total_proves_coverage`).
+    Canonical implementation: this function.
+    Validated against: tests/broker/alpaca/clerk/sqlite/
+      test_bot_order_activity_disagreement.py.
+    """
+    if not retained_quantities or not cumulative_quantities:
+        return False
+    quantities = (*retained_quantities, *cumulative_quantities)
+    if not all(_is_finite(quantity) and quantity > 0 for quantity in quantities):
+        return False
+    return abs(math.fsum(retained_quantities) - math.fsum(cumulative_quantities)) < QTY_ATOL
+
+
 def _validate_set_economics(
     observations: tuple[CumulativeCoverageObservation | ExactCoverageObservation, ...],
 ) -> ExecutionCoverageSetProofRefusal | None:
@@ -550,8 +638,29 @@ def execution_coverage_gross_cost_tolerance(
     *,
     exact: ExecutionCoverageAggregate,
     cumulative: ExecutionCoverageAggregate,
+    order_quantity: float,
+    order_gross_cost: float,
 ) -> float:
-    """Propagate pinned quantity and VWAP error into a gross-cost envelope."""
+    """The gross-cost gap at which exact executions move the order's average by one price increment.
+
+    ``tick(C_O / Q_O) × Q_O``: the cumulative carries the rounding of the
+    broker's order average over every share of the order, however few of them
+    the cumulative rows hold, so the gap is measured on the order's whole
+    average rather than on the rows'. ``max(|P_E|, |P_R|) × |Q_E − Q_R|``
+    prices the share residue, under ``QTY_ATOL``, the quantity rule accepted;
+    with equal quantities it is zero, so a gap of one increment is refused.
+    """
+    return total_price_conflict_atol(order_gross_cost / order_quantity) * order_quantity + max(
+        abs(exact.vwap), abs(cumulative.vwap)
+    ) * abs(exact.quantity - cumulative.quantity)
+
+
+def strict_gross_cost_envelope(
+    *,
+    exact: ExecutionCoverageAggregate,
+    cumulative: ExecutionCoverageAggregate,
+) -> float:
+    """The float-precision envelope coverage was proven with before #2791, kept so those records replay."""
     return (
         max(abs(exact.quantity), abs(cumulative.quantity)) * PRICE_ATOL
         + max(abs(exact.vwap), abs(cumulative.vwap)) * QTY_ATOL
@@ -1107,10 +1216,14 @@ def exact_replaces_cumulative(
 ) -> bool:
     """Temporary S0 one-to-one mirror of the canonical set-proof predicate.
 
-    Formula: exact and cumulative sides/prices/quantities agree within the
-      S0 strict `FILL_QTY_EPSILON` boundary.
+    Formula: same side, |q_cumulative − q_exact| < FILL_QTY_EPSILON shares,
+      and |p_cumulative − p_exact| < tick(p_cumulative) per share
+      (total_price_conflict_atol, #2791). On a cumulative row that holds only
+      part of its order this is stricter than the set proof, which measures
+      the gap on the order's whole average.
     Reference: Project-authored S0 operator contract retained during the
-      execution-coverage migration in PRD #1543.
+      execution-coverage migration in PRD #1543; the price rule is ADR 0036's
+      vendor-rounding rule.
     Canonical implementation: prove_execution_coverage_set in this file; this
       S0 predicate remains only for the shipped operator flow.
     Validated against: tests/broker/alpaca/clerk/sqlite/
@@ -1119,7 +1232,8 @@ def exact_replaces_cumulative(
     return (
         cumulative.side == exact.side
         and abs(cumulative.quantity - exact.slice_qty) < FILL_QTY_EPSILON
-        and abs(cumulative.price - exact.slice_price) < FILL_QTY_EPSILON
+        and _is_finite(cumulative.price)
+        and abs(cumulative.price - exact.slice_price) < total_price_conflict_atol(cumulative.price)
     )
 
 

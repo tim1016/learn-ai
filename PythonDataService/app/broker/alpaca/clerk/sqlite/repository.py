@@ -762,6 +762,38 @@ class ClerkSqliteRepository(
             self.append_transition(transition)
             return "appended"
 
+    def exact_execution_contradicts_record(self, *, order_ref: str, facts: ExecutionSliceFilledFacts) -> bool:
+        """Whether :meth:`append_execution_slice_if_absent` would raise a new conflict on an execution the order holds.
+
+        True when the order holds ``facts``'s execution id with other
+        economics, either as an effective fill that no uncertainty names yet,
+        or as an exact an order-total proof (#2346) kept quarantined. Any
+        other recorded copy, such as a superseded fill, is a duplicate to the
+        append flow. An order an open coverage conflict fences keeps that one
+        (#2791).
+        """
+        with self._write_lock:
+            if active_execution_coverage_conflicts(self._conn, order_ref=order_ref):
+                return False
+            existing = reads.effective_execution_slice(self._conn, facts.execution_id)
+            if existing is not None:
+                return not self._same_execution_slice(
+                    existing, facts=facts, order_ref=order_ref
+                ) and not reads.correction_uncertainty_exists(self._conn, facts.execution_id)
+            if reads.execution_exists(self._conn, facts.execution_id):
+                return False
+            retained = [
+                item.exact_execution
+                for item in order_total_retained_exact_provenance(self._conn, order_ref=order_ref)
+                if item.exact_execution.execution_id == facts.execution_id
+            ]
+            return bool(retained) and not any(
+                self._same_slice_economics(
+                    symbol=item.symbol, side=item.side, qty=item.slice_qty, price=item.slice_price, facts=facts
+                )
+                for item in retained
+            )
+
     def _validated_execution_slice_transition(
         self,
         transition: TransitionInput,

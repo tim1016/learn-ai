@@ -82,6 +82,37 @@ ACTIVITY_EXACT_CONFLICT_COPY = ExactExecutionConflictCopy(
 )
 
 
+def exact_execution_facts(
+    event: BrokerOrderEvent, *, symbol: str, side: str, evidence_source: str
+) -> ExecutionSliceFilledFacts:
+    """The ``EXECUTION_SLICE_FILLED`` facts one exact execution event appends as.
+
+    The event must carry its execution identity, quantity, and price — an
+    exact source that cannot name its slice is a contract violation, not a
+    degraded observation, and fails here rather than folding an aggregate.
+    """
+    if event.execution_id is None:
+        raise ValueError("An exact execution event must carry its execution_id.")
+    if event.quantity is None or event.price is None:
+        raise ValueError(
+            "An exact execution event must include its quantity and price "
+            f"when execution_id is set ({event.execution_id!r})."
+        )
+    if evidence_source not in EXACT_EXECUTION_EVIDENCE_SOURCES:
+        raise ValueError(f"invalid exact-execution evidence source {evidence_source!r}")
+    return ExecutionSliceFilledFacts(
+        execution_id=event.execution_id,
+        symbol=symbol,
+        side=side.upper(),
+        slice_qty=event.quantity,
+        slice_price=event.price,
+        fee=None,
+        fee_fidelity="not_reported",
+        evidence_source=evidence_source,
+        source_event_at_ms=event.occurred_at_ms,
+    )
+
+
 def append_exact_execution_slice(
     repo: ClerkSqliteRepository,
     *,
@@ -106,31 +137,10 @@ def append_exact_execution_slice(
     Returns ``append_execution_slice_if_absent``'s outcome
     (``"appended"``/``"duplicate"``/``"coverage_superseded"``/...), so a
     producer may surface whether its exact evidence replaced legacy coverage.
-    The event must carry its execution identity, quantity, and price — an
-    exact source that cannot name its slice is a contract violation, not a
-    degraded observation, and fails here rather than folding an aggregate.
+    The event must name its slice (:func:`exact_execution_facts`).
     """
-    if event.execution_id is None:
-        raise ValueError("An exact execution event must carry its execution_id.")
-    if event.quantity is None or event.price is None:
-        raise ValueError(
-            "An exact execution event must include its quantity and price "
-            f"when execution_id is set ({event.execution_id!r})."
-        )
-    if evidence_source not in EXACT_EXECUTION_EVIDENCE_SOURCES:
-        raise ValueError(f"invalid exact-execution evidence source {evidence_source!r}")
-    facts = ExecutionSliceFilledFacts(
-        execution_id=event.execution_id,
-        symbol=symbol,
-        side=side.upper(),
-        slice_qty=event.quantity,
-        slice_price=event.price,
-        fee=None,
-        fee_fidelity="not_reported",
-        evidence_source=evidence_source,
-        source_event_at_ms=event.occurred_at_ms,
-    )
-    proof = event.execution_id if proof_reference is None else proof_reference
+    facts = exact_execution_facts(event, symbol=symbol, side=side, evidence_source=evidence_source)
+    proof = facts.execution_id if proof_reference is None else proof_reference
 
     def _execution_transition() -> TransitionInput:
         return TransitionInput(
@@ -164,7 +174,7 @@ def append_exact_execution_slice(
         )
 
     return repo.append_execution_slice_if_absent(
-        execution_id=event.execution_id,
+        execution_id=facts.execution_id,
         order_ref=order_ref,
         build_transition=_execution_transition,
         build_coverage_conflict=_coverage_conflict_transition,

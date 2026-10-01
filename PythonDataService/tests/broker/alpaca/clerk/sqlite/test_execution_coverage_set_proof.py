@@ -24,7 +24,9 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
 
 EXPECTED_QTY_ATOL = 1e-9
-EXPECTED_PRICE_ATOL = 1e-9
+#: One valid price increment: Alpaca prices in cents at or above $1, in $0.0001 below (ADR 0036).
+EXPECTED_TICK_AT_OR_ABOVE_ONE_DOLLAR = 0.01
+EXPECTED_TICK_BELOW_ONE_DOLLAR = 0.0001
 _GOLDEN_FIXTURE_DIRECTORY = (
     Path(__file__).parents[4] / "fixtures/golden/clerk-execution-coverage-set-proof/one_to_one"
 )
@@ -80,14 +82,22 @@ def _candidate(
     cumulative: tuple[CumulativeCoverageObservation, ...] = (_cumulative("recovery-1", 1.0, 10.0),),
     prior: tuple[ExactCoverageObservation, ...] = (),
     incoming: ExactCoverageObservation | None = None,
+    order_effective: tuple[float, float] | None = None,
     active_episode_ids: tuple[str, ...] = (),
     effective_exact_source_ids: frozenset[str] = frozenset(),
     unreadable_source_ids: tuple[str, ...] = (),
 ) -> ExecutionCoverageSetCandidate:
+    """``order_effective`` defaults to an order whose effective fills are its cumulative rows alone."""
+    order_quantity, order_gross_cost = order_effective or (
+        sum(item.quantity for item in cumulative),
+        sum(item.quantity * item.price for item in cumulative),
+    )
     return ExecutionCoverageSetCandidate(
         cumulative_recovery=cumulative,
         prior_quarantined_exact=prior,
         incoming_exact=incoming or _exact("execution-incoming", 1.0, 10.0),
+        order_effective_quantity=order_quantity,
+        order_effective_gross_cost=order_gross_cost,
         active_episode_ids=active_episode_ids,
         effective_exact_source_ids=effective_exact_source_ids,
         unreadable_source_ids=unreadable_source_ids,
@@ -166,11 +176,7 @@ def test_prove_execution_coverage_set_accepts_one_exact_for_one_cumulative() -> 
     assert (result.cumulative.quantity, result.cumulative.gross_cost, result.cumulative.vwap) == expected_cumulative
     assert abs(result.position_delta) < EXPECTED_QTY_ATOL
     assert abs(result.exact.quantity - result.cumulative.quantity) < EXPECTED_QTY_ATOL
-    assert abs(result.exact.gross_cost - result.cumulative.gross_cost) <= (
-        max(abs(result.exact.quantity), abs(result.cumulative.quantity)) * EXPECTED_PRICE_ATOL
-        + max(abs(result.exact.vwap), abs(result.cumulative.vwap)) * EXPECTED_QTY_ATOL
-        + EXPECTED_QTY_ATOL * EXPECTED_PRICE_ATOL
-    )
+    assert abs(result.exact.gross_cost - result.cumulative.gross_cost) < result.gross_cost_tolerance
 
 
 def test_prove_execution_coverage_set_matches_the_one_to_one_golden_fixture() -> None:
@@ -213,7 +219,10 @@ def test_prove_execution_coverage_set_matches_the_one_to_one_golden_fixture() ->
     ("exact_quantity", "exact_price", "cumulative_quantity", "cumulative_price", "cumulative_side"),
     [
         (2.5, 101.25, 2.5, 101.25, "BUY"),
-        (2.5, 101.25, 2.5, 101.250000002, "BUY"),
+        (2.5, 101.25, 2.5, 101.259, "BUY"),
+        (2.5, 101.25, 2.5, 101.261, "BUY"),
+        (2.5, 0.5, 2.5, 0.50009, "BUY"),
+        (2.5, 0.5, 2.5, 0.50011, "BUY"),
         (2.5, 101.25, 2.500000002, 101.25, "BUY"),
         (2.5, 101.25, 2.5, 101.25, "SELL"),
     ],
@@ -352,24 +361,62 @@ def test_prove_execution_coverage_set_pins_strict_quantity_boundary() -> None:
     )
 
 
-def test_prove_execution_coverage_set_pins_strict_vwap_boundary() -> None:
+@pytest.mark.parametrize(
+    ("rest_average", "tick"),
+    [(101.25, EXPECTED_TICK_AT_OR_ABOVE_ONE_DOLLAR), (0.5, EXPECTED_TICK_BELOW_ONE_DOLLAR)],
+)
+def test_prove_execution_coverage_set_reads_a_gap_below_one_price_increment_as_rest_rounding(
+    rest_average: float, tick: float,
+) -> None:
+    """Alpaca rounds an order's average to its price increment; an exact within it is the same execution (#2791)."""
+    within = _candidate(
+        cumulative=(_cumulative("recovery-1", 5.0, rest_average),),
+        incoming=_exact("execution-incoming", 5.0, rest_average + 0.9 * tick),
+    )
+    outside = replace(within, incoming_exact=_exact("execution-incoming", 5.0, rest_average + 1.1 * tick))
+
+    _assert_success(prove_execution_coverage_set(within))
+    _assert_refusal(prove_execution_coverage_set(outside), ExecutionCoverageSetProofRefusalReason.VWAP_MISMATCH)
+
+
+def test_prove_execution_coverage_set_refuses_a_gap_of_exactly_one_cent() -> None:
+    """At or above one increment the gap is a real disagreement, not rounding (ADR 0036)."""
     candidate = _candidate(
-        cumulative=(_cumulative("recovery-1", 1.0, 0.0),),
-        incoming=_exact("execution-incoming", 1.0, EXPECTED_PRICE_ATOL),
+        cumulative=(_cumulative("recovery-1", 5.0, 100.0),),
+        incoming=_exact("execution-incoming", 5.0, 100.01),
     )
 
-    _assert_refusal(
-        prove_execution_coverage_set(candidate),
-        ExecutionCoverageSetProofRefusalReason.VWAP_MISMATCH,
-    )
+    _assert_refusal(prove_execution_coverage_set(candidate), ExecutionCoverageSetProofRefusalReason.VWAP_MISMATCH)
 
-    outside = replace(
-        candidate,
-        incoming_exact=_exact("execution-incoming", 1.0, math.nextafter(EXPECTED_PRICE_ATOL, math.inf)),
+
+def test_prove_execution_coverage_set_measures_the_gap_on_the_orders_whole_average() -> None:
+    """The stream recorded 95 of 100 shares; REST's cumulative holds the other 5 at a delta price.
+
+    The broker's average is rounded over all 100 shares, so the 5-share
+    delta carries 100 shares' rounding: its exact is 0.18 a share away, yet
+    swapping it in moves the order's average by 0.009, under one cent.
+    """
+    rounded_delta = _candidate(
+        cumulative=(_cumulative("recovery-1", 5.0, 100.18),),
+        incoming=_exact("execution-incoming", 5.0, 100.0),
+        order_effective=(100.0, 95 * 100.0 + 5 * 100.18),
     )
+    beyond = replace(rounded_delta, incoming_exact=_exact("execution-incoming", 5.0, 99.78))
+
+    _assert_success(prove_execution_coverage_set(rounded_delta))
+    _assert_refusal(prove_execution_coverage_set(beyond), ExecutionCoverageSetProofRefusalReason.VWAP_MISMATCH)
+
+
+@pytest.mark.parametrize(
+    "order_effective",
+    [(0.0, 0.0), (math.nan, 10.0), (1.0, math.inf), (1.0, -1.0), (0.5, 5.0)],
+)
+def test_prove_execution_coverage_set_refuses_an_order_total_that_cannot_hold_its_cumulative(
+    order_effective: tuple[float, float],
+) -> None:
     _assert_refusal(
-        prove_execution_coverage_set(outside),
-        ExecutionCoverageSetProofRefusalReason.VWAP_MISMATCH,
+        prove_execution_coverage_set(_candidate(order_effective=order_effective)),
+        ExecutionCoverageSetProofRefusalReason.INVALID_ORDER_TOTAL,
     )
 
 
@@ -382,25 +429,19 @@ def test_prove_execution_coverage_set_accepts_high_price_sub_quantity_tolerance_
     _assert_success(prove_execution_coverage_set(candidate))
 
 
-def test_prove_execution_coverage_set_records_the_propagated_cost_envelope() -> None:
+def test_prove_execution_coverage_set_records_one_increment_of_the_order_plus_the_priced_share_residue() -> None:
     candidate = _candidate(
-        cumulative=(
-            _cumulative(
-                "recovery-1",
-                1.0 + EXPECTED_QTY_ATOL / 2,
-                1_000_000.0 + EXPECTED_PRICE_ATOL / 2,
-            ),
-        ),
+        cumulative=(_cumulative("recovery-1", 1.0 + EXPECTED_QTY_ATOL / 2, 1_000_000.004),),
         incoming=_exact("execution-incoming", 1.0, 1_000_000.0),
+        order_effective=(4.0 + EXPECTED_QTY_ATOL / 2, 4_000_000.004),
     )
 
     result = _assert_success(prove_execution_coverage_set(candidate))
 
     assert result.gross_cost_tolerance == pytest.approx(
-        max(abs(result.exact.quantity), abs(result.cumulative.quantity)) * EXPECTED_PRICE_ATOL
-        + max(abs(result.exact.vwap), abs(result.cumulative.vwap)) * EXPECTED_QTY_ATOL
-        + EXPECTED_QTY_ATOL * EXPECTED_PRICE_ATOL,
-        abs=1e-18,
+        EXPECTED_TICK_AT_OR_ABOVE_ONE_DOLLAR * (4.0 + EXPECTED_QTY_ATOL / 2)
+        + max(abs(result.exact.vwap), abs(result.cumulative.vwap)) * abs(result.position_delta),
+        abs=1e-12,
         rel=0,
     )
 

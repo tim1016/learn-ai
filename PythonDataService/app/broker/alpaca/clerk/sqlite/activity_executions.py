@@ -17,6 +17,13 @@ the order does not account for, every execution it names for the order goes
 through the append flow together, which dedups what the order holds and
 fails closed on one the activity contradicts.
 
+An activity can also contradict an execution the order accounts for: the
+same execution id with another quantity or price. That batch goes through the
+append flow too, past the caller's total gate, so the flow raises the
+coverage conflict once and the operator sees it (#2791). A contradiction the
+flow would not raise again -- one an uncertainty already names, or on an
+order an open coverage conflict fences -- is not one here.
+
 That id bridge has no captured Alpaca receipt yet, and a wrong one would
 credit one execution twice under two ids. So an order's executions are
 recorded together or not at all, and only while its exact total stays within
@@ -24,9 +31,10 @@ the quantity the caller names -- no order executes more. A batch past it
 records nothing and raises ``EXECUTION_COVERAGE_CONFLICT`` in the subject's
 words; an order already fenced by an open coverage conflict keeps that one.
 
-A row that cannot be read as an exact execution of the order is left out,
-never folded, and reported once per process: it is immutable evidence, and
-the bot recovery reads it again on every tick.
+Recovery reads the same immutable evidence again on every pass, so what it
+cannot act on is reported once per process: a row that cannot be read as an
+exact execution of the order (left out, never folded), and a refusal past
+the order's quantity for the same evidence.
 """
 
 from __future__ import annotations
@@ -44,6 +52,7 @@ from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
     ExactExecutionConflictCopy,
     append_exact_execution_slice,
     exact_execution_coverage_conflict,
+    exact_execution_facts,
 )
 from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     FILL_QTY_EPSILON,
@@ -57,6 +66,8 @@ from app.broker.contract.models import BrokerActivity, BrokerOrderEvent, BrokerO
 logger = logging.getLogger(__name__)
 
 _EXECUTION_ACTIVITY_TYPES = frozenset({"FILL", "PARTIAL_FILL"})
+
+_EVIDENCE_SOURCE = "activity_recovery"
 
 #: An activity's side, as the leg spells it. A sale from a flat or short
 #: position is reported ``sell_short``; it is still the leg's sell.
@@ -84,7 +95,7 @@ class ActivityRecoverySubject:
     """Whose order a recording credits.
 
     ``name`` prefixes its log actions -- ``<name>_execution_recovered``,
-    ``<name>_execution_unreadable`` and
+    ``<name>_execution_unreadable``, ``<name>_execution_contradicted`` and
     ``<name>_recovered_executions_exceed_order`` -- and
     ``over_quantity_copy`` words its refusal.
     """
@@ -105,18 +116,23 @@ class RecordedActivityExecutions:
     grew: bool = False
 
 
-#: Each account's activity rows already reported unreadable, as (order ref,
-#: activity id). In memory only: a restart reports each of them once more.
-_REPORTED_UNREADABLE: WeakKeyDictionary[ClerkSqliteRepository, set[tuple[str, str]]] = WeakKeyDictionary()
-_REPORTED_UNREADABLE_GUARD = threading.Lock()
+#: What each account's recovery already reported, by the report's own key.
+#: In memory only: a restart reports each of them once more.
+_REPORTED: WeakKeyDictionary[ClerkSqliteRepository, set[tuple[object, ...]]] = WeakKeyDictionary()
+_REPORTED_GUARD = threading.Lock()
 
 
-def _first_report_of_unreadable(repo: ClerkSqliteRepository, *, order_ref: str, activity_id: str) -> bool:
-    with _REPORTED_UNREADABLE_GUARD:
-        reported = _REPORTED_UNREADABLE.setdefault(repo, set())
-        if (order_ref, activity_id) in reported:
+def first_report(repo: ClerkSqliteRepository, key: tuple[object, ...]) -> bool:
+    """Whether this process reports ``key`` for ``repo``'s account for the first time; it is then marked reported.
+
+    Recovery reads the same immutable evidence on every pass, so a report
+    about that evidence is made once, not once a pass.
+    """
+    with _REPORTED_GUARD:
+        reported = _REPORTED.setdefault(repo, set())
+        if key in reported:
             return False
-        reported.add((order_ref, activity_id))
+        reported.add(key)
         return True
 
 
@@ -139,7 +155,8 @@ def record_activity_executions(
     under the broker order it names. ``broker_order_id`` is the order whose
     quantity ``quantity_cap`` is, named on the refusal's log. With
     ``require_total``, a batch is recorded only once the order's exact total
-    would equal the shares its effective fills hold.
+    would equal the shares its effective fills hold -- unless it contradicts
+    an execution the order accounts for, which the append flow must raise.
 
     Checked and appended under the repository's write lock, so no stream
     slice lands between the check and the appends.
@@ -168,12 +185,24 @@ def record_activity_executions(
                     recovered_quantity=recovered_quantity,
                 ),
             )
-        if not unrecorded:
+        contradicted = _contradicted_executions(
+            repo, order_ref=order_ref, leg=leg, batch=batch, accounted_ids=accounted_ids
+        )
+        if not unrecorded and not contradicted:
             return RecordedActivityExecutions()
-        if require_total:
+        if require_total and not contradicted:
             filled_quantity, _ = repo.effective_fill_totals_for_order(order_ref)
             if abs(exact_quantity + recovered_quantity - filled_quantity) >= FILL_QTY_EPSILON:
                 return RecordedActivityExecutions()
+        if contradicted:
+            logger.warning(
+                "Alpaca's account activity contradicts an execution the order records",
+                extra={
+                    "action": f"{subject.name}_execution_contradicted",
+                    "order_ref": order_ref,
+                    "execution_ids": contradicted,
+                },
+            )
         grew = False
         for fill, event in batch:
             executed_on = (fill.native_order_id or "").strip()
@@ -185,7 +214,7 @@ def record_activity_executions(
                 broker_order_id=executed_on,
                 order_ref=order_ref,
                 owner=owner,
-                evidence_source="activity_recovery",
+                evidence_source=_EVIDENCE_SOURCE,
                 conflict_copy=ACTIVITY_EXACT_CONFLICT_COPY,
                 proof_reference=fill.activity_id,
                 extra_conflict_evidence_refs=[fill.activity_id],
@@ -223,7 +252,7 @@ def _executions_of_order(
             continue
         event = exact_execution_of_activity(fill, leg=leg)
         if event is None:
-            if _first_report_of_unreadable(repo, order_ref=order_ref, activity_id=fill.activity_id):
+            if first_report(repo, (f"{subject.name}_execution_unreadable", order_ref, fill.activity_id)):
                 logger.warning(
                     "An Alpaca execution could not be read as an exact execution of its order",
                     extra={
@@ -236,6 +265,28 @@ def _executions_of_order(
             continue
         executions.append((fill, event))
     return executions
+
+
+def _contradicted_executions(
+    repo: ClerkSqliteRepository,
+    *,
+    order_ref: str,
+    leg: BrokerOrderLeg,
+    batch: list[tuple[BrokerActivity, BrokerOrderEvent]],
+    accounted_ids: frozenset[str],
+) -> list[str]:
+    """The executions the order accounts for whose activity the append flow would raise as a conflict (#2791)."""
+    return [
+        event.execution_id
+        for _, event in batch
+        if event.execution_id in accounted_ids
+        and repo.exact_execution_contradicts_record(
+            order_ref=order_ref,
+            facts=exact_execution_facts(
+                event, symbol=leg.symbol, side=leg.side.value, evidence_source=_EVIDENCE_SOURCE
+            ),
+        )
+    ]
 
 
 def _accounted_exacts(repo: ClerkSqliteRepository, *, order_ref: str) -> tuple[frozenset[str], float]:
@@ -277,20 +328,25 @@ def _refuse_over_quantity(
 
     The order's coverage conflict is raised once, naming the batch's first
     execution and every activity in it; an order already fenced by an open
-    coverage conflict keeps that one.
+    coverage conflict keeps that one. The refusal is logged once per
+    process for the same evidence, so an order whose accounted executions
+    already exceed its quantity is named once, not on every pass.
     """
-    logger.warning(
-        "Executions recovered for an order would exceed the shares it asked for",
-        extra={
-            "action": f"{subject.name}_recovered_executions_exceed_order",
-            "order_ref": order_ref,
-            "broker_order_id": broker_order_id,
-            "order_quantity": quantity_cap,
-            "exact_quantity": exact_quantity,
-            "recovered_quantity": recovered_quantity,
-            "activity_ids": [fill.activity_id for fill, _ in executions],
-        },
-    )
+    activity_ids = [fill.activity_id for fill, _ in executions]
+    action = f"{subject.name}_recovered_executions_exceed_order"
+    if first_report(repo, (action, order_ref, quantity_cap, exact_quantity, *activity_ids)):
+        logger.warning(
+            "Executions recovered for an order would exceed the shares it asked for",
+            extra={
+                "action": action,
+                "order_ref": order_ref,
+                "broker_order_id": broker_order_id,
+                "order_quantity": quantity_cap,
+                "exact_quantity": exact_quantity,
+                "recovered_quantity": recovered_quantity,
+                "activity_ids": activity_ids,
+            },
+        )
     if not executions or active_execution_coverage_conflicts(repo._conn, order_ref=order_ref):
         return False
     fill, event = executions[0]
@@ -335,5 +391,6 @@ __all__ = [
     "ActivityRecoverySubject",
     "RecordedActivityExecutions",
     "exact_execution_of_activity",
+    "first_report",
     "record_activity_executions",
 ]

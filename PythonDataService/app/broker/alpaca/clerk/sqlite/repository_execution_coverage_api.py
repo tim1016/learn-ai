@@ -143,6 +143,7 @@ class ClerkSqliteRepositoryExecutionCoverageApi:
                 cumulative=cumulative,
                 prior=prior,
                 exact=facts,
+                order_effective=reads.effective_fill_totals_for_order(self._conn, exact_transition.order_ref),
                 effective_exact_source_ids=effective_exact_execution_ids_for_order(
                     self._conn,
                     order_ref=exact_transition.order_ref,
@@ -212,6 +213,7 @@ class ClerkSqliteRepositoryExecutionCoverageApi:
                 cumulative=cumulative,
                 prior=prior,
                 exact=facts,
+                order_effective=reads.effective_fill_totals_for_order(self._conn, exact_transition.order_ref),
                 active_episode_ids=(conflict.uncertainty_id,),
                 effective_exact_source_ids=effective_exact_ids,
                 unreadable_source_ids=unreadable_quarantine_source_ids_for_order(

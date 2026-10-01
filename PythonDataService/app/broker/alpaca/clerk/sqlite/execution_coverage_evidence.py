@@ -310,11 +310,17 @@ def execution_coverage_candidate(
     cumulative: tuple[CumulativeRecoveryFill, ...],
     prior: tuple[ExecutionCoverageExactProvenance, ...],
     exact: ExecutionSliceFilledFacts,
+    order_effective: tuple[float, float],
     active_episode_ids: tuple[str, ...] = (),
     effective_exact_source_ids: frozenset[str] = frozenset(),
     unreadable_source_ids: tuple[str, ...] = (),
 ) -> ExecutionCoverageSetCandidate:
-    """Map current rows and retained exact custody evidence into set proof input."""
+    """Map current rows and retained exact custody evidence into set proof input.
+
+    ``order_effective`` is the order's effective ``(quantity, gross cost)``,
+    as :func:`reads.effective_fill_totals_for_order` reads it before the swap.
+    """
+    order_effective_quantity, order_effective_gross_cost = order_effective
     return ExecutionCoverageSetCandidate(
         cumulative_recovery=tuple(
             CumulativeCoverageObservation(
@@ -349,6 +355,8 @@ def execution_coverage_candidate(
             price=exact.slice_price,
             fee=exact.fee,
         ),
+        order_effective_quantity=order_effective_quantity,
+        order_effective_gross_cost=order_effective_gross_cost,
         active_episode_ids=active_episode_ids,
         effective_exact_source_ids=effective_exact_source_ids,
         unreadable_source_ids=unreadable_source_ids,

@@ -2,7 +2,8 @@
 
 Formula: ``Δposition = 0``. The current cumulative contribution already owns
 the attributed quantity, so this fold swaps only its rebuildable ``fills``
-representation after rerunning the canonical set proof.
+representation after rerunning the canonical set proof. Prices move to the
+exacts', within one price increment of the order's average (#2791).
 Reference: PRD #1543 stories 19 and 33; issues #1554 and #1557.
 Canonical implementation: execution_coverage.prove_execution_coverage_set.
 Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
@@ -31,6 +32,7 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
     chain_total_proves_coverage,
     cumulative_recovery_fills_for_order,
     prove_execution_coverage_set,
+    strict_gross_cost_envelope,
     validate_execution_coverage_chain_total_proven_facts,
     validate_execution_coverage_superseded_facts,
 )
@@ -146,6 +148,7 @@ def fold_execution_coverage_superseded(
             cumulative=cumulative_for_proof,
             prior=tuple(facts.prior_exact_observations),
             exact=exact,
+            order_effective=reads.effective_fill_totals_for_order(conn, facts.order_ref),
             active_episode_ids=tuple(item.uncertainty_id for item in active),
             effective_exact_source_ids=effective_exact_execution_ids_for_order(conn, order_ref=facts.order_ref),
             unreadable_source_ids=unreadable_quarantine_source_ids_for_order(conn, order_ref=facts.order_ref),
@@ -153,11 +156,15 @@ def fold_execution_coverage_superseded(
     )
     if not isinstance(proof, ExecutionCoverageSetProofSuccess):
         raise ValueError("coverage supersession proof no longer matches immutable evidence")
-    accepted_cost_tolerances = {proof.gross_cost_tolerance}
+    # Records before #2791 were proven at float precision and carry that
+    # envelope: #1557's propagated quantity-plus-VWAP tolerance, or #1554's
+    # direct-only one for an unconflicted record. Each still proves under
+    # the price-increment rule, so it replays.
+    accepted_cost_tolerances = {
+        proof.gross_cost_tolerance,
+        strict_gross_cost_envelope(exact=proof.exact, cumulative=proof.cumulative),
+    }
     if facts.resolved_uncertainty_id is None:
-        # #1554 records used the then-pinned direct-only envelope. Preserve
-        # their replayability while accumulated records use #1557's propagated
-        # quantity-plus-VWAP tolerance.
         accepted_cost_tolerances.add(max(proof.exact.quantity, proof.cumulative.quantity) * PRICE_ATOL)
     if (
         facts.quantity_tolerance != QTY_ATOL
