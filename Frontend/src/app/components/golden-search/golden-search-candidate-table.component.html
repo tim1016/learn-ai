@@ -15,15 +15,15 @@
               <small>{{ row.origin }}@if (row.sameAs.length > 0) { · same settings as {{ row.sameAs.join(' and ') }}}</small>
             </span>
           </button>
-          @for (flag of row.otherFlags; track flag.code) { <small class="flag">{{ flag.text }}</small> }
+          @for (flag of row.otherFlags; track $index) { <small class="flag">{{ flag.text }}</small> }
           @if (row.failure; as failure) { <small class="flag flag--bad">Development run failed — {{ failure }}</small> }
         </th>
         <td role="cell" class="num" data-label="Net return">{{ row.netReturn }}</td>
         <td role="cell" class="num" data-label="Worst fall" [class.warn]="row.drawdownFlags.length > 0">
-          <span>{{ row.worstFall }}@for (flag of row.drawdownFlags; track flag.code) { <small>{{ flag.text }}</small> }</span>
+          <span>{{ row.worstFall }}@for (flag of row.drawdownFlags; track $index) { <small>{{ flag.text }}</small> }</span>
         </td>
         <td role="cell" class="num" data-label="Trades" [class.warn]="row.tradeFlags.length > 0">
-          <span>{{ row.trades }}@for (flag of row.tradeFlags; track flag.code) { <small>{{ flag.text }}</small> }</span>
+          <span>{{ row.trades }}@for (flag of row.tradeFlags; track $index) { <small>{{ flag.text }}</small> }</span>
         </td>
         <td role="cell" class="num" data-label="Sharpe">{{ row.sharpe }}</td>
       </tr>

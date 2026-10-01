@@ -10,7 +10,13 @@ import type { LinkedFoldReturn, StrategyCapability, StudyDetail } from './golden
 interface LinkedRow extends LinkedFoldReturn {
   /** The frozen incumbent's linked return through the same fold; null once its line is broken. */
   readonly benchmark: number | null;
+  /** Why each null is null: this fold has no test result, or an earlier fold broke the line. */
+  readonly linkedGap: string;
+  readonly benchmarkGap: string;
 }
+
+const FOLD_MISSING = 'Fold missing';
+const LINE_BROKEN_EARLIER = 'Line broken by an earlier missing fold';
 
 /**
  * The Test over time step (#2696): each fold re-ran the frozen procedure on
@@ -46,7 +52,16 @@ export class GoldenSearchTestStepComponent {
     const validation = this.study().results.validation;
     if (validation === null) return [];
     const benchmark = new Map(validation.incumbent_linked.map((point) => [point.fold_index, point.linked_return]));
-    return validation.linked.map((point) => ({ ...point, benchmark: benchmark.get(point.fold_index) ?? null }));
+    const folds = new Map(validation.folds.map((fold) => [fold.fold_index, fold]));
+    return validation.linked.map((point) => {
+      const fold = folds.get(point.fold_index);
+      return {
+        ...point,
+        benchmark: benchmark.get(point.fold_index) ?? null,
+        linkedGap: fold?.test_metrics ? LINE_BROKEN_EARLIER : FOLD_MISSING,
+        benchmarkGap: fold?.incumbent_test_metrics ? LINE_BROKEN_EARLIER : FOLD_MISSING,
+      };
+    });
   });
   protected readonly pending = computed(() =>
     this.study().state === 'validation_running'

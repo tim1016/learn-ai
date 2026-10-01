@@ -38,8 +38,8 @@
               <tr>
                 <th scope="row">{{ point.fold_index + 1 }}</th>
                 <td><app-timestamp-display [value]="point.test_end_ms - 1" mode="date-et" /></td>
-                <td class="num">{{ point.linked_return === null ? 'Line broken — fold missing' : (point.linked_return | percent: '1.2-2') }}</td>
-                <td class="num">{{ point.benchmark === null ? 'Line broken — fold missing' : (point.benchmark | percent: '1.2-2') }}</td>
+                <td class="num">{{ point.linked_return === null ? point.linkedGap : (point.linked_return | percent: '1.2-2') }}</td>
+                <td class="num">{{ point.benchmark === null ? point.benchmarkGap : (point.benchmark | percent: '1.2-2') }}</td>
               </tr>
             }
           </tbody>

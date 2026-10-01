@@ -48,7 +48,7 @@ describe('GoldenSearchTestStepComponent', () => {
 
     const linked = within(screen.getByRole('table', { name: /linked test-period return by fold/i })).getAllByRole('row');
     expect(linked[1].textContent).toMatch(/2\.10%\s*0\.70%/);
-    expect(linked[2].textContent).toMatch(/Line broken — fold missing\s*0\.30%/);
+    expect(linked[2].textContent).toMatch(/Fold missing\s*0\.30%/);
   });
 
   it('reads a key the canonical point omits as its declared default, so an explicit default is no change', async () => {
@@ -83,12 +83,29 @@ describe('GoldenSearchTestStepComponent', () => {
 
     const table = screen.getByRole('table', { name: /linked test-period return by fold/i });
     expect(within(table).getAllByRole('row')[1].textContent).toContain('2.10%');
-    expect(within(table).getAllByRole('row')[2].textContent).toContain('Line broken — fold missing');
+    expect(within(table).getAllByRole('row')[2].textContent).toContain('Fold missing');
     const svg = view.container.querySelector('app-golden-search-linked-line svg');
     expect(svg?.getAttribute('aria-hidden')).toBe('true');
     expect(svg?.querySelectorAll('path.line')).toHaveLength(0);
     expect(svg?.querySelectorAll('circle')).toHaveLength(1);
     expect(svg?.querySelectorAll('path.benchmark')).toHaveLength(1);
+  });
+
+  it('names the missing fold, and says a later completed fold is cut off by it rather than missing itself', async () => {
+    const base = validationView();
+    const [completed, failed] = base.folds;
+    // The first fold failed; the second completed but sits after the break.
+    const folds = [
+      { ...failed, fold_index: 0, test_end_ms: completed.test_end_ms },
+      { ...completed, fold_index: 1, test_end_ms: failed.test_end_ms },
+    ];
+    const linked = folds.map((fold) => ({ fold_index: fold.fold_index, test_end_ms: fold.test_end_ms, linked_return: null }));
+    await renderStep(withValidation({ ...base, folds, linked }));
+
+    const rows = within(screen.getByRole('table', { name: /linked test-period return by fold/i })).getAllByRole('row');
+    expect(rows[1].textContent).toContain('Fold missing');
+    expect(rows[2].textContent).toContain('Line broken by an earlier missing fold');
+    expect(rows[2].textContent).not.toContain('Fold missing');
   });
 
   it('draws one unbroken segment when every fold has a linked value', async () => {

@@ -1,7 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 
-import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { knobsByName, pointEntries } from './golden-search-display';
 import { GoldenSearchMetricsComponent } from './golden-search-metrics.component';
 import { GoldenSearchProcedurePathComponent } from './golden-search-procedure-path.component';
@@ -17,7 +16,7 @@ import type { GoldenSearchMethod, ProcedureView, StrategyCapability } from './go
  */
 @Component({
   selector: 'app-golden-search-procedure',
-  imports: [DecimalPipe, GoldenSearchMetricsComponent, GoldenSearchProcedurePathComponent, ReceiptLabelPipe],
+  imports: [DecimalPipe, GoldenSearchMetricsComponent, GoldenSearchProcedurePathComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-procedure.component.html',
   styleUrl: './golden-search-procedure.component.scss',

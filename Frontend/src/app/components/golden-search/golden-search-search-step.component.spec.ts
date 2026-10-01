@@ -47,7 +47,7 @@ describe('GoldenSearchSearchStepComponent', () => {
     await renderStep(studyDetail('awaiting_validation'));
     const allPeriod = screen.getByRole('region', { name: 'All-period search' });
 
-    expect(within(allPeriod).getByText(/stopped: no improvement/i).parentElement?.textContent).toContain('A full pass moved no knob');
+    expect(within(allPeriod).getByText('A full pass moved no knob, so the search kept its last settings.')).not.toBeNull();
     expect(within(allPeriod).getByRole('note').textContent).toContain('RSI upper gate ended at the edge of its searched range');
   });
 
@@ -67,7 +67,7 @@ describe('GoldenSearchSearchStepComponent', () => {
 
     const recent = screen.getByRole('region', { name: 'Recent window' });
     expect(recent.textContent).toContain('last 6 months of development');
-    expect(within(recent).getByText(/stopped: pass limit/i)).not.toBeNull();
+    expect(within(recent).getByText('The pass limit was reached while knobs still moved.')).not.toBeNull();
   });
 
   it('says a Grid study has no path rather than inventing one, and shows a failed winner run as failed', async () => {

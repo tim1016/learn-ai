@@ -31,7 +31,7 @@
     <p class="muted">{{ passes() }} “No improvement” describes the moves tested, not the best configuration everywhere.</p>
   }
 
-  <p class="stop"><strong>Stopped: {{ p.stop_reason | receiptLabel }}.</strong> {{ p.stop_explanation }}</p>
+  <p class="stop"><strong>{{ p.stop_explanation }}</strong></p>
   @for (label of edgeHits(); track label) {
     <p class="edge" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i> {{ label }} ended at the edge of its searched range — a better setting may lie outside it.</p>
   }
