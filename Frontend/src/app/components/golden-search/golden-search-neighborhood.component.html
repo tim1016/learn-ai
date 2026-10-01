@@ -1,0 +1,45 @@
+@if (view() === 'neighbors') {
+  <h3>Nearby settings</h3>
+  <p class="muted">{{ candidateLabel() }} with one knob moved one step either side; everything else held.</p>
+  @for (table of knobTables(); track table.knob) {
+    <div class="table-wrap" role="region" tabindex="0" [attr.aria-label]="'Neighbors on ' + table.label">
+      <table>
+        <caption>{{ table.label }}</caption>
+        <thead><tr><th scope="col">Value</th><th scope="col">Status</th><th scope="col" class="num">Net return</th><th scope="col" class="num">Worst fall</th><th scope="col" class="num">Trades</th><th scope="col" class="num">Sharpe</th></tr></thead>
+        <tbody>
+          @for (row of table.rows; track row.value) {
+            <tr>
+              <th scope="row">{{ row.value }}</th>
+              <td>@if (row.center) { <strong>{{ row.status }}</strong> } @else { {{ row.status }} }@if (row.reason) { <span class="muted"> — {{ row.reason }}</span> }</td>
+              <td class="num">{{ row.netReturn }}</td><td class="num">{{ row.worstFall }}</td><td class="num">{{ row.trades }}</td><td class="num">{{ row.sharpe }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  } @empty {
+    <p class="muted">No neighbor audit was recorded for this candidate.</p>
+  }
+  <p class="caption">A good neighborhood is a local observation on development data, not a probability that the settings will keep working.</p>
+} @else {
+  <h3>Cost stress</h3>
+  <p class="muted">{{ candidateLabel() }} rerun in the engine under each predeclared cost scenario.</p>
+  @if (stressRows().length > 0) {
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Cost stress">
+      <table>
+        <caption class="sr-only">Cost stress for {{ candidateLabel() }}</caption>
+        <thead><tr><th scope="col">Scenario</th><th scope="col" class="num">Net return</th><th scope="col" class="num">Worst fall</th><th scope="col" class="num">Trades</th><th scope="col" class="num">Sharpe</th></tr></thead>
+        <tbody>
+          @for (row of stressRows(); track row.key) {
+            <tr>
+              <th scope="row">{{ row.label }}@if (row.failed) { <span class="loss"> — run failed: {{ row.failed }}</span> }</th>
+              <td class="num">{{ row.netReturn }}</td><td class="num">{{ row.worstFall }}</td><td class="num">{{ row.trades }}</td><td class="num">{{ row.sharpe }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  } @else {
+    <p class="muted">No stress run was recorded for this candidate.</p>
+  }
+}

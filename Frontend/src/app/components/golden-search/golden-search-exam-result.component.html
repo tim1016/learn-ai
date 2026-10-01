@@ -1,0 +1,48 @@
+@let s = study();
+@let e = exam();
+<section class="panel" aria-label="Final test result">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col"><app-timestamp-display [value]="e.window.start_ms" mode="date-et" /> – <app-timestamp-display [value]="e.window.end_ms - 1" mode="date-et" /></th>
+          <th scope="col" class="num">Net return</th><th scope="col" class="num">Worst fall</th><th scope="col" class="num">Trades</th><th scope="col" class="num">Sharpe</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (row of rows(); track row.key) {
+          <tr [class.selected]="row.selected">
+            <th scope="row">{{ row.label }}@if (row.failure) { <small class="bad">{{ row.failure }}</small> }</th>
+            <td class="num" data-label="Net return">{{ row.netReturn }}</td><td class="num" data-label="Worst fall">{{ row.worstFall }}</td>
+            <td class="num" data-label="Trades">{{ row.trades }}</td><td class="num" data-label="Sharpe">{{ row.sharpe }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+  <p class="caption">${{ s.scope.capital | number: '1.0-0' }} frozen starting capital · {{ s.scope.costs_sentence }}.</p>
+  @if (e.checks.length > 0) {
+    <ul class="checks" aria-label="Final-test checks">
+      @for (check of e.checks; track check.code) {
+        <li [attr.data-status]="check.status"><strong>{{ checkWords[check.status] }}</strong> · {{ check.label }} — {{ check.detail }}</li>
+      }
+    </ul>
+  }
+  @if (retention(); as kept) {
+    <p class="caption">Retention of the development {{ s.protocol.policy.objective | receiptLabel }}: {{ kept }} — descriptive only, never a check.</p>
+  }
+</section>
+
+<div class="proof">
+  @for (row of evidence(); track row.title) {
+    <section class="evidence" [attr.aria-label]="row.title">
+      <h3>{{ row.title }}</h3>
+      <span class="chip" [attr.data-tone]="row.tone">{{ row.chip }}</span>
+      <small>{{ row.detail }}</small>
+    </section>
+  }
+</div>
+
+@if (proofFailure(); as reason) {
+  <p class="alert" role="alert"><strong>Qualification could not be verified.</strong> {{ reason }} Research override cannot bypass this failure; the existing default is unchanged.</p>
+}

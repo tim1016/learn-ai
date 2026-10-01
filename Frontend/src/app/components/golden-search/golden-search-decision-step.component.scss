@@ -1,0 +1,14 @@
+:host { display: block; min-width: 0; }
+p { margin: 0; }
+.pending { display: grid; gap: var(--space-3); justify-items: start; color: var(--text-secondary); font-size: var(--fs-sm); }
+.running { background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-4); font-size: var(--fs-sm); }
+.review { display: grid; gap: var(--space-4); min-width: 0; }
+.finished { display: grid; grid-template-columns: 2.6rem minmax(0, 1fr); gap: var(--space-4); border: 1px solid var(--border-light); background: var(--bg-surface); border-radius: var(--radius); padding: var(--space-5); }
+.icon { display: grid; place-items: center; width: 2.6rem; height: 2.6rem; border-radius: 50%; background: var(--bg-elevated); color: var(--bull); }
+.body { display: grid; gap: var(--space-2); justify-items: start; font-size: var(--fs-sm); }
+.badge { font-size: var(--fs-xxs); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); background: var(--bg-elevated); color: var(--text-secondary); }
+.note { color: var(--text-secondary); }
+
+@media (max-width: 680px) {
+  .finished { grid-template-columns: minmax(0, 1fr); padding: var(--space-4); }
+}

@@ -37,6 +37,18 @@ describe('GoldenSearchService', () => {
     expect(req.request.params.get('symbol')).toBe('SPY');
     req.flush({ ...protocol(), incumbent_label: 'Registry', exposure: preflight().exposure });
     await expect(defaults).resolves.toMatchObject({ incumbent_label: 'Registry' });
+    expect(req.request.params.has('final_months')).toBe(false);
+  });
+
+  it('asks the server to lay the dates out for the chosen final-test and fold months', async () => {
+    const defaults = service.defaults('ema_crossover_signal', 'SPY', { final_months: 4, training_months: 9, test_months: 3 });
+    const req = http.expectOne((r) => r.url === `${BASE}/defaults`);
+    expect(req.request.params.get('final_months')).toBe('4');
+    expect(req.request.params.get('training_months')).toBe('9');
+    expect(req.request.params.get('test_months')).toBe('3');
+    req.flush({ ...protocol(), incumbent_label: 'Registry', exposure: preflight().exposure });
+
+    await expect(defaults).resolves.toMatchObject({ incumbent_label: 'Registry' });
   });
 
   it('returns protocol refusals from preflight as data, not as an error', async () => {

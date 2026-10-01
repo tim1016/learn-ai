@@ -1,0 +1,35 @@
+@let s = study();
+@let c = candidate();
+<section class="lockbox" aria-labelledby="gs-lockbox-title">
+  <span class="icon" aria-hidden="true"><i class="pi pi-lock"></i></span>
+  <div class="body">
+    <h2 id="gs-lockbox-title"><app-timestamp-display [value]="s.scope.final_start_ms" mode="date-et" /> – <app-timestamp-display [value]="s.scope.final_end_ms - 1" mode="date-et" /> is still sealed</h2>
+    <p>Only <strong>{{ c?.label ?? 'the locked candidate' }}</strong> and the frozen incumbent will be evaluated. No other candidate runs on this final interval.</p>
+
+    <div class="timeline">
+      <div><strong>Development</strong><small><app-timestamp-display [value]="s.scope.development_label_start_ms" mode="date-et" /> – <app-timestamp-display [value]="s.scope.development_end_ms - 1" mode="date-et" /> · used to choose</small></div>
+      <div><strong>Final test</strong><small><app-timestamp-display [value]="s.scope.final_start_ms" mode="date-et" /> – <app-timestamp-display [value]="s.scope.final_end_ms - 1" mode="date-et" /> · locked</small></div>
+    </div>
+
+    <dl class="rules">
+      <div><dt>Selected settings</dt><dd><strong>{{ c?.label ?? '—' }}</strong>@if (c) { <small>{{ c.params_sentence }}</small> }</dd></div>
+      <div><dt>Profit after stated costs</dt><dd>Must be positive</dd></div>
+      <div><dt>Worst drawdown / activity</dt><dd>≤ {{ ceiling() }} / ≥ {{ s.protocol.exam_min_trades }} trades</dd></div>
+      <div><dt>Incumbent comparison</dt><dd>At least the incumbent's {{ s.protocol.policy.objective | receiptLabel }}, within the risk limits</dd></div>
+      <div><dt>Recorded exposure</dt><dd>Checked when you open the test</dd></div>
+    </dl>
+    <p class="caption">Opening checks every recorded study of this instrument for these dates; only an untouched interval can count as a confirmatory test. Exposure outside this application cannot be verified. A historical test is not a guarantee of future results.</p>
+
+    @if (c && c.flags.length > 0) {
+      <p class="note" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+        <span>Development warning: @for (flag of c.flags; track flag.code) { {{ flag.text }}. }Keeping the incumbent may be the better decision.</span></p>
+    }
+
+    <label class="check"><input type="checkbox" [checked]="acknowledged()" (change)="onAcknowledge($event)" /><span>I understand this locks my candidate and consumes this test interval.</span></label>
+    <div class="actions">
+      <button pButton type="button" severity="secondary" [outlined]="true" (click)="goTo.emit('compare')"><span>Return to candidates</span></button>
+      <button pButton type="button" [disabled]="busy() || !acknowledged() || !canOpen()" (click)="open()"><span>Open final test</span></button>
+    </div>
+    @if (refusal(); as reason) { <p class="caption">{{ reason }}</p> }
+  </div>
+</section>

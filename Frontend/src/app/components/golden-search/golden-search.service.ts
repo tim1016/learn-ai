@@ -8,6 +8,7 @@ import type {
   CandidateDetail,
   CandidateKey,
   CreateStudyRequest,
+  DefaultsMonths,
   EvaluationPage,
   EvaluationQuery,
   GoldenSearchDefaults,
@@ -86,9 +87,15 @@ export class GoldenSearchService {
     return firstValueFrom(this.http.get<StrategyCapability[]>(`${this.base}/capabilities`));
   }
 
-  async defaults(strategyKey: string, symbol: string): Promise<GoldenSearchDefaults> {
-    const params = new HttpParams({ fromObject: { strategy_key: strategyKey, symbol } });
-    return firstValueFrom(this.http.get<GoldenSearchDefaults>(`${this.base}/defaults`, { params }));
+  /** The prefilled plan; with `months`, the server lays the development and final-test dates out for those lengths. */
+  async defaults(strategyKey: string, symbol: string, months?: DefaultsMonths): Promise<GoldenSearchDefaults> {
+    const query: Record<string, string> = { strategy_key: strategyKey, symbol };
+    if (months !== undefined) {
+      query['final_months'] = String(months.final_months);
+      query['training_months'] = String(months.training_months);
+      query['test_months'] = String(months.test_months);
+    }
+    return firstValueFrom(this.http.get<GoldenSearchDefaults>(`${this.base}/defaults`, { params: new HttpParams({ fromObject: query }) }));
   }
 
   /** Protocol problems come back as refusals in the body; only a malformed request is an error. */

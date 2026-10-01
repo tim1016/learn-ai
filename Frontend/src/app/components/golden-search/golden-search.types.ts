@@ -172,6 +172,17 @@ export interface GoldenSearchDefaults extends ProtocolRequest {
   exposure: ExposureView;
 }
 
+/**
+ * The month counts `GET /defaults` lays the intervals out from: the final
+ * test's length and the fold lengths. The server computes the dates (the
+ * calendar authority stays in Python); the Plan form re-asks when one changes.
+ */
+export interface DefaultsMonths {
+  final_months: number;
+  training_months: number;
+  test_months: number;
+}
+
 export interface StageEstimate {
   stage: string;
   label: string;
@@ -399,12 +410,15 @@ export interface ValidationView {
   explanation: string;
 }
 
-export type EvidenceCellStatus = 'tested' | 'invalid' | 'failed' | 'outside_domain' | 'untested';
+/** `center` marks the candidate's own value in a neighborhood. */
+export type EvidenceCellStatus = 'tested' | 'invalid' | 'failed' | 'outside_domain' | 'untested' | 'center';
 
 export interface NeighborRow {
   value: number;
   status: EvidenceCellStatus;
   metrics: Metrics | null;
+  /** Why a cell was not tested (a broken constraint, outside the legal domain). */
+  reason?: string | null;
 }
 
 export interface CandidateNeighborhood {
@@ -444,8 +458,11 @@ export interface PairMapCell {
   y: number;
   status: EvidenceCellStatus;
   metrics: Metrics | null;
+  /** Why the cell was not tested (a broken constraint, outside the legal domain). */
+  reason?: string | null;
 }
 
+/** A two-knob landscape: rows are `y_knob`'s values, columns `x_knob`'s, cells row-major. */
 export interface PairMap {
   x_knob: string;
   y_knob: string;

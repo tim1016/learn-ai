@@ -168,10 +168,19 @@ export class GoldenSearchStudyComponent {
     }
   }
 
-  /** Sends one command against the revision on screen; a retry after no answer reuses its idempotency key. */
-  async runCommand(command: StudyCommand): Promise<void> {
+  /** A step's own action; locking a candidate moves on to the step where its final test is opened. */
+  async onStepCommand(command: StudyCommand): Promise<void> {
+    const accepted = await this.runCommand(command);
+    if (accepted && command.command === 'select_candidate') this.selectStep('decision');
+  }
+
+  /**
+   * Sends one command against the revision on screen; a retry after no answer
+   * reuses its idempotency key. Resolves true when the server accepted it.
+   */
+  async runCommand(command: StudyCommand): Promise<boolean> {
     const detail = this.detail();
-    if (detail === null || this.busy()) return;
+    if (detail === null || this.busy()) return false;
     const request: StudyCommandRequest = { ...command, expected_revision: detail.revision, idempotency_key: this.keys.keyFor(JSON.stringify([detail.id, detail.revision, command])) };
     this.busy.set(true);
     this.clearFeedback();
@@ -180,8 +189,10 @@ export class GoldenSearchStudyComponent {
       this.keys.settle();
       if (outcome.jobId !== null) this.awaitingClaimPolls = AWAIT_CLAIM_POLLS;
       this.applyAnswer(outcome.study);
+      return true;
     } catch (error) {
       this.onCommandFailure(error);
+      return error instanceof StageDispatchError;
     } finally {
       this.busy.set(false);
     }

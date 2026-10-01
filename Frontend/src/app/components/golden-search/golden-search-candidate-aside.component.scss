@@ -1,0 +1,10 @@
+:host { display: block; min-width: 0; }
+.aside { display: grid; gap: var(--space-3); background: var(--bg-surface); border-left: 3px solid var(--accent); border-radius: 0 var(--radius) var(--radius) 0; padding: var(--space-4); align-self: start; }
+h3 { margin: 0 0 var(--space-2); font-size: var(--fs-sm); }
+p { margin: 0; color: var(--text-secondary); font-size: var(--fs-xs); }
+.rules { margin: 0; }
+.rules div { display: flex; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) 0; border-bottom: 1px solid var(--border-light); font-size: var(--fs-xs); }
+.rules div:last-child { border-bottom: 0; }
+dt { color: var(--text-secondary); }
+dd { margin: 0; text-align: right; }
+.warn { color: var(--warn); }

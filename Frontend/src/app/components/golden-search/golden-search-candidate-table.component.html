@@ -1,0 +1,31 @@
+<table class="candidates">
+  <caption>Development replay · same dates, ${{ capital() | number: '1.0-0' }} starting capital and execution assumptions</caption>
+  <thead>
+    <tr><th scope="col">Configuration</th><th scope="col" class="num">Net return</th><th scope="col" class="num">Worst fall</th><th scope="col" class="num">Trades</th><th scope="col" class="num">Sharpe</th></tr>
+  </thead>
+  <tbody>
+    @for (row of rows(); track row.key) {
+      <tr [class.selected]="row.key === selected()">
+        <th scope="row">
+          <button type="button" class="pick" [attr.aria-pressed]="row.key === selected()" [disabled]="fixed()" (click)="pick.emit(row.key)">
+            <span class="radio" aria-hidden="true"></span>
+            <span class="name">
+              <strong>{{ row.candidate.label }}</strong>
+              <small>{{ row.origin }}@if (row.sameAs.length > 0) { · same settings as {{ row.sameAs.join(' and ') }}}</small>
+            </span>
+          </button>
+          @for (flag of row.otherFlags; track flag.code) { <small class="flag">{{ flag.text }}</small> }
+          @if (row.failure; as failure) { <small class="flag flag--bad">Development run failed — {{ failure }}</small> }
+        </th>
+        <td class="num" data-label="Net return">{{ row.netReturn }}</td>
+        <td class="num" data-label="Worst fall" [class.warn]="row.drawdownFlags.length > 0">
+          {{ row.worstFall }}@for (flag of row.drawdownFlags; track flag.code) { <small>{{ flag.text }}</small> }
+        </td>
+        <td class="num" data-label="Trades" [class.warn]="row.tradeFlags.length > 0">
+          {{ row.trades }}@for (flag of row.tradeFlags; track flag.code) { <small>{{ flag.text }}</small> }
+        </td>
+        <td class="num" data-label="Sharpe">{{ row.sharpe }}</td>
+      </tr>
+    }
+  </tbody>
+</table>
