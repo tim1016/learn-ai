@@ -186,20 +186,4 @@ class FixtureDataReader:
         return None
 
 
-def fixture_data_source_factory(csv_path: Path, *, symbol: str = "AAPL"):
-    """Adapter producing a ``data_source_factory`` callable for ``run_strategy_spec``.
-
-    The runner signature is ``(symbol, start_date, end_date) -> reader``. The
-    ``FixtureDataReader`` ignores ``(start_date, end_date)`` for construction
-    and applies the window inside ``iter_bars``; we close over the CSV path
-    and rebuild the reader per call so the factory is stateless.
-    """
-    reader = FixtureDataReader(csv_path=Path(csv_path), symbol=symbol)
-
-    def _factory(_symbol: str, _start: Date, _end: Date) -> FixtureDataReader:
-        return reader
-
-    return _factory
-
-
-__all__ = ["FixtureDataReader", "fixture_data_source_factory"]
+__all__ = ["FixtureDataReader"]

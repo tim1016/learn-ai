@@ -135,9 +135,7 @@ async def replay_warmup_bars(
     ``crash_recovered=True``.
 
     Any position this replay reconstructs is discarded by ``on_force_flat``
-    at the end regardless -- a freshly (re)deployed run always starts flat;
-    carryover is a separate, still-disabled policy
-    (``EXPOSURE_CARRYOVER_STRATEGY_KEYS`` in ``bot_trade_strategy.py``).
+    at the end regardless -- a freshly (re)deployed run always starts flat.
     Reapplying known dispositions only makes the *replayed math* accurate;
     it does not resurrect exposure.
     """

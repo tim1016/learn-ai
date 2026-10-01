@@ -499,10 +499,7 @@ def _build_default_aggregator() -> LiveBarAggregator:
         from app.broker.ibkr.config import get_settings
 
         settings = get_settings()
-        persistence = BarPersistence(
-            root=Path(settings.live_bars_root),
-            retention_days=int(settings.live_bars_retention_days),
-        )
+        persistence = BarPersistence(root=Path(settings.live_bars_root))
         return LiveBarAggregator(persistence=persistence)
     except Exception as exc:
         logger.warning(

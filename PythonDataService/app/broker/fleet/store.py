@@ -527,14 +527,6 @@ class FleetRegistryStore:
         ).fetchone()
         return None if row is None else _session_from_row(row)
 
-    def list_sessions(self) -> list[ClerkSessionRecord]:
-        """List every current session row in directory order."""
-        rows = self._query(
-            f"SELECT {self._SESSION_COLUMNS} FROM clerk_sessions "
-            "ORDER BY broker ASC, clerk_id ASC"
-        )
-        return [_session_from_row(row) for row in rows]
-
     def archive_session(
         self, conn: sqlite3.Connection, session: ClerkSessionRecord, *, superseded_at_ms: int
     ) -> None:

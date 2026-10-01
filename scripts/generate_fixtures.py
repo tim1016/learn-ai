@@ -32,32 +32,16 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).parent.parent
 PYTHON_SVC = REPO_ROOT / "PythonDataService"
 GOLDEN_DIR = PYTHON_SVC / "tests" / "fixtures" / "golden"
-GOLDEN_SUPPORT = PYTHON_SVC / "tests" / "fixtures" / "golden_support"
 MANIFEST_PATH = GOLDEN_DIR / "manifest.json"
 
 sys.path.insert(0, str(PYTHON_SVC / "tests" / "fixtures"))
 sys.path.insert(0, str(PYTHON_SVC))
-
-# ── Generator imports (registered below) ─────────────────────────────────────
-# Each generator lives in its own module under scripts/fixture_generators/.
-# Import lazily so missing optional deps don't block the --list flag.
-
-
-def _lazy_import(module_path: str) -> object:
-    import importlib
-
-    return importlib.import_module(module_path)
-
 
 # ── Manifest helpers ──────────────────────────────────────────────────────────
 
 
 def _load_manifest() -> dict:
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-
-
-def _save_manifest(data: dict) -> None:
-    MANIFEST_PATH.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def _find_fixture(manifest: dict, fixture_id: str) -> dict | None:

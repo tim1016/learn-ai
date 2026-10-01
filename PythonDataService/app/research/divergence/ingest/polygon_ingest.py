@@ -1,16 +1,9 @@
 """Polygon-side ingestor for the divergence study.
 
-Two ingest paths are supported because they have different latencies:
-
-1. ``ingest_polygon_aggregates`` — live fetch via the existing
-   ``PolygonClientService``. Used in production / for the FastAPI endpoint.
-   Slow (rate-limited) but always-current.
-
-2. ``ingest_polygon_1min_csv_resampled`` — read a pre-fetched 1-minute
-   Polygon CSV from disk and resample to the requested timeframe.
-   Used for development and for repeatable runs against a frozen dataset.
-
-Both paths produce DataFrames with the same canonical schema:
+``ingest_polygon_1min_csv_resampled`` reads a pre-fetched 1-minute Polygon
+CSV from disk and resamples it to the requested timeframe, for repeatable
+runs against a frozen dataset. It produces a DataFrame with the canonical
+schema:
 
     columns = [unix_ts (ms), iso_time, time_utc, et,
                open, high, low, close, volume, vwap, transactions]
@@ -215,58 +208,3 @@ def ingest_polygon_1min_csv_resampled(
         logger.info("[POLYGON INGEST] wrote %s  (%d rows)", out_parquet, len(out))
 
     return out, manifest
-
-
-def ingest_polygon_aggregates(  # pragma: no cover — live API path
-    polygon_client,  # type: ignore[no-untyped-def]
-    ticker: str,
-    timeframe: str,
-    from_date: str,
-    to_date: str,
-    out_parquet: Path | str | None = None,
-    rth_only: bool = True,
-) -> tuple[pd.DataFrame, PolygonIngestManifest]:
-    """Live-fetch aggregates from Polygon and (optionally) RTH-filter."""
-    multiplier = _PERIOD_MINUTES[timeframe]
-    timespan = "minute" if multiplier < 60 else "hour"
-    if timespan == "hour":
-        multiplier = multiplier // 60
-
-    bars = polygon_client.fetch_aggregates(
-        ticker=ticker,
-        multiplier=multiplier,
-        timespan=timespan,
-        from_date=from_date,
-        to_date=to_date,
-    )
-    df = pd.DataFrame(bars)
-    df["unix_ts"] = df["timestamp"].astype("Int64")
-    df["iso_time"] = pd.to_datetime(df["unix_ts"], unit="ms", utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
-    df["time_utc"] = pd.to_datetime(df["unix_ts"], unit="ms", utc=True)
-    df["et"] = df["time_utc"].dt.tz_convert("America/New_York")
-
-    if rth_only:
-        df = _filter_to_rth(df).reset_index(drop=True)
-
-    cols = ["unix_ts", "iso_time", "time_utc", "et", "open", "high", "low", "close", "volume"]
-    if "vwap" in df.columns:
-        cols.append("vwap")
-    if "transactions" in df.columns:
-        cols.append("transactions")
-    df = df[cols]
-
-    manifest = PolygonIngestManifest(
-        source=f"polygon-live:{ticker}",
-        timeframe=timeframe,
-        rows=len(df),
-        trading_days=int(df["et"].dt.date.nunique()),
-        first_bar_utc=df["time_utc"].iloc[0].isoformat() if len(df) else "",
-        last_bar_utc=df["time_utc"].iloc[-1].isoformat() if len(df) else "",
-        rth_only=rth_only,
-    )
-
-    if out_parquet is not None:
-        out_parquet = Path(out_parquet)
-        out_parquet.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(out_parquet, index=False)
-    return df, manifest

@@ -7,7 +7,6 @@ Validated against: NONE — pending (no golden fixture)
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import math
 from datetime import UTC, datetime, timedelta
@@ -20,12 +19,7 @@ from app.services.polygon_client import PolygonClientService
 
 logger = logging.getLogger(__name__)
 
-# Concurrency limit for Polygon API calls
-_SEMAPHORE = asyncio.Semaphore(5)
 
-MIN_VOLUME = 50
-MIN_OPEN_INTEREST = 100
-MAX_SPREAD_RATIO = 0.10  # 10% bid-ask spread / mid
 OTM_OFFSET_PCT = 0.05  # Fallback: 5% OTM for skew contracts
 TARGET_DELTA_PUT = -0.25  # Target delta for OTM put (25Δ)
 TARGET_DELTA_CALL = 0.25  # Target delta for OTM call (25Δ)
@@ -102,39 +96,6 @@ def _find_otm_call_by_delta(
         calls,
         key=lambda c: abs(_bs_delta(stock_close, c["strike_price"], T, rfr, iv_estimate, "call") - TARGET_DELTA_CALL),
     )
-
-
-def _passes_liquidity_filter(contract: dict) -> bool:
-    """Apply liquidity filters to a contract."""
-    volume = contract.get("volume") or 0
-    oi = contract.get("open_interest") or 0
-
-    if volume < MIN_VOLUME:
-        return False
-    if oi < MIN_OPEN_INTEREST:
-        return False
-
-    bid = contract.get("bid")
-    ask = contract.get("ask")
-    if bid is not None and ask is not None and bid > 0:
-        mid = (bid + ask) / 2
-        if mid > 0 and (ask - bid) / mid > MAX_SPREAD_RATIO:
-            return False
-
-    return True
-
-
-def _get_trading_days(start_date: str, end_date: str, stock_bars: pd.DataFrame) -> list[datetime]:
-    """Extract trading days from stock bar data."""
-    if stock_bars.empty:
-        return []
-
-    start = pd.Timestamp(start_date, tz="UTC")
-    end = pd.Timestamp(end_date, tz="UTC")
-
-    dates = pd.to_datetime(stock_bars["date"], utc=True).sort_values().unique()
-    mask = (dates >= start) & (dates <= end)
-    return [pd.Timestamp(d).to_pydatetime() for d in dates[mask]]
 
 
 def _fetch_contracts_for_expiry(

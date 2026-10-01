@@ -8,10 +8,8 @@ import pytest
 
 from app.engine.live.account_artifacts import AccountArtifactError
 from app.engine.live.account_binding_ledger import (
-    AccountBindingCommand,
     binding_command_ledger_path,
     binding_ledger_parity,
-    pending_binding_retirement_proposals,
     read_account_binding_commands,
 )
 from app.engine.live.account_registry import AccountInstanceBinding
@@ -45,25 +43,6 @@ def test_historical_binding_ledger_and_registry_have_clean_read_parity(tmp_path:
 
     assert [command.entry_kind for command in commands] == ["decision"]
     assert parity.is_clean
-
-
-def test_pending_historical_retirement_proposal_remains_observable(tmp_path: Path) -> None:
-    binding = _binding()
-    proposal = AccountBindingCommand(
-        seq=1,
-        entry_kind="retirement_proposal",
-        **binding.model_copy(update={"lifecycle_state": "RETIRED", "source": "historical-daemon"}).model_dump(
-            mode="json"
-        ),
-    )
-    path = binding_command_ledger_path(tmp_path, ACCOUNT)
-    path.parent.mkdir(parents=True)
-    path.write_text(proposal.model_dump_json() + "\n", encoding="utf-8")
-
-    assert pending_binding_retirement_proposals(
-        tmp_path,
-        account_id=ACCOUNT,
-    ) == (proposal,)
 
 
 def test_malformed_historical_binding_row_fails_closed(tmp_path: Path) -> None:

@@ -6,9 +6,6 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from app.engine.live.historical_run_identity import (
-    read_historical_strategy_instance_id,
-)
 from app.services.bot_binding_repository import live_state_binding_repository
 
 
@@ -16,39 +13,11 @@ class AlpacaBotIdentityRefusedError(RuntimeError):
     """Durable evidence did not positively identify an Alpaca bot."""
 
 
-def _legacy_ibkr_run_dir(
-    artifacts_root: Path,
-    strategy_instance_id: str,
-) -> Path | None:
-    """Return matching retired IBKR identity, refusing ambiguous ledgers."""
-
-    live_runs_root = artifacts_root / "live_runs"
-    if live_runs_root.is_symlink():
-        raise OSError("legacy live_runs root must not be a symbolic link")
-    if not live_runs_root.exists():
-        return None
-    if not live_runs_root.is_dir():
-        raise OSError("legacy live_runs root is not a readable directory")
-    for run_dir in live_runs_root.iterdir():
-        if run_dir.is_symlink():
-            raise OSError("legacy run directory must not be a symbolic link")
-        if not run_dir.is_dir():
-            continue
-        ledger_path = run_dir / "run_ledger.json"
-        if not ledger_path.exists() and not ledger_path.is_symlink():
-            continue
-        if read_historical_strategy_instance_id(ledger_path) == strategy_instance_id:
-            return run_dir
-    return None
-
-
 class AlpacaBotIdentityGuard:
     """Require SQLite authority and a non-conflicting readable binding."""
 
     def __init__(self, artifacts_root: Path) -> None:
-        root = Path(artifacts_root)
-        self._artifacts_root = root
-        self._bindings = live_state_binding_repository(root)
+        self._bindings = live_state_binding_repository(Path(artifacts_root))
 
     def require(self, strategy_instance_id: str, *, sqlite_claim: bool) -> None:
         try:
@@ -64,19 +33,6 @@ class AlpacaBotIdentityGuard:
         if binding is not None and binding.broker != "alpaca":
             raise AlpacaBotIdentityRefusedError(
                 f"{strategy_instance_id!r} has non-Alpaca broker identity {binding.broker!r}"
-            )
-        try:
-            legacy_run_dir = _legacy_ibkr_run_dir(
-                self._artifacts_root,
-                strategy_instance_id,
-            )
-        except (OSError, ValidationError, ValueError) as exc:
-            raise AlpacaBotIdentityRefusedError(
-                f"{strategy_instance_id!r} has unreadable historical run identity"
-            ) from exc
-        if legacy_run_dir is not None:
-            raise AlpacaBotIdentityRefusedError(
-                f"{strategy_instance_id!r} has historical IBKR run identity"
             )
 
 

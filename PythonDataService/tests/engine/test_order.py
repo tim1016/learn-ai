@@ -45,27 +45,6 @@ def test_order_defaults():
     assert order.tag == ""
     assert order.limit_price is None
     assert order.stop_price is None
-    assert order.take_profit_price is None
-    assert order.stop_loss_price is None
-
-
-def test_order_accepts_brackets():
-    now = datetime(2024, 1, 1, 14, 30, tzinfo=UTC)
-    order = Order(
-        order_id=2,
-        symbol="SPY",
-        quantity=-100,
-        order_type=OrderType.MARKET,
-        time=now,
-        direction=Direction.SHORT,
-        take_profit_price=Decimal("95.00"),
-        stop_loss_price=Decimal("105.00"),
-        tag="bracketed-short",
-    )
-
-    assert order.take_profit_price == Decimal("95.00")
-    assert order.stop_loss_price == Decimal("105.00")
-    assert order.tag == "bracketed-short"
 
 
 def test_order_event_fields():

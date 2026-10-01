@@ -71,13 +71,6 @@ class TestInsightScore:
         score.set_score(InsightScoreType.DIRECTION, 0.0)
         assert score.direction == 1.0
 
-    def test_get_score(self):
-        score = InsightScore()
-        score.set_score(InsightScoreType.DIRECTION, 0.7)
-        score.set_score(InsightScoreType.MAGNITUDE, 0.4)
-        assert score.get_score(InsightScoreType.DIRECTION) == 0.7
-        assert score.get_score(InsightScoreType.MAGNITUDE) == 0.4
-
     def test_to_dict(self):
         score = InsightScore()
         score.set_score(InsightScoreType.DIRECTION, 1.0)

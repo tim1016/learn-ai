@@ -170,18 +170,6 @@ class CloseLegExit(BaseModel):
     entry_leg_id: Annotated[str, Field(pattern=_LEG_ID_PATTERN)]
 
 
-class ParityWarning(BaseModel):
-    """Wire shape for a single parity warning — Slice 1D (#597).
-
-    Produced by ``app.engine.action_plan.parity.parity_diagnostics``. Codes
-    extend as new diagnostic kinds land (e.g. asymmetric position direction).
-    """
-
-    code: Literal["orphan_entry"]
-    message: str
-    leg_id: str | None = None
-
-
 class ActionPlan(BaseModel):
     """Operator-declared instrument plan, hashed into ``run_id``.
 

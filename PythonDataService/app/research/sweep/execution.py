@@ -19,9 +19,8 @@ the service mid-search and left its record reading ``running`` for a day
 (2026-09-05). A thread count cannot lift the GIL, so this module keeps no
 pool; more throughput would take a process pool, which re-loads the bars in
 every process and so costs memory first. A summary cell — every Grid Search
-cell since #1941 — peaks far lower (~150 MB over baseline, measured with
-``scripts/measure_sweep_cell_footprint.py``), but the GIL, not memory, is
-what keeps this loop sequential.
+cell since #1941 — peaks far lower (~150 MB over baseline), but the GIL,
+not memory, is what keeps this loop sequential.
 
 That limit is no longer this module's to enforce. Running cells one at a time
 only ever counted the cells of one sweep; ``app.engine.run_gate`` is the

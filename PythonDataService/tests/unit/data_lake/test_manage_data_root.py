@@ -2,8 +2,8 @@
 
 Issue #1876: "An administrative command exists for init / stamp-with-
 explicit-flag / inspect." These tests drive the parsed argparse actions
-directly (same style as test_migrate_lake_to_mode_roots.py) rather than
-shelling out to main(), so failures point at the actual function.
+directly rather than shelling out to main(), so failures point at the
+actual function.
 """
 
 from __future__ import annotations

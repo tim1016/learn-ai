@@ -26,12 +26,9 @@ import statistics
 from dataclasses import dataclass
 from datetime import date
 from math import fsum
-from zoneinfo import ZoneInfo
 
 from app.lean_sidecar.trading_calendar import trading_session_count
 from app.utils.session_anchors import et_date_at_ms
-
-_ET = ZoneInfo("America/New_York")
 
 
 @dataclass(frozen=True)

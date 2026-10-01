@@ -102,26 +102,6 @@ def read_account_binding_commands(artifacts_root: Path, account_id: str) -> list
         raise AccountArtifactError(f"binding command ledger is not a file: {path}") from exc
 
 
-def pending_binding_retirement_proposals(
-    artifacts_root: Path,
-    *,
-    account_id: str,
-    strategy_instance_id: str | None = None,
-) -> tuple[AccountBindingCommand, ...]:
-    """Return unmatched retirement proposals in deterministic ledger order."""
-
-    pending: dict[int, AccountBindingCommand] = {}
-    for command in read_account_binding_commands(artifacts_root, account_id):
-        if command.entry_kind == "retirement_proposal":
-            pending[command.seq] = command
-        elif command.entry_kind == "retirement_folded" and command.proposal_seq is not None:
-            pending.pop(command.proposal_seq, None)
-    proposals = tuple(pending.values())
-    if strategy_instance_id is None:
-        return proposals
-    return tuple(proposal for proposal in proposals if proposal.strategy_instance_id == strategy_instance_id)
-
-
 def binding_ledger_parity(
     artifacts_root: Path,
     *,
@@ -194,6 +174,5 @@ __all__ = [
     "account_binding_ledger_read_enabled",
     "binding_command_ledger_path",
     "binding_ledger_parity",
-    "pending_binding_retirement_proposals",
     "read_account_binding_commands",
 ]

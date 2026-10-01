@@ -62,12 +62,6 @@ def _compute_daily_forward_return(
     return target
 
 
-def _build_daily_timestamps(stock_bars: list[dict]) -> pd.Series:
-    """Build daily timestamp series from stock bars (ms epoch)."""
-    df = pd.DataFrame(stock_bars).sort_values("timestamp").reset_index(drop=True)
-    return df["timestamp"]
-
-
 def run_options_feature_research(
     ticker: str,
     feature_name: str,
