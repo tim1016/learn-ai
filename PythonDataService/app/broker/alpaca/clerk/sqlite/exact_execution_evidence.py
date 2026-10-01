@@ -2,9 +2,9 @@
 
 Every producer of exact execution slices — the trade-updates websocket sink
 (``trade_evidence.py``), the deterministic no-submit adapters'
-authoritative aggregates (``order_evidence.py``) and the sweep's recovery of
-a manual leg's executions from Alpaca's account activity
-(``manual_order_executions.py``, #2686) — must build the same
+authoritative aggregates (``order_evidence.py``) and the recovery of a
+manual leg's or a bot order's executions from Alpaca's account activity
+(``activity_executions.py``, #2686, #2787) — must build the same
 ``EXECUTION_SLICE_FILLED`` transition, the same typed
 ``EXECUTION_COVERAGE_CONFLICT`` uncertainty, and route through the same
 ``append_execution_slice_if_absent`` discipline: identity dedup,
@@ -79,18 +79,6 @@ ACTIVITY_EXACT_CONFLICT_COPY = ExactExecutionConflictCopy(
         "New exposure is blocked until this order's execution coverage is reconciled."
     ),
     next_step="Reconcile the broker order and its execution slices before resuming.",
-)
-
-#: The account-activity recovery's own refusal (#2686): no execution is held
-#: aside, so the copy sends the operator to Alpaca rather than to a reconcile.
-ACTIVITY_OVER_ORDER_QUANTITY_CONFLICT_COPY = ExactExecutionConflictCopy(
-    headline="Alpaca's fill history reports more shares than the order asked for",
-    explanation=(
-        "Alpaca's fill history reports more shares for this manual order than it "
-        "asked for, so nothing was credited."
-    ),
-    operator_impact="New exposure is blocked while this conflict stands.",
-    next_step="Check the order at Alpaca.",
 )
 
 

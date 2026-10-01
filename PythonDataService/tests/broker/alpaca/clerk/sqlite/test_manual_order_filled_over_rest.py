@@ -28,8 +28,8 @@ from app.broker.alpaca.adapter import et_date_to_ms
 from app.broker.alpaca.broker import _ACTIVITY_MAX_PAGES, AlpacaBroker
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite import manual_order_executions
+from app.broker.alpaca.clerk.sqlite.activity_executions import ACTIVITY_OVER_ORDER_QUANTITY_CONFLICT_COPY
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
-from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import ACTIVITY_OVER_ORDER_QUANTITY_CONFLICT_COPY
 from app.broker.alpaca.clerk.sqlite.facts import ExecutionSliceFilledFacts
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.manual_order_executions import (

@@ -15,33 +15,24 @@ So before the sweep folds a REST answer from a live manual leg's chain head
 that reports executions the leg has no exact record of, it reads the
 account's activity since the leg's original order was created, and records
 each execution of the chain as an exact ``activity_recovery`` slice under the
-broker order that executed it. Once Alpaca has posted every execution the
-answer counts, the slices recorded first leave its cumulative nothing to add,
-whatever a replacement's ``filled_qty`` means, and its acknowledgement ends
-the leg on them. Until then its cumulative folds as it always did, and the
-leg stays outstanding; should that cumulative under-credit the chain, the
-chain's exact executions replace it once they cover the head's quantity
-(#2786). A former member's answer -- the original Alpaca still
-answers for under our client id once the chain moved on -- records nothing:
-the head's own answer, which the same resolution reads next, records the
-whole chain against the head's quantity.
+broker order that executed it, through :mod:`activity_executions` with the
+head's quantity as the chain's cap -- no chain can execute more. Once Alpaca
+has posted every execution the answer counts, the slices recorded first
+leave its cumulative nothing to add, whatever a replacement's ``filled_qty``
+means, and its acknowledgement ends the leg on them. Until then its
+cumulative folds as it always did, and the leg stays outstanding; should that
+cumulative under-credit the chain, the chain's exact executions replace it
+once they cover the head's quantity (#2786). One recorded after a cumulative
+was folded takes the same coverage path a late stream frame does. A former
+member's answer -- the original Alpaca still answers for under our client id
+once the chain moved on -- records nothing: the head's own answer, which the
+same resolution reads next, records the whole chain against the head's
+quantity.
 
 The activity is read at most once per resolution, and refreshed once: a
 later head that reports ``filled`` and is still uncovered may have filled
 after the first read, which was taken for an earlier answer. Only one head of
 a resolution can report ``filled``, since a filled order ends its chain.
-
-Each execution is credited once. Alpaca's activity id embeds the execution id
-the stream carries (:func:`execution_id_from_activity_id`), and the one exact
-append flow dedups on it: an execution the stream recorded first is a
-duplicate here, and a stream redelivery of one recorded here is a duplicate
-there. One that arrives after a cumulative was already folded takes the same
-coverage path a late stream frame does. That id bridge has no captured
-Alpaca receipt yet, and a wrong one would credit one execution twice under
-two ids. So a chain's recovered executions are recorded together or not at
-all, and only while its exact total stays within the head's quantity -- no
-chain can execute more. A batch that would pass it records nothing and
-raises ``EXECUTION_COVERAGE_CONFLICT``.
 
 The read walks the account's ``FILL`` activity newest first, a bounded number
 of reads per resolution, and says whether it reached the start of the window
@@ -59,34 +50,23 @@ resolution folds as before.
 from __future__ import annotations
 
 import logging
-import math
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from weakref import WeakKeyDictionary
 
-from app.broker.alpaca.adapter import execution_id_from_activity_id
-from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
-    ACTIVITY_EXACT_CONFLICT_COPY,
-    ACTIVITY_OVER_ORDER_QUANTITY_CONFLICT_COPY,
-    append_exact_execution_slice,
-    exact_execution_coverage_conflict,
-)
-from app.broker.alpaca.clerk.sqlite.execution_coverage import (
-    FILL_QTY_EPSILON,
-    active_execution_coverage_conflicts,
-)
+from app.broker.alpaca.clerk.sqlite.activity_executions import MANUAL_ORDER, record_activity_executions
+from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
 from app.broker.alpaca.clerk.sqlite.manual_order_completion import (
     accepted_manual_leg,
     manual_order_has_exact_terminal_coverage,
 )
 from app.broker.alpaca.clerk.sqlite.manual_order_replacement import live_manual_effect
-from app.broker.alpaca.clerk.sqlite.models import EffectOperationResource
 from app.broker.alpaca.clerk.sqlite.off_loop import OffLoop
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.errors import BrokerError
-from app.broker.contract.models import BrokerActivity, BrokerOrder, BrokerOrderEvent, BrokerOrderLeg, OrderSide
+from app.broker.contract.models import BrokerActivity, BrokerOrder
 from app.broker.contract.ports import BrokerActivityEvidencePort
 
 if TYPE_CHECKING:
@@ -94,15 +74,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_EXECUTION_ACTIVITY_TYPES = frozenset({"FILL", "PARTIAL_FILL"})
-
 #: The one activity type the walk reads. Alpaca reports every execution,
 #: partial or full, as a ``FILL`` activity, so no other row takes a read's room.
 _FILL_ACTIVITY_TYPE = "FILL"
-
-#: An activity's side, as the leg spells it. A sale from a flat or short
-#: position is reported ``sell_short``; it is still the leg's sell.
-_LEG_SIDE_OF_ACTIVITY = {"buy": OrderSide.BUY, "sell": OrderSide.SELL, "sell_short": OrderSide.SELL}
 
 #: The bounded activity reads one walk of the window takes, each at most
 #: three pages of 100 rows, before it stops short of the window's start.
@@ -312,151 +286,28 @@ def record_manual_leg_executions(
 
     An activity is the leg's when its order is ``head`` -- which the caller
     folds under this leg next -- or a member of the leg's durable
-    replacement chain. Its symbol and side must be the accepted leg's, and
-    its quantity, price and time readable; one that is not is logged and
-    left out, never folded.
-
-    Checked and appended under the repository's write lock, so no stream
-    slice lands between the check and the appends: when the executions not
-    recorded yet would take the chain's exact total past ``head``'s
-    quantity, none is appended and the order's coverage conflict is raised.
+    replacement chain, and it is read against the accepted leg. The chain's
+    exact total is capped at ``head``'s quantity
+    (:func:`record_activity_executions`).
     """
     with repo._write_lock:
         row = repo.order(order_ref)
         owner = None if row is None else live_manual_effect(repo, row)
         if owner is None or head.quantity is None:
             return RecoveredExecutions()
-        leg = accepted_manual_leg(repo, order_ref=order_ref)
-        members = repo.manual_chain_member_ids(order_ref) | {head.order_id}
-        executions: list[tuple[BrokerActivity, BrokerOrderEvent]] = []
-        for fill in sorted(fills, key=lambda item: (item.occurred_at_ms or 0, item.activity_id)):
-            executed_on = (fill.native_order_id or "").strip()
-            if fill.activity_type.strip().upper() not in _EXECUTION_ACTIVITY_TYPES or executed_on not in members:
-                continue
-            event = exact_execution_of_activity(fill, leg=leg)
-            if event is None:
-                logger.warning(
-                    "An Alpaca execution of a manual order could not be read as an exact execution",
-                    extra={
-                        "action": "manual_order_execution_unreadable",
-                        "order_ref": order_ref,
-                        "activity_id": fill.activity_id,
-                        "broker_order_id": executed_on,
-                    },
-                )
-                continue
-            executions.append((fill, event))
-        recorded_ids = {fill["execution_id"] for fill in repo.fills_for_order(order_ref) if fill["execution_id"]}
-        unrecorded = {
-            event.execution_id: event.quantity
-            for _, event in executions
-            if event.execution_id not in recorded_ids
-        }
-        exact_quantity, _ = repo.effective_exact_fill_totals_for_order(order_ref)
-        recovered_quantity = math.fsum(quantity for quantity in unrecorded.values() if quantity is not None)
-        if exact_quantity + recovered_quantity - head.quantity >= FILL_QTY_EPSILON:
-            _refuse_over_head_quantity(
-                repo,
-                owner=owner,
-                order_ref=order_ref,
-                head=head,
-                executions=[item for item in executions if item[1].execution_id in unrecorded],
-                exact_quantity=exact_quantity,
-                recovered_quantity=recovered_quantity,
-            )
-            return RecoveredExecutions(over_head_quantity=True)
-        for fill, event in executions:
-            executed_on = (fill.native_order_id or "").strip()
-            outcome = append_exact_execution_slice(
-                repo,
-                event=event,
-                symbol=leg.symbol,
-                side=leg.side.value,
-                broker_order_id=executed_on,
-                order_ref=order_ref,
-                owner=owner,
-                evidence_source="activity_recovery",
-                conflict_copy=ACTIVITY_EXACT_CONFLICT_COPY,
-                proof_reference=fill.activity_id,
-                extra_conflict_evidence_refs=[fill.activity_id],
-            )
-            if outcome == "duplicate":
-                continue
-            logger.info(
-                "A manual order's execution was recovered from Alpaca's account activity",
-                extra={
-                    "action": "manual_order_execution_recovered",
-                    "order_ref": order_ref,
-                    "execution_id": event.execution_id,
-                    "broker_order_id": executed_on,
-                    "outcome": outcome,
-                },
-            )
-        return RecoveredExecutions()
-
-
-def _refuse_over_head_quantity(
-    repo: ClerkSqliteRepository,
-    *,
-    owner: EffectOperationResource,
-    order_ref: str,
-    head: BrokerOrder,
-    executions: list[tuple[BrokerActivity, BrokerOrderEvent]],
-    exact_quantity: float,
-    recovered_quantity: float,
-) -> None:
-    """Fence a batch that would credit the chain more shares than its head asked for.
-
-    The order's coverage conflict is raised once, naming the batch's first
-    execution and every activity in it; an order already fenced by an open
-    coverage conflict keeps that one.
-    """
-    logger.warning(
-        "Executions recovered for a manual order would exceed the shares its order asked for",
-        extra={
-            "action": "manual_order_recovered_executions_exceed_order",
-            "order_ref": order_ref,
-            "broker_order_id": head.order_id,
-            "head_quantity": head.quantity,
-            "exact_quantity": exact_quantity,
-            "recovered_quantity": recovered_quantity,
-            "activity_ids": [fill.activity_id for fill, _ in executions],
-        },
-    )
-    if not executions or active_execution_coverage_conflicts(repo._conn, order_ref=order_ref):
-        return
-    fill, event = executions[0]
-    repo.append_transition(
-        exact_execution_coverage_conflict(
+        recorded = record_activity_executions(
             repo,
-            event=event,
-            broker_order_id=(fill.native_order_id or "").strip(),
+            subject=MANUAL_ORDER,
             order_ref=order_ref,
             owner=owner,
-            conflict_copy=ACTIVITY_OVER_ORDER_QUANTITY_CONFLICT_COPY,
-            proof_reference=fill.activity_id,
-            extra_evidence_refs=[item.activity_id for item, _ in executions],
+            leg=accepted_manual_leg(repo, order_ref=order_ref),
+            broker_order_id=head.order_id,
+            member_ids=repo.manual_chain_member_ids(order_ref) | {head.order_id},
+            quantity_cap=head.quantity,
+            require_total=False,
+            fills=fills,
         )
-    )
-
-
-def exact_execution_of_activity(fill: BrokerActivity, *, leg: BrokerOrderLeg) -> BrokerOrderEvent | None:
-    """The activity as one exact execution of the accepted leg, or ``None`` when it cannot be one."""
-    if (fill.symbol or "").strip().upper() != leg.symbol.strip().upper():
-        return None
-    if _LEG_SIDE_OF_ACTIVITY.get((fill.side or "").strip().lower()) != leg.side:
-        return None
-    if fill.quantity is None or fill.price is None or fill.occurred_at_ms is None:
-        return None
-    if not (math.isfinite(fill.quantity) and fill.quantity > 0 and math.isfinite(fill.price) and fill.price > 0):
-        return None
-    return BrokerOrderEvent(
-        event_type="fill",
-        occurred_at_ms=fill.occurred_at_ms,
-        price=fill.price,
-        quantity=fill.quantity,
-        execution_id=execution_id_from_activity_id(fill.activity_id),
-    )
+        return RecoveredExecutions(over_head_quantity=recorded.over_quantity)
 
 
 __all__ = [
@@ -464,7 +315,6 @@ __all__ = [
     "BEYOND_REACH_REWALK_INTERVAL_MS",
     "ManualLegExecutionRecovery",
     "RecoveredExecutions",
-    "exact_execution_of_activity",
     "head_lacks_executions",
     "record_manual_leg_executions",
 ]
