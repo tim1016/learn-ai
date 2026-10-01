@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import MarketDataFeed
+from app.research.golden_search.qualifications import Coverage
 from app.schemas.action_plan import ActionPlan
 from app.schemas.bot_end import BotEnd
 from app.schemas.broker_bots import AlpacaPaperEvidenceOverride, BotStatusView
@@ -44,6 +45,7 @@ from app.services.signal_program_admission import (
     SignalProgramSealError,
     build_start_program_seal,
     prove_running_program_build,
+    resolve_admission_coverage,
     unsealed_program_build,
 )
 from app.services.strategy_validation_admission import (
@@ -83,6 +85,9 @@ CustodyGuard = Callable[[BrokerBotBinding], AbstractAsyncContextManager[Admissio
 ProcessFactResolver = Callable[[BrokerBotBinding, int], RunProcessAdmissionFact]
 RuntimeFactResolver = Callable[[str, int], Awaitable[StartRuntimeAdmissionFact]]
 MarketLivenessFactResolver = Callable[[str, int], MarketLivenessFact]
+#: Golden Search coverage for a binding's exact configuration (#2696), read
+#: from the research store before the synchronous seal and build proof.
+CoverageResolver = Callable[[BrokerBotBinding], Awaitable[Coverage | None]]
 CustodyBoundActivator = Callable[
     [BrokerBotBinding, MarketDataFeed, int, ClerkCustodySnapshot, BotEnd | None], Awaitable[BotStatusView]
 ]
@@ -574,6 +579,7 @@ class BotStartAdmission:
         validation_fact: ValidationFactResolver = current_strategy_validation_fact,
         activate: CustodyBoundActivator,
         market_liveness: MarketLivenessFactResolver = market_liveness_fact,
+        coverage: CoverageResolver = resolve_admission_coverage,
     ) -> None:
         self._now_ms = now_ms
         self._feed_resolver = feed_resolver
@@ -583,6 +589,7 @@ class BotStartAdmission:
         self._validation_fact = validation_fact
         self._activate = activate
         self._market_liveness = market_liveness
+        self._coverage = coverage
 
     async def preview(self, request: StartRequest) -> RunAdmissionDecision:
         """Evaluate without mutation while holding the same Clerk fence."""
@@ -636,6 +643,9 @@ class BotStartAdmission:
                     binding,
                     observed_at_ms,
                 )
+                # Golden Search coverage reads the research database too
+                # (#2696); the seal and the proof below are synchronous.
+                coverage = await self._coverage(binding)
                 # Golden Validation may read the research database. Re-capture
                 # after that await so newer market-clock evidence cannot look
                 # as though it came from the future.
@@ -647,6 +657,7 @@ class BotStartAdmission:
                             binding,
                             validation,
                             parameter_origins=binding.strategy_param_origins,
+                            coverage=coverage,
                         )
                     except SignalProgramSealError as exc:
                         sealed_program, seal_failure = None, exc
@@ -654,7 +665,7 @@ class BotStartAdmission:
                 program_build = (
                     unsealed_program_build(binding.strategy_key, observed_at_ms, seal_failure)
                     if seal_failure is not None
-                    else prove_running_program_build(binding, verified_at_ms=observed_at_ms)
+                    else prove_running_program_build(binding, verified_at_ms=observed_at_ms, coverage=coverage)
                 )
                 binding = binding.model_copy(update={"program_build": program_build})
                 facts = StartRunFacts(

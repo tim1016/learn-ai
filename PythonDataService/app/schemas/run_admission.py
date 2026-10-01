@@ -168,6 +168,31 @@ CORPUS_UNCOVERED_NEXT_STEP = (
     "Use qualified configuration in Deploy, or choose Try in Dry Run to explore these settings without orders."
 )
 
+#: Why a configuration is, or is not, corpus-covered (ADR 0054), now that a
+#: Golden Search qualification can cover a configuration the registry's
+#: validated point does not (#2696, ADR 0074). The coverage resolver, the live
+#: proof and the Deploy offer all state these; one copy each, here for the
+#: same reason as the copy above.
+REGISTRY_POINT_COVERED = "This exact configuration is the program's registered validated point."
+QUALIFICATION_COVERED = (
+    "A ready Golden Search qualification covers this exact program version, stock and parameter set."
+)
+QUALIFICATION_STALE = (
+    "A Golden Search qualification approved this exact configuration, but the program changed since — "
+    "re-proof it before deploying."
+)
+QUALIFICATION_REVOKED = "The Golden Search qualification for this exact configuration was revoked."
+QUALIFICATION_ABSENT = (
+    "Neither the registered validated point nor a Golden Search qualification covers this exact "
+    "program version, stock and parameter set."
+)
+QUALIFICATION_UNVERIFIABLE = (
+    "Cannot verify the Golden Search qualification for this configuration: its records could not be read."
+)
+QUALIFICATION_NOT_REVERIFIED = (
+    "The Golden Search qualification this program seal pins was not re-verified against the running build."
+)
+
 
 def proven_build_copy(
     *,
@@ -175,6 +200,7 @@ def proven_build_copy(
     corpus_coverage: str,
     matched: str,
     drifted: str,
+    coverage_note: str | None = None,
 ) -> tuple[str, str | None]:
     """The explanation and next step a PROVEN build owes its operator.
 
@@ -183,11 +209,16 @@ def proven_build_copy(
     tenses); the corpus-coverage stamp and every remedy are composed here so
     a Start decision and that run's panel afterwards say the same thing.
     Both warnings can hold at once, and an operator told about only one of
-    them would fix it and still be surprised by the other.
+    them would fix it and still be surprised by the other. ``coverage_note``
+    is the coverage resolver's own sentence when a Golden Search
+    qualification decided the stamp (#2696): which one covers the run, or why
+    the one the seal pins no longer does.
     """
     drift = wiring == "DRIFTED"
     uncovered = corpus_coverage == "UNCOVERED"
     explanation = drifted if drift else matched
+    if coverage_note:
+        explanation = f"{explanation} {coverage_note}"
     if uncovered:
         explanation = f"{explanation} {CORPUS_UNCOVERED_EXPLANATION}"
     remedies = [

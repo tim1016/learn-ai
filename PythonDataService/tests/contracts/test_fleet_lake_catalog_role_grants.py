@@ -25,6 +25,10 @@ LANE_TABLES = frozenset(
         "research_golden_validation_reviews",
         "research_parity_verdicts",
         "research_backtest_runs",
+        # Golden Search (#2696): Deploy's READY defaults and Start's coverage check.
+        "research_golden_qualifications",
+        "research_golden_qualification_events",
+        "research_golden_defaults",
     }
 )
 
@@ -53,6 +57,13 @@ NEVER_GRANTED_TABLES = frozenset(
         "RecencyRuns",
         "RecencyTrades",
         "RecencyTradeMemberships",
+        # Golden Search studies and their ledgers are data-plane research;
+        # a lane reads only the published qualifications (#2696).
+        "research_golden_search_studies",
+        "research_golden_search_evaluations",
+        "research_golden_search_trials",
+        "research_golden_search_exposures",
+        "research_golden_default_history",
     }
 )
 
