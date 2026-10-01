@@ -16,8 +16,8 @@ Per decision 9 (docs/superpowers/plans/2026-09-14-fleet-lane-e-frontend-fence-an
 Task 7a) these reasons do **not** enter the exported OpenAPI contract -- the
 frontend's copy map locks against a committed snapshot instead, exactly like
 the broker-v2 panel vocabulary
-(``scripts/regenerate_broker_v2_vocabulary_snapshot.py``,
-``.github/workflows/ci.yml``'s ``broker-v2-vocabulary-contract`` job). This
+(``scripts/regenerate_broker_v2_vocabulary_snapshot.py`` and its snapshot
+tests). This
 module is the Python authority ``build_snapshot()``
 (``scripts/regenerate_fleet_refusal_vocabulary_snapshot.py``) reads.
 

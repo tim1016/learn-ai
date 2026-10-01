@@ -79,9 +79,8 @@ def test_python_and_frontend_snapshots_are_byte_identical() -> None:
 
     Skipped when ``Frontend/`` isn't part of this checkout (e.g. the
     Python-only qualification container, whose image context is
-    ``PythonDataService`` — see ``compose.yaml``): cross-tree parity is
-    proven byte-for-byte there instead by the ``broker-v2-vocabulary-contract``
-    CI job, which runs against a full checkout.
+    ``PythonDataService`` — see ``compose.yaml``): the CI shards run against a
+    full checkout, so cross-tree parity is proven there.
     """
     if not _FRONTEND_SNAPSHOT_PATH.exists():
         pytest.skip(f"Frontend/ not present in this checkout ({_FRONTEND_SNAPSHOT_PATH})")
@@ -90,9 +89,7 @@ def test_python_and_frontend_snapshots_are_byte_identical() -> None:
 
 def test_committed_snapshots_match_freshly_generated_output() -> None:
     """Regression for #1666: committed bytes must equal what the generator
-    produces from live source right now — the same check CI's
-    ``broker-v2-vocabulary-contract`` job performs via `git diff --exit-code`
-    after regeneration, exercised here in-process.
+    produces from live source right now, exercised in-process.
 
     Only the Python-local snapshot is checked here — see
     ``test_python_and_frontend_snapshots_are_byte_identical`` for why the

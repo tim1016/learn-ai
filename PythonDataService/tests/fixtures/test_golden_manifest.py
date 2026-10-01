@@ -1,6 +1,6 @@
 """Validation tests for tests/fixtures/golden/manifest.json.
 
-These tests run on every PR (CI job: validate-golden-manifest).
+These tests run on every PR, in the Python test shards.
 They verify:
 1. manifest.json is valid JSON and conforms to manifest.schema.json.
 2. Every active fixture's files exist on disk.
