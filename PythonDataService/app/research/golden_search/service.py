@@ -79,6 +79,11 @@ _SYMBOL = re.compile(SYMBOL_PATTERN)
 Liveness = Callable[[str | None], bool | None]
 
 
+def job_is_live(job_id: str | None) -> bool | None:
+    """The default liveness: the job store, looked up on each call rather than bound when this module loads."""
+    return lifecycle.job_is_live(job_id)
+
+
 def _not_found(study_id: str) -> GoldenSearchRefusal:
     return GoldenSearchRefusal(f"Study {study_id} was not found.", code="NOT_FOUND", kind="not_found")
 
@@ -256,9 +261,9 @@ async def defaults(
         training_months=training_months,
         test_months=test_months,
     )
+    # The plan itself, plus its two annotations: a client edits it and sends it back as a ProtocolRequest.
     return {
         **protocol.as_dict(),
-        "final_months": final_months,
         "incumbent_label": incumbent.label,
         "exposure": await exposure_view(symbol, protocol.final_start_ms, protocol.final_end_ms),
     }
@@ -373,7 +378,7 @@ async def detail(
     row: StudyRow,
     *,
     dispatch: Mapping[str, Any] | None = None,
-    liveness: Liveness = lifecycle.job_is_live,
+    liveness: Liveness = job_is_live,
     identity: CodeIdentity | None = None,
 ) -> dict[str, Any]:
     """The StudyDetail read model for one row."""
@@ -393,7 +398,7 @@ async def summaries(
     symbol: str | None = None,
     include_hidden: bool = False,
     limit: int = 100,
-    liveness: Liveness = lifecycle.job_is_live,
+    liveness: Liveness = job_is_live,
 ) -> list[dict[str, Any]]:
     rows = await with_connection(
         repo.list_studies,
@@ -449,7 +454,7 @@ async def evaluations(study_id: str, *, stage: str | None = None, fold_index: in
     return result.as_dict()
 
 
-async def hide(study_id: str, *, liveness: Liveness = lifecycle.job_is_live) -> None:
+async def hide(study_id: str, *, liveness: Liveness = job_is_live) -> None:
     """Hide a study from history; refused while a stage runs. Rows, trials and exposures stay."""
     row = await get_row(study_id)
     presented = await asyncio.to_thread(lambda: presented_status(row, live=_live(row, liveness)))
@@ -528,7 +533,7 @@ async def run_command(
     idempotency_key: str,
     payload: Mapping[str, Any] | None = None,
     roots: Sequence[Path] | None = None,
-    liveness: Liveness = lifecycle.job_is_live,
+    liveness: Liveness = job_is_live,
     identity: CodeIdentity | None = None,
 ) -> CommandOutcome:
     """Apply one lifecycle command under its expected revision; a repeat of a recorded request returns its outcome."""

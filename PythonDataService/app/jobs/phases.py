@@ -127,10 +127,25 @@ WALK_FORWARD_STUDY_PHASES: tuple[Phase, ...] = (
     Phase("completed", "Study complete", 1),
 )
 
+# ── Golden Search (#2696) ───────────────────────────────────────────────
+# One job runs one authorized stage; each stage emits only its own phases
+# (search: search → pair_audits → recent; validation: validation → evidence;
+# exam; proof for the qualification stage).
+GOLDEN_SEARCH_PHASES: tuple[Phase, ...] = (
+    Phase("search", "Searching the development period", 4),
+    Phase("pair_audits", "Mapping parameter pairs around the winner", 2),
+    Phase("recent", "Fitting the recent window", 2),
+    Phase("validation", "Testing the selection procedure over time", 4),
+    Phase("evidence", "Gathering evidence for each candidate", 2),
+    Phase("exam", "Running the final test once", 1),
+    Phase("proof", "Building the proof and publishing the version", 2),
+)
+
 
 JOB_PHASES: dict[str, tuple[Phase, ...]] = {
     "grid_search": GRID_SEARCH_PHASES,
     "walk_forward_study": WALK_FORWARD_STUDY_PHASES,
+    "golden_search": GOLDEN_SEARCH_PHASES,
     "cross_sectional": CROSS_SECTIONAL_PHASES,
     "feature_research": FEATURE_RESEARCH_PHASES,
     "signal_engine": SIGNAL_ENGINE_PHASES,

@@ -44,6 +44,9 @@ public static class JobsApi
         ["grid_search"] = "/api/jobs-internal/grid-search",
         // Walk-Forward Study (PRD #1925): folds of grid_search sweeps; Python owns the record.
         ["walk_forward_study"] = "/api/jobs-internal/walk-forward-study",
+        // Golden Search (#2696): runs one study stage that a guarded study command
+        // authorized; Python checks the echoed stage token. This row is transport only.
+        ["golden_search"] = "/api/jobs-internal/golden-search",
         // The data-lake backfill worker lives on the data-lake router rather
         // than /api/jobs-internal/*; it accepts the same caller-minted job_id
         // this method injects below, so the framework (state, events, cancel,

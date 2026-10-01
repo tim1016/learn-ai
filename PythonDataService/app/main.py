@@ -59,6 +59,7 @@ from app.routers import (
     engine,
     fleet_compatibility_reads,
     golden_fixtures,
+    golden_search,
     golden_validation,
     grid_search,
     indicator_reliability,
@@ -1243,6 +1244,15 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     # Walk-Forward Study (PRD #1925): folds of Grid Search sweeps plus the frozen verdict.
     app.include_router(walk_forward_study.router, prefix="/api/research/walk-forward-studies", tags=["research-walk-forward-study"])
     app.include_router(walk_forward_study.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+    # Golden Search (#2696): guarded study commands authorize each stage; the
+    # jobs entry runs only a stage whose token a command issued.
+    app.include_router(
+        golden_search.router,
+        prefix="/api/research/golden-search",
+        tags=["research-golden-search"],
+        dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+    )
+    app.include_router(golden_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
     app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
     app.include_router(return_distribution.router, prefix="/api/research", tags=["research"])
     # Research-pipeline walk-forward (Phase C). Registered BEFORE
