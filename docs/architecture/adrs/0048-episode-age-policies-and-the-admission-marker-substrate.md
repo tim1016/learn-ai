@@ -1,10 +1,10 @@
 # ADR 0048 — Episodes declare their own age policy; holds are uncertainties; admission markers are a fenced single-writer claim
 
-**Status:** Proposed 2026-08-26
+**Status:** Accepted 2026-09-30
 **Provenance:** Decision ticket [#1780](https://github.com/tim1016/learn-ai/issues/1780) (WP5), child of the Two-Tap fleet-freeze umbrella [#1773](https://github.com/tim1016/learn-ai/issues/1773). Findings report: `docs/audits/bot-fleet-stress-2026-08-25.md` (S4 at line 201, remediation §8 lines 335-336). Every claim below was verified against source on `origin/master` at `1ee4305b` before this ADR was written; the three claims marked **measured** were reproduced by executing the shipped code against a copy of the live `DUM284968` artifact tree.
 **Decision drivers:** #1780 asks three questions — how long episode-store records live, whether account holds should become uncertainty episodes, and where admission markers belong. All three are answerable from the code and its history; the third only became so once the reader permit's provenance was traced to the control path it was retired with (4f).
 **Related:** ADR 0035 and ADR 0037 (SQLite is the sole Alpaca custody authority — the store this ADR consolidates *into*), ADR 0045 (stuck-EXIT watchdog and the redrive/escalate clock this ADR generalises), ADR 0047 (authority recovery is an offline ceremony — the sibling finding that a structurally unarmable mechanism must be removed, not documented), ADR 0033 (account custody clocks and safety contract — the `AccountSafetyVerdict` vocabulary the admission markers guard), ADR 0027 (operator blocker disposition taxonomy), ADR 0022 (temporal authority — every clock named here is `int64 ms UTC`), ADR 0039 (ADR status is decision standing, not code conformance).
-**Vocabulary:** `CONTEXT.md` § "Episode store" — **Episode**, **Age policy**, **Terminal disposition**, **Admission marker**. Owed on acceptance: `CONTEXT.md` today has no entry for *hold*, *uncertainty*, or *episode*, and Decision 2 makes one of those three words disappear. Per ADR 0040 Decision 4.
+**Vocabulary:** `CONTEXT.md` § "Episode store (resolved 2026-09-30)" — **Episode**, **Age policy**, **Terminal disposition**, **Admission marker**. Written on acceptance (2026-09-30, #2749), per ADR 0040 Decision 4.
 
 ## Context
 
@@ -238,3 +238,16 @@ So the reader half was not a missing safety property. It was a real one, belongi
 6. The #1777-lands-first sequencing constraint — Decision 2.
 
 **Non-goals, restated from #1780 and unchanged:** this project does not change intake-fence serialization, and does not change act-time re-proof.
+
+## Acceptance — 2026-09-30 (#2749)
+
+Accepted on the owner's map ruling ([#2700](https://github.com/tim1016/learn-ai/issues/2700), from the ADR kill list [#2712](https://github.com/tim1016/learn-ai/issues/2712)): clerk custody builds on this record, so it is promoted, not cut. The vocabulary it owed is now `CONTEXT.md` § "Episode store", which discharges the obligation in Consequences. Decisions 1–4 are unchanged.
+
+- **Decisions 1–3 are in the code.**
+  - `AgePolicy` is the closed sum `CauseCleared | VoidAfter | RedriveThenEscalate`. Every row of the reason-policy registry declares one (`app/broker/alpaca/clerk/sqlite/uncertainty_policies.py`).
+  - Account holds are uncertainty episodes (`UNEXPLAINED_ORDER_HOLD`, `STREAM_HEALTH_HOLD`).
+  - The three `ACCOUNT_HOLD_*` folds stay registered for replay only. The v9 ceremony replays them through `folds.V9_FOLD_REGISTRY`.
+- **Decision 4's subject no longer exists.** On 2026-08-27, `54e33bf4` deleted `app/engine/live/account_safety.py` together with its last callers, and with it every admission marker reader and writer. No admission marker exists in the tree today. Decision 4 (4a–4f) binds any marker mechanism that is reintroduced:
+  - it is never an episode;
+  - it never lives in the Alpaca clerk database;
+  - it is a single-writer claim whose fencing generation the store validates on every protected write.
