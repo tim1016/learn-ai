@@ -108,10 +108,6 @@ export class DataLakeBackfillStore {
     this.daysState().reduce((total, day) => total + day.fetched_count, 0),
   );
 
-  readonly reusedCount = computed(() =>
-    this.daysState().reduce((total, day) => total + day.reused_count, 0),
-  );
-
   constructor() {
     this.destroyRef.onDestroy(() => this.closeStream());
   }

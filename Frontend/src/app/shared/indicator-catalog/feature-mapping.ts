@@ -35,9 +35,3 @@ export function findFeatureId(
     ) ?? null
   );
 }
-
-/** All indicator keys that have at least one supported (params) variant —
- *  used by the catalog to grey-out unsupported indicators. */
-export const SUPPORTED_INDICATORS: ReadonlySet<string> = new Set(
-  FEATURE_MAPPINGS.map((m) => m.indicator),
-);

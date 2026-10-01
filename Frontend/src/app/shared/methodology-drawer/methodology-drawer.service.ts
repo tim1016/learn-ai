@@ -25,11 +25,6 @@ export class MethodologyDrawerService {
     this.drawer.activeDocId() === 'methodology' ? this.drawer.anchor() : null,
   );
 
-  /** Monotonic open tick (forwarded from the generic service). */
-  readonly openTick = computed(() =>
-    this.drawer.activeDocId() === 'methodology' ? this.drawer.openTick() : 0,
-  );
-
   open(anchor?: string): void {
     this.drawer.open('methodology', anchor);
   }

@@ -76,12 +76,6 @@ export interface VerdictAnalysis {
  */
 export type VerdictTier = "pre_flight" | "investigate" | "reject";
 
-export interface ScreenResult {
-  name: string;
-  passed: boolean;
-  reason?: string;
-}
-
 export interface Verdict {
   /** How many of the 5 statistical screens passed (0..5). The UI
    *  surfaces this as ``Screens N/5`` rather than as a 0-100 scalar

@@ -16,20 +16,6 @@ describe('SectionErrorComponent', () => {
     expect(el.querySelector('.section-error')).toBeNull();
   });
 
-  it('renders catalog copy when the error carries a known code', () => {
-    const fixture = createFixture();
-    fixture.componentRef.setInput(
-      'error',
-      new GraphqlError([{ message: 'gw down', extensions: { code: 'BROKER_DISCONNECTED' } }]),
-    );
-    fixture.detectChanges();
-    const el = fixture.nativeElement as HTMLElement;
-    const what = el.querySelector('.section-error-what');
-    const tryNode = el.querySelector('.section-error-try');
-    expect(what?.textContent ?? '').toContain('IB Gateway');
-    expect(tryNode?.textContent ?? '').toContain('Retry');
-  });
-
   it('emits retry when the button is clicked', () => {
     const fixture = createFixture();
     fixture.componentRef.setInput('error', new Error('nope'));

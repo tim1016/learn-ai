@@ -3,7 +3,6 @@ import {
   signal,
   computed,
   inject,
-  DestroyRef,
   ChangeDetectionStrategy,
   effect,
 } from '@angular/core';
@@ -126,7 +125,6 @@ interface FeatureResearchJobResultRaw {
 })
 export class FeatureRunnerComponent {
   private jobsService = inject(JobsService);
-  private destroyRef = inject(DestroyRef);
   private catalog = inject(IndicatorCatalogService);
 
   /** Catalog passed to the picker. Exposed as a getter so the template can
@@ -284,10 +282,6 @@ export class FeatureRunnerComponent {
 
   openConfigure(): void {
     this.configureModalOpen.set(true);
-  }
-
-  closeConfigure(open: boolean): void {
-    if (!open) this.configureModalOpen.set(false);
   }
 
   onModalParamChange(change: { name: string; value: number }): void {
