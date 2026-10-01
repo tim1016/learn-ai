@@ -61,6 +61,8 @@
         @case ('decision') { <app-golden-search-decision-step [study]="d" [capability]="capability()" [busy]="busy()" (studyCommand)="onStepCommand($event)" (goTo)="selectStep($event)" /> }
       }
     </div>
+
+    <footer class="footer"><span>{{ d.scope.data_source }}</span><span>{{ footerState() }}</span></footer>
   } @else if (loadError() === null) {
     <p class="muted" role="status">Loading the study…</p>
   }

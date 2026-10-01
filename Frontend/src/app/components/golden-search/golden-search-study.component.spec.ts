@@ -193,6 +193,18 @@ describe('GoldenSearchStudyComponent', () => {
     expect(screen.getByRole('note', { name: 'Study scope' }).textContent).toMatch(/Final test\s*2026-01-01\s*–\s*2026-03-31\s*: opened once/);
   });
 
+  it.each([
+    ['awaiting_candidate', 'Final test held back · Current default unchanged'],
+    ['awaiting_review', 'Final test opened once · Current default unchanged'],
+    ['qualification_failed', 'Final test opened once · Current default unchanged'],
+    ['approved', 'Golden settings ready · Deploy checks still apply'],
+  ] as const)('the footer names the data and, %s, where the final test and the default stand', async (state, standing) => {
+    await renderStudy(fakeService(studyDetail(state)));
+
+    const footer = screen.getByText('Historical research: Polygon, split adjusted, regular sessions').parentElement;
+    expect(footer?.textContent).toContain(standing);
+  });
+
   it('Plan step: the frozen plan is read-only and Revise starts a new linked study', async () => {
     const service = fakeService(studyDetail('awaiting_validation'));
     await renderStudy(service);

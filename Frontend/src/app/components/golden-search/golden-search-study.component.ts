@@ -33,8 +33,9 @@ const PROGRESS_TEXT: Readonly<Record<StepProgress, string>> = {
 /**
  * One Golden Search study (#2696): the study strip, the five steps, the
  * server's guidance for the current state with the one next action, the
- * scope line above every step, and the
- * record controls (Cancel, Finish, Hide). Every stage change is a command
+ * scope line above every step, the
+ * record controls (Cancel, Finish, Hide), and a footer naming the data and
+ * where the final test and the current default stand. Every stage change is a command
  * carrying the study's revision and an idempotency key; a command that
  * authorizes a stage starts its job through the jobs boundary. Polls while a
  * stage runs.
@@ -98,6 +99,12 @@ export class GoldenSearchStudyComponent {
   protected readonly finishRefusal = computed(() => {
     const detail = this.detail();
     return detail !== null && RESUMABLE_STATUSES.includes(detail.presented_status) ? (detail.action_refusals.finish ?? null) : null;
+  });
+  /** The footer's right-hand line: where the final test and the current default stand. */
+  protected readonly footerState = computed(() => {
+    const detail = this.detail();
+    if (detail?.state === 'approved') return 'Golden settings ready · Deploy checks still apply';
+    return detail?.exam_locked ? 'Final test opened once · Current default unchanged' : 'Final test held back · Current default unchanged';
   });
   /** Hiding a study whose stage still runs is refused by the server, so it is not offered. */
   protected readonly canHide = computed(() => {
