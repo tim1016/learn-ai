@@ -2,10 +2,10 @@
 
 Runs the unsharded PR gate (the same roots, markers, and xdist settings as
 ``scripts.run_fast_tests``) with ``--durations=0`` and records each test's
-combined setup+call+teardown seconds. ``scripts.pytest_shard`` deals those
-measured tests across shards longest-first so no shard approaches the
-120-second budget by hash luck (#2682); tests missing from the file keep
-the hash assignment.
+combined setup+call+teardown seconds. ``scripts.pytest_shard`` sums them by
+test file and deals the files across shards longest-first so no shard
+approaches the 120-second budget by hash luck (#2682); files missing from the
+file keep the hash assignment.
 
 The values jitter a few percent between runs and machines — only their
 relative sizes drive the balance, so regenerate when the shard times
