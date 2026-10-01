@@ -26,14 +26,15 @@ from app.broker.alpaca.clerk.sqlite.custody_subjects import outside_order_subjec
 from app.broker.alpaca.clerk.sqlite.economic_projection import effective_fill_records
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
+from app.broker.alpaca.clerk.sqlite.reads import OUTSIDE_ORDER_SQL, governing_acknowledgement
 from app.broker.alpaca.clerk.sqlite.reads import external_orders as tracked_external_orders
-from app.broker.alpaca.clerk.sqlite.reads import governing_acknowledgement
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PARAMS,
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PLACEHOLDERS,
 )
 from app.broker.contract.models import BrokerActivity, OrderSide
 from app.services.alpaca_fee_attribution import (
+    CollapsedDeliveries,
     FeeAttribution,
     FeeCharge,
     FeeFill,
@@ -309,6 +310,13 @@ def _recorded_evidence(conn: sqlite3.Connection) -> list[FeeEvidenceFacts]:
     ]
 
 
+def retained_activities(conn: sqlite3.Connection) -> CollapsedDeliveries[BrokerActivity]:
+    """Every activity row the recorded evidence retained, each identity once, with any disagreeing copies."""
+    return collapse_activity_deliveries(
+        activity for snapshot in _recorded_evidence(conn) for activity in snapshot.activities
+    )
+
+
 def fold_fee_evidence(_conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Strictly validate historical evidence; money is never materialized here."""
     FeeEvidenceFacts.model_validate_json(payload["facts_json"])
@@ -544,10 +552,14 @@ def custody_fee_attribution(
             by_date[day][activity.activity_id] = activity
         elif activity.activity_type in {"FILL", "PARTIAL_FILL"} and activity.native_order_id in floor.tracked:
             before_floor[activity.activity_id] = activity
+    # A manual chain's member first seen as foreign is the leg's: its
+    # executions are credited to the leg, never awaited as an outside
+    # order's (#2787).
     external_orders = {
         row[0]
         for row in conn.execute(
-            "SELECT broker_order_id FROM external_orders WHERE filled_avg_price IS NOT NULL AND ABS(qty) >= 1e-9"
+            "SELECT eo.broker_order_id FROM external_orders eo "
+            f"WHERE eo.filled_avg_price IS NOT NULL AND ABS(eo.qty) >= 1e-9 AND {OUTSIDE_ORDER_SQL}"
         )
     }
     witnessed_external: set[str] = set()

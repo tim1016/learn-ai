@@ -331,7 +331,7 @@ def record_manual_leg_executions(
             executed_on = (fill.native_order_id or "").strip()
             if fill.activity_type.strip().upper() not in _EXECUTION_ACTIVITY_TYPES or executed_on not in members:
                 continue
-            event = _exact_execution(fill, leg=leg)
+            event = exact_execution_of_activity(fill, leg=leg)
             if event is None:
                 logger.warning(
                     "An Alpaca execution of a manual order could not be read as an exact execution",
@@ -438,7 +438,7 @@ def _refuse_over_head_quantity(
     )
 
 
-def _exact_execution(fill: BrokerActivity, *, leg: BrokerOrderLeg) -> BrokerOrderEvent | None:
+def exact_execution_of_activity(fill: BrokerActivity, *, leg: BrokerOrderLeg) -> BrokerOrderEvent | None:
     """The activity as one exact execution of the accepted leg, or ``None`` when it cannot be one."""
     if (fill.symbol or "").strip().upper() != leg.symbol.strip().upper():
         return None
@@ -462,6 +462,7 @@ __all__ = [
     "BEYOND_REACH_REWALK_INTERVAL_MS",
     "ManualLegExecutionRecovery",
     "RecoveredExecutions",
+    "exact_execution_of_activity",
     "head_lacks_executions",
     "record_manual_leg_executions",
 ]

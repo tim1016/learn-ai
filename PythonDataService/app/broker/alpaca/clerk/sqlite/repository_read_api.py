@@ -431,7 +431,7 @@ class ClerkSqliteRepositoryReadApi:
             return reads.external_order_by_broker_order_id(self._conn, broker_order_id)
 
     def external_orders(self: ClerkSqliteRepository) -> list[dict]:
-        """Return all external observations as a compatibility-friendly mapping list."""
+        """Return every outside order (``reads.external_orders``) as a compatibility-friendly mapping list."""
         with self._write_lock:
             return [
                 {
@@ -454,7 +454,11 @@ class ClerkSqliteRepositoryReadApi:
             ]
 
     def external_order_resources(self: ClerkSqliteRepository) -> tuple[ExternalOrderResource, ...]:
-        """Retained external evidence, including current lifecycle proof for reconciliation."""
+        """Retained outside-order evidence, including current lifecycle proof for reconciliation.
+
+        A manual chain's member is not refreshed as a foreign order: the
+        chain's own resolution follows it (#2787).
+        """
         with self._write_lock:
             return tuple(reads.external_orders(self._conn))
 

@@ -62,6 +62,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
     SessionEconomicProjection,
 )
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
+from app.broker.alpaca.clerk.sqlite.reads import OUTSIDE_ORDER_SQL
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     EXECUTION_COVERAGE_INCOMPLETE_REASON_CODE_SQL_PARAMS,
@@ -431,9 +432,11 @@ class SqliteEconomicProjectionReader:
                 limit=None,
             )
             coverage_complete = self._account_execution_coverage(all_rows) == "complete"
+            # A manual chain's member first seen as foreign is the leg's,
+            # whose fills are already in ``all_rows`` (#2787).
             external_fill_exists = self._conn.execute(
-                "SELECT 1 FROM external_orders "
-                "WHERE filled_avg_price IS NOT NULL AND ABS(qty) >= 1e-9 LIMIT 1"
+                "SELECT 1 FROM external_orders eo "
+                f"WHERE eo.filled_avg_price IS NOT NULL AND ABS(eo.qty) >= 1e-9 AND {OUTSIDE_ORDER_SQL} LIMIT 1"
             ).fetchone() is not None
 
         records = tuple(
