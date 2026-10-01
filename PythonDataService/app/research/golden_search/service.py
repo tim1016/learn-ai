@@ -767,7 +767,12 @@ async def _decide(conn: Any, row: StudyRow, command: str, body: Mapping[str, Any
         kind, state = "close", "closed"
     decision = {"kind": kind, "note": note.strip(), "at_ms": now_ms_utc()}
     await repo.insert_trial(conn, row.id, stage="decision", kind="decision", payload=decision)
-    updated = await repo.update_study(conn, row.id, changes={"state": state, "pending_stage": None, "stage_token": None}, decision=decision)
+    changes: dict[str, Any] = {"state": state, "pending_stage": None, "stage_token": None}
+    if row.state in RUNNING_STATES:
+        # Closing a stopped stage seals its attempt: a worker presented as interrupted but still alive
+        # must not move a closed study back into the lifecycle (the fence refuses a completed record).
+        changes["status"] = "completed"
+    updated = await repo.update_study(conn, row.id, changes=changes, decision=decision)
     return CommandOutcome(study=updated, dispatch=None)
 
 

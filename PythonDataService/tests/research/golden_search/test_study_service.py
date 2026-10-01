@@ -21,8 +21,10 @@ from app.research.golden_search import repository as repo
 from app.research.golden_search import service
 from app.research.golden_search.evaluator import CapabilityError, EvaluationCapability, StudyEvaluator
 from app.research.golden_search.models import GoldenSearchRefusal, StudyRow
+from app.research.golden_search.selection import Metrics
 from app.research.golden_search.stages import StageRefusedError
 from app.research.persistence import lifecycle
+from app.research.persistence.fence import StaleAttemptError
 from app.research.sweep.identity import CodeIdentity, resolve_code_identity
 from tests._helpers.golden_search_study import (
     DEVELOPMENT,
@@ -315,6 +317,28 @@ async def test_no_stage_starts_under_code_other_than_the_study_was_locked_with(d
     # Back on the locked code, Finish runs the stage.
     await driver.run(await driver.command(stopped, "finish"))
     assert (await service.get_row(row.id)).state == "awaiting_validation"
+
+
+async def test_closing_a_stopped_stage_seals_its_attempt_against_a_worker_still_running(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    row = await driver.lock(symbol)
+    outcome = await driver.command(row, "continue")
+    driver.engine = FakeEngine(crash_on_call=3)
+    with pytest.raises(BaseException):
+        await driver.run(outcome)
+    interrupted = await service.get_row(row.id)
+    assert (await driver.detail(interrupted))["presented_status"] == "interrupted"
+
+    closed = (await driver.command(interrupted, "close", {"note": "Abandoned."})).study
+    assert (closed.state, (await driver.detail(closed))["presented_status"]) == ("closed", "completed")
+    # The attempt that was presented as interrupted cannot write again: not a result, not a state.
+    with pytest.raises(StaleAttemptError):
+        await repo.update_study_fenced(conn, row.id, interrupted.attempt, changes={"state": "awaiting_validation"})
+    pending = await conn.fetchval("SELECT evaluation_key FROM research_golden_search_evaluations WHERE study_id = $1 AND status = 'pending'", row.id)
+    with pytest.raises(StaleAttemptError):
+        await repo.complete_evaluation(conn, row.id, interrupted.attempt, pending, metrics=Metrics.failed("late"), detail=None)
+    assert (await service.get_row(row.id)).state == "closed"
 
 
 # ── Leakage and capability ───────────────────────────────────────────────
