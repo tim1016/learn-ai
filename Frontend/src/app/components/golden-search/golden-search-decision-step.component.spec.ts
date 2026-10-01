@@ -158,6 +158,20 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     ]);
   });
 
+  it('approval the server does not offer stays disabled even with every acknowledgement, and says why', async () => {
+    const { commands } = await renderStep(
+      reviewWith({}, { permitted_actions: ['retain', 'revise'], action_refusals: { approve: 'Approval follows the final test.' } }),
+    );
+
+    fireEvent.input(reason(), { target: { value: 'Ready to approve.' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /missing independent engine agreement/i }));
+
+    expect(approveButton().disabled).toBe(true);
+    expect(screen.getByText('Approval follows the final test.')).not.toBeNull();
+    fireEvent.click(approveButton());
+    expect(commands).toEqual([]);
+  });
+
   it('a failed rule names what failed in the acknowledgement', async () => {
     await renderStep(
       reviewWith({ outcome: 'does_not_meet_rules', checks: [{ code: 'NET_POSITIVE', label: 'Profit after stated costs', status: 'fail', detail: 'Net loss of $310.' }] }),

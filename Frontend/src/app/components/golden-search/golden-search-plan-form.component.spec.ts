@@ -287,6 +287,28 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(service.preflight).toHaveBeenCalledTimes(2);
   });
 
+  it('a date typed by hand while dates are being laid out wins: the late layout is dropped and the month count cleared', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    const pending = deferred<GoldenSearchDefaults>();
+    service.defaults.mockImplementationOnce(() => pending.promise);
+
+    fireEvent.input(screen.getByLabelText('Final test (months)'), { target: { value: '4' } });
+    await waitFor(() => expect(service.defaults).toHaveBeenCalledTimes(2));
+    fireEvent.input(screen.getByLabelText('Final test from (development ends the day before)'), { target: { value: '2025-10-01' } });
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
+    pending.resolve(fourMonthDefaults());
+    await view.fixture.whenStable();
+
+    expect((screen.getByLabelText('Final test (months)') as HTMLInputElement).value).toBe('');
+    expect(screen.queryByText('Laying out the dates for these months…')).toBeNull();
+    expect(service.preflight).toHaveBeenCalledTimes(2);
+    const sent = service.preflight.mock.lastCall?.[0];
+    expect(sent?.final_start_ms).toBe(etMidnightMs('2025-10-01'));
+    expect(sent?.development_end_ms).toBe(etMidnightMs('2025-10-01'));
+  });
+
   it('a failed layout says so and keeps the plan from being checked or locked', async () => {
     const service = fakeService();
     const { view } = await renderForm(service);
