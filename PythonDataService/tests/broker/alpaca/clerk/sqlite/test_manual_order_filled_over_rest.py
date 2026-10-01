@@ -36,6 +36,7 @@ from app.broker.alpaca.clerk.sqlite.manual_order_executions import (
     ACTIVITY_READS_PER_WALK,
     BEYOND_REACH_REWALK_INTERVAL_MS,
 )
+from app.broker.alpaca.clerk.sqlite.manual_orders import submit_manual_order
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult, reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -45,7 +46,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.alpaca.trade_updates import _opt_ms_to_rfc3339
 from app.broker.contract.errors import BrokerUnavailable
-from app.broker.contract.models import BrokerActivityEvidence, BrokerOrder, BrokerOrderEvent
+from app.broker.contract.models import BrokerActivityEvidence, BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.utils.session_anchors import et_date_at_ms
 from tests.broker.alpaca.clerk.sqlite.conftest import _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_manual_order_replaced_at_alpaca import (
@@ -54,12 +55,14 @@ from tests.broker.alpaca.clerk.sqlite.test_manual_order_replaced_at_alpaca impor
     _account_hold_active,
     _another_bots_entry,
     _buy_limit,
+    _guarded,
     _manual_endings,
     _replace_at_alpaca,
     _replacement_of,
     _unexplained_hold_active,
     _Website,
 )
+from tests.broker.alpaca.clerk.sqlite.test_manual_orders import ACCOUNT_ID, OPERATOR_ID
 from tests.broker.alpaca.clerk.sqlite.test_reconcile import (
     _FakeRead,
     _NoReconciler,
@@ -800,3 +803,44 @@ async def test_a_leg_whose_execution_lies_beyond_one_walk_is_not_walked_again_fo
     assert _logged("manual_order_executions_beyond_reach") == [(order_ref, original.order_id)] * 2
     assert repo.effect_operation(effect_id).state == "in_progress"
     assert _exact_credited(repo, order_ref) == []
+
+
+async def test_another_legs_open_coverage_conflict_never_holds_back_a_clean_leg(
+    clocked_repo,  # noqa: F811 -- pytest fixture, used by name
+) -> None:
+    """The operator's first leg has an open coverage conflict; the second leg then fills over REST only.
+
+    Every manual leg shares the operator's custody subject, which admits one
+    open coverage conflict (#2791). The second leg's execution raises
+    nothing -- it has no cumulative for the set proof to refuse -- so it is
+    credited and the leg ends; the other bot's entry is admitted.
+    """
+    repo, _clock = clocked_repo
+    website = _Website(repo=repo)
+    first = await _buy_limit(repo, website)
+    sid_b, _ = _register_second_spy_lane(repo)
+    first_ref = first.leg.order_ref
+    assert first_ref is not None
+    first_filled = _filled(website.orders[first_ref], repo, filled_quantity=5, avg=99.90)
+    website.orders[first_ref] = first_filled
+    assert await _fill_frame(repo, first_filled, execution_id=_EXEC_A, quantity=5, price=99.90) == "order_event"
+    second = await submit_manual_order(
+        repo, account_id=ACCOUNT_ID, operator_id=OPERATOR_ID,
+        ticket_id="11111111-2222-4333-8444-555555555555", leg_id="66666666-7777-4888-9999-aaaaaaaaaaaa",
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=3, order_type="limit", limit_price=99.90, time_in_force="gtc"),
+        trade=_guarded(website),
+    )
+    second_ref = second.leg.order_ref
+    assert second_ref is not None and second.leg.effect_operation_id is not None
+    await _fill_frame(repo, first_filled, execution_id=_EXEC_A, quantity=5, price=99.95)
+    assert _coverage_conflict_active(repo), "the first leg's changed redelivery fences the operator's subject"
+    original = website.orders[second_ref]
+    website.orders[second_ref] = _filled(original, repo, filled_quantity=3, avg=99.80)
+    feed = _ActivityFeed()
+    feed.fill(execution_id=_EXEC_B, order_id=original.order_id, quantity=3, price=99.80, at_ms=repo.clock())
+
+    await _sweep(repo, website, feed, spy_held=8.0)
+
+    assert _credited(repo, second_ref) == [(_EXEC_B, "activity_recovery", 3.0, 99.80)]
+    assert repo.effect_operation(second.leg.effect_operation_id).state == "succeeded"
+    assert _another_bots_entry(repo, sid_b) == (True, None)

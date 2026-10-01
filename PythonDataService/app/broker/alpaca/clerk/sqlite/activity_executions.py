@@ -24,10 +24,18 @@ words. So does an activity that contradicts an execution the order accounts
 for -- the same execution id with another quantity or price, which no
 uncertainty names yet (#2791).
 
-The uncertainty store admits one open coverage conflict per custody subject.
-An order whose own open conflict fences it keeps that one, and an order of a
-subject another order's conflict fences waits, recording nothing, until the
-operator settles that one: its activity is read again on the next pass.
+The uncertainty store admits one open coverage conflict per custody subject,
+and every manual leg shares its operator's. An order whose own open conflict
+fences it keeps that one. While another order's conflict fences its subject,
+nothing is raised for it, and an order holding a cumulative recovery -- whose
+append the set proof may refuse with a conflict -- records nothing until the
+operator settles that one: its activity is read again on the next pass. Any
+other order records as usual.
+
+A contradiction of an exact an order-total proof kept quarantined holds no
+quarantine of its own, so that proof may close it on the broker's total as
+it closed the first; the activity stays named and is not raised again
+(ADR 0036, 2026-10-01 amendment on #2791, item 2).
 
 Recovery reads the same immutable evidence again on every pass, so what it
 cannot act on is reported once per process: a row that cannot be read as an
@@ -60,6 +68,7 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage import (
 )
 from app.broker.alpaca.clerk.sqlite.execution_coverage_evidence import order_total_retained_exact_provenance
 from app.broker.alpaca.clerk.sqlite.models import EffectOperationResource
+from app.broker.alpaca.clerk.sqlite.reads import cumulative_recovery_fill_exists_for_order
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.contract.models import BrokerActivity, BrokerOrderEvent, BrokerOrderLeg, OrderSide
 
@@ -155,8 +164,7 @@ def record_activity_executions(
     under the broker order it names. ``broker_order_id`` is the order whose
     quantity ``quantity_cap`` is, named on the refusal's log. With
     ``require_total``, a batch is recorded only once the order's exact total
-    would equal the shares its effective fills hold -- unless it contradicts
-    an execution the order accounts for, which the append flow must raise.
+    would equal the shares its effective fills hold.
 
     Checked and appended under the repository's write lock, so no stream
     slice lands between the check and the appends.
@@ -165,8 +173,6 @@ def record_activity_executions(
         subject_fenced = custody_subject_has_coverage_conflict(
             repo._conn, effect_operation_id=owner.effect_operation_id
         )
-        if subject_fenced and not active_execution_coverage_conflicts(repo._conn, order_ref=order_ref):
-            return RecordedActivityExecutions()
         batch = _executions_of_order(
             repo, subject=subject, order_ref=order_ref, leg=leg, member_ids=member_ids, fills=fills
         )
@@ -215,6 +221,13 @@ def record_activity_executions(
                 ),
             )
         if not unrecorded:
+            return RecordedActivityExecutions()
+        if (
+            subject_fenced
+            and not active_execution_coverage_conflicts(repo._conn, order_ref=order_ref)
+            and cumulative_recovery_fill_exists_for_order(repo._conn, order_ref)
+        ):
+            # Its append could raise a second open conflict on the subject.
             return RecordedActivityExecutions()
         if require_total:
             filled_quantity, _ = repo.effective_fill_totals_for_order(order_ref)
