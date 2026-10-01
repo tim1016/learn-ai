@@ -9,18 +9,11 @@ import type { components } from './broker.types';
 export type BrokerAccountSnapshot = components['schemas']['BrokerAccountSnapshot'];
 export type AlpacaLiveVerdict = components['schemas']['AlpacaLiveVerdict'];
 export type BrokerActivity = components['schemas']['BrokerActivity'];
-export type BrokerPosition = components['schemas']['BrokerPosition'];
-export type BrokerOrder = components['schemas']['BrokerOrder'];
-export type BrokerOrderEvent = components['schemas']['BrokerOrderEvent'];
 export type BrokerPortfolioHistory = components['schemas']['BrokerPortfolioHistory'];
 export type PortfolioHistoryRange = components['schemas']['PortfolioHistoryRange'];
 
 // C1 + C2 + C3 Trader-lens proof. Values are server-owned and generated from
 // the Python OpenAPI contract; the browser only presents them.
-export type AccountFifoAttributionRow = components['schemas']['FifoAttributionRowResponse'];
-export type AccountPnlAttribution = components['schemas']['AccountPnlAttributionResponse'];
-export type AccountPnlDivergence = components['schemas']['AccountPnlDivergenceResponse'];
-export type AccountPnlReconciliation = components['schemas']['AccountPnlReconciliationResponse'];
 export type PortfolioHistoryProof = components['schemas']['PortfolioHistoryProofResponse'];
 
 // An account's Activity page (PRD #2560): a period's orders and cash moves and
@@ -49,8 +42,6 @@ export type ManualOrderCancellation = components['schemas']['ManualOrderCancella
 
 // SQLite reconciliation and flag-and-hold status are read-only at this surface.
 export type ClerkStatus = components['schemas']['ClerkStatus'];
-export type HoldState = components['schemas']['HoldState'];
-export type ReconciliationSummary = components['schemas']['ReconciliationSummary'];
 
 // Custody resolution (Clerk↔broker reconciliation on the Accounts page).
 export type CustodyDiagnosis = components['schemas']['CustodyDiagnosis'];
@@ -95,7 +86,6 @@ export type BrokerLiveEnvelope = components['schemas']['LiveEnvelopePayload'];
 export type BrokerPaperXhAllowances = components['schemas']['PaperXhAllowancesPayload'];
 export type AlpacaDeskState = components['schemas']['AlpacaDeskStateResponse'];
 export type AlpacaDeskAccountChoice = components['schemas']['DeskAccountChoiceResponse'];
-export type AlpacaDeskSelectionSummary = components['schemas']['DeskSelectionSummaryResponse'];
 // The endpoint mode a revision declares — `paper` or `live`. Derived from the
 // revision field rather than named separately, so the closed set cannot drift.
 export type BrokerEndpointMode = BrokerProfileRevision['endpoint_mode'];

@@ -2,11 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   CFG,
-  barIndexAtX,
   computeScale,
   draw,
   layoutTag,
-  type CandleRendererConfig,
   type ChartScale,
 } from './candle-renderer';
 import type { ChartBar, ChartFillMarker } from './gallery.types';
@@ -103,44 +101,6 @@ describe('computeScale', () => {
   });
 });
 
-describe('barIndexAtX', () => {
-  const cfg: CandleRendererConfig = {
-    ...CFG,
-    width: 100,
-    height: 100,
-    padLeft: 0,
-    padRight: 0,
-    padTop: 0,
-    padBottom: 0,
-  };
-  const scale = computeScale([bar()], cfg);
-  const barCount = 5; // barWidth = 100 / 5 = 20
-
-  it.each([
-    [0, 0],
-    [19, 0],
-    [20, 1],
-    [39, 1],
-    [40, 2],
-    [99, 4],
-  ])('maps x=%d to bar index %d', (x, expected) => {
-    expect(barIndexAtX(x, scale, barCount)).toBe(expected);
-  });
-
-  it('clamps at the right edge, including out-of-bounds x', () => {
-    expect(barIndexAtX(100, scale, barCount)).toBe(4);
-    expect(barIndexAtX(1_000, scale, barCount)).toBe(4);
-  });
-
-  it('clamps at the left edge for negative x', () => {
-    expect(barIndexAtX(-50, scale, barCount)).toBe(0);
-  });
-
-  it('returns 0 for a zero bar count', () => {
-    expect(barIndexAtX(50, scale, 0)).toBe(0);
-  });
-});
-
 describe('layoutTag', () => {
   const scale: ChartScale = {
     lo: 0,
@@ -168,7 +128,7 @@ describe('draw', () => {
     const ctx = createStubCtx();
     const scale = computeScale([], CFG);
 
-    expect(() => draw(ctx, [], [], scale, null, CFG)).not.toThrow();
+    expect(() => draw(ctx, [], [], scale, CFG)).not.toThrow();
   });
 
   it('does not throw for a single-bar array with a marker on it', () => {
@@ -177,7 +137,7 @@ describe('draw', () => {
     const markers = [marker({ filled_at_ms: bars[0].start_ms + 1 })];
     const scale = computeScale(bars, CFG);
 
-    expect(() => draw(ctx, bars, markers, scale, 0, CFG)).not.toThrow();
+    expect(() => draw(ctx, bars, markers, scale, CFG)).not.toThrow();
   });
 
   it('does not throw for an all-flat-price array', () => {
@@ -195,10 +155,10 @@ describe('draw', () => {
     );
     const scale = computeScale(bars, CFG);
 
-    expect(() => draw(ctx, bars, [], scale, null, CFG)).not.toThrow();
+    expect(() => draw(ctx, bars, [], scale, CFG)).not.toThrow();
   });
 
-  it('does not throw with buy and sell markers plus an active hover index', () => {
+  it('does not throw with buy and sell markers', () => {
     const ctx = createStubCtx();
     const bars = Array.from({ length: 8 }, (_, i) =>
       bar({
@@ -217,7 +177,7 @@ describe('draw', () => {
     ];
     const scale = computeScale(bars, CFG);
 
-    expect(() => draw(ctx, bars, markers, scale, 4, CFG)).not.toThrow();
+    expect(() => draw(ctx, bars, markers, scale, CFG)).not.toThrow();
   });
 
   it('paints the last-price tag by default but omits it when showLastPriceTag is false', () => {
@@ -229,11 +189,11 @@ describe('draw', () => {
     const scale = computeScale(bars, CFG);
 
     const withTag = createStubCtx();
-    draw(withTag, bars, [], scale, null, CFG);
+    draw(withTag, bars, [], scale, CFG);
     expect(withTag.fill).toHaveBeenCalledTimes(1);
 
     const withoutTag = createStubCtx();
-    draw(withoutTag, bars, [], scale, null, { ...CFG, showLastPriceTag: false });
+    draw(withoutTag, bars, [], scale, { ...CFG, showLastPriceTag: false });
     expect(withoutTag.fill).not.toHaveBeenCalled();
   });
 
@@ -248,11 +208,11 @@ describe('draw', () => {
     const scale = computeScale(bars, CFG);
 
     const tagOnly = createStubCtx();
-    draw(tagOnly, bars, [], scale, null, CFG);
+    draw(tagOnly, bars, [], scale, CFG);
     expect(tagOnly.fill).toHaveBeenCalledTimes(1);
 
     const withInWindowMarker = createStubCtx();
-    draw(withInWindowMarker, bars, [marker({ filled_at_ms: bars[1].start_ms + 1 })], scale, null, CFG);
+    draw(withInWindowMarker, bars, [marker({ filled_at_ms: bars[1].start_ms + 1 })], scale, CFG);
     expect(withInWindowMarker.fill).toHaveBeenCalledTimes(2);
 
     const withNewerThanBuffer = createStubCtx();
@@ -261,7 +221,6 @@ describe('draw', () => {
       bars,
       [marker({ filled_at_ms: bars[bars.length - 1].end_ms + 60_000 })], // the forming, not-yet-closed minute
       scale,
-      null,
       CFG,
     );
     expect(withNewerThanBuffer.fill).toHaveBeenCalledTimes(1);
@@ -272,7 +231,6 @@ describe('draw', () => {
       bars,
       [marker({ filled_at_ms: bars[0].start_ms - 60_000 })], // trimmed out of the buffer
       scale,
-      null,
       CFG,
     );
     expect(withOlderThanBuffer.fill).toHaveBeenCalledTimes(1);
@@ -283,7 +241,7 @@ describe('draw', () => {
     ];
     const gapScale = computeScale(barsWithGap, CFG);
     const withMarkerInGap = createStubCtx();
-    draw(withMarkerInGap, barsWithGap, [marker({ filled_at_ms: 1_700_000_090_000 })], gapScale, null, CFG);
+    draw(withMarkerInGap, barsWithGap, [marker({ filled_at_ms: 1_700_000_090_000 })], gapScale, CFG);
     expect(withMarkerInGap.fill).toHaveBeenCalledTimes(1);
   });
 });

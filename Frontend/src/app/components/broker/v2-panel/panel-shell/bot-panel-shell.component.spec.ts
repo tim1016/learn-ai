@@ -545,18 +545,6 @@ const mockService = {
   getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot()),
   liveStreamUrl: vi.fn().mockReturnValue('/api/test/live-stream'),
   getCurrentRun: vi.fn().mockResolvedValue(makeRun()),
-  getLiveChart: vi.fn().mockResolvedValue({
-    strategy_instance_id: 'sid-001',
-    symbol: 'QQQ',
-    trading_date_open_ms: 1_753_800_000_000,
-    trading_date_close_ms: 1_753_823_400_000,
-    resolution: '1m',
-    bars: [],
-    fill_markers: [],
-    overlay_notices: [],
-    feed: fakeChartFeed(),
-    as_of_ms: 1_753_800_000_000,
-  }),
   getHistoryChart: vi.fn().mockResolvedValue({
     strategy_instance_id: 'sid-001',
     symbol: 'QQQ',

@@ -29,7 +29,6 @@ import type {
   ChartHistoryTimeframe,
   ChartHistoryResponse,
   ChartLiveResolution,
-  ChartLiveResponse,
   EvidencePage,
   PanelAction,
   PanelActionRequest,
@@ -53,22 +52,6 @@ function isQuiesceAction(actionId: PanelActionRequest['action_id']): actionId is
   return Object.hasOwn(QUIESCE_ACTIONS, actionId);
 }
 
-/** The key the deploy-window fallback posts under. A coordinator that did
- * route the quiesce attempt recorded it under the frozen key, and it refuses
- * that key on a different operation. */
-const LEGACY_ACTIONS_KEY_SUFFIX = ':actions';
-const IDEMPOTENCY_KEY_MAX_LENGTH = 128;
-
-/** A 404 no handler produced: the framework's own unrouted answer
- * (`{"detail": "Not Found"}`), never a typed refusal — a fleet refusal
- * carries a `reason`, a panel refusal a structured `detail`. */
-function isUnroutedNotFound(error: unknown): boolean {
-  if (!(error instanceof HttpErrorResponse) || error.status !== 404) return false;
-  const body: unknown = error.error;
-  if (typeof body !== 'object' || body === null || 'reason' in body) return false;
-  return 'detail' in body && body.detail === 'Not Found';
-}
-
 /** The settings one Deploy asks for — what a preview judges and consent binds
  * to. The bot's name is never here: the backend authors it (#2551). */
 export type DeployBotBody = components['schemas']['AlpacaPaperDeployRequest'];
@@ -77,7 +60,6 @@ export type DeployBotBody = components['schemas']['AlpacaPaperDeployRequest'];
 export type DeploySubmissionBody = components['schemas']['AlpacaDeploySubmission'];
 /** Deploy again: one earlier bot's sealed settings, never its money or consent. */
 export type BotDeployPrefill = components['schemas']['BotDeployPrefill'];
-export type DeployBotReceipt = components['schemas']['AlpacaPaperDeployReceipt'];
 export type BudgetDeployReceipt = components['schemas']['BudgetDeployCommandReceipt'];
 /** The recovery read's answer for a key whose Deploy has not committed:
  * `in_flight` while this clerk is still sending it, `not_committed` when
@@ -104,7 +86,6 @@ export type DeploymentBudgetInput = components['schemas']['DeploymentBudgetInput
  * slice width is Python-authored; the browser only draws it. */
 export type AccountMoneyView = components['schemas']['AccountMoneyView'];
 export type MoneySegment = components['schemas']['MoneySegment'];
-export type MoneyParts = components['schemas']['MoneyParts'];
 export type DeployBotView = components['schemas']['AlpacaPaperDeployView'];
 export type DeployBotStrategy = components['schemas']['AlpacaPaperDeployStrategy'];
 export type QualifiedDeployConfiguration = components['schemas']['QualifiedDeployConfiguration'];
@@ -359,14 +340,8 @@ export class BrokerV2PanelService {
    * catalog operation, which a draining lane still routes while it refuses
    * every other action (#2351, ADR 0063 §2) — so the operator can make a
    * draining lane quiet from this panel.
-   *
-   * Deploy window: `my-frontend` serves this code the moment the main
-   * checkout is pulled, while a coordinator or clerk still running the
-   * previous build has no `/actions/quiesce` route until it restarts. Only
-   * that unrouted 404 — nothing ran — falls back to `/actions`, under a
-   * derived key; a typed refusal never does.
    */
-  async runAction(
+  runAction(
     target: ResourceTarget,
     sid: string,
     request: PanelActionRequest,
@@ -374,20 +349,7 @@ export class BrokerV2PanelService {
     if (!isQuiesceAction(request.action_id)) {
       return this.postPanelAction('bot_panel_action', target, sid, request);
     }
-    try {
-      return await this.postPanelAction('bot_panel_quiesce_action', target, sid, request);
-    } catch (error) {
-      const fallbackKey = `${request.idempotency_key}${LEGACY_ACTIONS_KEY_SUFFIX}`;
-      if (!isUnroutedNotFound(error) || fallbackKey.length > IDEMPOTENCY_KEY_MAX_LENGTH) {
-        throw error;
-      }
-      return this.postPanelAction(
-        'bot_panel_action',
-        withCommand(target, 'bot_action', fallbackKey),
-        sid,
-        { ...request, idempotency_key: fallbackKey },
-      );
-    }
+    return this.postPanelAction('bot_panel_quiesce_action', target, sid, request);
   }
 
   private postPanelAction(
@@ -547,19 +509,6 @@ export class BrokerV2PanelService {
           extended_limit: extendedLimit,
         }),
       ),
-    );
-  }
-
-  getLiveChart(
-    target: ResourceTarget,
-    sid: string,
-    resolution: ChartLiveResolution,
-  ): Promise<ChartLiveResponse> {
-    const params = new HttpParams().set('resolution', resolution);
-    // The tape polls beside the detail pane's panel read (#1912).
-    return this.polls.get<ChartLiveResponse>(
-      operationUrl('bot_chart_live', { ...target, sid }),
-      params,
     );
   }
 

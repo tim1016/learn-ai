@@ -18,7 +18,6 @@ import { HOME_CLEAR_COPY, clearRetryCanChange, isCleared, type ClearOutcome } fr
 })
 export class HomeClearOutcomeComponent {
   readonly outcome = input.required<ClearOutcome>();
-  readonly busy = input(false);
 
   readonly retryRequested = output();
   readonly dismissed = output();

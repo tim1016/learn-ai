@@ -89,7 +89,7 @@ function proof(): PortfolioHistoryProof {
 
 function brokers() {
   return {
-    getFeeAttribution: vi.fn((_target: unknown, _sid: string | null, period: ActivityPeriod) =>
+    getFeeAttribution: vi.fn((_target: unknown, period: ActivityPeriod) =>
       Promise.resolve(periodFees(period))),
     getTodayStatement: vi.fn().mockResolvedValue(TODAY),
     getActivityPeriod: vi.fn((_target: unknown, period: ActivityPeriod) => Promise.resolve(periodRead(period))),
@@ -222,7 +222,7 @@ describe('AlpacaActivityPageComponent', () => {
 
     fireEvent.click(await screen.findByRole('radio', { name: label }));
 
-    await waitFor(() => expect(broker.getFeeAttribution).toHaveBeenLastCalledWith(TARGET, null, id));
+    await waitFor(() => expect(broker.getFeeAttribution).toHaveBeenLastCalledWith(TARGET, id));
     await waitFor(() => expect(feeOwners()).toEqual(owners));
     expect(broker.getActivityPeriod).toHaveBeenLastCalledWith(TARGET, id);
   });
