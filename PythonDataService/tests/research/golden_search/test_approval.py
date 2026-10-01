@@ -422,7 +422,7 @@ async def test_the_real_engine_saves_a_run_golden_validation_accepts_as_current_
     assert dossier is not None
     # The run read the receipted lake bytes, so its data convention is recorded, not unknown.
     assert dossier.evidence_applicability.status == "current"
-    assert dossier.validation_case["evidence_provenance"]["data_contract"] == "lake_complete_sessions/v1"
+    assert dossier.validation_case["evidence_provenance"]["data_contract"] == "lake_receipted_snapshot/v1"
     assert dossier.latest_review is not None and dossier.latest_review.decision == "accept"
 
 

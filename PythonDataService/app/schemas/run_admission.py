@@ -189,6 +189,10 @@ QUALIFICATION_ABSENT = (
 QUALIFICATION_UNVERIFIABLE = (
     "Cannot verify the Golden Search qualification for this configuration: its records could not be read."
 )
+QUALIFICATION_UNJUDGEABLE = (
+    "This service cannot name the build it is running (its code on disk is not the code it imported), "
+    "so it cannot judge this qualification ready. Restart the service."
+)
 QUALIFICATION_NOT_REVERIFIED = (
     "The Golden Search qualification this program seal pins was not re-verified against the running build."
 )

@@ -626,6 +626,8 @@ async def _publish(
         published = await qualifications.get_qualification_by_study(conn, request.study_id)
         if published is not None:
             return published.id
+        # Held to commit: no re-proof or other approval can change the default's readiness after it is judged below.
+        await qualifications.lock_default_pointer(conn, request.strategy_key, request.symbol)
         try:
             designated = await golden_validation.designate(
                 conn,

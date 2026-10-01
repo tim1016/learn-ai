@@ -485,7 +485,9 @@ async def exposure_overlaps(
     Ledger overlaps count studies, from any strategy or revision. Outside
     activity is research that was never instrumented for exposure: Grid
     Search and Walk-Forward windows (half-open), saved backtests (start and
-    end dates inclusive) and other studies' evaluations.
+    end dates inclusive) and other studies' evaluations. A Grid or
+    Walk-Forward request whose window cannot be read counts as overlapping:
+    an unreadable history is never a fresh one.
     """
     row = await conn.fetchrow(
         """
@@ -494,10 +496,12 @@ async def exposure_overlaps(
             WHERE e.symbol = $1 AND e.interval_start_ms < $3 AND e.interval_end_ms > $2) AS ledger,
           (SELECT COUNT(*) FROM research_grid_searches g
             WHERE upper(g.symbol) = $1
-              AND (g.request_json ->> 'start_ms')::bigint < $3 AND (g.request_json ->> 'end_ms')::bigint > $2)
+              AND COALESCE((g.request_json ->> 'start_ms')::bigint, 0) < $3
+              AND COALESCE((g.request_json ->> 'end_ms')::bigint, 9223372036854775807) > $2)
           + (SELECT COUNT(*) FROM research_walk_forward_studies w
             WHERE upper(w.symbol) = $1
-              AND (w.request_json ->> 'start_ms')::bigint < $3 AND (w.request_json ->> 'end_ms')::bigint > $2)
+              AND COALESCE((w.request_json ->> 'start_ms')::bigint, 0) < $3
+              AND COALESCE((w.request_json ->> 'end_ms')::bigint, 9223372036854775807) > $2)
           + (SELECT COUNT(*) FROM research_backtest_runs r
             WHERE upper(r.symbol) = $1 AND r.start_ms < $3 AND r.end_ms >= $2)
           + (SELECT COUNT(DISTINCT v.study_id) FROM research_golden_search_evaluations v

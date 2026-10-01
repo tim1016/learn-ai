@@ -450,8 +450,8 @@ async def default_qualification_ids(conn: asyncpg.Connection) -> set[str]:
     return {row["qualification_id"] for row in rows}
 
 
-async def _lock_default_pointer(conn: asyncpg.Connection, program_key: str, symbol: str) -> None:
-    """Serialize every writer of one (program, stock) default until the caller's transaction ends.
+async def lock_default_pointer(conn: asyncpg.Connection, program_key: str, symbol: str) -> None:
+    """Serialize every writer of one (program, stock) default, and every change to its readiness, until the caller's transaction ends.
 
     A transaction-scoped advisory lock rather than only the pointer's row
     lock: before the first pointer exists there is no row to lock, and a
@@ -496,7 +496,7 @@ async def set_default_cas(
     if not reason.strip():
         raise ValueError("a default change records its reason")
     async with conn.transaction():
-        await _lock_default_pointer(conn, program_key, symbol)
+        await lock_default_pointer(conn, program_key, symbol)
         current = await conn.fetchrow(
             """
             SELECT qualification_id, revision FROM research_golden_defaults
@@ -637,7 +637,7 @@ async def revoke_qualification(
             raise QualificationNotFoundError(f"Golden Search qualification {qualification_id!r} was not found")
         # Locked before the replay check, so a same-command request racing this
         # one reads its committed event as a replay, not as another revocation.
-        await _lock_default_pointer(conn, qualification.program_key, qualification.symbol)
+        await lock_default_pointer(conn, qualification.program_key, qualification.symbol)
         prior = await get_event_by_command(conn, command_id)
         if prior is not None:
             event = await append_event(

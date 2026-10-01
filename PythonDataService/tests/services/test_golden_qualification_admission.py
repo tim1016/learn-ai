@@ -32,6 +32,7 @@ from app.schemas.run_admission import (
     QUALIFICATION_NOT_REVERIFIED,
     QUALIFICATION_REVOKED,
     QUALIFICATION_STALE,
+    QUALIFICATION_UNJUDGEABLE,
     QUALIFICATION_UNVERIFIABLE,
     REGISTRY_POINT_COVERED,
     ProgramBuildAdmissionFact,
@@ -40,6 +41,7 @@ from app.schemas.run_admission import (
     StartRuntimeAdmissionFact,
     StrategyValidationAdmissionFact,
 )
+from app.services import signal_program_admission as admission_module
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_start_admission import BotStartAdmission, StartRequest
 from app.services.run_admission import evaluate_run_admission
@@ -395,6 +397,17 @@ async def test_coverage_resolved_for_another_tuple_never_covers_a_seal() -> None
     assert later_start.corpus_coverage == "UNCOVERED"
     for proof in (first_start, later_start):
         assert not any(ref.startswith("golden-qualification:") for ref in proof.evidence_refs)
+
+
+async def test_a_running_build_that_cannot_be_named_judges_nothing_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unnamed(_contract: object) -> tuple[str, str]:
+        raise admission_module.RestartNeededError("sources changed after import")
+
+    monkeypatch.setattr(admission_module, "running_build_digests", unnamed)
+
+    coverage = await resolve_admission_coverage(_binding(), lookup=_Store(_ready("gq-1")))
+
+    assert coverage == Coverage(state="UNCOVERED", qualification_id=None, explanation=QUALIFICATION_UNJUDGEABLE)
 
 
 async def test_pinned_seal_with_an_unreadable_store_says_cannot_verify() -> None:

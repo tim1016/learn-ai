@@ -328,3 +328,12 @@ def test_a_failed_detail_run_has_metrics_and_no_series() -> None:
 def test_the_decimal_sentence_drops_trailing_zeros_but_keeps_the_gap_in_cents() -> None:
     point = {"symbol": "SPY", "gap": Decimal("0.1"), "rsi_min": 45, "rsi_max": 70, "fast_period": 5, "slow_period": 10, "hold_bars": 3}
     assert params_sentence(EMA, point) == "Gap $0.10 · RSI 45–70 · EMA 5/10 · hold 3 bars"
+
+
+def test_exposure_reads_the_window_keys_grid_and_walk_forward_requests_store() -> None:
+    """The exposure ledger reads these keys out of the other procedures' stored requests (#2696)."""
+    from app.schemas.grid_search import GridSearchSpecRequest
+    from app.schemas.walk_forward_study import WalkForwardStudySpecRequest
+
+    for model in (GridSearchSpecRequest, WalkForwardStudySpecRequest):
+        assert {"start_ms", "end_ms"} <= set(model.model_fields), model.__name__

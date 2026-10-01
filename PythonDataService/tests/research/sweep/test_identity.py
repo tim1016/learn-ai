@@ -205,6 +205,18 @@ def test_the_real_service_resolves_a_complete_identity() -> None:
 
 @pytest.mark.parametrize(
     "module_name",
+    ["app.research.golden_search.guidance", "app.research.golden_search.views", "app.research.golden_search.approval"],
+)
+def test_golden_search_copy_read_models_and_approval_are_not_part_of_the_source_identity(module_name: str) -> None:
+    """A wording or read-model change cannot change a number, so it must not strand a resumable study (#2696)."""
+    module_file = Path(importlib.import_module(module_name).__file__ or "")
+    relative = module_file.resolve().relative_to(identity_module.SERVICE_ROOT).as_posix()
+
+    assert not any(relative == path or relative.startswith(f"{path}/") for path in identity_module.IDENTITY_SOURCE_PATHS)
+
+
+@pytest.mark.parametrize(
+    "module_name",
     ["app.lean_sidecar.closing_bar", "app.lean_sidecar.trading_calendar", "app.research.golden_search.zoom", "app.research.golden_search.evaluator"],
 )
 def test_the_closing_bar_rule_and_its_calendar_are_part_of_the_source_identity(module_name: str) -> None:

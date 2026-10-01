@@ -14,6 +14,7 @@ v2 seal is append-only evidence and never rewrites v1 identity bytes.
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +36,7 @@ from app.research.golden_search.qualifications import (
 from app.schemas.run_admission import (
     QUALIFICATION_COVERED,
     QUALIFICATION_NOT_REVERIFIED,
-    QUALIFICATION_UNVERIFIABLE,
+    QUALIFICATION_UNJUDGEABLE,
     REGISTRY_POINT_COVERED,
     ProgramBuildAdmissionFact,
     StrategyValidationAdmissionFact,
@@ -59,6 +60,8 @@ from app.services.program_source_anchor import (
     record_imported_program_sources,
 )
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
+logger = logging.getLogger(__name__)
 
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_QUALIFICATION_MANIFEST = _SERVICE_ROOT / "app/data/signal_program_build_receipts.json"
@@ -561,7 +564,12 @@ async def resolve_admission_coverage(
         artifact_digest, _wiring_digest = running_build_digests(contract)
     except (RestartNeededError, OSError, ValueError):
         # The proof refuses this build on its own; nothing can be judged ready for it.
-        return Coverage(state="UNCOVERED", qualification_id=None, explanation=QUALIFICATION_UNVERIFIABLE)
+        logger.warning(
+            "Golden Search coverage could not name the running build",
+            extra={"action": "golden_coverage_build_unnamed", "strategy_key": binding.strategy_key},
+            exc_info=True,
+        )
+        return Coverage(state="UNCOVERED", qualification_id=None, explanation=QUALIFICATION_UNJUDGEABLE)
     return await resolve_coverage(
         program_key=binding.strategy_key,
         contract=contract,

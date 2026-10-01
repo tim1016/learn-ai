@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 
+import asyncpg
 import httpx
 import pytest
 from httpx import ASGITransport
@@ -169,6 +170,15 @@ async def test_unreadable_defaults_degrade_to_the_registry_point_and_say_so(
 
     assert defaults == {}
     assert any(getattr(record, "action", None) == "golden_search_defaults_unavailable" for record in caplog.records)
+
+
+async def test_a_dropped_research_connection_degrades_to_the_registry_point(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def dropped() -> object:
+        raise asyncpg.InterfaceError("connection is closed")
+
+    monkeypatch.setattr(panel_deploy.qualification_service, "ready_defaults", dropped)
+
+    assert await panel_deploy._ready_golden_defaults() == {}
 
 
 # ---------------------------------------------------------------------------

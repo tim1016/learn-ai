@@ -18,7 +18,7 @@ import asyncio
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import asyncpg
 
@@ -29,7 +29,7 @@ from app.research.golden_search import qualifications
 from app.research.golden_search.proof import BlobStore, ProofMismatchError, ProofRecord, default_blob_store, reprove
 from app.research.golden_search.qualifications import GoldenDefault, QualificationEvent, QualificationRow
 from app.research.persistence.db import with_connection
-from app.schemas.run_admission import QUALIFICATION_REVOKED, QUALIFICATION_STALE
+from app.schemas.run_admission import QUALIFICATION_REVOKED, QUALIFICATION_STALE, QUALIFICATION_UNJUDGEABLE
 from app.services.signal_program_admission import RestartNeededError, running_build_digests
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import now_ms_utc
@@ -37,11 +37,6 @@ from app.utils.timestamps import now_ms_utc
 logger = logging.getLogger(__name__)
 
 StatusName = Literal["ready", "stale", "revoked", "unverifiable"]
-
-QUALIFICATION_UNJUDGEABLE = (
-    "This service cannot name the build it is running (its code on disk is not the code it imported), "
-    "so it cannot judge this qualification ready. Restart the service."
-)
 
 
 class QualificationRefusal(Exception):
@@ -244,6 +239,13 @@ async def _require_judged(qualification_id: str) -> JudgedQualification:
     return judged
 
 
+async def _append_reproof(conn: asyncpg.Connection, *, program_key: str, symbol: str, **event: Any) -> None:
+    """Append a re-proof under the stock's default lock: approval judges the default's readiness under it too."""
+    async with conn.transaction():
+        await qualifications.lock_default_pointer(conn, program_key, symbol)
+        await qualifications.append_event(conn, **event)
+
+
 async def reprove_qualification(
     *,
     qualification_id: str,
@@ -319,7 +321,9 @@ async def reprove_qualification(
         ) from exc
     try:
         await with_connection(
-            qualifications.append_event,
+            _append_reproof,
+            program_key=row.program_key,
+            symbol=row.symbol,
             qualification_id=qualification_id,
             kind="reproved",
             actor=actor,
