@@ -1,0 +1,787 @@
+"""Golden Search study service: the one interface the HTTP layer and the jobs boundary call (#2696, ADR 0074).
+
+* :func:`capabilities`, :func:`defaults`, :func:`preflight` — read-only plan
+  work; protocol problems come back as refusals in the answer, never errors.
+* :func:`lock_study` — freeze a reviewed plan into a ``locked`` study,
+  idempotently by its key.
+* :func:`run_command` — every lifecycle command, under ``expected_revision``
+  and an idempotency key; a command that authorizes a stage returns its
+  ``dispatch``.
+* :func:`bind_dispatch` / :func:`run_stage` — the jobs boundary binds a job
+  to the authorized stage once, then runs it on a worker thread.
+* :func:`detail` / :func:`summaries` / :func:`candidate` / :func:`evaluations`
+  / :func:`hide` — reads and the soft delete.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+import secrets
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
+from app.research.golden_search import repository as repo
+from app.research.golden_search.actions import LIVE_PRESENTATIONS, action_refusals, presented_status, unclaimed
+from app.research.golden_search.declarations import declaration_for, point_hash, unavailable_reason
+from app.research.golden_search.exposure_rules import EXPOSURE_EXPLANATIONS, claim_for, exposure_state
+from app.research.golden_search.guidance import research_weakness
+from app.research.golden_search.models import (
+    CANDIDATE_KEYS,
+    COMMANDS,
+    RETAIN_KINDS,
+    RUNNING_STATES,
+    STAGE_STATES,
+    STAGE_STEPS,
+    CommandName,
+    GoldenSearchRefusal,
+    StageName,
+    StudyRow,
+    require_mapping,
+)
+from app.research.golden_search.planning import (
+    DEFAULT_FINAL_MONTHS,
+    DEFAULT_TEST_MONTHS,
+    DEFAULT_TRAINING_MONTHS,
+    default_protocol,
+    preflight_view,
+    prepare_lock,
+    protocol_from_request,
+    registry_incumbent,
+    request_sha256,
+    review_plan,
+    study_id_for,
+)
+from app.research.golden_search.protocol import IncumbentRef
+from app.research.golden_search.stages import ApprovalBinding, StageOutcome, execute_stage, stage_total
+from app.research.golden_search.views import candidate_detail, study_detail, study_summary
+from app.research.persistence import lifecycle
+from app.research.persistence.db import connection, with_connection
+from app.research.sweep.identity import CodeIdentity
+from app.schemas.grid_search import SYMBOL_PATTERN
+from app.utils.session_anchors import et_date_at_ms
+from app.utils.timestamps import now_ms_utc
+
+logger = logging.getLogger(__name__)
+
+NOUN = "study"
+UNIT = "evaluation"
+JOB_TYPE = "golden_search"
+_SYMBOL = re.compile(SYMBOL_PATTERN)
+
+Liveness = Callable[[str | None], bool | None]
+
+
+def _not_found(study_id: str) -> GoldenSearchRefusal:
+    return GoldenSearchRefusal(f"Study {study_id} was not found.", code="NOT_FOUND", kind="not_found")
+
+
+def _symbol(value: str) -> str:
+    symbol = value.strip().upper()
+    if not _SYMBOL.match(symbol):
+        raise GoldenSearchRefusal(f"{value!r} is not a ticker symbol.", code="SYMBOL_INVALID", field="symbol")
+    return symbol
+
+
+# ── Capabilities, exposure, incumbents and defaults ──────────────────────
+
+
+def capabilities() -> list[dict[str, Any]]:
+    """Every registered strategy with its Golden Search declaration, or the reason it has none."""
+    rows = []
+    for key, registration in sorted(_STRATEGY_REGISTRY.items()):
+        declaration = declaration_for(key)
+        reason = unavailable_reason(key)
+        rows.append(
+            {
+                "strategy_key": key,
+                "display_name": registration.display_name,
+                "available": declaration is not None and reason is None,
+                "reason": reason,
+                "knobs": []
+                if declaration is None
+                else [
+                    {
+                        "name": knob.name,
+                        "label": knob.label,
+                        "unit": knob.unit,
+                        "kind": knob.kind,
+                        "domain_low": float(knob.domain_low),
+                        "domain_high": float(knob.domain_high),
+                        "quantum": float(knob.quantum),
+                        "default_low": float(knob.default_low),
+                        "default_high": float(knob.default_high),
+                        "neighbor_step": float(knob.neighbor_step),
+                        "default_step": float(knob.default_step),
+                        "searchable_by_default": knob.searchable_by_default,
+                        "warmup_dependent": knob.warmup_dependent,
+                        "default_value": int(knob.default_value) if knob.kind == "integer" else float(knob.default_value),
+                        "note": knob.note,
+                    }
+                    for knob in declaration.knobs
+                ],
+                "fixed": [] if declaration is None else [{"label": f.label, "value": f.value, "reason": f.reason} for f in declaration.fixed],
+                "constraints": []
+                if declaration is None
+                else [{"left": c.left, "op": c.op, "right": c.right, "message": c.message} for c in declaration.constraints],
+                "default_pair_audits": [] if declaration is None else [list(pair) for pair in declaration.default_pair_audits],
+            }
+        )
+    return rows
+
+
+async def exposure_view(symbol: str, start_ms: int, end_ms: int, *, exclude_study_id: str | None = None) -> dict[str, Any]:
+    """Recorded use of a final interval for a symbol, as the state, its counts and its explanation."""
+    overlaps = await with_connection(
+        repo.exposure_overlaps, symbol=symbol, start_ms=start_ms, end_ms=end_ms, exclude_study_id=exclude_study_id
+    )
+    state = exposure_state(ledger_overlaps=overlaps.ledger, outside_activity_overlaps=overlaps.outside)
+    return {
+        "state": state,
+        "ledger_overlaps": overlaps.ledger,
+        "outside_activity_overlaps": overlaps.outside,
+        "explanation": EXPOSURE_EXPLANATIONS[state],
+    }
+
+
+def _running_artifact_digest(contract: SignalProgramContract) -> str:
+    from app.services.signal_program_admission import running_artifact_digest
+
+    return running_artifact_digest(contract)
+
+
+@dataclass(frozen=True)
+class IncumbentChoice:
+    ref: IncumbentRef
+    label: str
+
+
+REGISTRY_LABEL = "Registry validated point"
+
+
+async def resolve_incumbent(
+    strategy_key: str,
+    symbol: str,
+    *,
+    running_digest: Callable[[SignalProgramContract], str] = _running_artifact_digest,
+) -> IncumbentChoice:
+    """The active default qualification when it is ready for the running program, else the registry point.
+
+    An unreadable qualification store falls back to the registry point and
+    says so in the label; it never reports that no default exists.
+    """
+    from app.research.golden_search import qualifications
+
+    registry = registry_incumbent(strategy_key, symbol)
+    contract = _STRATEGY_REGISTRY[strategy_key].signal_program_contract
+    if contract is None:
+        return IncumbentChoice(ref=registry, label=REGISTRY_LABEL)
+    try:
+        async with connection() as conn:
+            pointer = await qualifications.get_default(conn, strategy_key, symbol)
+            if pointer is None or pointer.qualification_id is None:
+                return IncumbentChoice(ref=registry, label=REGISTRY_LABEL)
+            row = await qualifications.get_qualification(conn, pointer.qualification_id)
+            events = (await qualifications.events_for(conn, [pointer.qualification_id])).get(pointer.qualification_id, [])
+    except Exception:
+        logger.warning(
+            "golden search default unreadable; proposing the registry point",
+            extra={"action": "golden_search_default_unreadable", "strategy_key": strategy_key, "symbol": symbol},
+            exc_info=True,
+        )
+        return IncumbentChoice(ref=registry, label=f"{REGISTRY_LABEL} (the Golden Search default could not be read)")
+    if row is None or qualifications.qualification_status(row, events, running_digest(contract)) != "ready":
+        return IncumbentChoice(ref=registry, label=f"{REGISTRY_LABEL} (the Golden Search default is not ready)")
+    return IncumbentChoice(
+        ref=IncumbentRef(source="qualification", qualification_id=row.id, params=dict(row.params)),
+        label=f"Golden configuration {row.id[:8]}",
+    )
+
+
+async def lake_first_session(symbol: str) -> date | None:
+    """The symbol's first complete minute session in the adjusted lake, or ``None`` when the catalog cannot say."""
+    from app.data_lake import catalog_client
+    from app.data_lake.types import polygon_mode_for
+    from app.research.grid_search.service import SWEEP_DATA_POLICY
+
+    try:
+        await catalog_client.init_pool()
+        spans = await catalog_client.select_symbol_coverage_spans(
+            "usa", price_adjustment_mode=polygon_mode_for(adjusted=SWEEP_DATA_POLICY["adjusted"]), data_type="trade"
+        )
+    except Exception:
+        logger.warning(
+            "lake coverage unreadable; proposing the default development length",
+            extra={"action": "golden_search_lake_coverage_unreadable", "symbol": symbol},
+            exc_info=True,
+        )
+        return None
+    for span in spans:
+        if span.symbol.upper() == symbol and span.first_trading_date_ms is not None:
+            return et_date_at_ms(span.first_trading_date_ms)
+    return None
+
+
+async def defaults(
+    strategy_key: str,
+    symbol: str,
+    *,
+    final_months: int = DEFAULT_FINAL_MONTHS,
+    training_months: int = DEFAULT_TRAINING_MONTHS,
+    test_months: int = DEFAULT_TEST_MONTHS,
+    now_ms: int | None = None,
+    earliest_session: Callable[[str], Awaitable[date | None]] = lake_first_session,
+    running_digest: Callable[[SignalProgramContract], str] = _running_artifact_digest,
+) -> dict[str, Any]:
+    """A complete starting plan with the intervals computed here, the incumbent's name and the final interval's exposure."""
+    symbol = _symbol(symbol)
+    if declaration_for(strategy_key) is None:
+        reason = unavailable_reason(strategy_key) or "No Golden Search declaration exists for this strategy."
+        raise GoldenSearchRefusal(reason, code="STRATEGY_UNAVAILABLE", field="strategy_key")
+    incumbent = await resolve_incumbent(strategy_key, symbol, running_digest=running_digest)
+    protocol = default_protocol(
+        strategy_key,
+        symbol,
+        incumbent.ref,
+        now_ms=now_ms_utc() if now_ms is None else now_ms,
+        earliest_session=await earliest_session(symbol),
+        final_months=final_months,
+        training_months=training_months,
+        test_months=test_months,
+    )
+    return {
+        **protocol.as_dict(),
+        "final_months": final_months,
+        "incumbent_label": incumbent.label,
+        "exposure": await exposure_view(symbol, protocol.final_start_ms, protocol.final_end_ms),
+    }
+
+
+async def preflight(request: Mapping[str, Any], *, roots: Sequence[Path] | None = None) -> dict[str, Any]:
+    """Review a plan with no side effects: refusals, estimate, folds, exposure and run-up."""
+    protocol = protocol_from_request(request)
+    plan = await asyncio.to_thread(review_plan, protocol, roots=roots)
+    exposure = (
+        await exposure_view(protocol.symbol, protocol.final_start_ms, protocol.final_end_ms)
+        if protocol.final_start_ms < protocol.final_end_ms
+        else None
+    )
+    return preflight_view(plan, exposure)
+
+
+# ── Lock ─────────────────────────────────────────────────────────────────
+
+
+def _idempotency_key(value: str) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > 200:
+        raise GoldenSearchRefusal("An idempotency key of 1 to 200 characters is required.", code="IDEMPOTENCY_KEY_INVALID")
+    return value
+
+
+async def lock_study(
+    request: Mapping[str, Any],
+    *,
+    idempotency_key: str,
+    roots: Sequence[Path] | None = None,
+    identity: CodeIdentity | None = None,
+) -> StudyRow:
+    """Lock a plan into a new study; the same key and plan return the study it already locked."""
+    key = _idempotency_key(idempotency_key)
+    protocol = protocol_from_request(request)
+    # A retried lock finds the study its key already wrote before redoing the snapshot work.
+    existing = await _locked_by(key, request_sha256(protocol.as_dict()))
+    if existing is not None:
+        return existing
+    new = await asyncio.to_thread(prepare_lock, protocol, idempotency_key=key, roots=roots, identity=identity)
+    row, command = await with_connection(repo.insert_study, new)
+    if command.request_sha256 != new.request_sha256:
+        raise _lock_conflict(row)
+    logger.info("golden search study locked", extra={"action": "golden_search_study_locked", "study_id": row.id})
+    return row
+
+
+def _lock_conflict(row: StudyRow | None) -> GoldenSearchRefusal:
+    return GoldenSearchRefusal("This idempotency key already locked a different plan.", code="IDEMPOTENCY_CONFLICT", kind="conflict", study=row)
+
+
+async def _locked_by(key: str, digest: str) -> StudyRow | None:
+    study_id = study_id_for(key)
+    async with connection() as conn:
+        command = await repo.get_command(conn, study_id, key)
+        if command is None:
+            return None
+        row = await repo.get_study(conn, study_id)
+    if command.request_sha256 != digest:
+        raise _lock_conflict(row)
+    return row
+
+
+# ── Reads ────────────────────────────────────────────────────────────────
+
+
+async def get_row(study_id: str) -> StudyRow:
+    row = await with_connection(repo.get_study, study_id)
+    if row is None:
+        raise _not_found(study_id)
+    return row
+
+
+def _live(row: StudyRow, liveness: Liveness) -> bool | None:
+    return liveness(row.job_id) if row.status in LIVE_PRESENTATIONS and row.job_id is not None else False
+
+
+def _resume_refusal(
+    row: StudyRow, *, live: bool | None, identity: CodeIdentity | None = None, verify_data: bool = False
+) -> str | None:
+    return lifecycle.resume_refusal(row, noun=NOUN, unit=UNIT, live=live, identity=identity, verify_data=verify_data)
+
+
+@dataclass(frozen=True)
+class _Presentation:
+    presented: str
+    refusals: dict[CommandName, str | None]
+
+
+def _present(row: StudyRow, *, liveness: Liveness, identity: CodeIdentity | None, verify_data: bool = False) -> _Presentation:
+    """Blocking: Redis liveness and, for a stopped stage, the code identity behind Finish."""
+    live = _live(row, liveness)
+    presented = presented_status(row, live=live)
+    stopped = row.state in RUNNING_STATES and presented in ("failed", "cancelled", "interrupted")
+    resume = _resume_refusal(row, live=live, identity=identity, verify_data=verify_data) if stopped else None
+    return _Presentation(presented=presented, refusals=action_refusals(row, presented=presented, resume_refusal=resume))
+
+
+async def _progress(row: StudyRow, presented: str) -> dict[str, Any] | None:
+    stage = row.pending_stage
+    if stage is None or row.state not in RUNNING_STATES or presented not in LIVE_PRESENTATIONS:
+        return None
+    if stage == "qualification":
+        completed = await with_connection(repo.consumed_outside_evaluator, row.id, "proof")
+    else:
+        completed = await with_connection(repo.count_recorded_evaluations, row.id, STAGE_STEPS[stage])
+    return {"stage": stage, "completed": completed, "total_max": stage_total(row, stage)}
+
+
+async def detail(
+    row: StudyRow,
+    *,
+    dispatch: Mapping[str, Any] | None = None,
+    liveness: Liveness = lifecycle.job_is_live,
+    identity: CodeIdentity | None = None,
+) -> dict[str, Any]:
+    """The StudyDetail read model for one row."""
+    presentation = await asyncio.to_thread(_present, row, liveness=liveness, identity=identity)
+    return study_detail(
+        row,
+        presented=presentation.presented,
+        refusals=presentation.refusals,
+        progress=await _progress(row, presentation.presented),
+        dispatch=dispatch,
+    )
+
+
+async def summaries(
+    *,
+    strategy_key: str | None = None,
+    symbol: str | None = None,
+    include_hidden: bool = False,
+    limit: int = 100,
+    liveness: Liveness = lifecycle.job_is_live,
+) -> list[dict[str, Any]]:
+    rows = await with_connection(
+        repo.list_studies,
+        strategy_key=strategy_key,
+        symbol=None if symbol is None else symbol.strip().upper(),
+        include_hidden=include_hidden,
+        limit=limit,
+    )
+
+    def present_all() -> list[str]:
+        return [presented_status(row, live=_live(row, liveness)) for row in rows]
+
+    presented = await asyncio.to_thread(present_all)
+    return [study_summary(row, presented=status) for row, status in zip(rows, presented, strict=True)]
+
+
+async def candidate(study_id: str, candidate_key: str) -> dict[str, Any]:
+    """The candidate's development detail run, and its final-test run once the exam scored it."""
+    row = await get_row(study_id)
+    stored = next(
+        (item for item in (row.results.get("evidence") or {}).get("candidates", []) if item["key"] == candidate_key), None
+    )
+    if stored is None:
+        raise GoldenSearchRefusal(f"This study has no {candidate_key} candidate yet.", code="CANDIDATE_UNAVAILABLE", kind="not_found")
+    protocol = row.protocol
+    development = await with_connection(
+        repo.find_detail_evaluation,
+        row.id,
+        point_hash=stored["point_hash"],
+        window_start_ms=protocol["development_start_ms"],
+        window_end_ms=protocol["development_end_ms"],
+    )
+    exam_record = None
+    exam = row.results.get("exam") or {}
+    examined = {exam.get("candidate_point_hash"), point_hash(row.strategy_key, protocol["incumbent"]["params"])}
+    if exam.get("outcome") is not None and stored["point_hash"] in examined:
+        exam_record = await with_connection(
+            repo.find_detail_evaluation,
+            row.id,
+            point_hash=stored["point_hash"],
+            window_start_ms=protocol["final_start_ms"],
+            window_end_ms=protocol["final_end_ms"],
+        )
+    return candidate_detail(candidate_key, stored["point"], development=development, exam=exam_record)
+
+
+async def evaluations(study_id: str, *, stage: str | None = None, fold_index: int | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:
+    await get_row(study_id)
+    try:
+        result = await with_connection(repo.list_evaluations, study_id, stage=stage, fold_index=fold_index, page=page, page_size=page_size)
+    except ValueError as exc:
+        raise GoldenSearchRefusal(str(exc), code="PAGE_INVALID") from exc
+    return result.as_dict()
+
+
+async def hide(study_id: str, *, liveness: Liveness = lifecycle.job_is_live) -> None:
+    """Hide a study from history; refused while a stage runs. Rows, trials and exposures stay."""
+    row = await get_row(study_id)
+    presented = await asyncio.to_thread(lambda: presented_status(row, live=_live(row, liveness)))
+    if row.state in RUNNING_STATES and presented in LIVE_PRESENTATIONS:
+        raise GoldenSearchRefusal("A study cannot be hidden while a stage runs; cancel it first.", code="STUDY_RUNNING", kind="conflict", study=row)
+    await with_connection(repo.hide_study, study_id)
+
+
+# ── Commands ─────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class CommandOutcome:
+    """The study the response describes (the new study for ``revise``) and the stage to dispatch, if any."""
+
+    study: StudyRow
+    dispatch: dict[str, Any] | None
+    replayed: bool = False
+
+
+def _dispatch(study_id: str, token: str) -> dict[str, Any]:
+    return {"job_type": JOB_TYPE, "payload": {"study_id": study_id, "stage_token": token}}
+
+
+def _authorize(stage: StageName) -> tuple[dict[str, Any], str]:
+    token = secrets.token_hex(16)
+    return (
+        {
+            "state": STAGE_STATES[stage],
+            "status": "queued",
+            "pending_stage": stage,
+            "stage_token": token,
+            "job_id": None,
+            "failure_reason": None,
+            "incomplete": False,
+            "finished_at_ms": None,
+        },
+        token,
+    )
+
+
+async def _replayed(study_id: str, idempotency_key: str, digest: str) -> CommandOutcome | None:
+    async with connection() as conn:
+        record = await repo.get_command(conn, study_id, idempotency_key)
+        if record is None:
+            return None
+        if record.request_sha256 != digest:
+            current = await repo.get_study(conn, study_id)
+            raise GoldenSearchRefusal(
+                "This idempotency key was already used for a different request.",
+                code="IDEMPOTENCY_CONFLICT",
+                kind="conflict",
+                study=current,
+            )
+        target = record.response.get("study_id", study_id)
+        row = await repo.get_study(conn, target)
+    if row is None:
+        raise _not_found(target)
+    stored = record.response.get("dispatch")
+    # The original dispatch is offered again only while its stage still waits for a worker.
+    still_waiting = stored is not None and unclaimed(row) and row.stage_token == stored["payload"]["stage_token"]
+    return CommandOutcome(study=row, dispatch=stored if still_waiting else None, replayed=True)
+
+
+def _stale(row: StudyRow) -> GoldenSearchRefusal:
+    return GoldenSearchRefusal(
+        f"The study moved on to revision {row.revision}; review it and try again.", code="STALE_REVISION", kind="conflict", study=row
+    )
+
+
+async def run_command(
+    study_id: str,
+    *,
+    command: str,
+    expected_revision: int,
+    idempotency_key: str,
+    payload: Mapping[str, Any] | None = None,
+    roots: Sequence[Path] | None = None,
+    liveness: Liveness = lifecycle.job_is_live,
+    identity: CodeIdentity | None = None,
+) -> CommandOutcome:
+    """Apply one lifecycle command under its expected revision; a repeat of a recorded request returns its outcome."""
+    if command not in COMMANDS:
+        raise GoldenSearchRefusal(f"Unknown command {command!r}.", code="UNKNOWN_COMMAND", field="command")
+    key = _idempotency_key(idempotency_key)
+    body = dict(require_mapping(payload if payload is not None else {}, "payload"))
+    try:
+        digest = request_sha256({"command": command, "expected_revision": expected_revision, "payload": body})
+    except (TypeError, ValueError) as exc:
+        raise GoldenSearchRefusal(f"The payload is not plain JSON: {exc}", code="PAYLOAD_INVALID", field="payload") from exc
+    replay = await _replayed(study_id, key, digest)
+    if replay is not None:
+        return replay
+    seen = await get_row(study_id)
+    if seen.revision != expected_revision:
+        raise _stale(seen)
+    presentation = await asyncio.to_thread(_present, seen, liveness=liveness, identity=identity, verify_data=command == "finish")
+    reason = presentation.refusals[command]
+    if reason is not None:
+        raise GoldenSearchRefusal(reason, code="COMMAND_NOT_PERMITTED", kind="conflict", study=seen)
+    prepared = None
+    if command == "revise":
+        protocol = protocol_from_request(require_mapping(body.get("protocol"), "payload.protocol"))
+        prepared = await asyncio.to_thread(prepare_lock, protocol, idempotency_key=key, parent_study_id=study_id, roots=roots, identity=identity)
+    async with connection() as conn, conn.transaction():
+        if await repo.get_command(conn, study_id, key) is not None:
+            raise GoldenSearchRefusal("A concurrent request used this idempotency key.", code="IDEMPOTENCY_CONFLICT", kind="conflict")
+        row = await repo.lock_study(conn, study_id)
+        if row is None:
+            raise _not_found(study_id)
+        if (row.revision, row.status, row.job_id, row.attempt) != (seen.revision, seen.status, seen.job_id, seen.attempt):
+            raise _stale(row)
+        outcome = await _apply(conn, row, command, body, prepared=prepared)
+        response: dict[str, Any] = (
+            {"study_id": outcome.study.id}
+            if command == "revise"
+            else {"revision": outcome.study.revision, "dispatch": outcome.dispatch}
+        )
+        await repo.record_command(
+            conn, study_id=study_id, idempotency_key=key, command=command, request_sha256=digest, response=response
+        )
+    if command == "cancel" and seen.job_id is not None and not unclaimed(seen):
+        lifecycle.request_cancel(seen.job_id)
+    logger.info(
+        "golden search command applied",
+        extra={"action": "golden_search_command", "study_id": study_id, "command": command, "revision": outcome.study.revision},
+    )
+    return outcome
+
+
+async def _apply(conn: Any, row: StudyRow, command: str, body: Mapping[str, Any], *, prepared: Any) -> CommandOutcome:
+    if command == "continue":
+        changes, token = _authorize("search" if row.state == "locked" else "validation")
+        return CommandOutcome(study=await repo.update_study(conn, row.id, changes=changes), dispatch=_dispatch(row.id, token))
+    if command == "select_candidate":
+        return await _select_candidate(conn, row, body)
+    if command == "open_exam":
+        return await _open_exam(conn, row, body)
+    if command == "approve":
+        return await _approve(conn, row, body)
+    if command in ("retain", "close"):
+        return await _decide(conn, row, command, body)
+    if command == "cancel":
+        changes: dict[str, Any] = {"status": "cancelled", "stage_token": None, "incomplete": True} if unclaimed(row) else {}
+        return CommandOutcome(study=await repo.update_study(conn, row.id, changes=changes), dispatch=None)
+    if command == "finish":
+        stage = row.pending_stage
+        assert stage is not None  # a stopped stage keeps the stage it was authorized for
+        changes, token = _authorize(stage)
+        return CommandOutcome(study=await repo.update_study(conn, row.id, changes=changes), dispatch=_dispatch(row.id, token))
+    created, _ = await repo.insert_study(conn, prepared)
+    return CommandOutcome(study=created, dispatch=None)
+
+
+def _evidence_candidate(row: StudyRow, key: str) -> Mapping[str, Any] | None:
+    return next((item for item in (row.results.get("evidence") or {}).get("candidates", []) if item["key"] == key), None)
+
+
+async def _select_candidate(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> CommandOutcome:
+    key = body.get("candidate_key")
+    if key not in CANDIDATE_KEYS:
+        raise GoldenSearchRefusal(f"Choose one of {', '.join(CANDIDATE_KEYS)}.", code="PAYLOAD_INVALID", field="candidate_key")
+    chosen = _evidence_candidate(row, str(key))
+    if chosen is None:
+        raise GoldenSearchRefusal(f"This study has no {key} candidate.", code="CANDIDATE_UNAVAILABLE", field="candidate_key")
+    incumbent = _evidence_candidate(row, "incumbent")
+    if key == "incumbent" or (incumbent is not None and chosen["point_hash"] == incumbent["point_hash"]):
+        raise GoldenSearchRefusal(
+            "Use Keep current settings to finish without consuming the test.", code="INCUMBENT_NOT_EXAMINABLE", field="candidate_key"
+        )
+    await repo.insert_trial(conn, row.id, stage="candidate", kind="pick", payload={"candidate_key": key, "point_hash": chosen["point_hash"]})
+    updated = await repo.update_study(conn, row.id, changes={"candidate_key": key, "state": "candidate_locked"})
+    return CommandOutcome(study=updated, dispatch=None)
+
+
+async def _open_exam(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> CommandOutcome:
+    if body.get("acknowledge_final_test") is not True:
+        raise GoldenSearchRefusal(
+            "Confirm that opening the final test consumes it for this candidate.",
+            code="ACKNOWLEDGEMENT_REQUIRED",
+            field="acknowledge_final_test",
+        )
+    chosen = _evidence_candidate(row, str(row.candidate_key))
+    assert chosen is not None  # candidate_locked implies a chosen evidence candidate
+    protocol = row.protocol
+    start, end = int(protocol["final_start_ms"]), int(protocol["final_end_ms"])
+    await repo.lock_exposure(conn, row.symbol)
+    overlaps = await repo.exposure_overlaps(conn, symbol=row.symbol, start_ms=start, end_ms=end, exclude_study_id=row.id)
+    state = exposure_state(ledger_overlaps=overlaps.ledger, outside_activity_overlaps=overlaps.outside)
+    claim = claim_for(state)
+    await repo.insert_exposure(
+        conn,
+        symbol=row.symbol,
+        start_ms=start,
+        end_ms=end,
+        study_id=row.id,
+        strategy_key=row.strategy_key,
+        kind="reserved",
+        state_at_reservation=state,
+        claim=claim,
+        candidate_point_hash=chosen["point_hash"],
+        payload={
+            "candidate_key": row.candidate_key,
+            "candidate_point": chosen["point"],
+            "protocol_hash": row.protocol_hash,
+            "ledger_overlaps": overlaps.ledger,
+            "outside_activity_overlaps": overlaps.outside,
+        },
+    )
+    await repo.insert_trial(conn, row.id, stage="exam", kind="exam_open", payload={"candidate_key": row.candidate_key, "state": state, "claim": claim})
+    changes, token = _authorize("exam")
+    exam = {
+        "candidate_key": row.candidate_key,
+        "candidate_point": dict(chosen["point"]),
+        "candidate_point_hash": chosen["point_hash"],
+        "window": {"start_ms": start, "end_ms": end},
+        "claim": claim,
+        "exposure_state": state,
+        "ledger_overlaps": overlaps.ledger,
+        "outside_activity_overlaps": overlaps.outside,
+        "outcome": None,
+        "checks": [],
+        "retention": None,
+        "candidate_metrics": None,
+        "incumbent_metrics": None,
+    }
+    updated = await repo.update_study(conn, row.id, changes={**changes, "exam_locked": True}, results_patch={"exam": exam})
+    return CommandOutcome(study=updated, dispatch=_dispatch(row.id, token))
+
+
+async def _approve(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> CommandOutcome:
+    note = body.get("note")
+    if not isinstance(note, str) or not note.strip():
+        raise GoldenSearchRefusal("Write a note for the approval record.", code="NOTE_REQUIRED", field="note")
+    if body.get("acknowledge_missing_parity") is not True:
+        raise GoldenSearchRefusal(
+            "Acknowledge that independent engine (LEAN) parity is missing for this approval.",
+            code="ACKNOWLEDGEMENT_REQUIRED",
+            field="acknowledge_missing_parity",
+        )
+    weak_ack = body.get("acknowledge_research_weakness")
+    if not isinstance(weak_ack, bool):
+        raise GoldenSearchRefusal("acknowledge_research_weakness must be true or false.", code="PAYLOAD_INVALID", field="acknowledge_research_weakness")
+    if "expected_default_qualification_id" not in body or not isinstance(body["expected_default_qualification_id"], str | None):
+        raise GoldenSearchRefusal(
+            "Name the default you reviewed against (or null when there is none).",
+            code="PAYLOAD_INVALID",
+            field="expected_default_qualification_id",
+        )
+    exam = row.results["exam"]
+    weakness = research_weakness(exam["outcome"], exam["claim"], exam["exposure_state"])
+    if weakness and not weak_ack:
+        raise GoldenSearchRefusal(
+            "This evidence is weak (" + ", ".join(weakness) + "); approving needs your explicit acceptance of it.",
+            code="WEAKNESS_ACKNOWLEDGEMENT_REQUIRED",
+            field="acknowledge_research_weakness",
+        )
+    previous = row.decision or {}
+    decision = {
+        "kind": "approve",
+        "note": note.strip(),
+        "at_ms": now_ms_utc(),
+        "actor": "owner",
+        "acknowledge_missing_parity": True,
+        "acknowledge_research_weakness": weak_ack,
+        "expected_default_qualification_id": body["expected_default_qualification_id"],
+        "weakness": weakness,
+        # A retried approval reuses the proof and saved run it already built for this exact candidate.
+        "checkpoint": previous.get("checkpoint") if previous.get("kind") == "approve" else None,
+    }
+    await repo.insert_trial(conn, row.id, stage="qualification", kind="approval", payload={"event": "intent", "weakness": weakness, "override": bool(weakness)})
+    changes, token = _authorize("qualification")
+    updated = await repo.update_study(conn, row.id, changes=changes, decision=decision)
+    return CommandOutcome(study=updated, dispatch=_dispatch(row.id, token))
+
+
+async def _decide(conn: Any, row: StudyRow, command: str, body: Mapping[str, Any]) -> CommandOutcome:
+    note = body.get("note", "")
+    if not isinstance(note, str):
+        raise GoldenSearchRefusal("The note must be text.", code="PAYLOAD_INVALID", field="note")
+    if command == "retain":
+        kind = body.get("kind")
+        if kind not in RETAIN_KINDS:
+            raise GoldenSearchRefusal(f"Choose one of {', '.join(RETAIN_KINDS)}.", code="PAYLOAD_INVALID", field="kind")
+        state = "retained"
+    else:
+        kind, state = "close", "closed"
+    decision = {"kind": kind, "note": note.strip(), "at_ms": now_ms_utc()}
+    await repo.insert_trial(conn, row.id, stage="decision", kind="decision", payload=decision)
+    updated = await repo.update_study(conn, row.id, changes={"state": state, "pending_stage": None, "stage_token": None}, decision=decision)
+    return CommandOutcome(study=updated, dispatch=None)
+
+
+# ── The jobs boundary ────────────────────────────────────────────────────
+
+
+async def bind_dispatch(study_id: str, *, stage_token: str, job_id: str) -> str:
+    """Bind a job to the authorized stage; ``"bound"`` the first time, ``"redelivery"`` for the same job again."""
+    outcome = await with_connection(repo.bind_dispatch, study_id, stage_token=stage_token, job_id=job_id)
+    if outcome in ("bound", "redelivery"):
+        return outcome
+    if outcome == "not_found":
+        raise _not_found(study_id)
+    if outcome == "mismatch":
+        raise GoldenSearchRefusal("This stage token was not issued for the study's pending stage.", code="STAGE_TOKEN_MISMATCH", kind="conflict")
+    raise GoldenSearchRefusal("The study has no stage waiting for a worker.", code="NOTHING_PENDING", kind="conflict")
+
+
+def run_stage(
+    study_id: str,
+    *,
+    stage_token: str,
+    job_id: str,
+    execute: Callable[..., Any] | None = None,
+    approval: ApprovalBinding | None = None,
+    blob_store: Any | None = None,
+    roots: Sequence[Path] | None = None,
+    cancel_check: Callable[[], object] = lambda: None,
+    on_phase: Callable[[str], None] = lambda phase: None,
+    on_progress: Callable[[int, int], None] = lambda done, total: None,
+    on_log: Callable[[str], None] = lambda message: None,
+) -> StageOutcome:
+    """Run the bound stage on the calling worker thread (``stages.execute_stage``)."""
+    return execute_stage(
+        study_id,
+        stage_token=stage_token,
+        job_id=job_id,
+        execute=execute,
+        approval=approval,
+        blob_store=blob_store,
+        roots=roots,
+        cancel_check=cancel_check,
+        on_phase=on_phase,
+        on_progress=on_progress,
+        on_log=on_log,
+    )
+

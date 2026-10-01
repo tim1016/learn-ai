@@ -1,0 +1,512 @@
+"""Golden Search study lifecycle against the ephemeral database, with a fake engine and a fake approval (#2696).
+
+Live Postgres only (``POSTGRES_URL_IS_EPHEMERAL=1``). Every test seeds its
+own thin lake under a symbol of its own, so the exposure ledger — global by
+design — never couples two tests.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+import asyncpg
+import pytest
+
+from app.jobs.progress import JobCancelled
+from app.research.golden_search import repository as repo
+from app.research.golden_search import service
+from app.research.golden_search.evaluator import CapabilityError, EvaluationCapability, StudyEvaluator
+from app.research.golden_search.models import GoldenSearchRefusal, StudyRow
+from app.research.persistence import lifecycle
+from tests._helpers.golden_search_study import (
+    FINAL,
+    Driver,
+    FakeApproval,
+    FakeEngine,
+    plan_request,
+    seed_lake,
+    smooth_score,
+    unique_symbol,
+    window_ms,
+)
+
+FINAL_START_MS = window_ms(FINAL)[0]
+
+
+@pytest.fixture
+def symbol() -> str:
+    return unique_symbol()
+
+
+@pytest.fixture
+def lake(tmp_path: Path, symbol: str) -> Path:
+    return seed_lake(tmp_path, symbol)
+
+
+@pytest.fixture
+def driver(lake: Path, monkeypatch: pytest.MonkeyPatch) -> Driver:
+    # Finish re-hashes the receipted artifacts from the roots the receipt names.
+    monkeypatch.setattr(lifecycle, "roots_for", lambda row: [lake])
+    return Driver(roots=[lake])
+
+
+async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    row = await driver.lock(symbol)
+    detail = await driver.detail(row)
+    assert detail["state"] == "locked" and detail["presented_status"] == "idle"
+    assert detail["permitted_actions"] == ["continue", "close", "revise"]
+    assert detail["guidance"]["headline"] == "Ready to search"
+    assert detail["scope"]["final_state"] == "locked"
+
+    row = await driver.advance(row, "continue")
+    detail = await driver.detail(row)
+    assert detail["state"] == "awaiting_validation"
+    search = detail["results"]["search"]
+    assert [summary["knob"] for summary in search["knob_summary"]] == ["gap", "hold_bars"]
+    assert search["winner"]["gap"] == pytest.approx(0.3, abs=1e-12) and search["winner"]["hold_bars"] == 7
+    assert search["counts"]["evaluated"] == search["evaluations"]
+    assert search["pair_maps"][0]["x_knob"] == "hold_bars" and len(search["pair_maps"][0]["cells"]) == 25
+
+    row = await driver.advance(row, "continue")
+    detail = await driver.detail(row)
+    assert detail["state"] == "awaiting_candidate"
+    validation = detail["results"]["validation"]
+    assert [fold["status"] for fold in validation["folds"]] == ["completed", "completed"]
+    assert all(fold["incumbent_test_metrics"] is not None for fold in validation["folds"])
+    evidence = detail["results"]["evidence"]
+    keys = [candidate["key"] for candidate in evidence["candidates"]]
+    assert keys == ["incumbent", "all_period", "recent"]
+
+    row = await driver.advance(row, "select_candidate", {"candidate_key": "all_period"})
+    assert row.state == "candidate_locked" and row.candidate_key == "all_period"
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+    detail = await driver.detail(row)
+    assert detail["state"] == "awaiting_review"
+    exam = detail["results"]["exam"]
+    assert (exam["exposure_state"], exam["claim"], exam["outcome"]) == ("not_opened", "confirmatory", "meets_rules")
+    assert detail["guidance"]["headline"] == "Approve the settings you want to use"
+    assert detail["scope"]["final_state"] == "opened_once"
+
+    row = await driver.advance(
+        row,
+        "approve",
+        {"note": "Meets the rules.", "acknowledge_missing_parity": True, "acknowledge_research_weakness": False, "expected_default_qualification_id": None},
+    )
+    detail = await driver.detail(row)
+    assert detail["state"] == "approved"
+    qualification = detail["results"]["qualification"]
+    assert qualification["status"] == "ready" and qualification["deploy"]["symbol"] == symbol
+    assert "symbol" not in qualification["deploy"]["parameters"]
+    assert detail["consumed_evaluations"] <= row.receipt["estimate"]["total_max"]
+    assert await repo.consumed_outside_evaluator(conn, row.id, "proof") == 3
+
+
+APPROVE = {"note": "Reviewed.", "acknowledge_missing_parity": True, "acknowledge_research_weakness": False, "expected_default_qualification_id": None}
+
+
+# ── Commands: idempotency, revision, permissions ─────────────────────────
+
+
+async def test_lock_with_the_same_key_returns_the_same_study_and_a_new_plan_conflicts(driver: Driver, symbol: str) -> None:
+    key = driver.key()
+    first = await service.lock_study(plan_request(symbol), idempotency_key=key, roots=driver.roots)
+    again = await service.lock_study(plan_request(symbol), idempotency_key=key, roots=driver.roots)
+    assert again.id == first.id and again.revision == first.revision
+
+    with pytest.raises(GoldenSearchRefusal) as refused:
+        await service.lock_study(plan_request(symbol, budget_cap=4000), idempotency_key=key, roots=driver.roots)
+    assert (refused.value.code, refused.value.kind) == ("IDEMPOTENCY_CONFLICT", "conflict")
+
+
+async def test_a_repeated_command_returns_its_outcome_and_a_stale_or_reused_one_is_refused(driver: Driver, symbol: str) -> None:
+    row = await driver.lock(symbol)
+    key = driver.key()
+    first = await driver.command(row, "continue", idempotency_key=key)
+    replay = await driver.command(row, "continue", idempotency_key=key)
+    assert replay.replayed and replay.study.revision == first.study.revision == row.revision + 1
+    # The stage still waits for its worker, so the original dispatch is offered again.
+    assert replay.dispatch == first.dispatch
+
+    with pytest.raises(GoldenSearchRefusal) as reused:
+        await driver.command(row, "close", {"note": "x"}, idempotency_key=key)
+    assert reused.value.code == "IDEMPOTENCY_CONFLICT"
+    with pytest.raises(GoldenSearchRefusal) as stale:
+        await driver.command(row, "close", {"note": "x"})
+    assert stale.value.code == "STALE_REVISION" and stale.value.study is not None and stale.value.study.revision == first.study.revision
+
+    await driver.run(first)
+    after = await driver.command(row, "continue", idempotency_key=key)
+    assert after.replayed and after.dispatch is None  # the stage was claimed; its dispatch is spent
+
+
+async def test_a_command_the_state_does_not_permit_is_refused_with_the_views_reason(driver: Driver, symbol: str) -> None:
+    row = await driver.lock(symbol)
+    detail = await driver.detail(row)
+    with pytest.raises(GoldenSearchRefusal) as refused:
+        await driver.command(row, "open_exam", {"acknowledge_final_test": True})
+    assert refused.value.code == "COMMAND_NOT_PERMITTED"
+    assert str(refused.value) == detail["action_refusals"]["open_exam"]
+
+
+async def test_an_unclaimed_stage_reads_queued_cannot_be_finished_and_cancel_then_finish_redispatches(driver: Driver, symbol: str) -> None:
+    row = await driver.lock(symbol)
+    outcome = await driver.command(row, "continue")
+    detail = await driver.detail(outcome.study)
+    assert detail["presented_status"] == "queued" and "finish" not in detail["permitted_actions"]
+    assert "waiting for its worker" in detail["action_refusals"]["finish"]
+    assert "cancel" in detail["permitted_actions"]
+
+    cancelled = await driver.command(outcome.study, "cancel")
+    assert cancelled.study.status == "cancelled" and cancelled.study.stage_token is None
+    with pytest.raises(GoldenSearchRefusal) as stale_token:
+        await service.bind_dispatch(row.id, stage_token=outcome.dispatch["payload"]["stage_token"], job_id="job-old")
+    assert stale_token.value.code == "STAGE_TOKEN_MISMATCH"
+
+    finished = await driver.command(cancelled.study, "finish")
+    assert finished.dispatch is not None and finished.study.status == "queued"
+    token = finished.dispatch["payload"]["stage_token"]
+    assert await service.bind_dispatch(row.id, stage_token=token, job_id="job-a") == "bound"
+    assert await service.bind_dispatch(row.id, stage_token=token, job_id="job-a") == "redelivery"
+    with pytest.raises(GoldenSearchRefusal) as taken:
+        await service.bind_dispatch(row.id, stage_token=token, job_id="job-b")
+    assert taken.value.code == "NOTHING_PENDING"
+
+
+# ── Budget, crash and Finish ─────────────────────────────────────────────
+
+
+async def test_a_budget_reached_mid_stage_keeps_evidence_marks_it_incomplete_and_never_overspends(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    row = await driver.lock(symbol)
+    # A cap tighter than the plan's bound (lock refuses that); development stages may use cap - 5.
+    await conn.execute("UPDATE research_golden_search_studies SET budget_cap = 11 WHERE id = $1", row.id)
+    row = await driver.advance(await service.get_row(row.id), "continue")
+
+    assert row.state == "awaiting_validation" and row.consumed_evaluations == 6
+    detail = await driver.detail(row)
+    search = detail["results"]["search"]
+    assert search["stop_reason"] == "budget" and search["incomplete"] and detail["incomplete"]
+    # The seed, three gap values, then two hold values before the seventh evaluation found no budget.
+    assert search["counts"]["evaluated"] == 6
+    assert all(item["stop_explanation"] == "Budget reached" for item in search["knob_summary"])
+    assert all(cell["status"] == "untested" for cell in search["pair_maps"][0]["cells"] if cell["status"] != "invalid")
+    assert detail["results"]["recent"]["stop_reason"] == "budget"
+    assert await conn.fetchval("SELECT COUNT(*) FROM research_golden_search_evaluations WHERE study_id = $1", row.id) == 6
+
+
+async def test_finish_after_cancel_replays_from_the_cache_without_spending_twice(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    reference = await driver.advance(await driver.lock(symbol), "continue")
+    row = await driver.lock(symbol)
+    outcome = await driver.command(row, "continue")
+    calls = 0
+
+    def cancel_after_five() -> None:
+        nonlocal calls
+        calls += 1
+        if calls > 5:
+            raise JobCancelled("cancelled")
+
+    with pytest.raises(JobCancelled):
+        await driver.run(outcome, cancel_check=cancel_after_five)
+    stopped = await service.get_row(row.id)
+    assert (stopped.state, stopped.status, stopped.incomplete) == ("search_running", "cancelled", True)
+    spent = stopped.consumed_evaluations
+
+    resumed = await driver.command(stopped, "finish")
+    await driver.run(resumed)
+    done = await service.get_row(row.id)
+    assert done.state == "awaiting_validation"
+    assert done.consumed_evaluations == reference.consumed_evaluations
+    # Every evaluation the cancelled attempt recorded came back from the cache.
+    assert done.cache_hits >= reference.cache_hits + spent
+    assert done.results["search"]["procedure"] == reference.results["search"]["procedure"]
+
+
+async def test_a_crash_between_reservation_and_result_reruns_that_evaluation_without_new_budget(
+    conn: asyncpg.Connection, driver: Driver, symbol: str
+) -> None:
+    reference = await driver.advance(await driver.lock(symbol), "continue")
+    row = await driver.lock(symbol)
+    outcome = await driver.command(row, "continue")
+    driver.engine = FakeEngine(crash_on_call=4)
+    with pytest.raises(BaseException) as crashed:
+        await driver.run(outcome)
+    assert type(crashed.value).__name__ == "SimulatedCrash"
+    pending = await conn.fetch("SELECT evaluation_key FROM research_golden_search_evaluations WHERE study_id = $1 AND status = 'pending'", row.id)
+    assert len(pending) == 1
+    crashed_row = await service.get_row(row.id)
+    assert crashed_row.status == "running" and crashed_row.consumed_evaluations == 4
+
+    detail = await driver.detail(crashed_row)  # the worker is gone: interrupted
+    assert detail["presented_status"] == "interrupted" and "finish" in detail["permitted_actions"]
+    driver.engine.crash_on_call = None
+    await driver.run(await driver.command(crashed_row, "finish"))
+    done = await service.get_row(row.id)
+    assert done.consumed_evaluations == reference.consumed_evaluations
+    retried = await conn.fetchrow(
+        "SELECT status, retries FROM research_golden_search_evaluations WHERE study_id = $1 AND evaluation_key = $2",
+        row.id,
+        pending[0]["evaluation_key"],
+    )
+    assert (retried["status"], retried["retries"]) == ("completed", 1)
+
+
+# ── Leakage and capability ───────────────────────────────────────────────
+
+
+async def test_results_after_a_folds_training_window_never_change_its_selection(driver: Driver, symbol: str) -> None:
+    base = await driver.to_candidate(symbol)
+    folds = base.results["validation"]["folds"]
+    cut = folds[0]["train_end_ms"]
+
+    def later_flipped(point: dict, window: tuple[int, int], scenario: str) -> float:
+        # From fold 0's training end on, the landscape prefers a wide gap instead.
+        return smooth_score(point, window, scenario) if window[0] < cut else 2.0 - 8.0 * (float(point.get("gap", 0.2)) - 0.6) ** 2
+
+    mutated_driver = Driver(roots=driver.roots)
+    mutated_driver.engine.score = later_flipped
+    mutated = await mutated_driver.to_candidate(symbol)
+    other = mutated.results["validation"]["folds"]
+
+    assert other[0]["winner"] == folds[0]["winner"] and other[0]["train_metrics"] == folds[0]["train_metrics"]
+    assert other[1]["winner"] != folds[1]["winner"]  # the mutation reaches every later window
+
+
+async def test_final_interval_results_change_nothing_before_the_exam(driver: Driver, symbol: str) -> None:
+    base = await driver.to_candidate(symbol)
+
+    def final_flipped(point: dict, window: tuple[int, int], scenario: str) -> float:
+        return -5.0 if window[0] >= FINAL_START_MS else smooth_score(point, window, scenario)
+
+    mutated_driver = Driver(roots=driver.roots)
+    mutated_driver.engine.score = final_flipped
+    mutated = await mutated_driver.to_candidate(symbol)
+
+    for key in ("search", "recent", "validation", "evidence"):
+        assert mutated.results[key] == base.results[key], key
+    assert all(request.window[1] <= FINAL_START_MS for request in mutated_driver.engine.calls)
+
+
+async def test_the_capability_refuses_a_final_interval_evaluation_in_a_development_stage(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    row = await driver.lock(symbol)
+    outcome = await driver.command(row, "continue")
+    token = outcome.dispatch["payload"]["stage_token"]
+    await service.bind_dispatch(row.id, stage_token=token, job_id="job-cap")
+    claimed, attempt = await repo.claim_stage(conn, row.id, stage_token=token, job_id="job-cap")
+    evaluator = _evaluator(claimed, attempt, driver)
+
+    final = (claimed.protocol["final_start_ms"], claimed.protocol["final_end_ms"])
+    with pytest.raises(CapabilityError):
+        await asyncio.to_thread(evaluator.evaluate, [claimed.protocol["seed"]], window=final, stage="search")
+    assert driver.engine.calls == []
+    assert await conn.fetchval("SELECT COUNT(*) FROM research_golden_search_evaluations WHERE study_id = $1", row.id) == 0
+
+
+# ── Exposure ─────────────────────────────────────────────────────────────
+
+
+async def test_two_concurrent_final_tests_on_one_symbol_cannot_both_claim_an_unopened_interval(driver: Driver, symbol: str) -> None:
+    first = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
+    second = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
+
+    opened = await asyncio.gather(
+        driver.command(first, "open_exam", {"acknowledge_final_test": True}),
+        driver.command(second, "open_exam", {"acknowledge_final_test": True}),
+    )
+    claims = sorted((outcome.study.results["exam"]["exposure_state"], outcome.study.results["exam"]["claim"]) for outcome in opened)
+    assert claims == [("not_opened", "confirmatory"), ("previously_used", "exploratory")]
+
+
+async def test_outside_research_on_the_final_interval_makes_its_history_unknown(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    from app.research.backtest_runs import repository as backtest_repo
+    from app.research.backtest_runs.records import record_from_payload
+    from tests.research.backtest_runs.payloads import engine_payload
+
+    row = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
+    await backtest_repo.insert_run(conn, record_from_payload(engine_payload(symbol=symbol, start_date="2025-04-07", end_date="2025-04-11")))
+
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+    detail = await driver.detail(row)
+    exam = detail["results"]["exam"]
+    assert (exam["exposure_state"], exam["claim"]) == ("history_unknown", "exploratory")
+    assert detail["guidance"]["headline"] == "This test's history is unknown"
+
+    with pytest.raises(GoldenSearchRefusal) as weak:
+        await driver.command(row, "approve", APPROVE)
+    assert weak.value.code == "WEAKNESS_ACKNOWLEDGEMENT_REQUIRED"
+    row = await driver.advance(row, "approve", {**APPROVE, "acknowledge_research_weakness": True})
+    assert row.state == "approved"
+    research = driver.approval.requests[-1].research
+    assert research["research_override"] and research["weakness"] == ["EXPOSURE_HISTORY_UNKNOWN"]
+
+
+async def test_exposure_rows_survive_hiding_the_study(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    row = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+    await service.hide(row.id, liveness=driver.liveness)
+
+    assert [item["kind"] for item in await repo.list_exposures(conn, study_id=row.id)] == ["reserved", "result"]
+    assert row.id not in [item["id"] for item in await service.summaries(symbol=symbol, liveness=driver.liveness)]
+    hidden = await service.summaries(symbol=symbol, include_hidden=True, liveness=driver.liveness)
+    assert any(item["id"] == row.id and item["hidden"] for item in hidden)
+
+
+# ── Candidates, revision and approval outcomes ───────────────────────────
+
+
+async def test_a_recent_fit_equal_to_the_all_period_fit_collapses_to_one_candidate(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    row = await driver.to_candidate(symbol)
+    candidates = {item["key"]: item for item in (await driver.detail(row))["results"]["evidence"]["candidates"]}
+    assert candidates["all_period"]["point_hash"] == candidates["recent"]["point_hash"]
+    assert candidates["all_period"]["same_as"] == ["recent"] and candidates["recent"]["same_as"] == ["all_period"]
+    details = await conn.fetchval(
+        "SELECT COUNT(*) FROM research_golden_search_evaluations WHERE study_id = $1 AND detail AND point_hash = $2",
+        row.id,
+        candidates["recent"]["point_hash"],
+    )
+    assert details == 1  # one detail run serves both
+
+
+async def test_the_incumbent_cannot_be_locked_for_the_final_test(driver: Driver, symbol: str) -> None:
+    row = await driver.to_candidate(symbol)
+    with pytest.raises(GoldenSearchRefusal) as refused:
+        await driver.command(row, "select_candidate", {"candidate_key": "incumbent"})
+    assert refused.value.code == "INCUMBENT_NOT_EXAMINABLE"
+    candidates = (await driver.detail(row))["results"]["evidence"]["candidates"]
+    assert [item["exam_eligible"] for item in candidates] == [False, True, True]
+
+
+async def test_revise_forks_a_linked_study_and_leaves_the_original_untouched(driver: Driver, symbol: str) -> None:
+    row = await driver.advance(await driver.lock(symbol), "continue")
+    outcome = await driver.command(row, "revise", {"protocol": plan_request(symbol, budget_cap=4000)})
+    original = await service.get_row(row.id)
+
+    assert outcome.study.id != row.id and outcome.study.parent_study_id == row.id and outcome.study.state == "locked"
+    assert (original.revision, original.state) == (row.revision, row.state)
+
+
+async def test_a_technical_approval_failure_reads_back_failed_and_can_be_retried(driver: Driver, symbol: str) -> None:
+    row = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+    driver.approval = FakeApproval(fail_with=("PROOF_MISMATCH", "The restored replay differs from the lake replay."))
+    row = await driver.advance(row, "approve", APPROVE)
+    detail = await driver.detail(row)
+    assert row.state == "qualification_failed"
+    assert detail["guidance"] == {
+        "headline": "Qualification failed · current default unchanged",
+        "detail": "The restored replay differs from the lake replay.",
+    }
+    assert detail["results"]["qualification"]["status"] == "failed" and "approve" in detail["permitted_actions"]
+
+    driver.approval = FakeApproval()
+    row = await driver.advance(row, "approve", APPROVE)
+    assert row.state == "approved"
+    # The retry resumed from the proof the failed attempt saved; only the saved run was new work.
+    assert driver.approval.checkpoints[0].proof is not None
+
+
+def _evaluator(row: StudyRow, attempt: int, driver: Driver) -> StudyEvaluator:
+    development = (row.protocol["development_start_ms"], row.protocol["development_end_ms"])
+    return StudyEvaluator(
+        study_id=row.id,
+        attempt=attempt,
+        strategy_key=row.strategy_key,
+        context_digest=row.receipt["context_digest"],
+        run_up_sessions=row.receipt["run_up"]["run_up_sessions"],
+        capability=EvaluationCapability(allowed=(development,)),
+        budget_limit=row.budget_cap - 5,
+        execute=driver.engine,
+    )
+
+
+# ── Defaults ─────────────────────────────────────────────────────────────
+
+
+async def _no_lake_history(symbol: str) -> None:
+    return None
+
+
+async def test_defaults_offer_the_ready_default_qualification_as_the_incumbent(
+    conn: asyncpg.Connection, driver: Driver, symbol: str, unique: str
+) -> None:
+    from app.research.backtest_runs import repository as backtest_repo
+    from app.research.backtest_runs.records import record_from_payload
+    from app.research.golden_search import qualifications
+    from app.research.golden_search.declarations import canonical_point
+    from app.research.golden_validation import service as golden_validation
+    from tests.research.backtest_runs.payloads import engine_payload
+
+    study = await driver.lock(symbol)
+    run_id = (await backtest_repo.insert_run(conn, record_from_payload(engine_payload(symbol=symbol)))).run_id
+    designated = await golden_validation.designate(
+        conn, source_run_id=run_id, command_id=f"d-{unique}", label="Golden Search study", rationale="Approved.", actor="local:owner"
+    )
+    reviewed = await golden_validation.review(
+        conn,
+        golden_run_id=designated.golden_run.id,
+        command_id=f"r-{unique}",
+        expected_evidence_revision=designated.evidence.revision,
+        decision="accept",
+        reason="Approved.",
+        quantconnect_backtest_id=None,
+        authorized_program_version=None,
+        actor="local:owner",
+    )
+    assert reviewed.latest_review is not None
+    point = canonical_point("ema_crossover_signal", symbol, {"gap": 0.35, "hold_bars": 7})
+    contract = service._STRATEGY_REGISTRY["ema_crossover_signal"].signal_program_contract
+    await qualifications.insert_qualification(
+        conn,
+        qualification_id=f"q-{unique}",
+        program_key="ema_crossover_signal",
+        program_version=contract.program_version,
+        parameter_schema_version="ema-crossover-signal-params/v3",
+        symbol=symbol,
+        params=point,
+        artifact_digest="a" * 64,
+        wiring_digest="w" * 64,
+        study_id=study.id,
+        golden_run_id=reviewed.golden_run.id,
+        golden_review_id=reviewed.latest_review.id,
+        proof={"schema_version": 1},
+        research={"exam_outcome": "meets_rules"},
+        note="Approved.",
+        approved_by="local:owner",
+        created_at_ms=1_000,
+    )
+    await qualifications.set_default_cas(
+        conn,
+        program_key="ema_crossover_signal",
+        symbol=symbol,
+        qualification_id=f"q-{unique}",
+        expected_qualification_id=None,
+        reason="approved",
+        actor="local:owner",
+        now_ms=1_000,
+    )
+
+    ready = await service.defaults(
+        "ema_crossover_signal", symbol, earliest_session=_no_lake_history, running_digest=lambda contract: "a" * 64
+    )
+    assert ready["incumbent"] == {"source": "qualification", "qualification_id": f"q-{unique}", "params": point}
+    assert ready["seed"] == point and ready["incumbent_label"].startswith("Golden configuration")
+    assert ready["exposure"]["state"] in ("not_opened", "previously_used", "history_unknown")
+
+    stale = await service.defaults(
+        "ema_crossover_signal", symbol, earliest_session=_no_lake_history, running_digest=lambda contract: "b" * 64
+    )
+    assert stale["incumbent"]["source"] == "registry"
+    assert stale["incumbent_label"] == "Registry validated point (the Golden Search default is not ready)"
+
+
+async def test_preflight_answers_refusals_as_data_with_the_run_up_and_exposure(driver: Driver, symbol: str) -> None:
+    answer = await service.preflight(plan_request(symbol), roots=driver.roots)
+    assert answer["refusals"] == []
+    assert answer["run_up"]["run_up_sessions"] >= 1 and answer["estimate"]["budget_cap"] == 5000
+    assert [fold["fold_index"] for fold in answer["folds"]] == [0, 1]
+    assert answer["exposure"]["state"] == "not_opened"
+
+    refused = await service.preflight(plan_request(symbol, budget_cap=10), roots=driver.roots)
+    assert [item["code"] for item in refused["refusals"]] == ["WORKLOAD_LIMIT"] and refused["run_up"] is None
