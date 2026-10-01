@@ -4237,26 +4237,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/examples/alpaca-bot-control/fixtures": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Static Fixtures
-         * @description Return the committed documents for contract inspection only.
-         */
-        get: operations["list_static_fixtures_api_examples_alpaca_bot_control_fixtures_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/golden-fixtures": {
         parameters: {
             query?: never;
@@ -4271,50 +4251,6 @@ export interface paths {
         get: operations["get_golden_fixtures_api_golden_fixtures_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/indicators/calculate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Calculate Indicators
-         * @description Calculate technical indicators from OHLCV data.
-         */
-        post: operations["calculate_indicators_api_indicators_calculate_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/indicators/generate-table": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Indicator Table
-         * @description Fetch bars from Polygon and generate a full indicator table
-         *     with EMAs, Bollinger Bands, Supertrend, RSI, MACD, and ADX.
-         *
-         *     Uses the shared preprocessing pipeline (session filter, forward-fill,
-         *     warm-up buffer, indicator calculation).
-         */
-        post: operations["generate_indicator_table_api_indicators_generate_table_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4340,29 +4276,6 @@ export interface paths {
          *     validation problems (unknown slot, missing ticker).
          */
         post: operations["take_snapshot_api_iv_recorder_snapshot_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/jobs-internal/backtest": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start Rule Based Backtest Job
-         * @description Kick off a rule-based backtest in a worker thread. Returns 202.
-         *
-         *     The actual progress is observed by subscribing to the SSE stream
-         *     served by the .NET layer at ``/jobs/{id}/events``.
-         */
-        post: operations["start_rule_based_backtest_job_api_jobs_internal_backtest_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4711,33 +4624,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/options/contracts": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * List Options Contracts
-         * @description List options contracts for a given underlying ticker.
-         *
-         *     - **underlying_ticker**: Underlying stock symbol (e.g., GLD, SPY)
-         *     - **as_of_date**: Date to check contracts as of (YYYY-MM-DD)
-         *     - **contract_type**: Filter by call or put
-         *     - **strike_price_gte/lte**: Filter by strike price range
-         *     - **expiration_date**: Exact or range filter for expiration
-         *     - **limit**: Maximum number of results (default 100)
-         */
-        post: operations["list_options_contracts_api_options_contracts_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/options/expirations": {
         parameters: {
             query?: never;
@@ -4754,50 +4640,6 @@ export interface paths {
          *     and extracts unique dates without loading full contract payloads.
          */
         post: operations["list_options_expirations_api_options_expirations_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/portfolio/live-greeks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Portfolio Live Greeks
-         * @description Recompute Greeks for current portfolio state.
-         *
-         *     Convenience wrapper around `/scenario` with a 1×1×1 (current-state-only)
-         *     grid. The response shape is identical: a single ``ScenarioPoint`` with
-         *     per-leg Greeks at the current spot/time/IV.
-         */
-        post: operations["portfolio_live_greeks_api_portfolio_live_greeks_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/portfolio/scenario": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Portfolio Scenario
-         * @description Evaluate a portfolio across a grid of scenario points.
-         */
-        post: operations["portfolio_scenario_api_portfolio_scenario_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4850,46 +4692,6 @@ export interface paths {
          * @description Price a single European option and return all Greeks.
          */
         post: operations["quantlib_price_api_quantlib_price_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/quantlib/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Quantlib Status
-         * @description Check whether QuantLib is installed and list available engines.
-         */
-        get: operations["quantlib_status_api_quantlib_status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/quantlib/strategy": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Quantlib Strategy
-         * @description Price a multi-leg options strategy and return aggregate Greeks.
-         */
-        post: operations["quantlib_strategy_api_quantlib_strategy_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4951,29 +4753,6 @@ export interface paths {
         head?: never;
         /** Update Backtest Run Notes */
         patch: operations["update_backtest_run_notes_api_research_backtest_runs__run_id__notes_patch"];
-        trace?: never;
-    };
-    "/api/research/build-iv-history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Build Iv History Endpoint
-         * @description Build historical 30-day constant-maturity IV for a ticker.
-         *
-         *     Long-running: may take 5-10 minutes per ticker due to API calls.
-         *     Derives IV from expired options contracts + Black-Scholes inversion.
-         */
-        post: operations["build_iv_history_endpoint_api_research_build_iv_history_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
         trace?: never;
     };
     "/api/research/golden-validations": {
@@ -5279,100 +5058,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/research/run-batch-options": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Run Batch Options Endpoint
-         * @description Run cross-sectional options feature study across multiple tickers.
-         *
-         *     Tests the same options feature across a universe of tickers and
-         *     determines if the effect is cross-sectionally consistent.
-         */
-        post: operations["run_batch_options_endpoint_api_research_run_batch_options_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/run-feature": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Run Feature Research Endpoint
-         * @description Run a feature validation experiment.
-         *
-         *     Accepts OHLCV bars, computes the requested feature, validates it
-         *     against 15-minute forward log returns using IC, stationarity, and
-         *     quantile analysis.
-         */
-        post: operations["run_feature_research_endpoint_api_research_run_feature_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/run-options-feature": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Run Options Feature Endpoint
-         * @description Run options feature research using derived IV data.
-         *
-         *     Uses the same IC analysis pipeline as stock features but adapted for
-         *     daily-frequency options signals.
-         */
-        post: operations["run_options_feature_endpoint_api_research_run_options_feature_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/research/run-signal": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Run Signal Engine Endpoint
-         * @description Run the signal engine pipeline.
-         *
-         *     Converts a validated feature into a tradable signal with
-         *     standardization, regime gating, backtesting, walk-forward validation,
-         *     and graduation assessment.
-         */
-        post: operations["run_signal_engine_endpoint_api_research_run_signal_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/research/strategy-runs": {
         parameters: {
             query?: never;
@@ -5616,70 +5301,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/sanitize": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Sanitize Data
-         * @description Sanitize arbitrary market data using pandas-dq Fix_DQ.
-         *
-         *     Accepts a JSON list of dicts with numeric market data fields.
-         *     Returns the cleaned data with outliers removed, missing values filled,
-         *     and types enforced.
-         */
-        post: operations["sanitize_data_api_sanitize_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/snapshot/market": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Get Stock Snapshots
-         * @description Fetch snapshots for multiple stock tickers (or all tickers if none specified).
-         */
-        post: operations["get_stock_snapshots_api_snapshot_market_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/snapshot/movers": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Get Market Movers
-         * @description Fetch top market movers — gainers or losers.
-         */
-        post: operations["get_market_movers_api_snapshot_movers_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/snapshot/options-chain": {
         parameters: {
             query?: never;
@@ -5719,26 +5340,6 @@ export interface paths {
          * @description Fetch a snapshot for a single stock ticker (price, day/prevDay OHLCV, change).
          */
         post: operations["get_stock_snapshot_api_snapshot_ticker_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/snapshot/unified": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Get Unified Snapshots
-         * @description Fetch unified v3 snapshots with flexible ticker filtering.
-         */
-        post: operations["get_unified_snapshots_api_snapshot_unified_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6497,28 +6098,6 @@ export interface components {
             to_date: string;
         };
         /**
-         * AlpacaBotControlFixtureEnvelope
-         * @description Versioned server-presented fixture envelope for one diagnostic scenario.
-         */
-        AlpacaBotControlFixtureEnvelope: {
-            operator: components["schemas"]["OperatorDiagnosticView"];
-            /** Review Note */
-            review_note: string;
-            /**
-             * Scenario Id
-             * @enum {string}
-             */
-            scenario_id: "running_ready_flat" | "running_attributed_long" | "entry_partial_pending" | "exit_cancelling_entry" | "exit_closing" | "exit_complete" | "stopped_flat" | "stop_requires_flatten" | "stopped_carryover_intact" | "stopped_carryover_mismatch" | "instance_submit_uncertain" | "market_data_stale" | "account_unattributable" | "account_unprovable" | "known_manual_exposure";
-            /** Scenario Label */
-            scenario_label: string;
-            /**
-             * Schema Version
-             * @constant
-             */
-            schema_version: "1.0";
-            trader: components["schemas"]["TraderDiagnosticView"];
-        };
-        /**
          * AlpacaDeploySubmission
          * @description One Deploy command: the settings plus the opaque key that makes it retry-safe.
          *
@@ -6961,52 +6540,6 @@ export interface components {
             quantity?: number;
         };
         /**
-         * AlphaDecayStatsResponse
-         * @description Alpha decay regression statistics with power-guard flags.
-         */
-        AlphaDecayStatsResponse: {
-            /**
-             * Intercept
-             * @default 0
-             */
-            intercept?: number;
-            /**
-             * Is Significant
-             * @default false
-             */
-            is_significant?: boolean;
-            /**
-             * Is Test Valid
-             * @default false
-             */
-            is_test_valid?: boolean;
-            /**
-             * N Folds Used
-             * @default 0
-             */
-            n_folds_used?: number;
-            /**
-             * P Value
-             * @default 1
-             */
-            p_value?: number;
-            /**
-             * R Squared
-             * @default 0
-             */
-            r_squared?: number;
-            /**
-             * Slope
-             * @default 0
-             */
-            slope?: number;
-            /**
-             * T Stat
-             * @default 0
-             */
-            t_stat?: number;
-        };
-        /**
          * AnchoredSplitPolicySpec
          * @description Strict HTTP/storage shape for one anchored split.
          */
@@ -7174,16 +6707,6 @@ export interface components {
             selector: "atm";
         };
         /**
-         * AuthoredValue
-         * @description One server-presented label/value pair; Angular does not compose it.
-         */
-        AuthoredValue: {
-            /** Label */
-            label: string;
-            /** Value */
-            value: string;
-        };
-        /**
          * BackfillDefaults
          * @description The parts of a ``DataRunSpec`` only the data plane knows (#1838).
          *
@@ -7240,81 +6763,6 @@ export interface components {
             /** Job Id */
             job_id: string;
             spec: components["schemas"]["DataRunSpec"];
-        };
-        /**
-         * BacktestResultResponse
-         * @description Single backtest result for a threshold x cost config.
-         */
-        BacktestResultResponse: {
-            /**
-             * Annualized Turnover
-             * @default 0
-             */
-            annualized_turnover?: number;
-            /**
-             * Avg Holding Bars
-             * @default 0
-             */
-            avg_holding_bars?: number;
-            /**
-             * Avg Win Loss Ratio
-             * @default 0
-             */
-            avg_win_loss_ratio?: number;
-            /** Cost Bps */
-            cost_bps: number;
-            /**
-             * Cumulative Returns
-             * @default []
-             */
-            cumulative_returns?: number[];
-            /**
-             * Dates
-             * @default []
-             */
-            dates?: string[];
-            /**
-             * Gross Sharpe
-             * @default 0
-             */
-            gross_sharpe?: number;
-            /**
-             * Gross Total Return
-             * @default 0
-             */
-            gross_total_return?: number;
-            /**
-             * Max Drawdown
-             * @default 0
-             */
-            max_drawdown?: number;
-            /**
-             * Net Sharpe
-             * @default 0
-             */
-            net_sharpe?: number;
-            /**
-             * Net Total Return
-             * @default 0
-             */
-            net_total_return?: number;
-            /**
-             * Positions
-             * @default []
-             */
-            positions?: number[];
-            /** Threshold */
-            threshold: number;
-            /**
-             * Total Trades
-             * @default 0
-             */
-            total_trades?: number;
-            /**
-             * Win Rate
-             * @default 0
-             */
-            win_rate?: number;
         };
         /**
          * BacktestRunClosingBarSkipResponse
@@ -8792,83 +8240,6 @@ export interface components {
              * @default false
              */
             total?: boolean;
-        };
-        /**
-         * BuildIvHistoryRequest
-         * @description Request body for POST /research/build-iv-history.
-         */
-        BuildIvHistoryRequest: {
-            /**
-             * End Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            end_date: string;
-            /**
-             * Start Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            start_date: string;
-            /**
-             * Underlying Ticker
-             * @description Stock symbol (e.g. SPY)
-             */
-            underlying_ticker: string;
-        };
-        /**
-         * BuildIvHistoryResponse
-         * @description Response body for POST /research/build-iv-history.
-         */
-        BuildIvHistoryResponse: {
-            /**
-             * Data Points
-             * @default 0
-             */
-            data_points?: number;
-            diagnostics?: components["schemas"]["IvDiagnosticsReportResponse"] | null;
-            /** End Date */
-            end_date: string;
-            /** Error */
-            error?: string | null;
-            /**
-             * Iv Data
-             * @default []
-             */
-            iv_data?: Record<string, never>[];
-            /** Start Date */
-            start_date: string;
-            /** Success */
-            success: boolean;
-            /** Underlying Ticker */
-            underlying_ticker: string;
-        };
-        /**
-         * CalculateIndicatorsRequest
-         * @description Request to calculate technical indicators from OHLCV data
-         */
-        CalculateIndicatorsRequest: {
-            /** Bars */
-            bars: components["schemas"]["OhlcvBar"][];
-            /** Indicators */
-            indicators: components["schemas"]["IndicatorConfig"][];
-            /** Ticker */
-            ticker: string;
-        };
-        /**
-         * CalculateIndicatorsResponse
-         * @description Response from indicator calculation
-         */
-        CalculateIndicatorsResponse: {
-            /** Error */
-            error?: string | null;
-            /**
-             * Indicators
-             * @default []
-             */
-            indicators?: components["schemas"]["IndicatorResult"][];
-            /** Success */
-            success: boolean;
-            /** Ticker */
-            ticker: string;
         };
         /**
          * CanaryActivationConfirmation
@@ -10383,52 +9754,6 @@ export interface components {
             value: number;
         };
         /**
-         * CostViabilityResponse
-         * @description Cost-adjusted long-short spread, anchored on spec direction.
-         */
-        CostViabilityResponse: {
-            /**
-             * Cost Assumption One Way Bps
-             * @default 1
-             */
-            cost_assumption_one_way_bps?: number;
-            /**
-             * Cost Erasure One Way Bps
-             * @default 0
-             */
-            cost_erasure_one_way_bps?: number;
-            /**
-             * Directional Spread Bps
-             * @default 0
-             */
-            directional_spread_bps?: number;
-            /**
-             * Gross Spread Bps Signed
-             * @default 0
-             */
-            gross_spread_bps_signed?: number;
-            /**
-             * Net Spread Bps At Assumption
-             * @default 0
-             */
-            net_spread_bps_at_assumption?: number;
-            /**
-             * Note
-             * @default
-             */
-            note?: string;
-            /**
-             * Spec Direction
-             * @default unknown
-             */
-            spec_direction?: string;
-            /**
-             * Viable At Assumption
-             * @default false
-             */
-            viable_at_assumption?: boolean;
-        };
-        /**
          * CoverageDay
          * @description One calendar session's artifact status for a symbol/data-type window.
          *
@@ -10555,53 +9880,6 @@ export interface components {
             to_date: string;
         };
         /**
-         * CrossSectionalReportResponse
-         * @description Response body for POST /research/run-batch-options.
-         */
-        CrossSectionalReportResponse: {
-            /**
-             * Aggregate Ic
-             * @default 0
-             */
-            aggregate_ic?: number;
-            /**
-             * Cross Sectional Consistent
-             * @default false
-             */
-            cross_sectional_consistent?: boolean;
-            /** Error */
-            error?: string | null;
-            /** Feature Name */
-            feature_name: string;
-            /**
-             * Pass Rate
-             * @default 0
-             */
-            pass_rate?: number;
-            /** Success */
-            success: boolean;
-            /**
-             * Summary
-             * @default
-             */
-            summary?: string;
-            /**
-             * Ticker Results
-             * @default []
-             */
-            ticker_results?: components["schemas"]["TickerBatchResult"][];
-            /**
-             * Tickers Passed
-             * @default 0
-             */
-            tickers_passed?: number;
-            /**
-             * Tickers Tested
-             * @default 0
-             */
-            tickers_tested?: number;
-        };
-        /**
          * CurrentCurvePoint
          * @description Phase 1.1: theoretical per-share P&L at today's vol surface (not at expiry).
          */
@@ -10724,21 +10002,6 @@ export interface components {
              * @enum {string}
              */
             scope: "account" | "bot" | "broker";
-        };
-        /**
-         * CustodySpineStep
-         * @description One explicitly presented custody step in the operator diagnostic.
-         */
-        CustodySpineStep: {
-            /** Label */
-            label: string;
-            /** State Label */
-            state_label: string;
-            /**
-             * Tone
-             * @enum {string}
-             */
-            tone: "neutral" | "verified" | "active" | "caution" | "blocked";
         };
         /** DataAvailabilityResult */
         DataAvailabilityResult: {
@@ -10930,54 +10193,6 @@ export interface components {
             strategy_execution_id?: number | null;
             /** Symbols */
             symbols: string[];
-        };
-        /**
-         * DataSufficiencyResponse
-         * @description Data sufficiency assessment.
-         */
-        DataSufficiencyResponse: {
-            /**
-             * Coverage Warnings
-             * @default []
-             */
-            coverage_warnings?: string[];
-            /**
-             * Effective Oos Bars
-             * @default 0
-             */
-            effective_oos_bars?: number;
-            /**
-             * Regime Coverage
-             * @default {}
-             */
-            regime_coverage?: {
-                [key: string]: number;
-            };
-            /**
-             * Regimes Covered
-             * @default 0
-             */
-            regimes_covered?: number;
-            /**
-             * Test Bars
-             * @default 0
-             */
-            test_bars?: number;
-            /**
-             * Total Bars
-             * @default 0
-             */
-            total_bars?: number;
-            /**
-             * Train Bars
-             * @default 0
-             */
-            train_bars?: number;
-            /**
-             * Walk Forward Folds
-             * @default 0
-             */
-            walk_forward_folds?: number;
         };
         /**
          * DatasetPlanRequest
@@ -11411,47 +10626,6 @@ export interface components {
             semantic?: string | null;
         };
         /**
-         * DeflatedSharpeResponse
-         * @description Bailey & López de Prado Deflated Sharpe Ratio for the IS grid headline.
-         */
-        DeflatedSharpeResponse: {
-            /**
-             * Dsr Probability
-             * @default 0
-             */
-            dsr_probability?: number;
-            /**
-             * Expected Max Under Null
-             * @default 0
-             */
-            expected_max_under_null?: number;
-            /**
-             * Kurtosis
-             * @default 0
-             */
-            kurtosis?: number;
-            /**
-             * N Trials
-             * @default 0
-             */
-            n_trials?: number;
-            /**
-             * Raw Sharpe
-             * @default 0
-             */
-            raw_sharpe?: number;
-            /**
-             * Skewness
-             * @default 0
-             */
-            skewness?: number;
-            /**
-             * Valid
-             * @default false
-             */
-            valid?: boolean;
-        };
-        /**
          * DeploySubmissionUncommitted
          * @description The recovery read's answer for a key whose Deploy has not committed.
          *
@@ -11882,42 +11056,6 @@ export interface components {
             recorded_at_ms: number | null;
             /** Run Id */
             run_id: string | null;
-        };
-        /**
-         * EffectiveSampleSizeResponse
-         * @description Autocorrelation-adjusted sample size.
-         */
-        EffectiveSampleSizeResponse: {
-            /**
-             * Autocorrelation Lag1
-             * @default 0
-             */
-            autocorrelation_lag1?: number;
-            /**
-             * Effective N
-             * @default 0
-             */
-            effective_n?: number;
-            /**
-             * Independent Bets
-             * @default 0
-             */
-            independent_bets?: number;
-            /**
-             * Max Lag Used
-             * @default 0
-             */
-            max_lag_used?: number;
-            /**
-             * Raw N
-             * @default 0
-             */
-            raw_n?: number;
-            /**
-             * Rho Sum
-             * @default 0
-             */
-            rho_sum?: number;
         };
         /**
          * EmaCrossover2BpsStrategyParametersModel
@@ -12436,22 +11574,6 @@ export interface components {
             summary: string;
         };
         /**
-         * EvidenceItem
-         * @description Bounded evidence with a code label and opaque identifier kept verbatim.
-         */
-        EvidenceItem: {
-            /** Age Label */
-            age_label: string;
-            /** Code */
-            code: string;
-            /** Explanation */
-            explanation: string;
-            /** Label */
-            label: string;
-            /** Opaque Id */
-            opaque_id: string;
-        };
-        /**
          * EvidencePage
          * @description A bounded page of operator-gated evidence entries (§14).
          */
@@ -12624,18 +11746,6 @@ export interface components {
             symbol?: string | null;
         };
         /**
-         * ExposureSlice
-         * @description One attribution bucket, including known Clerk manual activity.
-         */
-        ExposureSlice: {
-            /** Explanation */
-            explanation: string;
-            /** Label */
-            label: string;
-            /** Quantity Label */
-            quantity_label: string;
-        };
-        /**
          * ExtendedLimitConfirmationRequest
          * @description The limit an operator confirmed for an extended-hours safe flatten (#2007).
          *
@@ -12783,158 +11893,6 @@ export interface components {
             timespan?: "minute" | "hour" | "day";
             /** To Date */
             to_date: string;
-        };
-        /**
-         * FeatureStageCriterionResponse
-         * @description Single advance-criterion in the next-stage list.
-         */
-        FeatureStageCriterionResponse: {
-            /**
-             * Current Value
-             * @default 0
-             */
-            current_value?: number;
-            /**
-             * Description
-             * @default
-             */
-            description?: string;
-            /**
-             * Met
-             * @default false
-             */
-            met?: boolean;
-            /**
-             * Name
-             * @default
-             */
-            name?: string;
-            /**
-             * Required Repr
-             * @default
-             */
-            required_repr?: string;
-        };
-        /**
-         * FeatureStageInfoResponse
-         * @description Where the feature sits on the 0/1/2/3 ladder.
-         */
-        FeatureStageInfoResponse: {
-            /**
-             * Advance Criteria
-             * @default []
-             */
-            advance_criteria?: components["schemas"]["FeatureStageCriterionResponse"][];
-            /**
-             * Description
-             * @default
-             */
-            description?: string;
-            /**
-             * Failed Screens
-             * @default []
-             */
-            failed_screens?: string[];
-            /**
-             * Label
-             * @default Rejected
-             */
-            label?: string;
-            /**
-             * Next Stage Label
-             * @default
-             */
-            next_stage_label?: string;
-            /**
-             * Stage
-             * @default 0
-             */
-            stage?: number;
-        };
-        /**
-         * FeatureValidationSpecResponse
-         * @description Per-feature validation contract surfaced to the UI.
-         *
-         *     Documents the question the screens are answering for this feature
-         *     so the reader can spot a "wrong target" or "wrong shape" mismatch
-         *     before reading the verdict.
-         */
-        FeatureValidationSpecResponse: {
-            /**
-             * Default Target
-             * @default
-             */
-            default_target?: string;
-            /**
-             * Expected Direction
-             * @default unknown
-             */
-            expected_direction?: string;
-            /**
-             * Expected Shape
-             * @default none
-             */
-            expected_shape?: string;
-            /**
-             * Feature Name
-             * @default
-             */
-            feature_name?: string;
-            /**
-             * Intent
-             * @default
-             */
-            intent?: string;
-            /**
-             * Is Signed Target Appropriate
-             * @default true
-             */
-            is_signed_target_appropriate?: boolean;
-            /**
-             * Monotonicity Required
-             * @default false
-             */
-            monotonicity_required?: boolean;
-            /**
-             * Notes
-             * @default []
-             */
-            notes?: string[];
-            /**
-             * Stationarity Required
-             * @default false
-             */
-            stationarity_required?: boolean;
-        };
-        /**
-         * FeatureValidationVerdictResponse
-         * @description Replaces the legacy single-boolean ``passed_validation``.
-         */
-        FeatureValidationVerdictResponse: {
-            cost_viability: components["schemas"]["CostViabilityResponse"];
-            /**
-             * Direction Matches Spec
-             * @default true
-             */
-            direction_matches_spec?: boolean;
-            economic_screen: components["schemas"]["ValidationScreenResponse"];
-            /**
-             * Final Decision
-             * @default
-             */
-            final_decision?: string;
-            ic_ci: components["schemas"]["IcCiResponse"];
-            multiple_testing: components["schemas"]["MultipleTestingWarningResponse"];
-            multiple_testing_screen: components["schemas"]["ValidationScreenResponse"];
-            oos_screen: components["schemas"]["ValidationScreenResponse"];
-            regime_stability_screen: components["schemas"]["ValidationScreenResponse"];
-            stage_info: components["schemas"]["FeatureStageInfoResponse"];
-            statistical_screen: components["schemas"]["ValidationScreenResponse"];
-            /**
-             * Target Signed Appropriate
-             * @default true
-             */
-            target_signed_appropriate?: boolean;
         };
         /**
          * FeedContinuityEventView
@@ -13477,112 +12435,6 @@ export interface components {
             symbol: string;
             /** Validation Case */
             validation_case: Record<string, never>;
-        };
-        /**
-         * GraduationCriterionResponse
-         * @description Single graduation criterion.
-         */
-        GraduationCriterionResponse: {
-            /**
-             * Description
-             * @default
-             */
-            description?: string;
-            /**
-             * Failure Reason
-             * @default
-             */
-            failure_reason?: string;
-            /**
-             * Label
-             * @default Fail
-             */
-            label?: string;
-            /**
-             * Name
-             * @default
-             */
-            name?: string;
-            /**
-             * Passed
-             * @default false
-             */
-            passed?: boolean;
-            /**
-             * Threshold
-             * @default 0
-             */
-            threshold?: number;
-            /**
-             * Value
-             * @default 0
-             */
-            value?: number;
-        };
-        /**
-         * GraduationResultResponse
-         * @description Complete graduation assessment.
-         */
-        GraduationResultResponse: {
-            /**
-             * Criteria
-             * @default []
-             */
-            criteria?: components["schemas"]["GraduationCriterionResponse"][];
-            /**
-             * Overall Grade
-             * @default F
-             */
-            overall_grade?: string;
-            /**
-             * Overall Passed
-             * @default false
-             */
-            overall_passed?: boolean;
-            parameter_stability?: components["schemas"]["ParameterStabilityResponse"] | null;
-            stage0_rejection?: components["schemas"]["Stage0RejectionResponse"] | null;
-            stage_info?: components["schemas"]["GraduationStageInfoResponse"] | null;
-            /**
-             * Status Label
-             * @default Exploratory
-             */
-            status_label?: string;
-            /**
-             * Summary
-             * @default
-             */
-            summary?: string;
-        };
-        /**
-         * GraduationStageInfoResponse
-         * @description Where the signal sits on the 0/1/2/3 ladder, plus advancement criteria.
-         */
-        GraduationStageInfoResponse: {
-            /**
-             * Advance Criteria
-             * @default []
-             */
-            advance_criteria?: components["schemas"]["StageAdvanceCriterionResponse"][];
-            /**
-             * Description
-             * @default
-             */
-            description?: string;
-            /**
-             * Label
-             * @default Rejected
-             */
-            label?: string;
-            /**
-             * Next Stage Label
-             * @default
-             */
-            next_stage_label?: string;
-            /**
-             * Stage
-             * @default 0
-             */
-            stage?: number;
         };
         /**
          * GreekCurvePoint
@@ -14368,52 +13220,6 @@ export interface components {
             /** Symbol */
             symbol: string;
         };
-        /**
-         * IcCiResponse
-         * @description Lo-style confidence interval on the headline mean IC.
-         */
-        IcCiResponse: {
-            /**
-             * Ci Lower
-             * @default 0
-             */
-            ci_lower?: number;
-            /**
-             * Ci Upper
-             * @default 0
-             */
-            ci_upper?: number;
-            /**
-             * Confidence Level
-             * @default 0.95
-             */
-            confidence_level?: number;
-            /**
-             * N Eff Used
-             * @default 0
-             */
-            n_eff_used?: number;
-            /**
-             * Point
-             * @default 0
-             */
-            point?: number;
-            /**
-             * Se
-             * @default 0
-             */
-            se?: number;
-            /**
-             * Se Approximation Note
-             * @default
-             */
-            se_approximation_note?: string;
-            /**
-             * Valid
-             * @default false
-             */
-            valid?: boolean;
-        };
         /** IndicatorBetween */
         IndicatorBetween: {
             /** Hi */
@@ -14507,41 +13313,6 @@ export interface components {
             op: "<" | "<=" | "==" | ">=" | ">" | "!=";
             /** Right */
             right: components["schemas"]["IndicatorRef"] | components["schemas"]["ConstOperand"] | components["schemas"]["Subtract-Output"] | components["schemas"]["DifferenceBps"];
-        };
-        /**
-         * IndicatorConfig
-         * @description Configuration for a single indicator
-         */
-        IndicatorConfig: {
-            /**
-             * Name
-             * @description Indicator name: sma, ema, rsi, macd, bbands, stoch
-             */
-            name: string;
-            /**
-             * Window
-             * @description Lookback period
-             * @default 14
-             */
-            window?: number;
-        };
-        /**
-         * IndicatorDataPoint
-         * @description A single indicator value at a timestamp
-         */
-        IndicatorDataPoint: {
-            /** Histogram */
-            histogram?: number | null;
-            /** Lower */
-            lower?: number | null;
-            /** Signal */
-            signal?: number | null;
-            /** Timestamp */
-            timestamp: number;
-            /** Upper */
-            upper?: number | null;
-            /** Value */
-            value?: number | null;
         };
         /**
          * IndicatorInfo
@@ -14753,171 +13524,6 @@ export interface components {
             warnings?: string[];
         };
         /**
-         * IndicatorResult
-         * @description Result for a single indicator calculation
-         */
-        IndicatorResult: {
-            /** Data */
-            data: components["schemas"]["IndicatorDataPoint"][];
-            /** Name */
-            name: string;
-            /** Window */
-            window: number;
-        };
-        /**
-         * IndicatorTableRequest
-         * @description Request to generate a full TradingView-style indicator table from Polygon minute data.
-         *
-         *     Inherits ``symbol`` / ``from_date`` / ``to_date`` / ``timespan`` /
-         *     ``multiplier`` / ``session`` from the canonical ``TickerRequest``.
-         *     Legacy field names (``ticker`` / ``start_date`` / ``end_date``) are
-         *     still accepted during the PR (ii) → (iii) migration window via
-         *     Pydantic ``AliasChoices``.
-         *
-         *     **Default override**: ``session`` defaults to ``"extended"`` here
-         *     (vs the base's ``"rth"``) to preserve pre-migration behavior — this
-         *     endpoint operates on the full session by default.
-         */
-        IndicatorTableRequest: {
-            /**
-             * Adjusted
-             * @description Adjust for splits/dividends (Polygon default: true)
-             * @default true
-             */
-            adjusted?: boolean;
-            /**
-             * Adx Length
-             * @description ADX period
-             * @default 14
-             */
-            adx_length?: number;
-            /**
-             * Bb Length
-             * @description Bollinger Bands length
-             * @default 20
-             */
-            bb_length?: number;
-            /**
-             * Bb Std
-             * @description Bollinger Bands standard deviation
-             * @default 2
-             */
-            bb_std?: number;
-            /**
-             * Ema Periods
-             * @description EMA periods to calculate
-             * @default [
-             *       5,
-             *       10,
-             *       20,
-             *       30,
-             *       40,
-             *       50,
-             *       100,
-             *       200
-             *     ]
-             */
-            ema_periods?: number[];
-            /**
-             * Forward Fill
-             * @description Fill missing minute bars with previous close (volume=0)
-             * @default false
-             */
-            forward_fill?: boolean;
-            /** From Date */
-            from_date: string;
-            /**
-             * Macd Fast
-             * @description MACD fast period
-             * @default 12
-             */
-            macd_fast?: number;
-            /**
-             * Macd Signal
-             * @description MACD signal period
-             * @default 9
-             */
-            macd_signal?: number;
-            /**
-             * Macd Slow
-             * @description MACD slow period
-             * @default 26
-             */
-            macd_slow?: number;
-            /**
-             * Multiplier
-             * @default 1
-             */
-            multiplier?: number;
-            /**
-             * Rsi Length
-             * @description RSI period
-             * @default 14
-             */
-            rsi_length?: number;
-            /**
-             * Rsi Ma Length
-             * @description RSI moving average period
-             * @default 14
-             */
-            rsi_ma_length?: number;
-            /**
-             * Session
-             * @default extended
-             * @enum {string}
-             */
-            session?: "rth" | "extended";
-            /**
-             * Supertrend Length
-             * @description Supertrend ATR length
-             * @default 10
-             */
-            supertrend_length?: number;
-            /**
-             * Supertrend Multiplier
-             * @description Supertrend multiplier
-             * @default 3
-             */
-            supertrend_multiplier?: number;
-            /** Symbol */
-            symbol: string;
-            /**
-             * Timespan
-             * @default minute
-             * @enum {string}
-             */
-            timespan?: "minute" | "hour" | "day";
-            /** To Date */
-            to_date: string;
-        };
-        /**
-         * IndicatorTableResponse
-         * @description Response containing the full indicator table
-         */
-        IndicatorTableResponse: {
-            /**
-             * Columns
-             * @default []
-             */
-            columns?: string[];
-            /** Error */
-            error?: string | null;
-            /**
-             * Row Count
-             * @default 0
-             */
-            row_count?: number;
-            /**
-             * Rows
-             * @default []
-             */
-            rows?: Record<string, never>[];
-            /** Success */
-            success: boolean;
-            /** Ticker */
-            ticker: string;
-        };
-        /**
          * InsufficientCoverageDetail
          * @description The typed 400 body's ``detail`` for a too-thin usable sample.
          */
@@ -14986,82 +13592,6 @@ export interface components {
             symbol: string;
             /** Target Calendar Days */
             target_calendar_days: number;
-        };
-        /**
-         * IvDataPoint
-         * @description Single IV data point for options research.
-         */
-        IvDataPoint: {
-            /** Atm Iv */
-            atm_iv?: number | null;
-            /** Date */
-            date: string;
-            /** Iv Otm Call */
-            iv_otm_call?: number | null;
-            /** Iv Otm Put */
-            iv_otm_put?: number | null;
-            /** Stock Close */
-            stock_close?: number | null;
-        };
-        /**
-         * IvDiagnosticsReportResponse
-         * @description IV series diagnostics report.
-         */
-        IvDiagnosticsReportResponse: {
-            /**
-             * Discontinuities
-             * @default 0
-             */
-            discontinuities?: number;
-            /**
-             * Dte Spikes
-             * @default 0
-             */
-            dte_spikes?: number;
-            /** First Date */
-            first_date?: string | null;
-            /**
-             * Gaps
-             * @default 0
-             */
-            gaps?: number;
-            /** Iv Max */
-            iv_max?: number | null;
-            /** Iv Mean */
-            iv_mean?: number | null;
-            /** Iv Min */
-            iv_min?: number | null;
-            /** Iv Skewness */
-            iv_skewness?: number | null;
-            /** Iv Std */
-            iv_std?: number | null;
-            /** Last Date */
-            last_date?: string | null;
-            /**
-             * Missing Pct
-             * @default 0
-             */
-            missing_pct?: number;
-            /**
-             * Total Trading Days
-             * @default 0
-             */
-            total_trading_days?: number;
-            /**
-             * Valid
-             * @default false
-             */
-            valid?: boolean;
-            /**
-             * Valid Iv Days
-             * @default 0
-             */
-            valid_iv_days?: number;
-            /**
-             * Warnings
-             * @default []
-             */
-            warnings?: string[];
         };
         /**
          * IvProvenancePayload
@@ -15855,60 +14385,6 @@ export interface components {
             strike: number;
         };
         /**
-         * LegGreeks
-         * @description Greeks for a single leg at a single scenario point.
-         *
-         *     Sign conventions match `bs_greeks.BSGreeks`:
-         *     - delta: per share (option) or 1.0 (stock)
-         *     - gamma: per share
-         *     - theta: per calendar day
-         *     - vega: per 1% IV move
-         *     - rho: per 1% rate move
-         *
-         *     Quantity-scaled aggregates are computed at the response level
-         *     (`ScenarioPoint`); per-leg values here are *unscaled per-share* Greeks
-         *     so the caller can re-aggregate however it wants.
-         */
-        LegGreeks: {
-            /**
-             * Delta
-             * @default 0
-             */
-            delta?: number;
-            /**
-             * Gamma
-             * @default 0
-             */
-            gamma?: number;
-            /**
-             * Instrument
-             * @enum {string}
-             */
-            instrument: "stock" | "option";
-            /** Leg Id */
-            leg_id?: string | null;
-            /**
-             * Rho
-             * @default 0
-             */
-            rho?: number;
-            /**
-             * Theoretical Price
-             * @description Theoretical per-share price at this scenario point
-             */
-            theoretical_price: number;
-            /**
-             * Theta
-             * @default 0
-             */
-            theta?: number;
-            /**
-             * Vega
-             * @default 0
-             */
-            vega?: number;
-        };
-        /**
          * LiveEnvelopePayload
          * @description The four current account bounds; retired session counts are rejected.
          *
@@ -16022,30 +14498,6 @@ export interface components {
              * @enum {string}
              */
             state: "activation_available" | "review_available" | "graduated" | "blocked";
-        };
-        /**
-         * LiveGreeksRequest
-         * @description Convenience request for the common 'live Greeks at current state' case.
-         *
-         *     Equivalent to ScenarioRequest with the default 1×1×1 grid.
-         */
-        LiveGreeksRequest: {
-            /** As Of Ms */
-            as_of_ms: number;
-            /**
-             * Dividend Yield
-             * @default 0
-             */
-            dividend_yield?: number;
-            /** Positions */
-            positions: (components["schemas"]["StockPosition"] | components["schemas"]["OptionPosition"])[];
-            /**
-             * Risk Free Rate
-             * @default 0.043
-             */
-            risk_free_rate?: number;
-            /** Spot Price */
-            spot_price: number;
         };
         /**
          * LiveSnapshotUnavailableDetail
@@ -16308,37 +14760,6 @@ export interface components {
             message: string;
         };
         /**
-         * MarketMoversRequest
-         * @description Request schema for top market movers
-         */
-        MarketMoversRequest: {
-            /**
-             * Direction
-             * @description 'gainers' or 'losers'
-             */
-            direction: string;
-        };
-        /**
-         * MarketMoversResponse
-         * @description Response for top market movers (gainers/losers)
-         */
-        MarketMoversResponse: {
-            /**
-             * Count
-             * @default 0
-             */
-            count?: number;
-            /** Error */
-            error?: string | null;
-            /** Success */
-            success: boolean;
-            /**
-             * Tickers
-             * @default []
-             */
-            tickers?: components["schemas"]["StockTickerSnapshot"][];
-        };
-        /**
          * MarketPulseView
          * @description Scheduled session, live tradability, and data recency authored by Python.
          */
@@ -16417,77 +14838,6 @@ export interface components {
          * @enum {string}
          */
         MarketStatusSource: "ibkr.market_data.status" | "alpaca.stock_data.status";
-        /**
-         * MethodologyResponse
-         * @description Methodology metadata from signal engine configuration.
-         */
-        MethodologyResponse: {
-            /**
-             * Annualization Factor
-             * @default 98280
-             */
-            annualization_factor?: number;
-            /**
-             * Bars Per Day
-             * @default 390
-             */
-            bars_per_day?: number;
-            /**
-             * Cost Bps Options
-             * @default []
-             */
-            cost_bps_options?: number[];
-            /**
-             * Default Cost Bps
-             * @default 2
-             */
-            default_cost_bps?: number;
-            /**
-             * Flip Sign
-             * @default true
-             */
-            flip_sign?: boolean;
-            /**
-             * Horizon
-             * @default 15
-             */
-            horizon?: number;
-            /**
-             * Min Bars For Signal
-             * @default 500
-             */
-            min_bars_for_signal?: number;
-            /**
-             * Optimization Target
-             * @default net_sharpe
-             */
-            optimization_target?: string;
-            /**
-             * Regime Gate Enabled
-             * @default true
-             */
-            regime_gate_enabled?: boolean;
-            /**
-             * Test Months
-             * @default 1
-             */
-            test_months?: number;
-            /**
-             * Thresholds
-             * @default []
-             */
-            thresholds?: number[];
-            /**
-             * Train Months
-             * @default 3
-             */
-            train_months?: number;
-            /**
-             * Window Type
-             * @default rolling
-             */
-            window_type?: string;
-        };
         /** MinDteExpiry */
         MinDteExpiry: {
             /** Days */
@@ -16754,46 +15104,6 @@ export interface components {
             warnings?: string[];
         };
         /**
-         * MonthlyICBreakdownResponse
-         * @description Monthly IC statistics.
-         */
-        MonthlyICBreakdownResponse: {
-            /** Mean Ic */
-            mean_ic: number;
-            /** Month */
-            month: string;
-            /** Observation Count */
-            observation_count: number;
-            /** T Stat */
-            t_stat: number;
-        };
-        /**
-         * MultipleTestingWarningResponse
-         * @description Holm-Bonferroni-corrected p-value across the feature family.
-         */
-        MultipleTestingWarningResponse: {
-            /**
-             * Holm P Value
-             * @default 1
-             */
-            holm_p_value?: number;
-            /**
-             * N Family
-             * @default 0
-             */
-            n_family?: number;
-            /**
-             * Note
-             * @default
-             */
-            note?: string;
-            /**
-             * Raw Nw P Value
-             * @default 1
-             */
-            raw_nw_p_value?: number;
-        };
-        /**
          * NavigateAction
          * @description Move: navigate to another operator page.
          */
@@ -17022,27 +15332,6 @@ export interface components {
             /** Validated Against */
             validated_against: string;
         };
-        /**
-         * OHLCVBar
-         * @description Single OHLCV bar.
-         */
-        OHLCVBar: {
-            /** Close */
-            close: number;
-            /** High */
-            high: number;
-            /** Low */
-            low: number;
-            /** Open */
-            open: number;
-            /**
-             * Timestamp
-             * @description Milliseconds since epoch
-             */
-            timestamp: number;
-            /** Volume */
-            volume: number;
-        };
         /** ObservedAccountResponse */
         ObservedAccountResponse: {
             /** Account Id */
@@ -17054,27 +15343,6 @@ export interface components {
             account_mode: "paper" | "live";
             /** Account Status */
             account_status?: string | null;
-        };
-        /**
-         * OhlcvBar
-         * @description Single OHLCV bar for indicator calculation
-         */
-        OhlcvBar: {
-            /** Close */
-            close: number;
-            /** High */
-            high: number;
-            /** Low */
-            low: number;
-            /** Open */
-            open: number;
-            /**
-             * Timestamp
-             * @description Unix milliseconds
-             */
-            timestamp: number;
-            /** Volume */
-            volume: number;
         };
         /**
          * OperatorBlocker
@@ -17166,42 +15434,6 @@ export interface components {
             /** Title */
             title: string;
         };
-        /**
-         * OperatorDiagnosticView
-         * @description All Operator-lens diagnosis, evidence, and action availability.
-         */
-        OperatorDiagnosticView: {
-            /** Actions */
-            actions: components["schemas"]["StaticAction"][];
-            /** Admission Explanation */
-            admission_explanation: string;
-            /** Admission Label */
-            admission_label: string;
-            /** Custody Spine */
-            custody_spine: components["schemas"]["CustodySpineStep"][];
-            /** Custody Spine Label */
-            custody_spine_label: string;
-            /** Evidence */
-            evidence: components["schemas"]["EvidenceItem"][];
-            /** Evidence Label */
-            evidence_label: string;
-            /** Exposure Label */
-            exposure_label: string;
-            /** Exposure Slices */
-            exposure_slices: components["schemas"]["ExposureSlice"][];
-            /** Freeze Explanation */
-            freeze_explanation: string;
-            /** Freeze Label */
-            freeze_label: string;
-            /** Next Step */
-            next_step: string;
-            /** Reduction Explanation */
-            reduction_explanation: string;
-            /** Reduction Label */
-            reduction_label: string;
-            /** Scope Cards */
-            scope_cards: components["schemas"]["AuthoredValue"][];
-        };
         /** OperatorMove */
         OperatorMove: {
             /** Action */
@@ -17252,61 +15484,6 @@ export interface components {
             kind: "option";
             /** Underlying */
             underlying: string;
-        };
-        /**
-         * OptionPosition
-         * @description A single option leg (call or put, long or short).
-         */
-        OptionPosition: {
-            /**
-             * Current Iv
-             * @description Current implied volatility as decimal
-             */
-            current_iv: number;
-            /**
-             * Entry Price
-             * @description Per-share entry premium (always positive)
-             */
-            entry_price: number;
-            /**
-             * Expiration Ms
-             * @description Expiration as int64 ms since Unix epoch UTC
-             */
-            expiration_ms: number;
-            /**
-             * Instrument
-             * @default option
-             * @constant
-             */
-            instrument?: "option";
-            /**
-             * Leg Id
-             * @description Optional caller-supplied identifier echoed in the response
-             */
-            leg_id?: string | null;
-            /**
-             * Multiplier
-             * @description Contract multiplier (default 100)
-             * @default 100
-             */
-            multiplier?: number;
-            /**
-             * Option Type
-             * @enum {string}
-             */
-            option_type: "call" | "put";
-            /**
-             * Quantity
-             * @description Net quantity in *contracts* (negative for short)
-             */
-            quantity: number;
-            /** Strike */
-            strike: number;
-            /**
-             * Symbol
-             * @description Underlying ticker
-             */
-            symbol: string;
         };
         /**
          * OptionTemplatePosition
@@ -17503,28 +15680,6 @@ export interface components {
             strikes_each_side?: number;
         };
         /**
-         * OptionsContractItem
-         * @description A single options contract
-         */
-        OptionsContractItem: {
-            /** Contract Type */
-            contract_type?: string | null;
-            /** Exercise Style */
-            exercise_style?: string | null;
-            /** Expiration Date */
-            expiration_date?: string | null;
-            /** Primary Exchange */
-            primary_exchange?: string | null;
-            /** Shares Per Contract */
-            shares_per_contract?: number | null;
-            /** Strike Price */
-            strike_price?: number | null;
-            /** Ticker */
-            ticker: string;
-            /** Underlying Ticker */
-            underlying_ticker?: string | null;
-        };
-        /**
          * OptionsContractSnapshotItem
          * @description A single options contract snapshot with greeks and day data
          */
@@ -17547,83 +15702,6 @@ export interface components {
             strike_price?: number | null;
             /** Ticker */
             ticker?: string | null;
-        };
-        /**
-         * OptionsContractsRequest
-         * @description Request schema for listing options contracts
-         */
-        OptionsContractsRequest: {
-            /**
-             * As Of Date
-             * @description As-of date (YYYY-MM-DD)
-             */
-            as_of_date?: string | null;
-            /**
-             * Contract Type
-             * @description Filter: call or put
-             */
-            contract_type?: string | null;
-            /**
-             * Expiration Date
-             * @description Exact expiration date (YYYY-MM-DD)
-             */
-            expiration_date?: string | null;
-            /**
-             * Expiration Date Gte
-             * @description Min expiration date
-             */
-            expiration_date_gte?: string | null;
-            /**
-             * Expiration Date Lte
-             * @description Max expiration date
-             */
-            expiration_date_lte?: string | null;
-            /**
-             * Expired
-             * @description Include expired contracts
-             */
-            expired?: boolean | null;
-            /**
-             * Limit
-             * @description Max results
-             * @default 100
-             */
-            limit?: number;
-            /**
-             * Strike Price Gte
-             * @description Min strike price
-             */
-            strike_price_gte?: number | null;
-            /**
-             * Strike Price Lte
-             * @description Max strike price
-             */
-            strike_price_lte?: number | null;
-            /**
-             * Underlying Ticker
-             * @description Underlying stock ticker
-             */
-            underlying_ticker: string;
-        };
-        /**
-         * OptionsContractsResponse
-         * @description Response schema for options contracts listing
-         */
-        OptionsContractsResponse: {
-            /**
-             * Contracts
-             * @default []
-             */
-            contracts?: components["schemas"]["OptionsContractItem"][];
-            /**
-             * Count
-             * @default 0
-             */
-            count?: number;
-            /** Error */
-            error?: string | null;
-            /** Success */
-            success: boolean;
         };
         /**
          * OptionsExpirationsRequest
@@ -17921,29 +15999,6 @@ export interface components {
             objective?: "sharpe_ratio";
         };
         /**
-         * ParameterStabilityResponse
-         * @description Parameter stability assessment.
-         */
-        ParameterStabilityResponse: {
-            /**
-             * Sharpe Values By Threshold
-             * @default {}
-             */
-            sharpe_values_by_threshold?: {
-                [key: string]: number;
-            };
-            /**
-             * Stability Label
-             * @default Fragile
-             */
-            stability_label?: string;
-            /**
-             * Stability Score
-             * @default 0
-             */
-            stability_score?: number;
-        };
-        /**
          * PayoffPoint
          * @description Single point on the payoff curve.
          */
@@ -18099,20 +16154,6 @@ export interface components {
             lookup?: "exact_bar_close" | "next_after_bar_close";
             /** Prediction Set Id */
             prediction_set_id: string;
-        };
-        /**
-         * PricePoint
-         * @description Compact, authored chart context; not a market-data API response.
-         */
-        PricePoint: {
-            /** Fill Label */
-            fill_label?: string | null;
-            /** Fill Tone */
-            fill_tone?: ("neutral" | "verified" | "active" | "caution" | "blocked") | null;
-            /** Label */
-            label: string;
-            /** Price */
-            price: string;
         };
         /**
          * PricingCompareRequest
@@ -18678,81 +16719,6 @@ export interface components {
              * @description Annualized IV (decimal, e.g. 0.20)
              */
             volatility: number;
-        };
-        /** QuantLibStatusResponse */
-        QuantLibStatusResponse: {
-            /** Available */
-            available: boolean;
-            /** Engines */
-            engines: string[];
-            /** Version */
-            version?: string | null;
-        };
-        /**
-         * QuantLibStrategyRequest
-         * @description Price a multi-leg strategy via QuantLib.
-         */
-        QuantLibStrategyRequest: {
-            /**
-             * Dividend Yield
-             * @default 0
-             */
-            dividend_yield?: number;
-            /**
-             * Engine
-             * @default analytic_bs
-             */
-            engine?: string;
-            /** Evaluation Date */
-            evaluation_date?: string | null;
-            /** Legs */
-            legs: components["schemas"]["StrategyLegInput"][];
-            /**
-             * Risk Free Rate
-             * @default 0.05
-             */
-            risk_free_rate?: number;
-            /** Spot */
-            spot: number;
-        };
-        /** QuantLibStrategyResponse */
-        QuantLibStrategyResponse: {
-            /** Engine */
-            engine: string;
-            /** Error */
-            error?: string | null;
-            /** Legs */
-            legs: components["schemas"]["StrategyLegResult"][];
-            /** Net Delta */
-            net_delta: number;
-            /** Net Gamma */
-            net_gamma: number;
-            /** Net Price */
-            net_price: number;
-            /** Net Rho */
-            net_rho: number;
-            /** Net Theta */
-            net_theta: number;
-            /** Net Vega */
-            net_vega: number;
-            /** Success */
-            success: boolean;
-        };
-        /**
-         * QuantileBinResponse
-         * @description Single quantile bin in the response.
-         */
-        QuantileBinResponse: {
-            /** Bin Number */
-            bin_number: number;
-            /** Count */
-            count: number;
-            /** Lower Bound */
-            lower_bound: number;
-            /** Mean Return */
-            mean_return: number;
-            /** Upper Bound */
-            upper_bound: number;
         };
         /**
          * ReadinessCheckView
@@ -19326,37 +17292,6 @@ export interface components {
             reason_code: string;
         };
         /**
-         * RegimeBucketResponse
-         * @description One cell of the joint (vol × trend) regime grid.
-         */
-        RegimeBucketResponse: {
-            /**
-             * Badge
-             * @default Empty
-             */
-            badge?: string;
-            /**
-             * Days
-             * @default 0
-             */
-            days?: number;
-            /**
-             * Effective Trades
-             * @default 0
-             */
-            effective_trades?: number;
-            /**
-             * Trend Label
-             * @default
-             */
-            trend_label?: string;
-            /**
-             * Vol Label
-             * @default
-             */
-            vol_label?: string;
-        };
-        /**
          * RegimeICPoint
          * @description IC for one horizon within one regime bucket.
          */
@@ -19373,20 +17308,6 @@ export interface components {
             mean_ic: number;
             /** P Value */
             p_value: number;
-            /** T Stat */
-            t_stat: number;
-        };
-        /**
-         * RegimeICResponse
-         * @description IC computed within a specific market regime.
-         */
-        RegimeICResponse: {
-            /** Mean Ic */
-            mean_ic: number;
-            /** Observation Count */
-            observation_count: number;
-            /** Regime Label */
-            regime_label: string;
             /** T Stat */
             t_stat: number;
         };
@@ -19648,73 +17569,6 @@ export interface components {
             schema_version: number;
         };
         /**
-         * RobustnessResponse
-         * @description Complete robustness analysis.
-         */
-        RobustnessResponse: {
-            /**
-             * Best Month Ic
-             * @default 0
-             */
-            best_month_ic?: number;
-            /**
-             * Monthly Breakdown
-             * @default []
-             */
-            monthly_breakdown?: components["schemas"]["MonthlyICBreakdownResponse"][];
-            /**
-             * Pct Positive Months
-             * @default 0
-             */
-            pct_positive_months?: number;
-            /**
-             * Pct Sign Consistent Months
-             * @default 0
-             */
-            pct_sign_consistent_months?: number;
-            /**
-             * Pct Significant Months
-             * @default 0
-             */
-            pct_significant_months?: number;
-            /**
-             * Rolling T Stat
-             * @default []
-             */
-            rolling_t_stat?: components["schemas"]["RollingTStatPointResponse"][];
-            /**
-             * Sign Consistent Stability Label
-             * @default Unknown
-             */
-            sign_consistent_stability_label?: string;
-            /**
-             * Stability Label
-             * @default Unknown
-             */
-            stability_label?: string;
-            /**
-             * Structural Breaks
-             * @default []
-             */
-            structural_breaks?: components["schemas"]["StructuralBreakPointResponse"][];
-            train_test?: components["schemas"]["TrainTestSplitResponse"] | null;
-            /**
-             * Trend Regimes
-             * @default []
-             */
-            trend_regimes?: components["schemas"]["RegimeICResponse"][];
-            /**
-             * Volatility Regimes
-             * @default []
-             */
-            volatility_regimes?: components["schemas"]["RegimeICResponse"][];
-            /**
-             * Worst Month Ic
-             * @default 0
-             */
-            worst_month_ic?: number;
-        };
-        /**
          * RollingSplitPolicySpec
          * @description Strict HTTP/storage shape for one rolling split.
          */
@@ -19731,16 +17585,6 @@ export interface components {
             /** Train Days */
             train_days: number;
         };
-        /**
-         * RollingTStatPointResponse
-         * @description Single point in rolling smoothed t-stat series.
-         */
-        RollingTStatPointResponse: {
-            /** Month */
-            month: string;
-            /** T Stat Smoothed */
-            t_stat_smoothed: number;
-        };
         /** RollingTradePointResponse */
         RollingTradePointResponse: {
             /** Average Return */
@@ -19753,45 +17597,6 @@ export interface components {
             win_rate: number;
             /** Window Size */
             window_size: number;
-        };
-        /**
-         * RuleBasedBacktestJobRequest
-         * @description Body of POST /api/jobs-internal/backtest.
-         *
-         *     **Default override**: ``multiplier=15`` to preserve the
-         *     pre-migration default (the rule-based backtest path defaulted to
-         *     15-minute bars before this PR). Without the override, the inherited
-         *     base default of 1 would silently switch every caller to 1-minute
-         *     bars.
-         */
-        RuleBasedBacktestJobRequest: {
-            /** From Date */
-            from_date: string;
-            /** Jobid */
-            jobId: string;
-            /**
-             * Multiplier
-             * @default 15
-             */
-            multiplier?: number;
-            /** Parameters */
-            parameters?: Record<string, never>;
-            /**
-             * Session
-             * @default rth
-             * @enum {string}
-             */
-            session?: "rth" | "extended";
-            /** Symbol */
-            symbol: string;
-            /**
-             * Timespan
-             * @default minute
-             * @enum {string}
-             */
-            timespan?: "minute" | "hour" | "day";
-            /** To Date */
-            to_date: string;
         };
         /**
          * RunAdmissionDecision
@@ -19843,38 +17648,6 @@ export interface components {
             /** Runtime */
             runtime: number;
         };
-        /**
-         * RunBatchOptionsRequest
-         * @description Request body for POST /research/run-batch-options.
-         */
-        RunBatchOptionsRequest: {
-            /**
-             * End Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            end_date: string;
-            /**
-             * Feature Name
-             * @description Options feature to test
-             */
-            feature_name: string;
-            /**
-             * Start Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            start_date: string;
-            /**
-             * Target Type
-             * @description Target type
-             * @default directional
-             */
-            target_type?: string;
-            /**
-             * Tickers
-             * @description List of tickers to test
-             */
-            tickers: string[];
-        };
         /** RunEvidenceProvenance */
         RunEvidenceProvenance: {
             closing_bar_convention?: components["schemas"]["ClosingBarConvention"] | null;
@@ -19897,115 +17670,6 @@ export interface components {
             schema_version?: 1;
             /** Statistics Basis */
             statistics_basis: string;
-        };
-        /**
-         * RunFeatureResearchRequest
-         * @description Request body for POST /research/run-feature.
-         */
-        RunFeatureResearchRequest: {
-            /**
-             * Bars
-             * @description OHLCV bars (1-minute)
-             */
-            bars: components["schemas"]["OHLCVBar"][];
-            /**
-             * End Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            end_date: string;
-            /**
-             * Feature Name
-             * @description Feature to validate (e.g. momentum_5m)
-             */
-            feature_name: string;
-            /**
-             * Start Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            start_date: string;
-            /**
-             * Ticker
-             * @description Stock symbol (e.g. AAPL)
-             */
-            ticker: string;
-        };
-        /**
-         * RunFeatureResearchResponse
-         * @description Response body for POST /research/run-feature.
-         */
-        RunFeatureResearchResponse: {
-            /** Adf Pvalue */
-            adf_pvalue: number;
-            /** Bars Used */
-            bars_used: number;
-            /**
-             * Effective N
-             * @default 0
-             */
-            effective_n?: number;
-            /** End Date */
-            end_date: string;
-            /** Error */
-            error?: string | null;
-            /** Feature Name */
-            feature_name: string;
-            feature_spec?: components["schemas"]["FeatureValidationSpecResponse"] | null;
-            /**
-             * Ic Dates
-             * @default []
-             */
-            ic_dates?: string[];
-            /** Ic P Value */
-            ic_p_value: number;
-            /** Ic T Stat */
-            ic_t_stat: number;
-            /**
-             * Ic Values
-             * @default []
-             */
-            ic_values?: number[];
-            /**
-             * Is Monotonic
-             * @default false
-             */
-            is_monotonic?: boolean;
-            /** Is Stationary */
-            is_stationary: boolean;
-            /** Kpss Pvalue */
-            kpss_pvalue: number;
-            /** Mean Ic */
-            mean_ic: number;
-            /**
-             * Monotonicity Ratio
-             * @default 0
-             */
-            monotonicity_ratio?: number;
-            /**
-             * Nw P Value
-             * @default 1
-             */
-            nw_p_value?: number;
-            /**
-             * Nw T Stat
-             * @default 0
-             */
-            nw_t_stat?: number;
-            /** Passed Validation */
-            passed_validation: boolean;
-            /**
-             * Quantile Bins
-             * @default []
-             */
-            quantile_bins?: components["schemas"]["QuantileBinResponse"][];
-            robustness?: components["schemas"]["RobustnessResponse"] | null;
-            /** Start Date */
-            start_date: string;
-            /** Success */
-            success: boolean;
-            target_metadata?: components["schemas"]["TargetMetadataResponse"] | null;
-            /** Ticker */
-            ticker: string;
-            validation_verdict?: components["schemas"]["FeatureValidationVerdictResponse"] | null;
         };
         /**
          * RunLedger
@@ -20163,171 +17827,6 @@ export interface components {
             win_rate?: number | null;
             /** Winning Trades */
             winning_trades: number;
-        };
-        /**
-         * RunOptionsFeatureResearchRequest
-         * @description Request body for POST /research/run-options-feature.
-         */
-        RunOptionsFeatureResearchRequest: {
-            /**
-             * End Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            end_date: string;
-            /**
-             * Feature Name
-             * @description Options feature (e.g. iv_rank_60)
-             */
-            feature_name: string;
-            /**
-             * Iv Data
-             * @description Historical IV data
-             */
-            iv_data: components["schemas"]["IvDataPoint"][];
-            /**
-             * Start Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            start_date: string;
-            /**
-             * Stock Daily Bars
-             * @description Daily stock OHLCV
-             */
-            stock_daily_bars: components["schemas"]["OHLCVBar"][];
-            /**
-             * Target Type
-             * @description Target: directional, volatility, abs_return
-             * @default directional
-             */
-            target_type?: string;
-            /**
-             * Ticker
-             * @description Stock symbol (e.g. AAPL)
-             */
-            ticker: string;
-        };
-        /**
-         * RunSignalEngineRequest
-         * @description Request body for POST /research/run-signal.
-         */
-        RunSignalEngineRequest: {
-            /**
-             * Bars
-             * @description OHLCV bars (1-minute)
-             */
-            bars: components["schemas"]["OHLCVBar"][];
-            /**
-             * End Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            end_date: string;
-            /**
-             * Feature Name
-             * @description Feature to test
-             * @default momentum_5m
-             */
-            feature_name?: string;
-            /**
-             * Flip Sign
-             * @description Flip sign for negative IC features
-             * @default true
-             */
-            flip_sign?: boolean;
-            /**
-             * Regime Gate Enabled
-             * @description Enable regime gating
-             * @default true
-             */
-            regime_gate_enabled?: boolean;
-            /**
-             * Start Date
-             * @description ISO date (YYYY-MM-DD)
-             */
-            start_date: string;
-            /**
-             * Ticker
-             * @description Stock symbol (e.g. AAPL)
-             */
-            ticker: string;
-        };
-        /**
-         * RunSignalEngineResponse
-         * @description Response body for POST /research/run-signal.
-         */
-        RunSignalEngineResponse: {
-            /**
-             * Backtest Grid
-             * @default []
-             */
-            backtest_grid?: components["schemas"]["BacktestResultResponse"][];
-            /**
-             * Bars Used
-             * @default 0
-             */
-            bars_used?: number;
-            /**
-             * Best Cost Bps
-             * @default 0
-             */
-            best_cost_bps?: number;
-            /**
-             * Best Threshold
-             * @default 0
-             */
-            best_threshold?: number;
-            /**
-             * Cost Bps Options
-             * @default []
-             */
-            cost_bps_options?: number[];
-            data_sufficiency?: components["schemas"]["DataSufficiencyResponse"] | null;
-            deflated_sharpe?: components["schemas"]["DeflatedSharpeResponse"] | null;
-            effective_sample?: components["schemas"]["EffectiveSampleSizeResponse"] | null;
-            /** End Date */
-            end_date: string;
-            /** Error */
-            error?: string | null;
-            /** Feature Name */
-            feature_name: string;
-            /**
-             * Flip Sign
-             * @default true
-             */
-            flip_sign?: boolean;
-            graduation?: components["schemas"]["GraduationResultResponse"] | null;
-            /**
-             * Joint Regime Coverage
-             * @default []
-             */
-            joint_regime_coverage?: components["schemas"]["RegimeBucketResponse"][];
-            methodology?: components["schemas"]["MethodologyResponse"] | null;
-            oos_sharpe_ci?: components["schemas"]["SharpeCiResponse"] | null;
-            /**
-             * Regime Coverage
-             * @default {}
-             */
-            regime_coverage?: {
-                [key: string]: number;
-            };
-            /**
-             * Research Log
-             * @default
-             */
-            research_log?: string;
-            signal_behavior?: components["schemas"]["SignalBehaviorMetricsResponse"] | null;
-            signal_diagnostics?: components["schemas"]["SignalDiagnosticsResponse"] | null;
-            /** Start Date */
-            start_date: string;
-            /** Success */
-            success: boolean;
-            /**
-             * Thresholds Tested
-             * @default []
-             */
-            thresholds_tested?: number[];
-            /** Ticker */
-            ticker: string;
-            walk_forward?: components["schemas"]["WalkForwardResultResponse"] | null;
         };
         /**
          * RunTrade
@@ -20561,37 +18060,6 @@ export interface components {
             removed_count: number;
         };
         /**
-         * SanitizeRequest
-         * @description Request schema for the standalone /api/sanitize endpoint
-         */
-        SanitizeRequest: {
-            /**
-             * Data
-             * @description List of market data records to sanitize
-             */
-            data: Record<string, never>[];
-            /**
-             * Quantile
-             * @description Quantile threshold for outlier removal
-             * @default 0.99
-             */
-            quantile?: number;
-        };
-        /**
-         * SanitizeResponse
-         * @description Response schema for the standalone /api/sanitize endpoint
-         */
-        SanitizeResponse: {
-            /** Data */
-            data: Record<string, never>[];
-            /** Error */
-            error?: string | null;
-            /** Success */
-            success: boolean;
-            /** Summary */
-            summary: Record<string, never>;
-        };
-        /**
          * SanitizedDataResponse
          * @description Typed response for the Python-to-.NET aggregate-bars boundary.
          */
@@ -20607,141 +18075,6 @@ export interface components {
             summary: components["schemas"]["SanitizationSummary"];
             /** Ticker */
             ticker: string;
-        };
-        /**
-         * ScenarioGrid
-         * @description Defines the grid of scenarios to evaluate.
-         *
-         *     A scenario is a (spot, time, iv-shift) triple. The default is a
-         *     1×1×1 grid that evaluates current state only — the "live Greeks"
-         *     use case. To compute a what-if surface, expand any of the three axes.
-         */
-        ScenarioGrid: {
-            /**
-             * Iv Shifts
-             * @description IV shifts as additive deltas (0.0 = current IV, 0.05 = +5 vol points)
-             */
-            iv_shifts?: number[];
-            /**
-             * Spot Shocks
-             * @description Spot shocks as fractional moves from current spot (e.g. -0.05 = spot drops 5%, 0.0 = current, 0.05 = spot rises 5%)
-             */
-            spot_shocks?: number[];
-            /**
-             * Time Shifts Days
-             * @description Time shifts in calendar days from now (0.0 = now, +7 = one week forward)
-             */
-            time_shifts_days?: number[];
-        };
-        /**
-         * ScenarioPoint
-         * @description Aggregate result for one (spot, time, iv) scenario point.
-         *
-         *     Aggregates apply the position quantity and contract multiplier.
-         *     For a 1-contract long ATM call with delta=0.5, the aggregate delta
-         *     is `0.5 * 1 * 100 = 50`.
-         */
-        ScenarioPoint: {
-            /**
-             * Aggregate Delta
-             * @description Sum of (per-share delta * quantity * multiplier)
-             * @default 0
-             */
-            aggregate_delta?: number;
-            /**
-             * Aggregate Gamma
-             * @default 0
-             */
-            aggregate_gamma?: number;
-            /**
-             * Aggregate Rho
-             * @default 0
-             */
-            aggregate_rho?: number;
-            /**
-             * Aggregate Theta
-             * @default 0
-             */
-            aggregate_theta?: number;
-            /**
-             * Aggregate Vega
-             * @default 0
-             */
-            aggregate_vega?: number;
-            /** Iv Shift */
-            iv_shift: number;
-            /** Legs */
-            legs?: components["schemas"]["LegGreeks"][];
-            /**
-             * Portfolio Pnl
-             * @description Aggregate P&L vs entry (sum over legs)
-             */
-            portfolio_pnl: number;
-            /**
-             * Spot
-             * @description Effective spot at this scenario point
-             */
-            spot: number;
-            /** Spot Shock */
-            spot_shock: number;
-            /** Time Shift Days */
-            time_shift_days: number;
-        };
-        /**
-         * ScenarioRequest
-         * @description Request a portfolio scenario evaluation.
-         *
-         *     `as_of_ms` is the evaluation timestamp; it determines TTM via
-         *     (expiration_ms - as_of_ms). The .NET caller passes `now()` for live
-         *     Greeks; passes a specific timestamp for what-if at a future date.
-         */
-        ScenarioRequest: {
-            /**
-             * As Of Ms
-             * @description Evaluation timestamp (int64 ms UTC)
-             */
-            as_of_ms: number;
-            /**
-             * Dividend Yield
-             * @default 0
-             */
-            dividend_yield?: number;
-            grid?: components["schemas"]["ScenarioGrid"];
-            /** Positions */
-            positions: (components["schemas"]["StockPosition"] | components["schemas"]["OptionPosition"])[];
-            /**
-             * Risk Free Rate
-             * @default 0.043
-             */
-            risk_free_rate?: number;
-            /**
-             * Spot Price
-             * @description Current underlying spot
-             */
-            spot_price: number;
-        };
-        /**
-         * ScenarioResponse
-         * @description Full response: every scenario point with per-leg breakdown.
-         */
-        ScenarioResponse: {
-            /** As Of Ms */
-            as_of_ms: number;
-            /** Dividend Yield */
-            dividend_yield: number;
-            /** Points */
-            points: components["schemas"]["ScenarioPoint"][];
-            /** Risk Free Rate */
-            risk_free_rate: number;
-            /** Spot Price */
-            spot_price: number;
-            /** Symbol */
-            symbol: string;
-            /**
-             * Warnings
-             * @description Soft warnings (e.g., 'leg X expired before scenario time T, treated as intrinsic'). These do not invalidate results; they surface assumptions.
-             */
-            warnings?: string[];
         };
         /**
          * SealedBotProgram
@@ -20904,47 +18237,6 @@ export interface components {
              */
             state: "restart_scheduled";
         };
-        /**
-         * SharpeCiResponse
-         * @description Lo (2002) confidence interval for the annualised Sharpe ratio.
-         */
-        SharpeCiResponse: {
-            /**
-             * Ci Lower
-             * @default 0
-             */
-            ci_lower?: number;
-            /**
-             * Ci Upper
-             * @default 0
-             */
-            ci_upper?: number;
-            /**
-             * Confidence Level
-             * @default 0.95
-             */
-            confidence_level?: number;
-            /**
-             * N Eff Used
-             * @default 0
-             */
-            n_eff_used?: number;
-            /**
-             * Point
-             * @default 0
-             */
-            point?: number;
-            /**
-             * Se
-             * @default 0
-             */
-            se?: number;
-            /**
-             * Valid
-             * @default false
-             */
-            valid?: boolean;
-        };
         /** SharpePnlDivergencePointResponse */
         SharpePnlDivergencePointResponse: {
             /** Cumulative Pnl */
@@ -21054,37 +18346,6 @@ export interface components {
             session_close_ownership?: "single_router_forced_flush_at_session_close";
         };
         /**
-         * SignalBehaviorMetricsResponse
-         * @description Signal behavior analysis on active bars.
-         */
-        SignalBehaviorMetricsResponse: {
-            /**
-             * Avg Forward Return When Active
-             * @default 0
-             */
-            avg_forward_return_when_active?: number;
-            /**
-             * Avg Loss Return
-             * @default 0
-             */
-            avg_loss_return?: number;
-            /**
-             * Avg Win Return
-             * @default 0
-             */
-            avg_win_return?: number;
-            /**
-             * Hit Rate
-             * @default 0
-             */
-            hit_rate?: number;
-            /**
-             * Skewness Active Returns
-             * @default 0
-             */
-            skewness_active_returns?: number;
-        };
-        /**
          * SignalClockContract
          * @description Calendar, warmup, session, pause, and replay semantics.
          */
@@ -21163,42 +18424,6 @@ export interface components {
              * @constant
              */
             timestamp_contract?: "int64_ms_utc";
-        };
-        /**
-         * SignalDiagnosticsResponse
-         * @description Signal diagnostics.
-         */
-        SignalDiagnosticsResponse: {
-            /**
-             * Avg Abs Signal
-             * @default 0
-             */
-            avg_abs_signal?: number;
-            /**
-             * Pct Filtered By Threshold
-             * @default 0
-             */
-            pct_filtered_by_threshold?: number;
-            /**
-             * Pct Gated By Regime
-             * @default 0
-             */
-            pct_gated_by_regime?: number;
-            /**
-             * Pct Time Active
-             * @default 0
-             */
-            pct_time_active?: number;
-            /**
-             * Signal Mean
-             * @default 0
-             */
-            signal_mean?: number;
-            /**
-             * Signal Std
-             * @default 0
-             */
-            signal_std?: number;
         };
         /**
          * SignalEngineJobRequest
@@ -21428,79 +18653,6 @@ export interface components {
             trade_number: number;
         };
         /**
-         * Stage0FailureResponse
-         * @description A single Stage 0 kill criterion that the signal failed.
-         */
-        Stage0FailureResponse: {
-            /**
-             * Criterion Name
-             * @default
-             */
-            criterion_name?: string;
-            /**
-             * Message
-             * @default
-             */
-            message?: string;
-            /**
-             * Threshold Repr
-             * @default
-             */
-            threshold_repr?: string;
-            /**
-             * Value
-             * @default 0
-             */
-            value?: number;
-        };
-        /**
-         * Stage0RejectionResponse
-         * @description Stage 0 kill-switch evaluation.
-         */
-        Stage0RejectionResponse: {
-            /**
-             * Failed Criteria
-             * @default []
-             */
-            failed_criteria?: components["schemas"]["Stage0FailureResponse"][];
-            /**
-             * Rejected
-             * @default false
-             */
-            rejected?: boolean;
-        };
-        /**
-         * StageAdvanceCriterionResponse
-         * @description A single requirement to advance from the current stage.
-         */
-        StageAdvanceCriterionResponse: {
-            /**
-             * Current Value
-             * @default 0
-             */
-            current_value?: number;
-            /**
-             * Description
-             * @default
-             */
-            description?: string;
-            /**
-             * Met
-             * @default false
-             */
-            met?: boolean;
-            /**
-             * Name
-             * @default
-             */
-            name?: string;
-            /**
-             * Required Repr
-             * @default
-             */
-            required_repr?: string;
-        };
-        /**
          * StartupJoinView
          * @description Where the current run is in joining its warmup to its live stream (#2410).
          *
@@ -21538,26 +18690,6 @@ export interface components {
              * @enum {string}
              */
             state: "waiting_for_stream" | "filling" | "history_joined" | "ready" | "refused";
-        };
-        /**
-         * StaticAction
-         * @description A deliberately inert action example for the static gallery.
-         */
-        StaticAction: {
-            /**
-             * Availability
-             * @enum {string}
-             */
-            availability: "available" | "blocked" | "terminal";
-            /** Explanation */
-            explanation: string;
-            /** Label */
-            label: string;
-            /**
-             * Tone
-             * @enum {string}
-             */
-            tone: "neutral" | "verified" | "active" | "caution" | "blocked";
         };
         /**
          * StationApplicability
@@ -21635,35 +18767,6 @@ export interface components {
             underlying: string;
         };
         /**
-         * StockPosition
-         * @description A long or short stock position.
-         */
-        StockPosition: {
-            /**
-             * Entry Price
-             * @description Avg entry price
-             */
-            entry_price: number;
-            /**
-             * Instrument
-             * @default stock
-             * @constant
-             */
-            instrument?: "stock";
-            /**
-             * Leg Id
-             * @description Optional caller-supplied identifier echoed in the response
-             */
-            leg_id?: string | null;
-            /**
-             * Quantity
-             * @description Net quantity (negative for short)
-             */
-            quantity: number;
-            /** Symbol */
-            symbol: string;
-        };
-        /**
          * StockSnapshotRequest
          * @description Request schema for single stock ticker snapshot
          */
@@ -21682,37 +18785,6 @@ export interface components {
             /** Error */
             error?: string | null;
             snapshot?: components["schemas"]["StockTickerSnapshot"] | null;
-            /** Success */
-            success: boolean;
-        };
-        /**
-         * StockSnapshotsRequest
-         * @description Request schema for multiple stock ticker snapshots
-         */
-        StockSnapshotsRequest: {
-            /**
-             * Tickers
-             * @description List of tickers. If omitted, returns all.
-             */
-            tickers?: string[] | null;
-        };
-        /**
-         * StockSnapshotsResponse
-         * @description Response for multiple stock ticker snapshots
-         */
-        StockSnapshotsResponse: {
-            /**
-             * Count
-             * @default 0
-             */
-            count?: number;
-            /** Error */
-            error?: string | null;
-            /**
-             * Snapshots
-             * @default []
-             */
-            snapshots?: components["schemas"]["StockTickerSnapshot"][];
             /** Success */
             success: boolean;
         };
@@ -22096,56 +19168,6 @@ export interface components {
              * @description Strike price
              */
             strike: number;
-        };
-        /** StrategyLegInput */
-        StrategyLegInput: {
-            /**
-             * Expiration Date
-             * @description YYYY-MM-DD
-             */
-            expiration_date: string;
-            /**
-             * Iv
-             * @description Implied volatility (decimal)
-             */
-            iv: number;
-            /** Option Type */
-            option_type: string;
-            /** Position */
-            position: string;
-            /**
-             * Premium
-             * @default 0
-             */
-            premium?: number;
-            /**
-             * Quantity
-             * @default 1
-             */
-            quantity?: number;
-            /** Strike */
-            strike: number;
-        };
-        /** StrategyLegResult */
-        StrategyLegResult: {
-            /** D1 */
-            d1?: number | null;
-            /** D2 */
-            d2?: number | null;
-            /** Delta */
-            delta: number;
-            /** Engine */
-            engine: string;
-            /** Gamma */
-            gamma: number;
-            /** Price */
-            price: number;
-            /** Rho */
-            rho: number;
-            /** Theta */
-            theta: number;
-            /** Vega */
-            vega: number;
         };
         /**
          * StrategyParamsSchema
@@ -22582,22 +19604,6 @@ export interface components {
             /** Refreshed At Ms */
             refreshed_at_ms: number;
         };
-        /**
-         * StructuralBreakPointResponse
-         * @description A detected structural break in the IC series.
-         */
-        StructuralBreakPointResponse: {
-            /** Date */
-            date: string;
-            /** Ic After */
-            ic_after: number;
-            /** Ic Before */
-            ic_before: number;
-            /** Significant */
-            significant: boolean;
-            /** T Stat */
-            t_stat: number;
-        };
         /** Subtract */
         "Subtract-Input": {
             /**
@@ -22748,59 +19754,6 @@ export interface components {
             symbol: string;
         };
         /**
-         * TargetMetadataResponse
-         * @description Audit trail of what the target pipeline actually computed.
-         */
-        TargetMetadataResponse: {
-            /**
-             * Bar Minutes
-             * @default 1
-             */
-            bar_minutes?: number;
-            /**
-             * Horizon Bars
-             * @default 15
-             */
-            horizon_bars?: number;
-            /**
-             * Horizon Minutes
-             * @default 15
-             */
-            horizon_minutes?: number;
-            /**
-             * Invalid Reason Counts
-             * @default {}
-             */
-            invalid_reason_counts?: {
-                [key: string]: number;
-            };
-            /**
-             * Target Name
-             * @default forward_log_return_15m
-             */
-            target_name?: string;
-            /**
-             * Timezone
-             * @default America/New_York
-             */
-            timezone?: string;
-            /**
-             * Total Count
-             * @default 0
-             */
-            total_count?: number;
-            /**
-             * Valid Count
-             * @default 0
-             */
-            valid_count?: number;
-            /**
-             * Valid Ratio
-             * @default 0
-             */
-            valid_ratio?: number;
-        };
-        /**
          * TickerAddress
          * @description Company address from ticker details
          */
@@ -22813,61 +19766,6 @@ export interface components {
             postal_code?: string | null;
             /** State */
             state?: string | null;
-        };
-        /**
-         * TickerBatchResult
-         * @description Per-ticker result in batch research.
-         */
-        TickerBatchResult: {
-            /**
-             * Data Points
-             * @default 0
-             */
-            data_points?: number;
-            /**
-             * Effective N
-             * @default 0
-             */
-            effective_n?: number;
-            /** Error */
-            error?: string | null;
-            /**
-             * Ic P Value
-             * @default 1
-             */
-            ic_p_value?: number;
-            /**
-             * Ic T Stat
-             * @default 0
-             */
-            ic_t_stat?: number;
-            /**
-             * Is Stationary
-             * @default false
-             */
-            is_stationary?: boolean;
-            /**
-             * Mean Ic
-             * @default 0
-             */
-            mean_ic?: number;
-            /**
-             * Nw P Value
-             * @default 1
-             */
-            nw_p_value?: number;
-            /**
-             * Nw T Stat
-             * @default 0
-             */
-            nw_t_stat?: number;
-            /**
-             * Passed Validation
-             * @default false
-             */
-            passed_validation?: boolean;
-            /** Ticker */
-            ticker: string;
         };
         /**
          * TickerDetailRequest
@@ -23155,72 +20053,6 @@ export interface components {
             symbol: string;
         };
         /**
-         * TraderDiagnosticView
-         * @description All Trader-lens meaning, authored by the fixture producer.
-         */
-        TraderDiagnosticView: {
-            /** Fill Summary */
-            fill_summary: string;
-            /** Headline */
-            headline: string;
-            /** Operation Summary */
-            operation_summary: string;
-            /** Price Context Label */
-            price_context_label: string;
-            /** Price Points */
-            price_points: components["schemas"]["PricePoint"][];
-            primary_action: components["schemas"]["StaticAction"];
-            /** Status Label */
-            status_label: string;
-            /**
-             * Status Tone
-             * @enum {string}
-             */
-            status_tone: "neutral" | "verified" | "active" | "caution" | "blocked";
-            /** Title */
-            title: string;
-            /** Truth Rows */
-            truth_rows: components["schemas"]["AuthoredValue"][];
-        };
-        /**
-         * TrainTestSplitResponse
-         * @description Chronological train/test split IC comparison.
-         */
-        TrainTestSplitResponse: {
-            /**
-             * Oos Retention
-             * @default 0
-             */
-            oos_retention?: number;
-            /**
-             * Oos Retention Label
-             * @default Unknown
-             */
-            oos_retention_label?: string;
-            /** Overfit Flag */
-            overfit_flag: boolean;
-            /** Test Days */
-            test_days: number;
-            /** Test End */
-            test_end: string;
-            /** Test Mean Ic */
-            test_mean_ic: number;
-            /** Test Start */
-            test_start: string;
-            /** Test T Stat */
-            test_t_stat: number;
-            /** Train Days */
-            train_days: number;
-            /** Train End */
-            train_end: string;
-            /** Train Mean Ic */
-            train_mean_ic: number;
-            /** Train Start */
-            train_start: string;
-            /** Train T Stat */
-            train_t_stat: number;
-        };
-        /**
          * TrainingCandidateResult
          * @description Auditable train-window outcome for one parameter candidate.
          */
@@ -23423,82 +20255,6 @@ export interface components {
             /** Ticker */
             ticker: string;
         };
-        /**
-         * UnifiedSnapshotItem
-         * @description A single item from the unified v3 snapshot
-         */
-        UnifiedSnapshotItem: {
-            /** Market Status */
-            market_status?: string | null;
-            /** Name */
-            name?: string | null;
-            session?: components["schemas"]["UnifiedSnapshotSession"] | null;
-            /** Ticker */
-            ticker?: string | null;
-            /** Type */
-            type?: string | null;
-        };
-        /**
-         * UnifiedSnapshotRequest
-         * @description Request schema for unified v3 snapshots
-         */
-        UnifiedSnapshotRequest: {
-            /**
-             * Limit
-             * @description Max results (default 10, max 250)
-             * @default 10
-             */
-            limit?: number;
-            /**
-             * Tickers
-             * @description Optional list of tickers to filter
-             */
-            tickers?: string[] | null;
-        };
-        /**
-         * UnifiedSnapshotResponse
-         * @description Response for unified v3 snapshots
-         */
-        UnifiedSnapshotResponse: {
-            /**
-             * Count
-             * @default 0
-             */
-            count?: number;
-            /** Error */
-            error?: string | null;
-            /**
-             * Results
-             * @default []
-             */
-            results?: components["schemas"]["UnifiedSnapshotItem"][];
-            /** Success */
-            success: boolean;
-        };
-        /**
-         * UnifiedSnapshotSession
-         * @description Session data from unified v3 snapshot
-         */
-        UnifiedSnapshotSession: {
-            /** Change */
-            change?: number | null;
-            /** Change Percent */
-            change_percent?: number | null;
-            /** Close */
-            close?: number | null;
-            /** High */
-            high?: number | null;
-            /** Low */
-            low?: number | null;
-            /** Open */
-            open?: number | null;
-            /** Previous Close */
-            previous_close?: number | null;
-            /** Price */
-            price?: number | null;
-            /** Volume */
-            volume?: number | null;
-        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -23507,37 +20263,6 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
-        };
-        /**
-         * ValidationScreenResponse
-         * @description One of the four screens (statistical / economic / OOS / multiple-testing).
-         */
-        ValidationScreenResponse: {
-            /**
-             * Description
-             * @default
-             */
-            description?: string;
-            /**
-             * Failure Reasons
-             * @default []
-             */
-            failure_reasons?: string[];
-            /**
-             * Name
-             * @default
-             */
-            name?: string;
-            /**
-             * Passed
-             * @default false
-             */
-            passed?: boolean;
-            /**
-             * Required For Stage1
-             * @default false
-             */
-            required_for_stage1?: boolean;
         };
         /** ValidationSummary */
         ValidationSummary: {
@@ -23770,73 +20495,6 @@ export interface components {
             walk_forward_id: string;
             /** Warnings */
             warnings?: string[];
-        };
-        /**
-         * WalkForwardResultResponse
-         * @description Aggregated walk-forward validation results.
-         */
-        WalkForwardResultResponse: {
-            alpha_decay?: components["schemas"]["AlphaDecayStatsResponse"] | null;
-            /**
-             * Best Window Sharpe
-             * @default 0
-             */
-            best_window_sharpe?: number;
-            /**
-             * Combined Oos Cumulative Returns
-             * @default []
-             */
-            combined_oos_cumulative_returns?: number[];
-            /**
-             * Combined Oos Dates
-             * @default []
-             */
-            combined_oos_dates?: string[];
-            /**
-             * Mean Oos Sharpe
-             * @default 0
-             */
-            mean_oos_sharpe?: number;
-            /**
-             * Median Oos Sharpe
-             * @default 0
-             */
-            median_oos_sharpe?: number;
-            /**
-             * Oos Sharpe Trend Slope
-             * @default 0
-             */
-            oos_sharpe_trend_slope?: number;
-            /**
-             * Pct Windows Positive Sharpe
-             * @default 0
-             */
-            pct_windows_positive_sharpe?: number;
-            /**
-             * Pct Windows Profitable
-             * @default 0
-             */
-            pct_windows_profitable?: number;
-            /**
-             * Std Oos Sharpe
-             * @default 0
-             */
-            std_oos_sharpe?: number;
-            /**
-             * Total Oos Bars
-             * @default 0
-             */
-            total_oos_bars?: number;
-            /**
-             * Windows
-             * @default []
-             */
-            windows?: components["schemas"]["WalkForwardWindowResponse"][];
-            /**
-             * Worst Window Sharpe
-             * @default 0
-             */
-            worst_window_sharpe?: number;
         };
         /** WalkForwardStudyDetailResponse */
         WalkForwardStudyDetailResponse: {
@@ -24110,102 +20768,6 @@ export interface components {
             window_start_ms: number;
             /** Winner Changes */
             winner_changes: number;
-        };
-        /**
-         * WalkForwardWindowResponse
-         * @description Single walk-forward fold result.
-         */
-        WalkForwardWindowResponse: {
-            /**
-             * Best Threshold
-             * @default 0
-             */
-            best_threshold?: number;
-            /**
-             * Fold Index
-             * @default 0
-             */
-            fold_index?: number;
-            /**
-             * Mu
-             * @default 0
-             */
-            mu?: number;
-            /**
-             * Oos Cumulative Returns
-             * @default []
-             */
-            oos_cumulative_returns?: number[];
-            /**
-             * Oos Dates
-             * @default []
-             */
-            oos_dates?: string[];
-            /**
-             * Oos Gross Sharpe
-             * @default 0
-             */
-            oos_gross_sharpe?: number;
-            /**
-             * Oos Max Drawdown
-             * @default 0
-             */
-            oos_max_drawdown?: number;
-            /**
-             * Oos Net Return
-             * @default 0
-             */
-            oos_net_return?: number;
-            /**
-             * Oos Net Sharpe
-             * @default 0
-             */
-            oos_net_sharpe?: number;
-            /**
-             * Oos Total Trades
-             * @default 0
-             */
-            oos_total_trades?: number;
-            /**
-             * Oos Win Rate
-             * @default 0
-             */
-            oos_win_rate?: number;
-            /**
-             * Sigma
-             * @default 0
-             */
-            sigma?: number;
-            /**
-             * Test Bars
-             * @default 0
-             */
-            test_bars?: number;
-            /**
-             * Test End
-             * @default
-             */
-            test_end?: string;
-            /**
-             * Test Start
-             * @default
-             */
-            test_start?: string;
-            /**
-             * Train Bars
-             * @default 0
-             */
-            train_bars?: number;
-            /**
-             * Train End
-             * @default
-             */
-            train_end?: string;
-            /**
-             * Train Start
-             * @default
-             */
-            train_start?: string;
         };
         /**
          * WarmupJoinView
@@ -32380,26 +28942,6 @@ export interface operations {
             };
         };
     };
-    list_static_fixtures_api_examples_alpaca_bot_control_fixtures_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AlpacaBotControlFixtureEnvelope"][];
-                };
-            };
-        };
-    };
     get_golden_fixtures_api_golden_fixtures_get: {
         parameters: {
             query?: never;
@@ -32416,72 +28958,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GoldenFixturesCatalog"];
-                };
-            };
-        };
-    };
-    calculate_indicators_api_indicators_calculate_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CalculateIndicatorsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CalculateIndicatorsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    generate_indicator_table_api_indicators_generate_table_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["IndicatorTableRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IndicatorTableResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -32506,39 +28982,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SnapshotResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    start_rule_based_backtest_job_api_jobs_internal_backtest_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RuleBasedBacktestJobRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -33017,39 +29460,6 @@ export interface operations {
             };
         };
     };
-    list_options_contracts_api_options_contracts_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["OptionsContractsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OptionsContractsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_options_expirations_api_options_expirations_post: {
         parameters: {
             query?: never;
@@ -33070,72 +29480,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OptionsExpirationsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    portfolio_live_greeks_api_portfolio_live_greeks_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LiveGreeksRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScenarioResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    portfolio_scenario_api_portfolio_scenario_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScenarioRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ScenarioResponse"];
                 };
             };
             /** @description Validation Error */
@@ -33202,59 +29546,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QuantLibGreeksResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    quantlib_status_api_quantlib_status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QuantLibStatusResponse"];
-                };
-            };
-        };
-    };
-    quantlib_strategy_api_quantlib_strategy_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["QuantLibStrategyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QuantLibStrategyResponse"];
                 };
             };
             /** @description Validation Error */
@@ -33353,39 +29644,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BacktestRunNotesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    build_iv_history_endpoint_api_research_build_iv_history_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BuildIvHistoryRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BuildIvHistoryResponse"];
                 };
             };
             /** @description Validation Error */
@@ -33991,138 +30249,6 @@ export interface operations {
             };
         };
     };
-    run_batch_options_endpoint_api_research_run_batch_options_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RunBatchOptionsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CrossSectionalReportResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_feature_research_endpoint_api_research_run_feature_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RunFeatureResearchRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunFeatureResearchResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_options_feature_endpoint_api_research_run_options_feature_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RunOptionsFeatureResearchRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunFeatureResearchResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_signal_engine_endpoint_api_research_run_signal_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RunSignalEngineRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RunSignalEngineResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_runs_endpoint_api_research_strategy_runs_get: {
         parameters: {
             query?: {
@@ -34670,105 +30796,6 @@ export interface operations {
             };
         };
     };
-    sanitize_data_api_sanitize_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SanitizeRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SanitizeResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_stock_snapshots_api_snapshot_market_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["StockSnapshotsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StockSnapshotsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_market_movers_api_snapshot_movers_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MarketMoversRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MarketMoversResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_options_chain_snapshot_api_snapshot_options_chain_post: {
         parameters: {
             query?: never;
@@ -34822,39 +30849,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StockSnapshotResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_unified_snapshots_api_snapshot_unified_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UnifiedSnapshotRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UnifiedSnapshotResponse"];
                 };
             };
             /** @description Validation Error */

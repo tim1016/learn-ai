@@ -1,7 +1,5 @@
-using System.Collections.Concurrent;
 using System.Globalization;
 using Backend.Data;
-using Backend.Models.DTOs;
 using Backend.Models.MarketData;
 using Backend.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
@@ -14,14 +12,6 @@ namespace Backend.Services.Implementation;
 /// </summary>
 public class MarketDataService : IMarketDataService
 {
-    private static readonly ConcurrentDictionary<string, FetchProgress> _progressTracker = new();
-
-    public static FetchProgress? GetProgress(string ticker)
-    {
-        _progressTracker.TryGetValue(ticker.ToUpper(), out var progress);
-        return progress;
-    }
-
     private readonly AppDbContext _context;
     private readonly IPolygonService _polygonService;
     private readonly ILogger<MarketDataService> _logger;
@@ -106,7 +96,7 @@ public class MarketDataService : IMarketDataService
         }
     }
 
-    public async Task<AggregatesWithGapInfo> GetOrFetchAggregatesAsync(
+    public async Task<List<StockAggregate>> GetOrFetchAggregatesAsync(
         string ticker,
         int multiplier,
         string timespan,
@@ -126,17 +116,8 @@ public class MarketDataService : IMarketDataService
                 "[MarketDataService] FORCE REFRESH for {Ticker} from {From} to {To}, bypassing cache",
                 symbol, fromDate, toDate);
 
-            var (fetchedAggs, windowStatuses) = await FetchWithWindowsAsync(
+            return await FetchWithWindowsAsync(
                 ticker, multiplier, timespan, fromDate, toDate, adjusted, cancellationToken);
-
-            var gapInfo = DetectGaps(fetchedAggs, fromDate, toDate, timespan, multiplier);
-            gapInfo.WindowStatuses = windowStatuses;
-
-            return new AggregatesWithGapInfo
-            {
-                Aggregates = fetchedAggs,
-                GapDetection = gapInfo
-            };
         }
 
         var market = DetectMarket(symbol);
@@ -168,12 +149,7 @@ public class MarketDataService : IMarketDataService
                     "[STEP 4.7 - MarketDataService] CACHE HIT: {Count} aggregates for {Ticker} from {From} to {To}",
                     existing.Count, symbol, fromDate, toDate);
 
-                var gapInfo = DetectGaps(existing, fromDate, toDate, timespan, multiplier);
-                return new AggregatesWithGapInfo
-                {
-                    Aggregates = existing,
-                    GapDetection = gapInfo
-                };
+                return existing;
             }
         }
 
@@ -182,17 +158,8 @@ public class MarketDataService : IMarketDataService
             "[STEP 5.5 - MarketDataService] CACHE MISS for {Ticker} from {From} to {To}, fetching from Polygon",
             symbol, fromDate, toDate);
 
-        var (aggs, statuses) = await FetchWithWindowsAsync(
+        return await FetchWithWindowsAsync(
             ticker, multiplier, timespan, fromDate, toDate, adjusted, cancellationToken);
-
-        var gap = DetectGaps(aggs, fromDate, toDate, timespan, multiplier);
-        gap.WindowStatuses = statuses;
-
-        return new AggregatesWithGapInfo
-        {
-            Aggregates = aggs,
-            GapDetection = gap
-        };
     }
 
     #region Windowed Fetch
@@ -223,7 +190,7 @@ public class MarketDataService : IMarketDataService
         return windows;
     }
 
-    private async Task<(List<StockAggregate> Aggregates, List<WindowFetchStatus> Statuses)> FetchWithWindowsAsync(
+    private async Task<List<StockAggregate>> FetchWithWindowsAsync(
         string ticker,
         int multiplier,
         string timespan,
@@ -233,169 +200,44 @@ public class MarketDataService : IMarketDataService
         CancellationToken cancellationToken)
     {
         var windows = GenerateFetchWindows(fromDate, toDate, timespan);
-        var key = ticker.ToUpper();
 
         _logger.LogInformation(
             "[STEP W1] Windowed fetch for {Ticker}: {WindowCount} windows from {From} to {To}",
             ticker, windows.Count, fromDate, toDate);
 
-        var progress = new FetchProgress
-        {
-            Ticker = key,
-            TotalWindows = windows.Count,
-            Status = "fetching"
-        };
-        _progressTracker[key] = progress;
-
         var allAggregates = new List<StockAggregate>();
-        var statuses = new List<WindowFetchStatus>();
 
-        try
+        for (var i = 0; i < windows.Count; i++)
         {
-            for (var i = 0; i < windows.Count; i++)
+            var (winFrom, winTo) = windows[i];
+
+            _logger.LogInformation(
+                "[STEP W2] Window {Index}/{Total}: {From} to {To}",
+                i + 1, windows.Count, winFrom, winTo);
+
+            try
             {
-                var (winFrom, winTo) = windows[i];
-                progress.CurrentWindow = $"{winFrom} to {winTo}";
+                var windowAggs = await FetchAndStoreAggregatesAsync(
+                    ticker, multiplier, timespan, winFrom, winTo, adjusted, cancellationToken);
 
                 _logger.LogInformation(
-                    "[STEP W2] Window {Index}/{Total}: {From} to {To}",
-                    i + 1, windows.Count, winFrom, winTo);
+                    "[STEP W3] Window {Index}/{Total} result: {Count} bars fetched",
+                    i + 1, windows.Count, windowAggs.Count);
 
-                try
-                {
-                    var windowAggs = await FetchAndStoreAggregatesAsync(
-                        ticker, multiplier, timespan, winFrom, winTo, adjusted, cancellationToken);
-
-                    _logger.LogInformation(
-                        "[STEP W3] Window {Index}/{Total} result: {Count} bars fetched",
-                        i + 1, windows.Count, windowAggs.Count);
-
-                    allAggregates.AddRange(windowAggs);
-                    progress.CompletedWindows = i + 1;
-                    progress.BarsFetched += windowAggs.Count;
-
-                    statuses.Add(new WindowFetchStatus
-                    {
-                        FromDate = winFrom,
-                        ToDate = winTo,
-                        Success = true,
-                        BarsFetched = windowAggs.Count,
-                    });
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex,
-                        "[STEP W3] Window {Index}/{Total} FAILED: {From} to {To}",
-                        i + 1, windows.Count, winFrom, winTo);
-
-                    progress.CompletedWindows = i + 1;
-
-                    statuses.Add(new WindowFetchStatus
-                    {
-                        FromDate = winFrom,
-                        ToDate = winTo,
-                        Success = false,
-                        BarsFetched = 0,
-                        Error = ex.Message,
-                    });
-                }
+                allAggregates.AddRange(windowAggs);
             }
-
-            progress.Status = "done";
-        }
-        catch
-        {
-            progress.Status = "error";
-            throw;
-        }
-        finally
-        {
-            // Remove progress after a brief delay so the frontend can read the final state
-            _ = Task.Delay(TimeSpan.FromSeconds(5)).ContinueWith(t => _progressTracker.TryRemove(key, out var removed));
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "[STEP W3] Window {Index}/{Total} FAILED: {From} to {To}",
+                    i + 1, windows.Count, winFrom, winTo);
+            }
         }
 
         // Sort by timestamp to ensure contiguous ordering
         allAggregates.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
 
-        return (allAggregates, statuses);
-    }
-
-    #endregion
-
-    #region Gap Detection
-
-    internal static GapDetectionResult DetectGaps(
-        List<StockAggregate> aggregates,
-        string fromDate,
-        string toDate,
-        string timespan,
-        int multiplier)
-    {
-        var from = DateTime.ParseExact(fromDate, "yyyy-MM-dd", CultureInfo.InvariantCulture);
-        var to = DateTime.ParseExact(toDate, "yyyy-MM-dd", CultureInfo.InvariantCulture);
-
-        // Count weekdays in the range
-        var totalWeekdays = 0;
-        for (var d = from; d <= to; d = d.AddDays(1))
-        {
-            if (d.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday))
-                totalWeekdays++;
-        }
-
-        // Group bars by date
-        var barsByDate = aggregates
-            .GroupBy(a => a.Timestamp.Date)
-            .ToDictionary(g => g.Key, g => g.Count());
-
-        // Expected bars per day based on timespan
-        var expectedBarsPerDay = timespan switch
-        {
-            "minute" => 390 / multiplier,  // 6.5 hours * 60 minutes
-            "hour" => 7 / multiplier,       // ~7 trading hours
-            _ => 1
-        };
-        if (expectedBarsPerDay < 1) expectedBarsPerDay = 1;
-
-        var missingDates = new List<string>();
-        var partialDates = new List<string>();
-        var daysWithData = 0;
-        var partialThreshold = expectedBarsPerDay * 0.5;
-
-        for (var d = from; d <= to; d = d.AddDays(1))
-        {
-            if (d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
-                continue;
-
-            if (barsByDate.TryGetValue(d.Date, out var count))
-            {
-                daysWithData++;
-
-                // Only flag partial days for intraday timespans
-                if (timespan is "minute" or "hour" && count < partialThreshold)
-                    partialDates.Add(d.ToString("yyyy-MM-dd"));
-            }
-            else
-            {
-                missingDates.Add(d.ToString("yyyy-MM-dd"));
-            }
-        }
-
-        var coveragePercent = totalWeekdays > 0
-            ? Math.Round((decimal)daysWithData / totalWeekdays * 100, 1)
-            : 0;
-
-        return new GapDetectionResult
-        {
-            TotalWeekdays = totalWeekdays,
-            DaysWithData = daysWithData,
-            MissingDays = missingDates.Count,
-            PartialDays = partialDates.Count,
-            CoveragePercent = coveragePercent,
-            ExpectedBars = totalWeekdays * expectedBarsPerDay,
-            ActualBars = aggregates.Count,
-            MissingDates = missingDates,
-            PartialDates = partialDates,
-        };
+        return allAggregates;
     }
 
     #endregion

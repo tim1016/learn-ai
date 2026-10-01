@@ -27,7 +27,7 @@ is the rule this document operationalizes.
 | **Volatility surface fitting (SVI, SABR, variance interpolation)** | `app/volatility/fitting.py` | (multiple) | Per-expiry smile fits used by `surface.py`. |
 | **Skew metrics (RR-25, BF-25, slope)** | `app/volatility/analytics.py` | `compute_skew_metrics` | Per-expiry. |
 | **Forward price from put-call parity** | `app/volatility/analytics.py` | `compute_put_call_parity_forward` | Returns implied forward `F` per TTM; `q` is derived as `r - ln(F/S)/T` — there is no separate function for `q` yet. |
-| **QuantLib pricing engine + numerical Greeks** | `app/services/quantlib_pricer.py` | `price_option`, `price_strategy`, `implied_volatility` | Used when QuantLib's pricing path matters (multi-engine `/compare`, American/exotic options if added). Greeks here use QL analytical when supported, numerical bumps otherwise. **Note:** the QuantLib IV path (`quantlib_pricer.implied_volatility`) is *internal* to the QuantLib branch of `volatility/solver.implied_volatility`'s fallback chain — direct callers should use `volatility/solver.implied_volatility`, not this. |
+| **QuantLib pricing engine + numerical Greeks** | `app/services/quantlib_pricer.py` | `price_option`, `implied_volatility` | Used when QuantLib's pricing path matters (multi-engine `/compare`, American/exotic options if added). Greeks here use QL analytical when supported, numerical bumps otherwise. **Note:** the QuantLib IV path (`quantlib_pricer.implied_volatility`) is *internal* to the QuantLib branch of `volatility/solver.implied_volatility`'s fallback chain — direct callers should use `volatility/solver.implied_volatility`, not this. |
 
 ---
 

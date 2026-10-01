@@ -5,29 +5,21 @@ import logging
 from fastapi import APIRouter, HTTPException, status
 
 from app.models.requests import (
-    MarketMoversRequest,
     OptionsChainSnapshotRequest,
     StockSnapshotRequest,
-    StockSnapshotsRequest,
-    UnifiedSnapshotRequest,
 )
 from app.models.responses import (
     DaySnapshot,
     GreeksSnapshot,
     LastQuoteSnapshot,
     LastTradeSnapshot,
-    MarketMoversResponse,
     MinuteBar,
     OptionsChainSnapshotResponse,
     OptionsContractSnapshotItem,
     SnapshotBar,
     StockSnapshotResponse,
-    StockSnapshotsResponse,
     StockTickerSnapshot,
     UnderlyingSnapshot,
-    UnifiedSnapshotItem,
-    UnifiedSnapshotResponse,
-    UnifiedSnapshotSession,
 )
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import get_rate_and_dividend
@@ -155,77 +147,4 @@ async def get_stock_snapshot(request: StockSnapshotRequest):
         logger.error(f"[Snapshot] Error fetching ticker snapshot: {e!s}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch stock snapshot: {e!s}"
-        )
-
-
-@router.post("/market", response_model=StockSnapshotsResponse)
-async def get_stock_snapshots(request: StockSnapshotsRequest):
-    """Fetch snapshots for multiple stock tickers (or all tickers if none specified)."""
-    try:
-        ticker_label = ",".join(request.tickers) if request.tickers else "all"
-        logger.info(f"[Snapshot] Market snapshot request: {ticker_label}")
-
-        results = polygon_client.get_stock_snapshots(request.tickers)
-        snapshots = [_build_ticker_snapshot(r) for r in results]
-
-        logger.info(f"[Snapshot] Returning {len(snapshots)} market snapshots")
-        return StockSnapshotsResponse(success=True, snapshots=snapshots, count=len(snapshots))
-
-    except Exception as e:
-        logger.error(f"[Snapshot] Error fetching market snapshots: {e!s}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch market snapshots: {e!s}"
-        )
-
-
-@router.post("/movers", response_model=MarketMoversResponse)
-async def get_market_movers(request: MarketMoversRequest):
-    """Fetch top market movers — gainers or losers."""
-    try:
-        logger.info(f"[Snapshot] Market movers request: {request.direction}")
-
-        results = polygon_client.get_market_movers(request.direction)
-        tickers = [_build_ticker_snapshot(r) for r in results]
-
-        logger.info(f"[Snapshot] Returning {len(tickers)} {request.direction}")
-        return MarketMoversResponse(success=True, tickers=tickers, count=len(tickers))
-
-    except Exception as e:
-        logger.error(f"[Snapshot] Error fetching market movers: {e!s}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch market movers: {e!s}"
-        )
-
-
-@router.post("/unified", response_model=UnifiedSnapshotResponse)
-async def get_unified_snapshots(request: UnifiedSnapshotRequest):
-    """Fetch unified v3 snapshots with flexible ticker filtering."""
-    try:
-        logger.info(f"[Snapshot] Unified snapshot request: tickers={request.tickers}, limit={request.limit}")
-
-        results = polygon_client.get_unified_snapshots(
-            tickers=request.tickers,
-            limit=request.limit,
-        )
-
-        items = []
-        for r in results:
-            session_data = r.get("session")
-            items.append(
-                UnifiedSnapshotItem(
-                    ticker=r.get("ticker"),
-                    type=r.get("type"),
-                    market_status=r.get("market_status"),
-                    name=r.get("name"),
-                    session=UnifiedSnapshotSession(**session_data) if session_data else None,
-                )
-            )
-
-        logger.info(f"[Snapshot] Returning {len(items)} unified snapshots")
-        return UnifiedSnapshotResponse(success=True, results=items, count=len(items))
-
-    except Exception as e:
-        logger.error(f"[Snapshot] Error fetching unified snapshots: {e!s}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch unified snapshots: {e!s}"
         )

@@ -84,66 +84,6 @@ public class PolygonServiceTests
         Assert.Contains("Rate limit exceeded", ex.Message);
     }
 
-    [Fact]
-    public async Task FetchAggregatesAsync_PostsToCorrectEndpoint()
-    {
-        var response = new AggregateResponse
-        {
-            Success = true,
-            Ticker = "AAPL",
-            DataType = "aggregates",
-            Data = [],
-            Summary = new DataSummary()
-        };
-        var handler = CreateHandler(HttpStatusCode.OK, response);
-        var service = CreateService(handler);
-
-        await service.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-01", "2026-01-31");
-
-        Assert.Equal("/api/aggregates/fetch", handler.LastRequestUri?.AbsolutePath);
-        Assert.Equal(HttpMethod.Post, handler.LastRequestMethod);
-    }
-
-    #endregion
-
-    #region FetchTradesAsync
-
-    [Fact]
-    public async Task FetchTradesAsync_Success_ReturnsResponse()
-    {
-        var response = new TradeResponse
-        {
-            Success = true,
-            Ticker = "AAPL",
-            DataType = "trades",
-            Data = [],
-            Summary = new DataSummary { CleanedCount = 0 }
-        };
-        var handler = CreateHandler(HttpStatusCode.OK, response);
-        var service = CreateService(handler);
-
-        var result = await service.FetchTradesAsync("AAPL");
-
-        Assert.True(result.Success);
-    }
-
-    [Fact]
-    public async Task FetchTradesAsync_PythonReturnsError_Throws()
-    {
-        var response = new TradeResponse
-        {
-            Success = false,
-            Ticker = "BAD",
-            DataType = "trades",
-            Error = "No trades found"
-        };
-        var handler = CreateHandler(HttpStatusCode.OK, response);
-        var service = CreateService(handler);
-
-        await Assert.ThrowsAsync<HttpRequestException>(() =>
-            service.FetchTradesAsync("BAD"));
-    }
-
     #endregion
 
     #region FetchOptionsChainSnapshotAsync
@@ -183,60 +123,6 @@ public class PolygonServiceTests
 
         await Assert.ThrowsAsync<HttpRequestException>(() =>
             service.FetchOptionsChainSnapshotAsync("AAPL"));
-    }
-
-    #endregion
-
-    #region FetchOptionsContractsAsync
-
-    [Fact]
-    public async Task FetchOptionsContractsAsync_Success_ReturnsContracts()
-    {
-        var response = new OptionsContractsResponse
-        {
-            Success = true,
-            Contracts = [new OptionsContractDto
-            {
-                Ticker = "O:AAPL260220C00230000",
-                UnderlyingTicker = "AAPL",
-                ContractType = "call",
-                StrikePrice = 230m,
-                ExpirationDate = "2026-02-20"
-            }],
-            Count = 1
-        };
-        var handler = CreateHandler(HttpStatusCode.OK, response);
-        var service = CreateService(handler);
-
-        var result = await service.FetchOptionsContractsAsync("AAPL", contractType: "call");
-
-        Assert.Single(result.Contracts);
-        Assert.Equal("AAPL", result.Contracts[0].UnderlyingTicker);
-    }
-
-    #endregion
-
-    #region CancellationToken
-
-    [Fact]
-    public async Task FetchAggregatesAsync_CancellationRequested_ThrowsOperationCanceled()
-    {
-        var response = new AggregateResponse
-        {
-            Success = true,
-            Ticker = "AAPL",
-            DataType = "aggregates",
-            Data = [],
-            Summary = new DataSummary()
-        };
-        var handler = CreateHandler(HttpStatusCode.OK, response);
-        var service = CreateService(handler);
-
-        var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            service.FetchAggregatesAsync("AAPL", 1, "day", "2026-01-01", "2026-01-31", true, cts.Token));
     }
 
     #endregion

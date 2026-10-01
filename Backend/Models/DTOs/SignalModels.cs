@@ -1,20 +1,5 @@
 namespace Backend.Models.DTOs;
 
-#region Signal Engine Request DTOs
-
-public class RunSignalEngineRequest
-{
-    public required string Ticker { get; set; }
-    public string FeatureName { get; set; } = "momentum_5m";
-    public required List<OhlcvBarDto> Bars { get; set; }
-    public required string StartDate { get; set; }
-    public required string EndDate { get; set; }
-    public bool FlipSign { get; set; } = true;
-    public bool RegimeGateEnabled { get; set; } = true;
-}
-
-#endregion
-
 #region Signal Experiment DTOs
 
 public class SignalExperimentDto

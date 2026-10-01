@@ -173,16 +173,3 @@ class ScenarioResponse(BaseModel):
             "These do not invalidate results; they surface assumptions."
         ),
     )
-
-
-class LiveGreeksRequest(BaseModel):
-    """Convenience request for the common 'live Greeks at current state' case.
-
-    Equivalent to ScenarioRequest with the default 1×1×1 grid.
-    """
-
-    as_of_ms: int
-    spot_price: float = Field(..., gt=0)
-    risk_free_rate: float = Field(0.043, ge=0, le=0.5)
-    dividend_yield: float = Field(0.0, ge=0, le=0.5)
-    positions: list[Position] = Field(..., min_length=1, max_length=64)

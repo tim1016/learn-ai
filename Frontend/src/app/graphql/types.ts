@@ -13,82 +13,9 @@ export interface StockAggregate {
   transactionCount: number | null;
 }
 
-export interface AggregatesSummary {
-  periodHigh: number;
-  periodLow: number;
-  averageVolume: number;
-  averageVwap: number | null;
-  openPrice: number;
-  closePrice: number;
-  priceChange: number;
-  priceChangePercent: number;
-  totalBars: number;
-}
-
-export interface GapDetectionInfo {
-  totalWeekdays: number;
-  daysWithData: number;
-  missingDays: number;
-  partialDays: number;
-  coveragePercent: number;
-  expectedBars: number;
-  actualBars: number;
-  missingDates: string[];
-  partialDates: string[];
-}
-
 export interface SmartAggregatesResult {
   ticker: string;
   aggregates: StockAggregate[];
-  summary: AggregatesSummary | null;
-  gapDetection: GapDetectionInfo | null;
-}
-
-export interface FetchProgress {
-  ticker: string;
-  totalWindows: number;
-  completedWindows: number;
-  barsFetched: number;
-  currentWindow: string;
-  status: string;
-}
-
-export interface Ticker {
-  id: number;
-  symbol: string;
-  name: string;
-  market: string;
-  locale: string | null;
-  primaryExchange: string | null;
-  type: string | null;
-  active: boolean;
-  currencySymbol: string | null;
-  createdAt: number;
-  updatedAt: number | null;
-  sanitizationSummary: string | null;
-}
-
-export interface IndicatorPoint {
-  timestamp: number;
-  value: number | null;
-  signal: number | null;
-  histogram: number | null;
-  upper: number | null;
-  lower: number | null;
-}
-
-export interface IndicatorSeries {
-  name: string;
-  window: number;
-  data: IndicatorPoint[];
-}
-
-export interface CalculateIndicatorsResult {
-  success: boolean;
-  ticker: string;
-  indicators: IndicatorSeries[];
-  /** Error description when success = false. null on success. */
-  error: string | null;
 }
 
 // Stock Snapshot types (v2 API)
@@ -119,48 +46,6 @@ export interface StockTickerSnapshot {
 export interface StockSnapshotResult {
   success: boolean;
   snapshot: StockTickerSnapshot | null;
-  error: string | null;
-}
-
-export interface StockSnapshotsResult {
-  success: boolean;
-  snapshots: StockTickerSnapshot[];
-  count: number;
-  error: string | null;
-}
-
-export interface MarketMoversResult {
-  success: boolean;
-  tickers: StockTickerSnapshot[];
-  count: number;
-  error: string | null;
-}
-
-// Unified Snapshot types (v3 API)
-export interface UnifiedSession {
-  price: number | null;
-  change: number | null;
-  changePercent: number | null;
-  open: number | null;
-  close: number | null;
-  high: number | null;
-  low: number | null;
-  previousClose: number | null;
-  volume: number | null;
-}
-
-export interface UnifiedSnapshotItem {
-  ticker: string | null;
-  type: string | null;
-  marketStatus: string | null;
-  name: string | null;
-  session: UnifiedSession | null;
-}
-
-export interface UnifiedSnapshotResult {
-  success: boolean;
-  results: UnifiedSnapshotItem[];
-  count: number;
   error: string | null;
 }
 
@@ -229,22 +114,6 @@ export interface OptionsChainSnapshotResult {
   dividendYield: number | null;
   rateSource: string | null;
   dividendSource: string | null;
-  error: string | null;
-}
-
-export interface OptionsContract {
-  ticker: string;
-  underlyingTicker: string | null;
-  contractType: string | null;
-  strikePrice: number | null;
-  expirationDate: string | null;
-  exerciseStyle: string | null;
-}
-
-export interface OptionsContractsResult {
-  success: boolean;
-  contracts: OptionsContract[];
-  count: number;
   error: string | null;
 }
 
@@ -388,12 +257,6 @@ export interface StrategyAnalyzeResult {
 
 export type QuantLibEngine = 'analytic_bs' | 'binomial_crr' | 'binomial_jr' | 'binomial_lr' | 'finite_diff' | 'monte_carlo';
 
-export interface QuantLibStatusResult {
-  available: boolean;
-  version: string | null;
-  engines: string[];
-}
-
 export interface QuantLibPriceResult {
   success: boolean;
   engine: string;
@@ -405,31 +268,6 @@ export interface QuantLibPriceResult {
   rho: number;
   d1: number | null;
   d2: number | null;
-  error: string | null;
-}
-
-export interface QuantLibLegResult {
-  engine: string;
-  price: number;
-  delta: number;
-  gamma: number;
-  theta: number;
-  vega: number;
-  rho: number;
-  d1: number | null;
-  d2: number | null;
-}
-
-export interface QuantLibStrategyResult {
-  success: boolean;
-  engine: string;
-  netPrice: number;
-  netDelta: number;
-  netGamma: number;
-  netTheta: number;
-  netVega: number;
-  netRho: number;
-  legs: QuantLibLegResult[];
   error: string | null;
 }
 
@@ -484,46 +322,4 @@ export interface PricingCompareResult {
   timeToExpiryYears: number;
   models: PricingModelCurve[];
   error: string | null;
-}
-
-// Rule-Based Backtest types
-export interface RuleBasedBacktestResult {
-  success: boolean;
-  ticker: string;
-  strategyName: string;
-  parameters: string;
-  totalTrades: number;
-  winningTrades: number;
-  losingTrades: number;
-  winRate: number;
-  avgWinPct: number;
-  avgLossPct: number;
-  winLossRatio: number;
-  profitFactor: number;
-  expectancyPerTrade: number;
-  totalPnlPct: number;
-  maxDrawdownPct: number;
-  totalPnlPts: number;
-  sharpeRatio: number;
-  barsProcessed: number;
-  trades: RuleBasedTrade[];
-  error: string | null;
-}
-
-export interface RuleBasedTrade {
-  tradeNumber: number;
-  tradeType: string;
-  entryTimestamp: number;
-  exitTimestamp: number;
-  entryPrice: number;
-  exitPrice: number;
-  pnl: number;
-  pnlPct: number;
-  cumulativePnlPct: number;
-  signalReason: string;
-  emaFast: number | null;
-  emaSlow: number | null;
-  emaGap: number | null;
-  rsi: number | null;
-  adx: number | null;
 }
