@@ -33,7 +33,7 @@ describe('GoldenSearchTestStepComponent', () => {
 
     const second = foldRow(2);
     expect(second.textContent).toContain('Failed');
-    expect(second.textContent).toContain('No Eligible Candidate');
+    expect(second.textContent).toContain("No setting met your rules in this fold's training window.");
     expect(second.textContent).toContain('No winner');
     expect(second.textContent).toContain('No result recorded.');
   });

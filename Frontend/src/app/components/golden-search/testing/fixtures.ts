@@ -5,6 +5,7 @@ import type {
   EvidenceCandidate,
   EvidenceView,
   ExamView,
+  ExposureView,
   GoldenSearchDefaults,
   GoldenSearchPreflight,
   Metrics,
@@ -14,8 +15,10 @@ import type {
   ProtocolRequest,
   QualificationDeployOffer,
   QualificationView,
+  SearchView,
   StrategyCapability,
   StudyDetail,
+  StudyProgress,
   StudyState,
   ValidationView,
 } from '../golden-search.types';
@@ -32,13 +35,13 @@ export function emaCapability(overrides: Partial<StrategyCapability> = {}): Stra
     available: true,
     reason: null,
     knobs: [
-      { name: 'gap', label: 'Crossover gap', unit: 'price ($)', kind: 'decimal', domain_low: 0, domain_high: 2, quantum: 0.01, default_low: 0, default_high: 0.6, neighbor_step: 0.05, default_step: 0.05, searchable_by_default: true, warmup_dependent: false, default_value: 0.2 },
-      { name: 'rsi_min', label: 'RSI lower gate', unit: 'RSI points', kind: 'decimal', domain_low: 0, domain_high: 100, quantum: 1, default_low: 30, default_high: 60, neighbor_step: 2, default_step: 1, searchable_by_default: true, warmup_dependent: false, default_value: 50 },
-      { name: 'rsi_max', label: 'RSI upper gate', unit: 'RSI points', kind: 'decimal', domain_low: 0, domain_high: 100, quantum: 1, default_low: 60, default_high: 90, neighbor_step: 2, default_step: 1, searchable_by_default: true, warmup_dependent: false, default_value: 70 },
-      { name: 'fast_period', label: 'Fast EMA length', unit: 'decision bars', kind: 'integer', domain_low: 2, domain_high: 30, quantum: 1, default_low: 3, default_high: 12, neighbor_step: 1, default_step: 1, searchable_by_default: true, warmup_dependent: true, default_value: 5 },
-      { name: 'slow_period', label: 'Slow EMA length', unit: 'decision bars', kind: 'integer', domain_low: 3, domain_high: 40, quantum: 1, default_low: 8, default_high: 30, neighbor_step: 1, default_step: 1, searchable_by_default: true, warmup_dependent: true, default_value: 10 },
-      { name: 'hold_bars', label: 'Hold time', unit: 'decision bars', kind: 'integer', domain_low: 1, domain_high: 26, quantum: 1, default_low: 2, default_high: 12, neighbor_step: 1, default_step: 1, searchable_by_default: true, warmup_dependent: false, default_value: 5 },
-      { name: 'gap_bps', label: 'Crossover gap (bps)', unit: 'basis points', kind: 'decimal', domain_low: 0, domain_high: 100, quantum: 0.5, default_low: 0, default_high: 5, neighbor_step: 0.5, default_step: 0.5, searchable_by_default: false, warmup_dependent: false, default_value: 0 },
+      { name: 'gap', label: 'Crossover gap', unit: 'price ($)', kind: 'decimal', domain_low: 0, domain_high: 2, quantum: 0.01, default_low: 0, default_high: 0.6, neighbor_step: 0.05, default_step: 0.05, searchable_by_default: true, warmup_dependent: false, default_value: 0.2, note: '' },
+      { name: 'rsi_min', label: 'RSI lower gate', unit: 'RSI points', kind: 'decimal', domain_low: 0, domain_high: 100, quantum: 1, default_low: 30, default_high: 60, neighbor_step: 2, default_step: 1, searchable_by_default: true, warmup_dependent: false, default_value: 50, note: '' },
+      { name: 'rsi_max', label: 'RSI upper gate', unit: 'RSI points', kind: 'decimal', domain_low: 0, domain_high: 100, quantum: 1, default_low: 60, default_high: 90, neighbor_step: 2, default_step: 1, searchable_by_default: true, warmup_dependent: false, default_value: 70, note: '' },
+      { name: 'fast_period', label: 'Fast EMA length', unit: 'decision bars', kind: 'integer', domain_low: 2, domain_high: 30, quantum: 1, default_low: 3, default_high: 12, neighbor_step: 1, default_step: 1, searchable_by_default: true, warmup_dependent: true, default_value: 5, note: '' },
+      { name: 'slow_period', label: 'Slow EMA length', unit: 'decision bars', kind: 'integer', domain_low: 3, domain_high: 40, quantum: 1, default_low: 8, default_high: 30, neighbor_step: 1, default_step: 1, searchable_by_default: true, warmup_dependent: true, default_value: 10, note: '' },
+      { name: 'hold_bars', label: 'Hold time', unit: 'decision bars', kind: 'integer', domain_low: 1, domain_high: 26, quantum: 1, default_low: 2, default_high: 12, neighbor_step: 1, default_step: 1, searchable_by_default: true, warmup_dependent: false, default_value: 5, note: '' },
+      { name: 'gap_bps', label: 'Crossover gap (bps)', unit: 'basis points', kind: 'decimal', domain_low: 0, domain_high: 100, quantum: 0.5, default_low: 0, default_high: 5, neighbor_step: 0.5, default_step: 0.5, searchable_by_default: false, warmup_dependent: false, default_value: 0, note: 'Both gap floors apply together: an entry must clear the price gap and this basis-point gap.' },
     ],
     fixed: [
       { label: 'RSI length', value: '14', reason: 'fixed in this program version' },
@@ -115,10 +118,16 @@ export function protocol(overrides: Partial<ProtocolRequest> = {}): ProtocolRequ
 export function defaults(overrides: Partial<GoldenSearchDefaults> = {}): GoldenSearchDefaults {
   return {
     ...protocol(),
+    seed: { ...INCUMBENT_PARAMS },
     incumbent_label: 'Registry validated settings',
-    exposure: { state: 'not_opened', ledger_overlaps: 0, outside_activity_overlaps: 0, explanation: 'No recorded research has opened these dates.' },
+    exposure: exposure(),
+    final_months: 3,
     ...overrides,
   };
+}
+
+export function exposure(overrides: Partial<ExposureView> = {}): ExposureView {
+  return { state: 'not_opened', ledger_overlaps: 0, outside_activity_overlaps: 0, explanation: 'No recorded research has opened these dates.', ...overrides };
 }
 
 export function preflight(overrides: Partial<GoldenSearchPreflight> = {}): GoldenSearchPreflight {
@@ -143,7 +152,7 @@ export function preflight(overrides: Partial<GoldenSearchPreflight> = {}): Golde
       { fold_index: 0, train_start_ms: etMidnightMs('2024-01-01'), train_end_ms: etMidnightMs('2024-07-01'), test_start_ms: etMidnightMs('2024-07-01'), test_end_ms: etMidnightMs('2024-09-01') },
       { fold_index: 1, train_start_ms: etMidnightMs('2024-03-01'), train_end_ms: etMidnightMs('2024-09-01'), test_start_ms: etMidnightMs('2024-09-01'), test_end_ms: etMidnightMs('2024-11-01') },
     ],
-    exposure: { state: 'not_opened', ledger_overlaps: 0, outside_activity_overlaps: 0, explanation: 'No recorded research has opened these dates.' },
+    exposure: exposure(),
     run_up: { required_samples: 41, run_up_sessions: 3, data_start_ms: etMidnightMs('2023-12-27') },
     ...overrides,
   };
@@ -201,8 +210,14 @@ export function procedureView(overrides: Partial<ProcedureView> = {}): Procedure
     ],
     counts: { evaluated: 486, cached: 134, invalid: 18 },
     passes_completed: 2,
+    window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS },
     ...overrides,
   };
+}
+
+/** The all-period procedure with its pair landscape around the winner. */
+export function searchView(overrides: Partial<SearchView> = {}): SearchView {
+  return { ...procedureView(), pair_maps: [pairMap()], pair_maps_incomplete: false, ...overrides };
 }
 
 export function validationView(overrides: Partial<ValidationView> = {}): ValidationView {
@@ -217,9 +232,20 @@ export function validationView(overrides: Partial<ValidationView> = {}): Validat
         train_metrics: metrics({ sharpe_ratio: 1.4 }),
         test_metrics: metrics({ sharpe_ratio: 0.9, total_return_pct: 0.021 }),
         incumbent_test_metrics: metrics({ total_trades: 17, sharpe_ratio: 0.41, total_return_pct: 0.007 }),
+        failure_code: null,
         failure_reason: null,
       },
-      { ...second, status: 'failed', winner: null, winner_hash: null, train_metrics: null, test_metrics: null, incumbent_test_metrics: metrics({ total_trades: 15, sharpe_ratio: -0.2, total_return_pct: -0.004 }), failure_reason: 'NO_ELIGIBLE_CANDIDATE' },
+      {
+        ...second,
+        status: 'failed',
+        winner: null,
+        winner_hash: null,
+        train_metrics: null,
+        test_metrics: null,
+        incumbent_test_metrics: metrics({ total_trades: 15, sharpe_ratio: -0.2, total_return_pct: -0.004 }),
+        failure_code: 'NO_ELIGIBLE_CANDIDATE',
+        failure_reason: "No setting met your rules in this fold's training window.",
+      },
     ],
     verdict: {
       label: 'could not be judged',
@@ -242,6 +268,7 @@ export function validationView(overrides: Partial<ValidationView> = {}): Validat
     ],
     summary_pills: { judged: '1 of 2 folds judged', test_trades: 42, median_retention: null },
     explanation: 'Each fold searched only its own training months.',
+    incomplete: false,
     ...overrides,
   };
 }
@@ -285,9 +312,10 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       neighbors: [
         {
           knob: 'fast_period',
+          one_sided: false,
           rows: [
-            { value: 7, status: 'tested', metrics: metrics({ total_return_pct: 0.052 }) },
-            { value: 8, status: 'center', metrics: metrics({ total_return_pct: 0.087 }) },
+            { value: 7, status: 'tested', metrics: metrics({ total_return_pct: 0.052 }), reason: null },
+            { value: 8, status: 'center', metrics: metrics({ total_return_pct: 0.087 }), reason: null },
             { value: 9, status: 'invalid', metrics: null, reason: 'untested: outside the legal domain' },
           ],
         },
@@ -298,6 +326,7 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       params_sentence: 'Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars',
       fixed_sentence: 'Normalized gap fixed at 0 bps',
       exam_eligible: true,
+      edge_hits: [],
     },
     recent: {
       key: 'recent',
@@ -315,6 +344,7 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       params_sentence: 'Gap $0.10 · RSI 45–70 · EMA 5/10 · hold 3 bars',
       fixed_sentence: 'Normalized gap fixed at 0 bps',
       exam_eligible: true,
+      edge_hits: [],
     },
     incumbent: {
       key: 'incumbent',
@@ -332,6 +362,7 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       params_sentence: 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars',
       fixed_sentence: 'Normalized gap fixed at 0 bps',
       exam_eligible: false,
+      edge_hits: [],
     },
   };
   return { ...base[key], ...overrides };
@@ -346,6 +377,7 @@ export function evidenceView(overrides: Partial<EvidenceView> = {}): EvidenceVie
       findings: [{ code: 'RECENT_DIFFERS_FROM_ALL_PERIOD', text: 'The recent fit chose different EMA lengths than the all-period fit.' }],
     },
     scope: { window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS }, capital: 100000, costs: { fill_mode: 'decision_minute_open', commission_per_order: 0, slippage_per_share: 0 } },
+    incomplete: false,
     ...overrides,
   };
 }
@@ -420,9 +452,14 @@ export function deployOffer(overrides: Partial<QualificationDeployOffer> = {}): 
     parameters: { gap: 0.15, rsi_min: 48, rsi_max: 72, fast_period: 8, slow_period: 21 },
     status: 'ready',
     explanation: 'Approved in Golden Search study study-00; its proof matches the running program.',
+    is_default: true,
+    research: { claim: 'confirmatory', exam_outcome: 'meets_rules', exposure_state: 'not_opened', research_override: false, validation_verdict_label: 'still worked', weakness: [] },
     ...overrides,
   };
 }
+
+/** Why the fixture's approval failed; the server repeats it as the study's failure reason and its guidance detail. */
+export const QUALIFICATION_FAILURE = 'The restored replay did not match the lake replay (TRACE_MISMATCH).';
 
 const GUIDANCE: Readonly<Record<StudyState, { headline: string; detail: string }>> = {
   locked: { headline: 'Start the search when the plan is right', detail: 'The plan is frozen; the search runs on development data only.' },
@@ -435,19 +472,32 @@ const GUIDANCE: Readonly<Record<StudyState, { headline: string; detail: string }
   awaiting_review: { headline: 'Decide', detail: 'Approve the candidate or keep the current settings.' },
   qualification_pending: { headline: 'Building the proof', detail: 'Qualification is running.' },
   approved: { headline: 'Golden configuration ready in Deploy', detail: 'Use it in Deploy.' },
-  qualification_failed: { headline: 'Qualification failed', detail: 'The current default is unchanged.' },
+  qualification_failed: { headline: 'Qualification failed · current default unchanged', detail: QUALIFICATION_FAILURE },
   retained: { headline: 'Current settings retained', detail: 'The study stays in history.' },
   closed: { headline: 'Study closed', detail: 'The study stays in history.' },
+};
+
+/** The stage each running state reports progress for. */
+const PROGRESS_STAGE: Partial<Readonly<Record<StudyState, StudyProgress['stage']>>> = {
+  search_running: 'search',
+  validation_running: 'validation',
+  exam_running: 'exam',
+  qualification_pending: 'qualification',
 };
 
 /** States reached only after the final test was opened. */
 const AFTER_EXAM: readonly StudyState[] = ['exam_running', 'awaiting_review', 'qualification_pending', 'approved', 'qualification_failed'];
 
+function progressFor(state: StudyState): StudyProgress | null {
+  const stage = PROGRESS_STAGE[state];
+  return stage === undefined ? null : { stage, completed: 120, total_max: 410 };
+}
+
 function qualificationFor(state: StudyState): QualificationView | null {
   if (state === 'approved') return qualificationView();
   if (state === 'qualification_pending') return qualificationView({ status: 'pending', qualification_id: null, deploy: null });
   if (state === 'qualification_failed') {
-    return qualificationView({ status: 'failed', qualification_id: null, deploy: null, failure_reason: 'The restored replay did not match the lake replay (TRACE_MISMATCH).' });
+    return qualificationView({ status: 'failed', qualification_id: null, deploy: null, failure_reason: QUALIFICATION_FAILURE });
   }
   return null;
 }
@@ -474,7 +524,7 @@ export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> =
     cache_hits: 37,
     invalid_points: 6,
     incomplete: false,
-    failure_reason: null,
+    failure_reason: state === 'qualification_failed' ? QUALIFICATION_FAILURE : null,
     hidden: false,
     exposure_claim: examOpened ? 'confirmatory' : null,
     exam_outcome: examJudged ? 'meets_rules' : null,
@@ -494,10 +544,10 @@ export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> =
     permitted_actions: permittedFor(state),
     action_refusals: {},
     guidance: GUIDANCE[state],
-    progress: state.endsWith('_running') || state === 'qualification_pending' ? { stage: state === 'qualification_pending' ? 'qualification' : state.replace('_running', ''), completed: 120, total_max: 410 } : null,
+    progress: progressFor(state),
     dispatch: null,
     results: {
-      search: reachedSearch ? procedureView({ pair_maps: [pairMap()] }) : null,
+      search: reachedSearch ? searchView() : null,
       recent: reachedSearch ? procedureView({ winner_hash: 'r1', stop_reason: 'pass_limit', stop_explanation: 'The pass limit was reached while knobs still moved.', edge_hits: [] }) : null,
       validation: reachedValidation ? validationView() : null,
       evidence: reachedValidation ? evidenceView() : null,
@@ -507,6 +557,7 @@ export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> =
     decision: state === 'approved' ? { kind: 'approve', note: 'Accept this exact configuration after reviewing the stated limitations.', at_ms: etMidnightMs('2026-09-30') } : null,
     candidate_key: examOpened || state === 'candidate_locked' ? 'all_period' : null,
     exam_locked: examOpened,
+    exposure_preview: state === 'awaiting_candidate' || state === 'candidate_locked' ? exposure() : null,
     scope: {
       development_label_start_ms: DEVELOPMENT_START_MS,
       development_end_ms: FINAL_START_MS,
@@ -515,6 +566,7 @@ export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> =
       final_state: examOpened ? 'opened_once' : 'locked',
       capital: 100000,
       costs_sentence: 'No commission · no slippage · fills at the decision minute open',
+      data_source: 'Historical research: Polygon, split adjusted, regular sessions',
     },
     ...overrides,
   };

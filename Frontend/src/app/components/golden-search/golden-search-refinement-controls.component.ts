@@ -32,7 +32,7 @@ export class GoldenSearchRefinementControlsComponent {
   protected readonly pairOptions = computed<PairOption[]>(() => {
     const labels = new Map((this.capability()?.knobs ?? []).map((knob) => [knob.name, knob.label]));
     const chosen = this.protocol().pair_audits;
-    const offered = [...(this.capability()?.default_pair_audits ?? [])];
+    const offered: KnobPair[] = [...(this.capability()?.default_pair_audits ?? [])];
     for (const pair of chosen) if (!offered.some((p) => p[0] === pair[0] && p[1] === pair[1])) offered.push(pair);
     return offered.map((pair) => ({
       pair,

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { GoldenSearchSearchStepComponent } from './golden-search-search-step.component';
 import type { StudyDetail } from './golden-search.types';
-import { emaCapability, metrics, procedureView, studyDetail } from './testing/fixtures';
+import { emaCapability, metrics, searchView, studyDetail } from './testing/fixtures';
 
 async function renderStep(study: StudyDetail) {
   return render(GoldenSearchSearchStepComponent, { inputs: { study, capability: emaCapability() } });
@@ -71,7 +71,7 @@ describe('GoldenSearchSearchStepComponent', () => {
   });
 
   it('says a Grid study has no path rather than inventing one, and shows a failed winner run as failed', async () => {
-    const grid = procedureView({ rounds: [], edge_hits: [], knob_summary: [], winner_metrics: metrics({ status: 'failed', error: 'engine refused the window', sharpe_ratio: null }) });
+    const grid = searchView({ pair_maps: [], rounds: [], edge_hits: [], knob_summary: [], winner_metrics: metrics({ status: 'failed', error: 'engine refused the window', sharpe_ratio: null }) });
     await renderStep(studyDetail('awaiting_validation', { method: 'grid', results: { ...studyDetail('awaiting_validation').results, search: grid, recent: null }, protocol: { ...studyDetail('locked').protocol, recent_window: false } }));
 
     expect(screen.getByText(/no path to show/i)).not.toBeNull();
@@ -93,7 +93,7 @@ describe('GoldenSearchSearchStepComponent', () => {
 
   it('a procedure without pair audits shows no landscape', async () => {
     const study = studyDetail('awaiting_validation');
-    await renderStep({ ...study, results: { ...study.results, search: procedureView() } });
+    await renderStep({ ...study, results: { ...study.results, search: searchView({ pair_maps: [] }) } });
 
     expect(screen.queryByRole('group', { name: /parameter map/i })).toBeNull();
     expect(screen.queryByRole('complementary')).toBeNull();

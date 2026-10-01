@@ -1,17 +1,23 @@
 /**
- * Wire shapes for Golden Search (#2696), hand-written to mirror
- * PythonDataService/app/schemas/golden_search.py until generated types
- * replace them. Every temporal value is int64 ms UTC; interval boundaries are
- * ET-midnight instants with exclusive ends. Every number shown is computed in
- * Python — these types carry it, the browser never derives it.
+ * Wire shapes for Golden Search (#2696). Each response shape is derived from
+ * the generated contract (`api/broker.types.ts`, from
+ * PythonDataService/app/schemas/golden_search.py), so a field the server adds,
+ * drops or retypes is a compile error here rather than a silent drift. The
+ * contract types a parameter point as an empty object, so every field that
+ * carries one is re-typed as `Point`; nothing else is overridden. Requests
+ * stay hand-written in snake_case, which the server accepts beside its
+ * camelCase aliases. Every temporal value is int64 ms UTC; interval
+ * boundaries are ET-midnight instants with exclusive ends. Every number
+ * shown is computed in Python — these types carry it, the browser never
+ * derives it.
  */
 
-import type { FillModeName } from '../../models/fill-mode';
-import type { RankingMeasure } from '../grid-search/grid-search.types';
-import type { FoldPlan, Verdict } from '../walk-forward-study/walk-forward-study.types';
+import type { components } from '../../api/broker.types';
 
 export type { RankingMeasure } from '../grid-search/grid-search.types';
 export type { FoldPlan } from '../walk-forward-study/walk-forward-study.types';
+
+type Schemas = components['schemas'];
 
 /** One canonical parameter value: a point is a dict of JSON scalars (integers as ints, decimals quantized). */
 export type PointValue = string | number | boolean | null;
@@ -20,157 +26,60 @@ export type Point = Readonly<Record<string, PointValue>>;
 
 // ---------------------------------------------------------------- capabilities
 
-export type KnobKind = 'integer' | 'decimal';
-
-export interface CapabilityKnob {
-  name: string;
-  label: string;
-  unit: string;
-  kind: KnobKind;
-  domain_low: number;
-  domain_high: number;
-  quantum: number;
-  default_low: number;
-  default_high: number;
-  neighbor_step: number;
-  /** The smallest step a searched knob starts with; a multiple of `quantum`. */
-  default_step: number;
-  searchable_by_default: boolean;
-  warmup_dependent: boolean;
-  default_value: number;
-}
-
-export interface FixedControl {
-  label: string;
-  value: string;
-  reason: string;
-}
-
-export interface KnobConstraint {
-  left: string;
-  op: '<';
-  right: string;
-  message: string;
-}
-
+export type CapabilityKnob = Schemas['GoldenSearchCapabilityKnob'];
+export type KnobKind = CapabilityKnob['kind'];
+export type FixedControl = Schemas['GoldenSearchFixedControl'];
+export type KnobConstraint = Schemas['GoldenSearchConstraint'];
 export type KnobPair = readonly [string, string];
-
-export interface StrategyCapability {
-  strategy_key: string;
-  display_name: string;
-  available: boolean;
-  reason: string | null;
-  knobs: CapabilityKnob[];
-  fixed: FixedControl[];
-  constraints: KnobConstraint[];
-  default_pair_audits: KnobPair[];
-}
+export type StrategyCapability = Schemas['GoldenSearchCapability'];
 
 // ---------------------------------------------------------------- protocol
 
-export type GoldenSearchMethod = 'zoom' | 'grid';
-export type KnobMode = 'search' | 'fixed';
+/**
+ * One declared knob: searched over `[low, high]` at its smallest `step` (a
+ * multiple of the declared quantum; Grid samples at it, Zoom stops refining
+ * below it), or held at `fixed_value`.
+ */
+export type KnobPlan = Schemas['GoldenSearchKnobPlan'];
+export type KnobMode = KnobPlan['mode'];
+export type GoldenSearchMethod = Schemas['GoldenSearchProtocol']['method'];
+/** `max_drawdown_ceiling` is a fraction of peak equity, in (0, 1]. */
+export type SelectionPolicy = Schemas['GoldenSearchSelectionPolicy'];
+export type ZoomSettings = Schemas['GoldenSearchZoomSettings'];
+export type ExecutionAssumptions = Schemas['GoldenSearchExecution'];
+export type StressScenario = Schemas['GoldenSearchStressScenario'];
 
-export interface KnobPlan {
-  name: string;
-  mode: KnobMode;
-  /** Search range, used when `mode` is `search`. */
-  low: number;
-  high: number;
-  /** Used when `mode` is `fixed`. */
-  fixed_value: number;
-  /**
-   * The smallest step, required for every searched knob (a multiple of the
-   * declared quantum): Grid samples `low..high` at it, and Zoom stops
-   * refining the knob once a round's spacing would fall below it.
-   */
-  step: number | null;
-}
+export type IncumbentRef = Omit<Schemas['GoldenSearchIncumbent'], 'params'> & { params: Point };
 
-export interface SelectionPolicy {
-  objective: RankingMeasure;
-  min_trades: number;
-  /** Fraction of peak equity, in (0, 1]. */
-  max_drawdown_ceiling: number;
-  require_positive_net: boolean;
-}
-
-export interface ZoomSettings {
-  points: number;
-  refinements: number;
-  passes: number;
-}
-
-export interface ExecutionAssumptions {
-  fill_mode: FillModeName;
-  commission_per_order: number;
-  slippage_per_share: number;
-  initial_cash: number;
-}
-
-export interface StressScenario {
-  key: string;
-  label: string;
-  slippage_add: number;
-  commission_add: number;
-  fill_mode: FillModeName | null;
-}
-
-export interface IncumbentRef {
-  source: 'registry' | 'qualification';
-  qualification_id: string | null;
-  params: Point;
-}
-
-/** Mirrors `GoldenSearchProtocol` field for field; `seed` omitted defaults to the incumbent's params. */
-export interface ProtocolRequest {
-  strategy_key: string;
-  symbol: string;
-  method: GoldenSearchMethod;
-  /** Every declared knob, in search order. */
-  knobs: KnobPlan[];
+/**
+ * The plan, field for field the frozen `GoldenSearchProtocol` the server
+ * echoes; `knobs` lists every declared knob in search order, and `seed`
+ * omitted or null starts from the incumbent's params.
+ */
+export type ProtocolRequest = Omit<Schemas['GoldenSearchProtocol'], 'seed' | 'incumbent' | 'pair_audits'> & {
   seed?: Point | null;
   incumbent: IncumbentRef;
-  policy: SelectionPolicy;
-  zoom: ZoomSettings;
-  development_start_ms: number;
-  development_end_ms: number;
-  final_start_ms: number;
-  final_end_ms: number;
-  training_months: number;
-  test_months: number;
-  recent_window: boolean;
   pair_audits: KnobPair[];
-  neighbor_audit: boolean;
-  stress: StressScenario[];
-  execution: ExecutionAssumptions;
-  exam_min_trades: number;
-  budget_cap: number;
-}
+};
 
-export interface ProtocolRefusal {
-  code: string;
-  field: string | null;
-  message: string;
-}
+export type ProtocolRefusal = Schemas['GoldenSearchProtocolRefusal'];
 
 // ---------------------------------------------------------------- exposure, defaults, preflight
 
-export type ExposureState = 'not_opened' | 'previously_used' | 'history_unknown';
-export type ExposureClaim = 'confirmatory' | 'exploratory';
+export type ExposureView = Schemas['GoldenSearchExposure'];
+export type ExposureState = ExposureView['state'];
+export type ExposureClaim = NonNullable<Schemas['GoldenSearchStudySummary']['exposure_claim']>;
 
-export interface ExposureView {
-  state: ExposureState;
-  ledger_overlaps: number;
-  outside_activity_overlaps: number;
-  explanation: string;
-}
-
-/** `GET /defaults`: a full ProtocolRequest prefilled, plus the incumbent's name and the proposed final interval's exposure. */
-export interface GoldenSearchDefaults extends ProtocolRequest {
-  incumbent_label: string;
-  exposure: ExposureView;
-}
+/**
+ * `GET /defaults`: a full plan prefilled, plus the incumbent's name, the
+ * proposed final interval's exposure and the final test's length in months.
+ * Those three are not plan fields: the server refuses them in a plan.
+ */
+export type GoldenSearchDefaults = Omit<Schemas['GoldenSearchDefaults'], 'seed' | 'incumbent' | 'pair_audits'> & {
+  seed: Point;
+  incumbent: IncumbentRef;
+  pair_audits: KnobPair[];
+};
 
 /**
  * The month counts `GET /defaults` lays the intervals out from: the final
@@ -183,359 +92,86 @@ export interface DefaultsMonths {
   test_months: number;
 }
 
-export interface StageEstimate {
-  stage: string;
-  label: string;
-  max_evaluations: number;
-}
-
-export interface StudyEstimate {
-  stages: StageEstimate[];
-  total_max: number;
-  reserved_for_exam_and_proof: number;
-  budget_cap: number;
-  serial_seconds_low: number;
-  serial_seconds_high: number;
-}
-
-export interface RunUpView {
-  required_samples: number;
-  run_up_sessions: number;
-  data_start_ms: number;
-}
-
+export type StageEstimate = Schemas['GoldenSearchStageEstimate'];
+export type StudyEstimate = Schemas['GoldenSearchEstimate'];
+export type RunUpView = Schemas['GoldenSearchRunUp'];
 /** `POST /preflight`: protocol problems are refusals in the body, never a 400. */
-export interface GoldenSearchPreflight {
-  refusals: ProtocolRefusal[];
-  estimate: StudyEstimate | null;
-  folds: FoldPlan[];
-  exposure: ExposureView | null;
-  run_up: RunUpView | null;
-}
+export type GoldenSearchPreflight = Schemas['GoldenSearchPreflight'];
 
 // ---------------------------------------------------------------- study lifecycle
 
-export type StudyState =
-  | 'locked'
-  | 'search_running'
-  | 'awaiting_validation'
-  | 'validation_running'
-  | 'awaiting_candidate'
-  | 'candidate_locked'
-  | 'exam_running'
-  | 'awaiting_review'
-  | 'qualification_pending'
-  | 'approved'
-  | 'qualification_failed'
-  | 'retained'
-  | 'closed';
-
+export type StudySummary = Schemas['GoldenSearchStudySummary'];
+export type StudyState = StudySummary['state'];
 /** The fence status of the current stage run as the lifecycle presents it (`running` with no live job reads `interrupted`). */
-export type PresentedStatus = 'idle' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
-
-export type StudyCommandName = 'continue' | 'select_candidate' | 'open_exam' | 'approve' | 'retain' | 'close' | 'cancel' | 'finish' | 'revise';
-
-export type CandidateKey = 'incumbent' | 'all_period' | 'recent';
+export type PresentedStatus = StudySummary['presented_status'];
+export type StudyCommandName = Schemas['GoldenSearchCommandRequest']['command'];
+export type CandidateKey = Schemas['GoldenSearchEvidenceCandidate']['key'];
+export type ExamOutcome = NonNullable<StudySummary['exam_outcome']>;
 export type RetainKind = 'keep_current' | 'wait_for_fresh_data' | 'retain_exploration';
-export type ExamOutcome = 'meets_rules' | 'does_not_meet_rules' | 'not_enough_evidence' | 'could_not_evaluate';
 
-export interface StudySummary {
-  id: string;
-  parent_study_id: string | null;
-  strategy_key: string;
-  symbol: string;
-  state: StudyState;
-  presented_status: PresentedStatus;
-  revision: number;
-  created_at_ms: number;
-  updated_at_ms: number;
-  protocol_hash: string;
-  method: GoldenSearchMethod;
-  consumed_evaluations: number;
-  budget_cap: number;
-  cache_hits: number;
-  invalid_points: number;
-  incomplete: boolean;
-  failure_reason: string | null;
-  hidden: boolean;
-  exposure_claim: ExposureClaim | null;
-  exam_outcome: ExamOutcome | null;
-  qualification_id: string | null;
-}
+export type StudyReceiptSummary = Schemas['GoldenSearchReceiptSummary'];
+export type StudyGuidance = Schemas['GoldenSearchGuidance'];
+export type StudyProgress = Schemas['GoldenSearchProgress'];
+export type StageDispatch = Schemas['GoldenSearchDispatch'];
+export type StudyDecision = Schemas['GoldenSearchDecision'];
+/** Returns and drawdowns are fractions, as the engine reports them. */
+export type Metrics = Schemas['GoldenSearchMetrics'];
 
-export interface StudyReceiptSummary {
-  data_start_ms: number;
-  development_start_ms: number;
-  development_end_ms: number;
-  final_start_ms: number;
-  final_end_ms: number;
-  run_up_sessions: number;
-  snapshot_digest: string;
-  code: { git_revision: string; tree_state: string };
-  program_version: string | null;
-}
-
-export interface StudyGuidance {
-  headline: string;
-  detail: string;
-}
-
-export interface StudyProgress {
-  stage: string;
-  completed: number;
-  total_max: number;
-}
-
-export interface StageDispatch {
-  job_type: 'golden_search';
-  payload: { study_id: string; stage_token: string };
-}
-
-export interface StudyDecision {
-  kind: string;
-  note: string;
-  at_ms: number;
-}
-
-export interface Metrics {
-  status: 'completed' | 'failed';
-  total_trades: number;
-  net_profit: number | null;
-  /** Fractions, as the engine reports them. */
-  total_return_pct: number | null;
-  sharpe_ratio: number | null;
-  max_drawdown_pct: number | null;
-  win_rate: number | null;
-  error: string | null;
-}
-
-export type StopReason = 'no_improvement' | 'pass_limit' | 'budget' | 'quantization_limit' | 'no_eligible';
-
-/** One refinement round of one knob; tuples arrive as two-element arrays. */
-export interface ZoomRound {
-  pass_index: number;
-  knob: string;
-  round_index: number;
-  low: number;
-  high: number;
-  values: number[];
-  /** Constraint-skipped candidate values, never evaluated: `[value, reason]`. */
-  invalid: [number, string][];
-  /** `[value, ineligibility code or null when eligible]`. */
-  results: [number, string | null][];
-  /** The objective each evaluated value scored (null when undefined), in `results` order. */
-  objectives: [number, number | null][];
-  chosen: number;
-  moved: boolean;
-  current_before: number;
-  /** True on the round where the knob's spacing reached its smallest step. */
-  quantization_limit: boolean;
-}
-
+/** One refinement round of one knob; `invalid`, `results` and `objectives` arrive as two-element arrays. */
+export type ZoomRound = Schemas['GoldenSearchZoomRound'];
 /** One searched knob's outcome over the whole procedure, authored in Python from its rounds. */
-export interface KnobSummary {
-  knob: string;
-  label: string;
-  unit: string;
-  start_value: number;
-  retained_value: number;
-  moved: boolean;
-  stop_reason: StopReason;
-  /** From a closed copy map, e.g. "No better tested move", "Minimum step reached". */
-  stop_explanation: string;
-}
+export type KnobSummary = Schemas['GoldenSearchKnobSummary'];
+export type StopReason = KnobSummary['stop_reason'];
+export type ProcedureCounts = Schemas['GoldenSearchProcedureCounts'];
 
-export interface ProcedureCounts {
-  evaluated: number;
-  cached: number;
-  invalid: number;
-}
+/** The recent-window procedure. */
+export type ProcedureView = Omit<Schemas['GoldenSearchProcedureView'], 'winner'> & { winner: Point };
+/** The all-period procedure, with its pair landscapes centered on its winner; `pair_maps_incomplete` when the budget cut them short. */
+export type SearchView = Omit<Schemas['GoldenSearchSearchView'], 'winner'> & { winner: Point };
 
-export interface ProcedureView {
-  winner: Point;
-  winner_hash: string;
-  winner_metrics: Metrics | null;
-  stop_reason: StopReason;
-  stop_explanation: string;
-  rounds: ZoomRound[];
-  edge_hits: string[];
-  evaluations: number;
-  incomplete: boolean;
-  knob_summary: KnobSummary[];
-  counts: ProcedureCounts;
-  passes_completed: number;
-  /** The all-period search's pair landscapes, centered on its winner; the recent procedure has none. */
-  pair_maps?: PairMap[];
-}
-
-export type FoldRunStatus = 'pending' | 'running' | 'completed' | 'failed';
-
-export interface ValidationFold extends FoldPlan {
-  status: FoldRunStatus;
-  winner: Point | null;
-  winner_hash: string | null;
-  train_metrics: Metrics | null;
-  test_metrics: Metrics | null;
-  /** The frozen incumbent on the same test window: the benchmark every fold is read against. */
-  incumbent_test_metrics: Metrics | null;
-  failure_reason: string | null;
-}
-
+/** One fold; `incumbent_test_metrics` is the frozen incumbent on the same test window, the benchmark every fold is read against. */
+export type ValidationFold = Omit<Schemas['GoldenSearchValidationFold'], 'winner'> & { winner: Point | null };
+export type FoldRunStatus = ValidationFold['status'];
 /** `compute_verdict(...).as_dict()`: the legacy five-label summary with its coverage. */
-export interface ValidationVerdict extends Verdict {
-  retention_threshold: number;
-}
-
-export interface LinkedFoldReturn {
-  fold_index: number;
-  test_end_ms: number;
-  /** Growth of 1 linked across test folds, minus 1; null once a fold is missing (the line breaks). */
-  linked_return: number | null;
-}
-
-export interface ValidationSummaryPills {
-  /** Python-authored, e.g. "5 of 6 folds judged". */
-  judged: string;
-  test_trades: number;
-  median_retention: number | null;
-}
-
-export interface ValidationView {
-  folds: ValidationFold[];
-  verdict: ValidationVerdict | null;
-  linked: LinkedFoldReturn[];
-  /** The frozen incumbent's test returns linked the same way. */
-  incumbent_linked: LinkedFoldReturn[];
-  summary_pills: ValidationSummaryPills;
-  explanation: string;
-}
+export type ValidationVerdict = Schemas['GoldenSearchVerdict'];
+/** Growth of 1 linked across test folds, minus 1; `linked_return` is null once a fold is missing (the line breaks). */
+export type LinkedFoldReturn = Schemas['GoldenSearchLinkedReturn'];
+export type ValidationSummaryPills = Schemas['GoldenSearchSummaryPills'];
+/** `incumbent_linked` is the frozen incumbent's test returns linked the same way; `incomplete` when the budget stopped the stage. */
+export type ValidationView = Omit<Schemas['GoldenSearchValidationView'], 'folds'> & { folds: ValidationFold[] };
 
 /** `center` marks the candidate's own value in a neighborhood. */
-export type EvidenceCellStatus = 'tested' | 'invalid' | 'failed' | 'outside_domain' | 'untested' | 'center';
-
-export interface NeighborRow {
-  value: number;
-  status: EvidenceCellStatus;
-  metrics: Metrics | null;
-  /** Why a cell was not tested (a broken constraint, outside the legal domain). */
-  reason?: string | null;
-}
-
-export interface CandidateNeighborhood {
-  knob: string;
-  rows: NeighborRow[];
-}
-
-export interface StressResult {
-  scenario: string;
-  label: string;
-  metrics: Metrics | null;
-}
-
-export interface EvidenceCandidate {
-  key: CandidateKey;
-  label: string;
-  point: Point;
-  point_hash: string;
-  same_as: CandidateKey[];
-  development_metrics: Metrics | null;
-  eligible: boolean;
-  ineligibility: string | null;
-  neighbors: CandidateNeighborhood[];
-  stress: StressResult[];
-  /** From a closed copy map keyed by the candidate's situation. */
-  guidance: { title: string; text: string };
-  flags: Finding[];
-  /** Python-authored, e.g. "Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars". */
-  params_sentence: string;
-  fixed_sentence: string;
-  /** False for the incumbent: keeping the current settings needs no final test. */
-  exam_eligible: boolean;
-}
-
-export interface PairMapCell {
-  x: number;
-  y: number;
-  status: EvidenceCellStatus;
-  metrics: Metrics | null;
-  /** Why the cell was not tested (a broken constraint, outside the legal domain). */
-  reason?: string | null;
-}
-
+export type NeighborRow = Schemas['GoldenSearchNeighborRow'];
+export type EvidenceCellStatus = NeighborRow['status'];
+export type CandidateNeighborhood = Schemas['GoldenSearchNeighborhood'];
+export type StressResult = Schemas['GoldenSearchStressResult'];
+export type Finding = Schemas['GoldenSearchFinding'];
+export type Recommendation = Schemas['GoldenSearchRecommendation'];
+export type PairMapCell = Schemas['GoldenSearchPairCell'];
 /** A two-knob landscape: rows are `y_knob`'s values, columns `x_knob`'s, cells row-major. */
-export interface PairMap {
-  x_knob: string;
-  y_knob: string;
-  x_values: number[];
-  y_values: number[];
-  cells: PairMapCell[];
-}
+export type PairMap = Schemas['GoldenSearchPairMap'];
+export type IntervalMs = Schemas['GoldenSearchWindow'];
+export type EvidenceScope = Schemas['GoldenSearchEvidenceScope'];
 
-export interface Finding {
-  code: string;
-  text: string;
-}
+/**
+ * One candidate on the development scope. `guidance` comes from a closed copy
+ * map keyed by its situation; `params_sentence` is Python-authored; the
+ * incumbent is not `exam_eligible` (keeping it needs no final test).
+ */
+export type EvidenceCandidate = Omit<Schemas['GoldenSearchEvidenceCandidate'], 'point'> & { point: Point };
+/** `incomplete` when the budget stopped the stage before every candidate's evidence ran. */
+export type EvidenceView = Omit<Schemas['GoldenSearchEvidenceView'], 'candidates'> & { candidates: EvidenceCandidate[] };
 
-export interface Recommendation {
-  headline: string;
-  findings: Finding[];
-}
+export type ExamCheck = Schemas['GoldenSearchExamCheck'];
+/** `retention` is descriptive only, never a check. */
+export type ExamView = Omit<Schemas['GoldenSearchExamView'], 'candidate_point'> & { candidate_point: Point };
 
-export interface IntervalMs {
-  start_ms: number;
-  end_ms: number;
-}
-
-export interface EvidenceScope {
-  window: IntervalMs;
-  capital: number;
-  costs: Pick<ExecutionAssumptions, 'fill_mode' | 'commission_per_order' | 'slippage_per_share'>;
-}
-
-export interface EvidenceView {
-  candidates: EvidenceCandidate[];
-  pair_maps: PairMap[];
-  recommendation: Recommendation;
-  scope: EvidenceScope;
-}
-
-export interface ExamCheck {
-  code: string;
-  label: string;
-  status: 'pass' | 'fail' | 'not_available';
-  detail: string;
-}
-
-export interface ExamView {
-  candidate_key: CandidateKey;
-  candidate_point: Point;
-  window: IntervalMs;
-  claim: ExposureClaim;
-  exposure_state: ExposureState;
-  outcome: ExamOutcome | null;
-  checks: ExamCheck[];
-  /** Descriptive only, never a check. */
-  retention: number | null;
-  candidate_metrics: Metrics | null;
-  incumbent_metrics: Metrics | null;
-}
-
-export interface DeployOffer {
-  program_key: string;
-  symbol: string;
-  parameters: Point;
-  program_version: string | null;
-}
-
-export interface QualificationView {
-  status: 'pending' | 'ready' | 'failed';
-  qualification_id: string | null;
-  failure_reason: string | null;
-  deploy: DeployOffer | null;
-}
+/** The canonical point Deploy applies, without `symbol`. */
+export type DeployOffer = Omit<Schemas['GoldenSearchDeployHandoff'], 'parameters'> & { parameters: Point };
+export type QualificationView = Omit<Schemas['GoldenSearchQualificationView'], 'deploy'> & { deploy: DeployOffer | null };
 
 export interface StudyResults {
-  search: ProcedureView | null;
+  search: SearchView | null;
   recent: ProcedureView | null;
   validation: ValidationView | null;
   evidence: EvidenceView | null;
@@ -543,32 +179,19 @@ export interface StudyResults {
   qualification: QualificationView | null;
 }
 
-/** The scope line every step shows above its comparisons. */
-export interface StudyScope {
-  development_label_start_ms: number;
-  development_end_ms: number;
-  final_start_ms: number;
-  final_end_ms: number;
-  final_state: 'locked' | 'opened_once';
-  capital: number;
-  costs_sentence: string;
-}
+/** The scope line every step shows above its comparisons; `data_source` is the footer's sentence. */
+export type StudyScope = Schemas['GoldenSearchScope'];
 
-export interface StudyDetail extends StudySummary {
-  /** The frozen protocol echo. */
+/**
+ * One study as the workbench reads it. `protocol` is the frozen plan echo;
+ * `exposure_preview` is what opening the final test would record, while a
+ * candidate is chosen (null otherwise).
+ */
+export type StudyDetail = Omit<Schemas['GoldenSearchStudyDetail'], 'protocol' | 'results' | 'action_refusals'> & {
   protocol: ProtocolRequest;
-  receipt: StudyReceiptSummary;
-  permitted_actions: StudyCommandName[];
-  action_refusals: Partial<Record<StudyCommandName, string>>;
-  guidance: StudyGuidance;
-  progress: StudyProgress | null;
-  dispatch: StageDispatch | null;
   results: StudyResults;
-  decision: StudyDecision | null;
-  candidate_key: CandidateKey | null;
-  exam_locked: boolean;
-  scope: StudyScope;
-}
+  action_refusals: Partial<Record<StudyCommandName, string>>;
+};
 
 // ---------------------------------------------------------------- commands
 
@@ -617,105 +240,32 @@ export interface EvaluationQuery {
   page_size: number;
 }
 
-export interface EvaluationRow {
-  evaluation_key: string;
-  point_hash: string;
-  point: Point;
-  window_start_ms: number;
-  window_end_ms: number;
-  scenario: string;
-  detail: boolean;
-  stage: string;
-  fold_index: number | null;
-  status: 'pending' | 'completed' | 'failed';
-  attempt: number;
-  retries: number;
-  total_trades: number | null;
-  net_profit: number | null;
-  total_return_pct: number | null;
-  sharpe_ratio: number | null;
-  max_drawdown_pct: number | null;
-  win_rate: number | null;
-  error: string | null;
-  created_at_ms: number;
-  completed_at_ms: number | null;
-}
+export type EvaluationRow = Omit<Schemas['GoldenSearchEvaluationRow'], 'point'> & { point: Point };
+export type EvaluationPage = Omit<Schemas['GoldenSearchEvaluationPage'], 'rows'> & { rows: EvaluationRow[] };
 
-export interface EvaluationPage {
-  total: number;
-  page: number;
-  page_size: number;
-  rows: EvaluationRow[];
-}
-
-export interface DailyEquityPoint {
-  ms: number;
-  equity: number;
-}
-
-export interface DrawdownPoint {
-  ms: number;
-  drawdown: number;
-}
-
-export interface MonthlyResult {
-  month_start_ms: number;
-  net_profit: number;
-  /** Null when the month started without positive equity to divide by. */
-  return_fraction: number | null;
-  trades: number;
-}
-
-export interface CandidateTrade {
-  entry_ms: number;
-  exit_ms: number;
-  entry_price: number;
-  exit_price: number;
-  quantity: number;
-  /** Price change times filled quantity, before fees. */
-  pnl: number;
-  pnl_pct: number;
-  indicators: Readonly<Record<string, number | null>>;
-  exit_reason: string | null;
-}
-
-export interface CumulativeReturnPoint {
-  ms: number;
-  /** A fraction of starting capital. */
-  value: number;
-}
-
-export interface CandidateRunDetail {
-  window: IntervalMs;
-  metrics: Metrics;
-  cumulative_return: CumulativeReturnPoint[];
-  daily_equity: DailyEquityPoint[];
-  drawdown: DrawdownPoint[];
-  monthly: MonthlyResult[];
-  trades: CandidateTrade[];
-}
+export type DailyEquityPoint = Schemas['GoldenSearchEquityPoint'];
+export type DrawdownPoint = Schemas['GoldenSearchDrawdownPoint'];
+/** `return_fraction` is null when the month started without positive equity to divide by. */
+export type MonthlyResult = Schemas['GoldenSearchMonthlyResult'];
+/** `pnl` is the price change times filled quantity, before fees. */
+export type CandidateTrade = Schemas['GoldenSearchTrade'];
+/** `value` is a fraction of starting capital. */
+export type CumulativeReturnPoint = Schemas['GoldenSearchCumulativeReturnPoint'];
+export type CandidateRunDetail = Schemas['GoldenSearchRunDetail'];
 
 /** `GET /studies/{id}/candidates/{key}`: the development detail run, plus the exam's once it ran. */
-export interface CandidateDetail {
-  candidate_key: CandidateKey;
-  point: Point;
-  development: CandidateRunDetail | null;
-  exam: CandidateRunDetail | null;
-}
+export type CandidateDetail = Omit<Schemas['GoldenSearchCandidateDetail'], 'point'> & { point: Point };
 
-/** Only `ready` may be applied; `unverifiable` means its status could not be read. */
-export type QualificationStatus = 'ready' | 'stale' | 'revoked' | 'unverifiable';
+/** What the research said when the version was approved; preserved forever, never upgraded by approval. */
+export type QualificationResearch = Schemas['GoldenQualificationResearch'];
 
-/** `GET /api/research/golden-qualifications/{id}/deploy-offer`; `parameters` is canonical without `symbol`. */
-export interface QualificationDeployOffer {
-  qualification_id: string;
-  program_key: string;
-  program_version: string | null;
-  symbol: string;
-  parameters: Point;
-  status: QualificationStatus;
-  explanation: string;
-}
+/**
+ * `GET /api/research/golden-qualifications/{id}/deploy-offer`; `parameters` is
+ * canonical without `symbol`. Only a `ready` status may be applied;
+ * `unverifiable` means its status could not be read.
+ */
+export type QualificationDeployOffer = Omit<Schemas['GoldenQualificationDeployOffer'], 'parameters'> & { parameters: Point };
+export type QualificationStatus = QualificationDeployOffer['status'];
 
 /** Statuses whose stage run still owns (or is waiting for) a worker. */
 export const LIVE_STATUSES: readonly PresentedStatus[] = ['queued', 'running'];
