@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -489,6 +489,273 @@ DDL_V10: tuple[str, ...] = (
     "ALTER TABLE research_backtest_runs ADD COLUMN IF NOT EXISTS evidence_provenance_json JSONB NULL",
 )
 
+# Version 11 — Golden Search (#2696, ADR 0074): studies, their evaluation
+# cache and trial ledger, the cross-study exposure ledger, and the immutable
+# qualified versions with their per-(program, symbol) default pointer. Every
+# fact a later review relies on is append-only: hiding a study never deletes
+# its trials, exposures or qualification, and a qualification is revoked or
+# re-proved by another event, never by an edit.
+DDL_V11: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS research_golden_search_studies (
+        id                   TEXT PRIMARY KEY,
+        parent_study_id      TEXT NULL
+            REFERENCES research_golden_search_studies (id) ON DELETE RESTRICT,
+        strategy_key         TEXT NOT NULL,
+        symbol               TEXT NOT NULL,
+        state                TEXT NOT NULL,
+        revision             INTEGER NOT NULL DEFAULT 0,
+        status               TEXT NOT NULL DEFAULT 'idle',
+        attempt              INTEGER NOT NULL DEFAULT 0,
+        job_id               TEXT NULL,
+        pending_stage        TEXT NULL,
+        stage_token          TEXT NULL,
+        created_at_ms        BIGINT NOT NULL,
+        updated_at_ms        BIGINT NOT NULL,
+        finished_at_ms       BIGINT NULL,
+        protocol_json        JSONB NOT NULL,
+        protocol_hash        TEXT NOT NULL,
+        receipt_json         JSONB NOT NULL,
+        results_json         JSONB NOT NULL DEFAULT '{}'::jsonb,
+        candidate_key        TEXT NULL,
+        exam_locked          BOOLEAN NOT NULL DEFAULT FALSE,
+        decision_json        JSONB NULL,
+        budget_cap           INTEGER NOT NULL,
+        consumed_evaluations INTEGER NOT NULL DEFAULT 0,
+        cache_hits           INTEGER NOT NULL DEFAULT 0,
+        invalid_points       INTEGER NOT NULL DEFAULT 0,
+        incomplete           BOOLEAN NOT NULL DEFAULT FALSE,
+        failure_reason       TEXT NULL,
+        hidden               BOOLEAN NOT NULL DEFAULT FALSE,
+        CONSTRAINT ck_research_golden_search_studies_state CHECK (state IN (
+            'locked', 'search_running', 'awaiting_validation', 'validation_running',
+            'awaiting_candidate', 'candidate_locked', 'exam_running', 'awaiting_review',
+            'qualification_pending', 'approved', 'qualification_failed', 'retained', 'closed'
+        )),
+        CONSTRAINT ck_research_golden_search_studies_status CHECK (status IN (
+            'idle', 'queued', 'running', 'completed', 'failed', 'cancelled'
+        )),
+        CONSTRAINT ck_research_golden_search_studies_pending_stage CHECK (
+            pending_stage IS NULL OR pending_stage IN ('search', 'validation', 'exam', 'qualification')
+        ),
+        CONSTRAINT ck_research_golden_search_studies_budget CHECK (
+            budget_cap BETWEEN 1 AND 5000 AND consumed_evaluations BETWEEN 0 AND budget_cap
+        )
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_research_golden_search_studies_subject
+        ON research_golden_search_studies (strategy_key, symbol, created_at_ms DESC)
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_research_golden_search_studies_job ON research_golden_search_studies (job_id)",
+    """
+    CREATE TABLE IF NOT EXISTS research_golden_search_evaluations (
+        study_id         TEXT NOT NULL
+            REFERENCES research_golden_search_studies (id) ON DELETE RESTRICT,
+        evaluation_key   TEXT NOT NULL,
+        point_hash       TEXT NOT NULL,
+        point_json       JSONB NOT NULL,
+        window_start_ms  BIGINT NOT NULL,
+        window_end_ms    BIGINT NOT NULL,
+        scenario         TEXT NOT NULL DEFAULT 'base',
+        detail           BOOLEAN NOT NULL DEFAULT FALSE,
+        stage            TEXT NOT NULL,
+        fold_index       INTEGER NULL,
+        status           TEXT NOT NULL,
+        attempt          INTEGER NOT NULL,
+        retries          INTEGER NOT NULL DEFAULT 0,
+        total_trades     INTEGER NULL,
+        net_profit       DOUBLE PRECISION NULL,
+        total_return_pct DOUBLE PRECISION NULL,
+        sharpe_ratio     DOUBLE PRECISION NULL,
+        max_drawdown_pct DOUBLE PRECISION NULL,
+        win_rate         DOUBLE PRECISION NULL,
+        error            TEXT NULL,
+        detail_json      JSONB NULL,
+        created_at_ms    BIGINT NOT NULL,
+        completed_at_ms  BIGINT NULL,
+        PRIMARY KEY (study_id, evaluation_key),
+        CONSTRAINT ck_research_golden_search_evaluations_status
+            CHECK (status IN ('pending', 'completed', 'failed')),
+        CONSTRAINT ck_research_golden_search_evaluations_window
+            CHECK (window_start_ms < window_end_ms)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_research_golden_search_evaluations_window
+        ON research_golden_search_evaluations (study_id, stage, fold_index)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS research_golden_search_trials (
+        id            BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+        study_id      TEXT NOT NULL
+            REFERENCES research_golden_search_studies (id) ON DELETE RESTRICT,
+        stage         TEXT NOT NULL,
+        fold_index    INTEGER NULL,
+        kind          TEXT NOT NULL,
+        payload_json  JSONB NOT NULL,
+        created_at_ms BIGINT NOT NULL,
+        CONSTRAINT ck_research_golden_search_trials_kind CHECK (kind IN (
+            'evaluated', 'cache_hit', 'invalid', 'round', 'stop', 'selection', 'pick',
+            'exam_open', 'decision', 'approval'
+        ))
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_research_golden_search_trials_study
+        ON research_golden_search_trials (study_id, id)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS research_golden_search_commands (
+        study_id       TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        command        TEXT NOT NULL,
+        request_sha256 TEXT NOT NULL,
+        response_json  JSONB NOT NULL,
+        created_at_ms  BIGINT NOT NULL,
+        PRIMARY KEY (study_id, idempotency_key)
+    )
+    """,
+    # No foreign key to the studies on purpose: an exposure outlives every study.
+    """
+    CREATE TABLE IF NOT EXISTS research_golden_search_exposures (
+        id                   BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+        symbol               TEXT NOT NULL,
+        interval_start_ms    BIGINT NOT NULL,
+        interval_end_ms      BIGINT NOT NULL,
+        study_id             TEXT NOT NULL,
+        strategy_key         TEXT NOT NULL,
+        kind                 TEXT NOT NULL,
+        state_at_reservation TEXT NOT NULL,
+        claim                TEXT NOT NULL,
+        candidate_point_hash TEXT NOT NULL,
+        payload_json         JSONB NOT NULL,
+        created_at_ms        BIGINT NOT NULL,
+        CONSTRAINT ck_research_golden_search_exposures_kind CHECK (kind IN ('reserved', 'result')),
+        CONSTRAINT ck_research_golden_search_exposures_state CHECK (
+            state_at_reservation IN ('not_opened', 'previously_used', 'history_unknown')
+        ),
+        CONSTRAINT ck_research_golden_search_exposures_claim CHECK (claim IN ('confirmatory', 'exploratory')),
+        CONSTRAINT ck_research_golden_search_exposures_interval CHECK (interval_start_ms < interval_end_ms)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_research_golden_search_exposures_symbol
+        ON research_golden_search_exposures (symbol, interval_start_ms)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS research_golden_qualifications (
+        id                       TEXT PRIMARY KEY,
+        program_key              TEXT NOT NULL,
+        program_version          TEXT NOT NULL,
+        parameter_schema_version TEXT NOT NULL,
+        symbol                   TEXT NOT NULL,
+        params_json              JSONB NOT NULL,
+        params_sha256            TEXT NOT NULL,
+        artifact_digest          TEXT NOT NULL,
+        wiring_digest            TEXT NOT NULL,
+        study_id                 TEXT NOT NULL UNIQUE
+            REFERENCES research_golden_search_studies (id) ON DELETE RESTRICT,
+        golden_run_id            INTEGER NOT NULL
+            REFERENCES research_validation_golden_runs (id) ON DELETE RESTRICT,
+        golden_review_id         INTEGER NOT NULL
+            REFERENCES research_golden_validation_reviews (id) ON DELETE RESTRICT,
+        proof_json               JSONB NOT NULL,
+        proof_sha256             TEXT NOT NULL,
+        research_json            JSONB NOT NULL,
+        note                     TEXT NOT NULL,
+        approved_by              TEXT NOT NULL,
+        created_at_ms            BIGINT NOT NULL,
+        CONSTRAINT ck_research_golden_qualifications_note CHECK (btrim(note) <> '')
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_research_golden_qualifications_subject
+        ON research_golden_qualifications (program_key, symbol, params_sha256)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS research_golden_qualification_events (
+        id               BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+        qualification_id TEXT NOT NULL
+            REFERENCES research_golden_qualifications (id) ON DELETE RESTRICT,
+        kind             TEXT NOT NULL,
+        artifact_digest  TEXT NULL,
+        wiring_digest    TEXT NULL,
+        proof_json       JSONB NULL,
+        reason           TEXT NULL,
+        actor            TEXT NOT NULL,
+        command_id       TEXT NOT NULL UNIQUE,
+        created_at_ms    BIGINT NOT NULL,
+        CONSTRAINT ck_research_golden_qualification_events_kind CHECK (kind IN ('reproved', 'revoked')),
+        CONSTRAINT ck_research_golden_qualification_events_shape CHECK (
+            (kind = 'reproved' AND artifact_digest IS NOT NULL AND wiring_digest IS NOT NULL AND proof_json IS NOT NULL)
+            OR (kind = 'revoked' AND reason IS NOT NULL AND btrim(reason) <> '')
+        )
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_research_golden_qualification_events_qualification
+        ON research_golden_qualification_events (qualification_id, id)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS research_golden_defaults (
+        program_key      TEXT NOT NULL,
+        symbol           TEXT NOT NULL,
+        qualification_id TEXT NULL
+            REFERENCES research_golden_qualifications (id) ON DELETE RESTRICT,
+        revision         INTEGER NOT NULL,
+        updated_at_ms    BIGINT NOT NULL,
+        PRIMARY KEY (program_key, symbol)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS research_golden_default_history (
+        id                         BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+        program_key                TEXT NOT NULL,
+        symbol                     TEXT NOT NULL,
+        previous_qualification_id  TEXT NULL,
+        qualification_id           TEXT NULL,
+        revision                   INTEGER NOT NULL,
+        reason                     TEXT NOT NULL,
+        actor                      TEXT NOT NULL,
+        created_at_ms              BIGINT NOT NULL
+    )
+    """,
+    """
+    CREATE OR REPLACE FUNCTION reject_golden_search_ledger_mutation()
+    RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        RAISE EXCEPTION 'Golden Search ledgers are append-only';
+    END;
+    $$
+    """,
+    """
+    CREATE TRIGGER research_golden_search_trials_no_update_or_delete
+        BEFORE UPDATE OR DELETE ON research_golden_search_trials
+        FOR EACH ROW EXECUTE FUNCTION reject_golden_search_ledger_mutation()
+    """,
+    """
+    CREATE TRIGGER research_golden_search_exposures_no_update_or_delete
+        BEFORE UPDATE OR DELETE ON research_golden_search_exposures
+        FOR EACH ROW EXECUTE FUNCTION reject_golden_search_ledger_mutation()
+    """,
+    """
+    CREATE TRIGGER research_golden_qualifications_no_update_or_delete
+        BEFORE UPDATE OR DELETE ON research_golden_qualifications
+        FOR EACH ROW EXECUTE FUNCTION reject_golden_search_ledger_mutation()
+    """,
+    """
+    CREATE TRIGGER research_golden_qualification_events_no_update_or_delete
+        BEFORE UPDATE OR DELETE ON research_golden_qualification_events
+        FOR EACH ROW EXECUTE FUNCTION reject_golden_search_ledger_mutation()
+    """,
+    """
+    CREATE TRIGGER research_golden_default_history_no_update_or_delete
+        BEFORE UPDATE OR DELETE ON research_golden_default_history
+        FOR EACH ROW EXECUTE FUNCTION reject_golden_search_ledger_mutation()
+    """,
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -500,6 +767,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (8, DDL_V8),
     (9, DDL_V9),
     (10, DDL_V10),
+    (11, DDL_V11),
 )
 
 
