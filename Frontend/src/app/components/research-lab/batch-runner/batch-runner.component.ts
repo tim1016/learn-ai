@@ -3,7 +3,6 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
-  DestroyRef,
   effect,
   inject,
   signal,
@@ -162,7 +161,6 @@ interface CrossSectionalJobResultRaw {
 })
 export class BatchRunnerComponent {
   private jobsService = inject(JobsService);
-  private destroyRef = inject(DestroyRef);
 
   // Form state
   featureName = signal('iv_rank_60');
@@ -439,10 +437,6 @@ export class BatchRunnerComponent {
     this.result.set(null);
     this.error.set(null);
     this.logBuffer.clear();
-  }
-
-  getValidationSeverity(passed: boolean): 'success' | 'danger' {
-    return passed ? 'success' : 'danger';
   }
 
   getIcClass(ic: number): string {

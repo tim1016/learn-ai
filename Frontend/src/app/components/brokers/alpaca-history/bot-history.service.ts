@@ -13,8 +13,6 @@ import type { LaneModeChip } from '../../../services/alpaca-live-verdict.service
  * `int64 ms UTC`. */
 export type FleetBotHistoryPage = components['schemas']['FleetBotHistoryPage'];
 export type FleetBotHistoryRow = components['schemas']['FleetBotHistoryRow'];
-export type FleetBotHistoryGap = components['schemas']['FleetBotHistoryGap'];
-export type BotHistoryRun = components['schemas']['BotHistoryRun'];
 export type BotHistoryStatus = FleetBotHistoryRow['status'];
 export type BotHistoryWorld = FleetBotHistoryRow['world'];
 

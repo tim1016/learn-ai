@@ -34,8 +34,8 @@
 
   <div class="clear-outcome__actions">
     @if (canRetry()) {
-      <button type="button" [disabled]="busy()" [attr.aria-busy]="busy()" (click)="retryRequested.emit()">{{ copy.retry }}</button>
+      <button type="button" (click)="retryRequested.emit()">{{ copy.retry }}</button>
     }
-    <button type="button" [disabled]="busy()" (click)="dismissed.emit()">{{ copy.dismiss }}</button>
+    <button type="button" (click)="dismissed.emit()">{{ copy.dismiss }}</button>
   </div>
 </section>

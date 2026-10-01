@@ -77,23 +77,6 @@ describe('DataLabWorkspaceStore scope', () => {
 });
 
 describe('DataLabWorkspaceStore chart staleness', () => {
-  it('markChartStale/consumeStale round-trip keyed by request signature', () => {
-    const store = createDataLabWorkspaceStore();
-    expect(store.chartStale()).toBe(false);
-    store.markChartStale();
-    expect(store.consumeStale('sig-1')).toBe(false); // no signature recorded yet
-    expect(store.recordChartRequest('sig-1')).toBe(true);
-    // Recording a request no longer clears staleness — only settling does.
-    expect(store.chartStale()).toBe(true);
-    store.settleChartRequest();
-    expect(store.chartStale()).toBe(false);
-    store.markChartStale();
-    expect(store.consumeStale('sig-2')).toBe(false); // wrong signature
-    expect(store.chartStale()).toBe(true);
-    expect(store.consumeStale('sig-1')).toBe(true);
-    expect(store.chartStale()).toBe(false);
-  });
-
   it('recordChartRequest keeps the stale flag set while a request is pending', () => {
     // An in-flight (or failed) fetch must leave old bars visibly out of
     // date — only settleChartRequest (the explicit success/failure

@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { __TEST__ } from './broker-options-surface.component';
-
-const { pickStrikesAroundAtm, intersectAll } = __TEST__;
+import { intersectAll, pickStrikesAroundAtm } from './broker-options-surface.component';
 
 describe('pickStrikesAroundAtm', () => {
   it('returns ±band strikes around the closest-to-ATM strike', () => {

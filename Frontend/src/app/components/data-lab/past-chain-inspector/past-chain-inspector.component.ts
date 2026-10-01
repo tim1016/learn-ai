@@ -197,20 +197,9 @@ export class PastChainInspectorComponent {
     return val != null ? val.toFixed(2) : '—';
   }
 
-  formatChange(val: number | null): string {
-    if (val == null) return '—';
-    const sign = val >= 0 ? '+' : '';
-    return `${sign}${val.toFixed(2)}`;
-  }
-
   formatChangePct(val: number | null): string {
     if (val == null) return '—';
     const sign = val >= 0 ? '+' : '';
     return `${sign}${val.toFixed(1)}%`;
-  }
-
-  formatVolume(val: number | null | undefined): string {
-    if (val == null) return '—';
-    return val.toLocaleString();
   }
 }

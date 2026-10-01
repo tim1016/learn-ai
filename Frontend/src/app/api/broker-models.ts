@@ -81,22 +81,3 @@ export interface IbkrStrikeList {
   strikes: number[];
   fetched_at_ms: number;
 }
-
-// ── REST shape: /api/broker/option-contracts/{symbol} (Slice 1F) ─────
-
-export interface OptionContractMatch {
-  con_id: number;
-  symbol: string;
-  local_symbol: string;
-  trading_class: string;
-  exchange: string;
-  currency: string;
-  expiry_ms: number;
-  strike: number;
-  right: 'C' | 'P';
-  multiplier: number;
-}
-
-export interface OptionContractsResponse {
-  matches: OptionContractMatch[];
-}

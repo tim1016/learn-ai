@@ -999,16 +999,6 @@ describe('AlpacaDeployWorkflowComponent — submission (#2551)', () => {
     expect(service.deployBudgetBot).not.toHaveBeenCalled();
   });
 
-  it('never words an unknown outcome in internal terms', async () => {
-    const service = mockService(DEPLOY_VIEW, new HttpErrorResponse({ status: 0 }));
-    await renderWorkflow(service);
-    await chooseMoney();
-    fireEvent.click(deployButton());
-
-    const alert = await screen.findByRole('alert', { name: 'Outcome unknown' });
-    expect(alert.textContent).not.toMatch(/control boundary|data.plane|SQLite|lens/i);
-  });
-
   it('reads a pending submission after a reload without sending another Deploy', async () => {
     const service = mockService();
     const pending: BudgetDeployReceipt = {

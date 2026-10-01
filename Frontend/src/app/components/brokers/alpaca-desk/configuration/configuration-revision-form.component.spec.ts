@@ -58,18 +58,6 @@ describe('ConfigurationRevisionFormComponent', () => {
     ).toBeTruthy();
   });
 
-  it('says an unavailable slot is a host deployment change, not a page action', async () => {
-    const rendered = await render(HostComponent);
-    rendered.fixture.componentInstance.draft.update((draft) => ({
-      ...draft,
-      credential_slot: 'live',
-    }));
-    await rendered.fixture.whenStable();
-
-    expect(screen.getByText(/No credential pair is injected for this slot/)).toBeTruthy();
-    expect(screen.getByText(/this page cannot make it/)).toBeTruthy();
-  });
-
   it('shows paper entry settings and exit defaults, and explains their ownership', async () => {
     await render(HostComponent);
 

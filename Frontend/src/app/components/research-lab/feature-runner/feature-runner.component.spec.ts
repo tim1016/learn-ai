@@ -98,10 +98,6 @@ describe('FeatureRunnerComponent', () => {
     fixture.detectChanges();
   });
 
-  it('should create', () => {
-    expect(component).toBeTruthy();
-  });
-
   it('canRun is true with the default form values and no in-flight job', () => {
     // The component seeds AAPL / momentum_5m / 2024-01-01 / 2024-03-31
     // in its signals; that's enough to satisfy `canRun`.

@@ -70,7 +70,7 @@ export class HomeSparklineComponent {
       if (ctx === null) return;
       const bars = this.bars();
       const config = this.config();
-      draw(ctx, bars, this.markers(), computeScale(bars, config), null, config);
+      draw(ctx, bars, this.markers(), computeScale(bars, config), config);
     });
     afterNextRender(() => {
       const canvas = this.canvas().nativeElement;

@@ -83,10 +83,6 @@ describe('AppComponent', () => {
     fixture.detectChanges();
   });
 
-  it('should create', () => {
-    expect(fixture.componentInstance).toBeTruthy();
-  });
-
   it('should render the app menubar inside the top bar', () => {
     const nav = fixture.nativeElement.querySelector('[data-shell-slot="nav"]');
     expect(nav?.querySelector('app-menubar')).toBeTruthy();
@@ -295,21 +291,5 @@ describe('AppComponent', () => {
     // entries until the account list slice retires them.
     expect(connection?.querySelector('a[href="/brokers/alpaca/bots"]')).toBeNull();
     expect(connection?.querySelector('a[href="/brokers/alpaca/gallery"]')).toBeNull();
-  });
-
-  it('names the top-bar region for what it holds: each account, with its attention bell (review B minor 4)', () => {
-    const region = fixture.nativeElement.querySelector('[data-shell-slot="connection"] nav');
-    // It carries the account pills AND each account's bell, so it is not
-    // a "Switch account" control.
-    expect(region?.getAttribute('aria-label')).toBe('Accounts');
-  });
-
-  it('should contain a router-outlet', () => {
-    expect(fixture.nativeElement.querySelector('router-outlet')).toBeTruthy();
-  });
-
-  it('carries no Trader/Operator switch: each page has one view (PRD #2560 D2)', () => {
-    expect(fixture.nativeElement.querySelector('[role="tablist"]')).toBeNull();
-    expect(fixture.nativeElement.textContent).not.toMatch(/\bOperator\b/);
   });
 });

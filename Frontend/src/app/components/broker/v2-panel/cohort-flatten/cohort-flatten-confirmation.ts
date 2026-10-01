@@ -114,5 +114,3 @@ export const COHORT_FLATTEN_COPY = {
     'changed after it was read. Retrying would re-send the same facts; let the roster ' +
     're-read and start a new wave.',
 } as const;
-
-export type CohortFlattenCopy = typeof COHORT_FLATTEN_COPY;

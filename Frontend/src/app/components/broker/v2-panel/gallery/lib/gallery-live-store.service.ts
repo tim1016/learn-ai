@@ -1,5 +1,5 @@
 import { HttpClient } from '@angular/common/http';
-import { DestroyRef, Injectable, computed, inject, signal } from '@angular/core';
+import { DestroyRef, Injectable, inject, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
 import {
@@ -22,12 +22,6 @@ import type {
 } from './gallery.types';
 
 const FALLBACK_POLL_MS = 5_000;
-/**
- * How long a live wall may go without adopting a new frame before it reads
- * stale (#2330, #2326): twice the slowest delivery interval (the REST poll;
- * the stream polls every ~1s), so ordinary jitter never flips it.
- */
-const FRAME_STALE_AFTER_MS = 2 * FALLBACK_POLL_MS;
 
 interface GalleryRequest {
   readonly broker: string;
@@ -188,26 +182,13 @@ export class GalleryLiveStore {
   private readonly markersState = signal<ReadonlyMap<string, readonly ChartFillMarker[]>>(new Map());
   private readonly resolutionState = signal<GalleryResolution>('1m');
   private readonly statusState = signal<GalleryLiveStatus>('connecting');
-  private readonly frameStaleState = signal(false);
   private readonly refusalReasonState = signal<string | null>(null);
 
   readonly bots = this.botsState.asReadonly();
   readonly barsBySymbol = this.barsState.asReadonly();
   readonly markersBySid = this.markersState.asReadonly();
   readonly resolution = this.resolutionState.asReadonly();
-  /**
-   * The transport's state, except that a `live` wall whose newest frame has
-   * aged past ``FRAME_STALE_AFTER_MS`` reads `stale` (#2330). An open stream
-   * can go silent while the lane's frame build hangs (#2326), leaving the
-   * last frame on screen; its age, not the open transport, says whether the
-   * wall is current. A wall with no bots gets no frames, only keepalives, so
-   * age says nothing there.
-   */
-  readonly status = computed<GalleryLiveStatus>(() => {
-    const status = this.statusState();
-    const aged = this.frameStaleState() && this.botsState().length > 0;
-    return status === 'live' && aged ? 'stale' : status;
-  });
+  readonly status = this.statusState.asReadonly();
   /** The lane's reason code when it refused the stream (#2328); `null` otherwise. */
   readonly refusalReason = this.refusalReasonState.asReadonly();
 
@@ -221,7 +202,6 @@ export class GalleryLiveStore {
   private epoch = '';
   private surfaceVersion = -1;
   private stagedPages: StagedBarsPages | null = null;
-  private frameAgeTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.destroyRef.onDestroy(() => this.stop());
@@ -260,7 +240,6 @@ export class GalleryLiveStore {
       this.botsState.set([]);
       this.barsState.set(new Map());
       this.markersState.set(new Map());
-      this.clearFrameAge();
     }
     this.refusalReasonState.set(null);
     this.statusState.set('connecting');
@@ -273,7 +252,6 @@ export class GalleryLiveStore {
     this.generation += 1;
     this.request = null;
     this.closeTransport();
-    this.clearFrameAge();
     this.statusState.set('connecting');
   }
 
@@ -290,7 +268,6 @@ export class GalleryLiveStore {
     this.markersState.set(
       new Map(Object.entries(snapshot.markers ?? {}).map(([sid, markers]) => [sid, [...markers]])),
     );
-    this.trackFrameAge();
   }
 
   /** Incremental merge — per-symbol bars, per-sid markers, bot upserts/removals. */
@@ -299,7 +276,6 @@ export class GalleryLiveStore {
     // (possible if the bootstrap fetch and a live-stream update race).
     if (this.epoch === '' || update.surface_version <= this.surfaceVersion) return;
     this.surfaceVersion = update.surface_version;
-    this.trackFrameAge();
 
     if (update.symbols.length > 0) {
       this.barsState.update((current) => {
@@ -326,27 +302,6 @@ export class GalleryLiveStore {
       this.botsState.update((current) =>
         dropRemoved(upsertBots(current, update.bots_delta), update.removed_sids));
     }
-  }
-
-  /**
-   * Arm the frame-age check for the newest adopted frame; a newer frame
-   * re-arms it. Measured as local elapsed time since receipt, never as the
-   * browser clock minus the lane's ``as_of_ms``: the two clocks are
-   * independent, and skew beyond the threshold would mark every fresh frame
-   * stale (browser ahead) or hide a silent stream (browser behind).
-   */
-  private trackFrameAge(): void {
-    this.clearFrameAge();
-    this.frameAgeTimer = setTimeout(() => {
-      this.frameAgeTimer = null;
-      this.frameStaleState.set(true);
-    }, FRAME_STALE_AFTER_MS);
-  }
-
-  private clearFrameAge(): void {
-    if (this.frameAgeTimer !== null) clearTimeout(this.frameAgeTimer);
-    this.frameAgeTimer = null;
-    this.frameStaleState.set(false);
   }
 
   private async bootstrap(generation: number, request: GalleryRequest): Promise<void> {

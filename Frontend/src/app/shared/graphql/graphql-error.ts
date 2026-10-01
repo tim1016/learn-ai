@@ -4,11 +4,6 @@ export interface GraphQLErrorPayload {
   extensions?: Record<string, unknown>;
 }
 
-export interface GraphQLResponse<TData> {
-  data: TData;
-  errors?: GraphQLErrorPayload[];
-}
-
 export class GraphqlError extends Error {
   readonly errors: GraphQLErrorPayload[];
   readonly context?: string;

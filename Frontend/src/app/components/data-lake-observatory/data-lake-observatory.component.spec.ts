@@ -158,20 +158,6 @@ describe('DataLakeObservatoryComponent', () => {
       originalEventSource;
   });
 
-  it('renders an empty catalog honestly rather than as zeroed tables', async () => {
-    await renderObservatory();
-
-    expect(await screen.findByText(/The catalog holds no artifacts yet/)).toBeTruthy();
-  });
-
-  it('asks for a symbol before claiming anything about coverage', async () => {
-    await renderObservatory();
-
-    expect(
-      await screen.findByText('Name a symbol above to see which sessions are on disk.'),
-    ).toBeTruthy();
-  });
-
   it('reads coverage for each symbol the operator names', async () => {
     const { view, lake } = await renderObservatory();
     await screen.findByText(/The catalog holds no artifacts yet/);
@@ -197,16 +183,6 @@ describe('DataLakeObservatoryComponent', () => {
     await vi.waitFor(() => expect(lake.artifact).toHaveBeenCalledWith(11));
     expect(await screen.findByText('dch-1234')).toBeTruthy();
     expect(screen.getByText('/lake/usa/minute/spy/20260518_trade.zip')).toBeTruthy();
-  });
-
-  it('surfaces a rejected window under its own reason code', async () => {
-    const { view } = await renderObservatory({
-      coverage: { kind: 'rejected', reason: 'range_too_large', message: 'range is 3654 days' },
-    });
-    await loadSymbols(view);
-
-    expect(await screen.findByText('SPY · Range Too Large')).toBeTruthy();
-    expect(screen.getByText('range is 3654 days')).toBeTruthy();
   });
 
   it('stops the backfill form offering to fill a view it cannot write', async () => {

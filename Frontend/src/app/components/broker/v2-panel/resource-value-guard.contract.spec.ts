@@ -32,8 +32,7 @@
  *
  * Known limitation: a textual check, not an Angular-expression or TypeScript
  * parse (the same class of limitation `lane-fence-freeze.contract.spec.ts`
- * and `eyebrow-heading-retirement.contract.spec.ts` document for their own
- * scans). A template read passes when `<identifier>.hasValue()` is on the
+ * documents for its own scan). A template read passes when `<identifier>.hasValue()` is on the
  * SAME source line — true for every binding in this directory today, all
  * one-line template expressions. A class read passes when
  * `<identifier>.hasValue()` appears earlier in the same statement (the text

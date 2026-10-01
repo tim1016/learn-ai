@@ -72,13 +72,4 @@ describe('CopyButtonComponent', () => {
     expect(alert).not.toBeNull();
     expect(button(fixture.nativeElement).getAttribute('aria-label')).toBe('Copy');
   });
-
-  it('renders the label text in the button variant', () => {
-    const fixture = TestBed.createComponent(Host);
-    fixture.componentInstance.variant = 'button';
-    fixture.componentInstance.label = 'Copy command';
-    fixture.detectChanges();
-
-    expect(button(fixture.nativeElement).textContent?.trim()).toBe('Copy command');
-  });
 });

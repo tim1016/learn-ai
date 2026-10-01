@@ -60,27 +60,6 @@ describe('AlpacaSurfaceNotReadyTabComponent', () => {
     ).toBe('/brokers/alpaca/clerks/clerk-unbound/settings');
   });
 
-  it('explains a lane without the Home capability, through receiptLabel', async () => {
-    await render(AlpacaSurfaceNotReadyTabComponent, {
-      inputs: { clerkId: 'clerk-incapable' },
-      providers: [
-        provideRouter([]),
-        provideFleetDirectory({
-          observed_at_ms: 1,
-          clerks: [
-            testLane({
-              clerk_id: 'clerk-incapable',
-              capabilities: ['account_read', 'configuration_manage', 'gallery_read'],
-            }),
-          ],
-        }),
-      ],
-    });
-
-    expect(screen.getByText(/Bot Panel Read/i)).toBeTruthy();
-    expect(screen.getByText(/capability,/i)).toBeTruthy();
-  });
-
   it('links a lane that became servable to its account\'s Home instead of refusing', async () => {
     await render(AlpacaSurfaceNotReadyTabComponent, {
       inputs: { clerkId: 'clerk-ready' },

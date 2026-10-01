@@ -7,7 +7,6 @@ import {
   inject,
   input,
   linkedSignal,
-  output,
   signal,
 } from '@angular/core';
 import { form } from '@angular/forms/signals';
@@ -98,8 +97,6 @@ export class AlpacaOrderEntryComponent {
   private readonly cancellationTarget = signal<ResourceTarget | null>(null);
   protected readonly submitError = signal<string | null>(null);
   protected readonly cancelling = signal(false);
-  /** Fires after any broker submission attempt, including uncertain outcomes. */
-  readonly submissionFinished = output();
 
   private nextId = 1;
 
@@ -257,7 +254,6 @@ export class AlpacaOrderEntryComponent {
       this.previewOpen.set(false);
     } finally {
       this.submitting.set(false);
-      this.submissionFinished.emit();
     }
   }
 
@@ -332,7 +328,6 @@ export class AlpacaOrderEntryComponent {
       this.submitError.set(this.submissionErrorMessage(err));
     } finally {
       this.cancelling.set(false);
-      this.submissionFinished.emit();
     }
   }
 
@@ -373,7 +368,6 @@ export class AlpacaOrderEntryComponent {
       this.submitError.set(this.submissionErrorMessage(err));
     } finally {
       this.submitting.set(false);
-      this.submissionFinished.emit();
     }
   }
 

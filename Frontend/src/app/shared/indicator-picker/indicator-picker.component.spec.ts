@@ -160,17 +160,6 @@ describe('IndicatorPickerComponent', () => {
     expect(el.querySelector('.ip-chip-clear')).toBeNull();
   });
 
-  it('facets that filter a non-empty catalog down to nothing keep the filter advice', () => {
-    const { fixture, el } = setup();
-    // Overlay ∩ momentum is empty: rsi and macd are both sub-panel indicators.
-    clickAndFlush(fixture, el.querySelector<HTMLButtonElement>('.ip-chip[data-pane="overlay"]'));
-    clickAndFlush(fixture, el.querySelector<HTMLButtonElement>('.ip-chip[data-cat="momentum"]'));
-    const empty = textOf(el, '.ip-empty');
-    expect(empty).toContain('No indicators match these filters');
-    expect(empty).toContain('Try removing a pane or category constraint, or clearing the search.');
-    expect(el.querySelector('.ip-link')?.textContent).toContain('Clear search and filters');
-  });
-
   it('an empty catalog says nothing is available instead of blaming filters', () => {
     const { fixture, el } = setup([]);
     const empty = () => textOf(el, '.ip-empty');

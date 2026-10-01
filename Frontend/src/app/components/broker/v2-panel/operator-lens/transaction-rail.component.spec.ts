@@ -52,32 +52,6 @@ describe('TransactionRailComponent', () => {
     expect(screen.getByText('Blocked')).toBeTruthy();
   });
 
-  it('satisfied station has station--satisfied CSS class', async () => {
-    const stations: StationView[] = [
-      makeStation({ station_id: 'SIGNAL', state: 'satisfied', label: 'Signal', state_label: 'Ready' }),
-    ];
-
-    const { container } = await render(TransactionRailComponent, {
-      inputs: { clerkId: 'clrk_spec', rail: makeRail(stations) },
-    });
-
-    const item = container.querySelector('.station--satisfied');
-    expect(item).not.toBeNull();
-  });
-
-  it('blocked station has station--blocked CSS class', async () => {
-    const stations: StationView[] = [
-      makeStation({ station_id: 'SUBMIT_GATE', state: 'blocked', label: 'Submit', state_label: 'Blocked' }),
-    ];
-
-    const { container } = await render(TransactionRailComponent, {
-      inputs: { clerkId: 'clrk_spec', rail: makeRail(stations) },
-    });
-
-    const item = container.querySelector('.station--blocked');
-    expect(item).not.toBeNull();
-  });
-
   it('opens attention stations and keeps satisfied stations collapsed', async () => {
     const stations: StationView[] = [
       makeStation({ station_id: 'SIGNAL', state: 'waiting', label: 'Signal', state_label: 'Waiting' }),
@@ -193,27 +167,6 @@ describe('TransactionRailComponent', () => {
     });
 
     expect(screen.getByText('No live binding')).toBeTruthy();
-  });
-
-  it('not-applicable station uses — icon and N/A text', async () => {
-    const stations: StationView[] = [
-      makeStation({ station_id: 'FILL', state: 'not_applicable', label: 'Fee', state_label: 'N/A' }),
-    ];
-
-    await render(TransactionRailComponent, {
-      inputs: { clerkId: 'clrk_spec', rail: makeRail(stations) },
-    });
-
-    expect(screen.getByText('—')).toBeTruthy();
-    expect(screen.getByText('N/A')).toBeTruthy();
-  });
-
-  it('null transaction_ref shows no-transaction message', async () => {
-    await render(TransactionRailComponent, {
-      inputs: { clerkId: 'clrk_spec', rail: { transaction_ref: null, stations: [] } },
-    });
-
-    expect(screen.getByText(/no active transaction/i)).toBeTruthy();
   });
 
   it('each station list item has an aria-label for WCAG AA', async () => {

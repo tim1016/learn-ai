@@ -615,16 +615,6 @@ export class StrategyBuilderComponent implements OnDestroy {
       }))
   );
 
-  weightedIv = computed(() => {
-    const params = this.enabledLegsParams();
-    if (params.length === 0) return 0.2;
-    const valid = params.filter(l => l.iv > 0);
-    if (valid.length === 0) return 0.2;
-    const totalWeight = valid.reduce((s, l) => s + l.premium * l.quantity, 0);
-    if (totalWeight <= 0) return valid.reduce((s, l) => s + l.iv, 0) / valid.length;
-    return valid.reduce((s, l) => s + l.iv * l.premium * l.quantity, 0) / totalWeight;
-  });
-
   // X-axis center: single-leg → strike, multi-leg → midpoint of min/max strikes.
   chartCenter = computed(() => {
     const enabledStrikes = this.legs()

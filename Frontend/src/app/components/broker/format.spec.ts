@@ -4,9 +4,6 @@ import {
   deltaAbsBand,
   diffBps,
   fmtBrokerExpiryDate,
-  fmtDurationRemaining,
-  fmtElapsedSince,
-  toleranceBand,
 } from './format';
 
 describe('fmtBrokerExpiryDate', () => {
@@ -16,28 +13,6 @@ describe('fmtBrokerExpiryDate', () => {
 
   it('returns a dash for absent expiry markers', () => {
     expect(fmtBrokerExpiryDate(null)).toBe('—');
-  });
-});
-
-describe('fmtDurationRemaining', () => {
-  it('renders a concise minute-and-second countdown', () => {
-    expect(fmtDurationRemaining(300_000)).toBe('5m 0s');
-    expect(fmtDurationRemaining(270_000)).toBe('4m 30s');
-    expect(fmtDurationRemaining(59_001)).toBe('1m 0s');
-    expect(fmtDurationRemaining(59_000)).toBe('59s');
-  });
-
-  it('renders expired when no freshness remains', () => {
-    expect(fmtDurationRemaining(0)).toBe('Expired');
-    expect(fmtDurationRemaining(-1)).toBe('Expired');
-  });
-});
-
-describe('fmtElapsedSince', () => {
-  it('renders concise elapsed freshness without deriving a domain state', () => {
-    expect(fmtElapsedSince(1_000, 43_000)).toBe('42s ago');
-    expect(fmtElapsedSince(1_000, 121_000)).toBe('2m ago');
-    expect(fmtElapsedSince(1_000, 3_601_000)).toBe('1h ago');
   });
 });
 
@@ -99,20 +74,5 @@ describe('deltaAbsBand', () => {
     expect(deltaAbsBand(-0.003)).toBe('green');
     expect(deltaAbsBand(-0.015)).toBe('yellow');
     expect(deltaAbsBand(-0.05)).toBe('red');
-  });
-});
-
-describe('diffBps and toleranceBand (kept for unbounded scalars)', () => {
-  it('toleranceBand still uses absolute magnitude consistently', () => {
-    expect(toleranceBand(50)).toBe('green');
-    expect(toleranceBand(-50)).toBe('green');
-    expect(toleranceBand(200)).toBe('yellow');
-    expect(toleranceBand(-200)).toBe('yellow');
-    expect(toleranceBand(201)).toBe('red');
-    expect(toleranceBand(-201)).toBe('red');
-  });
-
-  it('diffBps still returns null on a zero reference', () => {
-    expect(diffBps(0.1, 0)).toBeNull();
   });
 });

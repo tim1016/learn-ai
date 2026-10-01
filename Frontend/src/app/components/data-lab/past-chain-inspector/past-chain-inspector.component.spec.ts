@@ -114,24 +114,10 @@ describe('PastChainInspectorComponent', () => {
       expect(component.formatPrice(undefined)).toBe('—');
     });
 
-    it('formats change with sign', () => {
-      expect(component.formatChange(5.5)).toBe('+5.50');
-      expect(component.formatChange(-3.2)).toBe('-3.20');
-      expect(component.formatChange(null)).toBe('—');
-    });
-
     it('formats change percent with sign', () => {
       expect(component.formatChangePct(12.5)).toBe('+12.5%');
       expect(component.formatChangePct(-3.1)).toBe('-3.1%');
       expect(component.formatChangePct(null)).toBe('—');
-    });
-
-    it('formats volume with locale separators', () => {
-      const out = component.formatVolume(1000000);
-      expect(out).toContain('1');
-      expect(out).toContain('000');
-      expect(component.formatVolume(null)).toBe('—');
-      expect(component.formatVolume(undefined)).toBe('—');
     });
   });
 

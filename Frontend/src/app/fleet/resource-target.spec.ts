@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { accountUrl, laneUrl } from './clerk-scoped-url';
 import {
   commandBodyOf,
   commandContextOf,
@@ -54,9 +53,7 @@ describe('resource targets', () => {
     const lane = resourceTarget('alpaca', 'clerk-1');
 
     expect(() => commandContextOf(lane)).toThrow(/frozen capability/i);
-    expect(() => accountUrl(lane, '/bots')).toThrow(/account ID/i);
     expect(() => resourceTarget('alpaca', 'clerk-1', { accountId: '' })).toThrow(/account ID/i);
-    expect(laneUrl(lane, '/account')).toBe('/api/brokers/alpaca/clerks/clerk-1/account');
   });
 
   it('treats an identical address re-derived as a new object as the same target', () => {

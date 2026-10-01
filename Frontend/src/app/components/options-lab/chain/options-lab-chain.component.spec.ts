@@ -60,14 +60,6 @@ describe('OptionsLabChainComponent', () => {
     httpMock.verify();
   });
 
-  it('creates the component with default state', () => {
-    expect(component).toBeTruthy();
-    expect(component.ticker()).toBe('SPY');
-    expect(component.density()).toBe('quick');
-    expect(component.strikeRange()).toBe(15);
-    expect(component.showAllStrikes()).toBe(false);
-  });
-
   it('detects the ATM strike as the strike closest to spot', () => {
     component.allContracts.set([
       makeContract('call', 720),

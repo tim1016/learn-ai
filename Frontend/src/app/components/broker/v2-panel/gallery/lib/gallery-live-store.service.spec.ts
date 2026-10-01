@@ -280,63 +280,6 @@ describe('GalleryLiveStore', () => {
       expect(store.status()).toBe('stale');
     });
 
-    // #2330 / #2326: a hung frame build leaves the stream open and silent.
-    it('reads stale once the newest frame ages past twice the poll interval, and live again on a fresh frame', async () => {
-      vi.useFakeTimers();
-      const store = TestBed.inject(GalleryLiveStore);
-      const http = TestBed.inject(HttpTestingController);
-
-      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
-      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot').flush(snapshot());
-      await starting;
-      const source = StubEventSource.instances[0];
-      source.emit('open');
-      source.emit('snapshot', JSON.stringify(snapshot({ surface_version: 2 })));
-      expect(store.status()).toBe('live');
-
-      // The transport stays open, but no frame arrives.
-      await vi.advanceTimersByTimeAsync(9_000);
-      expect(store.status()).toBe('live');
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(store.status()).toBe('stale');
-
-      source.emit(
-        'update',
-        JSON.stringify({
-          surface_version: 3,
-          as_of_ms: Date.now(),
-          symbols: [],
-          markers_delta: {},
-          bots_delta: [bot('sid-1')],
-          removed_sids: [],
-        }),
-      );
-      expect(store.status()).toBe('live');
-    });
-
-    // #2403 review: frame age is local elapsed time since receipt, so a
-    // browser clock skewed from the lane's neither flags fresh frames nor
-    // hides a silent stream.
-    it.each([
-      ['ahead of', -60_000],
-      ['behind', 60_000],
-    ])('measures frame age from receipt when the browser clock is 60 s %s the lane', async (_label, skewMs) => {
-      vi.useFakeTimers();
-      const store = TestBed.inject(GalleryLiveStore);
-      const http = TestBed.inject(HttpTestingController);
-
-      const starting = store.start('alpaca', 'clrk_spec', 'PA-1');
-      http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA-1/gallery/snapshot').flush(snapshot());
-      await starting;
-      const source = StubEventSource.instances[0];
-      source.emit('open');
-      source.emit('snapshot', JSON.stringify(snapshot({ surface_version: 2, as_of_ms: Date.now() + skewMs })));
-      expect(store.status()).toBe('live');
-
-      await vi.advanceTimersByTimeAsync(11_000);
-      expect(store.status()).toBe('stale');
-    });
-
     it('drops a malformed frame without disturbing status, and still applies the next good frame', async () => {
       const store = TestBed.inject(GalleryLiveStore);
       const http = TestBed.inject(HttpTestingController);

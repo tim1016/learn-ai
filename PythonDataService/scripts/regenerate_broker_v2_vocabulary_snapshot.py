@@ -3,26 +3,17 @@
 The broker-v2 bot control panel (spec §13) renders a **closed** operator
 vocabulary authored on the Python side in
 ``app/broker/v2panel/vocabulary.py`` (``ALL_VOCABULARY_CODES``). This script
-writes **two identical** JSON snapshot files — one in the PythonDataService
-tree, one in the Frontend tree — so the two test containers (which do not share
-a working tree) each lock against their own copy:
+writes its JSON snapshot in the PythonDataService tree. Pytest
+``tests/broker/v2panel/test_vocabulary_snapshot.py`` asserts the live
+``ALL_VOCABULARY_CODES`` set equals the snapshot AND that every code carries
+non-trivial server-authored copy. Failing means a code was added (or copy
+omitted) without regenerating.
 
-- pytest ``tests/broker/v2panel/test_vocabulary_snapshot.py`` asserts the live
-  ``ALL_VOCABULARY_CODES`` set equals the Python-tree snapshot AND that every
-  code carries non-trivial server-authored copy. Failing means a code was added
-  (or copy omitted) without regenerating.
-
-- Vitest ``broker-v2-copy-contract.spec.ts`` loads the Frontend-tree
-  snapshot and asserts every code carries a non-empty server-authored label
-  and explanation. There is no client-side copy map: the server authors it.
-
-A CI job (``broker-v2-vocabulary-contract``) regenerates both files from live
-source on every PR and diffs them against the committed copies, so a hand-edit
-to either file — even one applied identically to both, which neither file's
-own drift alone would catch — fails CI. ``test_vocabulary_snapshot.py``
-additionally asserts the two committed copies are byte-identical to each other
-and that every code's committed ``copy`` matches live ``OPERATOR_COPY``
-exactly, not merely non-trivially.
+A CI job (``broker-v2-vocabulary-contract``) regenerates the file from live
+source on every PR and diffs it against the committed copy, so a hand-edit
+fails CI. ``test_vocabulary_snapshot.py`` additionally asserts that every
+code's committed ``copy`` matches live ``OPERATOR_COPY`` exactly, not merely
+non-trivially.
 
 Usage::
 
@@ -54,28 +45,16 @@ _PYTHON_SNAPSHOT_PATH: Final[Path] = (
     / "v2panel"
     / "vocabulary.snapshot.json"
 )
-_FRONTEND_SNAPSHOT_PATH: Final[Path] = (
-    _REPO_ROOT
-    / "Frontend"
-    / "src"
-    / "app"
-    / "components"
-    / "broker"
-    / "v2-panel"
-    / "lib"
-    / "broker-v2-vocabulary.snapshot.json"
-)
 
 _SNAPSHOT_COMMENT: Final[str] = (
     "Snapshot of the closed broker-v2 panel operator vocabulary "
     "(phases, desired states, duty-outcome kinds, hold reasons, "
     "reconciliation verdicts, channel states, station ids, station "
     "states, action ids). Deploy starts a fresh identity; Stop is terminal. "
-    "Two test surfaces lock against this file. Pytest "
+    "Pytest "
     "PythonDataService/tests/broker/v2panel/test_vocabulary_snapshot.py "
-    "reads the Python-tree copy and asserts equality with the live "
+    "asserts equality with the live "
     "ALL_VOCABULARY_CODES frozenset and non-trivial copy for every code. "
-    "The Frontend Vitest surface reads the Frontend-tree copy. "
     "Adding a code requires (a) updating vocabulary.py and (b) re-running "
     "PythonDataService/scripts/regenerate_broker_v2_vocabulary_snapshot.py. "
     "Either missing step fails a parity test."
@@ -109,20 +88,16 @@ def _write(path: Path, snapshot: dict[str, object]) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def write_snapshots() -> tuple[Path, Path]:
-    """Write both snapshot files. Returns the paths written."""
-    snapshot = build_snapshot()
-    _write(_PYTHON_SNAPSHOT_PATH, snapshot)
-    _write(_FRONTEND_SNAPSHOT_PATH, snapshot)
-    return _PYTHON_SNAPSHOT_PATH, _FRONTEND_SNAPSHOT_PATH
+def write_snapshots() -> Path:
+    """Write the snapshot file. Returns the path written."""
+    _write(_PYTHON_SNAPSHOT_PATH, build_snapshot())
+    return _PYTHON_SNAPSHOT_PATH
 
 
 def main() -> int:
-    """CLI entry point — regenerate both snapshot copies."""
+    """CLI entry point — regenerate the snapshot."""
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    py_path, fe_path = write_snapshots()
-    logger.info("wrote snapshot", extra={"path": str(py_path)})
-    logger.info("wrote snapshot", extra={"path": str(fe_path)})
+    logger.info("wrote snapshot", extra={"path": str(write_snapshots())})
     return 0
 
 

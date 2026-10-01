@@ -151,11 +151,6 @@ export class BrokerOptionsSurfaceComponent {
   readonly underlyingPrice = computed(
     () => this.latestSnapshot()?.underlying_price ?? this.spotPrice(),
   );
-  readonly snapshotAge = computed(() => {
-    const snap = this.latestSnapshot();
-    if (snap === null) return null;
-    return Date.now() - snap.as_of_ms;
-  });
 
   /** Currently-rendered grid: sorted unique strikes and expiries. */
   readonly axesY = computed<number[]>(() => {
@@ -582,6 +577,3 @@ function formatZ(value: number, metric: ZMetric): string {
   if (metric === 'gamma') return value.toFixed(6);
   return value.toFixed(4);
 }
-
-// Re-export for tests.
-export const __TEST__ = { pickStrikesAroundAtm, intersectAll };

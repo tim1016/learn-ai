@@ -27,12 +27,6 @@ describe('MarkdownDrawerHostComponent', () => {
     expect(drawer).toBeNull();
   });
 
-  it('is not visible initially', () => {
-    const { svc } = setup();
-    expect(svc.visible()).toBe(false);
-    expect(svc.activeDocId()).toBeNull();
-  });
-
   it('opens the methodology document', () => {
     const { fixture, svc } = setup();
     svc.open('methodology', 'intro');

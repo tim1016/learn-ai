@@ -138,11 +138,6 @@ describe('MonteCarloSectionComponent', () => {
     });
   });
 
-  it('shows empty-state copy when no MCs exist', () => {
-    const text: string = fixture.nativeElement.textContent ?? '';
-    expect(text).toContain('No Monte Carlos yet');
-  });
-
   it('runReshuffle calls runReshuffleFromRun, refreshes the list, and remembers the new mc_id', async () => {
     service.listMonteCarlos.mockClear();
     await component.runReshuffle();

@@ -3,7 +3,7 @@
     <li class="channel" [class.channel--attention]="channel.state !== 'healthy'">
       <div class="channel__heading">
         <app-channel-health-dot [state]="channel.state" />
-        <strong>{{ channelName(channel) }}</strong>
+        <strong>{{ channel.name }}</strong>
         <span class="channel__state">{{ channel.label }}</span>
       </div>
       <p class="channel__explanation">{{ channel.explanation }}</p>

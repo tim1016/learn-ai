@@ -36,21 +36,6 @@ export interface BundleComponentStatus {
   status: 'queued' | 'fetching' | 'done';
 }
 
-/**
- * Per-contract progress within a bundling component (today only the
- * options-companion builder fans out enough requests to need this — each
- * contract is one Polygon call). The frontend renders this as
- * "options_calls.csv · contract 47 · O:SPY260417C00705000".
- */
-export interface BundleComponentProgress {
-  /** Filename in the components list, e.g. "options_calls.csv". */
-  component: string;
-  /** 1-based count of items processed so far in that component. */
-  step: number;
-  /** Optional human-readable identifier of the item just being processed. */
-  label?: string;
-}
-
 export interface RunResult {
   /** Job id minted by the .NET layer (formerly "session_id"). */
   sessionId: string;
@@ -116,17 +101,9 @@ export class RunSessionService implements RunDockSource {
   private readonly _sessionId = signal<string | null>(null);
   private readonly _chunks = signal<readonly ChunkStatus[]>([]);
   private readonly _bundleComponents = signal<readonly BundleComponentStatus[]>([]);
-  private readonly _bundleProgress = signal<BundleComponentProgress | null>(null);
   private readonly _result = signal<RunResult | null>(null);
   private readonly _error = signal<RunError | null>(null);
-  private readonly _alsoZip = signal(false);
   private readonly _startedAt = signal<number | null>(null);
-  private readonly _processingIndicators = signal<{ indicatorCount: number; barCount: number } | null>(null);
-  /** Captured from the worker's ``fetch_complete`` event — the headline
-   *  numbers for the run (raw bars Polygon returned, post-processed bars,
-   *  indicator-column count). Persists through the bundle phase and into
-   *  ``done`` so the run-card can show what the dataset.csv will hold. */
-  private readonly _fetchSummary = signal<{ rawBars: number; processedBars: number; indicatorColumns: number } | null>(null);
 
   /** Rolling FIFO log of every SSE event the run pipeline emits. Capped
    *  at RUN_LOG_MAX_LINES; entries persist across runs (the dock is a
@@ -146,18 +123,8 @@ export class RunSessionService implements RunDockSource {
   readonly sessionId = this._sessionId.asReadonly();
   readonly chunks = this._chunks.asReadonly();
   readonly bundleComponents = this._bundleComponents.asReadonly();
-  /** Live "step / label" within the component currently bundling (e.g.
-   *  options_calls.csv at contract 47). Null between components. */
-  readonly bundleProgress = this._bundleProgress.asReadonly();
   readonly result = this._result.asReadonly();
   readonly error = this._error.asReadonly();
-  readonly alsoZip = this._alsoZip.asReadonly();
-  /** Snapshot of the in-flight indicator computation phase, set when
-   *  the worker emits ``processing_indicators`` and cleared on
-   *  ``bundle_start``. The run-card surfaces it as a status line so
-   *  the gap between the last chunk and bundling isn't silent. */
-  readonly processingIndicators = this._processingIndicators.asReadonly();
-  readonly fetchSummary = this._fetchSummary.asReadonly();
   readonly log = this._log.asReadonly();
 
   /** Wipe the log. The dock's "Clear" button calls this; ordinary
@@ -291,10 +258,8 @@ export class RunSessionService implements RunDockSource {
    *  the ZIP has been triggered for download. */
   async start(payload: Record<string, unknown>, options?: { downloadOnComplete?: boolean }): Promise<void> {
     this.reset();
-    this._alsoZip.set(true);
     this._state.set('fetching');
     this._startedAt.set(Date.now());
-    this._processingIndicators.set(null);
     const ticker = (payload as { ticker?: string }).ticker ?? '?';
     const fromDate = (payload as { from_date?: string }).from_date ?? '?';
     const toDate = (payload as { to_date?: string }).to_date ?? '?';
@@ -355,13 +320,9 @@ export class RunSessionService implements RunDockSource {
     this._sessionId.set(null);
     this._chunks.set([]);
     this._bundleComponents.set([]);
-    this._bundleProgress.set(null);
     this._result.set(null);
     this._error.set(null);
-    this._alsoZip.set(false);
     this._startedAt.set(null);
-    this._processingIndicators.set(null);
-    this._fetchSummary.set(null);
     this._completionEnvelope = null;
   }
 
@@ -491,7 +452,6 @@ export class RunSessionService implements RunDockSource {
         const raw = (event['raw_bars'] as number) ?? 0;
         const processed = (event['processed_bars'] as number) ?? 0;
         const cols = (event['indicator_columns'] as number) ?? 0;
-        this._fetchSummary.set({ rawBars: raw, processedBars: processed, indicatorColumns: cols });
         this._state.set('bundling');
         this._appendLog(
           'success',
@@ -503,8 +463,6 @@ export class RunSessionService implements RunDockSource {
       case 'bundle_start': {
         const components = (event['components'] as string[]) ?? [];
         this._bundleComponents.set(components.map((name) => ({ name, status: 'queued' })));
-        this._bundleProgress.set(null);
-        this._processingIndicators.set(null);
         this._appendLog('info', '▸', `bundling ${components.length} component${components.length === 1 ? '' : 's'}: ${components.join(', ')}`);
         break;
       }
@@ -520,7 +478,6 @@ export class RunSessionService implements RunDockSource {
         const component = event['component'] as string;
         const step = event['step'] as number;
         const label = event['label'] as string | undefined;
-        this._bundleProgress.set({ component, step, label });
         this._appendLog('info', '·', `${component} step ${step}${label ? ` · ${label}` : ''}`);
         break;
       }
@@ -529,16 +486,12 @@ export class RunSessionService implements RunDockSource {
         this._bundleComponents.update((list) =>
           list.map((c) => (c.name === name ? { ...c, status: 'done' } : c)),
         );
-        if (this._bundleProgress()?.component === name) {
-          this._bundleProgress.set(null);
-        }
         this._appendLog('success', '✓', `${name} bundled`);
         break;
       }
       case 'processing_indicators': {
         const count = event['indicator_count'] as number;
         const bars = event['bar_count'] as number;
-        this._processingIndicators.set({ indicatorCount: count, barCount: bars });
         this._appendLog('info', 'ⓘ', `processing ${count} indicator${count === 1 ? '' : 's'} × ${bars.toLocaleString()} bars`);
         break;
       }

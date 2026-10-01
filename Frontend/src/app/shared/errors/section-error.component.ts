@@ -37,11 +37,6 @@ import { formatErrorDetails } from './error-display';
             </button>
           }
         </div>
-        @if (info.mathRef; as ref) {
-          <p class="section-error-mathref">
-            <a [href]="ref" target="_blank" rel="noopener">View math sources of truth ↗</a>
-          </p>
-        }
         @if (details()) {
           <details class="section-error-details">
             <summary>Show technical details</summary>

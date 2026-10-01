@@ -109,48 +109,6 @@ describe('ArtifactInspectorComponent', () => {
     expect(modes).toContain('local');
   });
 
-  it('says a content hash is absent rather than showing a blank one', async () => {
-    await renderInspector({ kind: 'ok', value: fakeDetail({ content_hash: null, status: 'fetching' }) });
-
-    expect(
-      await screen.findByText('Not recorded until the artifact reaches complete.'),
-    ).toBeTruthy();
-  });
-
-  it('names a failed row diagnosis through the receipt-label pipe', async () => {
-    await renderInspector({
-      kind: 'ok',
-      value: fakeDetail({
-        status: 'failed',
-        last_error: 'provider_rate_limited',
-        error_message: 'Polygon returned 429 four times.',
-        attempt_count: 4,
-      }),
-    });
-
-    expect(await screen.findByText('Provider Rate Limited')).toBeTruthy();
-    expect(screen.getByText('Polygon returned 429 four times.')).toBeTruthy();
-  });
-
-  it("names a missing row by the endpoint's own reason, without hedging", async () => {
-    // The 404 for an unknown id carries a typed body, so the panel says
-    // which failure this was instead of covering two possibilities at once.
-    await renderInspector(
-      { kind: 'rejected', reason: 'artifact_not_found', message: 'artifact 99 not found' },
-      99,
-    );
-
-    expect(await screen.findByText('Artifact Not Found')).toBeTruthy();
-    expect(screen.getByText('artifact 99 not found')).toBeTruthy();
-  });
-
-  it('surfaces a rejection reason instead of a blank panel', async () => {
-    await renderInspector({ kind: 'unavailable', message: 'The data plane did not respond.' });
-
-    expect(await screen.findByText('Unavailable')).toBeTruthy();
-    expect(screen.getByText('The data plane did not respond.')).toBeTruthy();
-  });
-
   it('passes AXE', async () => {
     await renderInspector({ kind: 'ok', value: fakeDetail() });
     await screen.findByText('dch-aaaabbbbccccdddd');

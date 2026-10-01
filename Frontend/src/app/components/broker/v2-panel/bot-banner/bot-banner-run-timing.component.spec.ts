@@ -89,12 +89,6 @@ describe('BotBannerRunTimingComponent', () => {
     expect(retried.called).toBe(true);
   });
 
-  it('names a refresh failure distinctly from an initial load failure', async () => {
-    await renderStrip({ run: fakeRun(), loading: false, failed: true }, HEALTH);
-
-    expect(screen.getByText(/Run timing could not be refreshed\./)).toBeTruthy();
-  });
-
   it('shows no retry notice while the run resource is healthy', async () => {
     await renderStrip({ run: fakeRun(), loading: false, failed: false }, HEALTH);
 

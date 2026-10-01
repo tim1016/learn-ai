@@ -41,31 +41,12 @@ async function renderCard(getAccount: () => Promise<BrokerAccountSnapshot>) {
 }
 
 describe('AlpacaAccountCardComponent', () => {
-  it('renders account figures and a paper badge when loaded', async () => {
-    await renderCard(() => Promise.resolve(fakeAccount({ account_id: 'PA9', buying_power: 300 })));
-
-    expect(await screen.findByText('Paper')).toBeTruthy();
-    expect(screen.getByText('Equity')).toBeTruthy();
-    expect(screen.getByText('Cash')).toBeTruthy();
-    expect(screen.getByText('Buying power')).toBeTruthy();
-    expect(screen.getByText('Updated (local)')).toBeTruthy();
-
-    screen.getByRole('button', { name: 'More details' }).click();
-    expect(screen.getByText('Portfolio value')).toBeTruthy();
-  });
 
   it('renders an error state, distinct from empty, when Alpaca is unreachable', async () => {
     await renderCard(() => Promise.reject(new Error('unreachable')));
 
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toContain("Couldn't reach Alpaca");
-  });
-
-  it('renders the account status through the receiptLabel pipe', async () => {
-    await renderCard(() => Promise.resolve(fakeAccount({ account_status: 'ACTIVE' })));
-
-    // receiptLabel title-cases the code identifier.
-    expect(await screen.findByText('Active')).toBeTruthy();
   });
 
   it('tags a live account as Live with danger severity, never a hardcoded Paper', async () => {

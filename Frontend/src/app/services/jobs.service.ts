@@ -152,8 +152,6 @@ export class JobsService {
     this.jobs().filter(j => !TERMINAL.includes(j.status)),
   );
 
-  readonly hasActive = computed(() => this.activeJobs().length > 0);
-
   /** True once the startup `/api/jobs?active=true` snapshot has been applied:
    *  from then on, a job absent from `activeJobs()` is genuinely not running
    *  rather than not yet known (#1954). A snapshot that could not be fetched

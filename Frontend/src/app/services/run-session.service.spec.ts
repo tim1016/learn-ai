@@ -195,74 +195,6 @@ describe('RunSessionService', () => {
     await done;
   });
 
-  it('bundle_progress populates bundleProgress and clears it when its parent component finishes', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(new Blob(['x']), { status: 200 }),
-    );
-    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:fake');
-    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
-    vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
-      if (tag === 'a') return { href: '', download: '', click: vi.fn() } as unknown as HTMLAnchorElement;
-      return document.createElement(tag);
-    }) as typeof document.createElement);
-
-    const { done, source } = await startAndGrabSource(service, jobsMock);
-
-    source.dispatch({ type: 'job.started' });
-    source.dispatch({ type: 'chunk_plan', total: 1 });
-    source.dispatch({ type: 'chunk_start', index: 1, total: 1, from: 'a', to: 'b' });
-    source.dispatch({ type: 'chunk_done', index: 1, total: 1, bars_returned: 100 });
-    source.dispatch({ type: 'fetch_complete' });
-    source.dispatch({ type: 'job.phase', phase: 'bundling' });
-    source.dispatch({ type: 'bundle_start', components: ['options_calls.csv', 'metadata.csv'] });
-    source.dispatch({
-      type: 'bundle_progress',
-      component: 'options_calls.csv',
-      step: 47,
-      label: 'O:SPY260417C00705000',
-    });
-    source.dispatch({ type: 'bundle_component_done', name: 'options_calls.csv' });
-    source.dispatch({ type: 'bundle_component_done', name: 'metadata.csv' });
-    source.dispatch({
-      type: 'job.completed',
-      download_url: '/api/jobs/sess-1/download',
-      filename: 'SPY.zip',
-      size_bytes: 2048,
-    });
-
-    await done;
-
-    expect(service.bundleProgress()).toBeNull();
-    expect(service.bundleComponents().every((c) => c.status === 'done')).toBe(true);
-    expect(service.state()).toBe('done');
-  });
-
-  it('bundle_progress for one component does not clear when a different component finishes', async () => {
-    const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'SPY' }, { downloadOnComplete: false });
-
-    source.dispatch({ type: 'job.started' });
-    source.dispatch({ type: 'chunk_plan', total: 1 });
-    source.dispatch({ type: 'chunk_start', index: 1, total: 1, from: 'a', to: 'b' });
-    source.dispatch({ type: 'chunk_done', index: 1, total: 1, bars_returned: 1 });
-    source.dispatch({ type: 'fetch_complete' });
-    source.dispatch({ type: 'bundle_start', components: ['options_calls.csv', 'metadata.csv'] });
-    source.dispatch({
-      type: 'bundle_progress',
-      component: 'options_calls.csv',
-      step: 12,
-    });
-    source.dispatch({ type: 'bundle_component_done', name: 'metadata.csv' });
-
-    const progress = service.bundleProgress();
-    expect(progress).not.toBeNull();
-    if (!progress) throw new Error('Expected bundle progress');
-    expect(progress.component).toBe('options_calls.csv');
-    expect(progress.step).toBe(12);
-
-    source.dispatch({ type: 'job.cancelled', reason: 'test cleanup' });
-    await done;
-  });
-
   it('bundle_component_start flips a component to fetching and bundle_component_done flips it to done', async () => {
     const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'SPY' }, { downloadOnComplete: false });
 
@@ -283,24 +215,6 @@ describe('RunSessionService', () => {
     const completedNews = service.bundleComponents().find((c) => c.name === 'news.csv');
     if (!completedNews) throw new Error('Expected the news bundle component');
     expect(completedNews.status).toBe('done');
-
-    source.dispatch({ type: 'job.cancelled', reason: 'test cleanup' });
-    await done;
-  });
-
-  it('processing_indicators populates the indicator-phase signal and bundle_start clears it', async () => {
-    const { done, source } = await startAndGrabSource(service, jobsMock, { ticker: 'SPY' }, { downloadOnComplete: false });
-
-    source.dispatch({ type: 'job.started' });
-    source.dispatch({ type: 'chunk_plan', total: 1 });
-    source.dispatch({ type: 'chunk_done', index: 1, total: 1, bars_returned: 100 });
-    expect(service.processingIndicators()).toBeNull();
-
-    source.dispatch({ type: 'processing_indicators', indicator_count: 7, bar_count: 8000 });
-    expect(service.processingIndicators()).toEqual({ indicatorCount: 7, barCount: 8000 });
-
-    source.dispatch({ type: 'bundle_start', components: ['dataset.csv'] });
-    expect(service.processingIndicators()).toBeNull();
 
     source.dispatch({ type: 'job.cancelled', reason: 'test cleanup' });
     await done;

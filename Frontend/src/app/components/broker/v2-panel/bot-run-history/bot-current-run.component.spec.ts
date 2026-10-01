@@ -108,15 +108,6 @@ describe('BotCurrentRunComponent', () => {
     expect(screen.queryByText('Loading run evidence…')).toBeNull();
   });
 
-  it('sends earlier runs to History, narrowed to this bot, instead of paging through them one at a time', async () => {
-    await renderRuns({ state: state(), feedContinuity: CONTINUITY });
-
-    expect(screen.getByRole('link', { name: 'History' }).getAttribute('href'))
-      .toBe('/brokers/alpaca/clerks/clrk_spec/history?account=clrk_spec&bot=sid-001');
-    expect(screen.queryByRole('button', { name: 'Previous Runs' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Older run' })).toBeNull();
-  });
-
   it('offers a retry when the current run could not be read', async () => {
     const { fixture } = await renderRuns({ state: state({ run: null, failed: true }), feedContinuity: CONTINUITY });
     let retried = 0;
