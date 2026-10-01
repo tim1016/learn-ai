@@ -21,7 +21,7 @@ const QUANTLIB_PRICE_QUERY = `
     $volatility: Decimal!
     $expirationDate: String!
     $optionType: String!
-    $riskFreeRate: Decimal = 0.05
+    $riskFreeRate: Decimal
     $evaluationDate: String
     $dividendYield: Decimal = 0
     $engine: String = "analytic_bs"
@@ -84,7 +84,7 @@ export class QuantLibService {
             volatility: params.volatility,
             expirationDate: params.expirationDate,
             optionType: params.optionType,
-            riskFreeRate: params.riskFreeRate ?? 0.05,
+            riskFreeRate: params.riskFreeRate ?? null,
             evaluationDate: params.evaluationDate ?? null,
             dividendYield: params.dividendYield ?? 0,
             engine: params.engine ?? this.selectedEngine(),

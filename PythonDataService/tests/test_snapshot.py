@@ -138,3 +138,26 @@ async def test_snapshot_empty_chain(client):
     assert data["success"] is True
     assert data["count"] == 0
     assert len(data["contracts"]) == 0
+
+
+@pytest.mark.anyio
+async def test_snapshot_carries_the_rate_when_there_is_no_spot(client):
+    """Pricing Lab and the Strategy Builder price at the snapshot's rate, so it is never missing (#2764)."""
+    mock_result = {
+        "underlying": {"ticker": "AAPL", "price": 0, "change": 0, "change_percent": 0},
+        "contracts": [],
+    }
+
+    with (
+        patch("app.routers.snapshot.polygon_client.list_snapshot_options_chain", return_value=mock_result),
+        patch(
+            "app.services.rate_dividend_service.get_risk_free_rate_and_source", return_value=(0.0371, "FRED")
+        ) as fred_rate,
+    ):
+        response = await client.post("/api/snapshot/options-chain", json={"underlying_ticker": "AAPL"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert (data["risk_free_rate"], data["rate_source"]) == (0.0371, "FRED")
+    assert (data["dividend_yield"], data["dividend_source"]) == (None, None)
+    fred_rate.assert_called_once_with(dte_days=30, observation_date=None)

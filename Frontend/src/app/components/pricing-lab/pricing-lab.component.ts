@@ -144,7 +144,8 @@ export class PricingLabComponent implements OnDestroy {
     void this.fetchExpirations();
   }
 
-  readonly riskFreeRate = signal(0.05);
+  /** Empty sends no rate, so Python prices at its one default (#2764). A chain load fills Python's live rate. */
+  readonly riskFreeRate = signal<number | null>(null);
   readonly spotRangePct = signal(20);
 
   // ── Loading states ───────────────────────────────────────────
@@ -238,9 +239,10 @@ export class PricingLabComponent implements OnDestroy {
     const iv = contract.impliedVolatility;
     const strike = contract.strikePrice;
     const optType = contract.contractType as 'call' | 'put';
-    if (iv && strike && optType) {
+    // Price the overlay at the rate the server priced at, never at a rate of its own (#2764).
+    const r = result.riskFreeRate;
+    if (iv && strike && optType && r != null) {
       const T = result.timeToExpiryYears;
-      const r = this.riskFreeRate();
       if (T > 0) {
         const rangePct = this.spotRangePct() / 100;
         const spotMin = spot * (1 - rangePct);
@@ -363,7 +365,7 @@ export class PricingLabComponent implements OnDestroy {
       // Auto-populate the riskFreeRate signal from the FRED-sourced rate
       // returned by the snapshot. User can still override via UI.
       // (Step 8 of IV-RV alignment.)
-      if (snap.riskFreeRate != null && snap.riskFreeRate > 0) {
+      if (snap.riskFreeRate != null) {
         this.riskFreeRate.set(snap.riskFreeRate);
       }
       this.allContracts.set(snap.contracts ?? []);
@@ -424,7 +426,7 @@ export class PricingLabComponent implements OnDestroy {
           volatility: iv,
           expirationDate: exp,
           optionType: optType,
-          riskFreeRate: this.riskFreeRate(),
+          riskFreeRate: this.riskFreeRate() ?? undefined,
           spotMin: spot * (1 - rangePct),
           spotMax: spot * (1 + rangePct),
           numPoints: 100,

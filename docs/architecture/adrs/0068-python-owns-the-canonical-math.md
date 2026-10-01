@@ -36,7 +36,7 @@ Exception 1 covers the Strategy Builder only. Pricing Lab (`Frontend/src/app/com
 
 - A comment that justifies a duplicate cites this ADR, never a rule file.
 - When a provenance block is wrong, the fix is to the block itself, because no registry exists to correct instead.
-- Math that is still outside Python and not in the table is non-conformance, not an exception. This covers the dead Portfolio cascade's FIFO lots and statistics, and the hardcoded risk-free constants (`0.043` and `0.05`) in .NET and Angular. #2747 lists it, and it is tracked as issues under ADR 0039 Decision 1. It does not widen the table.
+- Math that is still outside Python and not in the table is non-conformance, not an exception. This covers the dead Portfolio cascade's FIFO lots and statistics. #2747 lists it, and it is tracked as issues under ADR 0039 Decision 1. It does not widen the table.
 - The owed parity tests are follow-up issues from #2747. Until each lands, its exception stands on its stated reason, and the missing proof is visible in the table.
 
 ## Considered and rejected

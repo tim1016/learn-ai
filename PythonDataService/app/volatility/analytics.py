@@ -6,6 +6,11 @@ Formula: Risk reversal = IV(call, Δ=0.25) − IV(put, Δ=0.25); butterfly = (IV
 Reference: Standard volatility market conventions for risk-reversal and butterfly quoting (practitioner standard; see Hull §20 for smile metrics).
 Canonical implementation: app/volatility/analytics.py
 Validated against: NONE — pending (no golden fixture)
+
+Formula (parity forward): F = K + (C − P)·e^{rT}, from European put-call parity C − P = (F − K)·e^{−rT}.
+Reference: European put-call parity (Hull, Options, Futures, and Other Derivatives, ch. 11).
+Canonical implementation: app/volatility/analytics.py::compute_put_call_parity_forward
+Validated against: tests/volatility/test_analytics.py::TestPutCallParityForward::test_put_call_parity_forward_is_the_bsm_forward_at_the_rate_passed (analytic BSM forward S·e^{rT}, atol=1e-9, rtol=0)
 """
 
 from __future__ import annotations
@@ -305,6 +310,7 @@ def compute_health_score(surface) -> HealthScore:
 
 def compute_put_call_parity_forward(
     option_records: list[dict],
+    rate: float,
 ) -> dict[float, float]:
     """
     Implied forward price from put-call parity: C - P = (F - K) * df.
@@ -314,6 +320,7 @@ def compute_put_call_parity_forward(
 
     Args:
         option_records: List of dicts with keys: strike, ttm, option_price, is_call
+        rate: Continuously-compounded risk-free rate the chain was priced at
 
     Returns:
         Dictionary mapping ttm -> implied_forward
@@ -338,7 +345,6 @@ def compute_put_call_parity_forward(
 
             cp_diff = call_price - put_price
 
-            rate = 0.05
             df = math.exp(-rate * ttm)
 
             if abs(df) > 1e-10:

@@ -48,4 +48,4 @@ the right one explicitly.
 - **No math in C# or TypeScript.** The .NET resolvers are passthroughs; the Angular code is rendering. See `CLAUDE.md` § 5.
 - **No new BS price formula** in any other Python file. Use `bs_european_price`.
 - **No new IV solver.** Use `implied_volatility` from `app/volatility/solver.py`. If it can't handle your case, fix it there or add a documented sibling with a clear name (`implied_volatility_american`, etc.) — never a duplicate.
-- **No risk-free rate constants** scattered through service modules. Use `app/services/fred_service.get_risk_free_rate(dte_days, observation_date)`. The one remaining `DEFAULT_RISK_FREE_RATE = 0.043` in `iv_builder.py` is a function-default fallback for tests; every production call site overrides it.
+- **No risk-free rate constants** scattered through service modules. Use `app/services/fred_service.get_risk_free_rate(dte_days, observation_date)` for the live rate. Where a surface needs a default, it reads the one constant, `app/services/risk_free_rate.py::DEFAULT_RISK_FREE_RATE`, which is also FRED's fallback. .NET and Angular never restate it; they omit the rate and let Python fill it (#2764).

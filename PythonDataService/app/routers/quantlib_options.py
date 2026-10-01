@@ -15,6 +15,7 @@ from app.services.quantlib_pricer import (
     PricingEngine,
     price_option,
 )
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -30,7 +31,9 @@ class QuantLibPriceRequest(BaseModel):
 
     spot: float = Field(..., gt=0, description="Current underlying price")
     strike: float = Field(..., gt=0, description="Strike price")
-    risk_free_rate: float = Field(0.05, description="Annualized risk-free rate")
+    risk_free_rate: float = Field(
+        DEFAULT_RISK_FREE_RATE, description="Annualized risk-free rate (omit for the Python default)"
+    )
     volatility: float = Field(..., gt=0, description="Annualized IV (decimal, e.g. 0.20)")
     expiration_date: str = Field(..., description="Expiration date YYYY-MM-DD")
     option_type: str = Field(..., pattern="^(call|put)$", description="call or put")
@@ -136,7 +139,9 @@ class PricingCompareRequest(BaseModel):
     volatility: float = Field(..., gt=0, description="Annualized IV (decimal)")
     expiration_date: str = Field(..., description="Expiration date YYYY-MM-DD")
     option_type: str = Field(..., pattern="^(call|put)$")
-    risk_free_rate: float = Field(0.05)
+    risk_free_rate: float = Field(
+        DEFAULT_RISK_FREE_RATE, description="Annualized risk-free rate (omit for the Python default)"
+    )
     dividend_yield: float = Field(0.0, ge=0)
     evaluation_date: str | None = Field(None)
     spot_min: float | None = Field(None, description="Range start (default: spot * 0.80)")
@@ -171,6 +176,9 @@ class PricingCompareResponse(BaseModel):
     option_type: str
     expiration_date: str
     time_to_expiry_years: float
+    risk_free_rate: float = Field(
+        ..., description="The rate every curve was priced at, so a client overlay can price at the same one"
+    )
     models: list[PricingModelCurve]
     error: str | None = None
 
@@ -448,6 +456,7 @@ async def pricing_compare(request: PricingCompareRequest):
                 option_type=request.option_type,
                 expiration_date=request.expiration_date,
                 time_to_expiry_years=0,
+                risk_free_rate=request.risk_free_rate,
                 models=[],
                 error="Option has expired",
             )
@@ -534,6 +543,7 @@ async def pricing_compare(request: PricingCompareRequest):
             option_type=request.option_type,
             expiration_date=request.expiration_date,
             time_to_expiry_years=round(T, 6),
+            risk_free_rate=request.risk_free_rate,
             models=models,
         )
 
@@ -545,6 +555,7 @@ async def pricing_compare(request: PricingCompareRequest):
             option_type=request.option_type,
             expiration_date=request.expiration_date,
             time_to_expiry_years=0,
+            risk_free_rate=request.risk_free_rate,
             models=[],
             error=str(e),
         )

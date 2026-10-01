@@ -661,6 +661,9 @@ def build_options_companion_csvs(
         "multiplier": multiplier,
         "dte_distance": config.dte_distance,
         "strikes_each_side": config.strikes_each_side,
+        # The rates every IV and Greek was solved at, after defaults (#2764).
+        "risk_free_rate": config.risk_free_rate,
+        "dividend_yield": config.dividend_yield,
         "calls_rows": total_call_rows,
         "puts_rows": total_put_rows,
         "calls_files": sorted(p for p in slot_files if p.startswith("calls/")),

@@ -69,9 +69,16 @@ class TestTrailingTwelveMonth:
         polygon = FakePolygon([])
         assert get_trailing_12m_cash_dividends("XYZ", polygon, "2024-12-20") == 0.0
 
-    def test_polygon_error_returns_zero(self):
+    def test_polygon_error_is_not_a_non_payer(self):
         polygon = FakePolygon(RuntimeError("polygon down"))
-        assert get_trailing_12m_cash_dividends("SPY", polygon, "2024-12-20") == 0.0
+        with pytest.raises(RuntimeError, match="polygon down"):
+            get_trailing_12m_cash_dividends("SPY", polygon, "2024-12-20")
+
+    def test_a_failed_lookup_is_not_cached(self):
+        with pytest.raises(RuntimeError):
+            compute_dividend_yield("SPY", 590.0, FakePolygon(RuntimeError("polygon down")), "2024-12-20")
+        recovered = FakePolygon([{"cash_amount": 1.65, "ex_dividend_date": "2024-06-21"}])
+        assert compute_dividend_yield("SPY", 590.0, recovered, "2024-12-20") == pytest.approx(1.65 / 590.0, abs=1e-12)
 
     def test_skips_null_amounts(self):
         polygon = FakePolygon(
