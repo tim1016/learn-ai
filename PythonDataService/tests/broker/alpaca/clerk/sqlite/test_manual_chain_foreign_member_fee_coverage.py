@@ -19,6 +19,9 @@ from the account activity the fee evidence retains.
 from __future__ import annotations
 
 import json
+import logging
+import sqlite3
+from collections.abc import Sequence
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -26,12 +29,15 @@ from pathlib import Path
 import pytest
 
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
+from app.broker.alpaca.clerk.sqlite import bot_order_executions
+from app.broker.alpaca.clerk.sqlite.bot_order_executions import record_bot_order_executions
 from app.broker.alpaca.clerk.sqlite.custody_subjects import manual_operator_subject_id
 from app.broker.alpaca.clerk.sqlite.day_pnl import risk_fill_sequence
 from app.broker.alpaca.clerk.sqlite.economic_projection import SqliteEconomicProjectionReader
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.enter import EnterSubmission, accept_enter
 from app.broker.alpaca.clerk.sqlite.fee_evidence_sync import FeeEvidenceSync
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_order_evidence
+from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import EXECUTION_COVERAGE_CONFLICT_REASON_CODE
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
@@ -133,22 +139,45 @@ async def test_a_bot_entry_is_admitted_once_a_chain_member_first_seen_as_foreign
 # ── A bot order whose fill frame the stream never delivered ─────────────────
 
 
+def _bot_entry(
+    repo: ClerkSqliteRepository, *, decision_id: str, strategy_instance_id: str = "a", quantity: float = 5
+) -> EnterSubmission:
+    """A deployed bot's market buy, accepted by the Clerk."""
+    accepted = accept_enter(
+        repo, account_id=repo.account_id, strategy_instance_id=strategy_instance_id, decision_id=decision_id,
+        lifecycle_run_id=f"run-{strategy_instance_id}", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=quantity),
+        reference_price=100, envelope=_reading_after_every_execution(repo),
+    )
+    assert accepted.order_ref is not None and accepted.effect_operation_id is not None
+    return accepted
+
+
+def _filled_over_rest(
+    repo: ClerkSqliteRepository, accepted: EnterSubmission, *, quantity: float = 5, order_id: str = "broker-order-1"
+) -> BrokerOrder:
+    """The bot's order filled where only the sweep's REST answer saw it: a cumulative."""
+    assert accepted.order_ref is not None and accepted.effect_operation_id is not None
+    filled = _broker_order_fixture(
+        accepted.order_ref, order_id=order_id, status="filled", quantity=quantity, filled_quantity=quantity,
+        filled_avg_price=100,
+    ).model_copy(update={"updated_at_ms": NOON, "observed_at_ms": NOON, "filled_at_ms": NOON})
+    fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=filled)
+    assert _credited(repo, accepted.order_ref) == [(None, "cumulative_recovery", quantity, 100.0)]
+    return filled
+
+
 def _bot_entry_filled_over_rest(
     repo: ClerkSqliteRepository, *, decision_id: str, quantity: float = 5
 ) -> tuple[str, BrokerOrder]:
     """The deployed bot's market buy, filled where only the sweep's REST answer saw it: a cumulative."""
-    accepted = accept_enter(
-        repo, account_id=repo.account_id, strategy_instance_id="a", decision_id=decision_id,
-        lifecycle_run_id="run-a", leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=quantity),
-        reference_price=100, envelope=_reading_after_every_execution(repo),
-    )
-    assert accepted.order_ref is not None and accepted.effect_operation_id is not None
-    filled = _broker_order_fixture(
-        accepted.order_ref, status="filled", quantity=quantity, filled_quantity=quantity, filled_avg_price=100,
-    ).model_copy(update={"updated_at_ms": NOON, "observed_at_ms": NOON, "filled_at_ms": NOON})
-    fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=filled)
-    assert _credited(repo, accepted.order_ref) == [(None, "cumulative_recovery", quantity, 100.0)]
-    return accepted.order_ref, filled
+    accepted = _bot_entry(repo, decision_id=decision_id, quantity=quantity)
+    assert accepted.order_ref is not None
+    return accepted.order_ref, _filled_over_rest(repo, accepted, quantity=quantity)
+
+
+def _recovery_actions(caplog: pytest.LogCaptureFixture, action: str) -> list[str]:
+    """The order ref of every log record of ``action``, in the order they were logged."""
+    return [record.order_ref for record in caplog.records if getattr(record, "action", None) == action]
 
 
 async def _read_account_activity(repo: ClerkSqliteRepository, feed: _ActivityFeed) -> None:
@@ -244,5 +273,140 @@ async def test_a_late_stream_redelivery_of_a_recovered_bot_execution_is_never_cr
         assert _credited(repo, order_ref) == [(_EXEC_1, "activity_recovery", 5.0, 100.0)]
         assert repo.attributed_positions_by_symbol() == pytest.approx({"SPY": 5.0}, abs=1e-9, rel=0)
         assert _coverage_conflict_episodes(repo) == []
+    finally:
+        repo.close()
+
+
+async def test_a_bot_execution_an_order_total_proof_kept_quarantined_is_never_recovered_again(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Alpaca's fill history prices the bot's 5-share execution a cent above the REST average.
+
+    The first read records it as an exact the cumulative cannot take, so it
+    is quarantined behind a coverage conflict. The order's final total
+    proves the episode (#2346), which closes it and leaves the exact
+    quarantined: the order accounts for that execution. Every later read
+    records nothing, reports no growth and logs no recovery.
+    """
+    repo = _new_budget_repo(tmp_path)
+    try:
+        _deploy(repo)
+        order_ref, filled = _bot_entry_filled_over_rest(repo, decision_id="cent-above-rest")
+        feed = _ActivityFeed()
+        feed.fill(execution_id=_EXEC_1, order_id=filled.order_id, quantity=5, price=100.01, at_ms=NOON)
+        await _read_account_activity(repo, feed)
+        assert _coverage_conflict_episodes(repo) == ["active"]
+        assert repo.resolve_order_total_covered_coverage_conflicts() == 1
+        transitions = len(repo.transitions_for_order(order_ref))
+        caplog.set_level(logging.INFO)
+
+        assert [record_bot_order_executions(repo) for _ in range(3)] == [False, False, False]
+        assert not await FeeEvidenceSync(repo=repo, read=_AlpacaAccount(feed=feed, spy_held=5.0)).tick()
+
+        assert _recovery_actions(caplog, "bot_order_execution_recovered") == []
+        assert len(repo.transitions_for_order(order_ref)) == transitions
+        assert _credited(repo, order_ref) == [(None, "cumulative_recovery", 5.0, 100.0)]
+        assert _coverage_conflict_episodes(repo) == ["resolved"]
+    finally:
+        repo.close()
+
+
+async def test_the_rest_of_a_bot_orders_executions_completes_what_an_order_total_proof_kept_quarantined(
+    tmp_path: Path,
+) -> None:
+    """The bot's 4-share order filled in two executions; REST credited all 4 as a cumulative.
+
+    The first execution's frame arrives late and is quarantined, and the
+    order's final total proves that episode (#2346). The account activity
+    then names both executions: the one the proof kept counts its 2 shares,
+    so the other's 2 complete the order and both replace the cumulative.
+    """
+    repo = _new_budget_repo(tmp_path)
+    try:
+        _deploy(repo)
+        order_ref, filled = _bot_entry_filled_over_rest(repo, decision_id="two-executions", quantity=4)
+        assert await _fill_frame(repo, filled, execution_id=_EXEC_1, quantity=2, price=100) == "order_event"
+        assert repo.resolve_order_total_covered_coverage_conflicts() == 1
+        feed = _ActivityFeed()
+        feed.fill(execution_id=_EXEC_1, order_id=filled.order_id, quantity=2, price=100, at_ms=NOON)
+        feed.fill(execution_id=_EXEC_2, order_id=filled.order_id, quantity=2, price=100, at_ms=NOON + 1)
+
+        await _read_account_activity(repo, feed)
+
+        assert [(execution_id, shares) for execution_id, _, shares, _ in _credited(repo, order_ref)] == [
+            (_EXEC_1, 2.0), (_EXEC_2, 2.0),
+        ]
+        assert repo.attributed_positions_by_symbol() == pytest.approx({"SPY": 4.0}, abs=1e-9, rel=0)
+    finally:
+        repo.close()
+
+
+async def test_a_bot_order_whose_instruction_cannot_be_read_leaves_another_bots_recovery_running(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two bots' orders hold a cumulative; the one read first has an instruction the Clerk cannot read.
+
+    It is named and left as it was, and the other order's execution is still
+    recorded in the same read.
+    """
+    repo = _new_budget_repo(tmp_path)
+    try:
+        _deploy(repo, "a", 60_000)
+        _deploy(repo, "b", 30_000)
+        entries = [
+            _bot_entry(repo, decision_id="first", strategy_instance_id="a", quantity=5),
+            _bot_entry(repo, decision_id="second", strategy_instance_id="b", quantity=2),
+        ]
+        feed = _ActivityFeed()
+        for accepted, quantity, order_id, execution_id in zip(
+            entries, (5, 2), ("broker-order-a", "broker-order-b"), (_EXEC_1, _EXEC_2), strict=True,
+        ):
+            filled = _filled_over_rest(repo, accepted, quantity=quantity, order_id=order_id)
+            feed.fill(execution_id=execution_id, order_id=filled.order_id, quantity=quantity, price=100, at_ms=NOON)
+        refs = {accepted.order_ref: quantity for accepted, quantity in zip(entries, (5.0, 2.0), strict=True)}
+        unreadable, readable = sorted(refs)  # orders are recovered in order-ref order
+        read_order_details = bot_order_executions.read_order_details
+
+        def _read_order_details(conn: sqlite3.Connection, order_refs: Sequence[str]) -> dict:
+            if unreadable in order_refs:
+                raise OrderProjectionReadError(f"SQLite order {unreadable!r} has contradictory immutable leg facts")
+            return read_order_details(conn, order_refs)
+
+        monkeypatch.setattr(bot_order_executions, "read_order_details", _read_order_details)
+        caplog.set_level(logging.INFO)
+
+        assert await FeeEvidenceSync(repo=repo, read=_AlpacaAccount(feed=feed, spy_held=7.0)).tick()
+
+        assert _recovery_actions(caplog, "bot_order_instruction_unreadable") == [unreadable]
+        assert _credited(repo, unreadable) == [(None, "cumulative_recovery", refs[unreadable], 100.0)]
+        assert [(source, shares) for _, source, shares, _ in _credited(repo, readable)] == [
+            ("activity_recovery", refs[readable])
+        ]
+    finally:
+        repo.close()
+
+
+async def test_an_unreadable_execution_row_of_a_bot_order_is_reported_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Alpaca's fill history names the bot's order on a row in another symbol.
+
+    The row can never be the order's execution, so the cumulative stands.
+    The row is retained evidence the recovery reads again on every tick; it
+    is reported on the first and not again.
+    """
+    repo = _new_budget_repo(tmp_path)
+    try:
+        _deploy(repo)
+        order_ref, filled = _bot_entry_filled_over_rest(repo, decision_id="other-symbol")
+        feed = _ActivityFeed()
+        feed.fill(execution_id=_EXEC_1, order_id=filled.order_id, quantity=5, price=100, at_ms=NOON, symbol="QQQ")
+        caplog.set_level(logging.INFO)
+
+        for _ in range(3):
+            await _read_account_activity(repo, feed)
+
+        assert _recovery_actions(caplog, "bot_order_execution_unreadable") == [order_ref]
+        assert _credited(repo, order_ref) == [(None, "cumulative_recovery", 5.0, 100.0)]
     finally:
         repo.close()
