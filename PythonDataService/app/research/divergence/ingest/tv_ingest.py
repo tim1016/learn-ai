@@ -58,21 +58,6 @@ PINE_INDICATOR_COLS: tuple[str, ...] = (
 # Columns the chart export adds automatically on top of what Pine emits.
 OHLCV_COLS: tuple[str, ...] = ("time", "open", "high", "low", "close", "Volume")
 
-# The chart's default indicator columns (Bollinger in TradingView default,
-# not Pine). Kept for a belt-and-braces cross-check against Pine's values.
-TV_DEFAULT_COLS: tuple[str, ...] = (
-    "Basis",
-    "Upper",
-    "Lower",  # default Bollinger
-    "Up Trend",
-    "Down Trend",  # default SuperTrend
-    "RSI",
-    "RSI-based MA",  # default RSI
-    "Histogram",
-    "MACD",
-    "Signal line",  # default MACD
-    "ADX",  # default ADX
-)
 
 _PERIOD_SECONDS = {"5m": 300, "15m": 900, "1h": 3600}
 

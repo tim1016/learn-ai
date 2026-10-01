@@ -21,10 +21,3 @@ class TestFriendlyLabels:
     def test_unknown_job_type_falls_back(self) -> None:
         label = phases.friendly("does_not_exist", "some_phase")
         assert label == "Some Phase"
-
-    def test_total_weight_sums_correctly(self) -> None:
-        # signal_engine: 1+1+1+1+4+4+1+1+1 = 15
-        assert phases.total_weight("signal_engine") == 15
-
-    def test_total_weight_unknown_job_zero(self) -> None:
-        assert phases.total_weight("nope") == 0

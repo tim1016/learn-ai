@@ -45,7 +45,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.research.parity.fixture_data_reader import FixtureDataReader
@@ -248,22 +248,6 @@ class ReconciliationReport:
         lines.append(f"- prices: `{self.fixture_metadata.qc_price_history_path}`")
         lines.append(f"- window: {self.fixture_metadata.window_start} → {self.fixture_metadata.window_end}")
         return "\n".join(lines) + "\n"
-
-    def render_json(self) -> dict[str, Any]:
-        return {
-            "status": self.status,
-            "summary": {
-                "n_pairs": self.summary.n_pairs,
-                "n_qc_fills": self.summary.n_qc_fills,
-                "n_our_fills": self.summary.n_our_fills,
-                "n_unmatched_qc": self.summary.n_unmatched_qc,
-                "n_unmatched_ours": self.summary.n_unmatched_ours,
-                "n_divergences_by_category": {k.value: v for k, v in self.summary.n_divergences_by_category.items()},
-            },
-            "divergence_count": len(self.divergences),
-            "fixture_audit_count": len(self.fixture_audit),
-            "propagated_pnl_atol": str(self.diagnostics.propagated_pnl_atol),
-        }
 
 
 class FixtureSchemaError(ValueError):

@@ -94,10 +94,6 @@ class RunUpPlan:
     run_up_sessions: int
     carved_from_range: bool
 
-    @property
-    def is_primed(self) -> bool:
-        return self.data_start < self.evaluation_start
-
 
 def _probe_bar(symbol: str, sample: int, bar_span_ms: int) -> TradeBar:
     """A deterministic, gently varying bar so no indicator sees a degenerate path."""

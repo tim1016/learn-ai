@@ -11,7 +11,6 @@ import pytest
 
 from app.research.parity.fixture_data_reader import (
     FixtureDataReader,
-    fixture_data_source_factory,
 )
 from app.utils.timestamps import datetime_at_ms
 
@@ -88,10 +87,3 @@ def test_bar_open_by_date_returns_decimals(csv_path: Path) -> None:
     by_date = reader.bar_open_by_date("AAPL")
     assert by_date[date(2026, 2, 10)] == Decimal("189.50")
     assert by_date[date(2026, 2, 12)] == Decimal("190.60")
-
-
-def test_factory_returns_callable_matching_runner_signature(csv_path: Path) -> None:
-    factory = fixture_data_source_factory(csv_path)
-    reader = factory("AAPL", date(2026, 2, 10), date(2026, 2, 12))
-    bars = list(reader.iter_bars("AAPL"))
-    assert len(bars) == 3

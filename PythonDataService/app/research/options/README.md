@@ -170,4 +170,4 @@ After fetching, all computation is local:
 
 2. **Cache bracket contracts**: The same option contract ticker is used for many consecutive days. Currently each day fetches independently.
 
-3. **Parallel API calls**: The current `_SEMAPHORE = asyncio.Semaphore(5)` exists but the IV builder runs synchronously. Making Stage 4 async with 5 concurrent calls would ~5× throughput.
+3. **Parallel API calls**: The IV builder runs synchronously. Making Stage 4 async with 5 concurrent calls would ~5× throughput.

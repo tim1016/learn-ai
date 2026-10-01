@@ -22,7 +22,7 @@ The lake's design is `docs/architecture/adrs/0049-data-lake-is-the-market-data-a
 git show 8441f4f6^:docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md
 ```
 
-The lake's live source cites that spec by section number throughout (e.g. `catalog_schema.py`'s docstring points at "§ 3", `sweep.py`'s at "§ 4.4"); this ADR does the same, and any successor reading a `§ N` citation in the code should recover the spec with the command above before assuming the section renumbered.
+The lake's live source cites that spec by section number throughout (e.g. `catalog_schema.py`'s docstring points at "§ 3"); this ADR does the same, and any successor reading a `§ N` citation in the code should recover the spec with the command above before assuming the section renumbered.
 
 The spec's **§2.1 service roles** table draws the authority split this ADR ratifies: Python `app/data_lake/` is "the only writer to the lake" and hosts the reader; Postgres is "Catalog + audit. Knows what artifacts exist and whether they are valid. **Never stores bar bytes.**" Its **§2.2 volume layout / mount table** enforces that split at the mount boundary — a writer-only `LEAN_DATA_WRITE_ROOT` mount (`/lean-data-writer`, rw) that only `app/data_lake/` ever references, versus a `LEAN_DATA_ROOT` mount (`/lean-data`, ro) for every reader (`LeanMinuteDataReader`, the LEAN sidecar's own `/lean-run/data` mount), with `lake/` and `staging/` sharing one filesystem specifically so the atomic `rename(2)` publish is real, not copy-then-unlink. Its **§2.3 control flow** is the flow Decision 3 below deliberately departs from.
 
