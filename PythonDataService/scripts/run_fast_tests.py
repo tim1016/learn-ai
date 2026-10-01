@@ -37,6 +37,10 @@ def pytest_command(
         "pytest",
         "-n",
         "auto",
+        # A shard's long tests can sit in one file; idle workers take queued
+        # tests from busy ones instead of waiting out the tail.
+        "--dist",
+        "worksteal",
         "-q",
         "-m",
         "not slow",

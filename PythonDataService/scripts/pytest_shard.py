@@ -1,14 +1,19 @@
-"""Deterministically partition collected pytest cases across CI jobs.
+"""Deterministically partition the test files across CI jobs.
 
-Tests present in ``pr_shard_durations.json`` are dealt to the shards by
-longest-processing-time-first balance over their measured durations, so a
-slow app-boot suite cannot pile onto one shard by hash luck (#2682: the
-hash-only partition put shard 5/12 at 103-109 s of the 120 s budget while
-other shards idled). Tests missing from the file — new, renamed, or
-sub-5 ms — keep the stable sha256 hash assignment: their times are noise
-at shard scale, and the fallback keeps a stale durations file harmless
-rather than load-bearing. A file that matches none of the collected tests
-is a key mismatch, not staleness, and fails the run.
+Each shard collects only its own test files: the others are ignored before
+pytest imports them. Importing and assertion-rewriting every test module was
+most of each shard's time while every shard collected the whole suite
+(#2751), and a file's tests still spread over the shard's xdist workers.
+
+Files whose tests appear in ``pr_shard_durations.json`` are dealt to the
+shards by longest-processing-time-first balance over their summed measured
+durations, so a slow app-boot suite cannot pile onto one shard by hash luck
+(#2682: the hash-only partition put shard 5/12 at 103-109 s of the 120 s
+budget while other shards idled). Files missing from it — new, renamed, or
+holding only sub-5 ms tests — keep the stable sha256 hash assignment: their
+times are noise at shard scale, and the fallback keeps a stale durations file
+harmless rather than load-bearing. A durations file that matches none of the
+collected test files is a key mismatch, not staleness, and fails the run.
 """
 
 from __future__ import annotations
@@ -16,6 +21,8 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable
+from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,11 +36,27 @@ _MATCH_REPORT_KEY = "pr_shard_durations_match"
 _MATCH_REPORT = pytest.StashKey[str]()
 
 
-def hash_shard(nodeid: str, *, shard_count: int) -> int:
-    """Return the one-based shard a pytest node hashes to."""
+@dataclass
+class _FileShard:
+    """This run's shard and the deal of every measured test file."""
+
+    index: int
+    count: int
+    measured: dict[str, int]
+    seen: set[str] = field(default_factory=set)
+
+    def owner(self, path: str) -> int:
+        return self.measured.get(path) or hash_shard(path, shard_count=self.count)
+
+
+_FILE_SHARD = pytest.StashKey[_FileShard]()
+
+
+def hash_shard(key: str, *, shard_count: int) -> int:
+    """Return the one-based shard a key (a test file path) hashes to."""
     if shard_count < 1:
         raise ValueError("shard_count must be at least 1")
-    digest = hashlib.sha256(nodeid.encode("utf-8")).digest()
+    digest = hashlib.sha256(key.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], byteorder="big") % shard_count + 1
 
 
@@ -65,38 +88,43 @@ def load_pr_shard_durations() -> dict[str, float]:
 
 
 def assign_shards(
-    nodeids: Iterable[str],
+    keys: Iterable[str],
     *,
     shard_count: int,
     durations: dict[str, float],
 ) -> dict[str, int]:
-    """Assign every node id to a one-based shard, balancing measured time.
+    """Assign every key to a one-based shard, balancing measured time.
 
-    Known tests are placed longest-first onto the currently lightest shard
-    (LPT); the tie-break on node id keeps the deal deterministic. Unknown
-    tests fall back to the stable hash shard.
+    Known keys are placed longest-first onto the currently lightest shard
+    (LPT); the tie-break on the key keeps the deal deterministic. Unknown
+    keys fall back to the stable hash shard.
     """
     if shard_count < 1:
         raise ValueError("shard_count must be at least 1")
-    collected = list(nodeids)
+    collected = list(keys)
     measured = sorted(
-        (
-            (durations[nodeid], nodeid)
-            for nodeid in collected
-            if nodeid in durations
-        ),
+        ((durations[key], key) for key in collected if key in durations),
         key=lambda entry: (-entry[0], entry[1]),
     )
     loads = [0.0] * shard_count
     assignments: dict[str, int] = {}
-    for duration, nodeid in measured:
+    for duration, key in measured:
         shard = min(range(shard_count), key=lambda index: (loads[index], index))
         loads[shard] += duration
-        assignments[nodeid] = shard + 1
-    for nodeid in collected:
-        if nodeid not in assignments:
-            assignments[nodeid] = hash_shard(nodeid, shard_count=shard_count)
+        assignments[key] = shard + 1
+    for key in collected:
+        if key not in assignments:
+            assignments[key] = hash_shard(key, shard_count=shard_count)
     return assignments
+
+
+def file_durations(durations: dict[str, float]) -> dict[str, float]:
+    """Sum the measured test durations by the test file in each node id."""
+    per_file: dict[str, float] = {}
+    for nodeid, duration in durations.items():
+        path = nodeid.split("::", maxsplit=1)[0]
+        per_file[path] = per_file.get(path, 0.0) + duration
+    return per_file
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -119,31 +147,46 @@ def pytest_configure(config: pytest.Config) -> None:
             f"--pr-shard-index {shard_index} must be between 1 and "
             f"--pr-shard-count {shard_count}"
         )
+    per_file = file_durations(load_pr_shard_durations())
+    config.stash[_FILE_SHARD] = _FileShard(
+        index=shard_index,
+        count=shard_count,
+        measured=assign_shards(per_file.keys(), shard_count=shard_count, durations=per_file),
+    )
 
 
-def pytest_collection_modifyitems(
-    config: pytest.Config,
-    items: list[pytest.Item],
-) -> None:
-    shard_index = config.getoption("pr_shard_index")
-    shard_count = config.getoption("pr_shard_count")
-    if shard_index is None or shard_count is None:
+def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool | None:
+    shard = config.stash.get(_FILE_SHARD, None)
+    if (
+        shard is None
+        or not collection_path.is_relative_to(config.rootpath)
+        or not any(fnmatch(collection_path.name, glob) for glob in config.getini("python_files"))
+    ):
+        return None
+    path = collection_path.relative_to(config.rootpath).as_posix()
+    shard.seen.add(path)
+    # None, never False: False would override every other ignore rule.
+    return None if shard.owner(path) == shard.index else True
+
+
+def pytest_collection_modifyitems(config: pytest.Config) -> None:
+    shard = config.stash.get(_FILE_SHARD, None)
+    if shard is None:
         return
 
-    durations = load_pr_shard_durations()
-    matched = sum(1 for item in items if item.nodeid in durations)
-    if durations and items and matched == 0:
+    matched = len(shard.seen & shard.measured.keys())
+    if shard.measured and shard.seen and matched == 0:
         # A key mismatch (another rootdir, a renamed tree) would otherwise
-        # quietly hash-deal every test and bring the imbalance back.
+        # quietly hash-deal every file and bring the imbalance back.
         raise ValueError(
-            f"none of the {len(durations)} tests in {DURATIONS_PATH.name} match "
-            f"the {len(items)} collected tests; regenerate it with "
+            f"none of the {len(shard.measured)} test files in {DURATIONS_PATH.name} "
+            f"match the {len(shard.seen)} collected test files; regenerate it with "
             "'python -m scripts.update_pr_shard_durations'"
         )
     report = (
-        f"PR shard {shard_index}/{shard_count}: {matched} of {len(items)} "
-        f"collected tests matched {DURATIONS_PATH.name}; "
-        f"the other {len(items) - matched} use the hash shard"
+        f"PR shard {shard.index}/{shard.count}: {matched} of {len(shard.seen)} "
+        f"test files matched {DURATIONS_PATH.name}; "
+        f"the other {len(shard.seen) - matched} use the hash shard"
     )
     worker_output = getattr(config, "workeroutput", None)
     if worker_output is not None:
@@ -151,22 +194,6 @@ def pytest_collection_modifyitems(
         worker_output[_MATCH_REPORT_KEY] = report
     else:
         config.stash[_MATCH_REPORT] = report
-
-    assignments = assign_shards(
-        (item.nodeid for item in items),
-        shard_count=shard_count,
-        durations=durations,
-    )
-    selected: list[pytest.Item] = []
-    deselected: list[pytest.Item] = []
-    for item in items:
-        destination = (
-            selected if assignments[item.nodeid] == shard_index else deselected
-        )
-        destination.append(item)
-
-    config.hook.pytest_deselected(items=deselected)
-    items[:] = selected
 
 
 @pytest.hookimpl(optionalhook=True)

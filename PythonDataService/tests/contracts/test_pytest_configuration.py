@@ -98,25 +98,31 @@ def test_python_pr_shards_balance_by_measured_duration() -> None:
         assert assignments[nodeid] == hash_shard(nodeid, shard_count=4)
 
 
-# A tiny project the shard plugin deals: six measured tests whose
+# A tiny project the shard plugin deals: six measured test files whose
 # longest-first deal over three shards is 8+3 / 7+4 / 6+5 seconds, and three
-# unmeasured tests that must keep their hash shard.
+# unmeasured files that must keep their hash shard. Each file holds two tests
+# that split its time, so the deal must sum by file and keep a file together.
 _SHARD_PLUGIN_MEASURED = {"8s": 1, "7s": 2, "6s": 3, "5s": 3, "4s": 2, "3s": 1}
-_SHARD_PLUGIN_UNMEASURED = ("new-a", "new-b", "new-c")
+_SHARD_PLUGIN_UNMEASURED = ("new_a", "new_b", "new_c")
+_SHARD_PLUGIN_TESTS = ("test_first", "test_second")
 
 
-def _shard_plugin_nodeid(case: str) -> str:
-    return f"test_generated.py::test_case[{case}]"
+def _shard_plugin_file(case: str) -> str:
+    return f"test_{case}.py"
+
+
+def _shard_plugin_nodeids(case: str) -> list[str]:
+    return [f"{_shard_plugin_file(case)}::{test}" for test in _SHARD_PLUGIN_TESTS]
 
 
 _SHARD_PLUGIN_DURATIONS = {
-    _shard_plugin_nodeid(case): float(case.removesuffix("s"))
+    nodeid: float(case.removesuffix("s")) / len(_SHARD_PLUGIN_TESTS)
     for case in _SHARD_PLUGIN_MEASURED
+    for nodeid in _shard_plugin_nodeids(case)
 }
 
 
 def _write_shard_plugin_project(root: Path, durations: dict[str, float]) -> None:
-    cases = [*_SHARD_PLUGIN_MEASURED, *_SHARD_PLUGIN_UNMEASURED]
     (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     (root / "durations.json").write_text(json.dumps(durations), encoding="utf-8")
     (root / "conftest.py").write_text(
@@ -126,13 +132,11 @@ def _write_shard_plugin_project(root: Path, durations: dict[str, float]) -> None
         'Path(__file__).with_name("durations.json")\n',
         encoding="utf-8",
     )
-    (root / "test_generated.py").write_text(
-        "import pytest\n\n\n"
-        f"@pytest.mark.parametrize('case', {cases!r})\n"
-        "def test_case(case):\n"
-        "    assert case\n",
-        encoding="utf-8",
-    )
+    for case in [*_SHARD_PLUGIN_MEASURED, *_SHARD_PLUGIN_UNMEASURED]:
+        (root / _shard_plugin_file(case)).write_text(
+            "".join(f"def {test}():\n    pass\n\n\n" for test in _SHARD_PLUGIN_TESTS),
+            encoding="utf-8",
+        )
 
 
 def _run_shard_plugin(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -163,21 +167,21 @@ def _run_shard_plugin(root: Path, *args: str) -> subprocess.CompletedProcess[str
 def _expected_shard_plugin_deal() -> dict[str, int]:
     from scripts.pytest_shard import hash_shard
 
-    return {
+    owners = {
+        **_SHARD_PLUGIN_MEASURED,
         **{
-            _shard_plugin_nodeid(case): shard
-            for case, shard in _SHARD_PLUGIN_MEASURED.items()
-        },
-        **{
-            _shard_plugin_nodeid(case): hash_shard(
-                _shard_plugin_nodeid(case), shard_count=3
-            )
+            case: hash_shard(_shard_plugin_file(case), shard_count=3)
             for case in _SHARD_PLUGIN_UNMEASURED
         },
     }
+    return {
+        nodeid: shard
+        for case, shard in owners.items()
+        for nodeid in _shard_plugin_nodeids(case)
+    }
 
 
-def test_pr_shard_plugin_deals_measured_tests_longest_first_and_the_rest_by_hash(
+def test_pr_shard_plugin_deals_measured_files_longest_first_and_the_rest_by_hash(
     tmp_path: Path,
 ) -> None:
     from scripts.pytest_shard import hash_shard
@@ -186,7 +190,7 @@ def test_pr_shard_plugin_deals_measured_tests_longest_first_and_the_rest_by_hash
     expected = _expected_shard_plugin_deal()
     # The fixture must tell the two deals apart, or it proves nothing.
     assert any(
-        hash_shard(_shard_plugin_nodeid(case), shard_count=3) != shard
+        hash_shard(_shard_plugin_file(case), shard_count=3) != shard
         for case, shard in _SHARD_PLUGIN_MEASURED.items()
     )
 
@@ -203,12 +207,12 @@ def test_pr_shard_plugin_deals_measured_tests_longest_first_and_the_rest_by_hash
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert (
-            f"PR shard {shard}/3: 6 of 9 collected tests matched durations.json; "
+            f"PR shard {shard}/3: 6 of 9 test files matched durations.json; "
             "the other 3 use the hash shard"
         ) in result.stdout
         selected[shard] = {
             line for line in result.stdout.splitlines()
-            if line.startswith("test_generated.py::")
+            if line.startswith("test_") and "::" in line
         }
 
     assert set().union(*selected.values()) == set(expected)
@@ -231,10 +235,10 @@ def test_pr_shard_plugin_deals_and_reports_the_same_under_xdist(tmp_path: Path) 
     assert set(re.findall(r"^PASSED (\S+)$", result.stdout, flags=re.MULTILINE)) == {
         nodeid for nodeid, owner in expected.items() if owner == 1
     }
-    assert "PR shard 1/3: 6 of 9 collected tests matched durations.json" in result.stdout
+    assert "PR shard 1/3: 6 of 9 test files matched durations.json" in result.stdout
 
 
-def test_pr_shard_plugin_fails_when_the_durations_file_matches_no_collected_test(
+def test_pr_shard_plugin_fails_when_the_durations_file_matches_no_collected_file(
     tmp_path: Path,
 ) -> None:
     _write_shard_plugin_project(tmp_path, {"test_elsewhere.py::test_gone": 1.0})
@@ -245,7 +249,7 @@ def test_pr_shard_plugin_fails_when_the_durations_file_matches_no_collected_test
 
     assert result.returncode != 0
     assert (
-        "none of the 1 tests in durations.json match the 9 collected tests"
+        "none of the 1 test files in durations.json match the 9 collected test files"
         in result.stdout + result.stderr
     )
 
