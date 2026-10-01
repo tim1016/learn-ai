@@ -12262,7 +12262,7 @@
       },
       "DecisionColumnSpec": {
         "additionalProperties": false,
-        "description": "One strategy-specific column in ``decisions.parquet``.\n\nThe spec is authoritative for the per-strategy decision-row schema:\nthe live runtime resolves the parquet columns as\n``CORE_DECISION_COLUMNS + [c.name for c in spec.decision_columns]``\n(see ``app.engine.live.artifacts.resolve_decision_columns``). Each\nentry declares the column ``name``, its ``dtype``, whether it is\n``nullable``, and a free-text ``semantic`` description so a new\nstrategy can grow the artifact schema without bespoke writer code.\n\n``name`` must match an attribute the strategy publishes on its\n``DecisionSnapshot`` \u2014 the writer reads the value by that name.\nFor the SPY EMA strategy these are ``ema5`` / ``ema10`` / ``rsi``.",
+        "description": "One strategy-specific column of a spec's per-bar decision row.\n\nEach entry declares the column ``name``, its ``dtype``, whether it is\n``nullable``, and a free-text ``semantic`` description. No app code\nreads it; it stays because the sealed ``*.spec.json`` fixtures carry it.\n\n``name`` names an attribute the strategy publishes on its\n``DecisionSnapshot``. For the SPY EMA strategy these are ``ema5`` /\n``ema10`` / ``rsi``.",
         "properties": {
           "dtype": {
             "default": "float64",

@@ -1,6 +1,6 @@
 """SmaCrossoverAlgorithm — new-engine port of the legacy SMA crossover strategy.
 
-Formula: Long-only golden cross / death cross. Enter long when short SMA crosses above long SMA; exit when short SMA crosses below long SMA. Default periods follow `_rsi_range_base.py` conventions (50/200 for the divergence-research s3 variant; new engine accepts arbitrary).
+Formula: Long-only golden cross. Enter long when the short SMA crosses above the long SMA; while in position, exit on any bar where the short SMA is at or below the long SMA (a level, #1736). Default windows 10/30; any windows are accepted.
 Reference: Internal strategy retained from the retired pandas-ta service implementation. LEAN inspiration but no line-for-line port.
 Canonical implementation: this file. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `spec/fixtures/sma_crossover.spec.json` reproduces the hand-coded twin trade-by-trade.
 Validated against: PythonDataService/tests/test_strategy_engine.py; spec ↔ hand-coded parity at `app/engine/strategy/spec/tests/test_spec_sma_parity.py`; `tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[sma_crossover]`.
@@ -9,7 +9,8 @@ Golden-cross / death-cross rule lifted from
 the retired pandas-ta service implementation:
 
     * Enter long when the short SMA crosses **above** the long SMA.
-    * Exit when the short SMA crosses **below** the long SMA.
+    * While in position, exit when the short SMA is **at or below** the long
+      SMA -- a level, not an edge (#1736; see ``evaluate_signal_bar``).
 
 Unlike the legacy pandas-ta version which runs bar-by-bar over a pre-computed
 DataFrame, this port plugs into the LEAN-compatible engine: minute bars stream

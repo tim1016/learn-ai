@@ -147,7 +147,7 @@ class SignalSession:
     exactly the bug this class used to carry (issue #1730).
     """
 
-    # Identifies the *shape* of this session's public contract — PRD §12's
+    # Identifies the *shape* of this session's public contract — the
     # staged open/advance/settle protocol (EvaluationMode DECIDE/OBSERVE_ONLY,
     # Settlement COMMIT/DISCARD, EvaluationTrace) — independent of
     # program_version, which identifies one program's own decision math.

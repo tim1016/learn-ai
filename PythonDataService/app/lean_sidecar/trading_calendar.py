@@ -325,8 +325,8 @@ def holiday_names_in_range(start: date, end: date) -> dict[date, str]:
 def current_trading_session_window(now_ms: int) -> SessionWindow | None:
     """Return the NYSE session window for the NY calendar date containing ``now_ms``.
 
-    "Today" is the New York trading date — never browser-local midnight
-    (broker-v2 panel spec §15). Returns ``None`` when that date is not a
+    "Today" is the New York trading date — never browser-local midnight.
+    Returns ``None`` when that date is not a
     session (weekend or holiday), so callers render an honest "market closed
     today" state rather than fabricating a session window. Half-days respect
     their real close.

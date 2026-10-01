@@ -412,19 +412,15 @@ class Diagnostics(BaseModel):
 
 
 class DecisionColumnSpec(BaseModel):
-    """One strategy-specific column in ``decisions.parquet``.
+    """One strategy-specific column of a spec's per-bar decision row.
 
-    The spec is authoritative for the per-strategy decision-row schema:
-    the live runtime resolves the parquet columns as
-    ``CORE_DECISION_COLUMNS + [c.name for c in spec.decision_columns]``
-    (see ``app.engine.live.artifacts.resolve_decision_columns``). Each
-    entry declares the column ``name``, its ``dtype``, whether it is
-    ``nullable``, and a free-text ``semantic`` description so a new
-    strategy can grow the artifact schema without bespoke writer code.
+    Each entry declares the column ``name``, its ``dtype``, whether it is
+    ``nullable``, and a free-text ``semantic`` description. No app code
+    reads it; it stays because the sealed ``*.spec.json`` fixtures carry it.
 
-    ``name`` must match an attribute the strategy publishes on its
-    ``DecisionSnapshot`` — the writer reads the value by that name.
-    For the SPY EMA strategy these are ``ema5`` / ``ema10`` / ``rsi``.
+    ``name`` names an attribute the strategy publishes on its
+    ``DecisionSnapshot``. For the SPY EMA strategy these are ``ema5`` /
+    ``ema10`` / ``rsi``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -531,10 +527,7 @@ class StrategySpec(BaseModel):
                 )
 
         # ---- decision-column validators ---------------------------------
-        # Names must be unique; collision with the universal core columns
-        # is rejected in app.engine.live.artifacts.resolve_decision_columns
-        # (the resolver owns the core vocabulary — checking it here would
-        # introduce a schema -> artifacts import cycle).
+        # Names must be unique.
         dcol_names = [c.name for c in self.decision_columns]
         if len(dcol_names) != len(set(dcol_names)):
             dup = sorted({n for n in dcol_names if dcol_names.count(n) > 1})

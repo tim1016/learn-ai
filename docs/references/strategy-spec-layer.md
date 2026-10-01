@@ -5,8 +5,8 @@
 ``StrategySpec`` schema + ``SpecAlgorithm`` evaluator.
 
 This is **not a port from an external reference**. It is a parity-pinned
-secondary implementation of three internal canonical algorithms that
-already have their own external references:
+secondary implementation of three internal canonical algorithms. The
+table names each twin's external reference, where it has one:
 
 | Spec fixture | Hand-coded twin (canonical) | Twin's external reference |
 |---|---|---|
