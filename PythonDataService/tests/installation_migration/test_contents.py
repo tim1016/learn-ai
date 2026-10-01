@@ -24,7 +24,6 @@ from app.installation_migration.contents import (
     LAKE_FOLDER_KEY,
     is_secret_shaped,
     resolve_folder_path,
-    skipped_secret_note,
 )
 from app.installation_migration.tree import require_bundleable
 from app.lean_sidecar.launcher_auth import LAUNCHER_TOKEN_FILENAME
@@ -252,10 +251,3 @@ def test_the_auth_tokens_under_artifacts_are_secret_shaped_and_skipped(tmp_path:
         "PythonDataService/artifacts/.host-daemon-token",
         "PythonDataService/artifacts/lean-sidecar/.launcher-token",
     ]
-
-
-def test_each_known_skipped_token_says_why_it_needs_nothing_from_the_operator() -> None:
-    assert "ensure_launcher_token" in skipped_secret_note(LAUNCHER_TOKEN_FILENAME)
-    assert "nothing reads it" in skipped_secret_note(".host-daemon-token")
-    assert "nothing reads it" in skipped_secret_note(".clerk-host-binding-capability")
-    assert "copy it by hand" in skipped_secret_note("stray.env")

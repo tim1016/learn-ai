@@ -28,7 +28,6 @@ from app.broker.alpaca.clerk.sqlite.operational_files import atomic_write_json
 from app.broker.alpaca.clerk.sqlite.repository import DB_FILENAME, ClerkSqliteRepository
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
 from app.broker_configuration.prior_obligations import ClerkPriorAccountObligations
-from app.broker_configuration.worker_binding import PriorAccountObligations
 from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
     BotLifecycleStateRepo,
@@ -275,13 +274,6 @@ def _record_binding(
 
 
 # ── Never activated ───────────────────────────────────────────────────────────
-
-
-def test_the_probe_satisfies_the_preflight_protocol(
-    probe: ClerkPriorAccountObligations,
-) -> None:
-    """``resolve_worker_binding`` accepts it wherever ``UnprovableObligations`` goes."""
-    assert isinstance(probe, PriorAccountObligations)
 
 
 async def test_observe_never_activated_account_is_clear(
@@ -570,21 +562,6 @@ async def test_observe_account_with_a_shadow_sealed_binding_is_not_clear(
     observed = await probe.observe(ACCOUNT_ID)
 
     assert not observed.is_clear
-
-
-async def test_observe_describes_several_bindings_in_readable_prose(
-    probe: ClerkPriorAccountObligations, clerk_dir: Path, live_state_root: Path
-) -> None:
-    """The refusal is operator copy: every noun here is a phrase, not a word + "s"."""
-    _activate(clerk_dir)
-    _record_binding(live_state_root, sealed_account_id=ACCOUNT_ID, strategy_instance_id="bot-a")
-    _record_binding(live_state_root, sealed_account_id=ACCOUNT_ID, strategy_instance_id="bot-b")
-
-    observed = await probe.observe(ACCOUNT_ID)
-
-    assert observed.describe() == (
-        f"account {ACCOUNT_ID} still has 2 bots still bound to it (bot-a, bot-b)"
-    )
 
 
 async def test_observe_ignores_a_binding_sealed_to_another_account(

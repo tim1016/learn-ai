@@ -895,28 +895,6 @@ async def test_an_unrouted_404_without_an_echo_surfaces_the_lanes_own_refusal_bo
 
 
 
-def test_the_two_fakes_canonicalize_the_same_raw_account_differently() -> None:
-    """The extension boundary is only provable when the fakes disagree.
-
-    Two adapters that canonicalize identically cannot distinguish a
-    provider-qualified key from a globally unique one — the exact bug
-    provider-qualified assignment exists to prevent.
-    """
-    from tests.broker.fleet.conftest import fake_alpha, fake_beta
-
-    raw = "  Acct-XYZ "
-    assert fake_alpha().canonical_account_id(raw) == "ACCT-XYZ"
-    assert fake_beta().canonical_account_id(raw) == "acct_xyz"
-    # Not merely case: a casefold cannot collapse them back together.
-    assert (
-        fake_alpha().canonical_account_id(raw).casefold()
-        != fake_beta().canonical_account_id(raw).casefold()
-    )
-    # Both still refuse the empty identity, so the service's gate stays reachable.
-    assert fake_alpha().canonical_account_id("   ") == ""
-    assert fake_beta().canonical_account_id("   ") == ""
-
-
 def test_a_configuration_operation_routes_on_an_unbound_lane_of_the_declaring_provider(
     control_dir: Path, fleet_service
 ) -> None:

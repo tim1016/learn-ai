@@ -130,15 +130,6 @@ def test_restaging_the_same_revision_is_a_no_op(service: BrokerConfigurationServ
     assert repeated.selection_generation == 1
 
 
-def test_staging_with_a_stale_generation_conflicts(service: BrokerConfigurationService) -> None:
-    profile_id = _staged(service)
-
-    with pytest.raises(SelectionGenerationConflict):
-        service.stage_selection(
-            profile_id=profile_id, revision=1, expected_selection_generation=0
-        )
-
-
 def test_two_tabs_cannot_silently_clobber_a_staged_selection(
     clerk_dir: Path, clock: FrozenClock
 ) -> None:

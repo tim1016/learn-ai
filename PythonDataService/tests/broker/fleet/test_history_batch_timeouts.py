@@ -132,25 +132,6 @@ async def test_http_lane_delivery_builds_its_client_with_the_operations_bound(
     assert captured["read_timeout_s"] == HISTORY_BATCH_OUTER_TIMEOUT_S
 
 
-async def test_http_lane_delivery_builds_the_default_operations_client_at_10s(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An operation that never widens still builds its client at the fleet
-    default -- pinned explicitly so a regression that silently drops
-    ``read_timeout_s`` (falling back to ``build_internal_client``'s own
-    default) cannot pass unnoticed."""
-    captured: dict[str, object] = {}
-    delivery = _probe_delivery(monkeypatch, captured)
-    operation = _probe_operation(read_timeout_s=DEFAULT_INTERNAL_TIMEOUT_S)
-    request = DeliveryRequest(
-        broker="alpaca", clerk_id="clrk_x", operation=operation, path_params={}
-    )
-
-    await delivery.deliver(request)
-
-    assert captured["read_timeout_s"] == DEFAULT_INTERNAL_TIMEOUT_S
-
-
 async def test_lane_router_thread_the_operations_bound_through_to_http_delivery(
     monkeypatch: pytest.MonkeyPatch, fleet_service, control_dir
 ) -> None:

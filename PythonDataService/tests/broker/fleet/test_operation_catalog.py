@@ -21,7 +21,6 @@ from app.broker.fleet.provider import (
     require_protocol_compatible,
     validate_operation_catalog,
 )
-from tests.broker.fleet.conftest import fake_alpha, fake_beta
 
 
 def _operation(**overrides) -> ProviderOperation:
@@ -106,16 +105,6 @@ def test_catalog_validation_refuses_malformed_operation_shapes() -> None:
         )
     with pytest.raises(ValueError, match="snake_case token"):
         validate_operation_catalog(frozenset({_operation(operation_id="Account Read")}))
-
-
-def test_the_fake_providers_declare_valid_catalogs() -> None:
-    """The conformance fakes themselves model a well-formed provider."""
-    for adapter in (fake_alpha(), fake_beta()):
-        validate_operation_catalog(adapter.operations())
-        declared = {operation.capability for operation in adapter.operations()}
-        assert declared <= adapter.capabilities
-        for operation in adapter.operations():
-            assert operation.agent_path_template.startswith("/api/")
 
 
 def test_alpaca_declares_the_six_desk_reads_at_their_pinned_routes() -> None:

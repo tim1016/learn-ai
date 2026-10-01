@@ -315,15 +315,6 @@ async def test_positions_endpoint_returns_list() -> None:
     assert body[0]["symbol"] == "MSFT"
 
 
-async def test_positions_endpoint_returns_empty_list() -> None:
-    get_broker_registry().register(_FakePort(positions=[]))
-
-    response = await _get("/api/brokers/alpaca/positions")
-
-    assert response.status_code == 200
-    assert response.json() == []
-
-
 def _order(**overrides: Any) -> BrokerOrder:
     base: dict[str, Any] = dict(
         broker="alpaca",

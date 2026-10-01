@@ -1,8 +1,7 @@
 """Panel capability profile — the closed per-broker descriptor (spec §4).
 
 Angular renders strictly from this profile: an inapplicable station renders as
-``not_applicable``. The profile is snapshot-contract-tested per broker
-(``test_panel_profile``).
+``not_applicable``.
 
 Phase 1 registers only Alpaca. The profile is deliberately a static, closed
 descriptor (not probed) — it declares honest vendor differences as data, the
