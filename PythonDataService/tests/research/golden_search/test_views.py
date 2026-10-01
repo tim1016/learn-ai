@@ -128,6 +128,24 @@ def test_a_candidate_can_be_changed_until_the_final_test_opens() -> None:
     assert permitted(action_refusals(reviewing, presented="completed", resume_refusal=None)) == ["approve", "retain", "close", "revise"]
 
 
+@pytest.mark.parametrize(
+    ("state", "kept"),
+    [
+        ("locked", ["close", "revise"]),
+        ("candidate_locked", ["select_candidate", "retain", "close", "revise"]),
+        ("awaiting_review", ["retain", "close", "revise"]),
+    ],
+)
+def test_moved_code_refuses_every_command_that_starts_a_stage_and_nothing_else(state: str, kept: list[str]) -> None:
+    row = _row(state=state, exam_locked=state == "awaiting_review", results={"evidence": {"candidates": []}})
+    moved = "No new stage can run for this study: the engine or strategy code changed since launch"
+
+    refusals = action_refusals(row, presented="completed", resume_refusal=None, stage_refusal=moved)
+
+    assert permitted(refusals) == kept
+    assert {refusals[command] for command in ("continue", "open_exam", "approve") if refusals[command] == moved}
+
+
 # ── Procedure views ──────────────────────────────────────────────────────
 
 

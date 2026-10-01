@@ -60,6 +60,7 @@ from app.research.golden_search.zoom import BudgetExhausted, ProcedureResult, ru
 from app.research.persistence import lifecycle
 from app.research.persistence.db import run_sync, with_connection
 from app.research.persistence.fence import StaleAttemptError, lock_current_attempt
+from app.research.sweep.identity import CodeIdentity
 from app.research.sweep.snapshot import DataSnapshot
 from app.research.walk_forward_study.verdict import Verdict, compute_verdict
 from app.utils.session_anchors import et_midnight_ms
@@ -166,6 +167,21 @@ def _invalid_total(results: Mapping[str, Any]) -> int:
     for fold in results.get("validation", {}).get("folds", []):
         total += int((fold.get("counts") or {}).get("invalid", 0))
     return total
+
+
+def stage_refusal(row: StudyRow, *, identity: CodeIdentity | None = None) -> str | None:
+    """Why no new stage may run for this study: the code or environment it was locked under has moved.
+
+    Every stage scores under the execution context frozen at lock; a stage run
+    by other code would record evaluations under an identity that did not
+    compute them, and mix them with the ones that did (#2696).
+    """
+    moved = lifecycle.identity_refusal(row, noun="study", identity=identity)
+    return None if moved is None else f"No new stage can run for this study: {moved}"
+
+
+class StageRefusedError(RuntimeError):
+    """A claimed stage did not run: this process cannot score it under the study's receipted identity."""
 
 
 def stage_total(row: StudyRow, stage: StageName) -> int:
@@ -639,17 +655,28 @@ def execute_stage(
     on_phase: Callable[[str], None] = lambda phase: None,
     on_progress: Callable[[int, int], None] = lambda done, total: None,
     on_log: Callable[[str], None] = lambda message: None,
+    identity: CodeIdentity | None = None,
 ) -> StageOutcome:
     """Run the stage a guarded command authorized, on the calling worker thread.
 
     ``execute`` defaults to the engine (``evaluator.engine_executor``) and
     ``approval`` to ``approval.approve_study``; tests inject both. A
     cancelled stage keeps its results and reads back ``cancelled``; any other
-    failure reads back ``failed`` with its reason; both may be finished.
+    failure reads back ``failed`` with its reason; both may be finished. A
+    stage claimed by a process whose code identity is not the study's
+    receipted one runs nothing and reads back ``failed`` with that reason.
     """
     row, attempt = run_sync(with_connection(repo.claim_stage, study_id, stage_token=stage_token, job_id=job_id))
     stage = row.pending_stage
     assert stage is not None  # claim_stage refuses a study with no authorized stage
+    refused = stage_refusal(row, identity=identity)
+    if refused is not None:
+        logger.warning(
+            "golden search stage refused: the code identity moved since lock",
+            extra={"action": "golden_search_stage_identity_refused", "study_id": study_id, "stage": stage, "attempt": attempt},
+        )
+        _end_run(study_id, attempt, status="failed", reason=refused)
+        raise StageRefusedError(refused)
     protocol = GoldenSearchProtocol.from_dict(row.protocol)
     declaration = declaration_for(row.strategy_key)
     if declaration is None:

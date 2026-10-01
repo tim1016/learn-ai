@@ -9,6 +9,7 @@ predictable, and a test can make it depend on the window to probe leakage.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ from app.research.golden_search.models import StudyRow
 from app.research.golden_search.selection import Metrics
 from app.research.golden_search.stages import ApprovalBinding, StageOutcome
 from app.research.persistence.db import run_sync, with_connection
+from app.research.sweep.identity import CodeIdentity, resolve_code_identity
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from tests._helpers.lean_store import seed_store_day
 
@@ -34,6 +36,12 @@ CAPITAL = 100_000.0
 
 def unique_symbol() -> str:
     return "G" + uuid.uuid4().hex[:6].upper()
+
+
+def clean_identity() -> CodeIdentity:
+    """This process's code identity, labelled clean: Finish refuses a study locked from a dirty tree,
+    and a developer running these tests mid-edit should not see that rule instead of the one under test."""
+    return dataclasses.replace(resolve_code_identity(), tree_state="clean")
 
 
 def seed_lake(root: Path, symbol: str, *, start: date = LAKE_FROM, end: date = FINAL[1] - timedelta(days=1)) -> Path:
@@ -249,7 +257,7 @@ class Driver:
         return f"k-{uuid.uuid4().hex[:8]}-{self._keys}"
 
     async def lock(self, symbol: str, **overrides: Any) -> StudyRow:
-        return await service.lock_study(plan_request(symbol, **overrides), idempotency_key=self.key(), roots=self.roots)
+        return await service.lock_study(plan_request(symbol, **overrides), idempotency_key=self.key(), roots=self.roots, identity=clean_identity())
 
     async def command(self, row: StudyRow, command: str, payload: Mapping[str, Any] | None = None, **kwargs: Any) -> service.CommandOutcome:
         return await service.run_command(

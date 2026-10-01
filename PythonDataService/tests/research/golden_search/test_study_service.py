@@ -8,6 +8,7 @@ design — never couples two tests.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from pathlib import Path
 
 import asyncpg
@@ -20,7 +21,9 @@ from app.research.golden_search import repository as repo
 from app.research.golden_search import service
 from app.research.golden_search.evaluator import CapabilityError, EvaluationCapability, StudyEvaluator
 from app.research.golden_search.models import GoldenSearchRefusal, StudyRow
+from app.research.golden_search.stages import StageRefusedError
 from app.research.persistence import lifecycle
+from app.research.sweep.identity import CodeIdentity, resolve_code_identity
 from tests._helpers.golden_search_study import (
     DEVELOPMENT,
     FINAL,
@@ -281,6 +284,37 @@ async def test_a_crash_between_reservation_and_result_reruns_that_evaluation_wit
         pending[0]["evaluation_key"],
     )
     assert (retried["status"], retried["retries"]) == ("completed", 1)
+
+
+def _moved_identity() -> CodeIdentity:
+    return dataclasses.replace(resolve_code_identity(), source_digest="0" * 64)
+
+
+async def test_no_stage_starts_under_code_other_than_the_study_was_locked_with(driver: Driver, symbol: str) -> None:
+    row = await driver.lock(symbol)
+    moved = _moved_identity()
+
+    detail = await service.detail(row, liveness=driver.liveness, identity=moved)
+    assert "continue" not in detail["permitted_actions"]
+    assert "code changed since launch" in detail["action_refusals"]["continue"]
+    with pytest.raises(GoldenSearchRefusal) as refused:
+        await driver.command(row, "continue", identity=moved)
+    assert refused.value.code == "COMMAND_NOT_PERMITTED" and "code changed since launch" in str(refused.value)
+
+    # A stage authorized under the locked code but claimed by a process running other code scores nothing.
+    outcome = await driver.command(row, "continue")
+    with pytest.raises(StageRefusedError):
+        await driver.run(outcome, identity=moved)
+    assert driver.engine.calls == []
+    stopped = await service.get_row(row.id)
+    assert (stopped.state, stopped.status, stopped.consumed_evaluations) == ("search_running", "failed", 0)
+    assert "code changed since launch" in (stopped.failure_reason or "")
+    refusals = (await service.detail(stopped, liveness=driver.liveness, identity=moved))["action_refusals"]
+    assert "code changed since launch" in refusals["finish"]
+
+    # Back on the locked code, Finish runs the stage.
+    await driver.run(await driver.command(stopped, "finish"))
+    assert (await service.get_row(row.id)).state == "awaiting_validation"
 
 
 # ── Leakage and capability ───────────────────────────────────────────────

@@ -203,12 +203,17 @@ def test_the_real_service_resolves_a_complete_identity() -> None:
     assert CodeIdentity.from_dict(identity.as_dict()) == identity
 
 
-@pytest.mark.parametrize("module_name", ["app.lean_sidecar.closing_bar", "app.lean_sidecar.trading_calendar"])
+@pytest.mark.parametrize(
+    "module_name",
+    ["app.lean_sidecar.closing_bar", "app.lean_sidecar.trading_calendar", "app.research.golden_search.zoom", "app.research.golden_search.evaluator"],
+)
 def test_the_closing_bar_rule_and_its_calendar_are_part_of_the_source_identity(module_name: str) -> None:
     """#2607: the engine sets a closing-bar decision aside by this predicate over the calendar.
 
     Either file changing changes a backtest's trades, so a sweep receipt made
-    before the change must not read as the same code.
+    before the change must not read as the same code. Golden Search's Zoom and
+    evaluator (#2696) decide which points a resumed stage scores and how a run
+    is recorded, so a Finish under a changed procedure must be refused too.
     """
     module_file = Path(importlib.import_module(module_name).__file__ or "")
     relative = module_file.resolve().relative_to(identity_module.SERVICE_ROOT).as_posix()

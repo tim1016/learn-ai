@@ -15,6 +15,9 @@ LIVE_PRESENTATIONS = frozenset({"queued", "running"})
 STOPPED_PRESENTATIONS = frozenset({"failed", "cancelled", "interrupted"})
 _RETAIN_STATES = frozenset({"awaiting_validation", "awaiting_candidate", "candidate_locked", "awaiting_review", "qualification_failed"})
 _CLOSE_STATES = frozenset({"locked", "awaiting_validation", "awaiting_candidate", "candidate_locked", "awaiting_review"})
+#: Commands that authorize a stage, and the states they start one from.
+STAGE_COMMANDS: tuple[CommandName, ...] = ("continue", "open_exam", "approve")
+STAGE_START_STATES = frozenset({"locked", "awaiting_validation", "candidate_locked", "awaiting_review", "qualification_failed"})
 
 
 def unclaimed(row: StudyRow) -> bool:
@@ -29,8 +32,14 @@ def presented_status(row: StudyRow, *, live: bool | None) -> str:
     return presented_status_for(row.status, live=live)
 
 
-def action_refusals(row: StudyRow, *, presented: str, resume_refusal: str | None) -> dict[CommandName, str | None]:
-    """``None`` for a permitted command, else why it is not available now."""
+def action_refusals(
+    row: StudyRow, *, presented: str, resume_refusal: str | None, stage_refusal: str | None = None
+) -> dict[CommandName, str | None]:
+    """``None`` for a permitted command, else why it is not available now.
+
+    ``stage_refusal`` is why no new stage may run for this study (its code
+    identity moved since lock); it refuses each command that would start one.
+    """
     running = row.state in RUNNING_STATES
     live = running and presented in LIVE_PRESENTATIONS
     stopped = running and presented in STOPPED_PRESENTATIONS
@@ -60,6 +69,10 @@ def action_refusals(row: StudyRow, *, presented: str, resume_refusal: str | None
         reasons["finish"] = resume_refusal
     if live:
         reasons["revise"] = "Wait for the running stage to stop before revising the plan."
+    if stage_refusal is not None:
+        for command in STAGE_COMMANDS:
+            if reasons[command] is None:
+                reasons[command] = stage_refusal
     return reasons
 
 

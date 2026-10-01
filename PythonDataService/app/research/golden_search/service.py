@@ -29,7 +29,13 @@ import redis
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
 from app.research.golden_search import repository as repo
-from app.research.golden_search.actions import LIVE_PRESENTATIONS, action_refusals, presented_status, unclaimed
+from app.research.golden_search.actions import (
+    LIVE_PRESENTATIONS,
+    STAGE_START_STATES,
+    action_refusals,
+    presented_status,
+    unclaimed,
+)
 from app.research.golden_search.declarations import declaration_for, point_hash, unavailable_reason
 from app.research.golden_search.exposure_rules import EXPOSURE_EXPLANATIONS, claim_for, exposure_state
 from app.research.golden_search.guidance import research_weakness
@@ -60,7 +66,7 @@ from app.research.golden_search.planning import (
     study_id_for,
 )
 from app.research.golden_search.protocol import IncumbentRef
-from app.research.golden_search.stages import ApprovalBinding, StageOutcome, execute_stage, stage_total
+from app.research.golden_search.stages import ApprovalBinding, StageOutcome, execute_stage, stage_refusal, stage_total
 from app.research.golden_search.views import candidate_detail, study_detail, study_summary
 from app.research.persistence import lifecycle
 from app.research.persistence.db import connection, with_connection
@@ -355,12 +361,15 @@ class _Presentation:
 
 
 def _present(row: StudyRow, *, liveness: Liveness, identity: CodeIdentity | None, verify_data: bool = False) -> _Presentation:
-    """Blocking: Redis liveness and, for a stopped stage, the code identity behind Finish."""
+    """Blocking: Redis liveness and the code identity behind Finish and every command that starts a stage."""
     live = _live(row, liveness)
     presented = presented_status(row, live=live)
     stopped = row.state in RUNNING_STATES and presented in ("failed", "cancelled", "interrupted")
     resume = _resume_refusal(row, live=live, identity=identity, verify_data=verify_data) if stopped else None
-    return _Presentation(presented=presented, refusals=action_refusals(row, presented=presented, resume_refusal=resume))
+    moved = stage_refusal(row, identity=identity) if row.state in STAGE_START_STATES else None
+    return _Presentation(
+        presented=presented, refusals=action_refusals(row, presented=presented, resume_refusal=resume, stage_refusal=moved)
+    )
 
 
 async def _progress(row: StudyRow, presented: str) -> dict[str, Any] | None:
@@ -790,6 +799,7 @@ def run_stage(
     on_phase: Callable[[str], None] = lambda phase: None,
     on_progress: Callable[[int, int], None] = lambda done, total: None,
     on_log: Callable[[str], None] = lambda message: None,
+    identity: CodeIdentity | None = None,
 ) -> StageOutcome:
     """Run the bound stage on the calling worker thread (``stages.execute_stage``)."""
     return execute_stage(
@@ -804,5 +814,6 @@ def run_stage(
         on_phase=on_phase,
         on_progress=on_progress,
         on_log=on_log,
+        identity=identity,
     )
 
