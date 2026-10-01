@@ -302,7 +302,7 @@ async def test_a_bot_execution_an_order_total_proof_kept_quarantined_is_never_re
         caplog.set_level(logging.INFO)
 
         assert [record_bot_order_executions(repo) for _ in range(3)] == [False, False, False]
-        assert not await FeeEvidenceSync(repo=repo, read=_AlpacaAccount(feed=feed, spy_held=5.0)).tick()
+        assert not await FeeEvidenceSync(repo=repo, read=_AlpacaAccount(feed=feed, spy_held=5.0), intake=ReentrantAsyncLock()).tick()
 
         assert _recovery_actions(caplog, "bot_order_execution_recovered") == []
         assert len(repo.transitions_for_order(order_ref)) == transitions
@@ -376,7 +376,7 @@ async def test_a_bot_order_whose_instruction_cannot_be_read_leaves_another_bots_
         monkeypatch.setattr(bot_order_executions, "read_order_details", _read_order_details)
         caplog.set_level(logging.INFO)
 
-        assert await FeeEvidenceSync(repo=repo, read=_AlpacaAccount(feed=feed, spy_held=7.0)).tick()
+        assert await FeeEvidenceSync(repo=repo, read=_AlpacaAccount(feed=feed, spy_held=7.0), intake=ReentrantAsyncLock()).tick()
 
         assert _recovery_actions(caplog, "bot_order_instruction_unreadable") == [unreadable]
         assert _credited(repo, unreadable) == [(None, "cumulative_recovery", refs[unreadable], 100.0)]

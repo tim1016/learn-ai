@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite.economic_projection import EconomicProjectionError
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
-from app.broker.alpaca.clerk.sqlite.order_projection import OrderProjectionReadError
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteError
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerReadPort
@@ -95,13 +94,9 @@ class FeeEvidenceSync:
         while True:
             try:
                 await self.tick()
-            # The walk's floor reads custody fills, and a bot order's recovery
-            # reads its accepted instruction, so a projection error refuses
-            # this tick instead of ending the producer.
-            except (
-                BrokerError, TimeoutError, ValueError, sqlite3.Error, ClerkSqliteError, EconomicProjectionError,
-                OrderProjectionReadError,
-            ):
+            # The walk's floor reads custody fills, so a projection error
+            # refuses this tick instead of ending the producer.
+            except (BrokerError, TimeoutError, ValueError, sqlite3.Error, ClerkSqliteError, EconomicProjectionError):
                 logger.warning("Account fee evidence could not be refreshed", exc_info=True)
             await asyncio.sleep(15)
 
