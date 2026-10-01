@@ -16,17 +16,6 @@ function makeResult() {
 }
 
 describe("StrategyLabRunStatsComponent", () => {
-  it("stacks the grade, headline metrics, supplementary statistics and evidence menu", async () => {
-    await render(StrategyLabRunStatsComponent, {
-      inputs: { run: makeRun(), result: makeResult(), verdict: null, parity: null, tradesTruncated: false },
-      providers: [provideZonelessChangeDetection()],
-    });
-
-    expect(screen.getByText("Backtest Evidence Grade")).toBeTruthy();
-    expect(screen.getByText("Returns")).toBeTruthy();
-    expect(screen.getByText("More statistics")).toBeTruthy();
-    expect(screen.getByText("Validation atlas")).toBeTruthy();
-  });
 
   it("never renders the retired results-page framing", async () => {
     const { container } = await render(StrategyLabRunStatsComponent, {

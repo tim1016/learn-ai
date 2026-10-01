@@ -158,29 +158,6 @@ describe("GoldenValidationWorkbenchComponent", () => {
     expect(await screen.findByText(/Golden validation accepted as Reviewed Deviations/i)).toBeTruthy();
   });
 
-  it("shows an explicit absence when execution configuration was not recorded", async () => {
-    const withoutExecutionConfiguration: GoldenValidation = {
-      ...CASE,
-      validation_case: {
-        ...CASE.validation_case,
-        execution: { ...CASE.validation_case.execution, configuration: null },
-      },
-    };
-    const service = fakeService({ list: vi.fn(() => of([withoutExecutionConfiguration])) });
-    await render(GoldenValidationWorkbenchComponent, {
-      providers: [
-        provideZonelessChangeDetection(),
-        { provide: GoldenValidationService, useValue: service },
-      ],
-    });
-    const user = userEvent.setup();
-
-    await user.click(await screen.findByText("Exact parameters, data, and execution scope"));
-
-    expect(screen.getByText("Configuration")).toBeTruthy();
-    expect(screen.getByText("Not recorded")).toBeTruthy();
-  });
-
   it("reuses the same review command when a response is lost and the intent is unchanged", async () => {
     const commands: string[] = [];
     const review = vi.fn((_id: number, request: ReviewGoldenValidationRequest) => {

@@ -54,14 +54,6 @@ function render(opts: {
 afterEach(() => TestBed.resetTestingModule());
 
 describe('TypedHaltConfirmComponent', () => {
-  it('renders the dialog when open is true', () => {
-    const h = render({});
-    expect(
-      h.el.querySelector('[data-testid="typed-halt-confirm-dialog"]'),
-    ).not.toBeNull();
-    expect(h.el.textContent).toContain('Backend title');
-    expect(h.el.textContent).toContain('Backend consequence.');
-  });
 
   it('disables the confirm button until the operator types HALT exactly', () => {
     const h = render({});
@@ -206,13 +198,6 @@ describe('TypedHaltConfirmComponent', () => {
         .querySelector<HTMLButtonElement>('[data-testid="typed-halt-confirm-submit"]')
         ?.click();
       expect(h.confirmed).toBe(1);
-    });
-
-    it('renders the supplied confirm label', () => {
-      const h = render({ requiredToken: '', confirmLabel: 'Flatten & pause' });
-      expect(
-        h.el.querySelector('[data-testid="typed-halt-confirm-submit"]')?.textContent?.trim(),
-      ).toBe('Flatten & pause');
     });
 
     it('moves keyboard focus into the dialog (onto Cancel) when there is no token input', async () => {

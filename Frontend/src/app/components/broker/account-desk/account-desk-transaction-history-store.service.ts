@@ -52,7 +52,6 @@ export class AccountDeskTransactionHistoryStore {
   readonly loadedPages = this.loadedPagesState.asReadonly();
   readonly rowLimitReached = this.rowLimitReachedState.asReadonly();
   readonly errorMessage = this.errorState.asReadonly();
-  readonly filters = this.filtersState.asReadonly();
   readonly hasLastGood = computed(() => this.feedState() !== null);
 
   async load(

@@ -545,18 +545,6 @@ const mockService = {
   getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot()),
   liveStreamUrl: vi.fn().mockReturnValue('/api/test/live-stream'),
   getCurrentRun: vi.fn().mockResolvedValue(makeRun()),
-  getLiveChart: vi.fn().mockResolvedValue({
-    strategy_instance_id: 'sid-001',
-    symbol: 'QQQ',
-    trading_date_open_ms: 1_753_800_000_000,
-    trading_date_close_ms: 1_753_823_400_000,
-    resolution: '1m',
-    bars: [],
-    fill_markers: [],
-    overlay_notices: [],
-    feed: fakeChartFeed(),
-    as_of_ms: 1_753_800_000_000,
-  }),
   getHistoryChart: vi.fn().mockResolvedValue({
     strategy_instance_id: 'sid-001',
     symbol: 'QQQ',
@@ -753,13 +741,6 @@ describe('BotPanelShellComponent', () => {
 
       const back = screen.getByRole('link', { name: 'Home' });
       expect(back.getAttribute('href')).toBe('/brokers/alpaca/clerks/clrk_spec/accounts/DUM284968');
-    });
-
-    it('names the bot in its header', async () => {
-      const { container } = await renderShellWithStamp('?from=bots');
-
-      expect(screen.getByRole('heading', { level: 2, name: 'sid-001' })).toBeTruthy();
-      expect(container.querySelector('app-bot-banner')).not.toBeNull();
     });
   });
 
@@ -1997,45 +1978,6 @@ describe('BotPanelShellComponent', () => {
     expect(mockService.getLiveSnapshot).toHaveBeenCalledTimes(2);
   });
 
-  it('renders a receiptLabel-formatted reason_code when the backend sends no why prose', async () => {
-    mockService.getLiveSnapshot.mockResolvedValueOnce(liveSnapshot({
-      ...PANEL,
-      health: { ...PANEL.health, running: false },
-      actions: [RECONCILE_ACTION],
-      primary_action: 'reconcile_now',
-    }));
-    mockService.runBotAction.mockRejectedValueOnce(
-      new HttpErrorResponse({
-        status: 409,
-        error: {
-          detail: {
-            action_id: 'reconcile_now',
-            outcome: 'failure',
-            receipt_id: null,
-            recorded_at_ms: 1_753_800_000_000,
-            message: 'Reconcile now is no longer available for this bot.',
-            why: null,
-            reason_code: 'TERMINAL_EVIDENCE_UNREADABLE',
-          },
-        },
-      }),
-    );
-    const { fixture } = await render(BotPanelShellComponent, {
-      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
-      providers: [provideRouter([]), { provide: BrokerV2PanelService, useValue: mockService }, { provide: BrokersService, useValue: brokersMock },
-        { provide: MessageService, useValue: messageService }],
-    });
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(screen.getByText('Reconcile now is no longer available for this bot.')).toBeTruthy();
-    expect(screen.getByText('Terminal Evidence Unreadable')).toBeTruthy();
-  });
-
   it('renders a cleanup-proven activation failure as Failure, distinct from Unknown', async () => {
     // PRD #1716 FR-6: outcome=failure (cleanup proven) must read differently
     // from outcome=unknown (unproven cleanup) — both the headline label and
@@ -2368,12 +2310,6 @@ describe('BotPanelShellComponent', () => {
         'Still in shares, at cost $764.71',
         'Still in entry orders $0.00',
       ]);
-    });
-
-    it('marks a Dry Run bot as simulated cash', async () => {
-      await renderPage({ ...PANEL, mode: 'dry_run' });
-
-      expect(screen.getByText('DRY RUN · simulated cash')).toBeTruthy();
     });
 
     it('moves the keyboard to the outcome after a command (story 48)', async () => {

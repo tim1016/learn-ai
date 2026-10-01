@@ -215,13 +215,11 @@ export class DataLabWorkspaceStore {
   readonly companions = this._companions.asReadonly();
   readonly exportColumns = this._exportColumns.asReadonly();
   readonly exportTimeZone = this._exportTimeZone.asReadonly();
-  readonly savedSession = this._savedSession.asReadonly();
   readonly lastChartRequestSignature = this._lastChartRequestSignature.asReadonly();
   readonly chartStale = this._chartStale.asReadonly();
   readonly datasetPlanReceipt = this._datasetPlanReceipt.asReadonly();
   readonly datasetPlanReceiptSignature = this._datasetPlanSignature.asReadonly();
   readonly newsState = this._newsState.asReadonly();
-  readonly generationRun = this._generationRun.asReadonly();
   readonly restoredChartSnapshot = this._restoredChartSnapshot.asReadonly();
   readonly latestChartSnapshot = this._latestChartSnapshot.asReadonly();
   readonly chartRefreshRequests = this._chartRefreshRequests.asReadonly();
@@ -285,15 +283,6 @@ export class DataLabWorkspaceStore {
    *  current. */
   settleChartRequest(): void {
     this._chartStale.set(false);
-  }
-
-  /** Consume staleness for a known signature. True when the chart rendering
-   *  `signature` is the one the staleness referred to. */
-  consumeStale(signature: string): boolean {
-    if (!this._chartStale()) return false;
-    if (this._lastChartRequestSignature() !== signature) return false;
-    this._chartStale.set(false);
-    return true;
   }
 
   // ── Recipe (setRecipe ops) ──────────────────────────────────
@@ -376,13 +365,6 @@ export class DataLabWorkspaceStore {
     if (!this._indicators().some(i => i.id === instanceId)) return false;
     this._colorOverrides.update(map => ({ ...map, [instanceId]: token }));
     return true;
-  }
-
-  clearColorToken(instanceId: string): void {
-    this._colorOverrides.update(map => {
-      if (!(instanceId in map)) return map;
-      return omitKey(map, instanceId);
-    });
   }
 
   // ── Companions / receipts / refs ────────────────────────────

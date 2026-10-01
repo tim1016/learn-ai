@@ -35,16 +35,8 @@ export type BotClearRequest = components['schemas']['BotClearRequest'];
 export type CohortActionResult = components['schemas']['CohortActionResult'];
 export type CohortLegResult = components['schemas']['CohortLegResult'];
 
-// ── Operator-blocker reuse (OperatorBlocker contract) ────────────────────────
-
-export type OperatorBlocker = components['schemas']['OperatorBlocker'];
-export type OperatorConfirmationCopy =
-  components['schemas']['OperatorConfirmationCopy'];
-
 // ── §4 Panel profile ─────────────────────────────────────────────────────────
 
-export type StationApplicability =
-  components['schemas']['StationApplicability'];
 export type PanelProfile = components['schemas']['PanelProfile'];
 
 // ── §5 Catalog view ──────────────────────────────────────────────────────────
@@ -53,19 +45,16 @@ export type BotCatalogView = components['schemas']['BotCatalogView'];
 
 // ── §7 Panel view ────────────────────────────────────────────────────────────
 
-export type DutyOutcomeView = components['schemas']['DutyOutcomeView'];
 export type ExposureNoticeView = components['schemas']['ExposureNoticeView'];
 export type StartupJoinView = components['schemas']['StartupJoinView'];
 export type BotHealthCard = components['schemas']['BotHealthCard'];
 export type ChannelHealthView = components['schemas']['ChannelHealthView'];
-export type FeedContinuityEventView = components['schemas']['FeedContinuityEventView'];
 export type FeedContinuityView = components['schemas']['FeedContinuityView'];
 export type ClerkCard = components['schemas']['ClerkCard'];
 export type StationView = components['schemas']['StationView'];
 export type ReadinessCheckView = components['schemas']['ReadinessCheckView'];
 export type TransactionRail = components['schemas']['TransactionRail'];
 export type PanelAction = components['schemas']['PanelAction'];
-export type ExitTerms = components['schemas']['ExitTerms'];
 
 /**
  * `authority_kind` names the exact Clerk account authority (real Paper vs

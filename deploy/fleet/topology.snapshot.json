@@ -193,7 +193,6 @@
       "volumes": [
         "Frontend/proxy.conf.js->/app/proxy.conf.js:bind",
         "Frontend/src->/app/src:bind",
-        "PythonDataService/tests/fixtures/action_plan->/app/src/testing/action_plan_fixtures:bind",
         "contracts->/contracts:bind"
       ]
     },

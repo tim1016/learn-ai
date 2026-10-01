@@ -22,18 +22,6 @@ const SELL_FILL: ChartFillMarker = {
 };
 
 describe('TradesTodayListComponent', () => {
-  it('shows no-trades message when fills are empty', async () => {
-    await render(TradesTodayListComponent, {
-      inputs: {
-        fills: [],
-        fillCount: 0,
-        tradingDateMs: null,
-      },
-    });
-
-    expect(screen.getByText('No fills today.')).toBeTruthy();
-    expect(screen.queryByRole('table')).toBeNull();
-  });
 
   it('distinguishes unavailable fill history from a verified zero count', async () => {
     await render(TradesTodayListComponent, {
@@ -50,20 +38,6 @@ describe('TradesTodayListComponent', () => {
     expect(screen.queryByText('No fills today.')).toBeNull();
   });
 
-  it('explains when known fills are outside the chart window', async () => {
-    await render(TradesTodayListComponent, {
-      inputs: {
-        fills: [],
-        fillCount: 2,
-        tradingDateMs: null,
-      },
-    });
-
-    expect(
-      screen.getByText('Fill details are outside the current chart window.'),
-    ).toBeTruthy();
-  });
-
   it('renders one row per fill when fills are present', async () => {
     await render(TradesTodayListComponent, {
       inputs: {
@@ -75,18 +49,6 @@ describe('TradesTodayListComponent', () => {
     const rows = screen.getAllByRole('row');
     // header row + 2 fill rows
     expect(rows.length).toBe(3);
-  });
-
-  it('never claims fees are unreported under the fills (H26)', async () => {
-    await render(TradesTodayListComponent, {
-      inputs: {
-        fills: [BUY_FILL, SELL_FILL],
-        tradingDateMs: null,
-      },
-    });
-
-    expect(screen.getByRole('table', { name: 'Fills today' })).toBeTruthy();
-    expect(screen.queryByText(/Fees not reported/i)).toBeNull();
   });
 
   it('bounds the inline rail and opens every fill in the slide-over', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeError, lookupErrorEntry, resolveErrorCode, resolveMathRef } from './error-catalog';
+import { describeError, lookupErrorEntry, resolveErrorCode } from './error-catalog';
 import { GraphqlError } from '../graphql/graphql-error';
 
 describe('lookupErrorEntry', () => {
@@ -40,25 +40,6 @@ describe('resolveErrorCode', () => {
   });
 });
 
-describe('resolveMathRef', () => {
-  it('reads extensions.mathRef when present', () => {
-    const err = new GraphqlError([
-      {
-        message: 'greeks diverged',
-        extensions: { code: 'NUMERIC_DIVERGENCE', mathRef: '/docs/math-sources-of-truth.md' },
-      },
-    ]);
-    expect(resolveMathRef(err)).toBe('/docs/math-sources-of-truth.md');
-  });
-
-  it('returns undefined when no mathRef is attached', () => {
-    const err = new GraphqlError([
-      { message: 'x', extensions: { code: 'BROKER_DISCONNECTED' } },
-    ]);
-    expect(resolveMathRef(err)).toBeUndefined();
-  });
-});
-
 describe('describeError', () => {
   it('uses catalog copy when the code is mapped', () => {
     const err = new GraphqlError([
@@ -79,15 +60,5 @@ describe('describeError', () => {
     const err = new Error('ECONNREFUSED');
     const display = describeError(err, 'We could not reach the broker.');
     expect(display.what).toBe('We could not reach the broker.');
-  });
-
-  it('passes through the math deep-link when supplied', () => {
-    const err = new GraphqlError([
-      {
-        message: 'greeks diverged',
-        extensions: { code: 'NUMERIC_DIVERGENCE', mathRef: '/docs/math.md' },
-      },
-    ]);
-    expect(describeError(err).mathRef).toBe('/docs/math.md');
   });
 });

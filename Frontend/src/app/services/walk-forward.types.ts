@@ -15,8 +15,6 @@ import type {
 export type WalkForwardStatus = 'completed' | 'failed';
 export type FoldStatus = 'completed' | 'failed';
 
-export type SplitPolicyKind = 'chronological' | 'rolling' | 'anchored';
-
 export type SplitPolicySpec =
   | { kind: 'chronological'; train_pct: number }
   | { kind: 'rolling'; train_days: number; test_days: number; step_days: number }

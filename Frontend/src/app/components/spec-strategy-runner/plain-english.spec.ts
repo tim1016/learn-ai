@@ -5,7 +5,6 @@ import {
   formatCondition,
   formatEntryBlock,
   formatExitBlock,
-  formatStrategySummary,
   formatSurvivalRule,
 } from './plain-english';
 
@@ -285,35 +284,6 @@ describe('plain-english', () => {
         INDS,
       );
       expect(out).toBe('stop loss: when unrealized PnL ≤ -1%, close the position.');
-    });
-  });
-
-  describe('formatStrategySummary', () => {
-    it('combines entry / survival / exit into one paragraph', () => {
-      const spec: StrategySpec = {
-        schema_version: '1.0',
-        name: 'test',
-        symbols: ['SPY'],
-        resolution: { period_minutes: 15 },
-        indicators: INDS as IndicatorBlock[],
-        entry: {
-          logic: 'AND',
-          size: { kind: 'SetHoldings', fraction: 1 },
-          conditions: [{ kind: 'FreshCross', left: 'ema5', right: 'ema10', direction: 'up' }],
-        },
-        survival: [
-          {
-            name: 'hard stop',
-            when: { logic: 'AND', conditions: [{ kind: 'PnLPercent', op: '<=', value: -0.01 }] },
-            action: { kind: 'CLOSE_ALL' },
-          },
-        ],
-        exit: { logic: 'OR', conditions: [{ kind: 'BarsSinceEntry', op: '>=', value: 5 }] },
-      };
-      const out = formatStrategySummary(spec);
-      expect(out).toContain('Enter all-in when EMA(5) crosses above EMA(10).');
-      expect(out).toContain('Manage rules: hard stop.');
-      expect(out).toContain('Exit when 5 or more bars since entry.');
     });
   });
 });

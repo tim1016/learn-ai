@@ -20,7 +20,7 @@ import {
 } from "@angular/core";
 
 import type {
-  EdgeData, HeatmapStat, SignalMark,
+  EdgeData, SignalMark,
 } from "../services/edge-mock-data.service";
 
 // Shared color tokens — match _tokens.scss.
@@ -859,5 +859,3 @@ export class EdgeStabilitySparklineComponent implements AfterViewInit {
     ctx.fillText(data[data.length - 1].toFixed(2), PAD_L + innerW, PAD_T + innerH - 1);
   }
 }
-
-export type EdgeHeatmapStat = HeatmapStat;

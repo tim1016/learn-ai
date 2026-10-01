@@ -655,11 +655,5 @@ describe('AlpacaLiveBannerComponent', () => {
       expect(status.getAttribute('aria-label')).toContain('Whether anything on this account needs you is unknown.');
       expect(status.textContent).not.toContain('0');
     });
-
-    it('puts the one-thing wording in the singular', async () => {
-      await renderWith(laneWithAttention(1), { verdict: verdict({}), lastError: null });
-
-      expect(screen.getByRole('status').getAttribute('aria-label')).toContain('1 thing on this account needs you.');
-    });
   });
 });

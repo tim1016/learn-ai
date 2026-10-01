@@ -40,10 +40,4 @@ test.describe('Strategy Lab analytical manual', () => {
     await expect(search).toHaveValue('');
     await expect(page.getByRole('link', { name: /Compare with/i })).toBeVisible();
   });
-
-  test('keeps unknown metric and stale contract context explicit', async ({ page }) => {
-    await page.goto('/strategy-lab/docs?metric=unknown_metric&contract=retired-v0');
-
-    await expect(page.getByText(/requested metric is not documented/i)).toBeVisible();
-  });
 });

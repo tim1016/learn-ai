@@ -18,7 +18,6 @@ import {
   bsTheta,
   bsVega,
   bsRho,
-  lognormalCdf,
   strategyPnlAtPrice,
   strategyGreekAtPrice,
   LegParams,
@@ -296,31 +295,6 @@ describe('bsRho', () => {
 
   it('should return 0 at expiry', () => {
     expect(bsRho(100, 100, 0.05, 0.20, 0, 'call')).toBe(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// lognormalCdf
-// ---------------------------------------------------------------------------
-
-describe('lognormalCdf', () => {
-  it('should return 0 for x <= 0', () => {
-    expect(lognormalCdf(0, 100, 0.05, 0.20, 1.0)).toBe(0);
-    expect(lognormalCdf(-10, 100, 0.05, 0.20, 1.0)).toBe(0);
-  });
-
-  it('should return value between 0 and 1', () => {
-    const cdf = lognormalCdf(100, 100, 0.05, 0.20, 1.0);
-    expect(cdf).toBeGreaterThan(0);
-    expect(cdf).toBeLessThan(1);
-  });
-
-  it('should be monotonically increasing', () => {
-    const c80 = lognormalCdf(80, 100, 0.05, 0.20, 1.0);
-    const c100 = lognormalCdf(100, 100, 0.05, 0.20, 1.0);
-    const c120 = lognormalCdf(120, 100, 0.05, 0.20, 1.0);
-    expect(c100).toBeGreaterThan(c80);
-    expect(c120).toBeGreaterThan(c100);
   });
 });
 

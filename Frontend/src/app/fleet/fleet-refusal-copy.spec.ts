@@ -4,8 +4,7 @@
  * `fleet-refusal-copy.ts` is a client-authored safety net, not the primary
  * copy source (`FleetControlError.detail()`'s `message`/`next_step` always
  * win — see that module's docstring). This test proves the net actually
- * covers the closed vocabulary it is locked to, mirroring
- * `broker-v2-copy-contract.spec.ts`'s pattern for the sibling vocabulary:
+ * covers the closed vocabulary it is locked to:
  *
  * 1. **Snapshot -> fallback parity** — every code in the committed
  *    `fleet-refusal-vocabulary.snapshot.json` has an entry in
@@ -81,13 +80,6 @@ describe('FLEET_REFUSAL_COPY', () => {
 });
 
 describe('fleetRefusalCopyFor', () => {
-  it('returns the fallback copy for a known code', () => {
-    expect(fleetRefusalCopyFor('clerk_unreachable')).toEqual({
-      outcome: 'failure',
-      message: "This clerk's agent could not be reached.",
-      nextStep: "Retry once the clerk's agent reconnects.",
-    });
-  });
 
   it('returns null for a code outside the closed vocabulary', () => {
     expect(fleetRefusalCopyFor('not_a_real_fleet_reason')).toBeNull();

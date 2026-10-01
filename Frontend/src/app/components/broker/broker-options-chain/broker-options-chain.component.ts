@@ -175,11 +175,6 @@ export class BrokerOptionsChainComponent {
   });
 
   readonly underlyingPrice = computed(() => this.latestSnapshot()?.underlying_price ?? null);
-  readonly snapshotAge = computed(() => {
-    const snap = this.latestSnapshot();
-    if (snap === null) return null;
-    return Date.now() - snap.as_of_ms;
-  });
 
   constructor() {
     void this.loadExpirations();

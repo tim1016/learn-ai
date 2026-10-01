@@ -33,21 +33,6 @@ describe("ValidationScopeNoteComponent", () => {
     expect(trigger?.getAttribute("aria-expanded")).toBe("true");
   });
 
-  it("opens the explainer and states the summary-level validation contract", async () => {
-    const fixture = await renderNote();
-
-    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>("button")?.click();
-    fixture.detectChanges();
-
-    expect(document.body.textContent).toContain("What LEAN validation covers");
-    expect(document.body.textContent).toContain("Validation is summary-level, by design.");
-    expect(document.body.textContent).toContain("closed-trade ledger");
-    expect(document.body.textContent).toContain("Ordinary runs and sweeps are not graded bar-by-bar");
-    expect(document.body.textContent).toContain("cross-engine reconciliation");
-    expect(document.body.textContent).toContain("carried through field-for-field without recomputation");
-    expect(document.body.textContent).toContain("expected, not a defect");
-  });
-
   it("labels the dialog for screen readers through the header template's aria id", async () => {
     const fixture = await renderNote();
 

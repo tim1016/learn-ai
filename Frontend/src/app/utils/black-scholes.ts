@@ -249,23 +249,6 @@ export function bsRho(
 }
 
 // ---------------------------------------------------------------------------
-// Lognormal CDF — probability that S_T < x
-// ---------------------------------------------------------------------------
-
-export function lognormalCdf(
-  x: number,
-  spot: number,
-  r: number,
-  sigma: number,
-  t: number,
-): number {
-  if (x <= 0 || spot <= 0 || sigma <= 0 || t <= 0) return 0;
-  const d2 = (Math.log(x / spot) - (r - 0.5 * sigma * sigma) * t) /
-    (sigma * Math.sqrt(t));
-  return normCdf(d2);
-}
-
-// ---------------------------------------------------------------------------
 // Composite: full-strategy P&L and Greeks at a given underlying price
 // ---------------------------------------------------------------------------
 

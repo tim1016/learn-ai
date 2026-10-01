@@ -324,10 +324,6 @@ export class IndicatorPickerComponent implements AfterViewChecked, AfterViewInit
     return this.openCats().has(name);
   }
 
-  protected catColorClass(category: string): string {
-    return `ip-cat--${category}`;
-  }
-
   protected paneIcon(pane: IndicatorPane): string {
     return pane === 'overlay' ? '▤' : '▥';
   }

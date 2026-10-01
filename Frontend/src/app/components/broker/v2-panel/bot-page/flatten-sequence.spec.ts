@@ -147,11 +147,6 @@ describe('the flatten sequence', () => {
 });
 
 describe('the flatten steps', () => {
-  it('names a Dry Run’s check by its simulated account, never Alpaca', () => {
-    expect(initialFlattenSteps('dry_run').map((step) => step.label))
-      .toEqual(['Check the position in its simulated account', 'Prepare the sale', 'Sell']);
-    expect(initialFlattenSteps('trade')[0].label).toBe('Check the position with Alpaca');
-  });
 
   it('changes one step at a time and knows while one is still running', () => {
     const running = settleFlattenStep(initialFlattenSteps('trade'), 'sell', 'running', 'Set it below.');

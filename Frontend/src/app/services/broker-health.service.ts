@@ -4,15 +4,12 @@ import { MarketDataFeedService } from './market-data-feed.service';
 
 const POLL_INTERVAL_MS = 5000;
 
-export type LifecycleAction = 'connect' | 'disconnect' | 'reconnect';
-
 /**
  * Singleton owner of the connection-health signal.
  *
  * Polls ``GET /api/broker/health`` every five seconds and exposes the
- * latest snapshot as a signal. The shell renders the global paper /
- * live / disconnected banner from this signal; per-page components
- * derive read-side availability from ``isPaperConnected()``.
+ * latest snapshot as a signal. The IBKR options-chain and options-surface
+ * pages derive their feed-state banner from it.
  *
  * Per the IBKR integration plan: never derive the banner from the
  * ``IBKR_MODE`` env var. ``health.is_paper`` is the only source of
@@ -26,14 +23,6 @@ export class BrokerHealthService {
 
   readonly health = signal<IbkrConnectionHealth | null>(null);
   readonly lastError = signal<unknown | null>(null);
-  /**
-   * Which lifecycle action (connect / disconnect / reconnect) is in
-   * flight. Both the global banner and the Account Desk read this
-   * — clicking either control disables both, so two concurrent
-   * connectAsyncs can't race past the server-side asyncio lock.
-   */
-  readonly lifecycleAction = signal<LifecycleAction | null>(null);
-  readonly lifecycleError = signal<unknown | null>(null);
 
   /**
    * The banner state derived from the latest health snapshot. ``null``
@@ -50,18 +39,6 @@ export class BrokerHealthService {
     if (!h.connected) return 'disconnected';
     if (h.connection_state !== 'connected') return 'degraded';
     return h.is_paper ? 'paper' : 'live';
-  });
-
-  /**
-   * Paper-session readiness signal retained for read-only evidence views.
-   *
-   * Reads ``connection_state`` rather than the legacy ``connected``
-   * boolean: during a TWS 1100 soft loss the socket is still up
-   * (``connected=true``) but the evidence feed is unavailable.
-   */
-  readonly isPaperConnected = computed<boolean>(() => {
-    const h = this.health();
-    return h !== null && h.connection_state === 'connected' && h.is_paper === true;
   });
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -97,43 +74,6 @@ export class BrokerHealthService {
       // crashing the poll.
       this.lastError.set(err);
       this.health.set(null);
-    }
-  }
-
-  /**
-   * Drive ``POST /api/broker/connect`` and refresh health on completion.
-   * Shared by the global banner and the Account Desk so a click
-   * in either place is the same lifecycle action — and the
-   * ``lifecycleAction`` signal locks both controls together.
-   */
-  connect(): Promise<void> {
-    return this.runLifecycleAction('connect', () => this.broker.connect());
-  }
-
-  /** Drive ``POST /api/broker/disconnect`` and refresh health. */
-  disconnect(): Promise<void> {
-    return this.runLifecycleAction('disconnect', () => this.broker.disconnect());
-  }
-
-  /** Drive ``POST /api/broker/reconnect`` and refresh health. */
-  reconnect(): Promise<void> {
-    return this.runLifecycleAction('reconnect', () => this.broker.reconnect());
-  }
-
-  private async runLifecycleAction(
-    action: LifecycleAction,
-    call: () => Promise<unknown>,
-  ): Promise<void> {
-    if (this.lifecycleAction() !== null) return;
-    this.lifecycleAction.set(action);
-    this.lifecycleError.set(null);
-    try {
-      await call();
-    } catch (err) {
-      this.lifecycleError.set(err);
-    } finally {
-      this.lifecycleAction.set(null);
-      await this.refresh();
     }
   }
 

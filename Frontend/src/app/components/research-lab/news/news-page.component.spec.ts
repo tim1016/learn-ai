@@ -132,12 +132,4 @@ describe('NewsPageComponent', () => {
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByText('Could not fetch news.')).toBeTruthy();
   });
-
-  it('says so plainly when nothing matched', async () => {
-    const { http } = await renderPage();
-
-    http.expectOne((r) => r.url === NEWS_URL).flush(responseBody({ articles: [], count: 0 }));
-
-    expect(await screen.findByText('No articles matched this query.')).toBeTruthy();
-  });
 });

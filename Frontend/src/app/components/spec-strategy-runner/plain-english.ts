@@ -184,21 +184,6 @@ export function formatSurvivalBlock(
   return rules.map((r) => '• ' + formatSurvivalRule(r, indicators)).join('\n');
 }
 
-/**
- * Top-of-page one-paragraph summary covering all three lifecycle
- * blocks. Used in the page header so a user lands on a familiar
- * strategy and can read what it does without scrolling.
- */
-export function formatStrategySummary(spec: StrategySpec): string {
-  const parts: string[] = [];
-  parts.push(formatEntryBlock(spec.entry, spec.indicators));
-  if (spec.survival && spec.survival.length > 0) {
-    parts.push(`Manage rules: ${spec.survival.map((r) => r.name).join(', ')}.`);
-  }
-  parts.push(formatExitBlock(spec.exit, spec.indicators));
-  return parts.join(' ');
-}
-
 // ---------------------------------------------------------------------------
 // Structured summary fragments — for rendering the rich Strategy Summary
 // hero with colored chips for indicators / numbers / verbs / bull / bear.

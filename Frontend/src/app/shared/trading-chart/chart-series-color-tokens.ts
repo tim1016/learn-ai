@@ -76,10 +76,3 @@ export const CHART_SERIES_ELIGIBLE_TOKENS: readonly ChartSeriesColorToken[] =
 export function isChartSeriesColorToken(v: unknown): v is ChartSeriesColorToken {
   return typeof v === 'string' && CHART_SERIES_COLOR_TOKENS.has(v as ChartSeriesColorToken);
 }
-
-/** Resolve a token to its CSS custom-property reference. */
-export function chartSeriesColorVar(token: ChartSeriesColorToken): string {
-  const def = CHART_SERIES_COLOR_TOKENS.get(token);
-  if (!def) throw new Error(`Unknown chart series color token: ${token}`);
-  return `var(${def.cssVar})`;
-}
