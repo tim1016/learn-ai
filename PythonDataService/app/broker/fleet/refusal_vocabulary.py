@@ -15,8 +15,8 @@ JSON on raw-ASGI compatibility-retirement paths (``compatibility_read_retired``,
 Per decision 9 (docs/superpowers/plans/2026-09-14-fleet-lane-e-frontend-fence-and-refusals.md
 Task 7a) these reasons do **not** enter the exported OpenAPI contract -- the
 frontend's copy map locks against a committed snapshot instead, regenerated
-and diffed by ``.github/workflows/ci.yml``'s ``broker-v2-vocabulary-contract``
-job. This module is the Python authority ``build_snapshot()``
+and compared by ``tests/broker/fleet/test_refusal_vocabulary_snapshot.py``.
+This module is the Python authority ``build_snapshot()``
 (``scripts/regenerate_fleet_refusal_vocabulary_snapshot.py``) reads.
 
 This module is a leaf: it imports nothing but ``errors.py``, which itself

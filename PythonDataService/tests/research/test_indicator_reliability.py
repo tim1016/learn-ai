@@ -159,8 +159,8 @@ class TestComputeIndicatorReliabilityWithOos:
         assert "train_bars" in metadata
         assert "test_bars" in metadata
 
-    # ~14 s: five horizons through the full IS/OOS pipeline. A change-driven
-    # PR shard that drew it ran past the 120 s gate (#2611), so it runs daily.
+    # ~14 s: five horizons through the full IS/OOS pipeline. A PR shard that
+    # drew it ran past the 120 s gate (#2611), so it runs daily.
     @pytest.mark.slow
     def test_multiple_horizons_apply_fdr(self):
         df = _create_test_df(500)

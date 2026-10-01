@@ -103,9 +103,9 @@ record that leaves its own checkable form to the CI author has moved the
 decision, not made it, and two follow-ups could normalize the corpus
 incompatibly.
 
-One format, one closed value, one occurrence per file — a CI grep gate, sibling
-to the temporal-rigor ban list. This is what obliges the field to stay current;
-nothing did before, for the whole life of the corpus.
+One format, one closed value, one occurrence per file, so a grep can check it.
+The CI grep gate this decision first called for was cut on 2026-09-30; see the
+amendment below.
 
 ## Considered and rejected
 
@@ -124,7 +124,7 @@ nothing did before, for the whole life of the corpus.
 - **Give `doc-authority.md` a Status column and generate it from the ADR files**,
   following the `vocabulary.snapshot.json` precedent. Rejected as premature: a
   generated view is worth building when the source is trustworthy, and the source
-  is currently three formats and five values. Decision 6's gate is the
+  is currently three formats and five values. Decision 6's form is the
   prerequisite, not the alternative.
 
 ## Consequences
@@ -160,10 +160,21 @@ register work.
 6. **ADR 0026's never-built §4 becomes a `known-gaps.md` entry** under Decision 1.
    Already scheduled — [#1610](https://github.com/tim1016/learn-ai/issues/1610)
    item 2 marks the ADR superseded for Alpaca and flags the contradiction.
-7. **A CI gate is owed** (Decision 6). Until it exists, this ADR's own rules are
-   as unenforced as the ones that produced the drift.
+7. **No CI gate enforces Decision 6** (amended 2026-09-30). The gate was built
+   and later cut; authors and review keep the form.
 8. **No `CONTEXT.md` entry.** ADR status is repo process, not trading-domain
    language, and `domain-modeling` holds that the glossary is a glossary and
    nothing else. That boundary — what `CONTEXT.md` is a glossary *of* — is itself
    the open question in [#1595](https://github.com/tim1016/learn-ai/issues/1595);
    this ADR assumes the narrow reading and should be revisited if #1595 widens it.
+
+## Amendment 2026-09-30 — the ADR status gate is cut (#2751)
+
+Decision 6's CI grep gate shipped as `scripts/check_adr_status.py` and the
+`ADR Status Guard` job, which also checked ADR 0040's `Vocabulary:` line. The
+lean-and-mean clean-up ([#2751](https://github.com/tim1016/learn-ai/issues/2751),
+gate bar from map [#2700](https://github.com/tim1016/learn-ai/issues/2700))
+keeps a CI check only if it is lint, build or typecheck, runs tests, or guards
+the money path, math parity or an OpenAPI/GraphQL contract. A check of ADR prose
+metadata is none of those, so the job and both scripts are gone. Decisions 1-5
+and the Status form in Decision 6 stand; nothing enforces the form mechanically.

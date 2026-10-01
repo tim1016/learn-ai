@@ -94,8 +94,7 @@ _ET = ZoneInfo("America/New_York")
 ReturnKind = Literal["close_to_close", "session", "overnight"]
 RETURN_KINDS: tuple[ReturnKind, ...] = ("close_to_close", "session", "overnight")
 
-#: The full-24h session segmentation shown in the per-day drill-down, in
-#: chronological order. ``overnight``/``morning``/``afternoon`` are the
+
 class NonMonotonicBarError(ValueError):
     """A day's bars did not arrive in chronological order."""
 
