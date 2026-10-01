@@ -27,19 +27,4 @@ public class StockAggregate
     // Metadata
     public long? TransactionCount { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-
-    /// <summary>
-    /// Validates OHLCV data integrity
-    /// Testable business rule
-    /// </summary>
-    public bool IsValid()
-    {
-        return High >= Open &&
-               High >= Close &&
-               High >= Low &&
-               Low <= Open &&
-               Low <= Close &&
-               Low <= High &&
-               Volume >= 0;
-    }
 }

@@ -14,10 +14,6 @@ public class AppDbContext : DbContext
     // Market data models
     public DbSet<Ticker> Tickers => Set<Ticker>();
     public DbSet<StockAggregate> StockAggregates => Set<StockAggregate>();
-    public DbSet<Trade> Trades => Set<Trade>();
-    public DbSet<Quote> Quotes => Set<Quote>();
-    public DbSet<TechnicalIndicator> TechnicalIndicators => Set<TechnicalIndicator>();
-    public DbSet<ReferenceData> ReferenceData => Set<ReferenceData>();
 
 
 
@@ -27,9 +23,6 @@ public class AppDbContext : DbContext
     // Research models
     public DbSet<ResearchExperiment> ResearchExperiments => Set<ResearchExperiment>();
     public DbSet<SignalExperiment> SignalExperiments => Set<SignalExperiment>();
-
-    // Options IV cache
-    public DbSet<OptionsIvSnapshot> OptionsIvSnapshots => Set<OptionsIvSnapshot>();
 
     // Data Lab models
     public DbSet<DataLabSession> DataLabSessions => Set<DataLabSession>();
@@ -95,62 +88,6 @@ public class AppDbContext : DbContext
             entity.HasIndex(a => a.Timestamp);
         });
 
-        // Trade configuration
-        modelBuilder.Entity<Trade>(entity =>
-        {
-            entity.HasKey(t => t.Id);
-            entity.Property(t => t.Price).HasPrecision(18, 8);
-            entity.Property(t => t.Size).HasPrecision(18, 8);
-            entity.HasOne(t => t.Ticker)
-                  .WithMany(tk => tk.Trades)
-                  .HasForeignKey(t => t.TickerId)
-                  .OnDelete(DeleteBehavior.Cascade);
-            entity.HasIndex(t => new { t.TickerId, t.Timestamp });
-        });
-
-        // Quote configuration
-        modelBuilder.Entity<Quote>(entity =>
-        {
-            entity.HasKey(q => q.Id);
-            entity.Property(q => q.BidPrice).HasPrecision(18, 8);
-            entity.Property(q => q.AskPrice).HasPrecision(18, 8);
-            entity.Property(q => q.BidSize).HasPrecision(18, 8);
-            entity.Property(q => q.AskSize).HasPrecision(18, 8);
-            entity.HasOne(q => q.Ticker)
-                  .WithMany(t => t.Quotes)
-                  .HasForeignKey(q => q.TickerId)
-                  .OnDelete(DeleteBehavior.Cascade);
-            entity.HasIndex(q => new { q.TickerId, q.Timestamp });
-        });
-
-        // TechnicalIndicator configuration
-        modelBuilder.Entity<TechnicalIndicator>(entity =>
-        {
-            entity.HasKey(i => i.Id);
-            entity.Property(i => i.Value).HasPrecision(18, 8);
-            entity.Property(i => i.Signal).HasPrecision(18, 8);
-            entity.Property(i => i.Histogram).HasPrecision(18, 8);
-            entity.HasOne(i => i.Ticker)
-                  .WithMany(t => t.Indicators)
-                  .HasForeignKey(i => i.TickerId)
-                  .OnDelete(DeleteBehavior.Cascade);
-            entity.HasIndex(i => new { i.TickerId, i.IndicatorType, i.Timestamp });
-        });
-
-        // ReferenceData configuration
-        modelBuilder.Entity<ReferenceData>(entity =>
-        {
-            entity.HasKey(r => r.Id);
-            entity.Property(r => r.CashAmount).HasPrecision(18, 8);
-            entity.Property(r => r.SplitFrom).HasPrecision(18, 8);
-            entity.Property(r => r.SplitTo).HasPrecision(18, 8);
-            entity.HasOne(r => r.Ticker)
-                  .WithMany()
-                  .HasForeignKey(r => r.TickerId)
-                  .OnDelete(DeleteBehavior.Cascade);
-            entity.HasIndex(r => new { r.TickerId, r.DataType, r.EventDate });
-        });
-
         // ResearchExperiment configuration
         modelBuilder.Entity<ResearchExperiment>(entity =>
         {
@@ -180,21 +117,6 @@ public class AppDbContext : DbContext
                   .HasForeignKey(e => e.TickerId)
                   .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(e => new { e.TickerId, e.FeatureName, e.CreatedAt });
-        });
-
-        // OptionsIvSnapshot configuration
-        modelBuilder.Entity<OptionsIvSnapshot>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.Iv30dAtm).HasPrecision(18, 8);
-            entity.Property(e => e.Iv30dPut).HasPrecision(18, 8);
-            entity.Property(e => e.Iv30dCall).HasPrecision(18, 8);
-            entity.Property(e => e.StockClose).HasPrecision(18, 8);
-            entity.HasOne(e => e.Ticker)
-                  .WithMany()
-                  .HasForeignKey(e => e.TickerId)
-                  .OnDelete(DeleteBehavior.Cascade);
-            entity.HasIndex(e => new { e.TickerId, e.TradingDate }).IsUnique();
         });
     }
 

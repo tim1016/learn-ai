@@ -61,40 +61,6 @@ builder.Services.AddHttpClient<IPolygonService, PolygonService>(client =>
 .AddPolicyHandler(retryPolicy)
 .AddPolicyHandler(circuitBreakerPolicy);
 
-// Add HttpClient for SanitizationService (same Python service, same resilience policies)
-builder.Services.AddHttpClient<ISanitizationService, SanitizationService>(client =>
-{
-    var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
-    client.BaseAddress = new Uri(baseUrl);
-    client.Timeout = TimeSpan.FromSeconds(120);
-})
-.AddPolicyHandler(retryPolicy)
-.AddPolicyHandler(circuitBreakerPolicy);
-
-// Add HttpClient for TechnicalAnalysisService (same Python service, same resilience policies)
-builder.Services.AddHttpClient<ITechnicalAnalysisService, TechnicalAnalysisService>(client =>
-{
-    var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
-    client.BaseAddress = new Uri(baseUrl);
-    client.Timeout = TimeSpan.FromSeconds(120);
-})
-.AddPolicyHandler(retryPolicy)
-.AddPolicyHandler(circuitBreakerPolicy);
-
-// Add HttpClient for ResearchService — no retry policy.
-// Research requests are expensive (minutes long, hundreds of MB payloads).
-// If the first attempt fails, retrying burns another 3-10 minutes doing the
-// same work with the same outcome. Fail fast and surface the error to the
-// user instead. Circuit-breaker is retained so a truly-broken python service
-// short-circuits cleanly.
-builder.Services.AddHttpClient<IResearchService, ResearchService>(client =>
-{
-    var baseUrl = builder.Configuration["PolygonService:BaseUrl"] ?? "http://python-service:8000";
-    client.BaseAddress = new Uri(baseUrl);
-    client.Timeout = TimeSpan.FromSeconds(600);
-})
-.AddPolicyHandler(circuitBreakerPolicy);
-
 // Redis — backing store for job state and SSE event streams. The same
 // Redis instance is shared with PythonDataService; the schema is
 // documented in Backend/Jobs/JobsApi.cs and PythonDataService/app/jobs/progress.py.
@@ -126,22 +92,14 @@ builder.Services.AddHttpClient("python", client =>
 
 // Register business services (testable via interfaces)
 builder.Services.AddScoped<IMarketDataService, MarketDataService>();
-builder.Services.AddScoped<IPositionEngine, PositionEngine>();
-builder.Services.AddScoped<IPortfolioService, PortfolioService>();
-builder.Services.AddScoped<IPortfolioValuationService, PortfolioValuationService>();
-builder.Services.AddScoped<ISnapshotService, SnapshotService>();
-builder.Services.AddScoped<IPortfolioRiskService, PortfolioRiskService>();
-builder.Services.AddScoped<IPortfolioReconciliationService, PortfolioReconciliationService>();
-builder.Services.AddScoped<IPortfolioValidationService, PortfolioValidationService>();
+builder.Services.AddScoped<IResearchService, ResearchService>();
 
 // Add GraphQL services
 builder.Services
     .AddGraphQLServer()
     .AddQueryType<Query>()
-    .AddTypeExtension<PortfolioQuery>()
     .AddTypeExtension<DataLabQuery>()
     .AddMutationType<Mutation>()
-    .AddTypeExtension<PortfolioMutation>()
     .AddTypeExtension<DataLabMutation>()
     .AddProjections()
     .AddFiltering()

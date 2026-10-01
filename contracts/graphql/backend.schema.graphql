@@ -3,25 +3,6 @@ schema {
   mutation: Mutation
 }
 
-type Account {
-  id: UUID!
-  name: String!
-  type: AccountType!
-  baseCurrency: String!
-  initialCash: Decimal!
-  cash: Decimal!
-  createdAt: DateTime!
-  orders: [Order!]!
-  trades: [PortfolioTrade!]!
-  positions: [Position!]!
-}
-
-type AccountResult {
-  success: Boolean!
-  account: Account
-  error: String
-}
-
 type AggregateBar {
   id: Long!
   open: Decimal!
@@ -36,18 +17,6 @@ type AggregateBar {
   transactionCount: Long
 }
 
-type AggregatesSummary {
-  periodHigh: Decimal!
-  periodLow: Decimal!
-  averageVolume: Decimal!
-  averageVwap: Decimal
-  openPrice: Decimal!
-  closePrice: Decimal!
-  priceChange: Decimal!
-  priceChangePercent: Decimal!
-  totalBars: Int!
-}
-
 type AlphaDecayStatsType {
   slope: Float!
   intercept: Float!
@@ -57,50 +26,6 @@ type AlphaDecayStatsType {
   nFoldsUsed: Int!
   isTestValid: Boolean!
   isSignificant: Boolean!
-}
-
-type AvailableIndicatorsResult {
-  success: Boolean!
-  categories: [IndicatorCategory!]!
-  total: Int!
-  error: String
-}
-
-type BatchResearchResultType {
-  success: Boolean!
-  featureName: String!
-  tickersTested: Int!
-  tickersPassed: Int!
-  passRate: Float!
-  crossSectionalConsistent: Boolean!
-  aggregateIc: Float!
-  tickerResults: [TickerBatchResultType!]!
-  summary: String!
-  error: String
-}
-
-type CachedRangeResult {
-  fromDate: String!
-  toDate: String!
-  isCached: Boolean!
-}
-
-type CalculateIndicatorsResult {
-  success: Boolean!
-  ticker: String!
-  indicators: [IndicatorSeriesResult!]!
-  error: String
-}
-
-type CostViabilityType {
-  grossSpreadBpsSigned: Float!
-  directionalSpreadBps: Float!
-  costAssumptionOneWayBps: Float!
-  costErasureOneWayBps: Float!
-  netSpreadBpsAtAssumption: Float!
-  viableAtAssumption: Boolean!
-  specDirection: String!
-  note: String!
 }
 
 type CurrentCurvePointResult {
@@ -164,24 +89,6 @@ type DeflatedSharpeType {
   valid: Boolean!
 }
 
-type DollarDeltaResult {
-  positionId: UUID!
-  symbol: String!
-  delta: Decimal!
-  price: Decimal!
-  quantity: Decimal!
-  multiplier: Int!
-  dollarDelta: Decimal!
-}
-
-type DrawdownPoint {
-  timestamp: DateTime!
-  equity: Decimal!
-  peakEquity: Decimal!
-  drawdown: Decimal!
-  drawdownPercent: Decimal!
-}
-
 type EffectiveSampleSizeType {
   rawN: Int!
   effectiveN: Float!
@@ -189,80 +96,6 @@ type EffectiveSampleSizeType {
   independentBets: Int!
   maxLagUsed: Int!
   rhoSum: Float!
-}
-
-type FeatureStageCriterionType {
-  name: String!
-  description: String!
-  currentValue: Float!
-  requiredRepr: String!
-  met: Boolean!
-}
-
-type FeatureStageInfoType {
-  stage: Int!
-  label: String!
-  description: String!
-  nextStageLabel: String!
-  advanceCriteria: [FeatureStageCriterionType!]!
-  failedScreens: [String!]!
-}
-
-type FeatureValidationSpecType {
-  featureName: String!
-  defaultTarget: String!
-  expectedDirection: String!
-  expectedShape: String!
-  stationarityRequired: Boolean!
-  monotonicityRequired: Boolean!
-  isSignedTargetAppropriate: Boolean!
-  intent: String!
-  notes: [String!]!
-}
-
-type FeatureValidationVerdictType {
-  statisticalScreen: ValidationScreenType!
-  economicScreen: ValidationScreenType!
-  oosScreen: ValidationScreenType!
-  multipleTestingScreen: ValidationScreenType!
-  regimeStabilityScreen: ValidationScreenType!
-  multipleTesting: MultipleTestingWarningType!
-  costViability: CostViabilityType!
-  icCi: IcCiType!
-  directionMatchesSpec: Boolean!
-  targetSignedAppropriate: Boolean!
-  stageInfo: FeatureStageInfoType!
-  finalDecision: String!
-}
-
-type FetchAggregatesResult {
-  success: Boolean!
-  ticker: String!
-  count: Int!
-  message: String
-  originalCount: Int
-  removedCount: Int
-}
-
-type FetchProgressInfo {
-  ticker: String!
-  totalWindows: Int!
-  completedWindows: Int!
-  barsFetched: Int!
-  currentWindow: String!
-  status: String!
-}
-
-type GapDetectionInfo {
-  totalWeekdays: Int!
-  daysWithData: Int!
-  missingDays: Int!
-  partialDays: Int!
-  coveragePercent: Decimal!
-  expectedBars: Int!
-  actualBars: Int!
-  missingDates: [String!]!
-  partialDates: [String!]!
 }
 
 type GraduationCriterionType {
@@ -309,57 +142,6 @@ type GreeksResult {
   vega: Decimal
 }
 
-type IcCiType {
-  point: Float!
-  se: Float!
-  ciLower: Float!
-  ciUpper: Float!
-  confidenceLevel: Float!
-  nEffUsed: Float!
-  valid: Boolean!
-  seApproximationNote: String!
-}
-
-type IndicatorCategory {
-  name: String!
-  indicators: [IndicatorInfoItem!]!
-}
-
-type IndicatorInfoItem {
-  name: String!
-  category: String!
-  description: String!
-}
-
-type IndicatorPoint {
-  timestamp: Long!
-  value: Decimal
-  signal: Decimal
-  histogram: Decimal
-  upper: Decimal
-  lower: Decimal
-}
-
-type IndicatorSeriesResult {
-  name: String!
-  window: Int!
-  data: [IndicatorPoint!]!
-}
-
-type IndicatorTableResult {
-  success: Boolean!
-  ticker: String!
-  rowCount: Int!
-  columns: [String!]!
-  rows: [String!]!
-  error: String
-}
-
-type InvalidReasonCountType {
-  reason: String!
-  count: Int!
-}
-
 type LastQuoteResult {
   bid: Decimal
   ask: Decimal
@@ -392,23 +174,6 @@ type LegDiagnosticResult {
   legPnl: Decimal!
 }
 
-type MarketDataRecord {
-  symbol: String!
-  open: Decimal!
-  high: Decimal!
-  low: Decimal!
-  close: Decimal!
-  volume: Decimal!
-  timestamp: Long!
-}
-
-type MarketMoversResult {
-  success: Boolean!
-  tickers: [StockTickerSnapshotResult!]!
-  count: Int!
-  error: String
-}
-
 type MethodologyType {
   trainMonths: Int!
   testMonths: Int!
@@ -436,70 +201,11 @@ type MinuteBarResult {
   vwap: Decimal
 }
 
-type MonthlyICBreakdownType {
-  month: String!
-  meanIC: Float!
-  tStat: Float!
-  observationCount: Int!
-}
-
-type MultipleTestingWarningType {
-  rawNwPValue: Float!
-  holmPValue: Float!
-  nFamily: Int!
-  note: String!
-}
-
 type Mutation {
-  fetchStockAggregates(ticker: String! fromDate: String! toDate: String! timespan: String! = "day" multiplier: Int! = 1): FetchAggregatesResult! @cost(weight: "10")
-  sanitizeMarketData(data: [MarketDataRecordInput!]! quantile: Float! = 0.99): SanitizeMarketDataResult! @cost(weight: "10")
-  runFeatureResearch(ticker: String! featureName: String! fromDate: String! toDate: String! timespan: String! = "minute" multiplier: Int! = 1): ResearchResultType! @cost(weight: "10")
-  runSignalEngine(ticker: String! featureName: String! = "momentum_5m" fromDate: String! = "" toDate: String! = "" flipSign: Boolean! = true regimeGateEnabled: Boolean! = true timespan: String! = "minute" multiplier: Int! = 1 forceRefresh: Boolean! = false): SignalEngineResultType! @cost(weight: "10")
-  runOptionsFeatureResearch(ticker: String! featureName: String! fromDate: String! toDate: String! targetType: String! = "directional"): ResearchResultType! @cost(weight: "10")
-  runBatchOptionsResearch(featureName: String! tickers: [String!]! fromDate: String! toDate: String! targetType: String! = "directional"): BatchResearchResultType! @cost(weight: "10")
-  runRuleBasedBacktest(ticker: String! fromDate: String! toDate: String! multiplier: Int! = 15 timespan: String! = "minute" filterRth: Boolean! = true parametersJson: String! = "{}"): RuleBasedBacktestResultType! @cost(weight: "10")
-  createAccount(name: String! type: String! = "Paper" initialCash: Decimal! = 100000): AccountResult! @cost(weight: "10")
-  submitOrder(accountId: UUID! tickerId: Int! side: String! orderType: String! = "Market" quantity: Decimal! = 1 limitPrice: Decimal assetType: String! = "Stock" optionContractId: UUID): OrderResult! @cost(weight: "10")
-  cancelOrder(orderId: UUID!): OrderResult! @cost(weight: "10")
-  fillOrder(orderId: UUID! fillPrice: Decimal! fillQuantity: Decimal! fees: Decimal! = 0 multiplier: Int! = 1): TradeResult! @cost(weight: "10")
-  recordTrade(accountId: UUID! symbol: String! side: String! quantity: Decimal! price: Decimal! fees: Decimal! = 0 assetType: String! = "Stock" multiplier: Int! = 1): TradeResult! @cost(weight: "10")
-  rebuildPositions(accountId: UUID!): RebuildResult! @cost(weight: "10")
-  takePortfolioSnapshot(accountId: UUID!): SnapshotResult! @cost(weight: "10")
-  createRiskRule(accountId: UUID! ruleType: String! threshold: Decimal! action: String! = "Warn" severity: String! = "Medium"): RiskRuleResult! @cost(weight: "10")
-  updateRiskRule(ruleId: UUID! threshold: Decimal enabled: Boolean action: String severity: String): RiskRuleResult! @cost(weight: "10")
-  runScenario(accountId: UUID! prices: [PriceInput!]! priceChangePercent: Decimal ivChangePercent: Decimal timeDaysForward: Int): ScenarioResult! @cost(weight: "10")
-  autoFixPortfolio(accountId: UUID!): RebuildResult! @cost(weight: "10")
-  runPortfolioValidation: ValidationSuiteResult! @cost(weight: "10")
   saveDataLabSession(input: DataLabSessionInput!): DataLabSessionResult! @cost(weight: "10")
   updateDataLabSession(id: UUID! input: DataLabSessionInput!): DataLabSessionResult! @cost(weight: "10")
-  updateDataLabChartSnapshot(id: UUID! chartSnapshotJson: String!): DataLabSessionResult! @cost(weight: "10")
   renameDataLabSession(id: UUID! name: String!): DataLabSessionResult! @cost(weight: "10")
   deleteDataLabSession(id: UUID!): DataLabSessionResult! @cost(weight: "10")
-}
-
-type OptionContract {
-  id: UUID!
-  underlyingTickerId: Int!
-  underlyingTicker: Ticker!
-  symbol: String!
-  strike: Decimal!
-  expiration: LocalDate!
-  optionType: OptionType!
-  multiplier: Int!
-}
-
-type OptionLeg {
-  id: UUID!
-  tradeId: UUID!
-  trade: PortfolioTrade!
-  optionContractId: UUID!
-  optionContract: OptionContract!
-  quantity: Decimal!
-  entryIV: Decimal
-  entryDelta: Decimal
-  entryGamma: Decimal
-  entryTheta: Decimal
-  entryVega: Decimal
 }
 
 type OptionsChainSnapshotResult {
@@ -514,51 +220,10 @@ type OptionsChainSnapshotResult {
   error: String
 }
 
-type OptionsContractResult {
-  ticker: String!
-  underlyingTicker: String
-  contractType: String
-  strikePrice: Decimal
-  expirationDate: String
-  exerciseStyle: String
-}
-
-type OptionsContractsResult {
-  success: Boolean!
-  contracts: [OptionsContractResult!]!
-  count: Int!
-  error: String
-}
-
 type OptionsExpirationsResult {
   success: Boolean!
   expirations: [String!]!
   count: Int!
-  error: String
-}
-
-type Order {
-  id: UUID!
-  accountId: UUID!
-  account: Account!
-  tickerId: Int!
-  ticker: Ticker!
-  side: OrderSide!
-  orderType: OrderType!
-  quantity: Decimal!
-  limitPrice: Decimal
-  status: OrderStatus!
-  assetType: AssetType!
-  optionContractId: UUID
-  optionContract: OptionContract
-  submittedAt: DateTime!
-  filledAt: DateTime
-  trades: [PortfolioTrade!]!
-}
-
-type OrderResult {
-  success: Boolean!
-  order: Order
   error: String
 }
 
@@ -571,130 +236,6 @@ type ParameterStabilityType {
 type PayoffPointResult {
   price: Decimal!
   pnl: Decimal!
-}
-
-type PortfolioMetrics {
-  sharpeRatio: Decimal!
-  sortinoRatio: Decimal!
-  maxDrawdown: Decimal!
-  maxDrawdownPercent: Decimal!
-  calmarRatio: Decimal!
-  winRate: Decimal!
-  profitFactor: Decimal!
-  totalReturn: Decimal!
-  totalReturnPercent: Decimal!
-  snapshotCount: Int!
-}
-
-type PortfolioSnapshot {
-  id: UUID!
-  accountId: UUID!
-  account: Account!
-  timestamp: DateTime!
-  equity: Decimal!
-  cash: Decimal!
-  marketValue: Decimal!
-  marginUsed: Decimal!
-  unrealizedPnL: Decimal!
-  realizedPnL: Decimal!
-}
-
-type PortfolioState {
-  account: Account!
-  positions: [Position!]!
-  recentTrades: [PortfolioTrade!]!
-  totalRealizedPnL: Decimal!
-}
-
-type PortfolioTrade {
-  id: UUID!
-  accountId: UUID!
-  account: Account!
-  orderId: UUID!
-  order: Order!
-  tickerId: Int!
-  ticker: Ticker!
-  side: OrderSide!
-  quantity: Decimal!
-  price: Decimal!
-  fees: Decimal!
-  assetType: AssetType!
-  optionContractId: UUID
-  optionContract: OptionContract
-  multiplier: Int!
-  executionTimestamp: DateTime!
-  lots: [PositionLot!]!
-  optionLeg: OptionLeg
-}
-
-type PortfolioValuation {
-  cash: Decimal!
-  marketValue: Decimal!
-  equity: Decimal!
-  unrealizedPnL: Decimal!
-  realizedPnL: Decimal!
-  positions: [PositionValuation!]!
-}
-
-type Position {
-  id: UUID!
-  accountId: UUID!
-  account: Account!
-  tickerId: Int!
-  ticker: Ticker!
-  assetType: AssetType!
-  optionContractId: UUID
-  optionContract: OptionContract
-  netQuantity: Decimal!
-  avgCostBasis: Decimal!
-  realizedPnL: Decimal!
-  status: PositionStatus!
-  openedAt: DateTime!
-  closedAt: DateTime
-  lastUpdated: DateTime!
-  lots: [PositionLot!]!
-}
-
-type PositionDrift {
-  tickerId: Int!
-  symbol: String!
-  cachedQuantity: Decimal!
-  rebuiltQuantity: Decimal!
-  cachedRealizedPnL: Decimal!
-  rebuiltRealizedPnL: Decimal!
-  driftType: String!
-}
-
-type PositionLot {
-  id: UUID!
-  positionId: UUID!
-  position: Position!
-  tradeId: UUID!
-  trade: PortfolioTrade!
-  quantity: Decimal!
-  entryPrice: Decimal!
-  remainingQuantity: Decimal!
-  realizedPnL: Decimal!
-  openedAt: DateTime!
-  closedAt: DateTime
-}
-
-type PositionScenario {
-  symbol: String!
-  currentValue: Decimal!
-  scenarioValue: Decimal!
-  pnLImpact: Decimal!
-}
-
-type PositionValuation {
-  positionId: UUID!
-  symbol: String!
-  quantity: Decimal!
-  costBasis: Decimal!
-  currentPrice: Decimal!
-  marketValue: Decimal!
-  unrealizedPnL: Decimal!
-  multiplier: Int!
 }
 
 type PricingCompareResult {
@@ -722,18 +263,6 @@ type PricingPointGql {
   rho: Decimal!
 }
 
-type QuantLibLegResultGql {
-  engine: String!
-  price: Decimal!
-  delta: Decimal!
-  gamma: Decimal!
-  theta: Decimal!
-  vega: Decimal!
-  rho: Decimal!
-  d1: Decimal
-  d2: Decimal
-}
-
 type QuantLibPriceResult {
   success: Boolean!
   engine: String!
@@ -748,117 +277,22 @@ type QuantLibPriceResult {
   error: String
 }
 
-type QuantLibStatusResult {
-  available: Boolean!
-  version: String
-  engines: [String!]!
-}
-
-type QuantLibStrategyResult {
-  success: Boolean!
-  engine: String!
-  netPrice: Decimal!
-  netDelta: Decimal!
-  netGamma: Decimal!
-  netTheta: Decimal!
-  netVega: Decimal!
-  netRho: Decimal!
-  legs: [QuantLibLegResultGql!]!
-  error: String
-}
-
-type QuantileBinType {
-  binNumber: Int!
-  lowerBound: Float!
-  upperBound: Float!
-  meanReturn: Float!
-  count: Int!
-}
-
 type Query {
-  tickers(where: TickerFilterInput @cost(weight: "10") order: [TickerSortInput!] @cost(weight: "10")): [Ticker!]! @cost(weight: "10")
-  stockAggregates(where: StockAggregateFilterInput @cost(weight: "10") order: [StockAggregateSortInput!] @cost(weight: "10")): [StockAggregate!]! @cost(weight: "10")
-  stockAggregateStats(symbol: String!): StockAggregateStatsType! @cost(weight: "10")
-  trades(where: TradeFilterInput @cost(weight: "10") order: [TradeSortInput!] @cost(weight: "10")): [Trade!]! @cost(weight: "10")
-  quotes(where: QuoteFilterInput @cost(weight: "10") order: [QuoteSortInput!] @cost(weight: "10")): [Quote!]! @cost(weight: "10")
-  technicalIndicators(where: TechnicalIndicatorFilterInput @cost(weight: "10") order: [TechnicalIndicatorSortInput!] @cost(weight: "10")): [TechnicalIndicator!]! @cost(weight: "10")
-  tickerBySymbol(symbol: String!): Ticker @cost(weight: "10")
-  getFetchProgress(ticker: String!): FetchProgressInfo
   getOrFetchStockAggregates(ticker: String! fromDate: String! toDate: String! timespan: String! = "day" multiplier: Int! = 1 forceRefresh: Boolean! = false adjusted: Boolean! = true): SmartAggregatesResult! @cost(weight: "10")
-  calculateIndicators(ticker: String! fromDate: String! toDate: String! indicators: [IndicatorConfigInput!]! timespan: String! = "day" multiplier: Int! = 1): CalculateIndicatorsResult! @cost(weight: "10")
-  generateIndicatorTable(ticker: String! fromDate: String! toDate: String! multiplier: Int! = 1 timespan: String! = "minute" emaPeriods: [Int!] bbLength: Int! = 20 bbStd: Float! = 2 supertrendLength: Int! = 10 supertrendMultiplier: Float! = 3 rsiLength: Int! = 14 rsiMaLength: Int! = 14 macdFast: Int! = 12 macdSlow: Int! = 26 macdSignal: Int! = 9 adxLength: Int! = 14): IndicatorTableResult! @cost(weight: "10")
-  availableIndicators: AvailableIndicatorsResult! @cost(weight: "10")
-  checkCachedRanges(ticker: String! ranges: [DateRangeInput!]! timespan: String! = "day" multiplier: Int! = 1): [CachedRangeResult!]! @cost(weight: "10")
-  getOptionsContracts(underlyingTicker: String! asOfDate: String contractType: String strikePriceGte: Decimal strikePriceLte: Decimal expirationDate: String expirationDateGte: String expirationDateLte: String limit: Int! = 100): OptionsContractsResult! @cost(weight: "10")
   getOptionsExpirations(underlyingTicker: String! contractType: String expirationDateGte: String expirationDateLte: String): OptionsExpirationsResult! @cost(weight: "10")
   getOptionsChainSnapshot(underlyingTicker: String! expirationDate: String): OptionsChainSnapshotResult! @cost(weight: "10")
   getStockSnapshot(ticker: String!): StockSnapshotResult! @cost(weight: "10")
-  getStockSnapshots(tickers: [String!]): StockSnapshotsResult! @cost(weight: "10")
-  getMarketMovers(direction: String!): MarketMoversResult! @cost(weight: "10")
-  getUnifiedSnapshot(tickers: [String!] limit: Int! = 10): UnifiedSnapshotResult! @cost(weight: "10")
   analyzeOptionsStrategy(symbol: String! legs: [StrategyLegInput!]! expirationDate: String! spotPrice: Decimal! riskFreeRate: Decimal! = 0.043 includeCurrentCurve: Boolean! = false includeGreekCurves: Boolean! = false includeLegDiagnostics: Boolean! = false whatIfTimeShiftDays: Decimal! = 0 whatIfIvShift: Decimal! = 0): StrategyAnalyzeResult! @cost(weight: "10")
   getTrackedTickers(tickers: [String!]!): TrackedTickersResult! @cost(weight: "10")
   getTickerDetails(ticker: String!): TickerDetailResult! @cost(weight: "10")
   getRelatedTickers(ticker: String!): RelatedTickersResult! @cost(weight: "10")
   getResearchExperiments(ticker: String!): [ResearchExperimentType!]! @cost(weight: "10")
-  getResearchExperiment(id: Int!): ResearchExperimentType @cost(weight: "10")
   getSignalExperiments(ticker: String!): [SignalExperimentType!]! @cost(weight: "10")
   getSignalExperimentReport(id: Int!): SignalEngineResultType @cost(weight: "10")
-  quantlibStatus: QuantLibStatusResult! @cost(weight: "10")
   quantlibPrice(spot: Decimal! strike: Decimal! volatility: Decimal! expirationDate: String! optionType: String! riskFreeRate: Decimal! = 0.05 evaluationDate: String dividendYield: Decimal! = 0 engine: String! = "analytic_bs"): QuantLibPriceResult! @cost(weight: "10")
-  quantlibStrategy(spot: Decimal! legs: [StrategyLegInput!]! expirationDate: String! riskFreeRate: Decimal! = 0.05 evaluationDate: String dividendYield: Decimal! = 0 engine: String! = "analytic_bs"): QuantLibStrategyResult! @cost(weight: "10")
   pricingModelComparison(spot: Decimal! strike: Decimal! volatility: Decimal! expirationDate: String! optionType: String! riskFreeRate: Decimal! = 0.05 dividendYield: Decimal! = 0 evaluationDate: String spotMin: Decimal spotMax: Decimal numPoints: Int! = 100): PricingCompareResult! @cost(weight: "10")
-  getAccounts(where: AccountFilterInput @cost(weight: "10") order: [AccountSortInput!] @cost(weight: "10")): [Account!]! @cost(weight: "10")
-  getAccount(id: UUID!): Account @cost(weight: "10")
-  getPositions(accountId: UUID! where: PositionFilterInput @cost(weight: "10") order: [PositionSortInput!] @cost(weight: "10")): [Position!]! @cost(weight: "10")
-  getPosition(id: UUID!): Position @cost(weight: "10")
-  getPortfolioTrades(accountId: UUID! where: PortfolioTradeFilterInput @cost(weight: "10") order: [PortfolioTradeSortInput!] @cost(weight: "10")): [PortfolioTrade!]! @cost(weight: "10")
-  getPositionLots(positionId: UUID! where: PositionLotFilterInput @cost(weight: "10") order: [PositionLotSortInput!] @cost(weight: "10")): [PositionLot!]! @cost(weight: "10")
-  getPortfolioState(accountId: UUID!): PortfolioState! @cost(weight: "10")
-  getPortfolioValuation(accountId: UUID!): PortfolioValuation! @cost(weight: "10")
-  getPortfolioSnapshots(accountId: UUID! where: PortfolioSnapshotFilterInput @cost(weight: "10") order: [PortfolioSnapshotSortInput!] @cost(weight: "10")): [PortfolioSnapshot!]! @cost(weight: "10")
-  getEquityCurve(accountId: UUID! from: DateTime to: DateTime): [PortfolioSnapshot!]! @cost(weight: "10")
-  getDrawdownSeries(accountId: UUID!): [DrawdownPoint!]! @cost(weight: "10")
-  getPortfolioMetrics(accountId: UUID!): PortfolioMetrics! @cost(weight: "10")
-  getRiskRules(accountId: UUID! where: RiskRuleFilterInput @cost(weight: "10") order: [RiskRuleSortInput!] @cost(weight: "10")): [RiskRule!]! @cost(weight: "10")
-  getDollarDelta(accountId: UUID! prices: [PriceInput!]!): [DollarDeltaResult!]! @cost(weight: "10")
-  getPortfolioVega(accountId: UUID!): Decimal! @cost(weight: "10")
-  evaluateRiskRules(accountId: UUID! prices: [PriceInput!]!): [RiskViolation!]! @cost(weight: "10")
-  reconcilePortfolio(accountId: UUID!): ReconciliationReport! @cost(weight: "10")
   dataLabSessions(where: DataLabSessionFilterInput @cost(weight: "10") order: [DataLabSessionSortInput!] @cost(weight: "10")): [DataLabSession!]! @cost(weight: "10")
   dataLabSession(id: UUID!): DataLabSession @cost(weight: "10")
-}
-
-type Quote {
-  spread: Decimal!
-  midPrice: Decimal!
-  id: Long!
-  tickerId: Int!
-  ticker: Ticker
-  bidPrice: Decimal!
-  askPrice: Decimal!
-  bidSize: Decimal!
-  askSize: Decimal!
-  timestamp: DateTime!
-  bidExchange: Long
-  askExchange: Long
-  sequenceNumber: Long
-  createdAt: DateTime!
-}
-
-type RebuildResult {
-  success: Boolean!
-  positionCount: Int!
-  message: String
-  error: String
-}
-
-type ReconciliationReport {
-  accountId: UUID!
-  hasDrift: Boolean!
-  drifts: [PositionDrift!]!
-  cachedPositionCount: Int!
-  rebuiltPositionCount: Int!
 }
 
 type RegimeBucketType {
@@ -872,13 +306,6 @@ type RegimeBucketType {
 type RegimeCoverageEntryType {
   regime: String!
   count: Int!
-}
-
-type RegimeICType {
-  regimeLabel: String!
-  meanIC: Float!
-  tStat: Float!
-  observationCount: Int!
 }
 
 type RelatedTickersResult {
@@ -905,141 +332,6 @@ type ResearchExperimentType {
   monotonicityRatio: Float!
   isMonotonic: Boolean!
   createdAt: Long!
-}
-
-type ResearchResultType {
-  success: Boolean!
-  ticker: String!
-  featureName: String!
-  startDate: String!
-  endDate: String!
-  barsUsed: Int!
-  meanIC: Float!
-  icTStat: Float!
-  icPValue: Float!
-  icValues: [Float!]!
-  icDates: [String!]!
-  nwTStat: Float!
-  nwPValue: Float!
-  effectiveN: Float!
-  adfPvalue: Float!
-  kpssPvalue: Float!
-  isStationary: Boolean!
-  quantileBins: [QuantileBinType!]!
-  isMonotonic: Boolean!
-  monotonicityRatio: Float!
-  passedValidation: Boolean!
-  robustness: RobustnessType
-  featureSpec: FeatureValidationSpecType
-  targetMetadata: TargetMetadataType
-  validationVerdict: FeatureValidationVerdictType
-  error: String
-}
-
-type RiskRule {
-  id: UUID!
-  accountId: UUID!
-  account: Account!
-  ruleType: RiskRuleType!
-  threshold: Decimal!
-  action: RiskAction!
-  severity: RiskSeverity!
-  enabled: Boolean!
-  lastTriggered: DateTime
-}
-
-type RiskRuleResult {
-  success: Boolean!
-  rule: RiskRule
-  error: String
-}
-
-type RiskViolation {
-  ruleId: UUID!
-  ruleType: RiskRuleType!
-  action: RiskAction!
-  severity: RiskSeverity!
-  threshold: Decimal!
-  actualValue: Decimal!
-  message: String!
-}
-
-type RobustnessType {
-  monthlyBreakdown: [MonthlyICBreakdownType!]!
-  pctPositiveMonths: Float!
-  pctSignificantMonths: Float!
-  bestMonthIC: Float!
-  worstMonthIC: Float!
-  stabilityLabel: String!
-  pctSignConsistentMonths: Float!
-  signConsistentStabilityLabel: String!
-  rollingTStat: [RollingTStatPointType!]!
-  volatilityRegimes: [RegimeICType!]!
-  trendRegimes: [RegimeICType!]!
-  trainTest: TrainTestSplitType
-  structuralBreaks: [StructuralBreakPointType!]!
-}
-
-type RollingTStatPointType {
-  month: String!
-  tStatSmoothed: Float!
-}
-
-type RuleBasedBacktestResultType {
-  success: Boolean!
-  ticker: String!
-  strategyName: String!
-  parameters: String!
-  totalTrades: Int!
-  winningTrades: Int!
-  losingTrades: Int!
-  winRate: Float!
-  avgWinPct: Float!
-  avgLossPct: Float!
-  winLossRatio: Float!
-  profitFactor: Float!
-  expectancyPerTrade: Float!
-  totalPnlPct: Float!
-  maxDrawdownPct: Float!
-  totalPnlPts: Float!
-  sharpeRatio: Float!
-  barsProcessed: Int!
-  trades: [RuleBasedTradeType!]!
-  error: String
-}
-
-type RuleBasedTradeType {
-  tradeNumber: Int!
-  tradeType: String!
-  entryTimestamp: Long!
-  exitTimestamp: Long!
-  entryPrice: Float!
-  exitPrice: Float!
-  pnl: Float!
-  pnlPct: Float!
-  cumulativePnlPct: Float!
-  signalReason: String!
-  emaFast: Float
-  emaSlow: Float
-  emaGap: Float
-  rsi: Float
-  adx: Float
-}
-
-type SanitizeMarketDataResult {
-  success: Boolean!
-  data: [MarketDataRecord!]!
-  originalCount: Int!
-  cleanedCount: Int!
-  message: String
-}
-
-type ScenarioResult {
-  currentEquity: Decimal!
-  scenarioEquity: Decimal!
-  pnLImpact: Decimal!
-  pnLImpactPercent: Decimal!
-  positions: [PositionScenario!]!
 }
 
 type SharpeCiType {
@@ -1136,9 +428,7 @@ type SignalExperimentType {
 type SmartAggregatesResult {
   ticker: String!
   aggregates: [AggregateBar!]!
-  summary: AggregatesSummary
   sanitizationSummary: String
-  gapDetection: GapDetectionInfo
 }
 
 type SnapshotBarResult {
@@ -1162,13 +452,6 @@ type SnapshotContractResult {
   day: DayResult
   lastTrade: LastTradeResult
   lastQuote: LastQuoteResult
-}
-
-type SnapshotResult {
-  success: Boolean!
-  snapshot: PortfolioSnapshot
-  message: String
-  error: String
 }
 
 type SnapshotUnderlyingResult {
@@ -1198,40 +481,9 @@ type StageAdvanceCriterionType {
   met: Boolean!
 }
 
-type StockAggregate {
-  isValid: Boolean!
-  id: Long!
-  tickerId: Int!
-  ticker: Ticker
-  open: Decimal!
-  high: Decimal!
-  low: Decimal!
-  close: Decimal!
-  volume: Decimal!
-  volumeWeightedAveragePrice: Decimal
-  timestamp: DateTime!
-  timespan: String!
-  multiplier: Int!
-  transactionCount: Long
-  createdAt: DateTime!
-}
-
-type StockAggregateStatsType {
-  count: Int!
-  earliest: Long
-  latest: Long
-}
-
 type StockSnapshotResult {
   success: Boolean!
   snapshot: StockTickerSnapshotResult
-  error: String
-}
-
-type StockSnapshotsResult {
-  success: Boolean!
-  snapshots: [StockTickerSnapshotResult!]!
-  count: Int!
   error: String
 }
 
@@ -1270,63 +522,9 @@ type StrategyGreeksResult {
   vega: Decimal!
 }
 
-type StructuralBreakPointType {
-  date: String!
-  icBefore: Float!
-  icAfter: Float!
-  tStat: Float!
-  significant: Boolean!
-}
-
-type TargetMetadataType {
-  targetName: String!
-  horizonMinutes: Int!
-  horizonBars: Int!
-  barMinutes: Int!
-  timezone: String!
-  validCount: Int!
-  totalCount: Int!
-  validRatio: Float!
-  invalidReasonCounts: [InvalidReasonCountType!]!
-}
-
-type TechnicalIndicator {
-  id: Long!
-  tickerId: Int!
-  ticker: Ticker
-  indicatorType: String!
-  timestamp: DateTime!
-  timespan: String!
-  window: Int!
-  value: Decimal
-  signal: Decimal
-  histogram: Decimal
-  valuesJson: String
-  createdAt: DateTime!
-}
-
 type ThresholdSharpeEntryType {
   threshold: Float!
   sharpe: Float!
-}
-
-type Ticker {
-  id: Int!
-  symbol: String!
-  name: String!
-  market: String!
-  locale: String
-  primaryExchange: String
-  type: String
-  active: Boolean!
-  currencySymbol: String
-  createdAt: DateTime!
-  updatedAt: DateTime
-  sanitizationSummary: String
-  aggregates: [StockAggregate!]!
-  trades: [Trade!]!
-  quotes: [Quote!]!
-  indicators: [TechnicalIndicator!]!
 }
 
 type TickerAddressResult {
@@ -1334,20 +532,6 @@ type TickerAddressResult {
   city: String
   state: String
   postalCode: String
-}
-
-type TickerBatchResultType {
-  ticker: String!
-  meanIc: Float!
-  icTStat: Float!
-  icPValue: Float!
-  nwTStat: Float!
-  nwPValue: Float!
-  effectiveN: Float!
-  isStationary: Boolean!
-  passedValidation: Boolean!
-  dataPoints: Int!
-  error: String
 }
 
 type TickerDetailResult {
@@ -1382,107 +566,6 @@ type TrackedTickersResult {
   tickers: [TickerInfoResult!]!
   count: Int!
   error: String
-}
-
-type Trade {
-  id: Long!
-  tickerId: Int!
-  ticker: Ticker
-  price: Decimal!
-  size: Decimal!
-  timestamp: DateTime!
-  exchange: Long
-  conditions: String
-  sequenceNumber: Long
-  tradeId: String
-  createdAt: DateTime!
-}
-
-type TradeResult {
-  success: Boolean!
-  trade: PortfolioTrade
-  error: String
-}
-
-type TrainTestSplitType {
-  trainStart: String!
-  trainEnd: String!
-  testStart: String!
-  testEnd: String!
-  trainMeanIC: Float!
-  trainTStat: Float!
-  trainDays: Int!
-  testMeanIC: Float!
-  testTStat: Float!
-  testDays: Int!
-  overfitFlag: Boolean!
-  oosRetention: Float!
-  oosRetentionLabel: String!
-}
-
-type UnifiedSessionResult {
-  price: Decimal
-  change: Decimal
-  changePercent: Decimal
-  open: Decimal
-  close: Decimal
-  high: Decimal
-  low: Decimal
-  previousClose: Decimal
-  volume: Decimal
-}
-
-type UnifiedSnapshotItemResult {
-  ticker: String
-  type: String
-  marketStatus: String
-  name: String
-  session: UnifiedSessionResult
-}
-
-type UnifiedSnapshotResult {
-  success: Boolean!
-  results: [UnifiedSnapshotItemResult!]!
-  count: Int!
-  error: String
-}
-
-type ValidationAssertion {
-  label: String!
-  expected: String!
-  actual: String!
-  passed: Boolean!
-  tolerance: Decimal
-}
-
-type ValidationScreenType {
-  name: String!
-  description: String!
-  passed: Boolean!
-  requiredForStage1: Boolean!
-  failureReasons: [String!]!
-}
-
-type ValidationSuiteResult {
-  accountId: String!
-  startedAt: DateTime!
-  completedAt: DateTime!
-  durationMs: Float!
-  totalTests: Int!
-  passed: Int!
-  failed: Int!
-  tests: [ValidationTestResult!]!
-}
-
-type ValidationTestResult {
-  testNumber: Int!
-  name: String!
-  category: String!
-  objective: String!
-  passed: Boolean!
-  durationMs: Float!
-  error: String
-  assertions: [ValidationAssertion!]!
 }
 
 type WalkForwardResultType {
@@ -1522,45 +605,6 @@ type WalkForwardWindowType {
   oosCumulativeReturns: [Float!]!
 }
 
-input AccountFilterInput {
-  and: [AccountFilterInput!]
-  or: [AccountFilterInput!]
-  id: UuidOperationFilterInput
-  name: StringOperationFilterInput
-  type: AccountTypeOperationFilterInput
-  baseCurrency: StringOperationFilterInput
-  initialCash: DecimalOperationFilterInput
-  cash: DecimalOperationFilterInput
-  createdAt: DateTimeOperationFilterInput
-  orders: ListFilterInputTypeOfOrderFilterInput
-  trades: ListFilterInputTypeOfPortfolioTradeFilterInput
-  positions: ListFilterInputTypeOfPositionFilterInput
-}
-
-input AccountSortInput {
-  id: SortEnumType @cost(weight: "10")
-  name: SortEnumType @cost(weight: "10")
-  type: SortEnumType @cost(weight: "10")
-  baseCurrency: SortEnumType @cost(weight: "10")
-  initialCash: SortEnumType @cost(weight: "10")
-  cash: SortEnumType @cost(weight: "10")
-  createdAt: SortEnumType @cost(weight: "10")
-}
-
-input AccountTypeOperationFilterInput {
-  eq: AccountType @cost(weight: "10")
-  neq: AccountType @cost(weight: "10")
-  in: [AccountType!] @cost(weight: "10")
-  nin: [AccountType!] @cost(weight: "10")
-}
-
-input AssetTypeOperationFilterInput {
-  eq: AssetType @cost(weight: "10")
-  neq: AssetType @cost(weight: "10")
-  in: [AssetType!] @cost(weight: "10")
-  nin: [AssetType!] @cost(weight: "10")
-}
-
 input BooleanOperationFilterInput {
   eq: Boolean @cost(weight: "10")
   neq: Boolean @cost(weight: "10")
@@ -1597,14 +641,6 @@ input DataLabSessionInput {
   adjusted: Boolean!
   entriesJson: String!
   chartSnapshotJson: String
-  "Inclusive window start in int64 ms UTC. When null, derived from fromDate (interim UTC-midnight derivation). Must be within [0, 253402300799999] and strictly before windowEndMsUtc when both are set."
-  windowStartMsUtc: Long
-  "Inclusive window end in int64 ms UTC. When null, derived from toDate (interim UTC-midnight derivation). Must be within [0, 253402300799999] and strictly after windowStartMsUtc when both are set."
-  windowEndMsUtc: Long
-  "Create-only: session creation time in int64 ms UTC. Honored by saveDataLabSession when provided (within [0, 253402300799999]); ignored by updateDataLabSession, which keeps the stored value (or backfills it from the legacy createdAt)."
-  createdMsUtc: Long
-  "Server-owned: ignored on input. The server always sets updatedMsUtc to the write time."
-  updatedMsUtc: Long
 }
 
 input DataLabSessionSortInput {
@@ -1626,11 +662,6 @@ input DataLabSessionSortInput {
   chartSnapshotJson: SortEnumType @cost(weight: "10")
 }
 
-input DateRangeInput {
-  fromDate: String!
-  toDate: String!
-}
-
 input DateTimeOperationFilterInput {
   eq: DateTime @cost(weight: "10")
   neq: DateTime @cost(weight: "10")
@@ -1646,112 +677,6 @@ input DateTimeOperationFilterInput {
   nlte: DateTime @cost(weight: "10")
 }
 
-input DecimalOperationFilterInput {
-  eq: Decimal @cost(weight: "10")
-  neq: Decimal @cost(weight: "10")
-  in: [Decimal] @cost(weight: "10")
-  nin: [Decimal] @cost(weight: "10")
-  gt: Decimal @cost(weight: "10")
-  ngt: Decimal @cost(weight: "10")
-  gte: Decimal @cost(weight: "10")
-  ngte: Decimal @cost(weight: "10")
-  lt: Decimal @cost(weight: "10")
-  nlt: Decimal @cost(weight: "10")
-  lte: Decimal @cost(weight: "10")
-  nlte: Decimal @cost(weight: "10")
-}
-
-input IndicatorConfigInput {
-  name: String!
-  window: Int!
-}
-
-input IntOperationFilterInput {
-  eq: Int @cost(weight: "10")
-  neq: Int @cost(weight: "10")
-  in: [Int] @cost(weight: "10")
-  nin: [Int] @cost(weight: "10")
-  gt: Int @cost(weight: "10")
-  ngt: Int @cost(weight: "10")
-  gte: Int @cost(weight: "10")
-  ngte: Int @cost(weight: "10")
-  lt: Int @cost(weight: "10")
-  nlt: Int @cost(weight: "10")
-  lte: Int @cost(weight: "10")
-  nlte: Int @cost(weight: "10")
-}
-
-input ListFilterInputTypeOfOrderFilterInput {
-  all: OrderFilterInput @cost(weight: "10")
-  none: OrderFilterInput @cost(weight: "10")
-  some: OrderFilterInput @cost(weight: "10")
-  any: Boolean @cost(weight: "10")
-}
-
-input ListFilterInputTypeOfPortfolioTradeFilterInput {
-  all: PortfolioTradeFilterInput @cost(weight: "10")
-  none: PortfolioTradeFilterInput @cost(weight: "10")
-  some: PortfolioTradeFilterInput @cost(weight: "10")
-  any: Boolean @cost(weight: "10")
-}
-
-input ListFilterInputTypeOfPositionFilterInput {
-  all: PositionFilterInput @cost(weight: "10")
-  none: PositionFilterInput @cost(weight: "10")
-  some: PositionFilterInput @cost(weight: "10")
-  any: Boolean @cost(weight: "10")
-}
-
-input ListFilterInputTypeOfPositionLotFilterInput {
-  all: PositionLotFilterInput @cost(weight: "10")
-  none: PositionLotFilterInput @cost(weight: "10")
-  some: PositionLotFilterInput @cost(weight: "10")
-  any: Boolean @cost(weight: "10")
-}
-
-input ListFilterInputTypeOfQuoteFilterInput {
-  all: QuoteFilterInput @cost(weight: "10")
-  none: QuoteFilterInput @cost(weight: "10")
-  some: QuoteFilterInput @cost(weight: "10")
-  any: Boolean @cost(weight: "10")
-}
-
-input ListFilterInputTypeOfStockAggregateFilterInput {
-  all: StockAggregateFilterInput @cost(weight: "10")
-  none: StockAggregateFilterInput @cost(weight: "10")
-  some: StockAggregateFilterInput @cost(weight: "10")
-  any: Boolean @cost(weight: "10")
-}
-
-input ListFilterInputTypeOfTechnicalIndicatorFilterInput {
-  all: TechnicalIndicatorFilterInput @cost(weight: "10")
-  none: TechnicalIndicatorFilterInput @cost(weight: "10")
-  some: TechnicalIndicatorFilterInput @cost(weight: "10")
-  any: Boolean @cost(weight: "10")
-}
-
-input ListFilterInputTypeOfTradeFilterInput {
-  all: TradeFilterInput @cost(weight: "10")
-  none: TradeFilterInput @cost(weight: "10")
-  some: TradeFilterInput @cost(weight: "10")
-  any: Boolean @cost(weight: "10")
-}
-
-input LocalDateOperationFilterInput {
-  eq: LocalDate @cost(weight: "10")
-  neq: LocalDate @cost(weight: "10")
-  in: [LocalDate] @cost(weight: "10")
-  nin: [LocalDate] @cost(weight: "10")
-  gt: LocalDate @cost(weight: "10")
-  ngt: LocalDate @cost(weight: "10")
-  gte: LocalDate @cost(weight: "10")
-  ngte: LocalDate @cost(weight: "10")
-  lt: LocalDate @cost(weight: "10")
-  nlt: LocalDate @cost(weight: "10")
-  lte: LocalDate @cost(weight: "10")
-  nlte: LocalDate @cost(weight: "10")
-}
-
 input LongOperationFilterInput {
   eq: Long @cost(weight: "10")
   neq: Long @cost(weight: "10")
@@ -1765,404 +690,6 @@ input LongOperationFilterInput {
   nlt: Long @cost(weight: "10")
   lte: Long @cost(weight: "10")
   nlte: Long @cost(weight: "10")
-}
-
-input MarketDataRecordInput {
-  symbol: String!
-  open: Decimal!
-  high: Decimal!
-  low: Decimal!
-  close: Decimal!
-  volume: Decimal!
-  timestamp: Long!
-}
-
-input OptionContractFilterInput {
-  and: [OptionContractFilterInput!]
-  or: [OptionContractFilterInput!]
-  id: UuidOperationFilterInput
-  underlyingTickerId: IntOperationFilterInput
-  underlyingTicker: TickerFilterInput
-  symbol: StringOperationFilterInput
-  strike: DecimalOperationFilterInput
-  expiration: LocalDateOperationFilterInput
-  optionType: OptionTypeOperationFilterInput
-  multiplier: IntOperationFilterInput
-}
-
-input OptionContractSortInput {
-  id: SortEnumType @cost(weight: "10")
-  underlyingTickerId: SortEnumType @cost(weight: "10")
-  underlyingTicker: TickerSortInput @cost(weight: "10")
-  symbol: SortEnumType @cost(weight: "10")
-  strike: SortEnumType @cost(weight: "10")
-  expiration: SortEnumType @cost(weight: "10")
-  optionType: SortEnumType @cost(weight: "10")
-  multiplier: SortEnumType @cost(weight: "10")
-}
-
-input OptionLegFilterInput {
-  and: [OptionLegFilterInput!]
-  or: [OptionLegFilterInput!]
-  id: UuidOperationFilterInput
-  tradeId: UuidOperationFilterInput
-  trade: PortfolioTradeFilterInput
-  optionContractId: UuidOperationFilterInput
-  optionContract: OptionContractFilterInput
-  quantity: DecimalOperationFilterInput
-  entryIV: DecimalOperationFilterInput
-  entryDelta: DecimalOperationFilterInput
-  entryGamma: DecimalOperationFilterInput
-  entryTheta: DecimalOperationFilterInput
-  entryVega: DecimalOperationFilterInput
-}
-
-input OptionLegSortInput {
-  id: SortEnumType @cost(weight: "10")
-  tradeId: SortEnumType @cost(weight: "10")
-  trade: PortfolioTradeSortInput @cost(weight: "10")
-  optionContractId: SortEnumType @cost(weight: "10")
-  optionContract: OptionContractSortInput @cost(weight: "10")
-  quantity: SortEnumType @cost(weight: "10")
-  entryIV: SortEnumType @cost(weight: "10")
-  entryDelta: SortEnumType @cost(weight: "10")
-  entryGamma: SortEnumType @cost(weight: "10")
-  entryTheta: SortEnumType @cost(weight: "10")
-  entryVega: SortEnumType @cost(weight: "10")
-}
-
-input OptionTypeOperationFilterInput {
-  eq: OptionType @cost(weight: "10")
-  neq: OptionType @cost(weight: "10")
-  in: [OptionType!] @cost(weight: "10")
-  nin: [OptionType!] @cost(weight: "10")
-}
-
-input OrderFilterInput {
-  and: [OrderFilterInput!]
-  or: [OrderFilterInput!]
-  id: UuidOperationFilterInput
-  accountId: UuidOperationFilterInput
-  account: AccountFilterInput
-  tickerId: IntOperationFilterInput
-  ticker: TickerFilterInput
-  side: OrderSideOperationFilterInput
-  orderType: OrderTypeOperationFilterInput
-  quantity: DecimalOperationFilterInput
-  limitPrice: DecimalOperationFilterInput
-  status: OrderStatusOperationFilterInput
-  assetType: AssetTypeOperationFilterInput
-  optionContractId: UuidOperationFilterInput
-  optionContract: OptionContractFilterInput
-  submittedAt: DateTimeOperationFilterInput
-  filledAt: DateTimeOperationFilterInput
-  trades: ListFilterInputTypeOfPortfolioTradeFilterInput
-}
-
-input OrderSideOperationFilterInput {
-  eq: OrderSide @cost(weight: "10")
-  neq: OrderSide @cost(weight: "10")
-  in: [OrderSide!] @cost(weight: "10")
-  nin: [OrderSide!] @cost(weight: "10")
-}
-
-input OrderSortInput {
-  id: SortEnumType @cost(weight: "10")
-  accountId: SortEnumType @cost(weight: "10")
-  account: AccountSortInput @cost(weight: "10")
-  tickerId: SortEnumType @cost(weight: "10")
-  ticker: TickerSortInput @cost(weight: "10")
-  side: SortEnumType @cost(weight: "10")
-  orderType: SortEnumType @cost(weight: "10")
-  quantity: SortEnumType @cost(weight: "10")
-  limitPrice: SortEnumType @cost(weight: "10")
-  status: SortEnumType @cost(weight: "10")
-  assetType: SortEnumType @cost(weight: "10")
-  optionContractId: SortEnumType @cost(weight: "10")
-  optionContract: OptionContractSortInput @cost(weight: "10")
-  submittedAt: SortEnumType @cost(weight: "10")
-  filledAt: SortEnumType @cost(weight: "10")
-}
-
-input OrderStatusOperationFilterInput {
-  eq: OrderStatus @cost(weight: "10")
-  neq: OrderStatus @cost(weight: "10")
-  in: [OrderStatus!] @cost(weight: "10")
-  nin: [OrderStatus!] @cost(weight: "10")
-}
-
-input OrderTypeOperationFilterInput {
-  eq: OrderType @cost(weight: "10")
-  neq: OrderType @cost(weight: "10")
-  in: [OrderType!] @cost(weight: "10")
-  nin: [OrderType!] @cost(weight: "10")
-}
-
-input PortfolioSnapshotFilterInput {
-  and: [PortfolioSnapshotFilterInput!]
-  or: [PortfolioSnapshotFilterInput!]
-  id: UuidOperationFilterInput
-  accountId: UuidOperationFilterInput
-  account: AccountFilterInput
-  timestamp: DateTimeOperationFilterInput
-  equity: DecimalOperationFilterInput
-  cash: DecimalOperationFilterInput
-  marketValue: DecimalOperationFilterInput
-  marginUsed: DecimalOperationFilterInput
-  unrealizedPnL: DecimalOperationFilterInput
-  realizedPnL: DecimalOperationFilterInput
-}
-
-input PortfolioSnapshotSortInput {
-  id: SortEnumType @cost(weight: "10")
-  accountId: SortEnumType @cost(weight: "10")
-  account: AccountSortInput @cost(weight: "10")
-  timestamp: SortEnumType @cost(weight: "10")
-  equity: SortEnumType @cost(weight: "10")
-  cash: SortEnumType @cost(weight: "10")
-  marketValue: SortEnumType @cost(weight: "10")
-  marginUsed: SortEnumType @cost(weight: "10")
-  unrealizedPnL: SortEnumType @cost(weight: "10")
-  realizedPnL: SortEnumType @cost(weight: "10")
-}
-
-input PortfolioTradeFilterInput {
-  and: [PortfolioTradeFilterInput!]
-  or: [PortfolioTradeFilterInput!]
-  id: UuidOperationFilterInput
-  accountId: UuidOperationFilterInput
-  account: AccountFilterInput
-  orderId: UuidOperationFilterInput
-  order: OrderFilterInput
-  tickerId: IntOperationFilterInput
-  ticker: TickerFilterInput
-  side: OrderSideOperationFilterInput
-  quantity: DecimalOperationFilterInput
-  price: DecimalOperationFilterInput
-  fees: DecimalOperationFilterInput
-  assetType: AssetTypeOperationFilterInput
-  optionContractId: UuidOperationFilterInput
-  optionContract: OptionContractFilterInput
-  multiplier: IntOperationFilterInput
-  executionTimestamp: DateTimeOperationFilterInput
-  lots: ListFilterInputTypeOfPositionLotFilterInput
-  optionLeg: OptionLegFilterInput
-}
-
-input PortfolioTradeSortInput {
-  id: SortEnumType @cost(weight: "10")
-  accountId: SortEnumType @cost(weight: "10")
-  account: AccountSortInput @cost(weight: "10")
-  orderId: SortEnumType @cost(weight: "10")
-  order: OrderSortInput @cost(weight: "10")
-  tickerId: SortEnumType @cost(weight: "10")
-  ticker: TickerSortInput @cost(weight: "10")
-  side: SortEnumType @cost(weight: "10")
-  quantity: SortEnumType @cost(weight: "10")
-  price: SortEnumType @cost(weight: "10")
-  fees: SortEnumType @cost(weight: "10")
-  assetType: SortEnumType @cost(weight: "10")
-  optionContractId: SortEnumType @cost(weight: "10")
-  optionContract: OptionContractSortInput @cost(weight: "10")
-  multiplier: SortEnumType @cost(weight: "10")
-  executionTimestamp: SortEnumType @cost(weight: "10")
-  optionLeg: OptionLegSortInput @cost(weight: "10")
-}
-
-input PositionFilterInput {
-  and: [PositionFilterInput!]
-  or: [PositionFilterInput!]
-  id: UuidOperationFilterInput
-  accountId: UuidOperationFilterInput
-  account: AccountFilterInput
-  tickerId: IntOperationFilterInput
-  ticker: TickerFilterInput
-  assetType: AssetTypeOperationFilterInput
-  optionContractId: UuidOperationFilterInput
-  optionContract: OptionContractFilterInput
-  netQuantity: DecimalOperationFilterInput
-  avgCostBasis: DecimalOperationFilterInput
-  realizedPnL: DecimalOperationFilterInput
-  status: PositionStatusOperationFilterInput
-  openedAt: DateTimeOperationFilterInput
-  closedAt: DateTimeOperationFilterInput
-  lastUpdated: DateTimeOperationFilterInput
-  lots: ListFilterInputTypeOfPositionLotFilterInput
-}
-
-input PositionLotFilterInput {
-  and: [PositionLotFilterInput!]
-  or: [PositionLotFilterInput!]
-  id: UuidOperationFilterInput
-  positionId: UuidOperationFilterInput
-  position: PositionFilterInput
-  tradeId: UuidOperationFilterInput
-  trade: PortfolioTradeFilterInput
-  quantity: DecimalOperationFilterInput
-  entryPrice: DecimalOperationFilterInput
-  remainingQuantity: DecimalOperationFilterInput
-  realizedPnL: DecimalOperationFilterInput
-  openedAt: DateTimeOperationFilterInput
-  closedAt: DateTimeOperationFilterInput
-}
-
-input PositionLotSortInput {
-  id: SortEnumType @cost(weight: "10")
-  positionId: SortEnumType @cost(weight: "10")
-  position: PositionSortInput @cost(weight: "10")
-  tradeId: SortEnumType @cost(weight: "10")
-  trade: PortfolioTradeSortInput @cost(weight: "10")
-  quantity: SortEnumType @cost(weight: "10")
-  entryPrice: SortEnumType @cost(weight: "10")
-  remainingQuantity: SortEnumType @cost(weight: "10")
-  realizedPnL: SortEnumType @cost(weight: "10")
-  openedAt: SortEnumType @cost(weight: "10")
-  closedAt: SortEnumType @cost(weight: "10")
-}
-
-input PositionSortInput {
-  id: SortEnumType @cost(weight: "10")
-  accountId: SortEnumType @cost(weight: "10")
-  account: AccountSortInput @cost(weight: "10")
-  tickerId: SortEnumType @cost(weight: "10")
-  ticker: TickerSortInput @cost(weight: "10")
-  assetType: SortEnumType @cost(weight: "10")
-  optionContractId: SortEnumType @cost(weight: "10")
-  optionContract: OptionContractSortInput @cost(weight: "10")
-  netQuantity: SortEnumType @cost(weight: "10")
-  avgCostBasis: SortEnumType @cost(weight: "10")
-  realizedPnL: SortEnumType @cost(weight: "10")
-  status: SortEnumType @cost(weight: "10")
-  openedAt: SortEnumType @cost(weight: "10")
-  closedAt: SortEnumType @cost(weight: "10")
-  lastUpdated: SortEnumType @cost(weight: "10")
-}
-
-input PositionStatusOperationFilterInput {
-  eq: PositionStatus @cost(weight: "10")
-  neq: PositionStatus @cost(weight: "10")
-  in: [PositionStatus!] @cost(weight: "10")
-  nin: [PositionStatus!] @cost(weight: "10")
-}
-
-input PriceInput {
-  symbol: String!
-  price: Decimal!
-}
-
-input QuoteFilterInput {
-  and: [QuoteFilterInput!]
-  or: [QuoteFilterInput!]
-  id: LongOperationFilterInput
-  tickerId: IntOperationFilterInput
-  ticker: TickerFilterInput
-  bidPrice: DecimalOperationFilterInput
-  askPrice: DecimalOperationFilterInput
-  bidSize: DecimalOperationFilterInput
-  askSize: DecimalOperationFilterInput
-  timestamp: DateTimeOperationFilterInput
-  bidExchange: LongOperationFilterInput
-  askExchange: LongOperationFilterInput
-  sequenceNumber: LongOperationFilterInput
-  createdAt: DateTimeOperationFilterInput
-}
-
-input QuoteSortInput {
-  id: SortEnumType @cost(weight: "10")
-  tickerId: SortEnumType @cost(weight: "10")
-  ticker: TickerSortInput @cost(weight: "10")
-  bidPrice: SortEnumType @cost(weight: "10")
-  askPrice: SortEnumType @cost(weight: "10")
-  bidSize: SortEnumType @cost(weight: "10")
-  askSize: SortEnumType @cost(weight: "10")
-  timestamp: SortEnumType @cost(weight: "10")
-  bidExchange: SortEnumType @cost(weight: "10")
-  askExchange: SortEnumType @cost(weight: "10")
-  sequenceNumber: SortEnumType @cost(weight: "10")
-  createdAt: SortEnumType @cost(weight: "10")
-}
-
-input RiskActionOperationFilterInput {
-  eq: RiskAction @cost(weight: "10")
-  neq: RiskAction @cost(weight: "10")
-  in: [RiskAction!] @cost(weight: "10")
-  nin: [RiskAction!] @cost(weight: "10")
-}
-
-input RiskRuleFilterInput {
-  and: [RiskRuleFilterInput!]
-  or: [RiskRuleFilterInput!]
-  id: UuidOperationFilterInput
-  accountId: UuidOperationFilterInput
-  account: AccountFilterInput
-  ruleType: RiskRuleTypeOperationFilterInput
-  threshold: DecimalOperationFilterInput
-  action: RiskActionOperationFilterInput
-  severity: RiskSeverityOperationFilterInput
-  enabled: BooleanOperationFilterInput
-  lastTriggered: DateTimeOperationFilterInput
-}
-
-input RiskRuleSortInput {
-  id: SortEnumType @cost(weight: "10")
-  accountId: SortEnumType @cost(weight: "10")
-  account: AccountSortInput @cost(weight: "10")
-  ruleType: SortEnumType @cost(weight: "10")
-  threshold: SortEnumType @cost(weight: "10")
-  action: SortEnumType @cost(weight: "10")
-  severity: SortEnumType @cost(weight: "10")
-  enabled: SortEnumType @cost(weight: "10")
-  lastTriggered: SortEnumType @cost(weight: "10")
-}
-
-input RiskRuleTypeOperationFilterInput {
-  eq: RiskRuleType @cost(weight: "10")
-  neq: RiskRuleType @cost(weight: "10")
-  in: [RiskRuleType!] @cost(weight: "10")
-  nin: [RiskRuleType!] @cost(weight: "10")
-}
-
-input RiskSeverityOperationFilterInput {
-  eq: RiskSeverity @cost(weight: "10")
-  neq: RiskSeverity @cost(weight: "10")
-  in: [RiskSeverity!] @cost(weight: "10")
-  nin: [RiskSeverity!] @cost(weight: "10")
-}
-
-input StockAggregateFilterInput {
-  and: [StockAggregateFilterInput!]
-  or: [StockAggregateFilterInput!]
-  id: LongOperationFilterInput
-  tickerId: IntOperationFilterInput
-  ticker: TickerFilterInput
-  open: DecimalOperationFilterInput
-  high: DecimalOperationFilterInput
-  low: DecimalOperationFilterInput
-  close: DecimalOperationFilterInput
-  volume: DecimalOperationFilterInput
-  volumeWeightedAveragePrice: DecimalOperationFilterInput
-  timestamp: DateTimeOperationFilterInput
-  timespan: StringOperationFilterInput
-  multiplier: IntOperationFilterInput
-  transactionCount: LongOperationFilterInput
-  createdAt: DateTimeOperationFilterInput
-}
-
-input StockAggregateSortInput {
-  id: SortEnumType @cost(weight: "10")
-  tickerId: SortEnumType @cost(weight: "10")
-  ticker: TickerSortInput @cost(weight: "10")
-  open: SortEnumType @cost(weight: "10")
-  high: SortEnumType @cost(weight: "10")
-  low: SortEnumType @cost(weight: "10")
-  close: SortEnumType @cost(weight: "10")
-  volume: SortEnumType @cost(weight: "10")
-  volumeWeightedAveragePrice: SortEnumType @cost(weight: "10")
-  timestamp: SortEnumType @cost(weight: "10")
-  timespan: SortEnumType @cost(weight: "10")
-  multiplier: SortEnumType @cost(weight: "10")
-  transactionCount: SortEnumType @cost(weight: "10")
-  createdAt: SortEnumType @cost(weight: "10")
 }
 
 input StrategyLegInput {
@@ -2190,104 +717,6 @@ input StringOperationFilterInput {
   nendsWith: String @cost(weight: "20")
 }
 
-input TechnicalIndicatorFilterInput {
-  and: [TechnicalIndicatorFilterInput!]
-  or: [TechnicalIndicatorFilterInput!]
-  id: LongOperationFilterInput
-  tickerId: IntOperationFilterInput
-  ticker: TickerFilterInput
-  indicatorType: StringOperationFilterInput
-  timestamp: DateTimeOperationFilterInput
-  timespan: StringOperationFilterInput
-  window: IntOperationFilterInput
-  value: DecimalOperationFilterInput
-  signal: DecimalOperationFilterInput
-  histogram: DecimalOperationFilterInput
-  valuesJson: StringOperationFilterInput
-  createdAt: DateTimeOperationFilterInput
-}
-
-input TechnicalIndicatorSortInput {
-  id: SortEnumType @cost(weight: "10")
-  tickerId: SortEnumType @cost(weight: "10")
-  ticker: TickerSortInput @cost(weight: "10")
-  indicatorType: SortEnumType @cost(weight: "10")
-  timestamp: SortEnumType @cost(weight: "10")
-  timespan: SortEnumType @cost(weight: "10")
-  window: SortEnumType @cost(weight: "10")
-  value: SortEnumType @cost(weight: "10")
-  signal: SortEnumType @cost(weight: "10")
-  histogram: SortEnumType @cost(weight: "10")
-  valuesJson: SortEnumType @cost(weight: "10")
-  createdAt: SortEnumType @cost(weight: "10")
-}
-
-input TickerFilterInput {
-  and: [TickerFilterInput!]
-  or: [TickerFilterInput!]
-  id: IntOperationFilterInput
-  symbol: StringOperationFilterInput
-  name: StringOperationFilterInput
-  market: StringOperationFilterInput
-  locale: StringOperationFilterInput
-  primaryExchange: StringOperationFilterInput
-  type: StringOperationFilterInput
-  active: BooleanOperationFilterInput
-  currencySymbol: StringOperationFilterInput
-  createdAt: DateTimeOperationFilterInput
-  updatedAt: DateTimeOperationFilterInput
-  sanitizationSummary: StringOperationFilterInput
-  aggregates: ListFilterInputTypeOfStockAggregateFilterInput
-  trades: ListFilterInputTypeOfTradeFilterInput
-  quotes: ListFilterInputTypeOfQuoteFilterInput
-  indicators: ListFilterInputTypeOfTechnicalIndicatorFilterInput
-}
-
-input TickerSortInput {
-  id: SortEnumType @cost(weight: "10")
-  symbol: SortEnumType @cost(weight: "10")
-  name: SortEnumType @cost(weight: "10")
-  market: SortEnumType @cost(weight: "10")
-  locale: SortEnumType @cost(weight: "10")
-  primaryExchange: SortEnumType @cost(weight: "10")
-  type: SortEnumType @cost(weight: "10")
-  active: SortEnumType @cost(weight: "10")
-  currencySymbol: SortEnumType @cost(weight: "10")
-  createdAt: SortEnumType @cost(weight: "10")
-  updatedAt: SortEnumType @cost(weight: "10")
-  sanitizationSummary: SortEnumType @cost(weight: "10")
-}
-
-input TradeFilterInput {
-  and: [TradeFilterInput!]
-  or: [TradeFilterInput!]
-  id: LongOperationFilterInput
-  tickerId: IntOperationFilterInput
-  ticker: TickerFilterInput
-  price: DecimalOperationFilterInput
-  size: DecimalOperationFilterInput
-  timestamp: DateTimeOperationFilterInput
-  exchange: LongOperationFilterInput
-  conditions: StringOperationFilterInput
-  sequenceNumber: LongOperationFilterInput
-  tradeId: StringOperationFilterInput
-  createdAt: DateTimeOperationFilterInput
-}
-
-input TradeSortInput {
-  id: SortEnumType @cost(weight: "10")
-  tickerId: SortEnumType @cost(weight: "10")
-  ticker: TickerSortInput @cost(weight: "10")
-  price: SortEnumType @cost(weight: "10")
-  size: SortEnumType @cost(weight: "10")
-  timestamp: SortEnumType @cost(weight: "10")
-  exchange: SortEnumType @cost(weight: "10")
-  conditions: SortEnumType @cost(weight: "10")
-  sequenceNumber: SortEnumType @cost(weight: "10")
-  tradeId: SortEnumType @cost(weight: "10")
-  createdAt: SortEnumType @cost(weight: "10")
-}
-
 input UuidOperationFilterInput {
   eq: UUID @cost(weight: "10")
   neq: UUID @cost(weight: "10")
@@ -2301,63 +730,6 @@ input UuidOperationFilterInput {
   nlt: UUID @cost(weight: "10")
   lte: UUID @cost(weight: "10")
   nlte: UUID @cost(weight: "10")
-}
-
-enum AccountType {
-  PAPER
-  BACKTEST
-}
-
-enum AssetType {
-  STOCK
-  OPTION
-}
-
-enum OptionType {
-  CALL
-  PUT
-}
-
-enum OrderSide {
-  BUY
-  SELL
-}
-
-enum OrderStatus {
-  PENDING
-  FILLED
-  PARTIALLY_FILLED
-  CANCELLED
-}
-
-enum OrderType {
-  MARKET
-  LIMIT
-  STOP
-}
-
-enum PositionStatus {
-  OPEN
-  CLOSED
-}
-
-enum RiskAction {
-  WARN
-  BLOCK
-}
-
-enum RiskRuleType {
-  MAX_DRAWDOWN
-  MAX_POSITION_SIZE
-  MAX_VEGA_EXPOSURE
-  MAX_DELTA
-}
-
-enum RiskSeverity {
-  LOW
-  MEDIUM
-  HIGH
-  CRITICAL
 }
 
 enum SortEnumType {
@@ -2376,9 +748,6 @@ scalar DateTime @specifiedBy(url: "https:\/\/www.graphql-scalars.com\/date-time"
 
 "The `Decimal` scalar type represents a decimal floating-point number."
 scalar Decimal
-
-"The `LocalDate` scalar type represents a ISO date string, represented as UTF-8 character sequences YYYY-MM-DD. The scalar follows the specification defined in RFC3339"
-scalar LocalDate
 
 "The `Long` scalar type represents non-fractional signed whole 64-bit numeric values. Long can represent values between -(2^63) and 2^63 - 1."
 scalar Long
