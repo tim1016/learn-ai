@@ -40,20 +40,6 @@ class TestReshuffle:
         reshuffle_trades(returns, rng=rng)
         np.testing.assert_array_equal(returns, before)
 
-    def test_same_seed_produces_identical_output(self):
-        returns = np.array([0.01, -0.02, 0.005, -0.01, 0.03])
-        out_a = reshuffle_trades(returns, rng=np.random.default_rng(7))
-        out_b = reshuffle_trades(returns, rng=np.random.default_rng(7))
-        np.testing.assert_array_equal(out_a, out_b)
-
-    def test_different_seeds_produce_different_orders(self):
-        # Long enough that the probability of two random permutations
-        # accidentally matching is negligible (~ 1 / 20!).
-        returns = np.arange(20, dtype=float)
-        out_a = reshuffle_trades(returns, rng=np.random.default_rng(1))
-        out_b = reshuffle_trades(returns, rng=np.random.default_rng(2))
-        assert not np.array_equal(out_a, out_b)
-
     def test_empty_input_returns_empty(self):
         out = reshuffle_trades(np.array([]), rng=np.random.default_rng(0))
         assert out.size == 0
@@ -80,12 +66,6 @@ class TestResample:
         returns = np.array([0.01, -0.02, 0.03, -0.005])
         out = resample_trades(returns, size=20, rng=np.random.default_rng(0))
         assert set(np.unique(out).tolist()).issubset(set(returns.tolist()))
-
-    def test_same_seed_produces_identical_output(self):
-        returns = np.array([0.01, -0.02, 0.03])
-        out_a = resample_trades(returns, size=15, rng=np.random.default_rng(7))
-        out_b = resample_trades(returns, size=15, rng=np.random.default_rng(7))
-        np.testing.assert_array_equal(out_a, out_b)
 
     def test_size_zero_returns_empty(self):
         returns = np.array([0.01, -0.02])

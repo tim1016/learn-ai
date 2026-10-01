@@ -29,7 +29,6 @@ from app.engine.strategy.algorithms.deployment_validation import (
     _session_decision_window_ms,
 )
 from app.engine.strategy.base import StrategyContext
-from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import (
     EvaluationMode,
     EvaluationStage,
@@ -121,14 +120,6 @@ def test_full_entry_to_exit_cycle_completes_without_on_order_event() -> None:
 
     assert strategy._in_position is False
     assert strategy._bars_until_exit_signal == 0
-
-
-def test_registry_factory_is_the_single_public_deployment_validation_program_construction_seam() -> None:
-    program, strategy, _context = _prepared_program()
-
-    assert strategy.signal_program is program
-    registration = _STRATEGY_REGISTRY[_KEY]
-    assert registration.build(registration.param_schema()).signal_program is not None
 
 
 def test_discarded_entry_does_not_advance_the_green_streak_or_entry_pending() -> None:

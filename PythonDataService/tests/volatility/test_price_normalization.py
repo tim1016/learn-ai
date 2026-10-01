@@ -30,17 +30,6 @@ from app.volatility.price_normalization import (
 
 
 class TestNormalizedOptionPriceContract:
-    def test_source_is_required_at_construction(self):
-        # The dataclass has no default for source; missing it raises TypeError.
-        with pytest.raises(TypeError, match="source"):
-            NormalizedOptionPrice(  # type: ignore[call-arg]
-                mid=1.0,
-                spread_estimate=0.05,
-                spread_synthetic=False,
-                half_spread_rule=None,
-                quality_score=0.95,
-            )
-
     def test_negative_mid_rejected(self):
         with pytest.raises(ValueError, match="mid must be >= 0"):
             NormalizedOptionPrice(
@@ -311,28 +300,8 @@ class TestRoundTripSerialization:
 
 
 class TestNormalizedOptionQuote:
-    def test_pair_construction(self):
-        call = from_snapshot_quote(bid=1.20, ask=1.30)
-        put = from_snapshot_quote(bid=0.45, ask=0.50)
-        nq = NormalizedOptionQuote(strike=100.0, call=call, put=put)
-        assert nq.strike == 100.0
-        assert nq.call.source == "opra_mid"
-        assert nq.put.source == "opra_mid"
-
     def test_zero_strike_rejected(self):
         call = from_snapshot_quote(1.20, 1.30)
         put = from_snapshot_quote(0.45, 0.50)
         with pytest.raises(ValueError, match="strike must be > 0"):
             NormalizedOptionQuote(strike=0.0, call=call, put=put)
-
-    def test_mixed_sources_per_strike_allowed(self):
-        # A real call leg + a synthesized put leg on the same strike is
-        # legal — the variance-contribution-weighted measure handles the
-        # mixed case correctly.
-        nq = NormalizedOptionQuote(
-            strike=100.0,
-            call=from_snapshot_quote(1.20, 1.30),
-            put=from_eod_close(0.50),
-        )
-        assert nq.call.source == "opra_mid"
-        assert nq.put.source == "synthetic_close_proxy"

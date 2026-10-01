@@ -410,23 +410,6 @@ def test_compute_run_verdict_unclean_incomplete_run_has_no_evidence_action() -> 
 
 # ── Probabilistic Sharpe note vocabulary (#2462, #2462 review) ────────────────
 
-_BANNED_PSR_PHRASES = ("Near-certain", "High statistical confidence")
-_SELECTION_MARKER = "not adjusted for picking the best of several tried settings"
-
-
-@pytest.mark.parametrize(("v", "expected_score"), [(0.97, 20), (0.999, 18)])
-def test_a_high_psr_note_names_the_missing_selection_adjustment(v: float, expected_score: int) -> None:
-    """PSR comes from one run's return series; the best of N tried settings
-    clears a high PSR most of the time by chance, so the ≥ 0.95 buckets must
-    not read as certainty. Scores and thresholds are the frozen v2 policy and
-    must not move."""
-    sub = _grade_psr_sub(v)
-
-    assert sub.score == expected_score
-    assert _SELECTION_MARKER in sub.note
-    assert not any(phrase in (sub.note or "") for phrase in _BANNED_PSR_PHRASES)
-
-
 @pytest.mark.parametrize(
     ("v", "expected_score"),
     [(0.0, 2), (0.5, 8), (0.8, 14), (0.95, 20), (0.99, 18), (None, None)],

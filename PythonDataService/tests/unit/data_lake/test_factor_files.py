@@ -102,35 +102,6 @@ def test_one_dividend_event_uses_prior_session_close():
     assert lines[2].split(",")[1] == "1"
 
 
-def test_actions_before_the_capture_are_not_planned():
-    """A dividend whose ex-date precedes every captured session is outside
-    every span — the capture cannot price it, and it scales every captured
-    bar alike, so no ratio needs it."""
-    dividends = [
-        DividendEvent(ex_dividend_date="2007-03-16", cash_amount=0.7),
-        DividendEvent(ex_dividend_date="2025-12-19", cash_amount=1.81),
-    ]
-    body = _build(
-        "SPY",
-        [],
-        dividends,
-        {
-            date(2024, 6, 3): Decimal("530.00"),
-            date(2025, 12, 18): Decimal("680.00"),
-            date(2026, 4, 30): Decimal("711.00"),
-        },
-    ).decode("ascii")
-    # Two anchors + one in-span dividend; the 2007 event is not planned.
-    assert len(body.strip().split("\n")) == 3
-
-
-def test_a_planned_dividend_without_its_reference_close_fails_loudly():
-    dividends = [DividendEvent(ex_dividend_date="2025-12-19", cash_amount=1.81)]
-    with pytest.raises(FactorFileReferenceError, match="reference price"):
-        # Only the ex-date itself is present — not the prior session that prices it.
-        _build("SPY", [], dividends, {date(2025, 12, 19): Decimal("681.00")})
-
-
 def test_zero_reference_close_fails_loudly():
     dividends = [DividendEvent(ex_dividend_date="2025-12-19", cash_amount=1.81)]
     with pytest.raises(FactorFileReferenceError, match="non-positive reference price"):

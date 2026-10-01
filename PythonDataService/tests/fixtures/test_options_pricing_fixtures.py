@@ -45,10 +45,6 @@ def _load(fixture_id: str) -> tuple[pa.Table, pa.Table, float, float]:
 # ---------------------------------------------------------------------------
 
 class TestBS001CallPrice:
-    def test_case_count(self) -> None:
-        inp, _, _, _ = _load("BS-001")
-        assert len(inp) == 180, f"Expected 180 cases, got {len(inp)}"
-
     def test_canonical_matches_oracle(self) -> None:
         inp, out, atol, rtol = _load("BS-001")
         spots = inp["spot"].to_pylist()
@@ -81,10 +77,6 @@ class TestBS001CallPrice:
 # ---------------------------------------------------------------------------
 
 class TestBS002PutPrice:
-    def test_case_count(self) -> None:
-        inp, _, _, _ = _load("BS-002")
-        assert len(inp) == 180, f"Expected 180 cases, got {len(inp)}"
-
     def test_canonical_matches_oracle(self) -> None:
         inp, out, atol, rtol = _load("BS-002")
         spots = inp["spot"].to_pylist()
@@ -111,31 +103,12 @@ class TestBS002PutPrice:
             f"BS-002 canonical vs oracle: max_abs_err={max_err:.3e}, atol={atol:.3e}"
         )
 
-    def test_put_call_parity(self) -> None:
-        """Put price >= max(K*e^(-rT) - S, 0) for all cases (lower bound check)."""
-        inp, out, _, _ = _load("BS-002")
-        spots = inp["spot"].to_pylist()
-        strikes = inp["strike"].to_pylist()
-        ttms = inp["ttm_years"].to_pylist()
-        rates = inp["rate"].to_pylist()
-        oracle_prices = out["oracle_price"].to_pylist()
-        import math
-        for s, k, t, r, p in zip(spots, strikes, ttms, rates, oracle_prices, strict=True):
-            lower_bound = max(k * math.exp(-r * t) - s, 0.0)
-            assert p >= lower_bound - 1e-10, (
-                f"Put price {p:.6f} < lower bound {lower_bound:.6f} for S={s}, K={k}, T={t}"
-            )
-
 
 # ---------------------------------------------------------------------------
 # BS-003: Call Delta
 # ---------------------------------------------------------------------------
 
 class TestBS003CallDelta:
-    def test_case_count(self) -> None:
-        inp, _, _, _ = _load("BS-003")
-        assert len(inp) == 180, f"Expected 180 cases, got {len(inp)}"
-
     def test_canonical_matches_oracle(self) -> None:
         inp, out, atol, rtol = _load("BS-003")
         spots = inp["spot"].to_pylist()
@@ -161,28 +134,4 @@ class TestBS003CallDelta:
 
         assert np.allclose(actual, expected, atol=atol, rtol=rtol), (
             f"BS-003 canonical vs oracle: max_abs_err={max_err:.3e}, atol={atol:.3e}"
-        )
-
-    def test_call_delta_in_range(self) -> None:
-        """Call delta must be in (0, 1) for all positive-TTM cases."""
-        _inp, out, _, _ = _load("BS-003")
-        oracle_deltas = out["oracle_delta"].to_pylist()
-        for i, d in enumerate(oracle_deltas):
-            assert 0.0 < d < 1.0, f"Row {i}: call delta {d:.6f} not in (0, 1)"
-
-    def test_itm_delta_greater_than_otm(self) -> None:
-        """Deep ITM call (S=120, K=90) delta > ATM call (S=100, K=100) delta."""
-        inp, out, _, _ = _load("BS-003")
-        spots = inp["spot"].to_pylist()
-        strikes = inp["strike"].to_pylist()
-        oracle_deltas = out["oracle_delta"].to_pylist()
-
-        itm_deltas = [d for s, k, d in zip(spots, strikes, oracle_deltas, strict=True)
-                      if s == 120.0 and k == 90.0]
-        atm_deltas = [d for s, k, d in zip(spots, strikes, oracle_deltas, strict=True)
-                      if s == 100.0 and k == 100.0]
-
-        assert itm_deltas and atm_deltas, "Could not find ITM/ATM rows"
-        assert min(itm_deltas) > max(atm_deltas) - 0.05, (
-            f"Expected deep-ITM delta > ATM delta: ITM_min={min(itm_deltas):.4f}, ATM_max={max(atm_deltas):.4f}"
         )

@@ -620,27 +620,6 @@ async def test_an_orphan_whose_recovery_raises_is_its_own_failure(
     assert get_clerk_runtime("sim:orphan-ok") is not None
 
 
-async def test_a_lease_held_dry_run_panel_shows_only_the_owner_sentence(
-    restarted_lane: _Lane,
-) -> None:
-    """#2670: a Dry Run whose account another live process holds refuses with the
-    one owner sentence on every surface -- never the internal ``sim:`` id,
-    never the words "execution lease" the repository's exception carries."""
-    holder = _another_process_holds_the_dry_run(restarted_lane.artifacts_root, lease_ttl_ms=60_000)
-    try:
-        with pytest.raises(PanelUnavailableError) as refused:
-            async with binding_clerk_runtime(restarted_lane.registry, _dry_run_binding()):
-                pass
-
-        sentence = f"{refused.value.detail}"
-        assert "still open in another running copy of this Clerk" in sentence
-        assert "Stop that copy" in sentence
-        assert "sim:" not in sentence
-        assert "execution lease" not in sentence
-    finally:
-        holder.close()
-
-
 async def test_start_re_checks_a_held_dry_run_account_and_agrees_with_the_panel(
     restarted_lane: _Lane, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

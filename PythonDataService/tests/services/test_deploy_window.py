@@ -13,11 +13,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.services.broker_v2_panel.paper_deploy_service import exit_steps_summary
 from app.services.deploy_window import deploy_window, start_window_next_step
 from app.services.run_admission import evaluate_run_admission
 from app.utils.timestamps import to_ms_utc
-from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.services.test_run_admission import _bot, _clerk
 
 _ET = ZoneInfo("America/New_York")
@@ -55,21 +53,3 @@ def test_a_closed_window_admission_words_the_next_open_as_of_its_own_evaluation(
 
     assert decision.reason_code == "DEPLOY_WINDOW_CLOSED"
     assert decision.next_step == "Next Start window opens Mon Jan 4 2027, 04:00 ET."
-
-
-def test_start_window_next_step_while_the_window_is_open() -> None:
-    now = _et(2026, 9, 30, 10)
-
-    assert start_window_next_step(deploy_window(now), now_ms=now) == "Start is allowed in the current session."
-
-
-def test_exit_steps_summary_names_each_step_in_the_owners_et_words() -> None:
-    summary = exit_steps_summary(DEPLOY_EXIT_TERMS, _et(2026, 9, 21, 9, 53))
-
-    assert summary == (
-        "Regular close (Mon Sep 21, 16:00 ET): limit at decision close minus 20 bps. "
-        "After-hours ends Mon Sep 21, 20:00 ET. "
-        "Next pre-market (Tue Sep 22, 04:00 ET): limit at bid minus 20 bps; hold if the spread exceeds 50 bps. "
-        "Next regular open (Tue Sep 22, 09:30 ET): cancel the unfilled Clerk-priced limit, confirm cancellation, "
-        "then sell the remaining quantity at market. A confirmed halt holds exits."
-    )

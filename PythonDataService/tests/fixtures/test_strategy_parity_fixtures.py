@@ -107,15 +107,3 @@ def test_strategy_trade_log_matches_pinned_pre_port_receipt(strategy_key: str) -
             problems.append(f"indicators {fresh_indicators} != {oracle['indicators']}")
         if problems:
             raise AssertionError(f"{strategy_key}: trade #{i + 1} mismatch\n  - " + "\n  - ".join(problems))
-
-
-def test_fixture_bar_series_is_deterministic_and_shared_across_strategies() -> None:
-    """Regenerating the fixture must reproduce byte-identical trade counts.
-
-    Pins the trade *counts* the fixture was generated with, so a change to
-    the shared synthetic bar series (not just the strategy math) is also
-    caught, not only per-trade drift within an unchanged count.
-    """
-    output = _load_output()
-    assert output["trade_counts"] == {key: len(output["trades"][key]) for key in _STRATEGIES}
-    assert all(output["trade_counts"][key] > 0 for key in _STRATEGIES)

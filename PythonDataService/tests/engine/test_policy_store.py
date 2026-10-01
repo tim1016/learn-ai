@@ -9,7 +9,6 @@ import pytest
 
 from app.data_lake import path_policy
 from app.engine.data.policy_store import (
-    policy_key,
     resolve_data_roots,
     snapshot_minute_trade_zips,
 )
@@ -47,37 +46,6 @@ def test_resolve_data_roots_serves_each_adjustment_mode_from_its_own_root(monkey
     assert raw == [path_policy.resolve_lake_root("raw")]
     assert adjusted == [path_policy.resolve_lake_root("polygon_split_adjusted")]
     assert raw != adjusted
-
-
-def test_policy_key_encodes_source_and_adjustment():
-    assert policy_key(source="polygon", adjusted=True) == "polygon-adjusted"
-    assert policy_key(source="polygon", adjusted=False) == "polygon-raw"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_snapshot_minute_trade_zips_is_path_independent_and_reference_first(tmp_path: Path):

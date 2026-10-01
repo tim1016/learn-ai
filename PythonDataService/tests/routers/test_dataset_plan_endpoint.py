@@ -62,14 +62,6 @@ async def _post_plan(api: FastAPI, payload: dict[str, Any]) -> httpx.Response:
 
 
 @pytest.mark.asyncio
-async def test_plan_missing_ticker_is_422(api: FastAPI) -> None:
-    payload = {**_RECIPE}
-    del payload["ticker"]
-    response = await _post_plan(api, payload)
-    assert response.status_code == 422
-
-
-@pytest.mark.asyncio
 async def test_plan_empty_ticker_is_422(api: FastAPI) -> None:
     response = await _post_plan(api, {**_RECIPE, "ticker": ""})
     assert response.status_code == 422

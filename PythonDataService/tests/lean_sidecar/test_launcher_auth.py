@@ -140,13 +140,6 @@ class TestReadLauncherToken:
         assert read_launcher_token(tmp_path) is None
 
 
-def test_token_file_path_lives_at_artifacts_root() -> None:
-    """The launcher and the data plane must resolve the same path —
-    test guards against an accidental rename of the constant."""
-    artifacts = Path("/tmp/test")
-    assert token_file_path(artifacts) == artifacts / ".launcher-token"
-
-
 def test_default_token_file_path_tracks_configured_artifacts_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

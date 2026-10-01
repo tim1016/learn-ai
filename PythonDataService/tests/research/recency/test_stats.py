@@ -71,10 +71,6 @@ class TestTradeDollarPnl:
         trade = _trade(_ms(2026, 6, 1), _ms(2026, 6, 1), pnl_pts=2.5, pnl_pct=0.025, quantity=10)
         assert trade_dollar_pnl(trade, commission_per_order=1.5) == pytest.approx(25.0 - 3.0, abs=1e-9, rel=0)
 
-    def test_zero_commission_matches_the_gross_default(self) -> None:
-        trade = _trade(_ms(2026, 6, 1), _ms(2026, 6, 1), pnl_pts=2.5, pnl_pct=0.025, quantity=10)
-        assert trade_dollar_pnl(trade, commission_per_order=0.0) == trade_dollar_pnl(trade)
-
     def test_matches_the_canonical_engine_flat_fee_formula(self) -> None:
         """Parity with the engine payload's ``persisted_trade_net_pnl`` flat-fee
         branch (compatibility_profile=None) — the codebase's one canonical

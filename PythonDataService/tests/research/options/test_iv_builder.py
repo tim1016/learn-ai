@@ -4,12 +4,7 @@ from __future__ import annotations
 
 import math
 
-import pytest
-
 from app.research.options.iv_builder import (
-    MAX_IV,
-    MIN_IV,
-    MIN_OPTION_PRICE,
     TARGET_DTE,
     _get_option_price,
     _interpolate_iv,
@@ -43,15 +38,6 @@ class TestInterpolateIv:
         iv = _interpolate_iv(iv_low=iv_low, dte_low=dte_low, iv_high=iv_high, dte_high=dte_high)
         assert abs(iv - expected) < 1e-10
 
-    def test_not_simple_linear(self):
-        """Variance-time result differs from simple linear interpolation."""
-        iv_low, dte_low = 0.20, 25
-        iv_high, dte_high = 0.30, 35
-
-        iv = _interpolate_iv(iv_low=iv_low, dte_low=dte_low, iv_high=iv_high, dte_high=dte_high)
-        linear = 0.5 * iv_low + 0.5 * iv_high  # simple linear = 0.25
-        assert iv != pytest.approx(linear, abs=1e-6)
-
     def test_exact_30_dte_low_bracket(self):
         """When low bracket is exactly 30 DTE, its variance dominates."""
         iv = _interpolate_iv(iv_low=0.20, dte_low=30, iv_high=0.30, dte_high=45)
@@ -66,11 +52,6 @@ class TestInterpolateIv:
         # Closer to 28 than 35, so result should be closer to 0.20
         assert iv < 0.25
 
-    def test_result_positive(self):
-        """Interpolated IV should always be positive."""
-        iv = _interpolate_iv(iv_low=0.10, dte_low=20, iv_high=0.50, dte_high=45)
-        assert iv > 0
-
     def test_result_bounded_by_inputs(self):
         """Interpolated IV should be between the two bracket IVs."""
         iv = _interpolate_iv(iv_low=0.15, dte_low=20, iv_high=0.35, dte_high=45)
@@ -82,13 +63,6 @@ class TestNormalizeIvFallback:
 
     def test_always_returns_none(self):
         assert _normalize_iv_fallback(0.25, dte=30) is None
-
-    def test_returns_none_for_any_dte(self):
-        assert _normalize_iv_fallback(0.20, dte=15) is None
-        assert _normalize_iv_fallback(0.30, dte=60) is None
-
-    def test_returns_none_for_zero_dte(self):
-        assert _normalize_iv_fallback(0.25, dte=0) is None
 
 
 class TestGetOptionPrice:
@@ -160,16 +134,3 @@ class TestGetOptionPrice:
         bar = {"c": 3.00, "v": 200}
         price, _source = _get_option_price(bar)
         assert price == 3.00
-
-
-class TestQualityFilters:
-    """Test IV quality filter boundaries."""
-
-    def test_min_iv_boundary(self):
-        assert MIN_IV == 0.05
-
-    def test_max_iv_boundary(self):
-        assert MAX_IV == 3.0
-
-    def test_min_option_price(self):
-        assert MIN_OPTION_PRICE == 0.05

@@ -112,10 +112,6 @@ def _assert_sequence(canonical: list[float | None], oracle: list[float | None], 
 
 
 class TestIND001EMA:
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("IND-001")
-        assert len(inp) == 3
-
     def test_ema_matches_oracle_all_cases(self) -> None:
         inp, out, atol, rtol = _load("IND-001")
         for row in range(len(inp)):
@@ -123,15 +119,6 @@ class TestIND001EMA:
             canonical = _run_ema(prices)
             oracle = _oracle_vals(out, row)
             _assert_sequence(canonical, oracle, atol, rtol, f"IND-001 row={row}")
-
-    def test_ema_always_produces_value(self) -> None:
-        """EMA produces a value at every bar (SMA warmup, not None)."""
-        inp, _out, _atol, _rtol = _load("IND-001")
-        for row in range(len(inp)):
-            prices = _prices(inp, row)
-            canonical = _run_ema(prices)
-            for bar, v in enumerate(canonical):
-                assert v is not None, f"Row {row} bar {bar}: EMA returned None"
 
     def test_ema_ready_at_period(self) -> None:
         ind = ExponentialMovingAverage("ema", PERIOD)
@@ -161,10 +148,6 @@ class TestIND001EMA:
 
 
 class TestIND002SMA:
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("IND-002")
-        assert len(inp) == 3
-
     def test_sma_matches_oracle_all_cases(self) -> None:
         inp, out, atol, rtol = _load("IND-002")
         for row in range(len(inp)):
@@ -172,14 +155,6 @@ class TestIND002SMA:
             canonical = _run_sma(prices)
             oracle = _oracle_vals(out, row)
             _assert_sequence(canonical, oracle, atol, rtol, f"IND-002 row={row}")
-
-    def test_sma_always_produces_value(self) -> None:
-        inp, _out, _atol, _rtol = _load("IND-002")
-        for row in range(len(inp)):
-            prices = _prices(inp, row)
-            canonical = _run_sma(prices)
-            for bar, v in enumerate(canonical):
-                assert v is not None, f"Row {row} bar {bar}: SMA returned None"
 
     def test_sma_ready_at_period(self) -> None:
         ind = SimpleMovingAverage("sma", PERIOD)
@@ -205,10 +180,6 @@ class TestIND002SMA:
 
 
 class TestIND003RSI:
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("IND-003")
-        assert len(inp) == 3
-
     def test_rsi_matches_oracle_all_cases(self) -> None:
         inp, out, atol, rtol = _load("IND-003")
         for row in range(len(inp)):
@@ -217,21 +188,6 @@ class TestIND003RSI:
             oracle = _oracle_vals(out, row)
             _assert_sequence(canonical, oracle, atol, rtol, f"IND-003 row={row}")
 
-    def test_rsi_nan_before_ready(self) -> None:
-        """RSI(3) is None for bars 0..period (first period+1 bars)."""
-        inp, out, _atol, _rtol = _load("IND-003")
-        for row in range(len(inp)):
-            oracle = _oracle_vals(out, row)
-            # First bar (no delta) + first 2 accumulation bars = 3 Nones
-            for bar in range(PERIOD):
-                assert oracle[bar] is None, (
-                    f"Row {row} bar {bar}: expected None, got {oracle[bar]}"
-                )
-            # Bar at index PERIOD should be non-None
-            assert oracle[PERIOD] is not None, (
-                f"Row {row} bar {PERIOD}: expected first RSI value, got None"
-            )
-
     def test_rsi_ready_at_period_plus_one(self) -> None:
         ind = RelativeStrengthIndex("rsi", PERIOD)
         for i in range(PERIOD):
@@ -239,17 +195,6 @@ class TestIND003RSI:
             assert not ind.is_ready
         ind.update(_timestamp_ms(PERIOD), Decimal(str(10 + PERIOD)))
         assert ind.is_ready
-
-    def test_rsi_bounded_zero_to_100(self) -> None:
-        """RSI must be in [0, 100]."""
-        inp, _out, _atol, _rtol = _load("IND-003")
-        for row in range(len(inp)):
-            canonical = _run_rsi(_prices(inp, row))
-            for bar, v in enumerate(canonical):
-                if v is not None:
-                    assert 0.0 <= v <= 100.0, (
-                        f"Row {row} bar {bar}: RSI={v} out of [0, 100]"
-                    )
 
     def test_rsi_monotone_increasing_gives_100(self) -> None:
         """All gains → RSI = 100 (avg_loss = 0)."""

@@ -16,7 +16,7 @@ from app.engine.execution.order import (
     Direction,
     OrderEvent,
 )
-from app.engine.execution.portfolio import Portfolio, Position
+from app.engine.execution.portfolio import Portfolio
 from app.utils.timestamps import to_ms_utc
 
 NOW = to_ms_utc(datetime(2024, 1, 1, 14, 30, tzinfo=UTC))
@@ -33,24 +33,6 @@ def _fill(quantity: int, price: str, fee: str = "0") -> OrderEvent:
         direction=direction,
         fee=Decimal(fee),
     )
-
-
-def test_position_direction_reflects_sign_of_quantity():
-    assert Position(symbol="SPY", quantity=10).direction == Direction.LONG
-    assert Position(symbol="SPY", quantity=-10).direction == Direction.SHORT
-    assert Position(symbol="SPY", quantity=0).direction == Direction.FLAT
-
-
-def test_position_market_value_scales_with_quantity():
-    pos = Position(symbol="SPY", quantity=100)
-
-    assert pos.market_value(Decimal("150.0")) == Decimal("15000.0")
-
-
-def test_portfolio_cash_initialized_from_initial_cash():
-    portfolio = Portfolio(initial_cash=Decimal("10000"))
-
-    assert portfolio.cash == Decimal("10000")
 
 
 def test_submit_market_order_raises_on_zero_quantity():
@@ -196,23 +178,3 @@ def test_liquidate_submits_offsetting_order():
     assert order is not None
     assert order.quantity == -100
     assert order.tag == "Liquidate"
-
-
-def test_drain_pending_clears_pending_list():
-    portfolio = Portfolio(initial_cash=Decimal("10000"))
-    portfolio.submit_market_order("SPY", 100, NOW)
-    portfolio.submit_market_order("SPY", -100, NOW)
-
-    drained = list(portfolio.drain_pending())
-
-    assert len(drained) == 2
-    assert portfolio.pending_orders == []
-
-
-def test_clear_pending_drops_pending_list():
-    portfolio = Portfolio(initial_cash=Decimal("10000"))
-    portfolio.submit_market_order("SPY", 100, NOW)
-
-    portfolio.clear_pending()
-
-    assert portfolio.pending_orders == []

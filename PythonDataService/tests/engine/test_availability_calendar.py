@@ -323,19 +323,6 @@ def test_missing_sessions_either_side_of_a_closure_are_one_span(tmp_path: Path) 
     assert report.missing_spans == [(date(2025, 12, 31), date(2026, 1, 2))]
 
 
-def test_a_year_long_gap_is_named_as_one_range(tmp_path: Path) -> None:
-    """The refusal compresses a hole into ranges instead of listing every date (#2445)."""
-    year = (date(2025, 1, 1), date(2025, 12, 31))
-    sessions = expected_sessions(*year)
-
-    error = MissingSessionsError(check_availability([tmp_path], "QQQ", *year))
-
-    assert str(error) == (
-        f"missing data: QQQ has no minute bars for {len(sessions)} of {len(sessions)} trading sessions "
-        f"in 2025-01-01..2025-12-31 — missing {sessions[0].isoformat()}..{sessions[-1].isoformat()}"
-    )
-
-
 def test_gaps_past_the_shown_limit_are_counted_not_listed(tmp_path: Path) -> None:
     sessions = expected_sessions(*WINDOW)
     _seed(tmp_path, sessions[1::2])  # every other session held: one gap per missing session

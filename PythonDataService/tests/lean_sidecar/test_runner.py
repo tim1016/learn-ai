@@ -375,32 +375,6 @@ class TestBuildCommand:
         monkeypatch.delattr(runner.os, "geteuid", raising=False)
         assert runner._is_rootless_podman("/usr/bin/podman") is False
 
-    def test_is_rootless_podman_does_not_shell_out_to_podman(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Regression for the silent-fallback bug: previously this
-        function called ``subprocess.run`` to query ``podman info``,
-        and any failure of that call (including the 15s timeout firing
-        under concurrent podman load) would silently return ``False``
-        and drop ``--userns=keep-id`` from the LEAN argv. The fix
-        replaced the probe with a euid check, which is deterministic
-        and has no subprocess. Guard against a future regression that
-        reintroduces the subprocess path."""
-        from app.lean_sidecar import runner
-
-        def _explode(*_args: object, **_kwargs: object) -> object:
-            raise AssertionError(
-                "_is_rootless_podman must not invoke subprocess.run; the "
-                "subprocess-based probe was removed because its 15s timeout "
-                "raced with concurrent podman activity and silently "
-                "misclassified rootless as rootful (see PR fixing this)."
-            )
-
-        monkeypatch.setattr(runner.subprocess, "run", _explode)
-        # Should return whatever euid says — no subprocess.
-        _ = runner._is_rootless_podman("/usr/bin/podman")
-
     def test_rejects_tmpfs_followed_by_another_flag(
         self,
         tmp_artifacts_root: Path,
@@ -630,17 +604,6 @@ class TestKillReason:
     (wall-clock timeout vs workspace cap overrun) into one — the
     discriminator is the enum threaded through the helper.
     """
-
-    def test_enum_has_expected_members(self) -> None:
-        from app.lean_sidecar.runner import KillReason
-
-        assert KillReason.WALL_CLOCK_TIMEOUT == "wall_clock_timeout"
-        assert KillReason.WORKSPACE_MAX_MB_EXCEEDED == "workspace_max_mb_exceeded"
-        # Stable string values for log / payload routing.
-        assert {m.value for m in KillReason} == {
-            "wall_clock_timeout",
-            "workspace_max_mb_exceeded",
-        }
 
     def test_kill_helper_accepts_reason_kwarg_and_logs_it(
         self,

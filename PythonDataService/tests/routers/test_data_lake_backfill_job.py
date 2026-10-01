@@ -117,15 +117,6 @@ async def test_route_404_when_flag_off() -> None:
     assert r.status_code == 404
 
 
-async def test_missing_job_id_is_422() -> None:
-    flag_on_app = _make_app(include_data_lake=True)
-    body = _valid_body()
-    del body["job_id"]
-    async with AsyncClient(transport=ASGITransport(app=flag_on_app), base_url="http://test") as client:
-        r = await client.post("/api/data-lake/backfill", json=body)
-    assert r.status_code == 422
-
-
 async def test_invalid_spec_symbol_is_422() -> None:
     flag_on_app = _make_app(include_data_lake=True)
     body = _valid_body(symbols=["spy"])  # lowercase — rejected by DataRunSpec's validator

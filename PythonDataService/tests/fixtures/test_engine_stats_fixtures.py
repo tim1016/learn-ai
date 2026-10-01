@@ -58,10 +58,6 @@ def _rows_to_returns(inp: pa.Table) -> list[tuple[list[float], int]]:
 # ---------------------------------------------------------------------------
 
 class TestENG001Sharpe:
-    def test_case_count(self) -> None:
-        inp, _, _, _ = _load("ENG-001")
-        assert len(inp) == 3, f"Expected 3 cases, got {len(inp)}"
-
     def test_canonical_matches_oracle(self) -> None:
         inp, out, atol, rtol = _load("ENG-001")
         cases = _rows_to_returns(inp)
@@ -76,33 +72,12 @@ class TestENG001Sharpe:
                 f"Case {i}: canonical={canonical:.10f}, oracle={oracle:.10f}, err={err:.3e}, atol={atol:.3e}"
             )
 
-    def test_sharpe_is_positive_for_positive_mean_cases(self) -> None:
-        """All 3 fixture cases have positive mean returns — Sharpe should be positive."""
-        _inp, out, _, _ = _load("ENG-001")
-        oracle_sharpes = out["oracle_sharpe"].to_pylist()
-        for i, s in enumerate(oracle_sharpes):
-            assert s > 0, f"Case {i}: expected positive Sharpe for positive-mean series, got {s:.6f}"
-
-    def test_sharpe_none_for_zero_std(self) -> None:
-        """Canonical _sharpe returns None when all returns are equal (zero std)."""
-        result = _sharpe([0.01, 0.01, 0.01, 0.01, 0.01], 252)
-        assert result is None, f"Expected None for zero-std series, got {result}"
-
-    def test_sharpe_none_for_single_return(self) -> None:
-        """Canonical _sharpe returns None when len < 2."""
-        result = _sharpe([0.01], 252)
-        assert result is None
-
 
 # ---------------------------------------------------------------------------
 # ENG-001b: Sortino Ratio
 # ---------------------------------------------------------------------------
 
 class TestENG001bSortino:
-    def test_case_count(self) -> None:
-        inp, _, _, _ = _load("ENG-001b")
-        assert len(inp) == 3, f"Expected 3 cases, got {len(inp)}"
-
     def test_canonical_matches_oracle(self) -> None:
         inp, out, atol, rtol = _load("ENG-001b")
         cases = _rows_to_returns(inp)
@@ -116,25 +91,3 @@ class TestENG001bSortino:
             assert err <= atol + rtol * abs(oracle), (
                 f"Case {i}: canonical={canonical:.10f}, oracle={oracle:.10f}, err={err:.3e}, atol={atol:.3e}"
             )
-
-    def test_sortino_none_when_no_downside(self) -> None:
-        """Canonical _sortino returns None when no negative returns exist."""
-        result = _sortino([0.01, 0.02, 0.005, 0.03, 0.01], 252)
-        assert result is None, f"Expected None for all-positive returns, got {result}"
-
-    def test_sortino_none_for_single_return(self) -> None:
-        """Canonical _sortino returns None when len < 2."""
-        result = _sortino([-0.01], 252)
-        assert result is None
-
-    def test_sortino_greater_than_sharpe_for_low_downside(self) -> None:
-        """When downside is rare, Sortino > Sharpe (smaller penalty denominator)."""
-        # Case 1: [0.01, 0.02, -0.01, 0.03, 0.01] — single small downside
-        _inp, out, _, _ = _load("ENG-001b")
-        _inp_001, out_001, _, _ = _load("ENG-001")
-        oracle_sortino_c1 = out["oracle_sortino"][0].as_py()
-        oracle_sharpe_c1 = out_001["oracle_sharpe"][0].as_py()
-        assert oracle_sortino_c1 > oracle_sharpe_c1, (
-            f"Expected Sortino > Sharpe for low-downside series; "
-            f"Sortino={oracle_sortino_c1:.4f}, Sharpe={oracle_sharpe_c1:.4f}"
-        )

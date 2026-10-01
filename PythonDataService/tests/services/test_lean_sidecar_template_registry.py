@@ -3,15 +3,8 @@
 from __future__ import annotations
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.lean_sidecar.trusted_samples.deployment_validation import (
-    DEPLOYMENT_VALIDATION_SOURCE,
-)
-from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
 from app.lean_sidecar.trusted_samples.ema_crossover_2_bps import (
     EMA_CROSSOVER_2_BPS_SOURCE,
-)
-from app.lean_sidecar.trusted_samples.ema_crossover_signal import (
-    EMA_CROSSOVER_SIGNAL_SOURCE,
 )
 from app.lean_sidecar.trusted_samples.rsi_mean_reversion import (
     RSI_MEAN_REVERSION_SOURCE,
@@ -21,21 +14,6 @@ from app.lean_sidecar.trusted_templates import (
     TrustedTemplate,
 )
 from app.services.strategy_lean_source_service import resolve_strategy_lean_source
-
-
-def test_ema_crossover_is_in_source_registry() -> None:
-    assert TrustedTemplate.EMA_CROSSOVER in TRUSTED_TEMPLATE_DEFINITIONS
-    assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.EMA_CROSSOVER].source is EMA_CROSSOVER_SOURCE
-
-
-def test_ema_crossover_brokerage_policy_is_algorithm_default() -> None:
-    assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.EMA_CROSSOVER].brokerage_policy == "algorithm_default"
-
-
-def test_ema_crossover_signal_is_in_source_registry() -> None:
-    assert TrustedTemplate.EMA_CROSSOVER_SIGNAL in TRUSTED_TEMPLATE_DEFINITIONS
-    assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.EMA_CROSSOVER_SIGNAL].source is EMA_CROSSOVER_SIGNAL_SOURCE
-    assert EMA_CROSSOVER_SIGNAL_SOURCE is EMA_CROSSOVER_SOURCE
 
 
 def test_ema_crossover_signal_brokerage_policy_is_interactive_brokers() -> None:
@@ -50,24 +28,6 @@ def test_ema_crossover_two_bps_is_in_source_registry() -> None:
 
     assert definition.source is EMA_CROSSOVER_2_BPS_SOURCE
     assert definition.brokerage_policy == "interactive_brokers"
-
-
-def test_deployment_validation_is_in_source_registry() -> None:
-    assert TrustedTemplate.DEPLOYMENT_VALIDATION in TRUSTED_TEMPLATE_DEFINITIONS
-    assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.DEPLOYMENT_VALIDATION].source is DEPLOYMENT_VALIDATION_SOURCE
-
-
-def test_deployment_validation_brokerage_policy_is_algorithm_default() -> None:
-    assert (
-        TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.DEPLOYMENT_VALIDATION].brokerage_policy
-        == "algorithm_default"
-    )
-
-
-def test_existing_templates_still_registered() -> None:
-    """Regression guard: don't break existing templates."""
-    assert TrustedTemplate.TRUSTED_DEFAULT in TRUSTED_TEMPLATE_DEFINITIONS
-    assert TrustedTemplate.RECONCILIATION in TRUSTED_TEMPLATE_DEFINITIONS
 
 
 def test_rsi_mean_reversion_is_in_source_registry() -> None:
@@ -99,8 +59,9 @@ _TEMPLATES_WITHOUT_A_REGISTRY_STRATEGY: frozenset[TrustedTemplate] = frozenset(
         TrustedTemplate.TRUSTED_DEFAULT,
         TrustedTemplate.RECONCILIATION,
         # The legacy base source. `ema_crossover_signal` IS this object
-        # (EMA_CROSSOVER_SIGNAL_SOURCE is EMA_CROSSOVER_SOURCE, asserted
-        # above) and is the name strategies claim, so the base name being
+        # (EMA_CROSSOVER_SIGNAL_SOURCE is EMA_CROSSOVER_SOURCE, asserted by
+        # test_ema_crossover_template.test_signal_template_emits_the_parameterized_base_source)
+        # and is the name strategies claim, so the base name being
         # unclaimed is the intended aliasing, not drift.
         TrustedTemplate.EMA_CROSSOVER,
         # Its strategy was retired, not lost: the former `ema_crossover_2_bps`

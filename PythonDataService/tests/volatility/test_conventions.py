@@ -114,13 +114,6 @@ class TestSurfaceConventionsDataclass:
 
         assert isinstance(hash_dict, dict)
 
-    def test_frozen_dataclass(self) -> None:
-        """Frozen dataclass cannot mutate attributes."""
-        conventions = SurfaceConventions(rate=0.05)
-
-        with pytest.raises(AttributeError):
-            conventions.rate = 0.06  # type: ignore
-
 
 class TestDayCountConversions:
     """Day count convention conversion tests."""

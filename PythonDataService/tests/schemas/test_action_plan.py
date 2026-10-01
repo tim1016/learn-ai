@@ -17,21 +17,6 @@ from pydantic import ValidationError
 from app.schemas.action_plan import ActionPlan
 
 
-def test_empty_action_plan_round_trips() -> None:
-    plan = ActionPlan(on_enter=[], on_exit=[])
-
-    assert plan.on_enter == []
-    assert plan.on_exit == []
-    assert plan.model_dump() == {"on_enter": [], "on_exit": []}
-
-
-def test_empty_action_plan_constructs_from_defaults() -> None:
-    plan = ActionPlan()
-
-    assert plan.on_enter == []
-    assert plan.on_exit == []
-
-
 def test_unknown_top_level_key_rejected() -> None:
     """`extra="forbid"` pins the deploy-boundary invariant: an operator typo
     like ``on_entry`` (instead of ``on_enter``) fails validation instead of

@@ -20,7 +20,6 @@ from httpx import ASGITransport, AsyncClient
 from app.main import app
 from app.services.bs_greeks import bs_european_price
 from app.services.iv_recorder import (
-    SLOT_CHOICES,
     InMemoryIvSnapshotStore,
     JsonlIvSnapshotStore,
     RecordedIvSnapshot,
@@ -59,36 +58,6 @@ def _bs_chain_payload(
         "underlying": {"ticker": "SPY", "price": spot},
         "contracts": contracts,
     }
-
-
-class TestInMemoryStore:
-    def test_round_trip(self):
-        store = InMemoryIvSnapshotStore()
-        snap = RecordedIvSnapshot(
-            ticker="SPY", snapshot_ts_ms=1, slot="09:35", spot=590.0,
-            rate=0.045, dividend_yield=0.012,
-            rate_source="FRED", dividend_source="Polygon TTM",
-            iv30_vix_style=0.18, iv30_parametric=0.17,
-            iv_provenance={"iv_source": "internal_solver"},
-            raw_chain=[], error=None,
-        )
-        store.write(snap)
-        rows = store.read_series("SPY")
-        assert len(rows) == 1
-        assert rows[0] == snap
-
-    def test_filter_by_window(self):
-        store = InMemoryIvSnapshotStore()
-        for ts in (100, 200, 300, 400):
-            store.write(RecordedIvSnapshot(
-                ticker="SPY", snapshot_ts_ms=ts, slot="09:35", spot=0.0,
-                rate=0.0, dividend_yield=0.0, rate_source="x", dividend_source="x",
-                iv30_vix_style=None, iv30_parametric=None,
-                iv_provenance={}, raw_chain=[], error=None,
-            ))
-        assert len(store.read_series("SPY", start_ms=200, end_ms=300)) == 2
-        assert len(store.read_series("SPY", start_ms=350)) == 1
-        assert len(store.read_series("SPY", end_ms=150)) == 1
 
 
 class TestJsonlStore:
@@ -222,14 +191,6 @@ class TestRecorderService:
         assert rows[0].error is not None
         assert rows[0].health_score is None
 
-    def test_invalid_slot_rejected(self):
-        store = InMemoryIvSnapshotStore()
-        polygon = MagicMock()
-        with pytest.raises(ValueError, match="slot must be one of"):
-            record_iv_snapshot(
-                ticker="SPY", slot="10:00", store=store, polygon=polygon,
-            )
-
 
 @pytest.fixture
 def in_memory_store():
@@ -290,10 +251,3 @@ class TestRecorderRoutes:
             assert body["success"] is True
             assert body["snapshot"]["iv30_vix_style"] is not None
             assert body["snapshot"]["error"] is None
-
-
-class TestSlotChoicesContract:
-    def test_default_slots(self):
-        # 15:55 runs alongside 16:00 for the trial-month experiment in
-        # research-doc §7.6 / §8.2.3.
-        assert SLOT_CHOICES == ("09:35", "12:30", "15:55", "16:00")

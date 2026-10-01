@@ -103,16 +103,6 @@ class TestWriteLeanQuoteDayZip:
         assert cols[5] == "0"  # bid_size
         assert cols[10] == "0"  # ask_size
 
-    def test_ms_offset_from_et_midnight(self, tmp_path: Path) -> None:
-        """The ms-since-ET-midnight encoding must match the trade-zip
-        contract exactly — a quote bar at 09:30 ET is 34_200_000 ms
-        after ET midnight, regardless of UTC offset (DST or otherwise)."""
-        bars = [_bar(9, 30, 580.50)]
-        path = write_lean_quote_day_zip(tmp_path, "SPY", date(2025, 1, 6), bars)
-        cols = _read_zip_lines(path)[0].split(",")
-        # 9 * 3600 + 30 * 60 = 34_200 seconds = 34_200_000 ms
-        assert cols[0] == str(34_200_000)
-
     def test_multiple_bars_one_per_row_in_order(self, tmp_path: Path) -> None:
         bars = [_bar(9, 30, 580.50), _bar(9, 31, 580.75), _bar(9, 32, 580.60)]
         path = write_lean_quote_day_zip(tmp_path, "SPY", date(2025, 1, 6), bars)

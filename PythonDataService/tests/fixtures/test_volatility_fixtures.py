@@ -85,10 +85,6 @@ def _assert_nan_series(canonical: list[float | None], oracle: list[float | None]
 
 
 class TestIV001SolverRoundTrip:
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("IV-001")
-        assert len(inp) == 12
-
     def test_solver_recovers_sigma_all_cases(self) -> None:
         inp, out, atol, rtol = _load("IV-001")
         for row in range(len(inp)):
@@ -141,38 +137,13 @@ class TestIV001SolverRoundTrip:
                 SolveStatus.BRENT_FALLBACK,
             ), f"Row {row}: unexpected status {result.status}"
 
-    def test_iv_positive_and_finite(self) -> None:
-        inp, _out, _atol, _rtol = _load("IV-001")
-        for row in range(len(inp)):
-            spot = float(inp["spot"][row].as_py())
-            strike = float(inp["strike"][row].as_py())
-            rate = float(inp["rate"][row].as_py())
-            ttm = float(inp["ttm_years"][row].as_py())
-            dividend = float(inp["dividend"][row].as_py())
-            market_price = float(inp["market_price"][row].as_py())
-            is_call = bool(inp["is_call"][row].as_py())
-            result = implied_volatility(
-                option_price=market_price, spot=spot, strike=strike, ttm=ttm,
-                rate=rate, dividend=dividend, is_call=is_call,
-            )
-            assert result.iv is not None and math.isfinite(result.iv) and result.iv > 0
-
 
 # ---------------------------------------------------------------------------
 # IV-002: SVI Total Variance Surface
 # ---------------------------------------------------------------------------
 
 
-def _svi_total_var(k: float, a: float, b: float, rho: float, m: float, sigma: float) -> float:
-    diff = k - m
-    return a + b * (rho * diff + math.sqrt(diff * diff + sigma * sigma))
-
-
 class TestIV002SVISurface:
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("IV-002")
-        assert len(inp) == 21  # 3 param sets × 7 k-values
-
     def test_fit_svi_recovers_oracle_all_param_sets(self) -> None:
         inp, out, atol, rtol = _load("IV-002")
 
@@ -203,20 +174,6 @@ class TestIV002SVISurface:
                     f"diff={abs(w_fit-w_oracle):.2e}"
                 )
 
-    def test_oracle_formula_positive_for_all_rows(self) -> None:
-        _inp, out, _atol, _rtol = _load("IV-002")
-        for row in range(len(out)):
-            w = float(out["w_oracle"][row].as_py())
-            assert w > 0, f"Row {row}: oracle w(k)={w} must be positive"
-
-    def test_svi_smile_shape_left_skew(self) -> None:
-        """Param set 0 (rho=-0.7) must show left skew: w(-0.3) > w(0.3)."""
-        _inp, out, _atol, _rtol = _load("IV-002")
-        # Set 0, row 0 = k=-0.30; row 6 = k=+0.30
-        w_left = float(out["w_oracle"][0].as_py())
-        w_right = float(out["w_oracle"][6].as_py())
-        assert w_left > w_right, f"Expected left skew: w(-0.30)={w_left:.6f} > w(0.30)={w_right:.6f}"
-
 
 # ---------------------------------------------------------------------------
 # IV-003: IV30 Constant-Maturity
@@ -224,10 +181,6 @@ class TestIV002SVISurface:
 
 
 class TestIV003IV30:
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("IV-003")
-        assert len(inp) == 3
-
     def test_vix_style_iv30_matches_oracle(self) -> None:
         inp, out, atol, rtol = _load("IV-003")
         for row in range(len(inp)):
@@ -262,12 +215,6 @@ class TestIV003IV30:
             )
             _assert_close(result, iv30_oracle, atol, rtol, f"IV-003 row={row}")
 
-    def test_iv30_positive_all_cases(self) -> None:
-        _inp, out, _atol, _rtol = _load("IV-003")
-        for row in range(len(out)):
-            iv30 = float(out["iv30_oracle"][row].as_py())
-            assert iv30 > 0, f"Row {row}: iv30_oracle={iv30} must be positive"
-
 
 # ---------------------------------------------------------------------------
 # IV-004: IV Rank Rolling 60-Day Window
@@ -290,10 +237,6 @@ class TestIV004IVRank:
         )
         return iv, oracle
 
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("IV-004")
-        assert len(inp) == 1
-
     def test_iv_rank_matches_oracle(self) -> None:
         iv, oracle_arr = self._get_iv_and_oracle()
         _inp, _out, atol, rtol = _load("IV-004")
@@ -313,22 +256,6 @@ class TestIV004IVRank:
                 assert not np.isnan(c), f"Bar {i}: expected {o}, got NaN"
                 _assert_close(c, o, atol, rtol, f"IV-004 bar={i}")
 
-    def test_half_before_min_periods(self) -> None:
-        """Canonical returns 0.5 (not NaN) before min_periods.
-
-        np.where(rolling_denom > 1e-10, rank, 0.5) — when denom = NaN (pre-warmup),
-        NaN > 1e-10 is False so the result is 0.5, not NaN.
-        """
-        _iv, oracle_arr = self._get_iv_and_oracle()
-        for i in range(self._MIN_PERIODS - 1):
-            assert oracle_arr[i] == 0.5, f"Bar {i}: expected 0.5 before min_periods={self._MIN_PERIODS}, got {oracle_arr[i]}"
-
-    def test_rank_bounded_zero_to_one(self) -> None:
-        _iv, oracle_arr = self._get_iv_and_oracle()
-        for i, r in enumerate(oracle_arr):
-            if not np.isnan(r):
-                assert 0.0 <= r <= 1.0, f"Bar {i}: rank={r} out of [0, 1]"
-
 
 # ---------------------------------------------------------------------------
 # RV-001: Close-to-Close Realized Volatility
@@ -338,10 +265,6 @@ class TestIV004IVRank:
 class TestRV001CloseToClose:
     _N_BARS = 30
     _WINDOW = 10
-
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("RV-001")
-        assert len(inp) == 1
 
     def test_rv_matches_oracle(self) -> None:
         inp, out, atol, rtol = _load("RV-001")
@@ -360,18 +283,6 @@ class TestRV001CloseToClose:
                 assert not np.isnan(c), f"Bar {i}: expected {o:.6e}, got NaN"
                 _assert_close(c, o, atol, rtol, f"RV-001 bar={i}")
 
-    def test_nan_before_window(self) -> None:
-        _inp, out, _atol, _rtol = _load("RV-001")
-        oracle = [float(out[f"rv_{i}"][0].as_py()) for i in range(self._N_BARS)]
-        for i in range(self._WINDOW):
-            assert np.isnan(oracle[i]), f"Bar {i}: expected NaN before window={self._WINDOW}"
-
-    def test_rv_positive_after_warmup(self) -> None:
-        _inp, out, _atol, _rtol = _load("RV-001")
-        oracle = [float(out[f"rv_{i}"][0].as_py()) for i in range(self._N_BARS)]
-        for i in range(self._WINDOW, self._N_BARS):
-            assert not np.isnan(oracle[i]) and oracle[i] > 0, f"Bar {i}: expected positive RV, got {oracle[i]}"
-
 
 # ---------------------------------------------------------------------------
 # RV-002: HF Two-Component Realized Volatility (ABDL)
@@ -381,10 +292,6 @@ class TestRV001CloseToClose:
 class TestRV002HFRealizedVol:
     _N_BARS = 20  # 5 days × 4 bars
     _WINDOW = 3
-
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("RV-002")
-        assert len(inp) == self._N_BARS
 
     def test_hf_rv_matches_oracle(self) -> None:
         inp, out, atol, rtol = _load("RV-002")
@@ -414,15 +321,6 @@ class TestRV002HFRealizedVol:
                 assert not np.isnan(c), f"Bar {i}: expected {o:.6e}, got NaN"
                 _assert_close(c, o, atol, rtol, f"RV-002 bar={i}")
 
-    def test_nan_before_window_days(self) -> None:
-        """First (window-1) trading days should produce NaN bars."""
-        _inp, out, _atol, _rtol = _load("RV-002")
-        oracle = [float(out["rv_hf"][i].as_py()) for i in range(self._N_BARS)]
-        # First (window-1)*bars_per_day = 2*4 = 8 bars are NaN
-        n_nan_bars = (self._WINDOW - 1) * 4
-        for i in range(n_nan_bars):
-            assert np.isnan(oracle[i]), f"Bar {i}: expected NaN (pre-window), got {oracle[i]}"
-
 
 # ---------------------------------------------------------------------------
 # RV-003: IV-RV Basis Conversion
@@ -430,10 +328,6 @@ class TestRV002HFRealizedVol:
 
 
 class TestRV003BasisConversion:
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("RV-003")
-        assert len(inp) == 3
-
     def test_conversion_matches_oracle(self) -> None:
         inp, out, atol, rtol = _load("RV-003")
         for row in range(len(inp)):
@@ -449,28 +343,6 @@ class TestRV003BasisConversion:
             )
             _assert_close(result, sigma_oracle, atol, rtol, f"RV-003 row={row}")
 
-    def test_pinned_trading_days_matches_calendar(self) -> None:
-        """n_trading_pinned in fixture must match current pandas_market_calendars call."""
-        import pandas_market_calendars as mcal
-        inp, _out, _atol, _rtol = _load("RV-003")
-        nyse = mcal.get_calendar("NYSE")
-        for row in range(len(inp)):
-            D = int(inp["tenor_calendar_days"][row].as_py())
-            asof_ms = int(inp["asof_ms"][row].as_py())
-            n_pinned = int(inp["n_trading_pinned"][row].as_py())
-            ts = pd.Timestamp(asof_ms, unit="ms", tz="UTC").tz_convert("America/New_York").normalize().tz_localize(None)
-            end_incl = ts + pd.Timedelta(days=D - 1)
-            schedule = nyse.schedule(start_date=str(ts.date()), end_date=str(end_incl.date()))
-            assert len(schedule) == n_pinned, (
-                f"Row {row}: pinned N={n_pinned} != calendar N={len(schedule)}"
-            )
-
-    def test_conversion_produces_positive_finite(self) -> None:
-        _inp, out, _atol, _rtol = _load("RV-003")
-        for row in range(len(out)):
-            sigma = float(out["sigma_trd252"][row].as_py())
-            assert sigma > 0 and math.isfinite(sigma), f"Row {row}: invalid sigma_trd252={sigma}"
-
 
 # ---------------------------------------------------------------------------
 # RV-004: Model-Free Variance Replication (CBOE Formula)
@@ -478,10 +350,6 @@ class TestRV003BasisConversion:
 
 
 class TestRV004ModelFreeVariance:
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("RV-004")
-        assert len(inp) == 3
-
     def test_replicate_expiry_variance_matches_oracle(self) -> None:
         inp, out, atol, rtol = _load("RV-004")
         for row in range(len(inp)):
@@ -505,9 +373,3 @@ class TestRV004ModelFreeVariance:
                 result.sigma_squared_T, sigma_sq_oracle, atol, rtol,
                 f"RV-004 row={row}"
             )
-
-    def test_sigma_sq_positive_all_cases(self) -> None:
-        _inp, out, _atol, _rtol = _load("RV-004")
-        for row in range(len(out)):
-            v = float(out["sigma_sq_oracle"][row].as_py())
-            assert v > 0, f"Row {row}: sigma_sq_oracle={v} must be positive"

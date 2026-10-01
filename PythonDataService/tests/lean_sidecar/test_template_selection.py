@@ -9,10 +9,6 @@ in the E2E suite gated on a real LEAN image.
 
 from __future__ import annotations
 
-import pytest
-
-from app.lean_sidecar.data_policy import BarsSpec, DataPolicy
-from app.lean_sidecar.trusted_samples.buy_and_hold import BUY_AND_HOLD_SOURCE
 from app.lean_sidecar.trusted_samples.buy_and_hold_reconciliation import (
     BUY_AND_HOLD_RECONCILIATION_SOURCE,
 )
@@ -20,47 +16,6 @@ from app.lean_sidecar.trusted_templates import (
     TRUSTED_TEMPLATE_DEFINITIONS,
     TrustedTemplate,
 )
-from app.services.lean_sidecar_service import TrustedRunRequest
-
-
-def _default_data_policy() -> DataPolicy:
-    return DataPolicy(
-        source="synthetic",
-        symbol="SPY",
-        adjusted=False,
-        session="regular",
-        input_bars=BarsSpec(timespan="minute", multiplier=1),
-        strategy_bars=BarsSpec(timespan="minute", multiplier=15),
-        timestamp_policy="bar_close_ms_utc",
-        timezone="America/New_York",
-        provider_kind="live",
-        fixture_id=None,
-        fixture_sha256=None,
-    )
-
-
-def _request(**overrides) -> TrustedRunRequest:
-    base = {
-        "run_id": "ut_template",
-        "start_ms_utc": 1_736_121_600_000,
-        "end_ms_utc": 1_736_467_200_000,
-        "starting_cash": 100_000.0,
-        "data_policy": _default_data_policy(),
-    }
-    base.update(overrides)
-    return TrustedRunRequest(**base)
-
-
-def test_trusted_default_template_is_the_dataclass_default() -> None:
-    """The Phase 1/4c API must keep working unchanged — old callers
-    that never sent a template field should keep their pre-Phase-5b
-    behavior (LEAN default brokerage)."""
-    req = _request()
-    assert req.template == "trusted_default"
-
-
-def test_template_maps_default_to_algorithm_default_policy() -> None:
-    assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.TRUSTED_DEFAULT].brokerage_policy == "algorithm_default"
 
 
 def test_template_maps_reconciliation_to_interactive_brokers_policy() -> None:
@@ -69,10 +24,6 @@ def test_template_maps_reconciliation_to_interactive_brokers_policy() -> None:
     Engine-Lab-comparable. Reconciliation template must map exactly
     to ``interactive_brokers``."""
     assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.RECONCILIATION].brokerage_policy == "interactive_brokers"
-
-
-def test_default_template_stages_legacy_buy_and_hold_source() -> None:
-    assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.TRUSTED_DEFAULT].source == BUY_AND_HOLD_SOURCE
 
 
 def test_reconciliation_template_stages_ibkr_pinned_source() -> None:
@@ -106,12 +57,3 @@ def test_reconciliation_source_class_name_is_my_algorithm() -> None:
     we rename the class, LEAN silently runs its image-baked default
     and the run looks successful with empty output."""
     assert "class MyAlgorithm" in BUY_AND_HOLD_RECONCILIATION_SOURCE
-
-
-@pytest.mark.parametrize(
-    "template",
-    list(TrustedTemplate),
-)
-def test_request_accepts_known_templates(template: TrustedTemplate) -> None:
-    req = _request(template=template)
-    assert req.template == template

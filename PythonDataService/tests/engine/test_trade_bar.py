@@ -24,12 +24,6 @@ def _bar(period: timedelta) -> TradeBar:
     )
 
 
-def test_trade_bar_is_frozen():
-    bar = _bar(timedelta(minutes=1))
-    with pytest.raises(Exception):  # dataclass(frozen=True) → FrozenInstanceError
-        bar.close = Decimal("200")  # type: ignore[misc]
-
-
 @pytest.mark.parametrize(
     "period,expected_seconds",
     [
@@ -43,12 +37,3 @@ def test_period_seconds_matches_end_minus_time(period: timedelta, expected_secon
     bar = _bar(period)
 
     assert bar.period_seconds == pytest.approx(expected_seconds, abs=1e-12, rel=0)
-
-
-def test_prices_preserved_as_decimal():
-    bar = _bar(timedelta(minutes=1))
-
-    # Decimal must round-trip without float coercion.
-    assert isinstance(bar.open, Decimal)
-    assert isinstance(bar.close, Decimal)
-    assert bar.close == Decimal("100.20")

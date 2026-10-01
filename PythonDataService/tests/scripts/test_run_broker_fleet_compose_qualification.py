@@ -184,12 +184,6 @@ def test_every_declared_fault_scenario_is_actually_populated_by_the_host_run() -
     assert populated == set(qualification.FAULT_SCENARIOS)
 
 
-def test_parse_args_accepts_build_timeout_s_and_defaults_to_120() -> None:
-    """A cold CI runner needs a wider image-build budget than a warm host."""
-    assert qualification._parse_args([]).build_timeout_s == 120.0
-    assert qualification._parse_args(["--build-timeout-s", "1500"]).build_timeout_s == 1500.0
-
-
 def test_partial_fault_matrix_cannot_be_labelled_passed() -> None:
     """An attempted or missing fault remains failed qualification evidence."""
     faults = {

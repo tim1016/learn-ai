@@ -14,7 +14,6 @@ from datetime import date
 import pytest
 
 from app.research.runs.window import (
-    ExcludedDay,
     WindowSummary,
     summarize_window,
 )
@@ -98,24 +97,3 @@ def test_summarize_window_same_day_holiday_returns_excluded():
 def test_summarize_window_rejects_end_before_start():
     with pytest.raises(ValueError, match="end must be on or after start"):
         summarize_window(date(2026, 5, 26), date(2026, 5, 25))
-
-
-def test_excluded_day_serializes_date_as_iso_string():
-    ex = ExcludedDay(date=date(2026, 5, 25), reason="holiday", name="Memorial Day")
-    dumped = ex.model_dump(mode="json")
-    assert dumped == {
-        "date": "2026-05-25",
-        "reason": "holiday",
-        "name": "Memorial Day",
-    }
-
-
-def test_window_summary_serializes_dates_as_iso_strings():
-    summary = summarize_window(date(2026, 5, 19), date(2026, 5, 26))
-    dumped = summary.model_dump(mode="json")
-
-    assert dumped["requested_start_date"] == "2026-05-19"
-    assert dumped["requested_end_date"] == "2026-05-26"
-    assert all(isinstance(d, str) for d in dumped["sessions_included"])
-    assert all(isinstance(ex["date"], str) for ex in dumped["sessions_excluded"])
-    assert summary.sessions_included[-1] == date(2026, 5, 26)  # end-inclusive

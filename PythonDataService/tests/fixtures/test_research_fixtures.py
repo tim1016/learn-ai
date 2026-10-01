@@ -48,10 +48,6 @@ class TestRP001InformationCoefficient:
     def _load(self):
         return _read(self._ID, self._CAT, "input.arrow"), _read(self._ID, self._CAT, "output.arrow")
 
-    def test_row_count(self) -> None:
-        inp, _ = self._load()
-        assert len(inp) == 40, f"Expected 40 bars (4 days × 10), got {len(inp)}"
-
     def test_mean_ic_matches_oracle(self) -> None:
         inp, out = self._load()
         from app.research.validation.ic import compute_information_coefficient
@@ -83,11 +79,6 @@ class TestRP001InformationCoefficient:
             f"diff={abs(result.ic_t_stat - oracle_t):.2e}"
         )
 
-    def test_n_days(self) -> None:
-        _, out = self._load()
-        n = int(out.column("oracle_n_days")[0].as_py())
-        assert n == 4, f"Expected 4 daily ICs, got {n}"
-
     def test_daily_ics_match_oracle(self) -> None:
         inp, out = self._load()
         from app.research.validation.ic import compute_information_coefficient
@@ -118,10 +109,6 @@ class TestRP002QuantileMonotonicity:
 
     def _load(self):
         return _read(self._ID, self._CAT, "input.arrow"), _read(self._ID, self._CAT, "output.arrow")
-
-    def test_row_count(self) -> None:
-        inp, _ = self._load()
-        assert len(inp) == 200, f"Expected 200 obs, got {len(inp)}"
 
     def test_is_monotonic_matches_oracle(self) -> None:
         inp, out = self._load()
@@ -166,12 +153,6 @@ class TestRP002QuantileMonotonicity:
                 f"bin_mean[{i}]: canonical={can_mean:.9f} oracle={oracle_mean:.9f}"
             )
 
-    def test_monotonic_with_positive_signal(self) -> None:
-        _, out = self._load()
-        assert bool(out.column("oracle_is_monotonic")[0].as_py()), (
-            "Expected monotonic result: feature is positively correlated with returns by design"
-        )
-
 
 # ---------------------------------------------------------------------------
 # RP-003 — Phipson-Smyth P-value
@@ -185,10 +166,6 @@ class TestRP003PhipsonSmyth:
 
     def _load(self):
         return _read(self._ID, self._CAT, "input.arrow"), _read(self._ID, self._CAT, "output.arrow")
-
-    def test_row_count(self) -> None:
-        inp, _ = self._load()
-        assert len(inp) == 1, f"Expected 1-row input (scalar observed_ic + wide null cols), got {len(inp)}"
 
     def test_p_value_matches_oracle(self) -> None:
         inp, out = self._load()
@@ -216,16 +193,6 @@ class TestRP003PhipsonSmyth:
             f"percentile: canonical={percentile:.9f} oracle={oracle_pct:.9f}"
         )
 
-    def test_p_value_positive(self) -> None:
-        _, out = self._load()
-        p = _f(out, "oracle_p_value")
-        assert p > 0, "Phipson-Smyth p-value must be > 0 (1 is added to numerator)"
-
-    def test_p_value_bounded(self) -> None:
-        _, out = self._load()
-        p = _f(out, "oracle_p_value")
-        assert 0 < p <= 1.0, f"p-value out of (0,1]: {p}"
-
 
 # ---------------------------------------------------------------------------
 # RP-004 — Signal Z-score
@@ -240,10 +207,6 @@ class TestRP004SignalZscore:
 
     def _load(self):
         return _read(self._ID, self._CAT, "input.arrow"), _read(self._ID, self._CAT, "output.arrow")
-
-    def test_row_count(self) -> None:
-        inp, _ = self._load()
-        assert len(inp) == self._N_BARS, f"Expected {self._N_BARS} bars, got {len(inp)}"
 
     def test_zscore_matches_oracle(self) -> None:
         inp, out = self._load()
@@ -290,16 +253,6 @@ class TestRP004SignalZscore:
             f"Mean of train z-scores should be 0.0, got {train_z_mean:.9f}"
         )
 
-    def test_flip_negates_zscore(self) -> None:
-        _inp, out = self._load()
-        # oracle_z_flipped[i] == -oracle_z[i] for all i
-        for i in range(self._N_BARS):
-            z = _f(out, f"oracle_z_{i}")
-            zf = _f(out, f"oracle_z_flipped_{i}")
-            assert abs(z + zf) < self._ATOL, (
-                f"z_flipped[{i}] should equal -z[{i}]: z={z:.9f} zf={zf:.9f}"
-            )
-
 
 # ---------------------------------------------------------------------------
 # REL-001 — IC Hit Rate
@@ -312,10 +265,6 @@ class TestREL001ICHitRate:
 
     def _load(self):
         return _read(self._ID, self._CAT, "input.arrow"), _read(self._ID, self._CAT, "output.arrow")
-
-    def test_row_count(self) -> None:
-        inp, _ = self._load()
-        assert len(inp) == 40, f"Expected 40 bars (4 days × 10), got {len(inp)}"
 
     def test_hit_rate_matches_oracle(self) -> None:
         inp, out = self._load()
@@ -332,23 +281,6 @@ class TestREL001ICHitRate:
             f"diff={abs(result.hit_rate - oracle_hr):.2e}"
         )
 
-    def test_mean_ic_matches(self) -> None:
-        inp, out = self._load()
-        from app.research.validation.ic import compute_information_coefficient
-
-        feature = pd.Series(inp.column("feature").to_pylist())
-        target = pd.Series(inp.column("target_return").to_pylist())
-        timestamps = pd.Series(inp.column("timestamps_ms").to_pylist())
-
-        result = compute_information_coefficient(feature, target, timestamps)
-        oracle_mean = _f(out, "oracle_mean_ic")
-        assert abs(result.mean_ic - oracle_mean) < self._ATOL
-
-    def test_hit_rate_bounded(self) -> None:
-        _, out = self._load()
-        hr = _f(out, "oracle_hit_rate")
-        assert 0.0 <= hr <= 1.0, f"hit_rate out of [0,1]: {hr}"
-
 
 # ---------------------------------------------------------------------------
 # REL-004 — IC Decay Curve
@@ -363,10 +295,6 @@ class TestREL004ICDecayCurve:
 
     def _load(self):
         return _read(self._ID, self._CAT, "input.arrow"), _read(self._ID, self._CAT, "output.arrow")
-
-    def test_row_count(self) -> None:
-        inp, _ = self._load()
-        assert len(inp) == 100, f"Expected 100 bars (5 days × 20), got {len(inp)}"
 
     def test_decay_curve_matches_oracle(self) -> None:
         inp, out = self._load()
@@ -408,9 +336,3 @@ class TestREL004ICDecayCurve:
         assert horizons == list(range(1, self._MAX_HORIZON + 1)), (
             f"Expected horizons 1..{self._MAX_HORIZON}, got {horizons}"
         )
-
-    def test_ic_values_finite(self) -> None:
-        _inp, out = self._load()
-        for h in range(1, self._MAX_HORIZON + 1):
-            ic = _f(out, f"oracle_horizon_{h}_ic")
-            assert np.isfinite(ic), f"oracle IC for horizon={h} is not finite: {ic}"

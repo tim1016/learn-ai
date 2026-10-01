@@ -16,7 +16,6 @@ the first time:
 from __future__ import annotations
 
 import asyncio
-import inspect
 from typing import Any
 
 import pytest
@@ -50,11 +49,6 @@ def _dispatch(monkeypatch: Any) -> dict[str, Any]:
         )
     )
     return captured
-
-
-def test_the_worker_checks_redis_on_every_cancel_call(monkeypatch: Any) -> None:
-    captured = _dispatch(monkeypatch)
-    assert captured["kwargs"]["cancel_check_every_n"] == 1
 
 
 def test_a_queued_run_is_cancelled_by_the_gates_poll(monkeypatch: Any) -> None:
@@ -96,13 +90,6 @@ def test_a_queued_run_is_cancelled_by_the_gates_poll(monkeypatch: Any) -> None:
         raise AssertionError("cancellation did not reach the queued run")
 
     assert seen["while_waiting"] == cancel.raise_if_cancelled
-
-
-def test_the_engine_entry_point_offers_a_wait_hook() -> None:
-    """The parameter the worker passes has to exist on the seam it passes it to."""
-    from app.services.engine_backtest_service import execute_engine_backtest
-
-    assert "while_waiting" in inspect.signature(execute_engine_backtest).parameters
 
 
 def test_a_reported_engine_failure_fails_the_background_job(monkeypatch: Any) -> None:

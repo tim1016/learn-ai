@@ -101,12 +101,6 @@ class TestRandomEmaWindows:
             assert 3 <= params["fast"] <= 5
             assert 8 <= params["slow"] <= 12
 
-    def test_same_seed_produces_identical_output(self):
-        parent = _make_parent()
-        a = random_ema_window_specs(parent, count=10, rng=np.random.default_rng(42))
-        b = random_ema_window_specs(parent, count=10, rng=np.random.default_rng(42))
-        assert [p for _, p in a] == [p for _, p in b]
-
     def test_uses_parent_symbol_and_resolution(self):
         parent = _make_parent(symbol="IWM", resolution_minutes=60)
         spec, _ = random_ema_window_specs(

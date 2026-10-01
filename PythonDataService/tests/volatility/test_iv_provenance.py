@@ -16,16 +16,6 @@ from app.volatility.iv_provenance import IvProvenance
 
 
 class TestIvProvenanceContract:
-    def test_minimal_construction_succeeds(self):
-        prov = IvProvenance(
-            iv_source="internal_solver",
-            price_source_mix={"opra_mid": 1.0},
-            variance_contribution_synthetic=0.0,
-            strike_coverage_score=0.95,
-        )
-        assert prov.iv_source == "internal_solver"
-        assert prov.per_strike_contributions is None
-
     def test_variance_contribution_outside_unit_interval_rejected(self):
         with pytest.raises(ValueError, match="variance_contribution_synthetic"):
             IvProvenance(
@@ -43,17 +33,6 @@ class TestIvProvenanceContract:
                 variance_contribution_synthetic=0.0,
                 strike_coverage_score=-0.1,
             )
-
-    def test_max_single_strike_share_default_is_zero(self):
-        # Backwards-compat: existing constructors that don't pass this
-        # diagnostic field should still build cleanly.
-        prov = IvProvenance(
-            iv_source="internal_solver",
-            price_source_mix={"opra_mid": 1.0},
-            variance_contribution_synthetic=0.0,
-            strike_coverage_score=0.95,
-        )
-        assert prov.max_single_strike_share == 0.0
 
     def test_max_single_strike_share_outside_unit_interval_rejected(self):
         with pytest.raises(ValueError, match="max_single_strike_share"):
@@ -84,19 +63,6 @@ class TestIvProvenanceContract:
             variance_contribution_synthetic=0.0,
             strike_coverage_score=0.0,
         )
-
-    def test_per_strike_contributions_optional(self):
-        prov = IvProvenance(
-            iv_source="internal_solver",
-            price_source_mix={"opra_mid": 0.6, "synthetic_close_proxy": 0.4},
-            variance_contribution_synthetic=0.35,
-            strike_coverage_score=0.9,
-            per_strike_contributions=[
-                {"strike": 100.0, "kind": "both", "c_i": 0.001},
-            ],
-        )
-        assert prov.per_strike_contributions is not None
-        assert len(prov.per_strike_contributions) == 1
 
 
 class TestRoundTripSerialization:

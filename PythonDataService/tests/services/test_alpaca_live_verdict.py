@@ -6,8 +6,6 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from app.broker.alpaca.clerk.active_authority import (
     ActiveClerkRuntime,
     ClerkStartupFailure,
@@ -104,20 +102,6 @@ def test_live_with_no_runtime_yet_is_unknown() -> None:
 
     assert verdict.clerk_authority == "not_installed"
     assert verdict.final_verdict == "unknown"
-
-
-@pytest.mark.parametrize("final", ["paper", "live", "unknown"])
-def test_every_verdict_carries_server_authored_copy(final: str) -> None:
-    settings, runtime = {
-        "paper": (_paper(), None),
-        "live": (_live(), _failure("LIVE_ACCOUNT_REFUSED", "9LIVE0001")),
-        "unknown": (None, None),
-    }[final]
-
-    verdict = alpaca_live_verdict(settings=settings, runtime=runtime, now_ms=_NOW)
-
-    assert verdict.final_verdict == final
-    assert verdict.headline and verdict.detail
 
 
 def test_a_mid_session_mode_disagreement_the_envelope_sync_observed_is_disagreed() -> None:

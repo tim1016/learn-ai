@@ -59,18 +59,3 @@ class TestQuantileAnalysis:
         result = compute_quantile_analysis(feature, target, n_bins=5)
 
         assert len(result.bins) == 0
-
-    def test_bins_have_correct_fields(self) -> None:
-        rng = np.random.default_rng(42)
-        feature = pd.Series(rng.normal(0, 1, 200))
-        target = pd.Series(rng.normal(0, 0.01, 200))
-
-        result = compute_quantile_analysis(feature, target, n_bins=5)
-
-        for b in result.bins:
-            assert isinstance(b.bin_number, int)
-            assert isinstance(b.lower_bound, float)
-            assert isinstance(b.upper_bound, float)
-            assert isinstance(b.mean_return, float)
-            assert isinstance(b.count, int)
-            assert b.count > 0

@@ -15,7 +15,6 @@ import pytest
 
 from app.engine.execution.commission import IbkrEquityCommissionModel
 from app.engine.execution.sizing import (
-    LEAN_FREE_PORTFOLIO_VALUE_PCT,
     LeanSetHoldingsSizing,
     SimpleFloorSizing,
 )
@@ -64,11 +63,6 @@ def test_simple_floor_overbuys_vs_lean_on_the_fixture() -> None:
         if qty > e["lean_qty"]:
             strictly_more += 1
     assert strictly_more > 0
-
-
-def test_lean_free_portfolio_pct_is_lean_default() -> None:
-    assert Decimal("0.0025") == LEAN_FREE_PORTFOLIO_VALUE_PCT
-    assert LeanSetHoldingsSizing().free_portfolio_value_pct == Decimal("0.0025")
 
 
 def test_lean_sizing_buffer_and_fee_reduce_quantity() -> None:

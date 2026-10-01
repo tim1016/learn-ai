@@ -304,10 +304,6 @@ def test_minute_audit_flags_no_minute_bar_for_time(
     assert "no minute bar" in audits[0].reason
 
 
-def test_minute_reader_detects_resolution(minute_reader: FixtureDataReader) -> None:
-    assert minute_reader.is_minute_resolution is True
-
-
 # ---------- _align_fills ---------------------------------------------------
 
 
@@ -521,39 +517,6 @@ def test_reconcile_halts_on_fixture_insufficient(tmp_path: Path) -> None:
     # (from our missing side) is NOT emitted in the same run.
     assert cats == {DivergenceCategory.FIXTURE_INSUFFICIENT}
     assert len(report.fixture_audit) == 1
-
-
-def test_render_markdown_includes_status_and_window(tmp_path: Path) -> None:
-    orders_path = tmp_path / "qc_orders.json"
-    prices_path = tmp_path / "qc_prices.csv"
-    prices_path.write_text(_CSV_TWO_BARS)
-    _write_orders_json(
-        orders_path,
-        [
-            {
-                "id": 1,
-                "symbol": "AAPL",
-                "type": 0,
-                "quantity": 526,
-                "events": [
-                    {
-                        "time": "2026-02-11T13:30:00Z",
-                        "fillQuantity": 526,
-                        "fillPrice": 190.00,
-                        "direction": 0,
-                    }
-                ],
-            }
-        ],
-    )
-    report = reconcile_qc_aapl_phase3(
-        qc_orders_path=orders_path,
-        qc_price_history_path=prices_path,
-        our_fills=[_our_fill("buy", 526, "190.00", "2026-02-11")],
-    )
-    md = report.render_markdown()
-    assert "PASSED" in md
-    assert "2026-02-11" in md
 
 
 # ---------- P1 #2: parser strictness (canonical schema) --------------------

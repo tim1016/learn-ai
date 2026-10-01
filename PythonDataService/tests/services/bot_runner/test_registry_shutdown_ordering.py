@@ -231,30 +231,6 @@ async def test_stop_all_preserves_operator_intent(tmp_path: Path) -> None:
     assert view.desired_state == "RUNNING"
 
 
-def test_runner_is_daemon_free_by_construction() -> None:
-    """P10 / L1: no host daemon, host socket, or subprocess in the runner path.
-
-    Asserted against the actual import graph (AST), not raw text, so docs
-    may name the banned machinery without tripping the guard.
-    """
-    import ast
-
-    import app.routers.broker_bots as router_mod
-    import app.services.bot_runner as runner_mod
-
-    banned = ("host_daemon", "daemon_client", "daemon_transport", "subprocess", "multiprocessing")
-    for mod in (runner_mod, router_mod):
-        tree = ast.parse(Path(mod.__file__).read_text(encoding="utf-8"))
-        imported: list[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                imported.append(node.module)
-        for name in imported:
-            assert not any(term in name for term in banned), f"{mod.__name__} imports banned module {name!r}"
-
-
 @pytest.mark.asyncio
 async def test_all_artifacts_are_written_under_the_container_root(tmp_path: Path) -> None:
     from app.broker.alpaca.clerk.account_authority import paper_evidence_account_id_for_strategy

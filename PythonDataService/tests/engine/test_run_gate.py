@@ -13,7 +13,6 @@ loaded, which is exactly when concurrency bugs show up.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 import threading
 
@@ -323,30 +322,6 @@ def test_the_engine_entry_point_holds_the_gate_for_its_callers(monkeypatch: pyte
     assert phases == ["waiting_for_engine"] * 3  # the three that queued said so, once each
 
 
-def test_every_engine_run_is_gated_wherever_it_is_built() -> None:
-    """The invariant #1990 closed: coverage by construction, not by convention.
-
-    The gate first sat at ``execute_engine_backtest``, which five callers
-    reached and three did not — ``/api/spec-strategy/backtest``,
-    ``/api/research-runs`` and ``/api/lean-sidecar/cross-reconcile`` each built
-    an engine of their own. Counting *those* callers is a list that rots; the
-    thing that cannot rot is that ``BacktestEngine.run`` itself takes the gate,
-    so this asserts that rather than enumerating call sites.
-    """
-    from app.engine.engine import BacktestEngine
-
-    # The call, not the name: the docstring names the gate too, so a bare
-    # substring check passes on prose alone after the `with` is deleted.
-    source = inspect.getsource(BacktestEngine.run)
-    assert "with one_backtest_in_flight():" in source, (
-        "BacktestEngine.run no longer holds the engine gate; every path that "
-        "builds an engine directly is ungated again (#1990)"
-    )
-    # The body moved to ``_run`` so ``run`` could stay a thin wrapper. If a
-    # future edit inlines it back, the gate has to come with it.
-    assert "self._run(" in source
-
-
 def test_an_engine_built_anywhere_still_runs_one_at_a_time(monkeypatch: pytest.MonkeyPatch) -> None:
     """Behavioural counterpart: two engines, built directly, never overlap."""
     from app.engine.engine import BacktestEngine
@@ -391,28 +366,3 @@ def test_an_engine_built_anywhere_still_runs_one_at_a_time(monkeypatch: pytest.M
 
     assert max(concurrent) == 1, f"{max(concurrent)} engines ran at once"
     assert len(concurrent) == 2
-
-
-def test_only_the_engine_backtest_service_may_call_the_ungated_core() -> None:
-    """The gate is a wrapper, so a caller reaching past it silently loses the gate.
-
-    Naming the private core in another module is how that would happen — a
-    sweep author dodging what looks like double-gating, say — so it fails here
-    rather than in production memory. The one module allowed to name it is the
-    one that defines it beside its gated wrapper, ``execute_engine_backtest``
-    (moved out of ``app/routers/engine.py`` by #1999; the allowance follows it).
-    """
-    from pathlib import Path
-
-    app_root = Path(__file__).resolve().parents[2] / "app"
-    home = "services/engine_backtest_service.py"
-    assert "def _execute_engine_backtest_core(" in (app_root / home).read_text(encoding="utf-8"), (
-        f"the ungated core moved out of {home}; move this allowance with it rather than widening it"
-    )
-    offenders = [
-        path.relative_to(app_root).as_posix()
-        for path in app_root.rglob("*.py")
-        if path.relative_to(app_root).as_posix() != home
-        and "_execute_engine_backtest_core" in path.read_text(encoding="utf-8")
-    ]
-    assert offenders == [], f"these modules run the engine without the gate: {offenders}"

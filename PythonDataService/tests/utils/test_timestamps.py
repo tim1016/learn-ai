@@ -10,10 +10,6 @@ from app.utils.timestamps import timestamp_like_to_ms_utc, to_ms_utc
 NY = ZoneInfo("America/New_York")
 
 
-def test_utc_epoch_zero() -> None:
-    assert to_ms_utc(datetime(1970, 1, 1, tzinfo=UTC)) == 0
-
-
 def test_known_utc_moment() -> None:
     # 2024-05-01 00:00 UTC = 1714521600000 ms (used as a fixture anchor in v0.5 tests)
     assert to_ms_utc(datetime(2024, 5, 1, tzinfo=UTC)) == 1714521600000
