@@ -10,6 +10,10 @@
       [capability]="capability()"
     />
 
+    @if (search.pair_maps_incomplete) {
+      <p class="note" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+        <span>The pair audit stopped at its evaluation budget, so some cells are missing and are shown as untested.</span></p>
+    }
     @if (pairMaps().length > 0) {
       <div class="columns">
         <section class="panel" aria-label="Pair landscape">

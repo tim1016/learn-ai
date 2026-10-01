@@ -16,9 +16,14 @@
       <div><dt>Profit after stated costs</dt><dd>Must be positive</dd></div>
       <div><dt>Worst drawdown / activity</dt><dd>≤ {{ ceiling() }} / ≥ {{ s.protocol.exam_min_trades }} trades</dd></div>
       <div><dt>Incumbent comparison</dt><dd>At least the incumbent's {{ s.protocol.policy.objective | receiptLabel }}, within the risk limits</dd></div>
-      <div><dt>Recorded exposure</dt><dd>Checked when you open the test</dd></div>
+      <div><dt>Recorded exposure</dt><dd>{{ exposure()?.label ?? 'Checked when you open the test' }}</dd></div>
     </dl>
-    <p class="caption">Opening checks every recorded study of this instrument for these dates; only an untouched interval can count as a confirmatory test. Exposure outside this application cannot be verified. A historical test is not a guarantee of future results.</p>
+    @if (exposure(); as e) {
+      <p class="caption">{{ e.explanation }}</p>
+      <p class="caption">Exposure outside this application cannot be verified. A historical test is not a guarantee of future results.</p>
+    } @else {
+      <p class="caption">Opening checks every recorded study of this instrument for these dates; only an untouched interval can count as a confirmatory test. Exposure outside this application cannot be verified. A historical test is not a guarantee of future results.</p>
+    }
 
     @if (c && c.flags.length > 0) {
       <p class="note" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i>

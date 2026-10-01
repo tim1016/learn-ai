@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { etMidnightMs } from '../../shared/date/et-midnight';
-import { applyPlanEdit, draftMonths, knobProblemKey, numberProblemKey, withServerDates, type PlanDraft } from './golden-search-plan-draft';
-import { emaCapability, protocol } from './testing/fixtures';
+import { applyPlanEdit, draftFromDefaults, draftMonths, knobProblemKey, numberProblemKey, withServerDates, type PlanDraft } from './golden-search-plan-draft';
+import { defaults, emaCapability, protocol } from './testing/fixtures';
 
 function draft(): PlanDraft {
   return { protocol: protocol(), problems: new Map() };
@@ -115,5 +115,17 @@ describe('applyPlanEdit', () => {
     expect(merged.protocol.budget_cap).toBe(5000);
     expect(merged.protocol.training_months).toBe(6);
     expect(merged.finalMonths).toBe(4);
+  });
+});
+
+describe('draftFromDefaults', () => {
+  it('starts from the final-test length the server laid out, and keeps the fields that describe the plan out of it', () => {
+    const { draft: fresh, incumbentLabel } = draftFromDefaults(defaults({ final_months: 6 }));
+
+    expect(fresh.finalMonths).toBe(6);
+    expect(draftMonths(fresh)).toEqual({ final_months: 6, training_months: 6, test_months: 2 });
+    expect(incumbentLabel).toBe('Registry validated settings');
+    expect(Object.keys(fresh.protocol).filter((key) => ['final_months', 'incumbent_label', 'exposure'].includes(key))).toEqual([]);
+    expect(fresh.protocol).toEqual(protocol());
   });
 });

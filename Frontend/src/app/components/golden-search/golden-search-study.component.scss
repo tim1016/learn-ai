@@ -20,6 +20,7 @@ p { margin: 0; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .spacer { flex: 1; }
 .step-body { display: grid; gap: var(--space-3); min-width: 0; }
+.footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-2) var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border-light); font-size: var(--fs-xxs); color: var(--text-secondary); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 @media (max-width: 768px) {

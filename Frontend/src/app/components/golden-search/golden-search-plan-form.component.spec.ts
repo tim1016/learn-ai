@@ -7,7 +7,7 @@ import { GoldenSearchPlanFormComponent } from './golden-search-plan-form.compone
 import { GoldenSearchService, type CommandOutcome } from './golden-search.service';
 import { etMidnightMs } from '../../shared/date/et-midnight';
 import type { CreateStudyRequest, DefaultsMonths, GoldenSearchDefaults, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyCommandRequest, StudyDetail } from './golden-search.types';
-import { defaults, emaCapability, preflight as preflightFixture, studyDetail, unavailableCapability } from './testing/fixtures';
+import { defaults, emaCapability, INCUMBENT_PARAMS, preflight as preflightFixture, studyDetail, unavailableCapability } from './testing/fixtures';
 
 /** The defaults laid out for a four-month final test: the development range ends where the final test starts. */
 function fourMonthDefaults(): GoldenSearchDefaults {
@@ -186,6 +186,24 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(sent?.knobs.some((k) => 'grid_step' in k)).toBe(false);
   });
 
+  it('says when a searched knob starts outside its range, a knob the seed omits starting at its declared default, without refusing the plan', async () => {
+    const service = fakeService();
+    service.defaults.mockResolvedValueOnce(defaults({ seed: { ...INCUMBENT_PARAMS, fast_period: 2 } }));
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    const knobRow = (name: string): string => screen.getByRole('rowheader', { name: new RegExp(name, 'i') }).closest('tr')?.textContent ?? '';
+    const note = /is outside this range\. It stays the answer only if nothing in the range beats it\./;
+
+    expect(knobRow('Fast EMA length')).toMatch(/Starting value 2 is outside this range/);
+    expect(knobRow('Slow EMA length')).not.toMatch(note);
+
+    fireEvent.input(screen.getByLabelText('Fast EMA length low'), { target: { value: '2' } });
+    fireEvent.input(screen.getByLabelText('Slow EMA length low'), { target: { value: '12' } });
+    await waitFor(() => expect(knobRow('Fast EMA length')).not.toMatch(note));
+    expect(knobRow('Slow EMA length')).toMatch(/Starting value 10 is outside this range/);
+    await waitFor(() => expect(lockButton().disabled).toBe(false));
+  });
+
   it('locks the checked plan and reports its study; a retry after no answer reuses the idempotency key', async () => {
     const service = fakeService();
     service.createStudy.mockRejectedValueOnce(new Error('network down'));
@@ -259,6 +277,27 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(sent?.final_end_ms).toBe(etMidnightMs('2026-04-01'));
     expect(sent?.knobs.find((k) => k.name === 'fast_period')?.low).toBe(4);
     await waitFor(() => expect(lockButton().disabled).toBe(false));
+  });
+
+  it('starts the final test at the length the server laid out, and never sends the fields that only describe the plan', async () => {
+    const service = fakeService();
+    service.defaults.mockResolvedValueOnce(defaults({ final_months: 6 }));
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+
+    expect((screen.getByLabelText('Final test (months)') as HTMLInputElement).value).toBe('6');
+    const describing = (sent: object | undefined): string[] => Object.keys(sent ?? {}).filter((key) => ['final_months', 'incumbent_label', 'exposure'].includes(key));
+    expect(describing(service.preflight.mock.lastCall?.[0])).toEqual([]);
+
+    fireEvent.input(screen.getByLabelText('Test window (months)'), { target: { value: '3' } });
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
+    expect(service.defaults.mock.lastCall?.[2]).toEqual({ final_months: 6, training_months: 6, test_months: 3 });
+    expect(describing(service.preflight.mock.lastCall?.[0])).toEqual([]);
+
+    await waitFor(() => expect(lockButton().disabled).toBe(false));
+    fireEvent.click(lockButton());
+    await waitFor(() => expect(service.createStudy).toHaveBeenCalledTimes(1));
+    expect(describing(service.createStudy.mock.calls[0][0].protocol)).toEqual([]);
   });
 
   it('holds the plan back while the dates are laid out, and ignores dates laid out for older month counts', async () => {

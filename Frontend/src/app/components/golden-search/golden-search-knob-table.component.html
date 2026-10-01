@@ -25,6 +25,7 @@
                 <small>{{ k.unit }} · allowed {{ k.domain_low }} – {{ k.domain_high }} · step {{ k.quantum }}</small>
                 @if (k.warmup_dependent) { <small class="tag">Changes warmup</small> }
                 @if (!k.searchable_by_default) { <small>Kept fixed by default.</small> }
+                @if (k.note) { <small>{{ k.note }}</small> }
               }
             </div>
           </th>
@@ -48,6 +49,9 @@
                 <label><span>High</span><input #high pInputText type="number" [step]="row.knob?.quantum ?? 'any'" [min]="row.knob?.domain_low ?? null" [max]="row.knob?.domain_high ?? null" [value]="row.plan.high" [attr.aria-label]="row.label + ' high'" [attr.aria-invalid]="problem(row.plan.name, 'high') !== null" (input)="onNumber(row.plan.name, 'high', high.value)" /></label>
               }
               @if (row.knob; as k) { <small>default {{ k.default_low }} – {{ k.default_high }}</small> }
+              @if (row.startOutside !== null) {
+                <small class="start-note">Starting value {{ row.startOutside }} is outside this range. It stays the answer only if nothing in the range beats it.</small>
+              }
             } @else {
               @if (readonly()) {
                 {{ row.plan.fixed_value }}

@@ -51,6 +51,18 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(rows[2].textContent).toContain('Frozen incumbent');
   });
 
+  it('candidate evidence cut short by the budget says some results read as untested; complete evidence says nothing', async () => {
+    const base = studyDetail('awaiting_candidate');
+    const { view } = await renderStep({ ...base, results: { ...base.results, evidence: evidenceView({ incomplete: true }) } });
+    const note = /candidate evidence stopped at its evaluation budget, so some results are missing/i;
+
+    expect(screen.getByText(note)).not.toBeNull();
+    expect(screen.getAllByRole('note')[0].textContent).toContain('The recent fit earns more in this replay');
+    view.fixture.componentRef.setInput('study', base);
+    await view.fixture.whenStable();
+    expect(screen.queryByText(note)).toBeNull();
+  });
+
   it('opens on the all-period fit and says exactly which settings are selected', async () => {
     await renderStep();
 

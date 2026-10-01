@@ -10,9 +10,15 @@
       </div>
     }
   } @else if (pending()) {
-    <p class="status" role="status">Building the proof and publishing the version. The current default stays until it is published.</p>
-    @if (s.progress; as progress) {
-      <progress [value]="progress.completed" [max]="progress.total_max" aria-label="Approval progress"></progress>
+    @if (building()) {
+      <p class="status" role="status">Building the proof and publishing the version. The current default stays until it is published.</p>
+      @if (s.progress; as progress) {
+        <progress [value]="progress.completed" [max]="progress.total_max" aria-label="Approval progress"></progress>
+      }
+    }
+    @if (canRetain()) {
+      <p class="caption">The approval stopped before publishing anything; the current default stands.</p>
+      <app-golden-search-retain [busy]="busy()" (decide)="retainDecision($event)" />
     }
   } @else {
     <label class="field"><span>Reason for this decision</span>

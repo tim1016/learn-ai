@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { GoldenSearchDecisionStepComponent } from './golden-search-decision-step.component';
 import type { StudyStep } from './golden-search-steps';
 import type { ExamView, StudyCommand, StudyDetail } from './golden-search.types';
-import { emaCapability, examView, protocol, studyDetail } from './testing/fixtures';
+import { emaCapability, examView, exposure, protocol, studyDetail } from './testing/fixtures';
 
 async function renderStep(study: StudyDetail) {
   const view = await render(GoldenSearchDecisionStepComponent, {
@@ -59,6 +59,26 @@ describe('GoldenSearchDecisionStepComponent — before the final test', () => {
     expect(commands).toEqual([{ command: 'open_exam', payload: { acknowledge_final_test: true } }]);
     expect(steps).toEqual(['compare']);
     await noAxeViolations(view.container);
+  });
+
+  it.each([
+    ['not_opened', 'Not opened in recorded research'],
+    ['previously_used', 'Previously used · exploratory only'],
+    ['history_unknown', 'History unknown · exploratory only'],
+  ] as const)('states the exposure opening would record (%s) with the server explanation', async (state, label) => {
+    await renderStep(studyDetail('candidate_locked', { exposure_preview: exposure({ state, explanation: `Ledger says ${state}.` }) }));
+
+    const lock = screen.getByRole('region', { name: /is still sealed/i });
+    expect(lock.textContent).toMatch(new RegExp(`Recorded exposure\\s*${label}`));
+    expect(lock.textContent).toContain(`Ledger says ${state}.`);
+    expect(lock.textContent).toContain('Exposure outside this application cannot be verified.');
+    expect(lock.textContent).not.toContain('Checked when you open the test');
+  });
+
+  it('without an exposure preview says it is checked when the test opens', async () => {
+    await renderStep(studyDetail('candidate_locked', { exposure_preview: null }));
+
+    expect(screen.getByRole('region', { name: /is still sealed/i }).textContent).toMatch(/Recorded exposure\s*Checked when you open the test/);
   });
 
   it('a lock the server will not open stays disabled and says why', async () => {
@@ -212,6 +232,35 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     expect(screen.getByRole('progressbar', { name: 'Approval progress' })).not.toBeNull();
     expect(screen.queryByRole('button', { name: /approve golden configuration/i })).toBeNull();
     expect(screen.getByRole('region', { name: 'Repeatability and coverage' }).textContent).toContain('Building the proof');
+    expect(screen.queryByRole('button', { name: 'Keep current settings' })).toBeNull();
+  });
+
+  it('a stopped approval the server lets you retain offers every way to keep the current settings', async () => {
+    const { commands, view } = await renderStep(studyDetail('qualification_pending', { presented_status: 'interrupted', permitted_actions: ['finish', 'retain', 'revise'] }));
+
+    expect(screen.queryByText(/building the proof and publishing the version/i)).toBeNull();
+    expect(screen.getByText('The approval stopped before publishing anything; the current default stands.')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Keep current settings' }));
+    const choices = screen.getByRole('group', { name: 'Finish without a new golden configuration' });
+    expect(within(choices).getAllByRole('radio').map((radio) => radio.closest('label')?.querySelector('strong')?.textContent)).toEqual([
+      'Keep current settings',
+      'Wait for fresh data',
+      'Retain as exploration',
+    ]);
+    await noAxeViolations(view.container);
+    fireEvent.click(within(choices).getByRole('radio', { name: /retain as exploration/i }));
+    fireEvent.input(within(choices).getByLabelText(/reason/i), { target: { value: 'Proof kept failing on the lake.' } });
+    fireEvent.click(within(choices).getByRole('button', { name: 'Record decision' }));
+
+    expect(commands).toEqual([{ command: 'retain', payload: { kind: 'retain_exploration', note: 'Proof kept failing on the lake.' } }]);
+    expect(screen.queryByRole('button', { name: /approve golden configuration/i })).toBeNull();
+  });
+
+  it('a stopped approval the server does not let you retain offers no retain choice', async () => {
+    await renderStep(studyDetail('qualification_pending', { presented_status: 'failed', permitted_actions: ['finish'] }));
+
+    expect(screen.queryByRole('button', { name: 'Keep current settings' })).toBeNull();
+    expect(screen.queryByText(/stopped before publishing anything/i)).toBeNull();
   });
 
   it('a proof failure is an alert that override cannot bypass; the retry is the same approval', async () => {

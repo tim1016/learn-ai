@@ -7,7 +7,7 @@
 
 import { etDayEndMs, etMidnightMs } from '../../shared/date/et-midnight';
 import type { FillModeName } from '../../models/fill-mode';
-import type { DefaultsMonths, GoldenSearchMethod, KnobMode, KnobPair, KnobPlan, ProtocolRequest, RankingMeasure, StrategyCapability } from './golden-search.types';
+import type { DefaultsMonths, GoldenSearchDefaults, GoldenSearchMethod, KnobMode, KnobPair, KnobPlan, ProtocolRequest, RankingMeasure, StrategyCapability } from './golden-search.types';
 
 export type KnobNumberField = 'low' | 'high' | 'fixed_value' | 'step';
 
@@ -67,8 +67,16 @@ export interface PlanDraft {
   readonly finalMonths?: number;
 }
 
-/** The final-test length `GET /defaults` lays out when asked for none (#2696). */
-export const DEFAULT_FINAL_MONTHS = 3;
+/**
+ * A fresh draft from `GET /defaults`, with the final test's length as the
+ * server laid it out. The incumbent's name, the exposure and the month count
+ * describe the plan but are not part of it: the server refuses them in a
+ * plan, so they never reach the protocol.
+ */
+export function draftFromDefaults(defaults: GoldenSearchDefaults): { readonly draft: PlanDraft; readonly incumbentLabel: string } {
+  const { incumbent_label, exposure: _exposure, final_months, ...protocol } = defaults;
+  return { draft: { protocol, problems: new Map(), finalMonths: final_months }, incumbentLabel: incumbent_label };
+}
 
 /** Month counts that, once changed, have the server lay the development and final-test dates out again. */
 export const MONTH_FIELDS: ReadonlySet<ProtocolNumberField> = new Set(['final_months', 'training_months', 'test_months']);

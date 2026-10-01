@@ -15,6 +15,7 @@
 .values input, td > input { width: 7rem; }
 .values small { flex-basis: 100%; color: var(--text-secondary); }
 .values .problem, .problem { color: var(--bear); }
+.values .start-note { color: var(--warn); }
 .tag { justify-self: start; border: 1px solid var(--border-light); border-radius: var(--radius-pill); padding: 0 var(--space-2); }
 .icon { all: unset; cursor: pointer; padding: 2px; border-radius: var(--radius-sm); color: var(--text-secondary); }
 .icon:focus-visible { outline: 2px solid var(--accent); }

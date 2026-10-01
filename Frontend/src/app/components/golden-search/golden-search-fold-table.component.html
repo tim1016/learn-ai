@@ -12,7 +12,7 @@
           <td class="dates"><app-timestamp-display [value]="row.fold.test_start_ms" mode="date-et" /> → <app-timestamp-display [value]="row.fold.test_end_ms - 1" mode="date-et" /></td>
           <td>
             <span class="tag" [attr.data-status]="row.fold.status">{{ row.fold.status | receiptLabel }}</span>
-            @if (row.fold.failure_reason) { <span class="reason">{{ row.fold.failure_reason | receiptLabel }}</span> }
+            @if (row.fold.failure_reason) { <span class="reason">{{ row.fold.failure_reason }}</span> }
           </td>
           <td>{{ row.changes ?? 'No winner' }}</td>
           <td><app-golden-search-metrics [metrics]="row.fold.train_metrics" [compact]="true" /></td>

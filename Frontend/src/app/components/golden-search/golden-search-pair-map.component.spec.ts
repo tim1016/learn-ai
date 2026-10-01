@@ -88,10 +88,10 @@ describe('GoldenSearchPairMapComponent', () => {
       x_values: [65, 72],
       y_values: [48, 70],
       cells: [
-        { x: 65, y: 48, status: 'tested', metrics: metrics({ total_return_pct: 0.03 }) },
-        { x: 72, y: 48, status: 'tested', metrics: metrics({ total_return_pct: 0.087 }) },
+        { x: 65, y: 48, status: 'tested', metrics: metrics({ total_return_pct: 0.03 }), reason: null },
+        { x: 72, y: 48, status: 'tested', metrics: metrics({ total_return_pct: 0.087 }), reason: null },
         { x: 65, y: 70, status: 'invalid', metrics: null, reason: 'The lower RSI gate must be below the upper gate.' },
-        { x: 72, y: 70, status: 'untested', metrics: null },
+        { x: 72, y: 70, status: 'untested', metrics: null, reason: null },
       ],
     };
     await renderMap([pairMap(), rsi]);
