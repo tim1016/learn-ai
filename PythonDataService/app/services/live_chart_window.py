@@ -60,8 +60,6 @@ _POLYGON_OVERLAY_CACHE: OrderedDict[tuple[str, date, int], list[PolygonBar]] = O
 
 
 class BarPersistenceLike(Protocol):
-    def read_parquet(self, symbol: str, resolution: str, day: date) -> list[IbkrMinuteBar]: ...
-
     def replay(self, symbol: str, resolution: str, day: date) -> list[IbkrMinuteBar]: ...
 
 
@@ -229,9 +227,6 @@ def _recorded_bars(
     persistence = getattr(live_aggregator, "_persistence", None)
     if persistence is not None:
         for day in days:
-            for bar in persistence.read_parquet(symbol, resolution, day):
-                if _bar_overlaps(bar, from_ms, to_ms):
-                    by_start[bar.start_ms] = bar
             for bar in persistence.replay(symbol, resolution, day):
                 if _bar_overlaps(bar, from_ms, to_ms):
                     by_start[bar.start_ms] = bar
