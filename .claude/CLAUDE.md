@@ -31,7 +31,7 @@ cd Frontend && npx ng test --include='src/app/<path>/<name>.spec.ts'            
 
 ```bash
 ruff check PythonDataService/app/ PythonDataService/tests/   # Python
-cd Frontend && npx eslint src/                               # Frontend (what CI runs)
+cd Frontend && npx eslint src/ && npx eslint tests/e2e --max-warnings 0   # Frontend (what CI runs)
 ```
 
 ## Container Management

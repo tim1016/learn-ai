@@ -8,7 +8,7 @@
 | Test       | `npx ng test --include='src/app/<path>/<name>.spec.ts'` (host, one exact spec) |
 | Build      | `podman exec my-frontend npx ng build`         |
 | Type-check | `podman exec my-frontend npx tsc --noEmit`     |
-| Lint       | `npx eslint src/` (what CI runs)               |
+| Lint       | `npx eslint src/ && npx eslint tests/e2e --max-warnings 0` (what CI runs) |
 | Logs       | `podman logs -f my-frontend`                   |
 
 Frontend tests are **independent** — no backend or database needed.

@@ -43,13 +43,13 @@ Validated against: tests/test_indicators.py::test_sma_matches_lean_golden
 
 ```typescript
 /**
- * Black-Scholes call price (UI-side copy for live payoff curves).
+ * Foo metric (UI-side copy for a live chart).
  *
- * Formula: C = S·N(d1) − K·e^(−rT)·N(d2)
- * Reference: Hull, Options Futures and Other Derivatives (10e), §15.8
- * Canonical implementation: PythonDataService/app/services/bs_greeks.py
+ * Formula: foo(x) = <the math, one line>
+ * Reference: <paper section, textbook, or authoritative URL>
+ * Canonical implementation: PythonDataService/app/<path>/foo_math.py
  *   (this copy is a named exception in ADR 0068: latency)
- * Validated against: Frontend/src/app/utils/black-scholes.parity.spec.ts —
+ * Validated against: Frontend/src/app/<path>/foo-math.parity.spec.ts —
  *   parity fixture generated from the Python canonical
  */
 ```
