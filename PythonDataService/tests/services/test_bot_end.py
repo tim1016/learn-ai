@@ -317,6 +317,17 @@ def test_bot_end_view_of_a_scheduled_sale() -> None:
     assert view.editable is True
 
 
+def test_bot_end_view_of_a_dry_run_names_the_last_price() -> None:
+    view = bot_end_view(
+        _scheduled(_at(_THURSDAY, 15, 59)), now_ms=_at(_WEDNESDAY, 10), dry_run=True, running=True, use_rth=True,
+    )
+
+    assert view.headline == "Ends Thu Oct 1, 15:59 ET · sells"
+    assert view.explanation == (
+        "At Thu Oct 1, 15:59 ET the bot stops, and its simulation sells what it holds at the last price it saw."
+    )
+
+
 def test_bot_end_view_of_a_bot_that_died_before_its_end_says_the_end_still_stands() -> None:
     view = bot_end_view(
         _scheduled(_at(_WEDNESDAY, 15, 59)), now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=False, use_rth=True,

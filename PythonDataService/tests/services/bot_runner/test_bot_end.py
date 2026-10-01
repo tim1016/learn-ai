@@ -463,6 +463,23 @@ async def test_an_operators_stop_with_no_process_records_the_same_stop_as_the_la
     assert DesiredStateRepo(stable_desired_state_path(tmp_path, "never-deployed")).read() is None
 
 
+async def test_a_stop_goes_on_when_the_end_it_cancels_cannot_be_read(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The panel's Stop cancels the end before its STOP fences the bot. An unreadable desired
+    state has no end the Clerk can carry out, so it never keeps the STOP from landing; it is said."""
+    registry = _registry(tmp_path, None)
+    broken = stable_desired_state_path(tmp_path, _SID)
+    broken.parent.mkdir(parents=True)
+    broken.write_text("not json", encoding="utf-8")
+
+    await registry.cancel_end(_SID, lifecycle_run_id="its-run", updated_by="operator_recovery")
+
+    [said] = [record for record in caplog.records if getattr(record, "action", None) == "bot_end_cancel_unreadable"]
+    # A repaired file would carry its end out after all: the repair must clear it.
+    assert "clear its end when repairing the file" in said.getMessage()
+
+
 async def test_a_stop_of_a_running_bot_whose_desired_state_cannot_be_read_still_stops_it(tmp_path: Path) -> None:
     """#2607 review: the Stop cannot cancel an unreadable desired state's end, and goes on. The
     process is fenced and stopped and its outcome recorded before the status the Stop answers

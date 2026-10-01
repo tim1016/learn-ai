@@ -25,6 +25,8 @@ from app.research.indicator_reliability import (
     compute_strength_label,
     compute_tradeability,
     find_best_horizon,
+    generate_info_footnotes,
+    generate_next_steps,
     split_by_volatility_regime,
 )
 
@@ -427,6 +429,74 @@ class TestTradeability:
     def test_uses_absolute_value(self):
         # Negative IC → short the signal → still tradeable
         assert compute_tradeability(-1.5, "High") == "Likely tradeable"
+
+
+class TestNextSteps:
+    def _r(self, **kwargs) -> HorizonICAnalysis:
+        defaults = {"horizon": 10, "is_mean_ic": 0.05}
+        defaults.update(kwargs)
+        return _make_analysis(**defaults)
+
+    def test_flags_missing_oos(self):
+        results = [self._r(oos_mean_ic=None)]
+        steps = generate_next_steps(results, None, None, 10)
+        assert any("out-of-sample" in s.lower() for s in steps)
+
+    def test_suggests_threshold_when_strong_stable_validated(self):
+        results = [
+            self._r(
+                is_mean_ic=0.10,
+                strength_label="Strong",
+                stability_label="High",
+                oos_mean_ic=0.09,
+                oos_p_value=0.02,
+            )
+        ]
+        steps = generate_next_steps(results, None, None, 10)
+        assert any("threshold" in s.lower() for s in steps)
+
+    def test_no_best_horizon_returns_prompt(self):
+        results = [self._r()]
+        steps = generate_next_steps(results, None, None, None)
+        assert len(steps) >= 1
+        assert "significance" in steps[0].lower() or "cleared" in steps[0].lower()
+
+    def test_flags_oos_gap_when_is_strong_but_not_validated(self):
+        results = [
+            self._r(
+                is_mean_ic=0.08,
+                strength_label="Moderate",
+                stability_label="High",
+                oos_mean_ic=0.05,
+                oos_p_value=0.23,
+            )
+        ]
+        steps = generate_next_steps(results, None, None, 10)
+        combined = " ".join(steps).lower()
+        assert "validate" in combined or "out-of-sample" in combined
+
+    def test_caps_at_four_items(self):
+        # Engineer a scenario that triggers every rule
+        results = [
+            self._r(
+                is_mean_ic=0.05,
+                strength_label="Moderate",
+                stability_label="Low",  # triggers "try a longer horizon"
+                oos_mean_ic=None,  # triggers "collect more OOS"
+            )
+        ]
+        steps = generate_next_steps(results, None, None, 10)
+        assert len(steps) <= 4
+
+
+class TestInfoFootnotes:
+    def test_adds_overlap_caveat_for_multi_bar_horizons(self):
+        notes = generate_info_footnotes([1, 5, 10])
+        assert any("overlapping" in n.lower() for n in notes)
+
+    def test_no_overlap_caveat_for_horizon_one_only(self):
+        notes = generate_info_footnotes([1])
+        assert not any("overlapping" in n.lower() for n in notes)
 
 
 class TestRandomBaselineReturnsDistribution:

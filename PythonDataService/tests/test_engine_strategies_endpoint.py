@@ -30,8 +30,7 @@ import pytest
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 
 EXPECTED_STRATEGY_KEYS = {
-    # VCR-0004 / Phase 2 — registry keys are now module names so the runner
-    # can import every registered strategy by ``app.engine.strategy.algorithms.{key}``.
+    # Registry keys are the module names under ``app.engine.strategy.algorithms``.
     "ema_crossover_signal",
     "sma_crossover",
     "rsi_mean_reversion",
