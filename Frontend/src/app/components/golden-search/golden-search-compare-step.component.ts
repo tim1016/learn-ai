@@ -77,7 +77,8 @@ export class GoldenSearchCompareStepComponent {
     if (study.exam_locked) return { kind: 'step', label: 'Review final decision' };
     if (row === null) return { kind: 'none', label: 'Review final-test lock', reason: 'Choose a candidate first.' };
     if (!row.candidate.exam_eligible) return { kind: 'none', label: 'Review final-test lock', reason: INCUMBENT_CAPTION };
-    if (study.state === 'candidate_locked' && study.candidate_key === row.key) return { kind: 'step', label: 'Review final-test lock' };
+    // The locked pick may be folded into this row (a recent fit that is the all-period settings).
+    if (study.state === 'candidate_locked' && study.candidate_key !== null && row.members.includes(study.candidate_key)) return { kind: 'step', label: 'Review final-test lock' };
     if (study.permitted_actions.includes('select_candidate')) return { kind: 'select', key: row.key, label: 'Review final-test lock' };
     return { kind: 'none', label: 'Review final-test lock', reason: study.action_refusals.select_candidate ?? 'This study cannot lock a candidate now.' };
   });

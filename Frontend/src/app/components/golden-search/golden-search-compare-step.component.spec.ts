@@ -115,6 +115,29 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(steps).toEqual(['decision']);
   });
 
+  it('a locked pick folded into another row still goes to its lock, never re-sending a different pick', async () => {
+    const study = studyDetail('candidate_locked', {
+      candidate_key: 'recent',
+      results: {
+        ...studyDetail('candidate_locked').results,
+        evidence: evidenceView({
+          candidates: [
+            evidenceCandidate('all_period', { same_as: ['recent'] }),
+            evidenceCandidate('recent', { same_as: ['all_period'] }),
+            evidenceCandidate('incumbent'),
+          ],
+        }),
+      },
+    });
+    const { commands, steps } = await renderStep(study);
+
+    expect(screen.getByRole('button', { name: /^all-period fit/i }).getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Review final-test lock' }));
+
+    expect(commands).toEqual([]);
+    expect(steps).toEqual(['decision']);
+  });
+
   it('after the final test opened, the pick is fixed and the note says its result is recorded separately', async () => {
     const { steps } = await renderStep(studyDetail('awaiting_review'));
 
