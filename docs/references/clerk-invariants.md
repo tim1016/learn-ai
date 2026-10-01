@@ -73,12 +73,17 @@ each `math.fsum` calculation:
 - `C_E = Σ qty × price(E)` and `C_R = Σ qty × price(R)` in **currency**;
 - `P_E = C_E / Q_E` and `P_R = C_R / Q_R` in **currency/share**.
 
-`QTY_ATOL = 1e-9` shares and `PRICE_ATOL = 1e-9` currency/share use zero
-relative tolerance. Quantity and VWAP comparisons are strict:
-`abs(Q_E - Q_R) < QTY_ATOL` and `abs(P_E - P_R) < PRICE_ATOL`.
-Gross-cost comparison is inclusive against the propagated envelope:
-`COST_ATOL = max(|Q_E|, |Q_R|) × PRICE_ATOL + max(|P_E|, |P_R|) × QTY_ATOL
-+ QTY_ATOL × PRICE_ATOL`, requiring `abs(C_E - C_R) <= COST_ATOL`.
+Quantity is strict: `abs(Q_E - Q_R) < QTY_ATOL`, with `QTY_ATOL = 1e-9`
+shares and zero relative tolerance. Price is compared at Alpaca's price
+precision, never at float precision (ADR 0036, 2026-10-01 amendment, #2791).
+With `Q_O` and `C_O` the order's effective fills, `tick` one valid price
+increment of `C_O / Q_O` and `max(p)` the highest row price, the proof
+requires, in exact decimals,
+`abs(C_E - C_R) < COST_ATOL = tick × Q_O + max(p) × abs(Q_E - Q_R)`:
+the exacts move the order's average by less than one increment.
+Records proven before #2791 carry the float-precision envelope
+`max(|Q_E|, |Q_R|) × 1e-9 + max(|P_E|, |P_R|) × 1e-9 + 1e-18`, which the
+fold still accepts on replay.
 The replacement's `Δposition = Q_E - Q_R` is therefore zero under the
 pinned absolute share-tolerance policy; the fold records the aggregates,
 tolerance, every cumulative source, and every prior quarantined exact's

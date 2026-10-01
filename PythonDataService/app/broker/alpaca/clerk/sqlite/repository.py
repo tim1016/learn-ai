@@ -762,6 +762,32 @@ class ClerkSqliteRepository(
             self.append_transition(transition)
             return "appended"
 
+    def exact_execution_contradicts_record(self, *, order_ref: str, facts: ExecutionSliceFilledFacts) -> bool:
+        """Whether the order holds ``facts``'s execution id with other economics (#2791).
+
+        Held as an effective fill, or as an exact an order-total proof
+        (#2346) kept quarantined, compared as the append flow compares a
+        redelivery (:meth:`_same_slice_economics`). A fill a correction
+        superseded is never compared: its correction's economics stand.
+        """
+        with self._write_lock:
+            existing = reads.effective_execution_slice(self._conn, facts.execution_id)
+            if existing is not None:
+                return not self._same_execution_slice(existing, facts=facts, order_ref=order_ref)
+            if reads.execution_exists(self._conn, facts.execution_id):
+                return False
+            retained = [
+                item.exact_execution
+                for item in order_total_retained_exact_provenance(self._conn, order_ref=order_ref)
+                if item.exact_execution.execution_id == facts.execution_id
+            ]
+            return bool(retained) and not any(
+                self._same_slice_economics(
+                    symbol=item.symbol, side=item.side, qty=item.slice_qty, price=item.slice_price, facts=facts
+                )
+                for item in retained
+            )
+
     def _validated_execution_slice_transition(
         self,
         transition: TransitionInput,

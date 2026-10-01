@@ -15,7 +15,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.money import normalize_money
@@ -23,7 +22,7 @@ from app.broker.alpaca.clerk.sqlite.exact_execution_evidence import (
     SIMULATED_EXACT_CONFLICT_COPY,
     append_exact_execution_slice,
 )
-from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON
+from app.broker.alpaca.clerk.sqlite.execution_coverage import FILL_QTY_EPSILON, total_price_conflict_atol
 from app.broker.alpaca.clerk.sqlite.facts import (
     EnterAcceptedFacts,
     ManualOrderCancelResultFacts,
@@ -76,7 +75,6 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     ExecutionPriceConflictOrder,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import VoidAfter, reason_age_policy
-from app.broker.alpaca.marketable_limit import price_increment
 from app.broker.contract.errors import BrokerError, BrokerOrderNotPermitted
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
 from app.broker.contract.ports import (
@@ -99,28 +97,6 @@ def submit_absence_grace_ms() -> int:
     R4 submit-absence age rule has exactly one declaration.
     """
     return reason_age_policy(ORDER_OUTCOME_UNKNOWN_REASON_CODE, VoidAfter).grace_ms
-
-
-def total_price_conflict_atol(reported_avg_price: float) -> float:
-    """The #2460 price-conflict tolerance at one reported average, per share (#2770).
-
-    Formula: ``price_increment(reported_avg_price)``, ``rtol=0`` -- $0.01 at or
-      above $1, $0.0001 below. A same-quantity average-price difference below
-      one valid increment of the reported price cannot be told from vendor
-      rounding and raises nothing; one at or above it is a real economic
-      disagreement and is recorded as ``EXECUTION_PRICE_CONFLICT``.
-    Assumes Alpaca reports a sub-dollar ``filled_avg_price`` to at least
-      $0.0001; a coarser report would read its own rounding as a conflict.
-    Reference: ADR 0036, 2026-09-30 amendment, item 3; the tick rule is
-      Alpaca's price precision (``app/broker/alpaca/marketable_limit.py``).
-    Canonical implementation: this function, on
-      ``marketable_limit.price_increment``.
-    Validated against: tests/broker/alpaca/clerk/sqlite/test_economic_projection.py::
-      test_a_sub_cent_difference_below_one_dollar_is_a_price_conflict,
-      test_a_vendor_rounding_sized_difference_raises_no_conflict and
-      test_the_sweep_keeps_a_sub_dollar_conflict_its_recorded_fills_still_disagree_with.
-    """
-    return float(price_increment(Decimal(str(reported_avg_price))))
 
 
 __all__ = [
@@ -148,7 +124,6 @@ __all__ = [
     "reconcile_execution_price_conflicts",
     "resolve_order_submission",
     "submit_absence_grace_ms",
-    "total_price_conflict_atol",
     "trade_port_folds_simulated_evidence",
     "unobserved_chain_head_why",
     "unresolved_order_refs",
