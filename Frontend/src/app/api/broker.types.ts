@@ -15450,10 +15450,11 @@ export interface components {
          * OptionsChainSnapshotResponse
          * @description Response schema for options chain snapshot.
          *
-         *     The ``risk_free_rate`` and ``dividend_yield`` fields are sourced from FRED
-         *     (DGS1MO interpolated) and Polygon TTM dividends respectively (Step 8 of
-         *     IV-RV alignment). They replace the historical hardcoded `r=0.043, q=0`
-         *     defaults used by pricing-lab, options-strategy-lab, strategy-builder.
+         *     ``risk_free_rate`` is FRED's Treasury-bill curve interpolated at the
+         *     requested expiration's days to expiry (30 days when no expiration is
+         *     given); ``dividend_yield`` is Polygon's TTM dividends. They replace the
+         *     historical hardcoded `r=0.043, q=0` defaults used by pricing-lab,
+         *     options-strategy-lab, strategy-builder.
          */
         OptionsChainSnapshotResponse: {
             /**

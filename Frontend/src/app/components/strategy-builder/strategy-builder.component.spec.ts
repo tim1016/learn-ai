@@ -568,6 +568,55 @@ describe('StrategyBuilderComponent', () => {
       req.flush({ data: { analyzeOptionsStrategy: buildAnalysisResult() } });
       await analysis;
     });
+
+    // Each expiry prices at its own tenor's rate (#2789).
+    it('never prices a new expiry at the previous expiry\'s rate', async () => {
+      function flushSnapshot(rate: number): void {
+        expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
+          data: {
+            getOptionsChainSnapshot: {
+              success: true,
+              underlying: { ticker: 'SPY', price: 100, change: 0, changePercent: 0 },
+              contracts: [],
+              count: 0,
+              riskFreeRate: rate,
+              dividendYield: null,
+              rateSource: 'FRED',
+              dividendSource: null,
+              error: null,
+            },
+          },
+        });
+      }
+      const nearExpiry = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      const farExpiry = new Date(Date.now() + 182 * 86400000).toISOString().slice(0, 10);
+      component.ticker.set('SPY');
+      component.selectedExpiration.set(nearExpiry);
+      const nearChain = component.fetchChainSnapshot('SPY', nearExpiry);
+      flushSnapshot(0.0401);
+      await nearChain;
+
+      const farChain = component.onExpirationSelected(farExpiry);
+      component.legs.set([
+        { strike: 100, optionType: 'call', position: 'long', premium: 5, iv: 0.3, quantity: 1, enabled: true },
+      ]);
+
+      // Until the far expiry's snapshot lands there is no rate, so nothing is priced.
+      expect(component.currentPnlCurve()).toEqual([]);
+      expect(component.liveGreeks()).toBeNull();
+
+      flushSnapshot(0.05);
+      await farChain;
+      expect(component.currentPnlCurve().length).toBeGreaterThan(0);
+
+      const analysis = component.analyzeStrategy();
+      const req = expectGraphQL(httpMock, 'analyzeOptionsStrategy');
+      expect(req.request.body.variables.expirationDate).toBe(farExpiry);
+      expect(req.request.body.variables.riskFreeRate).toBe(0.05);
+
+      req.flush({ data: { analyzeOptionsStrategy: buildAnalysisResult() } });
+      await analysis;
+    });
   });
 
   // ── UX: zero-TTM banner ─────────────────────────────────────────

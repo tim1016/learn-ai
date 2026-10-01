@@ -18,13 +18,15 @@ This file is a wiring test for the new fields.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 import pytest
 
 from app.models.strategy import StrategyAnalyzeRequest, StrategyLeg
 from app.services.bs_greeks import black_scholes_greeks, bs_european_price
-from app.services.strategy_engine import analyze_strategy
+from app.services.strategy_engine import analyze_strategy, calendar_days_to_expiry
+from app.utils.session_anchors import et_date_at_ms
+from app.utils.timestamps import now_ms_utc
 
 
 def _ttm_years(request: StrategyAnalyzeRequest) -> float:
@@ -33,14 +35,13 @@ def _ttm_years(request: StrategyAnalyzeRequest) -> float:
     Tests should use this rather than hardcoding `30 / 365.0` so they
     don't silently use wrong expected values if the fixture default changes.
     """
-    exp = date.fromisoformat(request.expiration_date)
-    days = max((exp - date.today()).days, 0)
-    return days / 365.0
+    return calendar_days_to_expiry(request.expiration_date) / 365.0
 
 
 def _bull_call_spread(today_plus: int = 30) -> StrategyAnalyzeRequest:
     """Long 100C / Short 105C, IV 25%, 30 DTE, spot 102."""
-    expiration = (date.today() + timedelta(days=today_plus)).strftime("%Y-%m-%d")
+    # Counted from the ET date, as the engine counts DTE.
+    expiration = (et_date_at_ms(now_ms_utc()) + timedelta(days=today_plus)).strftime("%Y-%m-%d")
     return StrategyAnalyzeRequest(
         symbol="TEST",
         legs=[

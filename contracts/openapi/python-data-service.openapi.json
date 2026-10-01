@@ -24187,7 +24187,7 @@
         "type": "object"
       },
       "OptionsChainSnapshotResponse": {
-        "description": "Response schema for options chain snapshot.\n\nThe ``risk_free_rate`` and ``dividend_yield`` fields are sourced from FRED\n(DGS1MO interpolated) and Polygon TTM dividends respectively (Step 8 of\nIV-RV alignment). They replace the historical hardcoded `r=0.043, q=0`\ndefaults used by pricing-lab, options-strategy-lab, strategy-builder.",
+        "description": "Response schema for options chain snapshot.\n\n``risk_free_rate`` is FRED's Treasury-bill curve interpolated at the\nrequested expiration's days to expiry (30 days when no expiration is\ngiven); ``dividend_yield`` is Polygon's TTM dividends. They replace the\nhistorical hardcoded `r=0.043, q=0` defaults used by pricing-lab,\noptions-strategy-lab, strategy-builder.",
         "properties": {
           "contracts": {
             "default": [],
