@@ -1244,9 +1244,9 @@ class ClerkSqliteRepository(
         """Insert-once bot registration — needs no command/effect lifecycle.
 
         The active runtime always supplies all immutable configuration fields.
-        The named defaults preserve the repository's narrow fixture and
-        qualification seam while avoiding a product-visible ``unknown``
-        strategy key for direct registrations.
+        The named defaults preserve the repository's narrow fixture seam
+        while avoiding a product-visible ``unknown`` strategy key for direct
+        registrations.
         """
         if not strategy_key:
             raise ValueError("strategy_key must be non-empty")

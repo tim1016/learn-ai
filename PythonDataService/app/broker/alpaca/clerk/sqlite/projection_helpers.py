@@ -74,5 +74,5 @@ def timeline_entry(row: sqlite3.Row) -> TimelineEntry:
 
 
 def timeline_sequences(entries: Iterable[TimelineEntry]) -> tuple[int, ...]:
-    """Small public seam used by qualification tests and cursor assertions."""
+    """Small public seam used by cursor assertions."""
     return tuple(entry.sequence for entry in entries)
