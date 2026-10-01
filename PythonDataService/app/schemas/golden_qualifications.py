@@ -134,9 +134,9 @@ class GoldenQualificationEventView(BaseModel):
 class GoldenQualificationProofView(BaseModel):
     """The approval proof's identity: what was replayed, over which window, to which trace root."""
 
-    window_start_ms: int | None
-    window_end_ms: int | None
-    warmup_from_ms: int | None
+    window_start_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    window_end_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    warmup_from_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
     trace_count: int | None
     lake_trace_root: str | None
     restored_trace_root: str | None
