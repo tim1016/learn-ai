@@ -955,6 +955,37 @@ parity verdicts of any version.
   for Golden Validation. It is neither required nor a substitute for selected
   Python/LEAN history evidence.
 
+## Golden Search (resolved 2026-10-01)
+
+**Lineage: neutral.**
+
+Decision record: ADR 0074. Golden Search is the research workbench that ends in a
+deployable golden configuration for one strategy and one stock. "Golden" here
+still means owner-approved, never optimal.
+
+- **Golden Search study** — one frozen research protocol for one strategy and
+  one stock, run in pauses: Plan, Search, Test over time, Compare, Final
+  decision. An edit after lock is a new linked study.
+- **Zoom Search** — one-knob-at-a-time, coarse-to-fine search from the frozen
+  incumbent; it reports "no improvement along the tested moves", never an
+  optimum. **Grid Search** inside a study is the same evaluator over every
+  listed combination.
+- **Final test** — the interval held back at lock and opened once for one picked
+  candidate beside the frozen incumbent. Its **exposure** is **not opened in
+  recorded research** (the only confirmatory state), **previously used**, or
+  **history unknown**; the exposure ledger outlives every study.
+- **Qualified version** — the immutable record an approval publishes: program and
+  version, stock, exact parameters, program bytes, replay proof, research
+  outcome and the owner's note. It is **ready**, **stale** (the program changed
+  since its proof; re-prove it) or **revoked**. A ready qualified version covers
+  its exact tuple for Paper, Shadow and Live under every other existing gate.
+- **Active default** — the one qualified version per strategy and stock that
+  Deploy offers as "Use qualified configuration"; other ready versions stay
+  deployable, and a stock without one keeps the registry point.
+- **Research override** — approving despite a failed, sparse or reused final test
+  with a written reason; the weakness stays on the qualified version. It cannot
+  bypass a proof failure.
+
 ## Deploy binding and launch posture (sharpened 2026-07-05)
 
 **Lineage: historical (ADR 0038; retired 2026-08-18).**
