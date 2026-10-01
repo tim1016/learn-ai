@@ -869,6 +869,33 @@ describe('AlpacaHomeComponent', () => {
       expect(clearBots).toHaveBeenCalledTimes(2);
     });
 
+    it('drops the last outcome for a new clear and says it is clearing (#2767)', async () => {
+      let answerSecond: (value: CohortActionResult) => void = () => { throw new Error('the second clear was never sent'); };
+      const clearBots = vi.fn()
+        .mockRejectedValueOnce(new Error('network down'))
+        .mockImplementationOnce(() => new Promise<CohortActionResult>((resolve) => { answerSecond = resolve; }));
+      await renderHome({ clearBots });
+      const fold = finishedFold();
+      fireEvent.click(within(fold).getByRole('checkbox', { name: 'Select all finished bots' }));
+      fireEvent.click(within(fold).getByRole('button', { name: 'Clear selected (2)' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Clear 2' }));
+      await screen.findByText(/The clear did not reach a result/);
+
+      fireEvent.click(within(fold).getByRole('checkbox', { name: 'Select all finished bots' }));
+      fireEvent.click(within(fold).getByRole('button', { name: 'Clear selected (2)' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Clear 2' }));
+
+      expect(await screen.findByText('Clearing 2 bots…')).toBeTruthy();
+      expect(screen.queryByRole('region', { name: 'Clear outcome' })).toBeNull();
+
+      answerSecond(clearResult([clearedLeg('old-bot'), clearedLeg('older-bot')]));
+      await screen.findByText('Cleared 2 of 2 bots.');
+      expect(clearBots).toHaveBeenCalledTimes(2);
+      const [, first] = clearBots.mock.calls[0];
+      const [, second] = clearBots.mock.calls[1];
+      expect(second.idempotency_key).not.toEqual(first.idempotency_key);
+    });
+
     it('names the bots a batch ended before reaching, and re-sends the same batch for them', async () => {
       const clearBots = vi.fn()
         .mockResolvedValueOnce(clearResult([clearedLeg('dry-old'), authorityLostLeg('old-bot')]))
