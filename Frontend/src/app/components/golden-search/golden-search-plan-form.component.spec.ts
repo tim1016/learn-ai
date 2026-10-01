@@ -261,6 +261,27 @@ describe('GoldenSearchPlanFormComponent', () => {
     await waitFor(() => expect(lockButton().disabled).toBe(false));
   });
 
+  it('starts the final test at the length the server laid out, and never sends the fields that only describe the plan', async () => {
+    const service = fakeService();
+    service.defaults.mockResolvedValueOnce(defaults({ final_months: 6 }));
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+
+    expect((screen.getByLabelText('Final test (months)') as HTMLInputElement).value).toBe('6');
+    const describing = (sent: object | undefined): string[] => Object.keys(sent ?? {}).filter((key) => ['final_months', 'incumbent_label', 'exposure'].includes(key));
+    expect(describing(service.preflight.mock.lastCall?.[0])).toEqual([]);
+
+    fireEvent.input(screen.getByLabelText('Test window (months)'), { target: { value: '3' } });
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
+    expect(service.defaults.mock.lastCall?.[2]).toEqual({ final_months: 6, training_months: 6, test_months: 3 });
+    expect(describing(service.preflight.mock.lastCall?.[0])).toEqual([]);
+
+    await waitFor(() => expect(lockButton().disabled).toBe(false));
+    fireEvent.click(lockButton());
+    await waitFor(() => expect(service.createStudy).toHaveBeenCalledTimes(1));
+    expect(describing(service.createStudy.mock.calls[0][0].protocol)).toEqual([]);
+  });
+
   it('holds the plan back while the dates are laid out, and ignores dates laid out for older month counts', async () => {
     const service = fakeService();
     const { view } = await renderForm(service);

@@ -8,7 +8,7 @@ import type { GridSearchRefusal } from '../grid-search/grid-search.types';
 import { incumbentLabel } from './golden-search-display';
 import { GoldenSearchKnobTableComponent } from './golden-search-knob-table.component';
 import { GoldenSearchMethodChoiceComponent } from './golden-search-method-choice.component';
-import { applyPlanEdit, DEFAULT_FINAL_MONTHS, draftMonths, MONTH_FIELDS, withServerDates, type PlanDraft, type PlanEdit } from './golden-search-plan-draft';
+import { applyPlanEdit, draftFromDefaults, draftMonths, MONTH_FIELDS, withServerDates, type PlanDraft, type PlanEdit } from './golden-search-plan-draft';
 import { GoldenSearchPreflightPanelComponent } from './golden-search-preflight-panel.component';
 import { GoldenSearchProtocolControlsComponent } from './golden-search-protocol-controls.component';
 import { GoldenSearchRefinementControlsComponent } from './golden-search-refinement-controls.component';
@@ -214,10 +214,10 @@ export class GoldenSearchPlanFormComponent {
     if (strategyKey === null || symbol === '') return;
     this.loadingDefaults.set(true);
     try {
-      const { incumbent_label, exposure: _exposure, ...protocol } = await this.service.defaults(strategyKey, symbol);
+      const { draft, incumbentLabel } = draftFromDefaults(await this.service.defaults(strategyKey, symbol));
       if (generation !== this.defaultsGeneration) return;
-      this.incumbentLabel.set(incumbent_label);
-      this.draft.set({ protocol, problems: new Map(), finalMonths: DEFAULT_FINAL_MONTHS });
+      this.incumbentLabel.set(incumbentLabel);
+      this.draft.set(draft);
       this.scheduleCheck();
     } catch {
       if (generation === this.defaultsGeneration) this.defaultsError.set('The study defaults could not be loaded for this strategy and instrument. Check the service and pick again.');
