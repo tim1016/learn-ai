@@ -70,6 +70,8 @@ IDENTITY_SOURCE_PATHS: tuple[str, ...] = (
     "app/research/sweep",
     "app/research/grid_search",
     "app/research/walk_forward_study",
+    # Golden Search's procedures and evaluator decide which points a stage scores and how a run is recorded (#2696).
+    "app/research/golden_search",
     "app/routers/engine.py",
     "app/schemas/engine_backtest.py",
     "app/services/engine_backtest_service.py",

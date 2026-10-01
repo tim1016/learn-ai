@@ -125,6 +125,8 @@ _MUTATIONS: list[tuple[str, Callable[[GoldenSearchProtocol], GoldenSearchProtoco
     ("STRESS_INVALID", lambda p: dataclasses.replace(p, stress=(StressScenario("a", "A"), StressScenario("a", "B")))),
     ("STRESS_INVALID", lambda p: dataclasses.replace(p, stress=(StressScenario("a", "A", slippage_add=-0.01),))),
     ("STRESS_INVALID", lambda p: dataclasses.replace(p, stress=(StressScenario("a", "A", fill_mode="magic"),))),
+    # A stress run named like the unstressed run would share its evaluation key and read back the base metrics.
+    ("STRESS_INVALID", lambda p: dataclasses.replace(p, stress=(StressScenario("base", "A", commission_add=1.0),))),
 ]
 
 

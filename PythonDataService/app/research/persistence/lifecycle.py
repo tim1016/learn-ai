@@ -119,6 +119,24 @@ def resume_refusal(
         return f"the {noun} is still running"
     if uncommitted_changes(row):
         return f"the {noun} was launched from a working tree with uncommitted changes and cannot be resumed; launch a fresh {noun}"
+    moved = identity_refusal(row, noun=noun, identity=identity)
+    if moved is not None:
+        return moved
+    if not verify_data:
+        return None
+    moved = verify_data_snapshot(DataSnapshot.from_dict(row.receipt["data_snapshot"]), roots_for(row))
+    if moved:
+        return f"{len(moved)} data artifact(s) changed since launch ({moved[0]}{', …' if len(moved) > 1 else ''}); launch a fresh {noun}"
+    return None
+
+
+def identity_refusal(row: FencedRecord, *, noun: str, identity: CodeIdentity | None = None) -> str | None:
+    """Why this process's code or environment is not the one the record was launched under, or ``None``.
+
+    The digests decide, never the git label. A record whose work spans
+    several runs (a Golden Search study's stages, #2696) asks this before
+    each run, not only on Finish.
+    """
     recorded = CodeIdentity.from_dict(row.receipt["code_identity"])
     try:
         current = identity or resolve_code_identity()
@@ -149,9 +167,4 @@ def resume_refusal(
         return f"the engine or strategy code changed since launch; launch a fresh {noun}"
     if recorded.environment_digest != current.environment_digest:
         return f"the Python interpreter or an installed library changed since launch; launch a fresh {noun}"
-    if not verify_data:
-        return None
-    moved = verify_data_snapshot(DataSnapshot.from_dict(row.receipt["data_snapshot"]), roots_for(row))
-    if moved:
-        return f"{len(moved)} data artifact(s) changed since launch ({moved[0]}{', …' if len(moved) > 1 else ''}); launch a fresh {noun}"
     return None
