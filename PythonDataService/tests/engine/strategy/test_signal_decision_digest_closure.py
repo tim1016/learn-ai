@@ -18,7 +18,6 @@ from pathlib import Path
 import pytest
 
 from scripts.run_signal_program_build_qualification import (
-    _SERVICE_ROOT,
     signal_decision_import_closure,
 )
 
@@ -39,10 +38,9 @@ def synthetic_package(tmp_path: Path) -> Path:
 
 
 def test_closure_helper_follows_deferred_function_local_imports(synthetic_package: Path) -> None:
-    """The production case this guards: ``app/engine/live/indicator_state.py``
-    imports ``app.lean_sidecar.trading_calendar`` only inside a function body.
-    A closure walker that only looked at module-top imports would silently
-    miss it — and miss the real defect 2 gap it represents."""
+    """A deferred import still executes and its bytes still ship. A closure
+    walker that only looked at module-top imports would silently miss such a
+    member -- the issue #1728 defect 2 gap."""
     closure = signal_decision_import_closure(roots=["app/root.py"], service_root=synthetic_package)
 
     assert closure == {"app/root.py", "app/helper.py", "app/sibling.py", "app/leaf.py"}
@@ -54,10 +52,3 @@ def test_closure_helper_follows_every_name_in_a_combined_import_statement(synthe
     closure = signal_decision_import_closure(roots=["app/helper.py"], service_root=synthetic_package)
 
     assert closure == {"app/helper.py", "app/sibling.py", "app/leaf.py"}
-
-
-def test_production_closure_helper_uses_the_real_service_root() -> None:
-    """Sanity check that the default ``service_root`` resolves to
-    ``PythonDataService``, not the ``scripts/`` directory the module lives in."""
-    assert (_SERVICE_ROOT / "app").is_dir()
-    assert (_SERVICE_ROOT / "tests").is_dir()

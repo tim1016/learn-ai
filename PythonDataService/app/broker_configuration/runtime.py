@@ -13,7 +13,7 @@ duplicating it for one reason:
     reason, it never crash-loops and it never couples an unrelated read to a
     credential.
 
-Per CLAUDE.md guiding philosophy #5 the duplicate carries a parity test naming
+The duplicate carries a parity test naming
 the canonical file: ``tests/broker_configuration/test_clerk_dir_parity.py``
 pins this resolver against ``AlpacaSettings.clerk_dir`` for both the default
 and an overridden ``ALPACA_CLERK_DIR``.

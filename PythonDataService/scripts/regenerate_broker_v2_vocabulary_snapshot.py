@@ -1,6 +1,6 @@
 """Regenerate the broker-v2 panel vocabulary snapshot.
 
-The broker-v2 bot control panel (spec §13) renders a **closed** operator
+The broker-v2 bot control panel renders a **closed** operator
 vocabulary authored on the Python side in
 ``app/broker/v2panel/vocabulary.py`` (``ALL_VOCABULARY_CODES``). This script
 writes its JSON snapshot in the PythonDataService tree. Pytest
@@ -53,8 +53,7 @@ _SNAPSHOT_COMMENT: Final[str] = (
     "states, action ids). Deploy starts a fresh identity; Stop is terminal. "
     "Pytest "
     "PythonDataService/tests/broker/v2panel/test_vocabulary_snapshot.py "
-    "asserts equality with the live "
-    "ALL_VOCABULARY_CODES frozenset and non-trivial copy for every code. "
+    "asserts the committed file equals freshly generated output. "
     "Adding a code requires (a) updating vocabulary.py and (b) re-running "
     "PythonDataService/scripts/regenerate_broker_v2_vocabulary_snapshot.py. "
     "Either missing step fails a parity test."

@@ -38,8 +38,8 @@ DecisionOutcome = Literal[
     # FR-016: replay recreated a staged candidate with no Clerk disposition
     # -- the process crashed after `SignalSession.advance()` staged it but
     # before intake captured it. DISCARD is applied and no effect is ever
-    # created; see `docs/prds/sealed-signal-program-to-governed-alpaca-bot.md`
-    # section 13.4 and the `CANDIDATE_UNCAPTURED_AT_CRASH` reason code.
+    # created; see ADR 0042 (every staged candidate gets a Clerk disposition)
+    # and the `CANDIDATE_UNCAPTURED_AT_CRASH` reason code.
     "candidate_uncaptured_at_crash",
     # Issue #1827: `SignalSession.advance` refused a decision bar outright
     # (TIMEFRAME_MISMATCH / NON_MONOTONIC_DECISION_CLOCK / UNSETTLED_STAGE),
@@ -72,7 +72,7 @@ class DecisionReceipt(BaseModel):
     intent_id: str = ""
     order_ref: str = ""
     indicator_snapshot: dict[str, float | int | str | None] = Field(default_factory=dict)
-    # PRD Sec 19 stored causal identity, written by
+    # Stored causal identity, written by
     # ``append_atomic_decision_receipt_row`` in this same module
     # (``decision_id`` == ``evaluation_id``). It belongs on the receipt row
     # it describes, not in a structure paired alongside it. A row with
@@ -182,8 +182,7 @@ def _enrich_atomic_receipt_facts(
     divergence check ``commit_first_transition`` runs before it will ever
     treat a replay as idempotent), and
     :func:`append_competing_decision_receipt_row` (a losing EXIT's own
-    evidence) so the three shapes never drift apart -- CLAUDE.md guiding
-    philosophy #5, one canonical implementation per concept.
+    evidence) so the three shapes never drift apart.
     ``effect_operation_id`` is a causal link either way: whether this
     decision produced that effect itself (``resolved_to_existing_effect``
     False) or lost a race and merely resolved to one that already existed

@@ -35,7 +35,7 @@ public class DataLabSession
 
     public bool Adjusted { get; set; } = true;
 
-    // ── Int64 ms UTC timestamps (additive migration gate, PRD #data-lab-workspace-redesign §13) ──
+    // ── Int64 ms UTC timestamps (additive migration gate) ──
     // Nullable until the legacy columns are backfilled and retired. On read,
     // these are authoritative when non-null; the legacy DateTime/string
     // columns remain populated for dual-read compatibility.

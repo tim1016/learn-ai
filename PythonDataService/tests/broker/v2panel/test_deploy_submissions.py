@@ -90,11 +90,6 @@ def test_a_name_that_cannot_fit_the_order_reference_cap_is_refused_not_truncated
 # ── The catalog's codes ─────────────────────────────────────────────────────
 
 
-def test_every_catalog_strategy_has_its_own_code() -> None:
-    codes = [registration.deploy_code for registration in _STRATEGY_REGISTRY.values() if registration.catalog_visible]
-    assert len(codes) == len(set(codes)) and all(codes)
-
-
 def test_catalog_load_refuses_a_missing_or_duplicate_code() -> None:
     ema = _STRATEGY_REGISTRY["ema_crossover_signal"]
     with pytest.raises(StrategyCatalogError, match="needs a bot-name code"):

@@ -278,7 +278,7 @@ class IbkrClient:
         # Track that condition explicitly so streaming loops can halt instead
         # of hanging on a silently-frozen feed. Cleared on connect and on a
         # restore event (1101/1102). The counter is observable (logged + read
-        # by diagnostics) per numerical-rigor's "surfaced, never silenced".
+        # by diagnostics).
         self._connection_lost: bool = False
         # Monotonic count of successful ``connect()`` calls. Every real-time
         # bar lease records the generation it was acquired under so a lease

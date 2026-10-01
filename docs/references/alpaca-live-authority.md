@@ -1,26 +1,9 @@
-# Alpaca live authority — graduation, the admission chain, and the first real order
+# Alpaca live authority — graduation and its residuals
 
-
-**Current authorization (2026-09-27, PRD #2540 / #2547):** after explicit Budget
-authority cutover, Live deployment requires its own reviewed budget and consent.
-Standalone arming is retired, and since #2629 the per-instance arming gate, its
-refresh, the envelope seal and the Start-time arming fact are deleted too: the
-live authority composes the risk envelope alone. This note's older arming
-descriptions are history, not a current operator workflow.
-
-**Status:** canonical for ADR 0059 slice 7 (2026-09-09). Lineage: live.
-
-## What it is
-
-The **Live Account Authority** is the same `sqlite` Clerk the paper account
-runs, composed over a real-money account with the real trade port and the two
-gates a real-money ENTER is admitted against: the risk envelope (ADR 0059 D4,
-[alpaca-live-envelope](alpaca-live-envelope.md)) and the per-instance arming
-gate (D3/D11, [alpaca-live-arming](alpaca-live-arming.md)). It exists only on
-three-way mode agreement (D1): the configured mode, the broker-observed
-account, and the cutover's activation record naming that exact account. This
-is the slice after which a real order is possible, and this note says exactly
-when one is.
+**Status:** ADR 0059 slice 7 (2026-09-09). Lineage: live.
+Since PRD #2540 and #2547, a Live deployment needs its own reviewed budget and consent.
+Since #2629 the per-instance arming gate is deleted, and the live authority
+composes the risk envelope alone (`app/broker/alpaca/clerk/live_authority.py`).
 
 ## Graduation
 
@@ -112,137 +95,6 @@ foreign bindings are refused one at a time on Start with
 startable. The live verdict's arming count reads the same rule: a
 `shadow:`-sealed instance is not armed on the graduated account.
 
-## Where it runs
-
-- `PythonDataService/app/broker/alpaca/clerk/live_authority.py::select_live_clerk_runtime`
-  — the boot story. Refuses, as a typed `unavailable` runtime and never an
-  aborted data plane: `LIVE_CONTROL_UNAUTHENTICATED`
-  (`DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL=true`, R14), `LIVE_MODE_DISAGREEMENT`,
-  `LIVE_ENVELOPE_MISSING`, `ACTIVATION_RECORD_INVALID`, `SQLITE_CLERK_STARTUP_FAILED`,
-  and — the one refusal that is not final — `BROKER_UNREACHABLE_RECONNECTING`.
-- `app/broker/alpaca/clerk/authority_reconnect.py::run_authority_reconnect` —
-  the capped-backoff retry of the boot's own steps a reconnecting boot runs
-  while the lane serves.
-- `app/broker/alpaca/clerk/sqlite/live_envelope_sync.py` — every 15 s, one
-  account reading judges the envelope, and a mid-session mode disagreement
-  withdraws it (`account_mode_disagreed`, which the live verdict reads).
-- The arming ledger is handed to the composition only as history: the one-time
-  exit-terms upgrade prices a bot armed before exit terms existed from its own
-  arming. Until #2629, `live_arming_gate.py`, `sqlite/arming_refresh.py` and
-  `services/live_arming_admission.py` held a per-instance arming snapshot and
-  a Start-time arming fact; they are deleted.
-
-## The ENTER admission chain
-
-`accept_enter` runs, inside the custody fence and before `ENTER_ACCEPTED`:
-
-1. `require_admission` — holds and uncertainties, the loss hold included;
-2. `require_envelope_admission` — an account not yet switched to budgets
-   refuses `BUDGETS_NOT_SWITCHED_ON` (#2553, owner decision 2026-09-29; never
-   switched automatically), then the deployment's budget and the account's
-   cash after every other claim bound the ENTER (`budgets.budget_entry_decision`).
-
-EXIT is never subject to 2. Every refusal is transient (retry on the next
-decision clock), never a fatal halt. Until #2553 a third check,
-`require_arming_admission`, admitted a version-1 live ENTER only for an armed
-instance; it is deleted, and the `LIVE_ARMING_*` codes it refused with stay
-recognised only so receipts already recorded under them still read.
-
-## Deploy, arm, trade
-
-*The version-1 ceremony, kept for history.* Since #2553 no ENTER is admitted
-on a version-1 account, armed or not: switch the account to budgets in
-Settings, then Deploy each bot with its own dollar budget (PRD #2540).
-
-A strategy instance is immutable per account and its account is inside its
-seal, so the instance that rehearsed as `shadow:<id>` cannot be the instance
-that trades on `<id>`: the live run is a **new instance** (R6).
-
-1. Deploy it on the live world (`execution_mode: "live"`, offered only there).
-   The launch is admitted running; every ENTER it makes refuses
-   `LIVE_ARMING_REQUIRED` until it is armed, and the admitted decision and the
-   receipt say so.
-2. Arm it: `manage_alpaca_arming plan` / `apply`. The ceremony reads the
-   live-sealed binding, records the instance's own current shadow receipt
-   when it has one (`shadow_receipt_sha256` is null otherwise), and arms
-   either way — shadow is a mode, not a requirement (R7; owner decision
-   2026-09-09).
-3. Within one sync tick the gate holds the instance `armed`; its next ENTER
-   passes all three admissions and `submit_enter` hands the leg to the real
-   trade port.
-
-## The halt
-
-Decision 8's `desired_state = PAUSED` is deliberately **not** written (R10):
-`PAUSED` is observe-only for EXIT too, and would strand a real position every
-morning under `ALPACA_LIVE_ARMING_MAX_SESSIONS=1`. What is built: new
-submission stops (every ENTER of an instance that is no longer armed refuses,
-as a rejected receipt carrying **that instance's own arming code** —
-`LIVE_ARMING_LAPSED`, `LIVE_ARMING_REVOKED`, `LIVE_ARMING_SEAL_CHANGED`,
-`LIVE_ARMING_FUTURE_DATED` or `LIVE_MODE_DISAGREEMENT`; no receipt ever
-carries `LIVE_VERDICT_TRANSITION_HALT`); it is loud (the sync logs
-`live_verdict_transition_halt` at warning level once per instance per
-transition, naming the code the receipt will carry, and the verdict names the
-instance); and
-resumption is guarded by the arming ceremony itself, after which the next tick
-admits. EXITs keep running; the operator's reduce-only actions
-(`execute_safe_flatten`, the cohort flatten) are EXIT-shaped and never gated
-(R17). The manual order ticket stays paper-only (D11).
-
-## The thirteen gates, re-meant
-
-See the table in design R8: `manual_order_runtime` keeps `LIVE_ACCOUNT_REFUSED`;
-`historical_execution_recovery` still refuses `LIVE_ACCOUNT_REFUSED` — the one
-paper-only gate this slice does not re-mean, a named follow-up; `cutover`
-admits `paper | live`; `dev_reset` still refuses non-paper on the configured
-mode; `panel_deploy` offers `live` on the live world; the `run_admission`
-corpus gate is unchanged and the arming fact sits beside it; `CustodyWorld`
-gains `real_live` and every world admits exactly one account mode.
-
-## In the live verdict
-
-`observe_arming` and `observe_loss_hold` read on every live-custodying facade
-authority (shadow, or sqlite on `real_live`); the paper authority reads
-neither. `observe_arming` counts only live-sealed instances on the
-`real_live` world — the rehearsal's `shadow:`-sealed bindings are foreign
-to a graduated authority (R15) and are never counted as armed under it. On the
-live authority the headline is `LIVE account <id> — N instances armed,
-real-money submission open` or `… — real-money authority installed, no
-instance armed`; `clerk_authority` stays `sqlite` (`configured_mode` names the
-world).
-
-## Operator configuration
-
-**The endpoint mode and the six risk-envelope values are a saved broker profile,
-not environment settings** (ADR 0060, superseding ADR 0059's environment-source
-rule). They are edited under `/api/brokers/alpaca/configuration`, staged, and
-made effective by pressing Apply and performing a controlled restart. There is
-no `ACTIVE_PROFILE` variable and no `ALPACA_MODE` on the runtime path.
-
-Once an installation has a saved profile, leaving any of the seven retired
-variables in place — `ALPACA_MODE`, `ALPACA_LIVE_LOSS_FRACTION`,
-`ALPACA_LIVE_LOSS_USD`, `ALPACA_LIVE_SHADOW_SESSIONS`,
-`ALPACA_LIVE_ARMING_MAX_SESSIONS`, `ALPACA_LIVE_XH_ENTRY_BPS`,
-`ALPACA_LIVE_XH_EXIT_BPS` — is answered by naming the ones to delete
-(`retired_environment_settings`). **A deliberate change refuses; an ordinary
-restart does not.** The worker binding a staged revision an Apply named refuses
-and the gate closes (the service still boots), as does any operator CLI. A
-restart of an already-effective configuration **binds and logs an error naming
-the variables on every boot** instead, because a worker left with no broker
-cannot place an EXIT (ADR 0060 D4.3) and the stale values are not read by
-anything it binds. `scripts/manage_broker_configuration.py` moves an existing
-deployment across; the per-boot table is in
-[`alpaca-credential-slots.md`](alpaca-credential-slots.md#retired-and-never-retired).
-
-What **remains** environment-injected, and always will: the credential pairs
-(`ALPACA_API_KEY_ID` / `ALPACA_API_SECRET_KEY` are the `default` slot;
-`ALPACA_CREDENTIAL_LIVE_*` are the `live` slot), `ALPACA_CLERK_DIR`, and the
-capability gates. The data plane reads **only** `PythonDataService/.env` (compose
-`env_file`); the repo-root `.env` feeds compose interpolation only. On a live
-boot, `DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL=false` and
-`ALPACA_FAULT_INJECTION_ENABLED=false` (the first refuses to install the
-authority; the second is already refused by `injection_permitted`).
-
 ## Residuals
 
 - One primary authority per process (R1): a graduated account cannot shadow
@@ -253,8 +105,6 @@ authority; the second is already refused by `injection_permitted`).
 - Graduation has no reversal (R1).
 - The halt writes no desired state (R10) — owner question E1.
 - A refused live boot labels its compat surfaces "paper" (`custody_world_or_paper`).
-- A human trading the live account withdraws day P&L to unknown for the day
-  (slice 5 R5), so every program ENTER refuses `LIVE_ENVELOPE_UNOBSERVED` — E7.
 - `StrategySpec.submit_mode` is not stamped at deploy — E8.
 - **Historical execution recovery stays paper-only.** `historical_execution_recovery.py`
   refuses `LIVE_ACCOUNT_REFUSED` at both entry points; re-meaning it for a live
@@ -263,7 +113,7 @@ authority; the second is already refused by `injection_permitted`).
 ## Decision record
 
 [ADR 0059](../architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md)
-Decisions 1, 3, 8, 10, 11 and Consequence 7. Controller rulings R1–R18 are in
-`docs/superpowers/specs/2026-09-09-live-slice-7-gate-remeaning-design.md`.
+Decisions 1, 3, 8, 10, 11 and Consequence 7. Controller rulings R1–R18 were in
+the slice-7 design spec (Git history).
 Predecessors: [alpaca-shadow-authority](alpaca-shadow-authority.md),
 [alpaca-live-envelope](alpaca-live-envelope.md), [alpaca-live-arming](alpaca-live-arming.md).

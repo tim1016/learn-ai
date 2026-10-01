@@ -6,8 +6,7 @@ load-and-validate, scan+filter — live in
 Carlo-specific surface: function signatures the runner and router
 already call, plus the phase-specific ``method`` filter on
 ``list_monte_carlos`` that the artifact store's generic
-``list_ids`` doesn't carry. See
-``docs/architecture/research-artifact-seam.md`` for the design.
+``list_ids`` doesn't carry.
 
 On-disk layout (unchanged from pre-seam):
 
@@ -119,21 +118,20 @@ def list_monte_carlos(
         limit=None,
     )
 
-    # Reuse the descriptor's filename and the store's path
-    # construction so we don't duplicate them here.
-    base = store._base()  # thin delegator over our own store; private access is intentional
-
     out: list[MonteCarloConfig] = []
     for mc_id in ids:
-        config_path = base / mc_id / MONTE_CARLO_ARTIFACT.config_filename
         try:
+            # Reuse the store's confined path construction (private
+            # access is intentional) and the descriptor's filename so
+            # we don't duplicate them here.
+            config_path = store._artifact_dir(mc_id) / MONTE_CARLO_ARTIFACT.config_filename
             config = MonteCarloConfig.model_validate_json(
                 config_path.read_text(encoding="utf-8")
             )
         except Exception as exc:
             logger.warning(
-                "[MC] skipping corrupt monte-carlo config at %s: %s",
-                config_path,
+                "[MC] skipping corrupt monte-carlo config for %s: %s",
+                mc_id,
                 exc,
             )
             continue

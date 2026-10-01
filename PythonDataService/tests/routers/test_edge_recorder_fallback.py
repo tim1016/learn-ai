@@ -2,8 +2,7 @@
 
 Covers the realized-vs-iv router auto-reading from the recorder when
 ``iv_series`` is omitted, plus the imputed-prior policy on
-``health_score`` (see docs/architecture/iv-ownership-research.md §4.7
-and §8.1.1). Exercises:
+``health_score`` (ADR 0071 Decision 11). Exercises:
 
 - The pure helper ``_iv_series_from_recorder`` (precedence + skip rules).
 - The realized-vs-iv route's ``iv_source`` field across the three states:
@@ -194,7 +193,7 @@ class TestParseIvSeriesNullCoalescing:
     parser must handle explicit null without crashing on ``float(None)``,
     and both shapes (missing-key, explicit-null) must take the same
     imputed-evidence branch. CodeRabbit P1 on PR 47, refined per
-    iv-research-chat-notes.md §5.3 — imputed bars now drop the health
+    ADR 0071 decision 11 — imputed bars now drop the health
     factor entirely (confidence = 1 - vcs) rather than apply a 0.5 prior.
     """
 
@@ -296,7 +295,7 @@ class TestHealthScoreImputedPrior:
     UI can flag the bar even though the numeric confidence may match the
     explicit full-health case.
 
-    Refined per ``docs/architecture/iv-research-chat-notes.md (pruned 2026-09-12, git history)`` §5.3 — the
+    Why: the
     earlier 0.5 imputed-prior policy was replaced because halving every
     no-evidence confidence is itself a real signal-attenuation choice
     with no evidence to support the cut.

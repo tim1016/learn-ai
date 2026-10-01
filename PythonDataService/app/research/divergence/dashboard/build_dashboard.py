@@ -1,14 +1,13 @@
 """Build the single-file HTML dashboard for the data-divergence study.
 
-Sections rendered (per research plan §8):
+Sections rendered:
   1. Header summary — counts, date range, headline numbers.
   2. Feed comparison — Polygon vs TV OHLCV differences, with prose context.
   3. Indicator divergence matrix — heatmap + per-row table.
   4. Per-indicator overlay charts — TV vs vetted pandas vs learn-ai engine.
   5. Methodology, variant definitions, and inline gotchas.
 
-Plotly.js is bundled inline so the HTML renders offline. See
-``docs/tv-polygon-validation-gotchas.md`` for the full gotchas catalog.
+Plotly.js is bundled inline so the HTML renders offline.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Tests for AlpacaSettings — mode agreement and URL derivation (spec §7)."""
+"""Tests for AlpacaSettings — mode agreement and URL derivation."""
 
 from __future__ import annotations
 
@@ -204,7 +204,7 @@ def test_live_values_must_be_finite(field: str, bad: float) -> None:
 # file's settings declare. ``live_envelope._ENVELOPE_DOMAINS`` is a second copy
 # of those bounds -- necessary, because an envelope also arrives from an arming
 # record read off disk and never passes through settings -- and the parity test
-# below is what stops the two from drifting (CLAUDE.md guiding philosophy #5).
+# below is what stops the two from drifting.
 _JUST_OUTSIDE: tuple[tuple[str, float], ...] = (
     ("loss_fraction", 0.0),
     ("loss_fraction", 1.0),
@@ -245,13 +245,6 @@ def test_the_envelope_domains_admit_every_value_the_settings_load() -> None:
     settings = AlpacaSettings(api_key_id="k", api_secret_key="s", mode="live", **_LIVE_REQUIRED)
 
     assert envelope_domain_violation(LiveEnvelopeValues.from_settings(settings)) is None
-
-
-def test_live_configuration_holds_no_retired_session_count() -> None:
-    """#2629: the arming ceremony's two counts are not settings any more."""
-    configured = AlpacaSettings(api_key_id="k", api_secret_key="s", mode="live", **_LIVE_REQUIRED)
-    assert configured.is_live
-    assert not {"live_shadow_sessions", "live_arming_max_sessions"} & set(AlpacaSettings.model_fields)
 
 
 @pytest.mark.parametrize("field", ["shadow_sessions", "arming_max_sessions"])

@@ -115,8 +115,8 @@ class AlpacaAccountVerifier:
 
     Refusals propagate as C's ``BrokerProfileError`` subclasses — the slot is
     unknown or unavailable, the revision will not resolve, the observed account
-    contradicts the mode. They carry the contract §6 shape and are translated
-    once, by the handler registered in ``app/main.py``.
+    contradicts the mode. They carry the ``reason`` / ``message`` / ``next_step`` shape and are
+    translated once, by the handler registered in ``app/main.py``.
     """
 
     def __init__(

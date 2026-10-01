@@ -2,16 +2,15 @@
 
 Run after building the arm64 derivative to rewrite the
 ``PINNED_LEAN_IMAGE_DIGEST_ARM64`` constant in
-``app/lean_sidecar/config.py`` and print the digest for the ADR.
+``app/lean_sidecar/config.py`` and print the digest.
 
 This is intentionally a small one-off helper, not part of the runtime
 data plane: the digest is committed source, not config that changes
-between deployments. After running this you should:
+between deployments. ``config.py`` is the only place the digest is
+recorded (ADR 0070). After running this you should:
 
   1. ``git diff app/lean_sidecar/config.py`` and confirm the digest
-  2. Update ``docs/architecture/lean-sidecar-lab.md`` §"Runner choice"
-     with the same digest
-  3. Commit both changes in the same PR
+  2. Commit the change
 """
 
 from __future__ import annotations

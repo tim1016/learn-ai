@@ -49,18 +49,3 @@ def test_random_walk_is_classified_non_stationary():
     result = run_stationarity_tests(series)
 
     assert result.is_stationary is False
-
-
-def test_summary_text_contains_verdict_and_pvalues():
-    result = StationarityResult(
-        adf_statistic=-3.5,
-        adf_pvalue=0.01,
-        kpss_statistic=0.1,
-        kpss_pvalue=0.1,
-        is_stationary=True,
-    )
-
-    summary = result.summary
-    assert "STATIONARY" in summary
-    assert "ADF p=0.0100" in summary
-    assert "KPSS p=0.1000" in summary

@@ -1,7 +1,6 @@
 """Typed profile-resolution errors carrying the contract's ``reason`` codes.
 
-Shapes follow ``docs/architecture/broker-configuration-profile-contract.md``
-§6: a code-like snake_case ``reason``, operator-readable ``message`` prose and
+Each error carries a code-like snake_case ``reason``, operator-readable ``message`` prose and
 a ``next_step``, which a router hands straight to ``HTTPException(detail=...)``
 via :meth:`BrokerProfileError.as_detail`. ``reason`` is the stable code the
 Frontend renders through the shared ``receiptLabel`` pipe; ``message`` and
@@ -35,7 +34,7 @@ from app.broker.contract.errors import BrokerError
 class BrokerProfileError(Exception):
     """Base class for every profile-resolution refusal.
 
-    ``reason`` and ``http_status`` are the contract §6 row for the subclass;
+    ``reason`` and ``http_status`` are the taxonomy row for the subclass;
     ``message`` is the *what* and ``next_step`` the operator's way forward.
 
     Both are declared without a default on purpose. A base-class fallback
@@ -53,7 +52,7 @@ class BrokerProfileError(Exception):
         self.next_step = next_step
 
     def as_detail(self) -> dict[str, str]:
-        """The contract §6 ``detail`` dict for an ``HTTPException``."""
+        """The ``detail`` dict for an ``HTTPException``."""
         return {
             "reason": self.reason,
             "message": self.message,
@@ -229,8 +228,8 @@ class AccountPinMismatch(BrokerProfileError):
     ) -> AccountPinMismatch:
         """Re-verification observed accounts, none of them the pinned one.
 
-        Every observed ID is named, not just the first: contract §2.5 keeps
-        exact account IDs in audit evidence, and reporting one of several
+        Every observed ID is named, not just the first: audit evidence keeps
+        exact account IDs, and reporting one of several
         arbitrarily would make that evidence depend on iteration order.
         """
         return cls(

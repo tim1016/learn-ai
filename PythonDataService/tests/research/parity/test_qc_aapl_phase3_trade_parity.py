@@ -8,16 +8,13 @@ Scope: 2-day window (2026-02-09 → 2026-02-11). QC free tier's minute-data
 trailing window (~90 days, per https://www.quantconnect.com/forum/discussion/19781/getting-data-with-free-plan/)
 truncated the achievable backtest to this window; 1 entry fill fires on
 2026-02-10, no exit (positive prediction every day). Full round-trip P&L
-coverage is not pursued (decision 2026-05-12 — see authority doc § 10).
+coverage is not pursued (decision 2026-05-12).
 
 ``_build_our_fills`` imports the prediction set, runs ``BacktestEngine``
 directly (bypassing ``run_strategy_spec``) so it captures order_events
 including the open-position entry that ``run_strategy_spec``'s trade log
 would miss (``LoggedTrade`` only records closed round-trips). Commission
 is computed reconciler-side via ``IbkrEquityCommissionModel``.
-
-See ``docs/ml-predictions-authority.md`` §3 and
-``docs/references/reconciliations/qc-aapl-phase3.md``.
 """
 
 from __future__ import annotations
@@ -200,8 +197,8 @@ def test_qc_aapl_phase3_trade_level_parity(tmp_path: Path) -> None:
     truncates the achievable backtest to the 2-day window 2026-02-09 → 2026-02-11.
     Result: 1 entry fill on 2026-02-10 morning, no exit (positive prediction
     every day in the window). Round-trip P&L coverage is not pursued
-    (decision 2026-05-12 — see authority doc § 10 and the reconciliation
-    report for the full rationale).
+    (decision 2026-05-12 — see docs/references/reconciliations/qc-aapl-phase3.md
+    for the full rationale).
 
     The (R8) invariant validates that our engine's NEXT_SESSION_OPEN +
     PredictionRef.lookup="next_after_bar_close" produces the same fill
@@ -233,9 +230,6 @@ def test_qc_aapl_phase3_trade_level_parity(tmp_path: Path) -> None:
     # last daily-bar close (274.37) when the signal fires; QC sizes off the
     # actual fill price (273.24). Both are valid LEAN-consistent approaches;
     # the 1-share difference (364 vs 365) is within cash-buffer rounding.
-    #
-    # Both tolerances are documented in
-    # docs/references/reconciliations/qc-aapl-phase3.md.
     tolerances = Tolerances(
         fill_price_atol=Decimal("0.10"),
         commission_atol=Decimal("0.01"),

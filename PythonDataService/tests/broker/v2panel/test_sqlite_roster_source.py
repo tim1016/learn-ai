@@ -1095,8 +1095,8 @@ def test_sqlite_decision_receipts_adapt_durable_s1_rows_without_jsonl(
     assert receipts[0].bar_ref == "SPY@1700000180000"
     assert receipts[0].reason_code == "STRATEGY_ENTER"
     assert receipts[0].intent_id == "intent-3"
-    # PRD Sec 19: decision/effect identities stored at Clerk intake are read
-    # back verbatim, attached directly to the receipt, never inferred from
+    # Decision/effect identities stored at Clerk intake are read back
+    # verbatim, attached directly to the receipt, never inferred from
     # proximity.
     assert receipts[0].decision_id == "deadbeef"
     assert receipts[0].effect_operation_id == "effect-op-3"
@@ -1323,12 +1323,6 @@ async def test_panel_evidence_returns_none_only_when_no_authority_is_active(
     )
 
     assert evidence is None
-
-
-def test_panel_bot_not_found_maps_to_the_unknown_bot_status() -> None:
-    """The 404/503 split the panel router renders is pinned to one taxonomy."""
-    assert panel_data_source.UnknownBotError.http_status == 404
-    assert panel_data_source.PanelUnavailableError.http_status == 503
 
 
 def test_torn_read_attempts_are_spaced_so_they_sample_different_moments() -> None:

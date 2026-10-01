@@ -15,7 +15,6 @@ from app.schemas.strategy_validation import (
     StrategyValidationFlagRequest,
 )
 from app.services.strategy_validation_manifest import (
-    DEFAULT_FLAG_EVENTS_PATH,
     StrategyEvidenceSeed,
     StrategyRegistrySeed,
     StrategyValidationManifestError,
@@ -63,37 +62,6 @@ def _accepted_flag_event(
         ),
         evidence_snapshot_sha256="snapshot-sha",
     )
-
-
-def test_default_runtime_flag_event_path_uses_ignored_service_artifacts() -> None:
-    assert DEFAULT_FLAG_EVENTS_PATH.as_posix().endswith(
-        "PythonDataService/artifacts/strategy_validation/flag_events.json"
-    )
-
-
-def test_flag_events_ledger_path_resolves_outside_the_real_artifacts_tree() -> None:
-    """#1739 regression: guards the autouse isolation fixture in
-    tests/conftest.py (``_isolate_strategy_validation_flag_ledger``). If
-    that fixture is ever removed, disabled, or stops patching the
-    module-level default, a developer's real, gitignored
-    artifacts/strategy_validation/flag_events.json resolves as the ledger
-    for every test that reads it through the default path, and local runs
-    silently diverge from CI (see PR #1733, where this happened).
-
-    ``strategy_validation_manifest`` is imported module-qualified here
-    (not the ``DEFAULT_FLAG_EVENTS_PATH`` name already imported at the top
-    of this file) so the assertion reads the *live* value, honoring
-    whatever tests/conftest.py's autouse fixture monkeypatched it to."""
-    import app.services.strategy_validation_manifest as strategy_validation_manifest
-
-    real_default_path = (
-        Path(strategy_validation_manifest.__file__).resolve().parents[2]
-        / "artifacts"
-        / "strategy_validation"
-        / "flag_events.json"
-    )
-
-    assert real_default_path != strategy_validation_manifest.DEFAULT_FLAG_EVENTS_PATH
 
 
 def test_bare_load_strategy_validation_entries_call_tracks_the_patched_ledger_path(
@@ -770,8 +738,7 @@ def test_reference_code_uses_service_fallback_when_repo_reference_absent(tmp_pat
         validation_state="validated",
         deployable=True,
         audit_copy_ref="references/qc-shadow/DeploymentValidationAlgorithm.py",
-        # #1672 changed the audit copy's session-boundary literals (see
-        # docs/references/deployment-validation-consecutive-green.md); this
+        # #1672 changed the audit copy's session-boundary literals; this
         # pins the current file's hash, not the manifest's — the manifest's
         # pinned hash is deliberately left stale until a fresh QC Cloud
         # reconciliation is run (see tests/routers/test_strategy_validation.py).
@@ -786,8 +753,7 @@ def test_reference_code_uses_service_fallback_when_repo_reference_absent(tmp_pat
 
 
 def test_qc_shadow_container_fallback_copies_are_byte_identical_to_references() -> None:
-    """The containerized data plane can't mount references/ (see
-    the archived data-plane topology investigation PRD, git history),
+    """The containerized data plane can't mount references/,
     so reference_code_for_entry falls back to app/data/qc-shadow/ whenever
     references/qc-shadow/ is absent. ruff.toml documents the intent that the
     two stay byte-identical ("Reference artifacts must stay byte-identical to

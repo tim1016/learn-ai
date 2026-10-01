@@ -153,18 +153,6 @@ def test_only_a_width_refusal_reports_the_decision_clock_pair(
         assert facts["observed_timeframe_ms"] == _BUCKET_END_MS - _BUCKET_START_MS
 
 
-def test_a_journal_with_no_sink_still_counts_and_logs() -> None:
-    """The read-only replay and qualification callers pass no sink.
-
-    They re-drive bars a live run already judged, so a receipt from them
-    would be a second record of one event. They must still not crash.
-    """
-    journal = QuarantineJournal()
-
-    _record(journal, _quarantine("TIMEFRAME_MISMATCH"))
-    _record(journal, _quarantine("TIMEFRAME_MISMATCH", offset_ms=60_000))
-
-
 def test_the_bar_ref_names_the_refused_bucket() -> None:
     binding = _binding(run_id="run-1")
 

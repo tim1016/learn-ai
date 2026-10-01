@@ -937,7 +937,7 @@ def test_aggregate_handles_ib_async_open_underscore_attribute() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Log-level demotion (incident taxonomy PR-3, plan §4.2 / codex D4): the
+# Log-level demotion (incident taxonomy PR-3): the
 # idempotent-skip log was demoted from WARNING to INFO so per-bar
 # redeliveries no longer land in the Recent Incidents panel. The
 # ``skipped_duplicate`` counter + the aggregate SUBSCRIPTION_STALE
@@ -951,7 +951,7 @@ def test_live_idempotent_skip_logs_at_info_not_warning(
     # Sets up the second-feed-of-same-bar duplicate-skip path and asserts
     # the emitted log record is INFO. A regression here (a future change
     # bumping it back to WARNING) re-introduces ~80% of the Incidents
-    # panel noise documented in unknown-incident-modes-2026-06-24.md.
+    # panel noise that motivated the demotion.
     counters = LiveBarCounters()
     current, _, last_ms = aggregate_realtime_bar(
         None,

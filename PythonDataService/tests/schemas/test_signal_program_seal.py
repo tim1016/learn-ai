@@ -238,7 +238,7 @@ def test_no_seal_family_field_is_excluded_from_its_json_dump() -> None:
 
 def test_mutating_any_semantic_leaf_changes_the_configured_signal_hash() -> None:
     """The field-sensitivity proof the sealed identity requires (issue: half the
-    §11.1 semantic surface previously had no sealed field to mutate at all).
+    semantic surface previously had no sealed field to mutate at all).
 
     Walks every leaf in the *sealed* payload — ``model_dump(mode="json")`` of
     ``ConfiguredSignalProgramSeal`` — rather than a hand-listed set of field

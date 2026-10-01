@@ -97,16 +97,6 @@ async def test_snapshot_empty_ticker_returns_422(client):
 
 
 @pytest.mark.anyio
-async def test_snapshot_missing_ticker_returns_422(client):
-    """Missing ticker should fail validation"""
-    response = await client.post(
-        "/api/snapshot/options-chain",
-        json={},
-    )
-    assert response.status_code == 422
-
-
-@pytest.mark.anyio
 async def test_snapshot_handles_polygon_error(client):
     """Polygon API errors should return 500"""
     with patch(

@@ -1,7 +1,7 @@
 """The migration reaches lanes only through the coordinator's routed surface (#2268).
 
 Pinned against an ``httpx.MockTransport``: the exact clerk-scoped paths, the
-control-secret header, the §10.3 command envelope on the stop, and that
+control-secret header, the command envelope on the stop, and that
 every non-200 answer is a refusal naming the lane.
 """
 

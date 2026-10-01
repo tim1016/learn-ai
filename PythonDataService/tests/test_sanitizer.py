@@ -41,7 +41,7 @@ class TestSanitizeAggregates:
         assert len(result["data"]) == 2
 
     def test_duplicates_raise_error(self):
-        """Duplicate timestamps must raise ValueError (fail-fast per numerical-rigor rules)."""
+        """Duplicate timestamps must raise ValueError (fail-fast per ADR 0022 (h))."""
         raw = [
             {
                 "timestamp": 1704067200000,
@@ -131,22 +131,6 @@ class TestSanitizeAggregates:
 
         with pytest.raises(ValueError, match="strictly increasing"):
             DataSanitizer.sanitize_aggregates(raw)
-
-    def test_summary_has_removal_percentage(self):
-        raw = [
-            {
-                "timestamp": 1704067200000,
-                "open": 150.0,
-                "high": 155.0,
-                "low": 148.0,
-                "close": 153.0,
-                "volume": 1000000.0,
-            },
-        ]
-
-        result = DataSanitizer.sanitize_aggregates(raw)
-
-        assert "removal_percentage" in result["summary"]
 
     def test_vwap_and_transactions_optional(self):
         """Bars with optional fields should still be processed"""

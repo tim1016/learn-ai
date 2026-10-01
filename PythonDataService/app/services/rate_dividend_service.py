@@ -5,8 +5,6 @@ and :func:`app.services.dividend_service.compute_dividend_yield`. This is
 the single entry point callers should use when they need ``(r, q)`` to feed
 the BS pricer or IV solver, replacing the historical hardcoded defaults
 ``r=0.043`` (pricing-lab UI signal) and ``q=0`` (every BS path).
-
-Step 2 of the IV-RV alignment plan (see memory: ``iv_rv_alignment_plan.md``).
 """
 
 from __future__ import annotations

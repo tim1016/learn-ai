@@ -11,8 +11,8 @@ the live touch in PRE/POST); and when nothing can price it, or its order
 already carries a broker identity, nothing is sent and the operator sees the
 ``EXIT_NOT_FLAT`` episode.
 
-Reproduces Codex finding R1 (``research/codex-2419``,
-``docs/references/codex-review-2419.md``): a program EXIT accepted at 15:59
+Reproduces Codex finding R1 (``research/codex-2419``):
+a program EXIT accepted at 15:59
 and first driven at 16:01 used to submit a market DAY SELL with
 ``extended_hours=False``.
 """

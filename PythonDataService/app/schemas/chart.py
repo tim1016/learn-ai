@@ -95,7 +95,7 @@ class ChartIndicatorSupportResponse(BaseModel):
 class ChartDataRequest(BaseModel):
     """Request for chart data with resampled bars and indicators.
 
-    Temporal authority (data-lab workspace redesign PRD §12): the numeric
+    Temporal authority: the numeric
     ``start_ms_utc`` / ``end_ms_utc`` pair is the canonical window form and
     each field takes precedence over its date-string counterpart when
     supplied. Each value resolves by flooring to its UTC calendar date —

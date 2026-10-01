@@ -12,7 +12,7 @@ import { ExposureNoticesComponent } from '../startup-join/exposure-notices.compo
 import { StartupJoinStatusComponent } from '../startup-join/startup-join-status.component';
 
 /**
- * Bot health card (spec §7.2).
+ * Bot health card.
  *
  * Phase, desired state, the run's startup preparation (#2410), duty outcome
  * (kind + backend reason, and what a startup refusal left at the broker).

@@ -179,7 +179,7 @@ def bucket(symbol: str, start_ms: int, end_ms: int, close: str, *, body: BarBody
 # ``LookupError: 1970-01-01 is not a NYSE session``. Both anchors below are
 # therefore derived from ``app.lean_sidecar.trading_calendar`` -- the repo's
 # sole ``mcal.get_calendar`` caller -- never from a hardcoded session
-# literal or a fixed ET offset, per ``.claude/rules/temporal-rigor.md``.
+# literal or a fixed ET offset, per ADR 0022 (b) and (d).
 # ---------------------------------------------------------------------------
 
 _ANCHOR_SEARCH_START = date(2024, 1, 2)

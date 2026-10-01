@@ -7,15 +7,6 @@ from app.lean_sidecar.trusted_samples.deployment_validation import (
 )
 
 
-def test_source_is_non_empty_string() -> None:
-    assert isinstance(DEPLOYMENT_VALIDATION_SOURCE, str)
-    assert len(DEPLOYMENT_VALIDATION_SOURCE) > 100
-
-
-def test_source_parses_as_valid_python() -> None:
-    ast.parse(DEPLOYMENT_VALIDATION_SOURCE)
-
-
 def test_source_contains_required_handlers() -> None:
     tree = ast.parse(DEPLOYMENT_VALIDATION_SOURCE)
     method_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}

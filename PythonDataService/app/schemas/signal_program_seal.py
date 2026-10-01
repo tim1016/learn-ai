@@ -15,8 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.action_plan import ActionPlan
 
-# Canonical home for "how was this parameter's effective value chosen" (CLAUDE.md
-# guiding philosophy #5 — one source of truth per concept). Every other module
+# Canonical home for "how was this parameter's effective value chosen".
+# Every other module
 # that needs this concept imports the alias rather than repeating the Literal.
 ParameterOrigin = Literal["registered_default", "deploy_override", "deployment_symbol"]
 
@@ -83,9 +83,9 @@ class SignalDataContract(BaseModel):
     # ``PolygonReplayMarketDataFeed``. This is NOT an authorization for which
     # live feed a running bot may consume, and nothing treats it as one: live
     # bars come from the single feed wired in ``app/main.py`` and are stamped
-    # ``feed_id="ibkr"``. The two differ by design. See PRD §11.6 — and note
-    # that introducing a second live provider would make that ambiguity a real
-    # safety hole and require revisiting this decision.
+    # ``feed_id="ibkr"``. The two differ by design — and note that introducing
+    # a second live provider would make that ambiguity a real safety hole and
+    # require revisiting this decision.
     provider: str
     symbol: str
     base_timeframe_ms: int = Field(gt=0)
@@ -98,8 +98,7 @@ class SignalDataContract(BaseModel):
 class SignalSeriesContract(BaseModel):
     """One named signal series a program consumes off the sealed data contract.
 
-    PRD §10.1/§11.1: "every signal series, field, and decision stream." A
-    program's ``data`` contract seals the *shared* provider/symbol/timeframe
+    A program's ``data`` contract seals the *shared* provider/symbol/timeframe
     pair every series reads from; this seals each named series drawn from
     that shared stream — e.g. ``ema_fast``, ``ema_slow``, and ``rsi`` all read
     ``field="close"`` off the same 15-minute decision bar. ``field`` also
@@ -107,7 +106,7 @@ class SignalSeriesContract(BaseModel):
     ``spy_strategy_a``'s ADX) that reads the full high/low/close swing
     rather than a single scalar -- ``field="close"`` would misdescribe what
     such a series actually consumes. ``warmup_bars`` is
-    the series' own ``is_ready`` threshold (PRD §11.1 "readiness"): the
+    the series' own ``is_ready`` threshold: the
     ``app.engine.indicators`` base class exposes ``is_ready`` as
     ``samples >= period``, so an EMA's ``warmup_bars`` equals its period; RSI
     overrides this to ``period + 1`` (one extra sample for the first delta);
@@ -133,8 +132,8 @@ SessionCloseOwnershipPolicy = Literal["single_router_forced_flush_at_session_clo
 class SignalBarIntegrityContract(BaseModel):
     """Duplicate/gap/out-of-order, watermark, and session-close ownership facts.
 
-    PRD §11.1 lists these beside ``revision_policy`` (``SignalDataContract``)
-    as sealed identity, not runtime evidence. Today every field is a single
+    These sit beside ``revision_policy`` (``SignalDataContract``) as sealed
+    identity, not runtime evidence. Today every field is a single
     system-wide policy — not a per-program choice — enforced by two modules
     outside this schema:
 
@@ -150,7 +149,7 @@ class SignalBarIntegrityContract(BaseModel):
       owns bucket closing: it fires every complete bucket on the bar that
       closes it, so a session's trailing bucket is flushed exactly at the
       decision session's close rather than left stranded until the next
-      session's bars arrive (FR-011, #2303).
+      session's bars arrive (#2303).
 
     A second policy would need its own Literal member and a per-program field
     here, not a silent default change on these.
@@ -168,10 +167,9 @@ class SignalBarIntegrityContract(BaseModel):
 class ExitEligibilityContract(BaseModel):
     """Level/countdown exit rule — the evidence future carryover work would read.
 
-    PRD §11.1: "level/countdown exit eligibility evidence where carryover may
-    later be considered." Two rules exist, matching PRD §17's own
-    "level- or countdown-true" vocabulary for when a discarded staged EXIT
-    must re-emit:
+    This is the evidence where carryover may later be considered. Two rules
+    exist, matching the "level- or countdown-true" vocabulary for when a
+    discarded staged EXIT must re-emit:
 
     * ``"fixed_bar_count_countdown"`` — ``ema_crossover_signal`` exits on a
       fixed decision-clock countdown
@@ -186,16 +184,10 @@ class ExitEligibilityContract(BaseModel):
       unset for this rule.
 
     ``countdown_state_persistable`` records a real, checked fact about
-    today's implementation, not an aspiration. For
-    ``fixed_bar_count_countdown``:
-    ``EmaCrossoverSignalAlgorithm.report_state_for_persistence`` returns
-    ``None`` whenever the strategy is mid-position, so an in-flight countdown
-    cannot currently survive a Pause/Resume — carryover work must either
-    change that or treat mid-countdown Resume as unsupported. For
-    ``level_true`` programs that have not yet implemented the
-    persistence-hook contract at all (e.g. ``sma_crossover`` today), this is
-    ``False`` for the stronger reason that no state -- not just an in-flight
-    exit -- currently survives Pause/Resume.
+    today's implementation, not an aspiration. No strategy persists its
+    state, so nothing -- an in-flight countdown included -- survives a
+    restart, and every program seals ``False``. Carryover work must either
+    add that persistence or treat a mid-countdown Resume as unsupported.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -214,18 +206,17 @@ class ExitEligibilityContract(BaseModel):
 
 
 class NumericalProvenanceContract(BaseModel):
-    """The Math Provenance Contract (CLAUDE.md #2/#5), sealed as program identity.
+    """The Math Provenance Contract (ADR 0068 Decision 2), sealed as program identity.
 
     Mirrors the ``Formula``/``Reference``/``Canonical implementation``/
-    ``Validated against`` block already required by the
-    ``learn-ai-validation`` skill and present in
+    ``Validated against`` block already required by
+    ADR 0068 Decision 2 and present in
     ``ema_crossover_signal.py``'s own module docstring; this is that same
     fact, made part of the immutable seal rather than living only in prose
     that could drift unnoticed. ``tolerance_atol``/``tolerance_rtol`` are
     ``None`` at ``equivalence_level="bit_exact"`` — the trace/decision
     identity in ``signal_program.py`` is Decimal-exact and SHA-256-compared,
-    not tolerance-compared; the documented ``1e-9`` absolute tolerance in
-    ``docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md``
+    not tolerance-compared; the documented ``1e-9`` absolute tolerance
     applies one level down, to the EMA/RSI *value* parity against LEAN.
     """
 
@@ -252,8 +243,8 @@ class SignalClockContract(BaseModel):
     early_close_policy: Literal["calendar_session_close"] = "calendar_session_close"
     warmup_lookback_days: int = Field(ge=0)
     pause_policy: Literal["OBSERVE_ONLY"] = "OBSERVE_ONLY"
-    # The complete legal evaluation-mode set (PRD §11.1 "readiness and DECIDE
-    # semantics"), sourced from ``app.engine.strategy.signal_program.EvaluationMode``
+    # The complete legal evaluation-mode set (readiness and DECIDE
+    # semantics), sourced from ``app.engine.strategy.signal_program.EvaluationMode``
     # — every source bar an active program observes captures exactly one of
     # these two, never a third. ``pause_policy`` above names which mode Pause
     # forces; this seals the complete set DECIDE is drawn from.
@@ -273,13 +264,13 @@ class ConfiguredSignalProgramSeal(BaseModel):
     program_version: str
     # Distinct from both ``schema_version`` (this seal's own shape) and
     # ``program_version`` (the decision math). Identifies the shape of the
-    # program's construction/session protocol — PRD §12's staged
+    # program's construction/session protocol — the staged
     # open/advance/settle contract (``EvaluationMode``, ``Settlement``,
     # ``EvaluationTrace``) — which could change independently of either.
     # Sourced from ``SignalSession.PROTOCOL_VERSION``, the one
     # place that shape is declared.
     protocol_version: str
-    # FR-002: the parameter schema's own legal type/range/unit contract is
+    # The parameter schema's own legal type/range/unit contract is
     # versioned so a later change to ``EmaCrossoverSignalParams``' field
     # constraints is a provable identity change, without duplicating every
     # field's ``ge``/``le`` bound into this seal (that would be a second

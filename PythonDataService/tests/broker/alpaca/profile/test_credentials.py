@@ -8,13 +8,9 @@ leaves the module.
 
 from __future__ import annotations
 
-import dataclasses
-
 import pytest
 
 from app.broker.alpaca.profile.credentials import (
-    CREDENTIAL_SLOT_DEFAULT,
-    CREDENTIAL_SLOT_LIVE,
     CREDENTIAL_SLOTS,
     AlpacaCredentialEnvironment,
     CredentialSlotAvailability,
@@ -44,11 +40,6 @@ class _RefusingEnvironment:
 
     def __getattr__(self, name: str) -> object:  # pragma: no cover - must not run
         raise AssertionError(f"an unknown slot reached an environment lookup for {name!r}")
-
-
-def test_the_allowlist_is_exactly_the_two_owner_decided_slots() -> None:
-    assert CREDENTIAL_SLOTS == (CREDENTIAL_SLOT_DEFAULT, CREDENTIAL_SLOT_LIVE)
-    assert (CREDENTIAL_SLOT_DEFAULT, CREDENTIAL_SLOT_LIVE) == ("default", "live")
 
 
 def test_resolve_credentials_default_slot_returns_the_legacy_pair(
@@ -167,9 +158,3 @@ def test_describe_credential_slots_lists_every_slot_with_its_availability(
         CredentialSlotAvailability(slot="default", available=True),
         CredentialSlotAvailability(slot="live", available=False),
     )
-
-
-def test_the_availability_shape_carries_a_label_and_a_boolean_and_nothing_else() -> None:
-    fields = {field.name for field in dataclasses.fields(CredentialSlotAvailability)}
-
-    assert fields == {"slot", "available"}

@@ -1,7 +1,7 @@
 """Data sanitization using native pandas/numpy (replaces pandas-dq Fix_DQ).
 
 Formula: Gap detection (NaN/0-volume/OHLC-violation checks), outlier clipping (99th-percentile quantile), monotonicity enforcement, fail-fast duplicate detection.
-Reference: Internal — no external algorithmic reference; gap/monotonicity rules are repo-invariants per .claude/rules/numerical-rigor.md (Timestamp rigor → Two and only two conversion boundaries).
+Reference: Internal — no external algorithmic reference; gap/monotonicity rules are repo-invariants per ADR 0022 (h).
 Canonical implementation: app/services/sanitizer.py
 Validated against: PythonDataService/tests/test_sanitizer.py
 """

@@ -1,7 +1,6 @@
 """Pydantic DTO for ``BacktestRunResult`` — the wire/storage shape.
 
-All timestamps are ``int64 ms UTC`` per
-``.claude/rules/numerical-rigor.md`` § "Timestamp rigor". Decimal money/
+All timestamps are ``int64 ms UTC``. Decimal money/
 price values surface as ``float`` at this boundary because the consumer
 is JSON. Math has already happened in the engine using ``Decimal``;
 this layer is transport.

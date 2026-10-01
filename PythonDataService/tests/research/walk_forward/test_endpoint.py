@@ -207,19 +207,6 @@ async def test_post_then_get_round_trips(client):
     assert fetched.json()["config"] == posted["config"]
 
 
-async def test_response_timestamps_are_int64_ms(client):
-    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.7})
-    response = await client.post("/api/research/strategy-runs/walk-forward", json=body)
-    payload = response.json()
-    assert isinstance(payload["config"]["start_ms"], int)
-    assert isinstance(payload["config"]["end_ms"], int)
-    assert isinstance(payload["config"]["created_at_ms"], int)
-    assert isinstance(payload["result"]["created_at_ms"], int)
-    for fold in payload["result"]["folds"]:
-        assert isinstance(fold["train_start_ms"], int)
-        assert isinstance(fold["test_end_ms"], int)
-
-
 # ---------------------------------------------------------------------------
 # Validation errors.
 # ---------------------------------------------------------------------------

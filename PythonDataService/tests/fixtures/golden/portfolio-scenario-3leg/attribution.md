@@ -1,6 +1,6 @@
 # portfolio-scenario-3leg — golden fixture
 
-**Constructed:** 2026-04-26 (Phase 2.1 of `docs/architecture/numerical-authority-migration-plan.md`)
+**Constructed:** 2026-04-26 (Phase 2.1 of the numerical-authority migration; decision in `docs/architecture/adrs/0068-python-owns-the-canonical-math.md`)
 **Purpose:** Pin the integration behavior of `evaluate_scenario` (in `app/services/portfolio_scenario.py`) against direct Hull-formula reference computation.
 
 ## Fixture composition

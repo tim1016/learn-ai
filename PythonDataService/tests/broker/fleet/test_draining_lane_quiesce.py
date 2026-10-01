@@ -801,7 +801,7 @@ async def test_remote_presence_carries_the_retirement_lesson_over_the_wire(
                 clerk_id=provisioned.clerk.clerk_id,
                 agent_instance_id="agnt_0000000000000000000000aa",
             )
-        # Not the unavailability family FR-066's offline fallback catches.
+        # Not the unavailability family the offline fallback catches.
         assert not isinstance(refused.value, FleetPresenceError)
     finally:
         if server is not None:
@@ -825,7 +825,7 @@ def _not_found_coordinator_app() -> FastAPI:
 async def test_remote_presence_reads_a_plain_not_found_as_a_refusal_not_retirement() -> None:
     """Retirement is learned only from its typed code (#2351); a plain
     not-found is the coordinator's refusal — never retirement, and since
-    #2320 never unavailability either (FR-066 rides out only an outage)."""
+    #2320 never unavailability either (the offline fallback rides out only an outage)."""
     server = _RealServer(_not_found_coordinator_app())
     server.start()
     try:

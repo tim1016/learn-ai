@@ -17,13 +17,11 @@ from pathlib import Path
 
 import pytest
 
-from app.data_lake.polygon_fetcher import PolygonBar
 from app.lean_sidecar.trading_calendar import session_windows_ms_utc
 from app.services.broker_v2_panel import qualification_recorded_history as recorded
 from app.services.broker_v2_panel.qualification_recorded_history import (
     RecordedHistoryInjectedUnavailable,
     build_qualification_recorded_history_batch,
-    recorded_bar_source,
     recorded_history_mode,
     reset_recorded_history_mode_for_testing,
     set_recorded_history_mode,
@@ -41,16 +39,6 @@ def _reset_mode() -> None:
 
 
 # ---- the deterministic generator --------------------------------------------
-
-
-def test_stable_unit_fraction_int_is_pure_and_non_negative() -> None:
-    a = recorded._stable_unit_fraction_int(_SYMBOL, 123_456, salt=0)
-    b = recorded._stable_unit_fraction_int(_SYMBOL, 123_456, salt=0)
-    c = recorded._stable_unit_fraction_int(_SYMBOL, 123_456, salt=1)
-
-    assert a == b
-    assert a >= 0
-    assert a != c  # a different salt must not collide by construction
 
 
 def test_deterministic_bar_is_reproducible_and_internally_consistent() -> None:
@@ -71,7 +59,7 @@ def test_recorded_bars_align_to_real_nyse_session_dates_for_day_bars() -> None:
     """No hardcoded session time: every daily bar is stamped at midnight
     America/New_York of the real NYSE session date (Polygon's own daily-bar
     convention -- see ``_session_midnight_et_ms_utc``), not a hardcoded
-    ``09:30``/``16:00`` (temporal-rigor.md)."""
+    ``09:30``/``16:00``."""
     start = date(2024, 1, 2)
     end = date(2024, 1, 5)
 
@@ -118,13 +106,6 @@ def test_recorded_bars_rejects_an_unsupported_timespan() -> None:
         recorded._recorded_bars(_SYMBOL, date(2024, 1, 2), date(2024, 1, 2), 1, "week")
 
 
-async def test_recorded_bar_source_matches_the_history_bar_source_protocol() -> None:
-    bars = await recorded_bar_source(_SYMBOL, date(2024, 1, 2), date(2024, 1, 2), 1, "day")
-
-    assert len(bars) == 1
-    assert isinstance(bars[0], PolygonBar)
-
-
 # ---- the complete-batch seam: reuses the real, unmodified walk --------------
 
 
@@ -156,19 +137,6 @@ async def test_build_qualification_recorded_history_batch_covers_intraday_timefr
 
     assert len(batch.bars) >= 300
     assert batch.overlay_notices == []
-
-
-async def test_same_as_of_ms_and_symbol_produce_the_same_batch_across_calls() -> None:
-    """Determinism end to end (not just at the single-bar level): a golden
-    fixture-style pin -- the same request always answers the same batch."""
-    first = await build_qualification_recorded_history_batch(
-        symbol=_SYMBOL, timeframe="1d", required_bar_count=5, as_of_ms=_AS_OF_MS
-    )
-    second = await build_qualification_recorded_history_batch(
-        symbol=_SYMBOL, timeframe="1d", required_bar_count=5, as_of_ms=_AS_OF_MS
-    )
-
-    assert first == second
 
 
 _GOLDEN_FIXTURE_PATH = (

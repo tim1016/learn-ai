@@ -113,10 +113,10 @@ class OrderEvent:
     # when not yet reported. ``fee`` above is portfolio-facing (0 when unknown,
     # so cash math never sees NaN); ``recorded_fee`` preserves the unknown for
     # the execution artifact so a missing commission is never written as a
-    # fabricated zero (PRD-B). Only the live IBKR fill path sets this; backtest
+    # fabricated zero. Only the live IBKR fill path sets this; backtest
     # fills leave it ``None`` (they do not flow through the live receipt writer).
     recorded_fee: Decimal | None = None
-    # Execution provenance for the live receipt (PRD-A schema, PRD-C shadow).
+    # Execution provenance for the live receipt.
     # Real broker fills default to ``broker_fill``; the NoSubmitBrokerAdapter
     # stamps ``shadow_sim`` + the source bar it synthesised the fill from so
     # the receipt writer can never confuse simulated fills with real ones.

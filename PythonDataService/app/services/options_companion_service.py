@@ -3,8 +3,7 @@
 Emits one CSV per ``(side, slot)`` pair under ``calls/`` and ``puts/`` ZIP
 subfolders, where ``slot`` is a price-ordered offset from ATM (e.g.
 ``atm-03``, ``atm``, ``atm+02``). The contract filling each slot rolls daily
-based on the prior trading day's close; the slot semantic is stable. See
-``docs/options-companion-format.md`` for the full format spec.
+based on the prior trading day's close; the slot semantic is stable.
 
 IV is solved per bar via ``app.volatility.solver.implied_volatility``
 (QuantLib primary, Brent fallback). Greeks are computed via QuantLib's

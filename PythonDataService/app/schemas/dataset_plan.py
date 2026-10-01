@@ -1,4 +1,4 @@
-"""Response schema for ``POST /api/dataset/plan`` (data-lab workspace redesign §12).
+"""Response schema for ``POST /api/dataset/plan``.
 
 Every numeric or enumerable claim a Data Lab receipt renders is authored
 here in Python — Angular renders it unchanged. Bar counts are estimates

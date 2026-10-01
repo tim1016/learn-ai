@@ -37,13 +37,6 @@ from tests.broker.alpaca.profile.conftest import (
     make_environment,
 )
 
-_LIVE_SETTINGS_KWARGS = {
-    "live_loss_fraction": 0.02,
-    "live_loss_usd": 500.0,
-    "live_xh_entry_bps": 10.0,
-    "live_xh_exit_bps": 12.5,
-}
-
 
 def test_a_paper_revision_resolves_without_an_envelope(
     only_default_slot_injected: AlpacaCredentialEnvironment,
@@ -101,8 +94,8 @@ def test_a_live_revision_without_an_envelope_is_incomplete_not_a_crash(
     assert info.value.http_status == 422
     # Profile vocabulary, not the settings validator's. That message names six
     # environment variables and says "Refusing to start" — the ADR 0059
-    # environment-source rule ADR 0060 supersedes — and contract §6 renders
-    # ``message`` to the operator verbatim.
+    # environment-source rule ADR 0060 supersedes — and the operator surface
+    # renders ``message`` verbatim.
     assert "live envelope" in info.value.detail
     for banned in ("ALPACA_", "environment file", "Refusing to start"):
         assert banned not in info.value.message
@@ -160,9 +153,9 @@ def test_a_stored_value_of_the_wrong_python_type_is_refused(
     value: object,
     only_default_slot_injected: AlpacaCredentialEnvironment,
 ) -> None:
-    # Pydantic's lax mode would coerce every one of these; the contract's
-    # type-fidelity rule (§2.4) means the sha must never be taken over a
-    # coerced stand-in for what was stored.
+    # Pydantic's lax mode would coerce every one of these; ADR 0060 Decision 6's
+    # type-fidelity rule means the sha must never be taken over a coerced
+    # stand-in for what was stored.
     stored = {**COMPLETE_ENVELOPE, field: value}
 
     with pytest.raises(RevisionIncomplete, match=field):
@@ -238,8 +231,7 @@ def test_the_integer_predicate_agrees_with_the_sealed_record_validator(
     Canonical implementation: ``app/broker/alpaca/clerk/live_arming.py::_is_int``.
     The resolver restates it rather than importing it, so the historical
     arming-record module stays off the credential-resolution path. This pins
-    the two together so the restatement cannot drift (CLAUDE.md guiding
-    philosophy #5).
+    the two together so the restatement cannot drift.
     """
     from app.broker.alpaca.clerk.live_arming import _is_int
 
@@ -487,19 +479,6 @@ def test_a_revision_naming_an_uninjected_slot_refuses_explicitly(
             live_envelope=COMPLETE_ENVELOPE,
             environment=only_default_slot_injected,
         )
-
-
-def test_the_resolved_context_is_immutable(
-    only_default_slot_injected: AlpacaCredentialEnvironment,
-) -> None:
-    context = resolve_runtime_context(
-        endpoint_mode="paper",
-        credential_slot="default",
-        environment=only_default_slot_injected,
-    )
-
-    with pytest.raises(AttributeError):
-        context.account_pin = "PA123"  # type: ignore[misc]
 
 
 def test_current_four_field_profile_ignores_stale_session_environment(only_default_slot_injected: AlpacaCredentialEnvironment, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,8 +1,7 @@
 """Exact-pairing admission gate and Clerk-proved rollback boundary for the
 guarded Alpaca Paper canary path.
 
-Issue #1729 (PRD Slice 3 — ``docs/prds/sealed-signal-program-to-governed-alpaca-bot.md``
-Sec 23). Two responsibilities, both additive to machinery that already
+Issue #1729 (PRD Slice 3; ADR 0042). Two responsibilities, both additive to machinery that already
 exists — this module invents no new proof of its own:
 
 * ``CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS`` gates every real Alpaca Paper
@@ -117,7 +116,7 @@ def canary_gate_applies(*, mode: str, program_build_state: str) -> bool:
     """True only once a real Alpaca Paper trade-mode build is already proven.
 
     Dry Run uses its own isolated synthetic authority and is never subject to
-    the canary allowlist (PRD Sec 15). A program with no registered Signal
+    the canary allowlist. A program with no registered Signal
     Program (``program_build_state == "NOT_APPLICABLE"``) has no seal to
     compose a canary proof from, so it is out of this gate's scope entirely —
     the legacy event-handler strategies keep working exactly as before.

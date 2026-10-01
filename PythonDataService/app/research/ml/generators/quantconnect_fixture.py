@@ -16,10 +16,9 @@ versions, calendar window). Provenance is captured separately in the
 fixture's ``attribution.md`` (or sidecar JSON) and passed to the importer
 as explicit arguments.
 
-Phase 1 §A scope: schema validation, symbol filter, date conversion,
-manifest + chunk write. Real-fixture parity tests are gated on §B (QC
-Cloud capture) — see
-``docs/superpowers/specs/2026-05-10-quantconnect-precomputed-predictions-parity.md``.
+Scope: schema validation, symbol filter, date conversion,
+manifest + chunk write. Real-fixture parity tests are gated on a QC
+Cloud capture.
 
 Wire and storage format for timestamps is ``int64 ms UTC``. QC's date-only
 strings are paired with the caller-supplied ``daily_anchor_tz`` +

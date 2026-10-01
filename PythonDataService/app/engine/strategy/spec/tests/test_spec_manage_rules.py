@@ -17,15 +17,12 @@ What's exercised:
 
 from __future__ import annotations
 
-import sys
 from decimal import Decimal
 
 from app.engine.strategy.spec import SpecAlgorithm, StrategySpec
 from app.engine.strategy.spec.tests._parity_helpers import (
     SYMBOL,
     build_minute_bars,
-    configure_script_logger,
-    logger,
     run_strategy,
 )
 
@@ -271,33 +268,3 @@ def test_survival_rule_does_not_fire_while_flat() -> None:
     closes = [100.0] * 60
     trades = _run(spec, closes)
     assert trades == [], f"expected no trades when flat, got {trades}"
-
-
-# ---------------------------------------------------------------------------
-# Script entry point.
-# ---------------------------------------------------------------------------
-def run_all() -> None:
-    configure_script_logger()
-    failed = False
-    tests = [
-        ("stop loss fires on drawdown", test_stop_loss_fires_on_drawdown),
-        ("profit target fires on overshoot", test_profit_target_fires_on_overshoot),
-        ("survival rule order: first-match-wins", test_survival_rule_order_first_match_wins),
-        ("survival rule does not fire while flat", test_survival_rule_does_not_fire_while_flat),
-    ]
-    for label, fn in tests:
-        try:
-            fn()
-            logger.info("PASS: %s", label)
-        except AssertionError as e:
-            failed = True
-            logger.error("FAIL: %s — %s", label, e)
-        except Exception as e:
-            failed = True
-            logger.error("ERROR: %s — %s: %s", label, type(e).__name__, e)
-    if failed:
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    run_all()

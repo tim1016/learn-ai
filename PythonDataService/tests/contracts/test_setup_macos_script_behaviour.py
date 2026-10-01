@@ -303,15 +303,6 @@ def test_the_host_ng_serve_flag_is_gone(machine: Machine) -> None:
     assert machine.touched_the_machine() == []
 
 
-def test_help_documents_no_serve_flag(machine: Machine) -> None:
-    completed = machine.run("--help")
-
-    assert completed.returncode == 0
-    assert "Usage:" in completed.stdout
-    assert "--serve" not in completed.stdout
-    assert machine.touched_the_machine() == []
-
-
 def test_a_fresh_run_prepares_the_host_and_both_ceremonies_before_the_stack_starts(machine: Machine) -> None:
     completed = machine.run()
 

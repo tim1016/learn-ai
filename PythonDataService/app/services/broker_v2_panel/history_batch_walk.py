@@ -143,7 +143,7 @@ def _history_bar_is_complete(bar: PolygonBar, plan: _HistoryWalkPlan) -> bool:
 
 
 def _polygon_bar_to_chart_bar(bar: PolygonBar, *, end_ms: int) -> ChartBar:
-    # Polygon-sourced history bars are truthfully tagged ``polygon`` (§8).
+    # Polygon-sourced history bars are truthfully tagged ``polygon`` (ADR 0032 amendment 1).
     return ChartBar(
         start_ms=bar.t_ms,
         end_ms=end_ms,

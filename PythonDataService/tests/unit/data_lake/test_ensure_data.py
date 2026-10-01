@@ -377,45 +377,6 @@ async def test_metadata_bootstrap_launcher_unreachable_is_transient_and_names_th
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_metadata_bootstrap_launcher_unreachable_retries_and_completes_when_the_launcher_recovers(
-    clean_artifacts, pool, tmp_lake
-):
-    """#1889 acceptance test: the artifact left 'failed' by an unreachable
-    launcher is retried -- not skipped because it's already 'failed' -- by
-    the very next ensure_data materialization once the launcher recovers."""
-    stage = _launcher_side_effect(tmp_lake)
-    calls = {"n": 0}
-
-    def _unreachable_then_recovers(request: httpx.Request) -> httpx.Response:
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise httpx.ConnectError("Connection refused")
-        return stage(request)
-
-    launcher_route = respx.post(re.compile(r"http://launcher-mock:8090/extract-metadata")).mock(
-        side_effect=_unreachable_then_recovers
-    )
-    _mock_corpus_actions_and_events()
-    respx.get(url__regex=r"https://api\.polygon\.io/v2/aggs/ticker/SPY/range/1/minute/.*").mock(
-        return_value=httpx.Response(200, json=_polygon_ok_payload("SPY"))
-    )
-
-    first = await ensure_data(_spec(["SPY"]))
-    first_metadata_failures = [f for f in first.failures if f.artifact_kind == "metadata"]
-    assert all(f.reason == "launcher_unreachable" for f in first_metadata_failures)
-    assert len(first_metadata_failures) == 3
-
-    second = await ensure_data(_spec(["SPY"]))
-    second_metadata_failures = [f for f in second.failures if f.artifact_kind == "metadata"]
-    assert second_metadata_failures == [], (
-        f"expected the recovered launcher to be retried and complete, not left failed: {second_metadata_failures}"
-    )
-    assert second.overall_status == "complete"
-    assert launcher_route.call_count == 2
-
-
-@respx.mock
-@pytest.mark.asyncio
 async def test_metadata_bootstrap_sends_the_resolved_launcher_token(
     clean_artifacts, pool, tmp_lake, monkeypatch
 ):

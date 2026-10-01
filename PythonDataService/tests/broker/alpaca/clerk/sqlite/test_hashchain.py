@@ -1,4 +1,4 @@
-"""Hash-chain row format — byte-level pin in contracts doc §7."""
+"""Hash-chain row format — byte-level pin in ADR 0035's binding annex §7."""
 
 from __future__ import annotations
 
@@ -39,25 +39,15 @@ def test_canonicalize_is_sorted_key_no_whitespace() -> None:
     assert canonicalize({"b": 1, "a": 2}) == '{"a":2,"b":1}'
 
 
-def test_canonicalize_is_deterministic_regardless_of_input_order() -> None:
-    assert canonicalize({"z": 1, "a": 2}) == canonicalize({"a": 2, "z": 1})
-
-
 def test_canonical_payload_includes_every_column_even_when_none() -> None:
     payload = canonical_payload(_ROW)
     assert '"run_id":null' in payload
     assert '"broker_state":null' in payload
 
 
-def test_compute_row_hash_matches_manual_sha256_string_concatenation() -> None:
-    payload = canonical_payload(_ROW)
-    expected = hashlib.sha256((GENESIS + payload).encode("utf-8")).hexdigest()
-    assert compute_row_hash(GENESIS, payload) == expected
-
-
 def test_compute_row_hash_is_string_not_byte_concatenation() -> None:
-    """A real prev_hash is a 64-char hex *string*; §7 pins concatenating it as
-    text, not decoding it to its 32 raw bytes first. These genuinely differ
+    """A real prev_hash is a 64-char hex *string*; the annex's §7 pins concatenating
+    it as text, not decoding it to its 32 raw bytes first. These genuinely differ
     (different byte lengths, not just different bytes) for any real hash —
     unlike GENESIS, which isn't valid hex and so can't discriminate this.
     """

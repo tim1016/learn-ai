@@ -3,8 +3,8 @@
 Frozen dataclasses only. Every timestamp is ``int64 ms UTC`` (ADR 0022); no
 record carries a credential value, fragment, length, environment name or
 secret-derived hash. ``worker_key`` is durable registry identity and never
-appears in a public projection (PRD FR-012), and — since the 2026-09-13
-audit — it is never a transport credential either.
+appears in a public projection (ADR 0062 Decision 3), and it is never a
+transport credential either (ADR 0062 addendum, item 5).
 
 Schema v2 separates *observed* facts (heartbeats, session rows) from the
 *confirmed* binding observation the coordinator keeps on the assignment row:
@@ -29,7 +29,7 @@ class StoredLifecycleState(StrEnum):
     """The durable states the registry persists for a clerk.
 
     ``starting`` / ``ready`` / ``degraded`` / ``unreachable`` are *projections*
-    over the current session and assignment (PRD FR-080/081): a stored flag
+    over the current session and assignment: a stored flag
     would let a historical acknowledgement present itself as current liveness.
     """
 
@@ -39,7 +39,7 @@ class StoredLifecycleState(StrEnum):
 
 
 class ClerkLifecycleState(StrEnum):
-    """The full public lifecycle vocabulary (PRD FR-080)."""
+    """The full public lifecycle vocabulary."""
 
     PROVISIONED = "provisioned"
     STARTING = "starting"
@@ -55,7 +55,7 @@ class AssignmentState(StrEnum):
 
     There is no expiry transition: ``released`` is reached only through the
     host ceremony, never through heartbeat loss or coordinator restart
-    (PRD FR-054/056).
+    (ADR 0062 Decision 4).
     """
 
     RESERVED = "reserved"
@@ -84,7 +84,7 @@ class RoutingReceiptState(StrEnum):
     definitive provider refusal; ``delivered`` carries the provider's durable
     receipt reference and is terminal; ``outcome_unknown`` means the attempt
     may have executed and must be reconciled by identity, never resubmitted
-    blindly (audit 2026-09-13, finding 7).
+    blindly (ADR 0062 addendum, item 7).
     """
 
     NOT_DISPATCHED = "not_dispatched"
@@ -134,8 +134,8 @@ _DROPPED_KEY_LOG_CHARS = 64
 class ProviderSummaryObservation:
     """The bounded, typed summary an agent may report about its lane.
 
-    Provider-authored, but never arbitrary agent JSON (audit 2026-09-13,
-    finding 6): the endpoint mode comes from a closed vocabulary, the
+    Provider-authored, but never arbitrary agent JSON (ADR 0062
+    addendum, item 8): the endpoint mode comes from a closed vocabulary, the
     authority state matches a bounded snake-case pattern, and the detail line
     and account nickname are length-capped prose. The provider adapter
     authors the public ``provider_summary`` projection from this observation
@@ -417,7 +417,7 @@ class ApprovedEndpointRecord:
 
     Nonsecret placement data, written only by the host ceremony; a session
     registration may cite ``endpoint_ref`` but can never change what it
-    points at (audit 2026-09-13, finding 4).
+    points at (ADR 0062 addendum, item 6).
     """
 
     endpoint_ref: str
@@ -432,7 +432,7 @@ class VolumeMarker:
     """The versioned identity marker written at a clerk volume's root.
 
     Nonsecret by construction: it names identities and the external mount
-    attestation, never credentials (PRD FR-024).
+    attestation, never credentials (ADR 0062 Decision 2).
     """
 
     marker_version: int
@@ -449,10 +449,10 @@ class ClerkDescriptor:
     """One directory entry — the broker-neutral public projection of a clerk.
 
     Carries identity, lifecycle, generations, declared capabilities and the
-    provider-authored summary (PRD FR-033). Deliberately absent: ``worker_key``,
+    provider-authored summary. Deliberately absent: ``worker_key``,
     internal endpoints, internal credentials, and every financial quantity —
     the directory computes no balances, positions, P&L, exposure or risk
-    (PRD FR-034).
+    (ADR 0062 Decision 1).
     """
 
     broker: str

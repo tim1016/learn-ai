@@ -1,5 +1,5 @@
 /**
- * Hero + foldable-rest combo classification (design spec D5). A strategy's
+ * Hero + foldable-rest combo classification. A strategy's
  * hero combo (highest Python-authored total_pnl, from recencyHero) shows
  * by default; every other combo for that (symbol, strategy) pair only
  * shows once the user expands that group.

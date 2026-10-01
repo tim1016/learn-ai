@@ -25,8 +25,7 @@ Provenance:
   Canonical implementation: this file (LeanSetHoldingsSizing).
   Validated against: tests/fixtures/golden/lean-set-holdings/ — 20 SPY
              entries from a pinned LEAN run, reproduced at atol=0 by
-             tests/engine/execution/test_sizing.py. See
-             docs/references/lean-set-holdings.md.
+             tests/engine/execution/test_sizing.py.
 """
 
 from __future__ import annotations

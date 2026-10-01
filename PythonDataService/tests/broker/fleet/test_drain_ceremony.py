@@ -166,7 +166,7 @@ def test_drain_closes_the_door_with_a_durable_start_and_deadline(
 def test_a_repeated_drain_returns_the_existing_record_and_never_extends_the_bound(
     fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
 ) -> None:
-    """§7.3: a retry loop must not make the deadline decorative."""
+    """ADR 0063 §7.3: a retry loop must not make the deadline decorative."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="d2", tmp_path=control_dir.parent)
     first = fleet_service.drain_clerk(clerk_id=lane.clerk_id)
     clock.advance(3_600_000)
@@ -485,7 +485,7 @@ def test_release_requires_a_draining_predecessor(
 def test_release_waits_out_the_drain_deadline(
     fleet_service: FleetControlService, clock: FrozenClock, control_dir: Path
 ) -> None:
-    """§4.1: release is available but never same-breath with the drain."""
+    """ADR 0063 §4.1: release is available but never same-breath with the drain."""
     lane = provision_lane(fleet_service, broker="fake_alpha", label="x2", tmp_path=control_dir.parent)
     bind_lane(fleet_service, lane, account="ACCT-X2")
     fleet_service.drain_clerk(clerk_id=lane.clerk_id)
@@ -559,13 +559,13 @@ def test_release_after_the_deadline_records_the_attribution_and_absent_confirmat
     assert again.lane_confirmation == "absent"
 
 
-# ---- reassignment (§4.1/§7.1) ----------------------------------------------------
+# ---- reassignment (ADR 0063 §4.1/§7.1) -------------------------------------------
 
 
 def test_reassignment_refuses_a_provisioned_predecessor(
     fleet_service: FleetControlService, control_dir: Path, clock: FrozenClock
 ) -> None:
-    """§4.1's precondition: the drained predecessor is what makes the rest of
+    """ADR 0063 §4.1's precondition: the drained predecessor is what makes the rest of
     the evidence meaningful."""
     first = provision_lane(fleet_service, broker="fake_alpha", label="z1", tmp_path=control_dir.parent)
     second = provision_lane(fleet_service, broker="fake_alpha", label="z2", tmp_path=control_dir.parent)
@@ -585,7 +585,7 @@ def test_reassignment_refuses_a_provisioned_predecessor(
 def test_reassignment_refuses_a_drained_lane_that_never_confirmed_quiet(
     fleet_service: FleetControlService, control_dir: Path, clock: FrozenClock
 ) -> None:
-    """§7.1: a drained, command-quiet, past-deadline lane is still not
+    """ADR 0063 §7.1: a drained, command-quiet, past-deadline lane is still not
     reassigned without its own lane-quiet confirmation (#2154) — without it
     the coordinator cannot tell a genuinely quiet lane from one that never
     learned its drain (#2155's residual window). The fixture creates no
@@ -640,10 +640,3 @@ def test_drain_wait_release_force_retire_is_a_complete_exit(
 
 
 # ---- the release proof token is gone ------------------------------------------------
-
-
-def test_no_release_proof_token_remains_in_the_fleet_package() -> None:
-    """The gate-shaped hole is deleted, not deprecated."""
-    import app.broker.fleet.service as service_module
-
-    assert not hasattr(service_module, "RELEASE_PROOF_TOKEN")

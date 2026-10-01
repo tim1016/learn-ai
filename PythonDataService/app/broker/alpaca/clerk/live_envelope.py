@@ -74,7 +74,7 @@ OBSERVATION_MAX_AGE_MS = 45_000
 # account values are "updated Real-Time post trade executions" (Broker API
 # FAQ), and neither the account endpoint nor the ``trade_updates`` stream
 # states an ordering or consistency guarantee between the two
-# (docs/references/alpaca-live-envelope.md cites each page). So a fill recorded
+# (ADR 0059, 2026-09-30 amendment). So a fill recorded
 # within this margin before the stamp stays reserved, even though the cash may
 # already include it (``AccountObservation.fills_seen_before_ms``):
 # over-reserving refuses an ENTER that would have fit, under-reserving admits a
@@ -104,7 +104,7 @@ FILL_VISIBILITY_GRACE_MS = 5_000
 # (envelope field name, ``AlpacaSettings`` field name). Public because the
 # profile resolver (``app/broker/alpaca/profile/runtime_context.py``) builds
 # settings from stored envelope values through this same pairing, so the two
-# directions cannot drift into separate rename layers (contract §2.4).
+# directions cannot drift into separate rename layers.
 ENVELOPE_SETTINGS_FIELDS: tuple[tuple[str, str], ...] = (
     ("loss_fraction", "live_loss_fraction"),
     ("loss_usd", "live_loss_usd"),

@@ -1,4 +1,4 @@
-"""Verbatim raw-capture hook for the alpaca-py session (spec §6, D4).
+"""Verbatim raw-capture hook for the alpaca-py session (ADR 0032 D4).
 
 alpaca-py drives HTTP through a ``requests.Session``. We append a ``response``
 hook to that session so every response — success *or* error — is journaled

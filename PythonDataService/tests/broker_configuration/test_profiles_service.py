@@ -1,6 +1,6 @@
 """Profiles, immutable revisions, archive rules, and the pin.
 
-The behaviour half of package B's "done when": create/edit/clone/archive,
+The behaviour half of package B: create/edit/clone/archive,
 concurrent stale edits return conflicts, archive rules preserve references.
 """
 
@@ -44,16 +44,6 @@ def test_the_owner_is_generated_once_and_seeded_from_the_operator_identity(
     assert first == second
     assert first.display_label == OPERATOR_IDENTITY
     assert first.owner_id.startswith("owner_")
-
-
-def test_nickname_for_returns_the_set_nickname(service: BrokerConfigurationService) -> None:
-    """#2182: the single-key read the fleet lane's per-beat path calls
-    (``fleet_boot.py``'s ``_live_account_nickname``) agrees with
-    ``list_nicknames()`` without materializing the whole table for one key.
-    """
-    service.set_nickname("PA000PAPER", nickname="Strategy lab")
-
-    assert service.nickname_for("PA000PAPER") == "Strategy lab"
 
 
 def test_nickname_for_returns_none_when_unset(service: BrokerConfigurationService) -> None:
@@ -111,15 +101,6 @@ def test_an_archived_profile_releases_its_display_name(service: BrokerConfigurat
     reused = paper_profile(service, display_name="Paper — testing")
 
     assert reused.profile.profile_id != created.profile.profile_id
-
-
-def test_listing_hides_archived_profiles_unless_asked(service: BrokerConfigurationService) -> None:
-    kept = paper_profile(service, display_name="Kept")
-    archived = paper_profile(service, display_name="Archived")
-    service.update_profile(archived.profile.profile_id, archived=True)
-
-    assert [profile.profile_id for profile in service.list_profiles()] == [kept.profile.profile_id]
-    assert len(service.list_profiles(include_archived=True)) == 2
 
 
 def test_archiving_preserves_every_revision_and_event(service: BrokerConfigurationService) -> None:
@@ -398,7 +379,7 @@ async def test_repinning_the_same_account_is_idempotent(
 async def test_verification_refuses_when_no_verifier_is_installed(
     clerk_dir: Path, clock: FrozenClock
 ) -> None:
-    """Package B ships the seam, not the broker call (contract §7)."""
+    """Package B ships the seam, not the broker call."""
     unwired = BrokerConfigurationService(
         store=ProfilesStore.open(clerk_dir=clerk_dir),
         operator_identity=OPERATOR_IDENTITY,

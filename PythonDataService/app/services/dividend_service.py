@@ -6,8 +6,7 @@ suitable for Black-Scholes pricing and IV solving. The TTM window is exactly
 
 Pairs with :mod:`app.services.fred_service` to replace the legacy
 ``r=0.043, q=0`` defaults that were hardcoded into pricing-lab,
-options-strategy-lab, and strategy-builder. See the IV-RV alignment plan
-(memory: ``iv_rv_alignment_plan.md``) for context.
+options-strategy-lab, and strategy-builder.
 
 Cache is in-memory, per-(ticker, observation_date) with a 24-hour TTL —
 matching the pattern already used by ``fred_service``.

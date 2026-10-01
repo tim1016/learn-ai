@@ -1,14 +1,15 @@
-"""The public clerk-scoped routing surface (PRD §10.1–§10.4, delivery B).
+"""The public clerk-scoped routing surface.
 
 Everything here derives from the typed operation catalog: the coordinator's
 forwarding allowlist, the route surface and the exported contract are one
 declaration per provider (ADR 0062 addendum, item 4). Directory routes read
 the registry projection; operation routes resolve the lane, validate the
-§10.3 command envelope, persist the routing attempt for effectful
+command envelope, persist the routing attempt for effectful
 operations, forward through the lane delivery and verify the identity echo.
 
-§10.4 refusal families surface with their pinned statuses — the typed error
-hierarchy is the contract; this router invents no refusal of its own.
+The stable refusal families (ADR 0062 Decision 5) surface with their pinned
+statuses — the typed error hierarchy is the contract; this router invents no
+refusal of its own.
 """
 
 from __future__ import annotations
@@ -88,19 +89,19 @@ def _lane_router(request: Request) -> LaneRouter:
 
 
 def _refuse(error: FleetControlError) -> Response:
-    """One §10.4 family, at its pinned status, with operator copy."""
+    """One refusal family, at its pinned status, with operator copy."""
     return JSONResponse(status_code=error.status_code, content=error.detail())
 
 
 def _envelope_invalid(error: CommandEnvelopeInvalid) -> Response:
-    """A §10.3 contract violation never reached a routing decision."""
+    """A command-envelope violation never reached a routing decision."""
     return JSONResponse(
         status_code=422,
         content={"reason": "command_envelope_invalid", "message": error.message},
     )
 
 
-# ---- Directory (§10.1/§10.2) -----------------------------------------------
+# ---- Directory ----------------------------------------------------------------
 
 
 @router.get(
@@ -327,7 +328,7 @@ async def aggregate_broker_clerks_bot_history(
     return JSONResponse(history.model_dump(mode="json"))
 
 
-# ---- Catalog-generated operation routes (§10.2/§10.3) ----------------------
+# ---- Catalog-generated operation routes -----------------------------------------
 
 
 def _lookup_operation(broker: str, operation: ProviderOperation, service: Any):
@@ -466,7 +467,7 @@ def _make_operation_handler(operation: ProviderOperation) -> Any:
             return _refuse(error)
         except CommandEnvelopeInvalid as error:
             return _envelope_invalid(error)
-        # §10.3: the public response echoes the target identity the lane
+        # The public response echoes the target identity the lane
         # served — the frontend's provenance — alongside the routing receipt.
         headers = {
             key: value

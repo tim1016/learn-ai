@@ -35,8 +35,8 @@ Formula (what a proposed limit does against the touch — bid to sell, ask to co
     worst case:       max(0, touch − limit) × |quantity| for a sell,
                       max(0, limit − touch) × |quantity| to cover
     spread:           (ask − bid) / mid × 10⁴ bps
-Reference: docs/references/alpaca-extended-hours.md § "Operator flatten outside
-    the regular session"; owner decisions 2026-09-19 on #2007.
+Reference: ADR 0059 D5, 2026-09-30 amendment (an operator's flatten outside
+    the regular session); owner decisions 2026-09-19 on #2007.
 Canonical implementation: this file for the session rule;
     ``app/broker/alpaca/marketable_limit.py::marketable_limit_price`` for the
     price.
@@ -820,7 +820,7 @@ def evaluate_proposed_limit(
     The one authority for the numbers an operator reads before confirming an
     extended-hours flatten: how far the price reaches through the touch, and
     the most that reach can cost. The browser renders these; it never
-    recomputes them (AGENTS.md § "Python owns all math").
+    recomputes them (ADR 0068).
     """
     side = proposal.side
     touch = Decimal(str(reduction_touch(side, bid=proposal.quote.bid, ask=proposal.quote.ask)))

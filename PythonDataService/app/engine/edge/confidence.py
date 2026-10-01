@@ -1,13 +1,12 @@
 """Continuous confidence formula for VRP gating.
 
 Formula: confidence = health_score * (1 - variance_contribution_synthetic), clamped to hard floor
-Reference: Internal — docs/architecture/iv-ownership-research.md §4.7
+Reference: Internal — no external reference.
 Canonical implementation: app/engine/edge/confidence.py
 Validated against: NONE — pending
 
-See ``docs/architecture/iv-ownership-research.md`` §4.7 for the consolidated
-rationale (multiplicative form, hard floor, imputed-prior policy for missing
-``health_score``).
+See ADR 0071 decisions 10–11 for the hard floor and the policy for a missing
+``health_score``.
 
 Single source of truth for "how trustworthy is this IV30, on a 0..1 scale,
 given (a) chain stability and (b) how much of the chain is synthesized."
@@ -28,8 +27,8 @@ from dataclasses import dataclass
 DEFAULT_CONFIDENCE_FLOOR = 0.1
 """Hard-gate floor: confidence below this forces signal action to 0
 regardless of z-magnitude. Configurable per route via Pydantic settings.
-See ``docs/architecture/iv-ownership-research.md`` §7.7 for the rationale
-and §8.2.2 for the planned reliability-curve calibration."""
+See ADR 0071 decision 10 for the rationale
+and the planned reliability-curve calibration."""
 
 
 @dataclass(frozen=True)

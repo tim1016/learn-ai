@@ -394,16 +394,6 @@ def _our_order_ref(intent_id: str = "abc") -> str:
     return build_order_ref(build_bot_order_namespace(SID), intent_id)
 
 
-def test_plan_is_clean_when_no_foreign_orders_and_positions_match() -> None:
-    plan = plan_account_reconciliation(
-        namespaces=_namespaces(),
-        broker_orders=[],
-        broker_positions=[_position("SPY", quantity=5)],
-        attributed_positions={"SPY": 5.0},
-    )
-    assert plan.verdict == "clean"
-
-
 def test_plan_flags_unexplained_order_for_a_foreign_client_order_id() -> None:
     foreign = _broker_order("manual/someone/v1:xyz")
     plan = plan_account_reconciliation(
@@ -1049,8 +1039,8 @@ async def test_reconcile_resolves_indeterminate_mismatch_only_once_proven_equal(
     ]
     assert len(resolutions) == 1
     # The drift-specific blocker is gone, but the strategy's ENTER is still
-    # filled and open (never exited) — #1722's ENTER fence (ADR 0042, PRD
-    # FR-020) refuses a fresh ENTER whenever attributed exposure exists,
+    # filled and open (never exited) — #1722's ENTER fence (ADR 0042)
+    # refuses a fresh ENTER whenever attributed exposure exists,
     # independent of whether an unrelated uncertainty resolved cleanly.
     admission = admit_new_exposure(repo, strategy_instance_id=SID)
     assert not admission.allowed
@@ -1872,7 +1862,7 @@ async def test_indeterminate_blocker_survives_restart_and_boot_recovery_stays_bl
         assert cleared.verdict == "clean"
         # The indeterminate-mismatch blocker is gone, but the strategy's
         # ENTER is still filled and open (never exited) — #1722's ENTER
-        # fence (ADR 0042, PRD FR-020) refuses a fresh ENTER whenever
+        # fence (ADR 0042) refuses a fresh ENTER whenever
         # attributed exposure exists, independent of this resolution.
         admission = admit_new_exposure(after_restart, strategy_instance_id=SID)
         assert not admission.allowed

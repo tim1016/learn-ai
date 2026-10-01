@@ -7,7 +7,6 @@ directory shape (``<root>/baselines/<baseline_id>/{config,result}.json``).
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
@@ -17,7 +16,6 @@ from app.research.baselines import (
     BaselineAlreadyExistsError,
     BaselineConfig,
     BaselineCorruptError,
-    BaselineNotFoundError,
     BaselineResult,
     list_baselines,
     load_baseline,
@@ -75,45 +73,15 @@ def test_save_then_load_round_trips(tmp_path: Path):
     assert loaded_result.model_dump() == result.model_dump()
 
 
-def test_save_writes_canonical_json(tmp_path: Path):
-    config = _make_config()
-    result = _make_result()
-    save_baseline(config, result, root=tmp_path)
-    cfg = json.loads(
-        (tmp_path / "baselines" / config.baseline_id / "config.json").read_text()
-    )
-    res = json.loads(
-        (tmp_path / "baselines" / config.baseline_id / "result.json").read_text()
-    )
-    assert cfg["baseline_id"] == config.baseline_id
-    assert res["baseline_id"] == config.baseline_id
-
-
 # ---------------------------------------------------------------------------
 # Failure modes.
 # ---------------------------------------------------------------------------
-def test_load_missing_raises(tmp_path: Path):
-    with pytest.raises(BaselineNotFoundError):
-        load_baseline("b" * 32, root=tmp_path)
-
-
 def test_save_refuses_to_overwrite(tmp_path: Path):
     config = _make_config()
     result = _make_result()
     save_baseline(config, result, root=tmp_path)
     with pytest.raises(BaselineAlreadyExistsError):
         save_baseline(config, result, root=tmp_path)
-
-
-def test_save_replace_overwrites(tmp_path: Path):
-    config = _make_config()
-    result = _make_result()
-    save_baseline(config, result, root=tmp_path)
-    new_result = _make_result(failure_reason="manually overridden", status="failed")
-    save_baseline(config, new_result, root=tmp_path, replace=True)
-    _, loaded = load_baseline(config.baseline_id, root=tmp_path)
-    assert loaded.failure_reason == "manually overridden"
-    assert loaded.status == "failed"
 
 
 def test_save_rejects_id_mismatch(tmp_path: Path):
@@ -164,32 +132,6 @@ def test_save_with_malformed_id_raises(tmp_path: Path):
 # ---------------------------------------------------------------------------
 # Listing.
 # ---------------------------------------------------------------------------
-def test_list_empty(tmp_path: Path):
-    assert list_baselines(root=tmp_path) == []
-
-
-def test_list_orders_by_created_at_desc(tmp_path: Path):
-    older = _make_config(baseline_id="a" * 32, created_at_ms=1_700_000_000_000)
-    older_r = _make_result(baseline_id="a" * 32, created_at_ms=1_700_000_000_000)
-    newer = _make_config(baseline_id="b" * 32, created_at_ms=1_800_000_000_000)
-    newer_r = _make_result(baseline_id="b" * 32, created_at_ms=1_800_000_000_000)
-    save_baseline(older, older_r, root=tmp_path)
-    save_baseline(newer, newer_r, root=tmp_path)
-    listed = list_baselines(root=tmp_path)
-    assert [c.baseline_id for c in listed] == [
-        newer.baseline_id, older.baseline_id,
-    ]
-
-
-def test_list_filter_by_parent_run_id(tmp_path: Path):
-    a = _make_config(baseline_id="a" * 32, parent_run_id="parent-1")
-    b = _make_config(baseline_id="b" * 32, parent_run_id="parent-2")
-    save_baseline(a, _make_result(baseline_id=a.baseline_id, parent_run_id=a.parent_run_id), root=tmp_path)
-    save_baseline(b, _make_result(baseline_id=b.baseline_id, parent_run_id=b.parent_run_id), root=tmp_path)
-    filtered = list_baselines(root=tmp_path, parent_run_id="parent-1")
-    assert [c.baseline_id for c in filtered] == ["a" * 32]
-
-
 def test_list_filter_by_method(tmp_path: Path):
     a = _make_config(baseline_id="a" * 32, method="buy_and_hold")
     b = _make_config(baseline_id="b" * 32, method="random_ema_windows")

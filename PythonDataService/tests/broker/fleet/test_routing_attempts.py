@@ -1,6 +1,6 @@
 """The routing attempt model: pin before dispatch, settle under terminal rules.
 
-Audit 2026-09-13, finding 7: an attempt's pinned context is persisted before
+ADR 0062 addendum, item 7: an attempt's pinned context is persisted before
 dispatch, the four outcome states are distinguished, a delivered outcome is
 terminal, and a late failed retry can never erase a known success.
 """

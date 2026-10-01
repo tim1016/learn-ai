@@ -1,4 +1,4 @@
-/** The broker-neutral clerk fleet directory (PRD §10.1/FR-093).
+/** The broker-neutral clerk fleet directory (FR-093).
  *
  * One root service loads `/api/broker-clerks` and exposes lanes keyed by
  * `(broker, clerk_id)`. Every lane-scoped consumer derives its own state

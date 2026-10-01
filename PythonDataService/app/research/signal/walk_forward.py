@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # Minimum folds required for the alpha-decay regression to be statistically
 # meaningful. Below this we report the slope but mark the test as invalid;
 # the UI must render a "trend test requires ≥ N folds" placeholder rather
-# than an uninformative p-value. Authority: signal-engine-authority.md § 4.9.
+# than an uninformative p-value. Authority: ADR 0073 decision 2.
 ALPHA_DECAY_MIN_FOLDS = 5
 ALPHA_DECAY_SIGNIFICANCE_LEVEL = 0.05
 

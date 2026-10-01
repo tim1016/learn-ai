@@ -7,8 +7,7 @@ specific surface: function signatures the runner and router
 already call, plus the phase-specific filters
 (``spec_hash``, ``symbol``, ``status``, ``parent_spec_hash``) on
 ``list_runs`` that the artifact store's generic ``list_ids``
-doesn't carry. See ``docs/architecture/research-artifact-seam.md``
-for the design.
+doesn't carry.
 
 On-disk layout (unchanged from pre-seam — runs/ is the flat
 ``subdir=""`` shape):

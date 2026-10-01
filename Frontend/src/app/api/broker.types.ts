@@ -3871,7 +3871,7 @@ export interface paths {
          *     rather than omitted.
          *
          *     The window arrives as two ``int64 ms UTC`` values, not ISO dates.
-         *     ``.claude/rules/temporal-rigor.md`` allows exactly one wire format for a
+         *     ADR 0022 (a) allows exactly one wire format for a
          *     temporal value and a trading date is not an exception to it — it is a
          *     date-anchored value, carried as the millisecond instant of that session's
          *     open and resolved back through ``America/New_York``
@@ -4041,8 +4041,7 @@ export interface paths {
          *     Planning touches only the local NYSE calendar — it never calls
          *     Polygon. Bar counts are arithmetic estimates typed with assumptions
          *     and provenance; output columns come from the same projection
-         *     function the ZIP generation path uses (data-lab workspace redesign
-         *     PRD §12).
+         *     function the ZIP generation path uses.
          */
         post: operations["plan_dataset_api_dataset_plan_post"];
         delete?: never;
@@ -4111,7 +4110,7 @@ export interface paths {
          * Iv30 Vix Style
          * @description Live VIX-style IV30 from a fresh Polygon snapshot.
          *
-         *     The acceptance criterion (plan §5.C): on a normal trading day, this
+         *     The acceptance criterion: on a normal trading day, this
          *     returns within 50 bps of the published CBOE VIX index value when
          *     called against SPY. The provenance object reports
          *     ``variance_contribution_synthetic ≈ 0`` and ``opra_mid`` ≈ 100% mix.
@@ -4594,8 +4593,8 @@ export interface paths {
          * @description Stage, launch, and write the manifest for one trusted-sample run.
          *
          *     Phase 2a: trusted sample only. No algorithm-source field, no
-         *     arbitrary user input. See ADR §"Phase sequencing" for when that
-         *     gate opens (Phase 3).
+         *     arbitrary user input. ADR 0070 decision 6 governs when caller source
+         *     may run.
          */
         post: operations["post_trusted_run_api_lean_sidecar_trusted_runs_post"];
         delete?: never;
@@ -7200,7 +7199,7 @@ export interface components {
         };
         /**
          * BotCatalogView
-         * @description One roster row: bot status + slice-0 rollups (§5).
+         * @description One roster row: bot status + slice-0 rollups.
          *
          *     Assembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``
          *     (incremental cache). ``needs_attention`` and ``status_label`` drive the
@@ -7413,7 +7412,7 @@ export interface components {
         };
         /**
          * BotHealthCard
-         * @description Bot-health card beside the rail (§7.2).
+         * @description Bot-health card beside the rail.
          *
          *     Terminal Stop retains custody evidence; new trading requires fresh Deploy.
          */
@@ -7576,7 +7575,7 @@ export interface components {
         };
         /**
          * BotPanelView
-         * @description The full 5s-poll panel projection for one bot (§7).
+         * @description The full 5s-poll panel projection for one bot.
          *
          *     Everything except chart data: bot health, clerk/account state, the six-
          *     station rail, a journal-tail reference, the presented actions, and the
@@ -8402,7 +8401,7 @@ export interface components {
         };
         /**
          * ChannelHealthView
-         * @description One market-data / execution channel's health (§7.3).
+         * @description One market-data / execution channel's health.
          */
         ChannelHealthView: {
             /** Explanation */
@@ -8428,11 +8427,11 @@ export interface components {
         };
         /**
          * ChartBar
-         * @description One source-tagged OHLCV bar for a chart pane (§8).
+         * @description One source-tagged OHLCV bar for a chart pane.
          *
          *     Broker-generic — decoupled from the IBKR-specific ``IbkrMinuteBar``. Prices
          *     are strings to preserve exact decimal representation over the wire.
-         *     ``source`` is truthfully tagged ``ibkr`` / ``polygon`` / ``mixed`` (§8).
+         *     ``source`` is truthfully tagged ``ibkr`` / ``polygon`` / ``mixed``.
          */
         ChartBar: {
             /** Close */
@@ -8496,7 +8495,7 @@ export interface components {
          * ChartDataRequest
          * @description Request for chart data with resampled bars and indicators.
          *
-         *     Temporal authority (data-lab workspace redesign PRD §12): the numeric
+         *     Temporal authority: the numeric
          *     ``start_ms_utc`` / ``end_ms_utc`` pair is the canonical window form and
          *     each field takes precedence over its date-string counterpart when
          *     supplied. Each value resolves by flooring to its UTC calendar date —
@@ -8644,7 +8643,7 @@ export interface components {
         };
         /**
          * ChartFillMarker
-         * @description One fill marker for a chart pane (§8, §10).
+         * @description One fill marker for a chart pane.
          *
          *     Projected from the clerk journal's fill events filtered by the bot's
          *     namespace. ``side`` and ``price`` render the buy/sell marker.
@@ -8679,7 +8678,7 @@ export interface components {
         };
         /**
          * ChartHistoryResponse
-         * @description Bounded Polygon chart response for one selected timeframe (§8).
+         * @description Bounded Polygon chart response for one selected timeframe.
          *
          *     ``bars`` is the bounded display window. ``indicator_bars`` includes every
          *     available preceding warmup candle, capped by the configured Polygon history
@@ -8850,7 +8849,7 @@ export interface components {
         };
         /**
          * ChartLiveResponse
-         * @description Today's merged, source-tagged LIVE-pane bars + today's fill markers (§8).
+         * @description Today's merged, source-tagged LIVE-pane bars + today's fill markers.
          *
          *     ``as_of_ms`` and the two session boundaries derive from the canonical NY
          *     calendar — "today" is the NY trading date, never browser-local midnight.
@@ -8882,7 +8881,7 @@ export interface components {
         };
         /**
          * ChartOverlayNoticeView
-         * @description An honest chip explaining a fallback overlay (§8).
+         * @description An honest chip explaining a fallback overlay.
          */
         ChartOverlayNoticeView: {
             /** Code */
@@ -8992,7 +8991,7 @@ export interface components {
         };
         /**
          * ClerkCard
-         * @description Account/clerk card beside the rail (§7.3).
+         * @description Account/clerk card beside the rail.
          */
         ClerkCard: {
             /** Account Id */
@@ -10142,8 +10141,7 @@ export interface components {
          *     executed with the same fields. ``from_date``/``to_date`` remain
          *     date-intent strings for now; the additive ``start_ms_utc``/
          *     ``end_ms_utc`` fields are the canonical numeric form and take
-         *     precedence over the date strings when supplied (data-lab workspace
-         *     redesign PRD §12).
+         *     precedence over the date strings when supplied.
          */
         DatasetPlanRequest: {
             /**
@@ -10532,20 +10530,15 @@ export interface components {
         };
         /**
          * DecisionColumnSpec
-         * @description One strategy-specific column in ``decisions.parquet`` (PRD-A §16.1
-         *     Resolution 5).
+         * @description One strategy-specific column of a spec's per-bar decision row.
          *
-         *     The spec is authoritative for the per-strategy decision-row schema:
-         *     the live runtime resolves the parquet columns as
-         *     ``CORE_DECISION_COLUMNS + [c.name for c in spec.decision_columns]``
-         *     (see ``app.engine.live.artifacts.resolve_decision_columns``). Each
-         *     entry declares the column ``name``, its ``dtype``, whether it is
-         *     ``nullable``, and a free-text ``semantic`` description so a new
-         *     strategy can grow the artifact schema without bespoke writer code.
+         *     Each entry declares the column ``name``, its ``dtype``, whether it is
+         *     ``nullable``, and a free-text ``semantic`` description. No app code
+         *     reads it; it stays because the sealed ``*.spec.json`` fixtures carry it.
          *
-         *     ``name`` must match an attribute the strategy publishes on its
-         *     ``DecisionSnapshot`` — the writer reads the value by that name.
-         *     For the SPY EMA strategy these are ``ema5`` / ``ema10`` / ``rsi``.
+         *     ``name`` names an attribute the strategy publishes on its
+         *     ``DecisionSnapshot``. For the SPY EMA strategy these are ``ema5`` /
+         *     ``ema10`` / ``rsi``.
          */
         DecisionColumnSpec: {
             /**
@@ -10940,7 +10933,7 @@ export interface components {
         };
         /**
          * DivergenceCategory
-         * @description Categorical divergence types — see numerical-rigor.md.
+         * @description Categorical divergence types — see ADR 0069 §6.
          * @enum {string}
          */
         DivergenceCategory: "fixture_insufficient" | "decision_mismatch" | "direction_mismatch" | "quantity_mismatch" | "fill_price_drift" | "commission_drift" | "pnl_drift" | "order_type_mismatch";
@@ -10975,7 +10968,7 @@ export interface components {
         };
         /**
          * DutyOutcomeView
-         * @description Typed terminal duty fact shown on the bot-health card (§7.2).
+         * @description Typed terminal duty fact shown on the bot-health card.
          */
         DutyOutcomeView: {
             /** Explanation */
@@ -11514,7 +11507,7 @@ export interface components {
         };
         /**
          * EvidencePage
-         * @description A bounded page of operator-gated evidence entries (§14).
+         * @description A bounded page of operator-gated evidence entries.
          */
         EvidencePage: {
             /** Account Id */
@@ -11583,10 +11576,9 @@ export interface components {
          * ExitEligibilityContract
          * @description Level/countdown exit rule — the evidence future carryover work would read.
          *
-         *     PRD §11.1: "level/countdown exit eligibility evidence where carryover may
-         *     later be considered." Two rules exist, matching PRD §17's own
-         *     "level- or countdown-true" vocabulary for when a discarded staged EXIT
-         *     must re-emit:
+         *     This is the evidence where carryover may later be considered. Two rules
+         *     exist, matching the "level- or countdown-true" vocabulary for when a
+         *     discarded staged EXIT must re-emit:
          *
          *     * ``"fixed_bar_count_countdown"`` — ``ema_crossover_signal`` exits on a
          *       fixed decision-clock countdown
@@ -11601,16 +11593,10 @@ export interface components {
          *       unset for this rule.
          *
          *     ``countdown_state_persistable`` records a real, checked fact about
-         *     today's implementation, not an aspiration. For
-         *     ``fixed_bar_count_countdown``:
-         *     ``EmaCrossoverSignalAlgorithm.report_state_for_persistence`` returns
-         *     ``None`` whenever the strategy is mid-position, so an in-flight countdown
-         *     cannot currently survive a Pause/Resume — carryover work must either
-         *     change that or treat mid-countdown Resume as unsupported. For
-         *     ``level_true`` programs that have not yet implemented the
-         *     persistence-hook contract at all (e.g. ``sma_crossover`` today), this is
-         *     ``False`` for the stronger reason that no state -- not just an in-flight
-         *     exit -- currently survives Pause/Resume.
+         *     today's implementation, not an aspiration. No strategy persists its
+         *     state, so nothing -- an in-flight countdown included -- survives a
+         *     restart, and every program seals ``False``. Carryover work must either
+         *     add that persistence or treat a mid-countdown Resume as unsupported.
          */
         ExitEligibilityContract: {
             /** Countdown Decision Clocks */
@@ -15233,18 +15219,17 @@ export interface components {
         };
         /**
          * NumericalProvenanceContract
-         * @description The Math Provenance Contract (CLAUDE.md #2/#5), sealed as program identity.
+         * @description The Math Provenance Contract (ADR 0068 Decision 2), sealed as program identity.
          *
          *     Mirrors the ``Formula``/``Reference``/``Canonical implementation``/
-         *     ``Validated against`` block already required by the
-         *     ``learn-ai-validation`` skill and present in
+         *     ``Validated against`` block already required by
+         *     ADR 0068 Decision 2 and present in
          *     ``ema_crossover_signal.py``'s own module docstring; this is that same
          *     fact, made part of the immutable seal rather than living only in prose
          *     that could drift unnoticed. ``tolerance_atol``/``tolerance_rtol`` are
          *     ``None`` at ``equivalence_level="bit_exact"`` — the trace/decision
          *     identity in ``signal_program.py`` is Decimal-exact and SHA-256-compared,
-         *     not tolerance-compared; the documented ``1e-9`` absolute tolerance in
-         *     ``docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md``
+         *     not tolerance-compared; the documented ``1e-9`` absolute tolerance
          *     applies one level down, to the EMA/RSI *value* parity against LEAN.
          */
         NumericalProvenanceContract: {
@@ -15505,8 +15490,8 @@ export interface components {
          *     from ATM (e.g. ``calls/atm-03.csv``, ``calls/atm.csv``, ``puts/atm+02.csv``).
          *     Each file is a fixed-schema time series for that slot across all trading
          *     days in range; the contract filling the slot rolls daily and is recorded
-         *     as the ``contract_ticker`` row value. See ``docs/options-companion-format.md``
-         *     for the full spec; computation lives in ``options_companion_service``.
+         *     as the ``contract_ticker`` row value. Computation lives in
+         *     ``options_companion_service``.
          */
         OptionsCompanionConfig: {
             /**
@@ -15696,7 +15681,7 @@ export interface components {
         OrderSide: "buy" | "sell";
         /**
          * PanelAction
-         * @description One backend-presented action (§11).
+         * @description One backend-presented action.
          *
          *     Angular executes only the closed set of known action ids and renders
          *     exactly what it is given. ``revision`` binds the action to the panel-state
@@ -15726,7 +15711,7 @@ export interface components {
         };
         /**
          * PanelActionErrorResponse
-         * @description A rejected action execution (409/500) (§11, PRD #1716 FR-4).
+         * @description A rejected action execution (409/500) (PRD #1716 FR-4).
          *
          *     Published so the OpenAPI contract and generated frontend types carry the
          *     exact error shape callers previously narrowed by hand from an untyped
@@ -15759,10 +15744,10 @@ export interface components {
         };
         /**
          * PanelActionRequest
-         * @description Execute one presented action (§11).
+         * @description Execute one presented action.
          *
          *     Identity is NEVER a request field — it derives from the authenticated
-         *     control channel (§14). The form carries only the reason.
+         *     control channel. The form carries only the reason.
          */
         PanelActionRequest: {
             /**
@@ -15781,7 +15766,7 @@ export interface components {
         };
         /**
          * PanelActionResult
-         * @description The outcome of an executed action (§11).
+         * @description The outcome of an executed action.
          *
          *     On success the caller re-polls the panel; ``applied`` distinguishes a fresh
          *     application from an idempotent replay (``applied=False`` — the key was seen
@@ -15814,7 +15799,7 @@ export interface components {
         };
         /**
          * PanelProfile
-         * @description Closed descriptor extending BrokerCapabilities for the panel (§4).
+         * @description Closed descriptor extending BrokerCapabilities for the panel.
          *
          *     Angular renders strictly from this: an inapplicable station renders as
          *     ``not_applicable``. A bot's commands are not listed here: its panel
@@ -16539,8 +16524,7 @@ export interface components {
          * @description What the price the operator proposed does against the Clerk's quote (#2007).
          *
          *     Every number an operator reads before confirming is computed by the Clerk
-         *     and rendered as-is; the browser never derives one (AGENTS.md § "Python
-         *     owns all math").
+         *     and rendered as-is; the browser never derives one (ADR 0068).
          */
         ProposedLimitEvaluationResponse: {
             /** Band Cap Bps */
@@ -18085,7 +18069,7 @@ export interface components {
         };
         /**
          * SelectionResponse
-         * @description Staged **and** effective, always both (contract §4).
+         * @description Staged **and** effective, always both.
          *
          *     ``effective_acknowledged_at_ms`` is a historical acknowledgement: it says a
          *     worker once bound this revision, never that one is running now.
@@ -18199,8 +18183,8 @@ export interface components {
          * SignalBarIntegrityContract
          * @description Duplicate/gap/out-of-order, watermark, and session-close ownership facts.
          *
-         *     PRD §11.1 lists these beside ``revision_policy`` (``SignalDataContract``)
-         *     as sealed identity, not runtime evidence. Today every field is a single
+         *     These sit beside ``revision_policy`` (``SignalDataContract``) as sealed
+         *     identity, not runtime evidence. Today every field is a single
          *     system-wide policy — not a per-program choice — enforced by two modules
          *     outside this schema:
          *
@@ -18216,7 +18200,7 @@ export interface components {
          *       owns bucket closing: it fires every complete bucket on the bar that
          *       closes it, so a session's trailing bucket is flushed exactly at the
          *       decision session's close rather than left stranded until the next
-         *       session's bars arrive (FR-011, #2303).
+         *       session's bars arrive (#2303).
          *
          *     A second policy would need its own Literal member and a per-program field
          *     here, not a silent default change on these.
@@ -18390,8 +18374,7 @@ export interface components {
          * SignalSeriesContract
          * @description One named signal series a program consumes off the sealed data contract.
          *
-         *     PRD §10.1/§11.1: "every signal series, field, and decision stream." A
-         *     program's ``data`` contract seals the *shared* provider/symbol/timeframe
+         *     A program's ``data`` contract seals the *shared* provider/symbol/timeframe
          *     pair every series reads from; this seals each named series drawn from
          *     that shared stream — e.g. ``ema_fast``, ``ema_slow``, and ``rsi`` all read
          *     ``field="close"`` off the same 15-minute decision bar. ``field`` also
@@ -18399,7 +18382,7 @@ export interface components {
          *     ``spy_strategy_a``'s ADX) that reads the full high/low/close swing
          *     rather than a single scalar -- ``field="close"`` would misdescribe what
          *     such a series actually consumes. ``warmup_bars`` is
-         *     the series' own ``is_ready`` threshold (PRD §11.1 "readiness"): the
+         *     the series' own ``is_ready`` threshold: the
          *     ``app.engine.indicators`` base class exposes ``is_ready`` as
          *     ``samples >= period``, so an EMA's ``warmup_bars`` equals its period; RSI
          *     overrides this to ``period + 1`` (one extra sample for the first delta);
@@ -18528,8 +18511,7 @@ export interface components {
          * SpecTradeResponse
          * @description Single trade emitted by a spec backtest.
          *
-         *     Timestamps are ``int64 ms UTC`` per the repo-wide wire-format rule
-         *     (see ``.claude/rules/numerical-rigor.md`` § "Timestamp rigor"). UI
+         *     Timestamps are ``int64 ms UTC`` on the wire. UI
          *     callers convert to local-time strings at the display boundary; no
          *     other layer should be reading these fields as strings.
          */
@@ -18601,7 +18583,7 @@ export interface components {
         };
         /**
          * StationApplicability
-         * @description One station's applicability for this broker/mode (§4, §7).
+         * @description One station's applicability for this broker/mode.
          *
          *     ``applicable=False`` renders the station in the rail's fifth state
          *     (``not_applicable``); Angular never guesses which stations a broker has.
@@ -18621,7 +18603,7 @@ export interface components {
         };
         /**
          * StationView
-         * @description One of the six transaction-rail stations (§7.1).
+         * @description One of the six transaction-rail stations.
          *
          *     ``state`` is one of the five states; ``blocker`` is populated only when
          *     ``state == "blocked"`` (carries the reused OperatorBlocker contract).
@@ -18717,7 +18699,7 @@ export interface components {
          * StopRunRequest
          * @description ``lifecycle_run_id`` is required (corrective foundation slice): Stop
          *     is no longer resolved from the currently active run, since that made a
-         *     lost response unrecoverable — see the pinned contract's §3a.
+         *     lost response unrecoverable — see ADR 0035's binding annex §3a.
          */
         StopRunRequest: {
             /** Lifecycle Run Id */
@@ -19857,7 +19839,7 @@ export interface components {
         };
         /**
          * TransactionRail
-         * @description The six-station rail rendering one selected transaction (§7.1).
+         * @description The six-station rail rendering one selected transaction.
          */
         TransactionRail: {
             /** Stations */
@@ -19937,7 +19919,7 @@ export interface components {
             session?: ("regular" | "extended") | null;
             /**
              * Start Ms Utc
-             * @description Inclusive window start as int64 ms since Unix epoch UTC. Per .claude/rules/numerical-rigor.md, every wire timestamp is int64 ms UTC; ISO strings are not accepted.
+             * @description Inclusive window start as int64 ms since Unix epoch UTC. Every wire timestamp is int64 ms UTC; ISO strings are not accepted.
              */
             start_ms_utc: number;
             /**

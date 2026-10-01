@@ -1,7 +1,7 @@
 """The fleet registry schema, its PRAGMAs and its versioned migrations.
 
-A dedicated SQLite database on the coordinator's own control volume (PRD
-FR-030), following the repository's established conventions — WAL,
+A dedicated SQLite database on the coordinator's own control volume (ADR 0062
+Decision 1), following the repository's established conventions — WAL,
 ``PRAGMA foreign_keys = ON``, a guarded singleton metadata row carrying the
 schema version, additive-only registered migrations applied inside one
 transaction, and uniqueness expressed in the schema rather than in service
@@ -10,13 +10,13 @@ upgrade chain and the retained v1 shape live beside it in
 ``schema_migrations.py`` (re-exported below for the callers and tests that
 read them off this module).
 
-The registry is deliberately custody-free (PRD FR-023 / ADR 0062 Decision 1):
+The registry is deliberately custody-free (ADR 0062 Decision 1):
 no table here names an order, fill, position, activation, arming or envelope
 fact, and ``tests/broker/fleet/test_registry_contains_no_custody.py`` asserts
 the shipped DDL never grows one. All timestamps are ``INTEGER`` ms UTC; no
 textual datetime storage exists in this schema.
 
-Schema v2 (audit 2026-09-13, finding 1/4/7) separates *observed* from
+Schema v2 (ADR 0062 addendum) separates *observed* from
 *confirmed* facts: the assignment row now carries the coordinator's confirmed
 binding observation (generation, tuple, instance, epoch) and is the only
 routing fence; sessions carry heartbeat observations only. Volume roots are
@@ -52,7 +52,7 @@ never-served predicate and the lifecycle trigger's backstop need; the
 lifecycle trigger gains a fourth arm that aborts ``provisioned -> retired``
 for a clerk that has served; and a new trigger pins drain and retirement
 facts as write-once, so a repeated drain can never extend its own deadline
-(§7.3). The v5 upgrade is additive except for that trigger arm — a registry
+(ADR 0063 §7.3). The v5 upgrade is additive except for that trigger arm — a registry
 upgraded to v5 refuses a direct retirement it accepted at v4, which is the
 point of Decision 6. Existing history rows keep NULL attestation columns
 forever (the immutability trigger forbids the backfill UPDATE), so a reader

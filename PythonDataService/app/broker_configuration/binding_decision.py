@@ -71,7 +71,7 @@ class SwitchVerdict(StrEnum):
         """Whether the previous account must be proven clear before binding.
 
         The two ``UNPROVABLE`` verdicts are grouped with ``DIFFERENT_ACCOUNT``
-        on purpose: the plan's rule is that a start which cannot *prove* the
+        on purpose: the rule is that a start which cannot *prove* the
         prior account is clear must refuse. An unpinned candidate cannot prove
         it is the same account; a previous binding whose account was never
         recorded cannot prove it either. Both are treated as a switch.
@@ -204,9 +204,9 @@ def needs_acknowledgement(
     call 4), which invalidates whatever generation a browser is holding. Doing
     that on every ordinary restart would make an unrelated reboot silently
     conflict the operator's staged edit, and it would rewrite
-    ``effective_acknowledged_at_ms`` with a fact the contract explicitly says it
-    does not carry — §2.6 calls it "a historical acknowledgement" that "does
-    **not** prove the worker is running now".
+    ``effective_acknowledged_at_ms`` with a fact it does not carry: that field is
+    a historical acknowledgement and does **not** prove the worker is running
+    now.
 
     So the write happens when it means something: an Apply was consumed, the
     effective revision actually moved, or the account underneath it did.

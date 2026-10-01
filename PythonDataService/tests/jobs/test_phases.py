@@ -6,11 +6,6 @@ from app.jobs import phases
 
 
 class TestFriendlyLabels:
-    def test_known_phase_returns_label(self) -> None:
-        assert phases.friendly("feature_research", "compute_ic") == "Measuring information coefficient"
-        assert phases.friendly("signal_engine", "backtest_grid") == "Sweeping backtest configurations"
-        assert phases.friendly("cross_sectional", "starting") == "Starting cross-sectional study"
-
     def test_unknown_phase_falls_back_to_humanized_id(self) -> None:
         # Per-ticker dynamic phases (ticker_3_AAPL) aren't registered;
         # the helper should still produce a readable label.

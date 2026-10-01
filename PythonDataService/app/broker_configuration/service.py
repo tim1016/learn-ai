@@ -1,6 +1,6 @@
 """The configuration module's interface: profiles, revisions, selection, audit.
 
-The small interface the plan asks for (§4): manage profiles and revisions,
+The small interface this module exposes: manage profiles and revisions,
 verify an account, stage a selection and record an Apply, report staged versus
 effective, and read the audit log. Storage, validation, conflict detection and
 audit live behind it; runtime callers receive records, never rows.
@@ -96,14 +96,13 @@ def revision_content_sha256(
 ) -> str:
     """The canonical hash over a revision's configured, non-secret content.
 
-    Deliberately **not** the envelope sha and never mistaken for it (contract
-    §2.3). It covers what the operator chose — slot reference, endpoint mode,
-    envelope values, a paper revision's own allowances, payload version — and
-    excludes the profile ID, the author, the timestamps and the account pin.
-    Excluding the pin is what lets pinning bind an existing revision without
-    changing the identity a stale-edit check compares against; excluding the
-    profile ID is what lets a clone of unchanged content hash equal to its
-    source.
+    Deliberately **not** the envelope sha and never mistaken for it. It covers
+    what the operator chose — slot reference, endpoint mode, envelope values, a
+    paper revision's own allowances, payload version — and excludes the profile
+    ID, the author, the timestamps and the account pin. Excluding the pin is
+    what lets pinning bind an existing revision without changing the identity a
+    stale-edit check compares against; excluding the profile ID is what lets a
+    clone of unchanged content hash equal to its source.
 
     ``paper_xh_allowances`` is **omitted** from the payload when ``None``
     (#2440), never written as ``null``: every revision saved before the pair
@@ -978,7 +977,7 @@ class BrokerConfigurationService:
         )
 
     def _require_known_credential_slot(self, credential_slot: str) -> None:
-        """Refuse a slot the installed directory does not list (contract §6).
+        """Refuse a slot the installed directory does not list.
 
         Package B stored an opaque string because the allowlist's shape was not
         yet decided; package C decided it, and package D wires the directory in,
@@ -989,7 +988,7 @@ class BrokerConfigurationService:
         installed — ``UnconfiguredCredentialSlotDirectory``, the build package B
         ships on its own — there is nothing to check a name against, and the
         slot stays opaque exactly as it did before. That is not a hole: the
-        property contract §8 actually requires is that a slot off the allowlist
+        property that actually matters is that a slot off the allowlist
         never reaches an environment lookup, and that is enforced
         unconditionally by ``require_known_credential_slot`` inside package C,
         which every binding passes through. This check buys an honest 422 at
@@ -1092,11 +1091,10 @@ class _DisplayNameGuard:
     """Translate the display-name unique index into its contract refusal.
 
     The rule that two live profiles cannot share a name lives in exactly one
-    place — the partial unique index in ``schema.py``, as contract §5 requires
-    ("uniqueness enforced in the schema rather than in application code"). A
-    second copy of the rule in Python would be a check two concurrent creates
-    could both pass; this only gives the index's ``IntegrityError`` the words
-    the operator surface expects.
+    place — the partial unique index in ``schema.py``, so uniqueness is enforced in
+    the schema rather than in application code. A second copy of the rule in
+    Python would be a check two concurrent creates could both pass; this only
+    gives the index's ``IntegrityError`` the words the operator surface expects.
     """
 
     def __init__(self, display_name: str) -> None:

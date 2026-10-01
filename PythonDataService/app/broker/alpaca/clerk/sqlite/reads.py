@@ -4,7 +4,7 @@ Pure ``SELECT`` + row-to-dataclass mapping, no write path, no lock, no fold
 concerns — split out of ``repository.py`` to keep that module under the
 file-size ceiling as new read surfaces accumulate slice over slice.
 ``ClerkSqliteRepository`` methods delegate here; callers outside this package
-still never see a cursor (PRD §9.2) — they go through the repository, which
+still never see a cursor — they go through the repository, which
 happens to forward to this module for these queries.
 """
 
@@ -1194,7 +1194,7 @@ def manual_reduction_available_quantity(
     Formula: ``max(0, folded_manual_long - pending_manual_sell_qty)`` where
     each pending sell quantity is its requested quantity less its current
     effective filled quantity.
-    Reference: docs/prds/2026-08-13-sqlite-clerk-manual-orders.md §8.
+    Reference: none external.
     Canonical implementation: this file.
     Validated against: tests/broker/alpaca/clerk/sqlite/test_manual_orders.py::
       test_manual_sell_reserves_only_its_subject_long_position.

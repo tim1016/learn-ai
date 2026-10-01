@@ -93,7 +93,7 @@ from app.config import FleetSettings
 #: fast gate in 63s where CI needs most of its 120s for the same work.
 #: ``run_fast_tests`` selects ``-m "not slow"``, and the scheduled
 #: ``daily-tests.yml`` run applies no marker filter, so the coverage is kept
-#: rather than dropped (``.claude/rules/testing.md``).
+#: rather than dropped.
 pytestmark = pytest.mark.slow
 
 SERVICE_ROOT = Path(__file__).resolve().parents[2]

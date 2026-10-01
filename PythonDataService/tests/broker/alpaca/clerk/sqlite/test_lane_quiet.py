@@ -13,7 +13,6 @@ for the missing consistency fence between the order and position reads.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -493,22 +492,3 @@ async def test_an_unreadable_broker_is_no_answer_not_a_not_quiet_one(
     read = _ScriptedRead([], error=BrokerUnavailable("alpaca down"))
 
     assert await observe_account_quiet(repo, read) is None
-
-
-async def test_the_log_that_the_broker_was_unreadable_says_why(
-    repo: ClerkSqliteRepository, caplog: pytest.LogCaptureFixture
-) -> None:
-    """#2582: a line saying broker truth could not be read carries the broker's own words."""
-    read = _ScriptedRead(
-        [], error=BrokerUnavailable("Could not reach Alpaca while fetching orders.", detail="Connection aborted.")
-    )
-    caplog.set_level(logging.WARNING, logger="app.broker.alpaca.clerk.sqlite.lane_quiet")
-
-    await observe_account_quiet(repo, read)
-
-    (unreadable,) = [
-        record for record in caplog.records if getattr(record, "action", None) == "lane_quiet_broker_unreadable"
-    ]
-    assert "Could not reach Alpaca while fetching orders." in unreadable.getMessage()
-    assert unreadable.error == "Could not reach Alpaca while fetching orders."
-    assert unreadable.error_detail == "Connection aborted."

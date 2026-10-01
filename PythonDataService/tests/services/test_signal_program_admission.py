@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.config import settings
+from app.engine.strategy.program_sources import DECLARED_PROGRAM_SOURCE_PATHS
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.run_admission import (
     CORPUS_UNCOVERED_EXPLANATION,
@@ -281,7 +282,7 @@ def test_seal_signal_semantics_come_from_the_registry_contract() -> None:
 
 def test_sealed_protocol_version_mismatch_fails_closed() -> None:
     """Sealed-completeness fix, sibling to the provider-mismatch test below:
-    every newly widened §11.1 field must fail build-proof on mismatch too, at
+    every newly widened sealed field must fail build-proof on mismatch too, at
     the same cadence as program_version/golden_trace_root/provider. Exercises
     one representative new field end to end through ``prove_running_program_build``'s
     real ``or`` chain, rather than only asserting the chain's source contains it.
@@ -300,7 +301,7 @@ def test_sealed_protocol_version_mismatch_fails_closed() -> None:
 
 def test_sealed_provider_identity_mismatch_fails_closed() -> None:
     """#1729 AC4: "provider" proof means the sealed qualification-lineage
-    identity (PRD Sec 11.6) is present and unchanged against the currently
+    identity is present and unchanged against the currently
     registered contract -- not a live-feed parity gate. A seal claiming a
     different provider than the registry cannot prove its running build,
     at the same cadence as the program_version/golden_trace_root checks."""
@@ -622,8 +623,8 @@ def test_artifact_drift_still_fails_closed_whatever_the_toggle_says(
     """Issue #1735's scope note, encoded.
 
     The toggle governs only the newly-added wiring coverage. Drift in the
-    already-covered artifacts is the admission control the PRD was built
-    around, and stays blocking in both toggle positions -- otherwise turning
+    already-covered artifacts is the admission control this gate exists
+    for, and stays blocking in both toggle positions -- otherwise turning
     the toggle off would quietly widen what can start.
     """
     monkeypatch.setattr(settings, "SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED", enforced)
@@ -796,14 +797,14 @@ def test_a_unchanged_disk_after_import_still_proves(
     assert proof.wiring == "MATCHED"
 
 
-def test_the_snapshot_covers_the_lazily_imported_indicator_state_module() -> None:
-    """#2450: ``indicator_state`` is imported lazily inside strategy methods,
-    so a later ``git pull`` could otherwise load new bytes mid-flight. The
-    startup anchor forces its import and covers its file."""
+def test_the_snapshot_anchors_and_imports_every_declared_source() -> None:
+    """#2450: a declared module that a program imports only lazily could
+    otherwise load bytes a later ``git pull`` landed mid-flight. The startup
+    anchor hashes every declared source and forces its import."""
     record_imported_program_sources()
 
-    assert "app/engine/live/indicator_state.py" in admission_module._IMPORTED_SOURCE_DIGESTS
-    assert "app.engine.live.indicator_state" in sys.modules
+    assert set(admission_module._IMPORTED_SOURCE_DIGESTS) == DECLARED_PROGRAM_SOURCE_PATHS
+    assert all(relative[:-3].replace("/", ".") in sys.modules for relative in DECLARED_PROGRAM_SOURCE_PATHS)
     assert imported_source_drift(_ema_contract()) is None
 
 
@@ -824,11 +825,11 @@ def test_a_cached_program_module_and_newer_disk_bytes_refuse_the_proof(
     root = _copied_source_tree(tmp_path)
     # Scope the anchor's work to exactly the two modules under control by
     # standing in a one-program registry whose contract declares only them;
-    # `normalized_gap` is a pure leaf (imports only Decimal), so it can be
+    # both are pure leaves (standard-library imports only), so each can be
     # loaded from the copy without dragging the rest of the tree along.
     minimal_contract = replace(
         _ema_contract(),
-        artifact_paths=("app/engine/live/indicator_state.py",),
+        artifact_paths=("app/engine/strategy/signal_intent.py",),
         wiring_artifact_paths=("app/engine/strategy/normalized_gap.py",),
     )
     monkeypatch.setattr(
@@ -844,7 +845,7 @@ def test_a_cached_program_module_and_newer_disk_bytes_refuse_the_proof(
     # The process imported both declared modules from THIS tree earlier --
     # the exact state ``app.main``'s import chain leaves behind.
     for name, relative in (
-        ("app.engine.live.indicator_state", "app/engine/live/indicator_state.py"),
+        ("app.engine.strategy.signal_intent", "app/engine/strategy/signal_intent.py"),
         ("app.engine.strategy.normalized_gap", "app/engine/strategy/normalized_gap.py"),
     ):
         monkeypatch.delitem(sys.modules, name, raising=False)
@@ -854,7 +855,7 @@ def test_a_cached_program_module_and_newer_disk_bytes_refuse_the_proof(
         monkeypatch.setitem(sys.modules, name, module)
         spec.loader.exec_module(module)
     # ...then the pull rewrote one of them after that import.
-    (root / "app/engine/live/indicator_state.py").write_text(
+    (root / "app/engine/strategy/signal_intent.py").write_text(
         "# pulled after the import\n", encoding="utf-8"
     )
     monkeypatch.setattr(admission_module, "_SERVICE_ROOT", root)

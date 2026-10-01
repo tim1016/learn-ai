@@ -5,11 +5,11 @@ two executions materially different — symbol, strategy, strategy-code
 revision, parameter assignment, data policy, fill model, commissions, and
 the trade's own entry/exit instants. Parameters alone are insufficient:
 two runs sharing a params_hash but differing in, say, the fill model must
-never collapse to one identity (design spec D16 — the direct fix for the
+never collapse to one identity (ADR 0072 decision 5 — the direct fix for the
 code-review finding that params-only dedup destroys scientific
 provenance).
-Reference: PRD https://github.com/tim1016/learn-ai/issues/1577; design spec
-docs/superpowers/specs/2026-08-16-recency-chart-design.md §3 (D16), §4.1.
+Reference: PRD https://github.com/tim1016/learn-ai/issues/1577; ADR 0072
+decision 5 (Recency Chart D16).
 Canonical implementation: this file.
 Validated against: tests/research/recency/test_fingerprint.py.
 """

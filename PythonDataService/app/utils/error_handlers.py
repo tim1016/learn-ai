@@ -132,8 +132,8 @@ async def broker_unbound_exception_handler(request: Request, exc: Exception) -> 
     ``BrokerUnbound`` means this process resolved no effective broker profile —
     nothing applied, an unreadable profiles database, a revision that will not
     load, or credentials reaching an account the revision is not approved for.
-    Every one of those is a *state the contract has words for* (§6), and the
-    whole point of the refusal vocabulary is that an operator sees which one.
+    Every one of those is a *state the configuration surface has words for*, and
+    the whole point of the refusal vocabulary is that an operator sees which one.
 
     Without this it fell through to the catch-all 500, so precisely when the
     Broker Desk should have said "the gate is closed, here is what to do", it
@@ -155,8 +155,8 @@ async def broker_profile_exception_handler(request: Request, exc: Exception) -> 
     """Answer a credential/verification refusal in the configuration's vocabulary.
 
     ``BrokerProfileError`` is the second refusal family on the configuration
-    surface: same contract §6 ``reason`` strings as ``BrokerConfigurationError``
-    but a separate base class, raised by the account ceremonies behind
+    surface: same ``reason`` vocabulary as ``BrokerConfigurationError`` but a
+    separate base class, raised by the account ceremonies behind
     ``/profiles/{id}/revisions/{n}/verify-account`` and ``/account-pin`` when a
     slot is unavailable, a revision will not resolve, or the observed account
     contradicts the revision's mode.

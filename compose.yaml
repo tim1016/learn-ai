@@ -120,8 +120,7 @@ services:
       # `start --readonly` writes here; the host-side `reconcile`
       # reads from the same files. Without this mount the writers'
       # parquets would vanish on container restart and not be
-      # visible to host-side commands. See
-      # docs/runbooks/ibkr-paper-dry-run.md prereqs.
+      # visible to host-side commands.
       - ./PythonDataService/artifacts:/app/artifacts:z
       # SQLite WAL requires every connection to share one host locking and
       # shared-memory domain. On macOS, the parent artifacts bind mount is
@@ -194,8 +193,7 @@ services:
       # per-minute cap; only the free Basic tier is 5/min. Set to a
       # positive integer here only if you're on the free tier.
       - POLYGON_RATE_LIMIT_PER_MIN=${POLYGON_RATE_LIMIT_PER_MIN:-0}
-      # IBKR paper-trading integration (Phase 1, see
-      # docs/architecture/ibkr-integration-phase1.md). Defaults match
+      # IBKR paper-trading integration (Phase 1). Defaults match
       # IbkrSettings; surfaced here so they're greppable in compose.
       - IBKR_MODE=${IBKR_MODE:-paper}
       # ``auto`` first tries the Podman/Docker host alias

@@ -256,9 +256,7 @@ class TestZeroDteFloorBoundary:
     that the solver returns `EXPIRED`; at or above it must return a
     finite, plausible IV. These tests pin the boundary so the constant
     can't silently regress to a coarser value (e.g. one calendar day,
-    which would silently kill 0DTE signal recovery — see
-    docs/references/reconciliations/data-lab-spy-2026-04-17-to-2026-04-24.md
-    Finding 3.1).
+    which would silently kill 0DTE signal recovery).
     """
 
     @pytest.mark.parametrize(

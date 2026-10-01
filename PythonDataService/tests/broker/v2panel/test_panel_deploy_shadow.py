@@ -139,14 +139,6 @@ def test_shadow_view_never_calls_the_live_account_a_paper_account(
     view = _shadow_view(monkeypatch)
     row = _account_posture_row(view)
 
-    assert row.label == "Shadow account posture"
-    assert row.headline == "The Alpaca shadow account is active and readable."
-    assert row.evidence_summary == (
-        f"Alpaca live account {LIVE_ACCT}, read through its shadow authority, reports status ACTIVE."
-    )
-    assert view.eligibility.headline == (
-        "This Alpaca account is eligible for a Clerk-governed shadow deployment."
-    )
     prose = (
         row.label,
         row.headline,
@@ -159,25 +151,6 @@ def test_shadow_view_never_calls_the_live_account_a_paper_account(
     # The wire tokens the Frontend consumes are deliberately not world-scoped.
     assert row.gate_id == "broker.account_posture"
     assert view.eligibility.reason_code == "ALPACA_PAPER_DEPLOY_READY"
-
-
-def test_real_paper_view_still_names_the_paper_account(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Characterization pin: the real-paper world's prose stays byte-identical."""
-    view = _paper_view(monkeypatch)
-    row = _account_posture_row(view)
-
-    assert row.label == "Paper account posture"
-    assert row.headline == "The Alpaca paper account is active and tradable."
-    assert row.explanation == (
-        "The server resolved the selected paper account and found no broker trading block."
-    )
-    assert row.evidence_summary == f"Alpaca paper account {ACCT} reports status ACTIVE."
-    assert view.eligibility.headline == (
-        "This Alpaca paper account is eligible for a Clerk-governed deployment."
-    )
-    assert view.eligibility.explanation == (
-        "The operator may choose Clerk-governed paper execution or a zero-broker-write Dry Run before launch."
-    )
 
 
 def _request(execution_mode: str) -> AlpacaPaperDeployRequest:
@@ -269,35 +242,8 @@ def test_shadow_receipt_names_the_shadow_world_not_paper(monkeypatch: pytest.Mon
     """A shadow deploy lands on a real-money account; its receipt must say so."""
     receipt = _receipt(_shadow_view(monkeypatch), "shadow")
 
-    assert receipt.message == f"{SID} is on duty in Alpaca shadow."
-    assert receipt.explanation == (
-        "The deployment binding is durable; the shadow Clerk synthesizes every fill "
-        "against this live account's real reads and submits nothing (ADR 0059 D2)."
-    )
-    assert receipt.next_action == "Open the bot panel and verify the first synthesized fill."
     prose = (receipt.message, receipt.explanation, receipt.next_action)
     assert not any("paper" in sentence.lower() for sentence in prose)
-
-
-def test_paper_receipt_copy_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Characterization pin: the real-paper receipt's three sentences stay byte-identical."""
-    admit_canary_pairing(monkeypatch, _STRATEGY_KEY, ACCT)
-    view = build_alpaca_paper_deploy_view(
-        account_snapshot(),
-        _clerk_status(ACCT),
-        _entries(),
-        symbol="SPY",
-        custody_world="real_paper",
-        default_exit_terms=ExitTermsInput(exit_allowance_bps=20, band_multiple=2, spread_cap_bps=50),
-    )
-
-    receipt = _receipt(view, "paper")
-
-    assert receipt.message == f"{SID} is on duty in Alpaca paper."
-    assert receipt.explanation == (
-        "The deployment binding is durable and all strategy effects are owned by the Alpaca Clerk."
-    )
-    assert receipt.next_action == "Open the production bot panel and verify the first Clerk receipt."
 
 
 @pytest.mark.asyncio

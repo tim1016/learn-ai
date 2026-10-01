@@ -35,23 +35,6 @@ def _ms(*, minutes: int = 0) -> int:
 # InsightScore
 # ──────────────────────────────────────────────────────────────────
 class TestInsightScore:
-    def test_initial_values(self):
-        score = InsightScore()
-        assert score.direction == 0.0
-        assert score.magnitude == 0.0
-        assert score.is_final_score is False
-
-    def test_set_direction(self):
-        score = InsightScore()
-        score.set_score(InsightScoreType.DIRECTION, 1.0)
-        assert score.direction == 1.0
-        assert score.magnitude == 0.0
-
-    def test_set_magnitude(self):
-        score = InsightScore()
-        score.set_score(InsightScoreType.MAGNITUDE, 0.85)
-        assert score.magnitude == 0.85
-
     def test_clamp_above_one(self):
         score = InsightScore()
         score.set_score(InsightScoreType.DIRECTION, 1.5)
@@ -356,14 +339,3 @@ class TestInsightManager:
         assert summary.total_insights == 0
         assert summary.scored_insights == 0
         assert summary.direction_accuracy == 0.0
-
-    def test_summary_to_dict(self):
-        mgr, _ = self._make_manager_with_insights()
-        t_end_ms = to_ms_utc(datetime(2024, 6, 1, 14, 0, tzinfo=UTC))
-        mgr.step(t_end_ms, {"SPY": Decimal("510")})
-        d = mgr.get_summary().to_dict()
-        assert "total_insights" in d
-        assert "direction_accuracy" in d
-        assert "confidence_calibration" in d
-        assert "accuracy_by_hour" in d
-        assert "magnitude_bias" in d

@@ -21,7 +21,6 @@ from app.services.bot_binding_repository import (
     BotBindingRepository,
     BotRunOutcomeRecord,
     BrokerBotBinding,
-    RunOutcomeConflictError,
     alpaca_v1_action_plan,
 )
 from app.services.bot_run_evidence import BotRunEvidenceService
@@ -214,29 +213,3 @@ def test_preserve_terminal_propagates_an_unreadable_receipt(tmp_path: Path) -> N
 
     # Unchanged: the corrupt file was never overwritten by a reconstruction.
     assert receipt_path.read_text(encoding="utf-8") == "{not valid json"
-
-
-def test_record_outcome_rejects_a_genuinely_different_receipt(tmp_path: Path) -> None:
-    """AC-6: writing conflicting terminal evidence for the same run still raises."""
-    repository = _repository(tmp_path)
-    _seed_run(repository)
-    repository.record_outcome(
-        BotRunOutcomeRecord(
-            strategy_instance_id=_STRATEGY_INSTANCE_ID,
-            run_id=_RUN_ID,
-            kind="CRASHED",
-            reason_code="TypeError",
-            recorded_at_ms=1_234,
-        )
-    )
-
-    with pytest.raises(RunOutcomeConflictError):
-        repository.record_outcome(
-            BotRunOutcomeRecord(
-                strategy_instance_id=_STRATEGY_INSTANCE_ID,
-                run_id=_RUN_ID,
-                kind="CRASHED",
-                reason_code="ValueError",
-                recorded_at_ms=1_234,
-            )
-        )

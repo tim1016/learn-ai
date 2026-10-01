@@ -1,4 +1,4 @@
-// Data Lab Validate (PRD §7.5 / §8) — one readable column, document scroll.
+// Data Lab Validate — one readable column, document scroll.
 @use '../../../styles/tokens' as *;
 
 :host {
@@ -113,7 +113,7 @@
   }
 }
 
-// Wide tables scroll inside a focusable, labeled region (PRD §8).
+// Wide tables scroll inside a focusable, labeled region.
 .validate__table-wrap {
   min-width: 0;
   overflow-x: auto;

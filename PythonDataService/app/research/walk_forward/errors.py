@@ -3,8 +3,7 @@
 Existing call sites (router, tests) catch by these specific class
 names and continue to work unchanged; new common code can
 ``except ArtifactError`` and catch this family alongside the other
-phases'. See ``docs/architecture/research-artifact-seam.md`` §
-"Shared base errors" for the rationale.
+phases'.
 
 The classes used to live in ``walk_forward/storage.py``; they moved
 here in PR 3 so ``storage.py`` can import the descriptor without

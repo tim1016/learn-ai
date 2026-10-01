@@ -32,11 +32,10 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.Configure<PolygonServiceOptions>(
     builder.Configuration.GetSection(PolygonServiceOptions.SectionName));
 
-// IV recorder cron — Step D follow-up of the IV-ownership plan. Opt-in
-// via `IvRecorder:Enabled = true` in config; dev/CI default is off.
-// Schedules one Quartz trigger per slot (default 09:35 / 12:30 / 15:55 /
-// 16:00 ET; 15:55 runs alongside 16:00 for the trial-month experiment
-// in research-doc §7.6 / §8.2.3) that POSTs to Python's
+// IV recorder cron. Opt-in via `IvRecorder:Enabled = true` in config;
+// dev/CI default is off. Schedules one Quartz trigger per slot (default
+// 09:35 / 12:30 / 15:55 / 16:00 ET; 15:55 runs alongside 16:00 for the
+// trial-month experiment in ADR 0071 decision 7) that POSTs to Python's
 // /api/iv-recorder/snapshot per configured ticker.
 builder.Services.AddIvRecorder(builder.Configuration);
 

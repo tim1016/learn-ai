@@ -3983,7 +3983,7 @@
         "type": "object"
       },
       "BotCatalogView": {
-        "description": "One roster row: bot status + slice-0 rollups (\u00a75).\n\nAssembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``\n(incremental cache). ``needs_attention`` and ``status_label`` drive the\nattention-first sort and the closed status vocabulary. No journal scan per\nrequest. ``group`` places the row on Home; a row's money is never here --\nHome joins it from the account-money read by ``strategy_instance_id``.",
+        "description": "One roster row: bot status + slice-0 rollups.\n\nAssembled from the ``BotStatusView`` (lifecycle) + the S0 ``BotRollup``\n(incremental cache). ``needs_attention`` and ``status_label`` drive the\nattention-first sort and the closed status vocabulary. No journal scan per\nrequest. ``group`` places the row on Home; a row's money is never here --\nHome joins it from the account-money read by ``strategy_instance_id``.",
         "properties": {
           "account_id": {
             "title": "Account Id",
@@ -4523,7 +4523,7 @@
         "type": "object"
       },
       "BotHealthCard": {
-        "description": "Bot-health card beside the rail (\u00a77.2).\n\nTerminal Stop retains custody evidence; new trading requires fresh Deploy.",
+        "description": "Bot-health card beside the rail.\n\nTerminal Stop retains custody evidence; new trading requires fresh Deploy.",
         "properties": {
           "decision_stale": {
             "title": "Decision Stale",
@@ -4997,7 +4997,7 @@
         "type": "object"
       },
       "BotPanelView": {
-        "description": "The full 5s-poll panel projection for one bot (\u00a77).\n\nEverything except chart data: bot health, clerk/account state, the six-\nstation rail, a journal-tail reference, the presented actions, and the\npanel-state ``revision`` those actions bind to.",
+        "description": "The full 5s-poll panel projection for one bot.\n\nEverything except chart data: bot health, clerk/account state, the six-\nstation rail, a journal-tail reference, the presented actions, and the\npanel-state ``revision`` those actions bind to.",
         "properties": {
           "account_id": {
             "title": "Account Id",
@@ -7287,7 +7287,7 @@
         "type": "object"
       },
       "ChannelHealthView": {
-        "description": "One market-data / execution channel's health (\u00a77.3).",
+        "description": "One market-data / execution channel's health.",
         "properties": {
           "explanation": {
             "title": "Explanation",
@@ -7340,7 +7340,7 @@
         "type": "object"
       },
       "ChartBar": {
-        "description": "One source-tagged OHLCV bar for a chart pane (\u00a78).\n\nBroker-generic \u2014 decoupled from the IBKR-specific ``IbkrMinuteBar``. Prices\nare strings to preserve exact decimal representation over the wire.\n``source`` is truthfully tagged ``ibkr`` / ``polygon`` / ``mixed`` (\u00a78).",
+        "description": "One source-tagged OHLCV bar for a chart pane.\n\nBroker-generic \u2014 decoupled from the IBKR-specific ``IbkrMinuteBar``. Prices\nare strings to preserve exact decimal representation over the wire.\n``source`` is truthfully tagged ``ibkr`` / ``polygon`` / ``mixed``.",
         "properties": {
           "close": {
             "title": "Close",
@@ -7486,7 +7486,7 @@
         "type": "object"
       },
       "ChartDataRequest": {
-        "description": "Request for chart data with resampled bars and indicators.\n\nTemporal authority (data-lab workspace redesign PRD \u00a712): the numeric\n``start_ms_utc`` / ``end_ms_utc`` pair is the canonical window form and\neach field takes precedence over its date-string counterpart when\nsupplied. Each value resolves by flooring to its UTC calendar date \u2014\nthe exact inverse of the frontend's ``utcMsToIsoDate`` \u2014 so a numeric\nwindow and the date string the same request carries never disagree,\nwhatever instant inside the day the anchors name (the Data Lab commits\nUTC midnight for the start and the day's final UTC instant for the\nend). Both endpoints of the resolved window are inclusive trading\ndates, matching ``from_date``/``to_date``.",
+        "description": "Request for chart data with resampled bars and indicators.\n\nTemporal authority: the numeric\n``start_ms_utc`` / ``end_ms_utc`` pair is the canonical window form and\neach field takes precedence over its date-string counterpart when\nsupplied. Each value resolves by flooring to its UTC calendar date \u2014\nthe exact inverse of the frontend's ``utcMsToIsoDate`` \u2014 so a numeric\nwindow and the date string the same request carries never disagree,\nwhatever instant inside the day the anchors name (the Data Lab commits\nUTC midnight for the start and the day's final UTC instant for the\nend). Both endpoints of the resolved window are inclusive trading\ndates, matching ``from_date``/``to_date``.",
         "properties": {
           "adjusted": {
             "default": true,
@@ -7742,7 +7742,7 @@
         "type": "object"
       },
       "ChartFillMarker": {
-        "description": "One fill marker for a chart pane (\u00a78, \u00a710).\n\nProjected from the clerk journal's fill events filtered by the bot's\nnamespace. ``side`` and ``price`` render the buy/sell marker.",
+        "description": "One fill marker for a chart pane.\n\nProjected from the clerk journal's fill events filtered by the bot's\nnamespace. ``side`` and ``price`` render the buy/sell marker.",
         "properties": {
           "event_key": {
             "title": "Event Key",
@@ -7813,7 +7813,7 @@
         "type": "object"
       },
       "ChartHistoryResponse": {
-        "description": "Bounded Polygon chart response for one selected timeframe (\u00a78).\n\n``bars`` is the bounded display window. ``indicator_bars`` includes every\navailable preceding warmup candle, capped by the configured Polygon history\nentitlement. The explicit budget fields distinguish a complete calculation\nwindow from entitlement- or liquidity-limited history. The existing 7-day\nlive resolver is not widened.\n\n``overlay_notices`` mirrors ``ChartLiveResponse.overlay_notices`` (issue\n#2203): a present-but-empty ``POLYGON_API_KEY`` or a Polygon fetch failure\ndegrades into a notice here \u2014 ``bars``/``indicator_bars`` stay empty rather\nthan fabricated \u2014 instead of an unhandled exception. Empty for a healthy\nresult.",
+        "description": "Bounded Polygon chart response for one selected timeframe.\n\n``bars`` is the bounded display window. ``indicator_bars`` includes every\navailable preceding warmup candle, capped by the configured Polygon history\nentitlement. The explicit budget fields distinguish a complete calculation\nwindow from entitlement- or liquidity-limited history. The existing 7-day\nlive resolver is not widened.\n\n``overlay_notices`` mirrors ``ChartLiveResponse.overlay_notices`` (issue\n#2203): a present-but-empty ``POLYGON_API_KEY`` or a Polygon fetch failure\ndegrades into a notice here \u2014 ``bars``/``indicator_bars`` stay empty rather\nthan fabricated \u2014 instead of an unhandled exception. Empty for a healthy\nresult.",
         "properties": {
           "as_of_ms": {
             "title": "As Of Ms",
@@ -8193,7 +8193,7 @@
         "type": "object"
       },
       "ChartLiveResponse": {
-        "description": "Today's merged, source-tagged LIVE-pane bars + today's fill markers (\u00a78).\n\n``as_of_ms`` and the two session boundaries derive from the canonical NY\ncalendar \u2014 \"today\" is the NY trading date, never browser-local midnight.\n``feed`` is the chart line's own health (#2355).",
+        "description": "Today's merged, source-tagged LIVE-pane bars + today's fill markers.\n\n``as_of_ms`` and the two session boundaries derive from the canonical NY\ncalendar \u2014 \"today\" is the NY trading date, never browser-local midnight.\n``feed`` is the chart line's own health (#2355).",
         "properties": {
           "as_of_ms": {
             "title": "As Of Ms",
@@ -8264,7 +8264,7 @@
         "type": "object"
       },
       "ChartOverlayNoticeView": {
-        "description": "An honest chip explaining a fallback overlay (\u00a78).",
+        "description": "An honest chip explaining a fallback overlay.",
         "properties": {
           "code": {
             "title": "Code",
@@ -8458,7 +8458,7 @@
         "type": "object"
       },
       "ClerkCard": {
-        "description": "Account/clerk card beside the rail (\u00a77.3).",
+        "description": "Account/clerk card beside the rail.",
         "properties": {
           "account_id": {
             "title": "Account Id",
@@ -11542,7 +11542,7 @@
         "type": "object"
       },
       "DatasetPlanRequest": {
-        "description": "Request for ``POST /api/dataset/plan`` \u2014 local, fetch-free planning.\n\nMirrors the generation-relevant core of\n:class:`DatasetGenerationRequest` so a recipe can be planned and\nexecuted with the same fields. ``from_date``/``to_date`` remain\ndate-intent strings for now; the additive ``start_ms_utc``/\n``end_ms_utc`` fields are the canonical numeric form and take\nprecedence over the date strings when supplied (data-lab workspace\nredesign PRD \u00a712).",
+        "description": "Request for ``POST /api/dataset/plan`` \u2014 local, fetch-free planning.\n\nMirrors the generation-relevant core of\n:class:`DatasetGenerationRequest` so a recipe can be planned and\nexecuted with the same fields. ``from_date``/``to_date`` remain\ndate-intent strings for now; the additive ``start_ms_utc``/\n``end_ms_utc`` fields are the canonical numeric form and take\nprecedence over the date strings when supplied.",
         "properties": {
           "adjust_for_dividends": {
             "default": false,
@@ -12262,7 +12262,7 @@
       },
       "DecisionColumnSpec": {
         "additionalProperties": false,
-        "description": "One strategy-specific column in ``decisions.parquet`` (PRD-A \u00a716.1\nResolution 5).\n\nThe spec is authoritative for the per-strategy decision-row schema:\nthe live runtime resolves the parquet columns as\n``CORE_DECISION_COLUMNS + [c.name for c in spec.decision_columns]``\n(see ``app.engine.live.artifacts.resolve_decision_columns``). Each\nentry declares the column ``name``, its ``dtype``, whether it is\n``nullable``, and a free-text ``semantic`` description so a new\nstrategy can grow the artifact schema without bespoke writer code.\n\n``name`` must match an attribute the strategy publishes on its\n``DecisionSnapshot`` \u2014 the writer reads the value by that name.\nFor the SPY EMA strategy these are ``ema5`` / ``ema10`` / ``rsi``.",
+        "description": "One strategy-specific column of a spec's per-bar decision row.\n\nEach entry declares the column ``name``, its ``dtype``, whether it is\n``nullable``, and a free-text ``semantic`` description. No app code\nreads it; it stays because the sealed ``*.spec.json`` fixtures carry it.\n\n``name`` names an attribute the strategy publishes on its\n``DecisionSnapshot``. For the SPY EMA strategy these are ``ema5`` /\n``ema10`` / ``rsi``.",
         "properties": {
           "dtype": {
             "default": "float64",
@@ -13314,7 +13314,7 @@
         "type": "object"
       },
       "DivergenceCategory": {
-        "description": "Categorical divergence types \u2014 see numerical-rigor.md.",
+        "description": "Categorical divergence types \u2014 see ADR 0069 \u00a76.",
         "enum": [
           "fixture_insufficient",
           "decision_mismatch",
@@ -13371,7 +13371,7 @@
         "type": "object"
       },
       "DutyOutcomeView": {
-        "description": "Typed terminal duty fact shown on the bot-health card (\u00a77.2).",
+        "description": "Typed terminal duty fact shown on the bot-health card.",
         "properties": {
           "explanation": {
             "title": "Explanation",
@@ -14701,7 +14701,7 @@
         "type": "object"
       },
       "EvidencePage": {
-        "description": "A bounded page of operator-gated evidence entries (\u00a714).",
+        "description": "A bounded page of operator-gated evidence entries.",
         "properties": {
           "account_id": {
             "title": "Account Id",
@@ -14970,7 +14970,7 @@
       },
       "ExitEligibilityContract": {
         "additionalProperties": false,
-        "description": "Level/countdown exit rule \u2014 the evidence future carryover work would read.\n\nPRD \u00a711.1: \"level/countdown exit eligibility evidence where carryover may\nlater be considered.\" Two rules exist, matching PRD \u00a717's own\n\"level- or countdown-true\" vocabulary for when a discarded staged EXIT\nmust re-emit:\n\n* ``\"fixed_bar_count_countdown\"`` \u2014 ``ema_crossover_signal`` exits on a\n  fixed decision-clock countdown\n  (``EmaCrossoverSignalAlgorithm.commit_signal_decision`` sets\n  ``_bars_until_exit = 5`` at entry); ``countdown_decision_clocks`` is\n  required.\n* ``\"level_true\"`` \u2014 ``sma_crossover`` exits the instant its exit\n  relation (a fresh death cross) is true on a decision clock, with no\n  hold period or counter at all\n  (``SmaCrossoverAlgorithm.evaluate_signal_bar``); there is no\n  \"countdown\" fact to seal, so ``countdown_decision_clocks`` must be\n  unset for this rule.\n\n``countdown_state_persistable`` records a real, checked fact about\ntoday's implementation, not an aspiration. For\n``fixed_bar_count_countdown``:\n``EmaCrossoverSignalAlgorithm.report_state_for_persistence`` returns\n``None`` whenever the strategy is mid-position, so an in-flight countdown\ncannot currently survive a Pause/Resume \u2014 carryover work must either\nchange that or treat mid-countdown Resume as unsupported. For\n``level_true`` programs that have not yet implemented the\npersistence-hook contract at all (e.g. ``sma_crossover`` today), this is\n``False`` for the stronger reason that no state -- not just an in-flight\nexit -- currently survives Pause/Resume.",
+        "description": "Level/countdown exit rule \u2014 the evidence future carryover work would read.\n\nThis is the evidence where carryover may later be considered. Two rules\nexist, matching the \"level- or countdown-true\" vocabulary for when a\ndiscarded staged EXIT must re-emit:\n\n* ``\"fixed_bar_count_countdown\"`` \u2014 ``ema_crossover_signal`` exits on a\n  fixed decision-clock countdown\n  (``EmaCrossoverSignalAlgorithm.commit_signal_decision`` sets\n  ``_bars_until_exit = 5`` at entry); ``countdown_decision_clocks`` is\n  required.\n* ``\"level_true\"`` \u2014 ``sma_crossover`` exits the instant its exit\n  relation (a fresh death cross) is true on a decision clock, with no\n  hold period or counter at all\n  (``SmaCrossoverAlgorithm.evaluate_signal_bar``); there is no\n  \"countdown\" fact to seal, so ``countdown_decision_clocks`` must be\n  unset for this rule.\n\n``countdown_state_persistable`` records a real, checked fact about\ntoday's implementation, not an aspiration. No strategy persists its\nstate, so nothing -- an in-flight countdown included -- survives a\nrestart, and every program seals ``False``. Carryover work must either\nadd that persistence or treat a mid-countdown Resume as unsupported.",
         "properties": {
           "countdown_decision_clocks": {
             "anyOf": [
@@ -23594,7 +23594,7 @@
       },
       "NumericalProvenanceContract": {
         "additionalProperties": false,
-        "description": "The Math Provenance Contract (CLAUDE.md #2/#5), sealed as program identity.\n\nMirrors the ``Formula``/``Reference``/``Canonical implementation``/\n``Validated against`` block already required by the\n``learn-ai-validation`` skill and present in\n``ema_crossover_signal.py``'s own module docstring; this is that same\nfact, made part of the immutable seal rather than living only in prose\nthat could drift unnoticed. ``tolerance_atol``/``tolerance_rtol`` are\n``None`` at ``equivalence_level=\"bit_exact\"`` \u2014 the trace/decision\nidentity in ``signal_program.py`` is Decimal-exact and SHA-256-compared,\nnot tolerance-compared; the documented ``1e-9`` absolute tolerance in\n``docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md``\napplies one level down, to the EMA/RSI *value* parity against LEAN.",
+        "description": "The Math Provenance Contract (ADR 0068 Decision 2), sealed as program identity.\n\nMirrors the ``Formula``/``Reference``/``Canonical implementation``/\n``Validated against`` block already required by\nADR 0068 Decision 2 and present in\n``ema_crossover_signal.py``'s own module docstring; this is that same\nfact, made part of the immutable seal rather than living only in prose\nthat could drift unnoticed. ``tolerance_atol``/``tolerance_rtol`` are\n``None`` at ``equivalence_level=\"bit_exact\"`` \u2014 the trace/decision\nidentity in ``signal_program.py`` is Decimal-exact and SHA-256-compared,\nnot tolerance-compared; the documented ``1e-9`` absolute tolerance\napplies one level down, to the EMA/RSI *value* parity against LEAN.",
         "properties": {
           "canonical_implementation": {
             "title": "Canonical Implementation",
@@ -24246,7 +24246,7 @@
         "type": "object"
       },
       "OptionsCompanionConfig": {
-        "description": "Optional companion-file config emitted alongside the underlying dataset CSV.\n\nWhen enabled, the ZIP response includes per-slot CSVs under ``calls/``\nand ``puts/`` subfolders (subject to ``include_calls`` / ``include_puts``)\n\u2014 one file per (side, slot) where the slot is a price-ordered offset\nfrom ATM (e.g. ``calls/atm-03.csv``, ``calls/atm.csv``, ``puts/atm+02.csv``).\nEach file is a fixed-schema time series for that slot across all trading\ndays in range; the contract filling the slot rolls daily and is recorded\nas the ``contract_ticker`` row value. See ``docs/options-companion-format.md``\nfor the full spec; computation lives in ``options_companion_service``.",
+        "description": "Optional companion-file config emitted alongside the underlying dataset CSV.\n\nWhen enabled, the ZIP response includes per-slot CSVs under ``calls/``\nand ``puts/`` subfolders (subject to ``include_calls`` / ``include_puts``)\n\u2014 one file per (side, slot) where the slot is a price-ordered offset\nfrom ATM (e.g. ``calls/atm-03.csv``, ``calls/atm.csv``, ``puts/atm+02.csv``).\nEach file is a fixed-schema time series for that slot across all trading\ndays in range; the contract filling the slot rolls daily and is recorded\nas the ``contract_ticker`` row value. Computation lives in\n``options_companion_service``.",
         "properties": {
           "dividend_yield": {
             "default": 0.0,
@@ -24593,7 +24593,7 @@
         "type": "string"
       },
       "PanelAction": {
-        "description": "One backend-presented action (\u00a711).\n\nAngular executes only the closed set of known action ids and renders\nexactly what it is given. ``revision`` binds the action to the panel-state\nrevision it was presented against; a stale POST is a 409.",
+        "description": "One backend-presented action.\n\nAngular executes only the closed set of known action ids and renders\nexactly what it is given. ``revision`` binds the action to the panel-state\nrevision it was presented against; a stale POST is a 409.",
         "properties": {
           "action_id": {
             "enum": [
@@ -24670,7 +24670,7 @@
         "type": "object"
       },
       "PanelActionErrorResponse": {
-        "description": "A rejected action execution (409/500) (\u00a711, PRD #1716 FR-4).\n\nPublished so the OpenAPI contract and generated frontend types carry the\nexact error shape callers previously narrowed by hand from an untyped\n``HTTPException.detail`` record. ``reason_code`` is the stable machine\ncode (e.g. an admission ``reason_code``) for a raw-identifier display\nthrough the shared ``receiptLabel`` pipe; ``message``/``why`` remain\nbackend-authored prose rendered as-is.",
+        "description": "A rejected action execution (409/500) (PRD #1716 FR-4).\n\nPublished so the OpenAPI contract and generated frontend types carry the\nexact error shape callers previously narrowed by hand from an untyped\n``HTTPException.detail`` record. ``reason_code`` is the stable machine\ncode (e.g. an admission ``reason_code``) for a raw-identifier display\nthrough the shared ``receiptLabel`` pipe; ``message``/``why`` remain\nbackend-authored prose rendered as-is.",
         "properties": {
           "action_id": {
             "enum": [
@@ -24753,7 +24753,7 @@
       },
       "PanelActionRequest": {
         "additionalProperties": false,
-        "description": "Execute one presented action (\u00a711).\n\nIdentity is NEVER a request field \u2014 it derives from the authenticated\ncontrol channel (\u00a714). The form carries only the reason.",
+        "description": "Execute one presented action.\n\nIdentity is NEVER a request field \u2014 it derives from the authenticated\ncontrol channel. The form carries only the reason.",
         "properties": {
           "action_id": {
             "enum": [
@@ -24811,7 +24811,7 @@
         "type": "object"
       },
       "PanelActionResult": {
-        "description": "The outcome of an executed action (\u00a711).\n\nOn success the caller re-polls the panel; ``applied`` distinguishes a fresh\napplication from an idempotent replay (``applied=False`` \u2014 the key was seen\nbefore, the action is a no-op).",
+        "description": "The outcome of an executed action.\n\nOn success the caller re-polls the panel; ``applied`` distinguishes a fresh\napplication from an idempotent replay (``applied=False`` \u2014 the key was seen\nbefore, the action is a no-op).",
         "properties": {
           "action_id": {
             "enum": [
@@ -24872,7 +24872,7 @@
         "type": "object"
       },
       "PanelProfile": {
-        "description": "Closed descriptor extending BrokerCapabilities for the panel (\u00a74).\n\nAngular renders strictly from this: an inapplicable station renders as\n``not_applicable``. A bot's commands are not listed here: its panel\npresents exactly the actions it may run (``BotPanelView.actions``).\nSnapshot-contract-tested per broker.",
+        "description": "Closed descriptor extending BrokerCapabilities for the panel.\n\nAngular renders strictly from this: an inapplicable station renders as\n``not_applicable``. A bot's commands are not listed here: its panel\npresents exactly the actions it may run (``BotPanelView.actions``).\nSnapshot-contract-tested per broker.",
         "properties": {
           "broker": {
             "title": "Broker",
@@ -26614,7 +26614,7 @@
         "type": "object"
       },
       "ProposedLimitEvaluationResponse": {
-        "description": "What the price the operator proposed does against the Clerk's quote (#2007).\n\nEvery number an operator reads before confirming is computed by the Clerk\nand rendered as-is; the browser never derives one (AGENTS.md \u00a7 \"Python\nowns all math\").",
+        "description": "What the price the operator proposed does against the Clerk's quote (#2007).\n\nEvery number an operator reads before confirming is computed by the Clerk\nand rendered as-is; the browser never derives one (ADR 0068).",
         "properties": {
           "band_cap_bps": {
             "anyOf": [
@@ -30772,7 +30772,7 @@
       },
       "SelectionResponse": {
         "additionalProperties": false,
-        "description": "Staged **and** effective, always both (contract \u00a74).\n\n``effective_acknowledged_at_ms`` is a historical acknowledgement: it says a\nworker once bound this revision, never that one is running now.",
+        "description": "Staged **and** effective, always both.\n\n``effective_acknowledged_at_ms`` is a historical acknowledgement: it says a\nworker once bound this revision, never that one is running now.",
         "properties": {
           "apply_requested": {
             "title": "Apply Requested",
@@ -31137,7 +31137,7 @@
       },
       "SignalBarIntegrityContract": {
         "additionalProperties": false,
-        "description": "Duplicate/gap/out-of-order, watermark, and session-close ownership facts.\n\nPRD \u00a711.1 lists these beside ``revision_policy`` (``SignalDataContract``)\nas sealed identity, not runtime evidence. Today every field is a single\nsystem-wide policy \u2014 not a per-program choice \u2014 enforced by two modules\noutside this schema:\n\n* ``app.services.source_bar_ledger.SourceBarLedger`` fails closed on a\n  same-identity-different-payload bar (``SOURCE_BAR_IDENTITY_CONFLICT``),\n  is idempotent on an exact repeat, fails closed on a non-monotonic\n  ``end_ms`` (``SOURCE_BAR_NON_MONOTONIC_LIVE``/``_HISTORY``), tolerates a\n  missing bar rather than filling or rejecting it, and refuses\n  ``append_history`` once live delivery has started for that\n  provider/symbol seam (``SOURCE_BAR_HISTORY_AFTER_LIVE`` \u2014 the\n  history/live watermark).\n* ``app.services.bot_trade_strategy._drain_bar`` is the one router that\n  owns bucket closing: it fires every complete bucket on the bar that\n  closes it, so a session's trailing bucket is flushed exactly at the\n  decision session's close rather than left stranded until the next\n  session's bars arrive (FR-011, #2303).\n\nA second policy would need its own Literal member and a per-program field\nhere, not a silent default change on these.",
+        "description": "Duplicate/gap/out-of-order, watermark, and session-close ownership facts.\n\nThese sit beside ``revision_policy`` (``SignalDataContract``) as sealed\nidentity, not runtime evidence. Today every field is a single\nsystem-wide policy \u2014 not a per-program choice \u2014 enforced by two modules\noutside this schema:\n\n* ``app.services.source_bar_ledger.SourceBarLedger`` fails closed on a\n  same-identity-different-payload bar (``SOURCE_BAR_IDENTITY_CONFLICT``),\n  is idempotent on an exact repeat, fails closed on a non-monotonic\n  ``end_ms`` (``SOURCE_BAR_NON_MONOTONIC_LIVE``/``_HISTORY``), tolerates a\n  missing bar rather than filling or rejecting it, and refuses\n  ``append_history`` once live delivery has started for that\n  provider/symbol seam (``SOURCE_BAR_HISTORY_AFTER_LIVE`` \u2014 the\n  history/live watermark).\n* ``app.services.bot_trade_strategy._drain_bar`` is the one router that\n  owns bucket closing: it fires every complete bucket on the bar that\n  closes it, so a session's trailing bucket is flushed exactly at the\n  decision session's close rather than left stranded until the next\n  session's bars arrive (#2303).\n\nA second policy would need its own Literal member and a per-program field\nhere, not a silent default change on these.",
         "properties": {
           "duplicate_policy": {
             "const": "reject_conflicting_payload_else_idempotent",
@@ -31359,7 +31359,7 @@
       },
       "SignalSeriesContract": {
         "additionalProperties": false,
-        "description": "One named signal series a program consumes off the sealed data contract.\n\nPRD \u00a710.1/\u00a711.1: \"every signal series, field, and decision stream.\" A\nprogram's ``data`` contract seals the *shared* provider/symbol/timeframe\npair every series reads from; this seals each named series drawn from\nthat shared stream \u2014 e.g. ``ema_fast``, ``ema_slow``, and ``rsi`` all read\n``field=\"close\"`` off the same 15-minute decision bar. ``field`` also\nadmits ``\"high_low_close\"`` for a ``BarIndicator``-family series (e.g.\n``spy_strategy_a``'s ADX) that reads the full high/low/close swing\nrather than a single scalar -- ``field=\"close\"`` would misdescribe what\nsuch a series actually consumes. ``warmup_bars`` is\nthe series' own ``is_ready`` threshold (PRD \u00a711.1 \"readiness\"): the\n``app.engine.indicators`` base class exposes ``is_ready`` as\n``samples >= period``, so an EMA's ``warmup_bars`` equals its period; RSI\noverrides this to ``period + 1`` (one extra sample for the first delta);\nADX overrides this to ``2 * period``.",
+        "description": "One named signal series a program consumes off the sealed data contract.\n\nA program's ``data`` contract seals the *shared* provider/symbol/timeframe\npair every series reads from; this seals each named series drawn from\nthat shared stream \u2014 e.g. ``ema_fast``, ``ema_slow``, and ``rsi`` all read\n``field=\"close\"`` off the same 15-minute decision bar. ``field`` also\nadmits ``\"high_low_close\"`` for a ``BarIndicator``-family series (e.g.\n``spy_strategy_a``'s ADX) that reads the full high/low/close swing\nrather than a single scalar -- ``field=\"close\"`` would misdescribe what\nsuch a series actually consumes. ``warmup_bars`` is\nthe series' own ``is_ready`` threshold: the\n``app.engine.indicators`` base class exposes ``is_ready`` as\n``samples >= period``, so an EMA's ``warmup_bars`` equals its period; RSI\noverrides this to ``period + 1`` (one extra sample for the first delta);\nADX overrides this to ``2 * period``.",
         "properties": {
           "field": {
             "enum": [
@@ -31658,7 +31658,7 @@
         "type": "object"
       },
       "SpecTradeResponse": {
-        "description": "Single trade emitted by a spec backtest.\n\nTimestamps are ``int64 ms UTC`` per the repo-wide wire-format rule\n(see ``.claude/rules/numerical-rigor.md`` \u00a7 \"Timestamp rigor\"). UI\ncallers convert to local-time strings at the display boundary; no\nother layer should be reading these fields as strings.",
+        "description": "Single trade emitted by a spec backtest.\n\nTimestamps are ``int64 ms UTC`` on the wire. UI\ncallers convert to local-time strings at the display boundary; no\nother layer should be reading these fields as strings.",
         "properties": {
           "entry_price": {
             "title": "Entry Price",
@@ -31849,7 +31849,7 @@
         "type": "object"
       },
       "StationApplicability": {
-        "description": "One station's applicability for this broker/mode (\u00a74, \u00a77).\n\n``applicable=False`` renders the station in the rail's fifth state\n(``not_applicable``); Angular never guesses which stations a broker has.",
+        "description": "One station's applicability for this broker/mode.\n\n``applicable=False`` renders the station in the rail's fifth state\n(``not_applicable``); Angular never guesses which stations a broker has.",
         "properties": {
           "applicable": {
             "title": "Applicable",
@@ -31886,7 +31886,7 @@
         "type": "object"
       },
       "StationView": {
-        "description": "One of the six transaction-rail stations (\u00a77.1).\n\n``state`` is one of the five states; ``blocker`` is populated only when\n``state == \"blocked\"`` (carries the reused OperatorBlocker contract).\n``evidence_at_ms`` is the ts of the evidence backing this station, if any.",
+        "description": "One of the six transaction-rail stations.\n\n``state`` is one of the five states; ``blocker`` is populated only when\n``state == \"blocked\"`` (carries the reused OperatorBlocker contract).\n``evidence_at_ms`` is the ts of the evidence backing this station, if any.",
         "properties": {
           "blocker": {
             "anyOf": [
@@ -32144,7 +32144,7 @@
         "type": "object"
       },
       "StopRunRequest": {
-        "description": "``lifecycle_run_id`` is required (corrective foundation slice): Stop\nis no longer resolved from the currently active run, since that made a\nlost response unrecoverable \u2014 see the pinned contract's \u00a73a.",
+        "description": "``lifecycle_run_id`` is required (corrective foundation slice): Stop\nis no longer resolved from the currently active run, since that made a\nlost response unrecoverable \u2014 see ADR 0035's binding annex \u00a73a.",
         "properties": {
           "lifecycle_run_id": {
             "minLength": 1,
@@ -35268,7 +35268,7 @@
         "type": "object"
       },
       "TransactionRail": {
-        "description": "The six-station rail rendering one selected transaction (\u00a77.1).",
+        "description": "The six-station rail rendering one selected transaction.",
         "properties": {
           "stations": {
             "items": {
@@ -35422,7 +35422,7 @@
             "title": "Session"
           },
           "start_ms_utc": {
-            "description": "Inclusive window start as int64 ms since Unix epoch UTC. Per .claude/rules/numerical-rigor.md, every wire timestamp is int64 ms UTC; ISO strings are not accepted.",
+            "description": "Inclusive window start as int64 ms since Unix epoch UTC. Every wire timestamp is int64 ms UTC; ISO strings are not accepted.",
             "maximum": 4102444800000.0,
             "minimum": 1000000000000.0,
             "title": "Start Ms Utc",
@@ -53384,7 +53384,7 @@
     },
     "/api/data-lake/coverage": {
       "get": {
-        "description": "Per-day artifact status for a symbol, keyed by the canonical NYSE calendar.\n\nDays are the calendar's own sessions in the requested window \u2014 weekends\nand holidays are simply absent, never listed and never invented. A session\nwith no matching catalog row is reported honestly as ``status=\"missing\"``\nrather than omitted.\n\nThe window arrives as two ``int64 ms UTC`` values, not ISO dates.\n``.claude/rules/temporal-rigor.md`` allows exactly one wire format for a\ntemporal value and a trading date is not an exception to it \u2014 it is a\ndate-anchored value, carried as the millisecond instant of that session's\nopen and resolved back through ``America/New_York``\n(:func:`trading_date_at_ms`). The response has always spoken ms\n(``CoverageDay.trading_date_ms``); before #1839 the request did not, which\nleft one endpoint with a temporal format in each direction.\n\n``provider`` is not a caller-supplied parameter: it's derived from\n``data_type`` via ``provider_for_data_type`` (the same rule\n``expand_required_artifacts`` uses to write these rows) \u2014 trade bars are\nPolygon's, quote bars are ``learn_ai_derived``. A fixed ``provider=\"polygon\"``\nparameter made quote coverage unfindable, since quote rows are never\ncatalogued under that provider.\n\n``price_adjustment_mode`` has no default (#1890): it used to fall back to\n``\"raw\"`` when a caller omitted it, and for most of the lake's life the\nraw root held zero catalogued rows even when ``polygon_split_adjusted``\nwas fully populated for a symbol \u2014 an unqualified request silently read\n\"missing\" for data that actually existed under the other root. A default\nthat reads empty is indistinguishable from genuinely absent data, so the\ncaller must say which root they mean; FastAPI's own structural 422\n(missing required query parameter) is what an omitted value gets, the\nsame as an omitted ``symbol`` or ``start_trading_date_ms`` already does.",
+        "description": "Per-day artifact status for a symbol, keyed by the canonical NYSE calendar.\n\nDays are the calendar's own sessions in the requested window \u2014 weekends\nand holidays are simply absent, never listed and never invented. A session\nwith no matching catalog row is reported honestly as ``status=\"missing\"``\nrather than omitted.\n\nThe window arrives as two ``int64 ms UTC`` values, not ISO dates.\nADR 0022 (a) allows exactly one wire format for a\ntemporal value and a trading date is not an exception to it \u2014 it is a\ndate-anchored value, carried as the millisecond instant of that session's\nopen and resolved back through ``America/New_York``\n(:func:`trading_date_at_ms`). The response has always spoken ms\n(``CoverageDay.trading_date_ms``); before #1839 the request did not, which\nleft one endpoint with a temporal format in each direction.\n\n``provider`` is not a caller-supplied parameter: it's derived from\n``data_type`` via ``provider_for_data_type`` (the same rule\n``expand_required_artifacts`` uses to write these rows) \u2014 trade bars are\nPolygon's, quote bars are ``learn_ai_derived``. A fixed ``provider=\"polygon\"``\nparameter made quote coverage unfindable, since quote rows are never\ncatalogued under that provider.\n\n``price_adjustment_mode`` has no default (#1890): it used to fall back to\n``\"raw\"`` when a caller omitted it, and for most of the lake's life the\nraw root held zero catalogued rows even when ``polygon_split_adjusted``\nwas fully populated for a symbol \u2014 an unqualified request silently read\n\"missing\" for data that actually existed under the other root. A default\nthat reads empty is indistinguishable from genuinely absent data, so the\ncaller must say which root they mean; FastAPI's own structural 422\n(missing required query parameter) is what an omitted value gets, the\nsame as an omitted ``symbol`` or ``start_trading_date_ms`` already does.",
         "operationId": "get_coverage_api_data_lake_coverage_get",
         "parameters": [
           {
@@ -53739,7 +53739,7 @@
     },
     "/api/dataset/plan": {
       "post": {
-        "description": "Resolve a dataset recipe into a fetch-free planning receipt.\n\nPlanning touches only the local NYSE calendar \u2014 it never calls\nPolygon. Bar counts are arithmetic estimates typed with assumptions\nand provenance; output columns come from the same projection\nfunction the ZIP generation path uses (data-lab workspace redesign\nPRD \u00a712).",
+        "description": "Resolve a dataset recipe into a fetch-free planning receipt.\n\nPlanning touches only the local NYSE calendar \u2014 it never calls\nPolygon. Bar counts are arithmetic estimates typed with assumptions\nand provenance; output columns come from the same projection\nfunction the ZIP generation path uses.",
         "operationId": "plan_dataset_api_dataset_plan_post",
         "requestBody": {
           "content": {
@@ -53863,7 +53863,7 @@
     },
     "/api/edge/iv30/vix-style": {
       "post": {
-        "description": "Live VIX-style IV30 from a fresh Polygon snapshot.\n\nThe acceptance criterion (plan \u00a75.C): on a normal trading day, this\nreturns within 50 bps of the published CBOE VIX index value when\ncalled against SPY. The provenance object reports\n``variance_contribution_synthetic \u2248 0`` and ``opra_mid`` \u2248 100% mix.",
+        "description": "Live VIX-style IV30 from a fresh Polygon snapshot.\n\nThe acceptance criterion: on a normal trading day, this\nreturns within 50 bps of the published CBOE VIX index value when\ncalled against SPY. The provenance object reports\n``variance_contribution_synthetic \u2248 0`` and ``opra_mid`` \u2248 100% mix.",
         "operationId": "iv30_vix_style_api_edge_iv30_vix_style_post",
         "requestBody": {
           "content": {
@@ -54653,7 +54653,7 @@
     },
     "/api/lean-sidecar/trusted-runs": {
       "post": {
-        "description": "Stage, launch, and write the manifest for one trusted-sample run.\n\nPhase 2a: trusted sample only. No algorithm-source field, no\narbitrary user input. See ADR \u00a7\"Phase sequencing\" for when that\ngate opens (Phase 3).",
+        "description": "Stage, launch, and write the manifest for one trusted-sample run.\n\nPhase 2a: trusted sample only. No algorithm-source field, no\narbitrary user input. ADR 0070 decision 6 governs when caller source\nmay run.",
         "operationId": "post_trusted_run_api_lean_sidecar_trusted_runs_post",
         "requestBody": {
           "content": {

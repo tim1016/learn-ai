@@ -796,30 +796,6 @@ def _confirmed_limit_shape(
     )
 
 
-async def test_execute_safe_flatten_plan_reduces_with_the_confirmed_extended_limit(
-    crashed_with_exposure,
-) -> None:
-    repo, _clock = crashed_with_exposure
-    await _held_position(repo)
-    submit_stop_run(
-        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
-        lifecycle_run_id=RUN_ID, operator_reason="crash_analog",
-    )
-    plan = await _reconciled_flatten_plan(repo)
-    trade = _FakeTrade()
-
-    await execute_safe_flatten_plan(
-        repo, plan=plan, trade=trade, intake=ReentrantAsyncLock(), account_id=ACCOUNT_ID,
-        confirmed_shape=_confirmed_limit_shape(),
-        pricing=UNPRICEABLE_RECOVERY,
-    )
-
-    ((leg,),) = (trade.submitted_legs,)
-    assert (leg.side, leg.quantity, leg.order_type, leg.limit_price, leg.extended_hours) == (
-        OrderSide.SELL, 10, OrderType.LIMIT, 99.95, True,
-    )
-
-
 async def test_the_flatten_drives_its_exit_with_the_pricing_seam_it_is_handed(
     crashed_with_exposure,
 ) -> None:

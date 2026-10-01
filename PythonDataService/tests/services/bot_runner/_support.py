@@ -108,7 +108,7 @@ async def _wait_for(predicate, *, timeout_s: float = 2.0) -> None:
 
 
 # 2024-01-02 is a regular NYSE trading day (Tuesday after New Year's).
-# All bar timestamps below are int64 ms UTC (temporal-rigor rule).
+# All bar timestamps below are int64 ms UTC.
 #
 # ET = EST on 2024-01-02 (UTC-5):
 #   session_open  = 09:30 ET = 14:30 UTC = 1_704_205_800_000 ms

@@ -55,12 +55,11 @@ def record_imported_program_sources() -> None:
     disk, but a clerk bind-mounts ``app/`` and deploys are a ``git pull``
     followed by a restart: between the two, the bytes on disk are not the
     bytes the process imported, and a proof computed from disk would name
-    code that is not running -- including modules imported lazily
-    (``indicator_state``), which the later pull can silently load
-    mid-flight. This hashes every declared source file and then forces the
-    import of every declared module, so the recorded digests describe the
-    bytes this process loads, and any later divergence between disk and
-    those bytes fails the drift check closed.
+    code that is not running -- including any module imported lazily, which
+    the later pull can silently load mid-flight. This hashes every declared
+    source file and then forces the import of every declared module, so the
+    recorded digests describe the bytes this process loads, and any later
+    divergence between disk and those bytes fails the drift check closed.
 
     #2450 review: a module that is *already cached* when the anchor runs can
     never be anchored honestly -- there is no way to recover the bytes it

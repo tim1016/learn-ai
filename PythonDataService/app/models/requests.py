@@ -87,8 +87,8 @@ class OptionsCompanionConfig(BaseModel):
     from ATM (e.g. ``calls/atm-03.csv``, ``calls/atm.csv``, ``puts/atm+02.csv``).
     Each file is a fixed-schema time series for that slot across all trading
     days in range; the contract filling the slot rolls daily and is recorded
-    as the ``contract_ticker`` row value. See ``docs/options-companion-format.md``
-    for the full spec; computation lives in ``options_companion_service``.
+    as the ``contract_ticker`` row value. Computation lives in
+    ``options_companion_service``.
     """
 
     enabled: bool = Field(False, description="Emit options companion CSV files in the ZIP")
@@ -204,7 +204,7 @@ class DatasetGenerationRequest(BaseModel):
     )
     # Canonical numeric window (int64 ms UTC) — additive; per-field takes
     # precedence over the date strings so a generated dataset matches the
-    # planned half-open window (data-lab workspace redesign PRD §12).
+    # planned half-open window.
     start_ms_utc: int | None = Field(
         None,
         ge=0,
@@ -307,8 +307,7 @@ class DatasetPlanRequest(BaseModel):
     executed with the same fields. ``from_date``/``to_date`` remain
     date-intent strings for now; the additive ``start_ms_utc``/
     ``end_ms_utc`` fields are the canonical numeric form and take
-    precedence over the date strings when supplied (data-lab workspace
-    redesign PRD §12).
+    precedence over the date strings when supplied.
     """
 
     ticker: str = Field(..., min_length=1, max_length=20, description="Ticker symbol")

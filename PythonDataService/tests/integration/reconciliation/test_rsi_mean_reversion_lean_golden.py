@@ -1,7 +1,6 @@
 """Trade-level parity for RSI Mean Reversion against a pinned LEAN run.
 
-The executable half of
-``docs/references/reconciliations/rsi-mean-reversion-lean-2026-09-01.md``.
+The executable half of the ENG-009 reconciliation receipt.
 That receipt records a one-off reconciliation; this test pins the LEAN
 oracle into the repository so indicator, consolidation, or template drift
 fails CI instead of quietly invalidating the twin the product presents as

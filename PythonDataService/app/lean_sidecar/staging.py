@@ -5,9 +5,6 @@ calling the launcher. ``staging.py`` is the single seam where Polygon
 data turns into LEAN's on-disk format and the algorithm source + config
 are placed next to it. The launcher does no staging — staging happens
 out-of-process and the launcher only invokes the container.
-
-Authority: ``docs/architecture/lean-sidecar-lab.md`` §"Workspace
-contract" and §"LEAN data-folder fidelity".
 """
 
 from __future__ import annotations
@@ -209,7 +206,7 @@ def stage_empty_corporate_action_dirs(workspace: Workspace) -> None:
     """Create empty ``factor_files`` / ``map_files`` subdirectories.
 
     A reconciliation-grade run requires real factor and map files (see
-    ADR §"Corporate actions and metadata policy"). For the
+    ADR 0070 decision 8). For the
     non-reconciliation trusted sample the windows have no corporate
     actions, so an empty directory is enough to silence LEAN's
     ``LocalDiskMapFileProvider`` warning and keep the run output
@@ -324,8 +321,7 @@ def stage_lean_metadata_from_image(
                 "launcher's own call into staging)"
             )
         # Data-plane container has no podman on PATH — by design, per
-        # the launcher topology in lean-sidecar-lab.md §"Launcher
-        # topology". Delegate to the host-side launcher via HTTP, then
+        # ADR 0070 decision 2. Delegate to the host-side launcher via HTTP, then
         # verify the files landed in the workspace through our view of
         # the shared bind mount.
         return _stage_lean_metadata_via_launcher(workspace, image_digest)

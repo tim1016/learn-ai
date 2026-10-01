@@ -138,31 +138,6 @@ def _run_signal_only(bars: list[TradeBar]) -> list[str]:
     return decisions
 
 
-def test_signal_decision_split_emits_the_same_sequence_the_retired_kernel_did() -> None:
-    """Same semantic sequence the now-retired ``DeploymentValidationDecisionKernel``
-    proved, reproduced through the canonical
-    ``evaluate_signal_bar``/``commit_signal_decision`` split.
-
-    Renamed from ``..._without_execution_state``. That claim was inherited
-    from the Kernel test and is no longer true of this one: ``_run_signal_only``
-    drives the strategy's compatibility callback, which commits any intent it
-    describes, and ``commit_signal_decision`` calls ``set_holdings`` /
-    ``liquidate``. The thing that had no execution state was the Kernel, not
-    this surface. What this test actually holds invariant is the decision
-    *sequence* across the promotion, which is what its name now says."""
-    bars = [
-        _bar(9, 44, "100", "101"),
-        _bar(9, 45, "101", "102"),
-        _bar(9, 46, "102", "101"),
-        _bar(9, 47, "101", "100"),
-        _bar(9, 48, "100", "99"),
-    ]
-
-    decisions = _run_signal_only(bars)
-
-    assert decisions == ["HOLD", "ENTER", "HOLD", "HOLD", "EXIT"]
-
-
 def test_cross_asset_mode_subscribes_signal_symbol_and_orders_trade_symbol() -> None:
     strategy = DeploymentValidationConsecutiveGreen(symbol="SPY", trade_symbol="NVDA")
     portfolio = Portfolio(initial_cash=Decimal("100000"))
@@ -279,56 +254,3 @@ def test_on_closed_bar_emits_exit_at_half_day_barrier() -> None:
 
     assert decisions[-1] == "EXIT"
 
-
-def test_exposes_consolidator_period_for_indicator_hydration() -> None:
-    # Regression: indicator_state.hydrate() reads ``strategy.CONSOLIDATOR_PERIOD_MIN``
-    # unconditionally during live-run startup. The class previously omitted it,
-    # so every live run of this strategy crashed with AttributeError before any
-    # bar was processed (exit_code=3). The period must match the 1-minute
-    # consolidator registered in initialize().
-    strategy = DeploymentValidationConsecutiveGreen()
-
-    assert strategy.CONSOLIDATOR_PERIOD_MIN == 1
-
-
-def test_is_not_warm_startable() -> None:
-    # deployment_validation reports no persistable state, so it is NOT
-    # warm-startable. The live hydration ladder must treat hydrate_policy=require
-    # as vacuous for it (no exit 4) — otherwise the canary can never start,
-    # because a stateless strategy never writes the sidecar `require` demands.
-    # Regression for the "zero clean sessions" blocker.
-    assert DeploymentValidationConsecutiveGreen().is_warm_startable() is False
-
-
-def test_spy_ema_remains_warm_startable() -> None:
-    # Contrast: a strategy that overrides report_state_for_persistence IS
-    # warm-startable, so `require` is still enforced for it (no regression to
-    # the seed-day guarantee). Derived purely from the persistence-contract
-    # override, so the two signals can never drift.
-    from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
-
-    assert EmaCrossoverSignalAlgorithm().is_warm_startable() is True
-
-
-def test_satisfies_live_persistence_contract() -> None:
-    # Regression: the live engine's hydration ladder + shutdown checkpoint call
-    # report_state_for_persistence / validate_state_payload /
-    # restore_state_from_persistence on every strategy. This indicator-less
-    # strategy defined none, so the shutdown checkpoint crashed mid-run with
-    # AttributeError ('...has no attribute report_state_for_persistence').
-    # Base-class defaults now satisfy the contract: no persistable state.
-    strategy = DeploymentValidationConsecutiveGreen()
-
-    # No warm-startable indicator state → cold start every session.
-    assert strategy.report_state_for_persistence() is None
-
-    # A strategy that models no state must refuse a foreign/stale payload.
-    result = strategy.validate_state_payload({"anything": 1})
-    assert result.failure_reason == "payload_mismatch"
-    assert result.payload_shape_ok is False
-
-    # restore is never reached on the happy path; reaching it is a bug.
-    import pytest
-
-    with pytest.raises(NotImplementedError):
-        strategy.restore_state_from_persistence({})

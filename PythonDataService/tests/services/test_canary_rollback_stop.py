@@ -242,7 +242,7 @@ async def test_stop_completes_and_records_outcome_when_rollback_verdict_refuses(
 
 @pytest.mark.asyncio
 async def test_canary_rollback_verdict_absent_for_dry_run_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """PRD Sec 15: Dry Run uses its own isolated synthetic authority and is
+    """Dry Run uses its own isolated synthetic authority and is
     never subject to the canary gate, even if its build proves PROVEN."""
     from tests._helpers.bot_runner.custody import configure_execution_allowances
 

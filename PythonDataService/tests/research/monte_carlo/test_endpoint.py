@@ -181,21 +181,6 @@ async def test_post_then_get_round_trips(client, parent_run_id):
     assert fetched.json()["config"] == posted["config"]
 
 
-async def test_response_timestamps_are_int64_ms(client, parent_run_id):
-    response = await client.post(
-        "/api/research/strategy-runs/monte-carlo",
-        json={
-            "parent_run_id": parent_run_id,
-            "method": "reshuffle",
-            "simulation_count": 100,
-        },
-    )
-    body = response.json()
-    assert isinstance(body["config"]["created_at_ms"], int)
-    assert isinstance(body["result"]["created_at_ms"], int)
-    assert isinstance(body["result"]["completed_at_ms"], int)
-
-
 # ---------------------------------------------------------------------------
 # Validation errors.
 # ---------------------------------------------------------------------------

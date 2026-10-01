@@ -365,7 +365,7 @@ class EngineTradeResponse(BaseModel):
     # downstream dollar-PnL persistence — without it, ``BacktestTrade.Quantity``
     # defaults to 1 on the .NET side and the persisted PnL silently diverges
     # from the actual run by a factor of ``quantity``. See
-    # ``.claude/rules/numerical-rigor.md`` → ``QUANTITY_MISMATCH``.
+    # ADR 0069 §6 → ``QUANTITY_MISMATCH``.
     quantity: int
     # Per-trade indicator snapshot captured at the entry signal. Keys depend
     # on the strategy — e.g. SPY returns ``ema5``/``ema10``/``rsi``, SMA

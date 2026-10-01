@@ -559,8 +559,8 @@ async def test_a_stale_identity_pin_refuses_in_the_contract_shape() -> None:
 
 @pytest.mark.asyncio
 async def test_a_malformed_raw_asgi_body_makes_the_shape_assertion_fail() -> None:
-    """Anti-vacuous proof (per the numerical-rigor "prove the check can fail"
-    standard): ``_assert_flat_refusal`` must actually redden on a body that
+    """Anti-vacuous proof (a check that cannot fail proves nothing):
+    ``_assert_flat_refusal`` must actually redden on a body that
     declares a real reason code but wraps it the pre-#2107 nested way. This
     is the exact shape ``internal_fleet.py``'s old ``_refuse`` produced and
     the exact shape a regressed hand-rolled writer would reintroduce."""

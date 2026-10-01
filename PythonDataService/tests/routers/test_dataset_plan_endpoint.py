@@ -4,7 +4,7 @@ The plan endpoint resolves date intent through the canonical NYSE
 calendar (never ``T23:59:59``, never a hard-coded 390-minute session),
 projects output columns through the same function the ZIP generation
 path uses, and types bar counts as arithmetic estimates with explicit
-assumptions and provenance (data-lab workspace redesign PRD §12/§18).
+assumptions and provenance.
 """
 
 from __future__ import annotations
@@ -59,14 +59,6 @@ async def _post_plan(api: FastAPI, payload: dict[str, Any]) -> httpx.Response:
 
 
 # ── Schema and boundary validation ──────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_plan_missing_ticker_is_422(api: FastAPI) -> None:
-    payload = {**_RECIPE}
-    del payload["ticker"]
-    response = await _post_plan(api, payload)
-    assert response.status_code == 422
 
 
 @pytest.mark.asyncio

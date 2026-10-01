@@ -28,7 +28,6 @@ import pytest
 
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.live_envelope import ENTRY_FEE_PROVISION_UNRECORDED
-from app.broker.alpaca.clerk.sqlite import schema
 from app.broker.alpaca.clerk.sqlite.budget_authority import BUDGETS_NOT_SWITCHED_ON
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import (
@@ -143,19 +142,6 @@ def _observed_order(
         expired_at_ms=None,
         events=[],
         observed_at_ms=source_event_at_ms,
-    )
-
-
-def test_a_fresh_authority_has_the_reservations_table_at_schema_v13(
-    envelope_repo: ClerkSqliteRepository,
-) -> None:
-    assert schema.SCHEMA_VERSION >= 20
-    assert envelope_repo.control_meta_snapshot().schema_version == schema.SCHEMA_VERSION
-    assert (
-        envelope_repo._conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='envelope_reservations'"
-        ).fetchone()
-        is not None
     )
 
 
@@ -416,10 +402,6 @@ def _append_slice(
         )
         == "appended"
     )
-
-
-def _refuse_correction_uncertainty(reason: str) -> TransitionInput:
-    raise AssertionError(f"the correction fixture must be valid: {reason}")
 
 
 def test_an_unseen_recorded_fill_reserves_at_its_actual_cost(

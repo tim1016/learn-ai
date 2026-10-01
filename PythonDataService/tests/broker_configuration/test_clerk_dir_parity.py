@@ -2,8 +2,8 @@
 
 ``runtime.resolve_clerk_dir`` duplicates ``AlpacaSettings.clerk_dir`` for one
 reason: locating a *directory* must not require Alpaca credentials to be
-present (ADR 0060 Decision 7). CLAUDE.md guiding philosophy #5 admits a
-duplicate only with a parity test naming the canonical file, which is this.
+present (ADR 0060 Decision 7). The duplicate carries a parity test naming
+the canonical file, which is this.
 
 Canonical implementation: ``app/broker/alpaca/config.py`` (``AlpacaSettings.clerk_dir``).
 """

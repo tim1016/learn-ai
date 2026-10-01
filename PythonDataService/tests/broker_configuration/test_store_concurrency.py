@@ -3,7 +3,7 @@
 The service checks its preconditions against a value it read; these pin the
 guards in the ``WHERE`` clauses that hold when something changes between that
 read and the write. Without them a second writer's change would silently
-overwrite the first — the outcome contract §5 exists to prevent.
+overwrite the first.
 """
 
 from __future__ import annotations
@@ -316,7 +316,7 @@ def test_a_stage_that_lands_mid_call_makes_this_one_conflict(
 
     A sequential second caller is caught by the service's own generation check.
     This commits a rival stage *between* this caller's read and its write, which
-    is the window contract §8's obligation is actually about.
+    is the window that actually matters.
     """
     service = _service(clerk_dir, clock)
     rival = _service(clerk_dir, clock)

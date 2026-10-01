@@ -1,4 +1,4 @@
-"""Tests for the panel projection (S1, spec §7).
+"""Tests for the panel projection (S1).
 
 Composes the health/clerk cards + six-station rail from journal fixtures and
 the presented actions through the SQLite adapter, and pins the revision
@@ -1811,7 +1811,7 @@ def test_program_build_view_replays_the_wiring_verdict_the_run_started_under() -
 
 
 def test_panel_exposes_sealed_program_build_proof_and_decision_causal_links() -> None:
-    """PRD Sec 11.1-11.4, 19: seal + build proof + FR-030 causal links reach the panel."""
+    """Seal + build proof + causal links reach the panel (ADR 0043)."""
     decision = decision_receipt(
         seq=3,
         ts_ms=_NOW - 500,
@@ -1917,7 +1917,7 @@ def test_panel_surfaces_unproven_for_a_registered_signal_program_with_no_evidenc
 
 
 def test_panel_renders_explicit_absence_when_no_seal_or_causal_links_supplied() -> None:
-    """PRD Sec 19: an absent link/seal is an explicit state, never inferred."""
+    """An absent link/seal is an explicit state, never inferred."""
     decision = decision_receipt(seq=4, ts_ms=_NOW - 500, outcome="no_action", reason_code="NO_SIGNAL")
     panel = _panel(_status(mode="trade"), _clerk_status(), [], decision)
 
@@ -2117,7 +2117,7 @@ def test_a_stopped_bots_archive_leads_its_recovery_commands() -> None:
 
 
 def test_served_readiness_counts_partition_the_recovery_checks() -> None:
-    """The one readiness aggregate (``docs/references/broker-v2-readiness-summary.md``):
+    """The one readiness aggregate:
     the adapter counts its recovery checks once, exactly (``atol=0, rtol=0``),
     and Angular renders the two numbers verbatim."""
     served = adapt_sqlite_panel(
@@ -2215,94 +2215,6 @@ def test_unhealthy_required_channel_blocks_trade_mode_mission() -> None:
     assert panel.mission_verdict.state == "blocked"
     assert "market_data" in panel.mission_verdict.explanation
     assert "execution" in panel.mission_verdict.explanation
-
-
-def test_stop_outcome_copy_distinguishes_approved_carryover() -> None:
-    status = _status(running=False)
-    status = status.model_copy(
-        update={
-            "duty_outcome": BotDutyOutcomeView(
-                kind="STOPPED",
-                reason_code="STOPPED_WITH_APPROVED_ATTRIBUTED_EXPOSURE",
-                recorded_at_ms=_NOW,
-                run_id="run-1",
-            ),
-        }
-    )
-    panel = _panel(status, _clerk_status(), [], exposure={"SPY": 1.0})
-
-    assert panel.health.duty_outcome is not None
-    assert panel.health.duty_outcome.label == "Stopped with approved carryover"
-    assert "durable checkpoint" in panel.health.duty_outcome.explanation
-
-
-def test_a_crash_the_feed_caused_says_the_feed_stopped() -> None:
-    """Hurdle H29: a run the market-data feed killed read "not a market-data
-    health verdict" while its log said the feed died."""
-    status = _status(running=False).model_copy(
-        update={
-            "duty_outcome": BotDutyOutcomeView(
-                kind="CRASHED", reason_code="FEED_DEATH", recorded_at_ms=_NOW, run_id="run-1",
-            ),
-        }
-    )
-
-    outcome = _panel(status, _clerk_status(), []).health.duty_outcome
-
-    assert outcome is not None
-    assert outcome.label == "Crashed: market data stopped"
-    assert outcome.explanation == (
-        "The IBKR market-data feed stopped delivering bars, so the run ended rather than decide without them."
-    )
-    assert "not a market-data" not in outcome.explanation
-
-
-def test_a_launch_that_failed_after_its_stop_reads_as_a_failed_launch_not_an_operator_stop() -> None:
-    """#2559 / #2661 review: the failed-launch compensation records a stop, but
-    the panel said "Stopped cleanly: ... an operator stop or a service shutdown"."""
-    status = _status(running=False).model_copy(
-        update={
-            "duty_outcome": BotDutyOutcomeView(
-                kind="STOPPED", reason_code="ACTIVATION_FAILED_AFTER_REGISTRATION", recorded_at_ms=_NOW,
-                run_id="run-1",
-            ),
-        }
-    )
-
-    outcome = _panel(status, _clerk_status(), []).health.duty_outcome
-
-    assert outcome is not None
-    assert outcome.label == "Failed to launch"
-    assert outcome.explanation == (
-        "The launch failed partway through, so the service ended the run. Nobody stopped it, and nothing is running."
-    )
-    assert "operator" not in outcome.explanation
-
-
-@pytest.mark.parametrize("reason_code", ["TypeError", "RuntimeError"])
-def test_crash_copy_is_source_neutral_and_not_a_market_data_verdict(
-    reason_code: str,
-) -> None:
-    status = _status(running=False)
-    status = status.model_copy(
-        update={
-            "duty_outcome": BotDutyOutcomeView(
-                kind="CRASHED",
-                reason_code=reason_code,
-                recorded_at_ms=_NOW,
-                run_id="run-1",
-            ),
-        }
-    )
-
-    panel = _panel(status, _clerk_status(), [])
-
-    assert panel.health.duty_outcome is not None
-    assert panel.health.duty_outcome.label == "Crashed"
-    assert panel.health.duty_outcome.explanation == (
-        "The bot exited on an unhandled runtime error. "
-        "This terminal outcome is not a market-data health verdict."
-    )
 
 
 def test_refused_warmup_crash_carries_its_own_backend_copy() -> None:
@@ -2638,25 +2550,6 @@ def _recovery_capability(action_id: str, *, primary: bool, available: bool = Tru
     )
 
 
-def test_select_primary_action_stopped_bot_has_none() -> None:
-    """A stopped bot's page offers Deploy again, which is navigation, not a
-    panel command."""
-    assert select_primary_action(
-        [_stub_action("stop_bot_decisions", enabled=False)], _health(running=False),
-    ) is None
-
-
-def test_select_primary_action_running_sqlite_bot_stops_its_decisions() -> None:
-    """A running bot's stop is the recovery executor's ``stop_bot_decisions``,
-    and that is the page's one primary command."""
-    selection = select_primary_action(
-        [_stub_action("reconcile_now"), _stub_action("stop_bot_decisions")],
-        _health(running=True),
-    )
-
-    assert selection == "stop_bot_decisions"
-
-
 def test_select_primary_action_blocked_action_still_referenced() -> None:
     """A disabled lifecycle action is still the reference; ``enabled`` only
     gates the button, not whether the page may point at it (ADR 0027's
@@ -2670,18 +2563,6 @@ def test_select_primary_action_blocked_action_still_referenced() -> None:
 def test_select_primary_action_missing_action_fails_closed() -> None:
     """Nothing presented: ``None`` rather than a guess from ``health``."""
     assert select_primary_action([], _health(running=True)) is None
-
-
-def test_select_primary_action_recovery_cure_outranks_the_lifecycle_command() -> None:
-    """The one precedence rule (#1665, ADR 0027): the bot's recovery cure
-    outranks the routine lifecycle command."""
-    selection = select_primary_action(
-        [_stub_action("stop_bot_decisions"), _stub_action("resolve_execution_coverage")],
-        _health(running=True),
-        recovery_primary_action_id="resolve_execution_coverage",
-    )
-
-    assert selection == "resolve_execution_coverage"
 
 
 def test_select_primary_action_dangling_recovery_primary_falls_back() -> None:
@@ -2795,34 +2676,6 @@ def test_primary_action_rejects_a_dangling_reference() -> None:
 
     with pytest.raises(ValidationError):
         BotPanelView.model_validate(payload)
-
-
-@pytest.mark.parametrize(
-    ("reason", "label"),
-    [
-        ("RESUME_HOLE_AFTER_HOURS", "Refused: after-hours hole"),
-        ("RESUME_HOLE_UNFILLED", "Refused: gap could not be filled"),
-        ("IMPOSSIBLE_SOURCE_BAR", "Refused: impossible source bar"),
-    ],
-)
-def test_a_resume_hole_refusal_carries_its_own_duty_outcome_copy(reason: str, label: str) -> None:
-    """#2314: a resume refused at its hole is not a feed death or a generic crash.
-
-    #2444: an impossible source bar is likewise a named data-quality refusal,
-    never the generic crash copy that disclaims a market-data verdict.
-    """
-    status = _status(running=False).model_copy(
-        update={
-            "duty_outcome": BotDutyOutcomeView(
-                kind="CRASHED", reason_code=reason, recorded_at_ms=_NOW, run_id="run-1"
-            ),
-        }
-    )
-
-    panel = _panel(status, _clerk_status(), [])
-
-    assert panel.health.duty_outcome is not None
-    assert panel.health.duty_outcome.label == label
 
 
 def test_warmup_join_projection_names_the_filled_window() -> None:

@@ -1,7 +1,6 @@
 """Resolve a broker-configuration profile revision into a runtime binding.
 
-Package C of the user-owned broker configurations plan (ADR 0060,
-``docs/architecture/broker-configuration-profile-contract.md`` §3 and §7). This
+Package C of the user-owned broker configurations work (ADR 0060). This
 package owns three things and nothing else:
 
 1. **The credential slot allowlist and resolver** (:mod:`.credentials`) — a

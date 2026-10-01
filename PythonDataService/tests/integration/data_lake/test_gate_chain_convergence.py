@@ -14,7 +14,7 @@ backfills must complete, the second must cost zero provider calls for A's
 already-covered days, and the sidecar's lake-mode resolver must succeed
 cleanly over the wider window afterward — no lake_* refusal.
 
-See docs/superpowers/specs/2026-08-29-data-lake-issue-closure-plan.md § 4.
+See ADR 0049 §3 (concurrent ``ensure_data`` callers converge on one fetch).
 """
 
 from __future__ import annotations

@@ -22,7 +22,7 @@ from app.research.recency import service as recency_service
 
 def test_window_date_resolves_the_et_calendar_date_not_utc() -> None:
     """Window bounds feed EngineBacktestRequest.from_date/to_date, an ET-anchored
-    trading date (.claude/rules/temporal-rigor.md) — must not drift a day off UTC.
+    trading date (ADR 0022 (a)) — must not drift a day off UTC.
     """
     # 2026-06-11 02:30 UTC is 2026-06-10 22:30 EDT (UTC-4): the ET calendar
     # date trails the UTC one across this boundary.

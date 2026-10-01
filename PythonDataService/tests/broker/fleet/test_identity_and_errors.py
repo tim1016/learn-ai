@@ -1,4 +1,4 @@
-"""Opaque identity minting and the stable refusal families (PRD §10.4)."""
+"""Opaque identity minting and the stable refusal families (ADR 0062 Decision 5)."""
 
 from __future__ import annotations
 
@@ -77,8 +77,8 @@ def test_identity_validation_rejects_forged_and_wrong_family_values() -> None:
 
 
 #: The retry-semantics pin for the families whose exact status code is a
-#: documented contract, not merely one of the four valid buckets (audit
-#: 2026-09-13; folded from the former standalone
+#: documented contract, not merely one of the four valid buckets (folded
+#: from the former standalone
 #: test_status_codes_pin_the_retry_semantics).
 _PINNED_RETRY_SEMANTICS: dict[type[FleetControlError], int] = {
     BrokerAndClerkRequired: 400,

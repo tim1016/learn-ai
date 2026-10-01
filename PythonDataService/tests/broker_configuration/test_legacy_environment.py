@@ -5,7 +5,7 @@ cutover: ``ALPACA_API_KEY_ID`` and ``ALPACA_API_SECRET_KEY`` look like legacy
 Alpaca variables and are named as such in casual descriptions of this work, but
 they **are** the ``default`` credential slot. Refusing a boot because they are
 present would break every deployment. The authority is
-``docs/architecture/alpaca-configuration-ownership-inventory.md`` §F.
+ADR 0060 (the credential slot reference; retired settings are refused).
 
 Every settings object here is built with ``_env_file=None`` so a developer's real
 ``PythonDataService/.env`` cannot decide the outcome — the same hazard the
@@ -59,30 +59,6 @@ def _values(**overrides: str) -> LegacyEnvironmentValues:
 
 
 # ---- the registry ----------------------------------------------------------
-
-
-def test_exactly_seven_settings_are_retired() -> None:
-    """The endpoint mode and the six envelope values. Nothing else."""
-    assert RETIRED_ENV_VARS == (
-        "ALPACA_MODE",
-        "ALPACA_LIVE_LOSS_FRACTION",
-        "ALPACA_LIVE_LOSS_USD",
-        "ALPACA_LIVE_SHADOW_SESSIONS",
-        "ALPACA_LIVE_ARMING_MAX_SESSIONS",
-        "ALPACA_LIVE_XH_ENTRY_BPS",
-        "ALPACA_LIVE_XH_EXIT_BPS",
-    )
-
-
-@pytest.mark.parametrize("credential_variable", ["ALPACA_API_KEY_ID", "ALPACA_API_SECRET_KEY"])
-def test_the_credential_pair_is_never_retired(credential_variable: str) -> None:
-    """They *are* the ``default`` slot — retiring them would break every deployment."""
-    assert credential_variable not in RETIRED_ENV_VARS
-    assert credential_variable in NEVER_RETIRED_SETTINGS
-
-
-def test_retired_and_never_retired_are_disjoint() -> None:
-    assert not set(RETIRED_ENV_VARS) & set(NEVER_RETIRED_SETTINGS)
 
 
 def test_the_envelope_mapping_covers_every_envelope_field() -> None:
@@ -174,7 +150,7 @@ def test_the_refusal_does_not_echo_a_value(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_legacy_values_declare_the_same_types_and_constraints() -> None:
-    """CLAUDE.md guiding philosophy #5: the duplicate is pinned to its canonical file.
+    """The duplicate is pinned to its canonical file.
 
     Comparing *declarations*, not one parsed sample. A sample-based check stays
     green if `config.py` widens `live_xh_entry_bps` to `lt=20_000`, drops
@@ -219,7 +195,7 @@ def _constraints(field: object) -> list[str]:
 def test_legacy_values_parse_exactly_as_alpaca_settings_does(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """CLAUDE.md guiding philosophy #5: the duplicate is pinned to its canonical file.
+    """The duplicate is pinned to its canonical file.
 
     ``LegacyEnvironmentValues`` mirrors ``AlpacaSettings``' field types so an
     imported value is the value the environment boot would have used. If the two

@@ -1,4 +1,4 @@
-"""Fetch-free dataset planning (data-lab workspace redesign PRD §12).
+"""Fetch-free dataset planning.
 
 ``POST /api/dataset/plan`` resolves a recipe into a receipt the Angular
 Data Lab renders verbatim: session window, exchange sessions, output

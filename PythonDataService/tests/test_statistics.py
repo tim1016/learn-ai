@@ -589,8 +589,7 @@ class TestValidateTradeLog:
         """A position opened on the final bar of the window is force-closed at
         that same instant by the engine's terminal sweep (issue #1928). The
         round trip is genuinely zero-duration; there is no later instant to
-        move the exit to, and inventing one would violate
-        ``.claude/rules/temporal-rigor.md``."""
+        move the exit to, and none may be invented."""
         ms = to_ms_utc(datetime(2024, 1, 2, 21, 0, tzinfo=UTC))
         t = FakeTrade(Decimal("0"), Decimal("0"), "LOSS", ms, ms, is_synthetic_exit=True)
 
@@ -654,7 +653,7 @@ class TestValidateStatistics:
 
 
 class TestSummarizeFiniteSanitization:
-    """Regression for audit § 5.3 — non-finite floats must be coerced to None.
+    """Regression: non-finite floats must be coerced to None.
 
     Before fix: profit_factor (all-wins) emits float('inf'); FastAPI/Pydantic
     serialization raised `ValueError: Out of range float values are not JSON

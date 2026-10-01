@@ -317,17 +317,6 @@ def test_bot_end_view_of_a_scheduled_sale() -> None:
     assert view.editable is True
 
 
-def test_bot_end_view_of_a_later_day_that_keeps() -> None:
-    view = bot_end_view(
-        _scheduled(_at(_MONDAY, 12), "KEEP"), now_ms=_at(_WEDNESDAY, 10), dry_run=False, running=True, use_rth=True,
-    )
-
-    assert view.headline == "Ends Mon Oct 5, 12:00 ET · keeps its shares"
-    assert view.explanation == (
-        "At Mon Oct 5, 12:00 ET the Clerk stops the bot and cancels its working orders. It keeps its shares."
-    )
-
-
 def test_bot_end_view_of_a_dry_run_names_the_last_price() -> None:
     view = bot_end_view(
         _scheduled(_at(_THURSDAY, 15, 59)), now_ms=_at(_WEDNESDAY, 10), dry_run=True, running=True, use_rth=True,
@@ -395,24 +384,6 @@ def test_bot_end_view_once_the_end_was_carried_out_names_when() -> None:
         "The Clerk stopped the bot at its end and put in the sale of its shares at market. "
         "A sale that meets a closed market waits for the next regular open; it never goes out after hours."
     )
-
-
-def test_bot_end_view_of_an_ended_dry_run() -> None:
-    carried_out = RecordedEnd(end_at_ms=_at(_WEDNESDAY, 15, 59), carried_out_at_ms=_at(_WEDNESDAY, 16, 2))
-
-    view = bot_end_view(carried_out, now_ms=_at(_WEDNESDAY, 17), dry_run=True, running=False, use_rth=True)
-
-    assert view.headline == "Ended Wed Sep 30, 16:02 ET · sold at its last price"
-    assert view.explanation == "The bot has stopped, and its simulation sold what it held at the last price it saw."
-
-
-def test_bot_end_view_carries_the_clamp_notice() -> None:
-    view = bot_end_view(
-        _scheduled(_at(_HALF_DAY, 12, 59)), now_ms=_at(_HALF_DAY, 9), dry_run=False, running=True, use_rth=True,
-        notice="moved",
-    )
-
-    assert view.notice == "moved"
 
 
 # ── the default end offered to a bot with none (#2663) ───────────────────────

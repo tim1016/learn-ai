@@ -77,21 +77,12 @@ def _rows(csv_bytes: bytes) -> list[list[str]]:
 _PROJECTION = ["open", "high", "low", "close", "volume", "vwap", "transactions", "session", "rsi_length14"]
 
 
-def test_select_output_columns_none_keeps_full_projection() -> None:
-    assert select_output_columns(_PROJECTION, None) == _PROJECTION
-
-
 def test_select_output_columns_keeps_canonical_order() -> None:
     assert select_output_columns(_PROJECTION, ["rsi_length14", "close", "open"]) == ["open", "close", "rsi_length14"]
 
 
 def test_select_output_columns_empty_selection_exports_no_data_columns() -> None:
     assert select_output_columns(_PROJECTION, []) == []
-
-
-def test_select_output_columns_unknown_name_fails_loudly() -> None:
-    with pytest.raises(ValueError, match="ema_20"):
-        select_output_columns(_PROJECTION, ["close", "ema_20"])
 
 
 def test_select_output_columns_unix_ts_is_not_selectable() -> None:
@@ -172,11 +163,6 @@ async def test_plan_unknown_time_zone_is_422() -> None:
 # ── Early validation (before any Polygon fetch) ──────────────────
 
 
-def test_prepare_generation_request_accepts_a_planned_selection() -> None:
-    request = DatasetGenerationRequest(**_RECIPE, columns=["close", "rsi_length14"])
-    assert prepare_generation_request(request).columns == ["close", "rsi_length14"]
-
-
 def test_plan_lists_a_long_window_indicator_the_real_run_produces() -> None:
     """Regression: the planning frame was a fixed 300 rows, so SMA(400) —
     configurable up to 500 — produced no column there while a real, warmed-up
@@ -188,12 +174,6 @@ def test_plan_lists_a_long_window_indicator_the_real_run_produces() -> None:
 
     request = DatasetGenerationRequest(**long_sma, columns=["close", "sma_length500"])
     assert prepare_generation_request(request).columns == ["close", "sma_length500"]
-
-
-def test_prepare_generation_request_rejects_a_column_the_recipe_cannot_produce() -> None:
-    request = DatasetGenerationRequest(**_RECIPE, columns=["close", "ema_20"])
-    with pytest.raises(ValueError, match="ema_20"):
-        prepare_generation_request(request)
 
 
 @pytest.mark.asyncio

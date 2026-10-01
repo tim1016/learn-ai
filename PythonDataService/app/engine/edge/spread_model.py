@@ -11,7 +11,6 @@ spread reflects market-maker inventory risk and asymmetric-information cost.
 Math provenance:
 - Madhavan, A. & Smidt, S. (1991), "A Bayesian Model of Intraday Specialist
   Pricing", Journal of Financial Economics 30(1).
-- Operational form per docs/architecture/edge-feature-design.md §7.2.
 """
 
 from __future__ import annotations

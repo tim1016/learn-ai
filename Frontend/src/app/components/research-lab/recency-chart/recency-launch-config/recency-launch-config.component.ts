@@ -19,7 +19,7 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const DEFAULT_SYMBOLS: readonly string[] = ["SPY"];
 
 /**
- * Recency Chart launch configuration surface (design spec D1, D4).
+ * Recency Chart launch configuration surface.
  * Symbols + eligible-strategy selection + per-strategy numeric param
  * ranges + duration preset, with a live pre-launch run-count estimate,
  * then dispatches the recency_chart job (Slice 1d).

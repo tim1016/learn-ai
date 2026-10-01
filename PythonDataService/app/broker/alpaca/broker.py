@@ -206,12 +206,12 @@ def _activity_page_oldest_ms(
 
 
 # Alpaca's documented extended session, 04:00–20:00 ET ("Orders at Alpaca" §
-# Extended Hours Trading, verified 2026-09-08; docs/references/alpaca-extended-hours.md).
+# Extended Hours Trading, verified 2026-09-08).
 # The overnight session (20:00–04:00) is a separate venue and is not part of
-# the decision clock in slice 3 (ADR 0059 D5.2; ruling R1 in the slice-3 plan).
+# the decision clock in slice 3 (ADR 0059 D5.2).
 ALPACA_EXTENDED_HOURS_WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
 
-# Alpaca free / paper-account capabilities, verified 2026-07 (spec §3). Honest
+# Alpaca free / paper-account capabilities, verified 2026-07. Honest
 # differences declared as data so callers gate on capability, not identity:
 # IEX gaps on illiquid symbols (bars_may_gap), 30-symbol / 1-connection stream
 # cap, 200 REST calls/min. Upgrading to Algo Trader Plus flips data_feed to

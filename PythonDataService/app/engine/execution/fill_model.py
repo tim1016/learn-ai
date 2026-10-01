@@ -54,7 +54,7 @@ from app.utils.timestamps import ny_datetime
 # subsequent candidate bar. The engine's main loop uses this set to gate
 # both the pending-fills retry loop (Step 3) and the order-drain branch
 # (Step 5). Single source of truth — keep in lockstep with the FillMode
-# enum (see test_deferred_fill_modes_membership_invariant).
+# enum.
 DEFERRED_FILL_MODES: frozenset[FillMode] = frozenset(
     {FillMode.NEXT_BAR_OPEN, FillMode.NEXT_SESSION_OPEN, FillMode.DECISION_MINUTE_OPEN}
 )

@@ -145,8 +145,7 @@ def _fetch_and_process(
 
     # Dividend adjustment (TV-style). Polygon's adjusted=True only does splits;
     # when the user opts in, we fetch the dividend reference file and subtract
-    # each dividend from bars dated before its ex-date. See
-    # docs/tv-polygon-validation-gotchas.md §1 for the reason this matters.
+    # each dividend from bars dated before its ex-date.
     if request.adjust_for_dividends:
         import pandas as pd
 
@@ -248,8 +247,7 @@ async def plan_dataset(request: DatasetPlanRequest) -> DatasetPlanResponse:
     Planning touches only the local NYSE calendar — it never calls
     Polygon. Bar counts are arithmetic estimates typed with assumptions
     and provenance; output columns come from the same projection
-    function the ZIP generation path uses (data-lab workspace redesign
-    PRD §12).
+    function the ZIP generation path uses.
     """
     try:
         return build_dataset_plan(request)

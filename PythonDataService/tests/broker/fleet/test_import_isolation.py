@@ -1,9 +1,9 @@
-"""The generic fleet spine imports no provider implementation (PRD FR-005).
+"""The generic fleet spine imports no provider implementation (ADR 0062 Decision 6).
 
 Static source scan plus an import-time check: every module under
 ``app/broker/fleet`` must be free of Alpaca (and IBKR) imports, and actually
 importing the package must leave no provider execution module in
-``sys.modules``. The Alpaca adapter lands as Phase 2 *beside* this package,
+``sys.modules``. The Alpaca adapter lives *beside* this package,
 never inside it.
 """
 
@@ -95,7 +95,7 @@ def test_importing_the_spine_loads_no_provider_execution_module() -> None:
 def test_the_fleet_packages_own_registry_is_not_the_production_composition() -> None:
     """The fleet package's own adapter mapping stays empty; the real
     production registry is owned by ``fleet_composition``, not the package
-    (PRD FR-001). ``production_adapter()`` — which resolved only against this
+    (ADR 0062 Decision 6). ``production_adapter()`` — which resolved only against this
     deliberately-empty mapping, had no production caller, and always refused
     "alpaca" — is deleted (#2076); this pins its absence rather than its
     refusal, which a live "alpaca" registration would otherwise falsify."""

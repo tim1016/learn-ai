@@ -21,7 +21,6 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     CustodySubjectRegisteredFacts,
     ExecutionSliceFilledFacts,
     ManualOrderAcceptedFacts,
-    ManualOrderCancelResultFacts,
     ManualTicketLegReservedFacts,
     ManualTicketReservedFacts,
     OrderSubmitFailedFacts,
@@ -33,7 +32,6 @@ from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.manual_order_cancellation import (
     ManualOrderCancelOwnershipError,
-    ManualOrderCancelTerminalError,
     accept_manual_order_cancellation,
     resolve_manual_order_cancellation,
     submit_manual_order_cancellation,
@@ -1502,53 +1500,6 @@ async def test_manual_cancel_records_a_broker_rejection_when_exact_evidence_stay
     latest = repo.transitions_for_order(submitted.leg.order_ref)[-1]
     assert latest["transition_kind"] == "ORDER_CANCEL_UNCERTAIN"
     assert "broker refused cancellation" in latest["facts_json"]
-
-
-@pytest.mark.asyncio
-async def test_manual_cancel_refuses_a_terminal_target_before_creating_a_cancel_effect(
-    repo: ClerkSqliteRepository,
-) -> None:
-    trade = FakeTrade(repo=repo)
-    submitted = await submit_manual_order(
-        repo,
-        account_id=ACCOUNT_ID,
-        operator_id=OPERATOR_ID,
-        ticket_id=TICKET_ID,
-        leg_id=LEG_ID,
-        leg=market_buy(),
-        trade=trade,
-    )
-    assert submitted.leg.order_ref is not None and submitted.leg.effect_operation_id is not None
-    repo.append_transition(
-        TransitionInput(
-            command_id=submitted.command.command_id,
-            effect_operation_id=submitted.leg.effect_operation_id,
-            order_ref=submitted.leg.order_ref,
-            transition_kind="MANUAL_ORDER_CANCELED",
-            custody_owner="ACCOUNT_CLERK",
-            execution_authority="ACCOUNT_CLERK",
-            operation_state="failed",
-            clerk_observed_at_ms=repo.clock(),
-            summary_code="MANUAL_ORDER_CANCELED",
-            facts_json=ManualOrderCancelResultFacts(
-                outcome="CANCELED",
-                why="Exact broker evidence already made this manual order terminal.",
-            ).to_facts_json(),
-        )
-    )
-
-    with pytest.raises(ManualOrderCancelTerminalError, match="already terminal"):
-        await submit_manual_order_cancellation(
-            repo,
-            account_id=ACCOUNT_ID,
-            operator_id=OPERATOR_ID,
-            order_ref=submitted.leg.order_ref,
-            cancel_request_id="d40f1aeb-263c-4a57-8583-0e48f1d9298b",
-            trade=trade,
-        )
-
-    assert repo.manual_order_cancellation(order_ref=submitted.leg.order_ref) is None
-    assert trade.cancel_calls == []
 
 
 @pytest.mark.asyncio

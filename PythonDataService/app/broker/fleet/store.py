@@ -1,8 +1,8 @@
 """The fleet registry: open it once, read and write it transactionally.
 
 Storage only; the rules about what a write *means* live in ``service.py``.
-The conventions are the repository's established SQLite discipline (PRD
-FR-030): WAL, ``synchronous = FULL``, a cross-process advisory lock
+The conventions are the repository's established SQLite discipline (ADR 0062
+Decision 1): WAL, ``synchronous = FULL``, a cross-process advisory lock
 serializing initialization and migration, additive-only registered upgrades,
 and compare-and-swap guards in ``WHERE`` clauses rather than in caller
 reads.
@@ -11,7 +11,7 @@ One deliberate divergence from the profiles store: this package performs the
 WAL-filesystem check *functionally* rather than by importing the Clerk's
 pre-flight helper — ``PRAGMA journal_mode = WAL`` either holds on the control
 volume or raises here, and no Alpaca module is imported on any fleet path
-(PRD FR-005, asserted by ``tests/broker/fleet/test_import_isolation.py``).
+(ADR 0062 Decision 6, asserted by ``tests/broker/fleet/test_import_isolation.py``).
 """
 
 from __future__ import annotations
@@ -519,7 +519,7 @@ class FleetRegistryStore:
 
         Confirmation must compare the session *inside* its write transaction:
         a superseded instance otherwise slips its confirmation between the
-        read and the commit (audit 2026-09-13, finding 1).
+        read and the commit (ADR 0062 addendum, item 1).
         """
         row = conn.execute(
             f"SELECT {self._SESSION_COLUMNS} FROM clerk_sessions WHERE clerk_id = ?",

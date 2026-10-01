@@ -1,21 +1,14 @@
-"""Alpaca Clerk SQLite schema — generated to match the pinned contract.
+"""Alpaca Clerk SQLite schema.
 
-The canonical schema definition is
-``docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md`` §3. This module
-embeds that exact DDL block (byte-for-byte — see
-``tests/broker/alpaca/clerk/sqlite/test_schema_parity.py``) as the one place
-production code executes it. Do not hand-edit ``SCHEMA_DDL`` without updating
-the pinned-contracts doc in the same change; the parity test enforces that.
-
-Guiding-philosophy #5 (single source of truth): the doc is the *reference*,
-this module is the *canonical implementation*, and the parity test is what
-keeps them from drifting.
+``SCHEMA_DDL`` is the schema's only definition and the one place production
+code executes it; ``configure_connection`` applies the PRAGMA set. ADR 0035's
+binding annex keeps no copy of either: it holds the invariants and reasons the
+DDL cannot state.
 """
 
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 from app.broker.alpaca.clerk.sqlite.account_risk import SCHEMA_V19_STATEMENTS
 from app.broker.alpaca.clerk.sqlite.budget_authority import SCHEMA_V21_DDL, SCHEMA_V21_STATEMENTS
@@ -51,8 +44,6 @@ PRAGMA_STATEMENTS: tuple[str, ...] = (
     "PRAGMA busy_timeout = 5000",
 )
 
-# Byte-for-byte the fenced ```sql block from
-# docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md §3.
 SCHEMA_V9_DDL = """\
 -- ============================================================
 -- control_meta — guarded singleton (PRD §9.1)
@@ -748,7 +739,7 @@ SCHEMA_DDL = (
 
 
 def configure_connection(conn: sqlite3.Connection) -> None:
-    """Apply the pinned PRAGMA set (§2) to a freshly-opened connection."""
+    """Apply the pinned PRAGMA set to a freshly-opened connection."""
     for statement in PRAGMA_STATEMENTS:
         conn.execute(statement)
 
@@ -830,23 +821,3 @@ def migrate_schema(conn: sqlite3.Connection, *, from_version: int) -> None:
         raise
     else:
         conn.commit()
-
-
-def load_pinned_ddl(repo_root: Path) -> str:
-    """Re-extract the SQL block from the pinned-contracts doc (parity test seam)."""
-    import re
-
-    doc_path = (
-        repo_root
-        / "docs"
-        / "architecture"
-        / "alpaca-clerk-sqlite-pinned-contracts.md"
-    )
-    text = doc_path.read_text(encoding="utf-8")
-    blocks = re.findall(r"```sql\n(.*?)\n```", text, re.DOTALL)
-    matches = [block for block in blocks if "CREATE TABLE" in block]
-    if len(matches) != 1:
-        raise ValueError(
-            f"expected exactly one CREATE-TABLE SQL block in {doc_path}, found {len(matches)}"
-        )
-    return matches[0]

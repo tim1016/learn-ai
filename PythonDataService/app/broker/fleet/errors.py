@@ -1,6 +1,6 @@
 """The refusal vocabulary of the fleet control plane.
 
-PRD §10.4 pins these as stable families; every refusal carries a code-like
+ADR 0062 Decision 5 pins these as stable families; every refusal carries a code-like
 ``reason`` plus backend-authored prose in the shape the rest of the data plane
 uses — the Frontend renders ``reason`` through the shared ``receiptLabel``
 pipe and never composes ``message`` or ``next_step`` itself.
@@ -57,7 +57,7 @@ class FleetControlError(Exception):
 
 
 class BrokerAndClerkRequired(FleetControlError):
-    """A clerk-scoped request without both path identities (PRD FR-070)."""
+    """A clerk-scoped request without both path identities."""
 
     reason: ClassVar[str] = "broker_and_clerk_required"
     status_code: ClassVar[int] = 400
@@ -94,7 +94,7 @@ class ClerkLaneRetired(ClerkNotFound):
 
 
 class ClerkBrokerMismatch(FleetControlError):
-    """The path broker differs from the clerk's immutable broker (FR-071)."""
+    """The path broker differs from the clerk's immutable broker."""
 
     reason: ClassVar[str] = "clerk_broker_mismatch"
     status_code: ClassVar[int] = 409
@@ -115,7 +115,7 @@ class ClerkIdentityMismatch(FleetControlError):
 
 
 class ClerkVolumeIdentityMissing(FleetControlError):
-    """The volume root carries no identity marker (PRD FR-026)."""
+    """The volume root carries no identity marker."""
 
     reason: ClassVar[str] = "clerk_volume_identity_missing"
     status_code: ClassVar[int] = 409
@@ -129,7 +129,7 @@ class ClerkVolumeIdentityMismatch(FleetControlError):
 
 
 class ClerkVolumeAlreadyRegistered(FleetControlError):
-    """A different active clerk already owns this volume identity (FR-032)."""
+    """A different active clerk already owns this volume identity."""
 
     reason: ClassVar[str] = "clerk_volume_already_registered"
     status_code: ClassVar[int] = 409
@@ -143,7 +143,7 @@ class ClerkVolumeMountUnproven(FleetControlError):
 
 
 class ClerkVolumeCloneDetected(FleetControlError):
-    """A copied volume presented another clerk's marker (PRD FR-026)."""
+    """A copied volume presented another clerk's marker."""
 
     reason: ClassVar[str] = "clerk_volume_clone_detected"
     status_code: ClassVar[int] = 409
@@ -164,7 +164,7 @@ class ClerkAccountMismatch(FleetControlError):
 
 
 class ClerkAssignmentConflict(FleetControlError):
-    """Another clerk owns the broker-qualified account assignment (FR-052)."""
+    """Another clerk owns the broker-qualified account assignment."""
 
     reason: ClassVar[str] = "clerk_assignment_conflict"
     status_code: ClassVar[int] = 409
@@ -172,7 +172,7 @@ class ClerkAssignmentConflict(FleetControlError):
 
 class BrokerClerkCapabilityUnavailable(FleetControlError):
     """The provider adapter does not declare the requested capability, or
-    cannot honor the served context for this lane (FR-006).
+    cannot honor the served context for this lane.
     """
 
     reason: ClassVar[str] = "broker_clerk_capability_unavailable"
@@ -180,7 +180,7 @@ class BrokerClerkCapabilityUnavailable(FleetControlError):
 
 
 class ClerkRoutingOutcomeUnknown(FleetControlError):
-    """The routing attempt's outcome is unknown; retry the same identity (FR-078)."""
+    """The routing attempt's outcome is unknown; retry the same identity."""
 
     reason: ClassVar[str] = "clerk_routing_outcome_unknown"
     status_code: ClassVar[int] = 503
@@ -189,10 +189,10 @@ class ClerkRoutingOutcomeUnknown(FleetControlError):
 class ClerkRoutingAttemptConflict(FleetControlError):
     """An illegal transition or key reuse on a routing attempt.
 
-    Not one of PRD §10.4's public route families; it is the internal refusal
+    Not one of the public route families; it is the internal refusal
     for settling a delivered attempt to anything weaker, or reusing an
-    idempotency key under a different pinned attempt context (audit
-    2026-09-13, finding 7).
+    idempotency key under a different pinned attempt context (ADR 0062 addendum,
+    item 7).
     """
 
     reason: ClassVar[str] = "clerk_routing_attempt_conflict"
@@ -202,7 +202,7 @@ class ClerkRoutingAttemptConflict(FleetControlError):
 class ClerkEndpointNotApproved(FleetControlError):
     """A registration cites an endpoint the deployment has not approved.
 
-    Internal family (audit 2026-09-13, finding 4): destinations are
+    Internal family (ADR 0062 addendum, item 6): destinations are
     deployment-owned rows; an agent may cite an approved reference but never
     choose or change where it points.
     """
@@ -214,7 +214,7 @@ class ClerkEndpointNotApproved(FleetControlError):
 class FleetProtocolIncompatible(FleetControlError):
     """An agent and coordinator speak different fleet protocol versions.
 
-    Internal family (audit 2026-09-13, finding 6): incompatible builds refuse
+    Internal family (ADR 0062 addendum, item 4): incompatible builds refuse
     explicitly instead of a newer coordinator advertising operations an older
     agent cannot serve.
     """
@@ -311,7 +311,7 @@ class ClerkReassignmentBlocked(FleetControlError):
 class FleetRegistryUnavailable(FleetControlError):
     """The fleet registry cannot be opened or read (the coordinator's own store).
 
-    Not one of PRD §10.4's public route families; it is the storage refusal
+    Not one of the public route families; it is the storage refusal
     the coordinator's surfaces translate, exactly as the profiles surface has
     ``profiles_database_unavailable``. Fails closed: no fleet read or command
     is granted off an unreadable registry.

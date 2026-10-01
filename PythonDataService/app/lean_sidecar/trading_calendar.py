@@ -1,15 +1,13 @@
-"""Canonical NYSE calendar source of truth.
+"""Canonical NYSE calendar source of truth (ADR 0022).
 
-Per docs/handoffs/2026-05-18-design-p2-5-date-semantics-v2.md, both the
-``TrustedRunRequestModel`` validator and the staging iteration consult
-this module so they cannot drift on which calendar dates are trading
-days, holidays, or half-days. The ``/calendar/blocked-dates`` endpoint
-also reads from here.
+Every consumer reads scheduled session structure from this one module, so
+none can drift on which calendar dates are trading days, holidays, or
+half-days.
 
 Backed by ``pandas_market_calendars`` (already in
 ``requirements-light.txt``).  All boundary types are ``date`` /
-``int64 ms UTC`` per the repo's timestamp-rigor rule. Internal use of
-tz-aware ``pd.Timestamp`` is fine; it must not escape.
+``int64 ms UTC`` per ADR 0022. Internal use of tz-aware ``pd.Timestamp``
+is fine; it must not escape.
 """
 
 from __future__ import annotations
@@ -327,8 +325,8 @@ def holiday_names_in_range(start: date, end: date) -> dict[date, str]:
 def current_trading_session_window(now_ms: int) -> SessionWindow | None:
     """Return the NYSE session window for the NY calendar date containing ``now_ms``.
 
-    "Today" is the New York trading date — never browser-local midnight
-    (broker-v2 panel spec §15). Returns ``None`` when that date is not a
+    "Today" is the New York trading date — never browser-local midnight.
+    Returns ``None`` when that date is not a
     session (weekend or holiday), so callers render an honest "market closed
     today" state rather than fabricating a session window. Half-days respect
     their real close.

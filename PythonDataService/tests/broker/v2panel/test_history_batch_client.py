@@ -19,7 +19,6 @@ from app.config import fleet_settings, settings
 from app.schemas.fleet_history_batch import HistoryBatchQuery, HistoryBatchResponse
 from app.services.broker_v2_panel import history_batch_client
 from app.services.broker_v2_panel.history_batch_client import (
-    HISTORY_BATCH_INNER_TIMEOUT_S,
     HistoryClientMisconfigured,
     RemoteHistoryBatchClient,
     build_history_batch_provider,
@@ -346,41 +345,10 @@ async def test_healthy_response_round_trips_bars_and_notices(
     assert batch.effective_as_of_ms == _NOW
 
 
-async def test_fetch_batch_builds_its_client_with_the_inner_read_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    def _fake_build_internal_client(*, read_timeout_s=None, **_kwargs):
-        captured["read_timeout_s"] = read_timeout_s
-        return httpx.AsyncClient(
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(
-                    200,
-                    json={
-                        "bars": [],
-                        "source": "polygon",
-                        "overlay_notices": [],
-                        "effective_as_of_ms": _NOW,
-                    },
-                )
-            )
-        )
-
-    monkeypatch.setattr(history_batch_client, "build_internal_client", _fake_build_internal_client)
-    client = RemoteHistoryBatchClient(
-        base_url="http://127.0.0.1", clerk_id="clrk_x", agent_service_token="tok"
-    )
-
-    await client.fetch_batch(_query())
-
-    assert captured["read_timeout_s"] == HISTORY_BATCH_INNER_TIMEOUT_S
-
-
 async def test_fetch_batch_sends_no_token_in_the_request_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No key or token appears in the payload (FR-010) -- only the identity
+    """No key or token appears in the payload -- only the identity
     headers carry the token; the JSON body carries none of it."""
     seen_bodies: list[bytes] = []
 

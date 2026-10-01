@@ -15,11 +15,9 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-from typing import Any
 
 from app.broker.alpaca.clerk.account_authority import shadow_account_id_for_live_account
 from app.broker.alpaca.clerk.shadow_activation import ShadowActivationRecord, ShadowActivationStore
-from app.broker.alpaca.config import AlpacaSettings
 from app.schemas.signal_program_seal import (
     ConfiguredSignalProgramSeal,
     ExitEligibilityContract,
@@ -41,7 +39,6 @@ from app.services.session_authority import et_minute_of_day_ms
 from tests.broker.alpaca.clerk.live_envelope_fixtures import (
     LIVE_ACCT,
     SHADOW_ACCT,
-    TEST_ENVELOPE_VALUES,
 )
 
 ARMING_SID = "ema-shadow-1"
@@ -49,30 +46,6 @@ ARMING_SID = "ema-shadow-1"
 # exactly one session and the weekend that follows spends none.
 ARMED_AT_MS = et_minute_of_day_ms(date(2026, 9, 11), 10 * 60)
 _ONE_DAY_MS = 86_400_000
-
-
-def live_settings(**overrides: Any) -> AlpacaSettings:
-    """Live settings whose envelope is exactly ``TEST_ENVELOPE_VALUES``.
-
-    Constructed with explicit keyword arguments, which outrank the process
-    environment and ``.env`` in pydantic-settings, so the values are the test's
-    and never the developer's.
-    """
-    values: dict[str, Any] = {
-        "api_key_id": "k",
-        "api_secret_key": "s",
-        "mode": "live",
-        "live_loss_fraction": TEST_ENVELOPE_VALUES.loss_fraction,
-        "live_loss_usd": TEST_ENVELOPE_VALUES.loss_usd,
-        "live_xh_entry_bps": TEST_ENVELOPE_VALUES.xh_entry_bps,
-        "live_xh_exit_bps": TEST_ENVELOPE_VALUES.xh_exit_bps,
-    }
-    values.update(overrides)
-    return AlpacaSettings(**values)
-
-
-def paper_settings() -> AlpacaSettings:
-    return AlpacaSettings(api_key_id="k", api_secret_key="s", mode="paper")
 
 
 def activate_shadow_fence(
@@ -204,26 +177,10 @@ def record_sealed_binding(
 
 
 
-def arming_ready(
-    artifacts_root: Path,
-    live_state_root: Path,
-    *,
-    strategy_instance_id: str = ARMING_SID,
-) -> SealedBotProgram:
-    """Every input ``observe_arming_inputs`` needs, on disk, for one instance."""
-    if not ShadowActivationStore(artifacts_root).account_ids():
-        activate_shadow_fence(artifacts_root)
-    seal = record_sealed_binding(live_state_root, strategy_instance_id=strategy_instance_id, artifacts_root=artifacts_root)
-    return seal
-
-
 __all__ = [
     "ARMED_AT_MS",
     "ARMING_SID",
     "activate_shadow_fence",
-    "arming_ready",
-    "live_settings",
-    "paper_settings",
     "record_sealed_binding",
     "sealed_program",
 ]

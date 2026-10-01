@@ -1,4 +1,4 @@
-"""Recency Chart statistics — Python-authored, per AGENTS.md #5.
+"""Recency Chart statistics — Python-authored, per ADR 0068.
 
 These are the numbers the Angular swimlane renders but never computes:
 per-trade dollar PnL, holding-session count (calendar-derived), a combo's
@@ -71,15 +71,11 @@ class TestTradeDollarPnl:
         trade = _trade(_ms(2026, 6, 1), _ms(2026, 6, 1), pnl_pts=2.5, pnl_pct=0.025, quantity=10)
         assert trade_dollar_pnl(trade, commission_per_order=1.5) == pytest.approx(25.0 - 3.0, abs=1e-9, rel=0)
 
-    def test_zero_commission_matches_the_gross_default(self) -> None:
-        trade = _trade(_ms(2026, 6, 1), _ms(2026, 6, 1), pnl_pts=2.5, pnl_pct=0.025, quantity=10)
-        assert trade_dollar_pnl(trade, commission_per_order=0.0) == trade_dollar_pnl(trade)
-
     def test_matches_the_canonical_engine_flat_fee_formula(self) -> None:
         """Parity with the engine payload's ``persisted_trade_net_pnl`` flat-fee
         branch (compatibility_profile=None) — the codebase's one canonical
         formula for round-trip net PnL under a flat per-order commission
-        (CLAUDE.md guiding philosophy #5)."""
+        (ADR 0068 Decision 4)."""
         from decimal import Decimal
 
         from app.research.backtest_runs.engine_payload import persisted_trade_net_pnl

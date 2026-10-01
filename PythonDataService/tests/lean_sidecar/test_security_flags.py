@@ -1,9 +1,9 @@
 """Container security-flag viability matrix.
 
-Phase 1 spike per ``docs/architecture/lean-sidecar-lab.md`` §"Container
-execution boundary": tests each optional hardening flag against the
+The viability matrix behind ADR 0070 Decision 4 (the container
+execution boundary): tests each optional hardening flag against the
 pinned LEAN image and records which ones survive. The results land in
-the ADR; the runner then includes only the surviving flags.
+ADR 0070; the runner then includes only the surviving flags.
 
 These tests SKIP when ``requires_lean_image`` is unmet so the unit suite
 runs on hosts without the image. They are NOT silent on failure: a

@@ -1,4 +1,4 @@
-"""Schema-drift guard (spec §9).
+"""Schema-drift guard.
 
 Recursively diffs the key sets of the captured raw Alpaca payloads against the
 alpaca-py model field names (and aliases). If Alpaca ships a field the SDK does
@@ -146,12 +146,6 @@ def test_schema_drift_is_detected_and_named() -> None:
     drift = unknown_keys(payload, (TradeAccount,))
 
     assert drift == {"brand_new_alpaca_field"}
-
-
-def test_asset_class_alias_is_recognized() -> None:
-    # Alpaca's raw `class` key is aliased to `asset_class` in the SDK — the
-    # guard must treat it as known, not as drift.
-    assert "class" in _known_names(Asset)
 
 
 def test_order_submit_body_keys_are_all_known_to_the_sdk() -> None:

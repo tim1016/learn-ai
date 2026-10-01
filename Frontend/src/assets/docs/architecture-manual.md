@@ -433,14 +433,14 @@ Here is what happens when you confirm **Deploy** in the Live account's workspace
 ### 3.9 A lane's life
 
 <figure class="md-diagram">
-<svg viewBox="0 0 960 250" role="img" aria-label="A lane's life. What the registry stores: provisioned, then draining, which is decided but not built, then retired, which is final and whose name is never reused. What the screen shows, worked out fresh each time: starting, ready, degraded, unreachable. Ready means reachable with a confirmed account, not necessarily able to trade.">
+<svg viewBox="0 0 960 250" role="img" aria-label="A lane's life. What the registry stores: provisioned, then draining, which closes the lane to new work for good, then retired, which is final and whose name is never reused. A draining lane retires only once it reports itself quiet, or through an audited forced retirement. What the screen shows, worked out fresh each time: starting, ready, degraded, unreachable. Ready means reachable with a confirmed account, not necessarily able to trade.">
 <defs><marker id="ah9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="dg-arrowhead" d="M0,0 L10,5 L0,10 z"/></marker></defs>
 <text class="dg-s" x="20" y="24">WHAT THE REGISTRY STORES (DURABLE)</text>
 <rect class="dg-box" x="20" y="36" width="230" height="56" rx="6"/><text class="dg-h" x="135" y="60" text-anchor="middle">Provisioned</text><text class="dg-t" x="135" y="80" text-anchor="middle">enrolled by a host ceremony</text>
-<rect class="dg-box dg-outside" x="310" y="36" width="280" height="56" rx="6"/><text class="dg-h" x="450" y="60" text-anchor="middle">Draining</text><text class="dg-t" x="450" y="80" text-anchor="middle">decided (ADR 0063) · not built</text>
+<rect class="dg-box" x="310" y="36" width="280" height="56" rx="6"/><text class="dg-h" x="450" y="60" text-anchor="middle">Draining</text><text class="dg-t" x="450" y="80" text-anchor="middle">closed to new work · no way back</text>
 <rect class="dg-box" x="650" y="36" width="230" height="56" rx="6"/><text class="dg-h" x="765" y="60" text-anchor="middle">Retired</text><text class="dg-t" x="765" y="80" text-anchor="middle">final · name never reused</text>
-<path class="dg-flow dg-blocked" d="M250,64 L308,64" marker-end="url(#ah9)"/><path class="dg-flow dg-blocked" d="M590,64 L648,64" marker-end="url(#ah9)"/>
-<text class="dg-s" x="20" y="114">There is no approved, safe way yet to retire a lane that has held an account: disable it instead (stop it, keep its disk and name).</text>
+<path class="dg-flow" d="M250,64 L308,64" marker-end="url(#ah9)"/><path class="dg-flow" d="M590,64 L648,64" marker-end="url(#ah9)"/>
+<text class="dg-s" x="20" y="114">A draining lane retires only once it reports itself quiet, or through an audited forced retirement from the Mac.</text>
 <text class="dg-s" x="20" y="148">WHAT THE SCREEN SHOWS (WORKED OUT FRESH EACH TIME)</text>
 <rect class="dg-box" x="20" y="160" width="200" height="50" rx="6"/><text class="dg-h" x="120" y="182" text-anchor="middle">Starting</text><text class="dg-t" x="120" y="200" text-anchor="middle">heard from, not bound</text>
 <rect class="dg-box dg-good" x="240" y="160" width="200" height="50" rx="6"/><text class="dg-h" x="340" y="182" text-anchor="middle">Ready</text><text class="dg-t" x="340" y="200" text-anchor="middle">account confirmed</text>
@@ -453,7 +453,7 @@ Here is what happens when you confirm **Deploy** in the Live account's workspace
 
 - **Enrolment happens on the Mac, never from the browser.** A command-line ceremony creates a fresh disk; mints the lane's name, worker key and two service tokens; writes the disk's identity marker; and approves the lane's internal address. The secrets go into environment files that git ignores. Then you bind the account through the lane's Configuration page ([add-an-account runbook](https://github.com/tim1016/learn-ai/blob/master/docs/runbooks/add-an-alpaca-account.md)).
 - **A lane that needs activation still boots**, so you can see why it cannot trade.
-- **Draining and handover were decided but are not built** ([ADR 0063](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0063-draining-is-an-observed-lane-handover.md)): draining will close a lane to new work but never force it flat. Until it exists, there is no approved, safe way to retire a lane that has held an account, or to hand its account to another lane. An older command-line ceremony still exists, but it cannot prove the lane is quiet, so the rule is not to use it: disable the lane instead (stop it, keep its disk and its name). This is one of the weak spots in [chapter 7](#7-weak-spots-built-into-the-design).
+- **Retiring a lane starts with draining it** ([ADR 0063](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0063-draining-is-an-observed-lane-handover.md)), a command-line ceremony on the Mac. Draining closes the lane to new work for good, but it never forces the account flat: stopping its bots, cancelling its orders and closing its positions stay your decisions. While draining, the lane reports on every heartbeat whether it is **quiet**: no bot running, no working order at the broker, a flat account, and no order still in flight. A quiet lane retires normally, and only a quiet lane's account can be handed to another lane; the handover retires the old lane. A lane that cannot answer (it crashed, restarted during the drain or lost its host) leaves only through an audited, deadline-delayed forced retirement, and its account then stays unassigned. What remains weak is in [chapter 7](#7-weak-spots-built-into-the-design).
 - **Retirement is final.** A retired lane is never deleted or revived, and its names are never reused.
 
 ### 3.10 How the screen mirrors the lanes
@@ -550,7 +550,7 @@ This is the repo's standing rule: **one canonical implementation per concept.** 
 | Which engine owns a job, and who owns research results? | The [engine authority map](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/engine-authority-map.md); Python's `research_*` tables are written only by Python | The engine map is a document you must sign off on. Older .NET research experiments remain, and no automated test stops the retired study screens from returning. |
 | Which status words and refusal reasons can the screen show? | Codes and their normal wording come from Python | Generated snapshot copies for the screen, compared by the build. The screen keeps a small, closed set of fallback sentences for when the server sends none. |
 | Which pages exist? | One menu list in the web app | The menu bar and the browser-tab titles are drawn from it |
-| What was decided, what do the words mean, and what is broken? | ADRs; [CONTEXT.md](https://github.com/tim1016/learn-ai/blob/master/CONTEXT.md); [known-gaps.md](https://github.com/tim1016/learn-ai/blob/master/docs/known-gaps.md); and [doc-authority.md](https://github.com/tim1016/learn-ai/blob/master/docs/doc-authority.md) for which document wins | A documentation test that classifies every document and checks the links in the authoritative ones |
+| What was decided, what do the words mean, and what is broken? | ADRs; [CONTEXT.md](https://github.com/tim1016/learn-ai/blob/master/CONTEXT.md); [known-gaps.md](https://github.com/tim1016/learn-ai/blob/master/docs/known-gaps.md). Everything else is answered by the code itself. | Review. A document stays only while it holds what code cannot: a decision, an operator procedure (a runbook) or an outside fact. |
 
 Even this manual follows the rule: the copy the app shows is compared with the file in `docs/` on every change, and the build fails if they differ.
 
@@ -640,12 +640,12 @@ Honesty matters here, because a rule nobody checks can quietly stop holding. Fou
 
 *Checked against the code on 2026-09-18 (commit `a69b77d5`).*
 
-> **In one sentence:** the strongest part of the design is inside each lane, and the weaker parts are around it: the single machine, the single price source, the single door, and a few jobs that are decided but not yet built.
+> **In one sentence:** the strongest part of the design is inside each lane, and the weaker parts are around it: the single machine, the single price source, the single door, and a lane's exit, which rests on the lane's own report.
 
 This chapter lists weaknesses that come from **how the system is built**, not individual bugs. Each links to where it is tracked, so this page does not go stale when one is fixed. Open defects in general live in [known-gaps.md](https://github.com/tim1016/learn-ai/blob/master/docs/known-gaps.md).
 
 <figure class="md-diagram">
-<svg viewBox="0 0 960 480" role="img" aria-label="Weak spots shaded over the lanes. Strong, in green: each clerk's sealed account, ledger, cash bound and exits that are never refused, and the registry's database rules. Weaker, in red: the coordinator as the only door, and IB Gateway as the single live price source that logs out. The whole Mac is marked as the development machine that is also the live-money machine, and the web app relies on one shared secret. Listed below: lane retirement and handover are blind to orders; nightly fault tests run a different layout; ready does not mean able to trade; outside regular hours emergency exits wait for the open.">
+<svg viewBox="0 0 960 480" role="img" aria-label="Weak spots shaded over the lanes. Strong, in green: each clerk's sealed account, ledger, cash bound and exits that are never refused, and the registry's database rules. Weaker, in red: the coordinator as the only door, and IB Gateway as the single live price source that logs out. The whole Mac is marked as the development machine that is also the live-money machine, and the web app relies on one shared secret. Listed below: lane retirement and handover rest on the lane's own report that it is quiet; nightly fault tests run a different layout; ready does not mean able to trade; outside regular hours emergency exits wait for the open.">
 <defs><marker id="ah14" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="dg-arrowhead" d="M0,0 L10,5 L0,10 z"/></marker></defs>
 <rect class="dg-zone" x="10" y="10" width="940" height="460" rx="10"/>
 <text class="dg-s" x="24" y="34">YOUR MAC: THE DEVELOPMENT MACHINE IS ALSO THE LIVE-MONEY MACHINE ①</text>
@@ -659,7 +659,7 @@ This chapter lists weaknesses that come from **how the system is built**, not in
 <path class="dg-flow dg-command" d="M480,90 L558,90" marker-end="url(#ah14)"/>
 <path class="dg-flow" d="M380,120 L380,158" marker-end="url(#ah14)"/>
 <path class="dg-flow dg-data" d="M645,250 L645,186" marker-end="url(#ah14)"/><path class="dg-flow dg-data" d="M845,250 L845,186" marker-end="url(#ah14)"/>
-<path class="dg-flow dg-blocked" d="M30,354 L90,354" marker-end="url(#ah14)"/><text class="dg-t" x="100" y="358">④ retiring or handing over a lane is blind to the lane's orders (decided, not built)</text>
+<text class="dg-t" x="30" y="358">④ retiring or handing over a lane rests on the lane's own report that it is quiet</text>
 <text class="dg-t" x="30" y="390">⑥ the nightly fault tests run the reviewed layout, not the one running on this Mac</text>
 <text class="dg-t" x="30" y="418">⑦ "ready" means reachable with a confirmed account, not "able to trade"</text>
 <text class="dg-t" x="30" y="446">⑧ outside regular hours, emergency and operator exits wait for the market to open</text>
@@ -688,12 +688,12 @@ This chapter lists weaknesses that come from **how the system is built**, not in
 - **What already limits the damage.** The money limits live inside each lane (cash bound, daily loss hold, exits never refused), and the Mac can always stop a lane's container.
 - **Tracked in** ADR 0062 (by design; no open issue).
 
-### ④ The control plane cannot see orders, so a lane cannot yet be safely retired or handed over
+### ④ The control plane cannot see orders, so a lane's exit rests on the lane's own report
 
-- **What could happen.** Bots place orders from inside their own lane, and the coordinator never sees them. So nothing central can prove a lane is quiet before it is retired or its account is given to another lane. Until the planned drain is built, those operations are gated by host ceremonies that cannot prove quiet.
-- **Why the design allows it.** The coordinator's blindness to orders is deliberate: it holds no custody. The consequence is recorded in [ADR 0063](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0063-draining-is-an-observed-lane-handover.md), which designs an observed drain.
-- **What already limits the damage.** These are host-only ceremonies with no browser path, a lost heartbeat never releases an account, and each lane only ever serves the account sealed into it. Today the practice is to *disable* a lane, never retire it.
-- **Tracked in** known-gaps.md ("Fleet account retirement"), plus [#2154](https://github.com/tim1016/learn-ai/issues/2154), [#2155](https://github.com/tim1016/learn-ai/issues/2155) and [#2157](https://github.com/tim1016/learn-ai/issues/2157).
+- **What could happen.** Bots place orders from inside their own lane, and the coordinator never sees them. So retiring a lane, or handing its account to another lane, rests on the lane's own report that it is quiet. A lane that cannot report (it crashed, restarted during the drain or lost its host) can only be force-retired, and its account then stays unassigned: no lane may take it over, because nothing proves the old lane stopped writing. And a lane that was unreachable for the whole drain could, if restarted while the coordinator is down, come back on its old account binding.
+- **Why the design allows it.** The coordinator's blindness to orders is deliberate: it holds no custody. So [ADR 0063](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0063-draining-is-an-observed-lane-handover.md) makes the lane itself prove it is quiet, and refuses a handover whenever that proof is missing.
+- **What already limits the damage.** Draining and retiring are host-only ceremonies with no browser path. A drained lane never returns to service, a lost heartbeat never releases an account, and each lane only ever serves the account sealed into it. A forced retirement is attested, waits out a deadline and is audited. By procedure, a lane that does not answer its next heartbeat after a drain is treated as decommissioned, and its disk is never started again.
+- **Tracked in** known-gaps.md ("Fleet account retirement"). The drain and the quiet check were built under [#2154](https://github.com/tim1016/learn-ai/issues/2154), [#2155](https://github.com/tim1016/learn-ai/issues/2155) and [#2157](https://github.com/tim1016/learn-ai/issues/2157).
 
 ### ⑤ No personal login: one shared secret
 
@@ -753,7 +753,7 @@ This chapter lists weaknesses that come from **how the system is built**, not in
 | **Data lake** | The folder of fingerprinted price-history files. One writer: the coordinator. |
 | **Data plane** | Another name for the Python coordinator's research and data role. |
 | **Directory** | The screen's list of lanes and their health, supplied by the coordinator. |
-| **Draining** | Closing a lane to new work before handover. Decided (ADR 0063), not yet built. |
+| **Draining** | Closing a lane to new work for good, before it retires or hands its account over. It never forces the account flat (ADR 0063). |
 | **Epoch** (routing epoch) | A counter that rises every time a lane registers: at each start, and whenever it must re-introduce itself to the coordinator. |
 | **Fence** | Any check that keeps one lane's work from reaching another. |
 | **Fleet** | The coordinator plus all the lanes, working as one system. |
@@ -766,6 +766,7 @@ This chapter lists weaknesses that come from **how the system is built**, not in
 | **IB Gateway** | IBKR's program on the Mac through which live prices arrive. |
 | **Idempotency key** (one-time ticket) | A unique ticket on each bot and custody command, so it can be recognised if it arrives twice. |
 | **Lane** | One account's private execution line: a clerk, its disk, its keys and one Alpaca account. |
+| **Lane quiet** | A draining lane's own report that no bot is running, no order is working or in flight, and the account is flat. Normal retirement and handover need it. |
 | **Ledger** (clerk ledger) | The account's tamper-evident record, the single custody authority. |
 | **Live Shadow** | The Live lane before graduation: it reads the real account but only simulates fills. It needs its own one-time activation from the Mac. |
 | **Operation catalog** | The one list of everything the screen may ask a clerk to do, and at which address. |
@@ -787,9 +788,9 @@ This chapter lists weaknesses that come from **how the system is built**, not in
 
 ## Where to go next
 
-- **The lanes in full technical depth:** [ADR 0062](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0062-broker-clerk-fleet-control-plane.md) (the decision) and the [broker clerk fleet authority](https://github.com/tim1016/learn-ai/blob/master/docs/broker-clerk-fleet-authority.md) (how it was built, with evidence; parts of it predate recent fixes, and the code is the authority).
+- **The lanes in full technical depth:** [ADR 0062](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0062-broker-clerk-fleet-control-plane.md) (the decision) and the [broker clerk fleet authority](https://github.com/tim1016/learn-ai/blob/master/docs/broker-clerk-fleet-authority.md) (accepted risks, operator-visible gaps and where the code departs from the ADRs; the code is the authority).
 - **Running the lanes:** the [two-lane posture runbook](https://github.com/tim1016/learn-ai/blob/master/docs/runbooks/fleet-dev-two-lane-posture.md) and the [add-an-account runbook](https://github.com/tim1016/learn-ai/blob/master/docs/runbooks/add-an-alpaca-account.md).
 - **Real money:** [ADR 0059](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0059-real-money-live-behind-shadow-gate-arming-and-cash-bound-envelope.md).
-- **Which document wins:** [doc-authority.md](https://github.com/tim1016/learn-ai/blob/master/docs/doc-authority.md).
+- **Which document wins:** an accepted ADR for a decision; for what the system does today, the code wins over any document.
 - **Words:** [CONTEXT.md](https://github.com/tim1016/learn-ai/blob/master/CONTEXT.md).
 - **What is broken right now:** [known-gaps.md](https://github.com/tim1016/learn-ai/blob/master/docs/known-gaps.md).

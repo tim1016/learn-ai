@@ -5,8 +5,7 @@ The runner is driven by a ``config.json`` the data plane writes into
 means a future LEAN version bump touches one file and one test rather
 than scattered string literals.
 
-Authority: ``docs/architecture/lean-sidecar-lab.md`` §"Config the
-launcher writes". Field names are confirmed against the pinned image in
+Field names are confirmed against the pinned image in
 the Phase 1 spike; mismatches surface in ``test_lean_config.py``.
 """
 

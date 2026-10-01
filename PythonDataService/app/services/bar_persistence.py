@@ -21,8 +21,8 @@ of:
       ``correction`` over the earliest ``append`` for the same key.
 
 A non-monotonic ``start_ms`` (incoming < last accepted) is **never**
-silently repaired; per ``.claude/rules/numerical-rigor.md`` →
-"Timestamp rigor → Ban list" the day's JSONL is quarantined and
+silently repaired; per ADR 0022 (h)
+the day's JSONL is quarantined and
 ``BarPersistenceRegressionError`` is raised so the aggregator fails
 fast. The quarantined file is forensic evidence for the operator.
 """

@@ -2,8 +2,8 @@
 
 > **Canonical reference** for Research Lab → Signal Engine. Covers the
 > statistical methodology (z-score signal construction, walk-forward validation,
-> Newey-West Sharpe inference, deflated Sharpe, graduation ladder), the
-> execution model used in backtests, the API contract, and the UI surfaces.
+> Newey-West Sharpe inference, deflated Sharpe, graduation ladder) and the
+> execution model used in backtests.
 >
 > **Audience:** graduate-level reader with light finance and statistics
 > background. The page is written so that someone who has seen Sharpe ratios
@@ -24,7 +24,6 @@
 
 - [1. Scope and authority](#1-scope-and-authority)
 - [2. Notation and glossary](#2-notation-and-glossary)
-- [3. Pipeline overview](#3-pipeline-overview)
 - [4. Statistical methodology](#4-statistical-methodology)
   - [4.1 Feature → z-score → signal](#41-feature--z-score--signal)
   - [4.2 Forward return target](#42-forward-return-target)
@@ -43,9 +42,6 @@
   - [5.3 Stage 2 — research candidate](#53-stage-2--research-candidate)
   - [5.4 Stage 3 — promotion candidate](#54-stage-3--promotion-candidate)
 - [6. Execution model](#6-execution-model)
-- [7. API contract](#7-api-contract)
-- [8. UI surfaces](#8-ui-surfaces)
-- [9. Code cross-reference](#9-code-cross-reference)
 - [10. Known limitations and roadmap](#10-known-limitations-and-roadmap)
 - [11. References](#11-references)
 
@@ -106,30 +102,6 @@ Conventions:
   (`.claude/rules/numerical-rigor.md`).
 - Returns are log returns. Cumulative return is `Σ n_t`, plotted as the
   equity curve.
-
----
-
-## 3. Pipeline overview
-
-```
-bars → feature → z_train_fit → z_score → threshold filter → regime gate → signal
-                                                                              │
-                                                                              ▼
-                                                                       position w_t
-                                                                              │
-forward_returns ──────────────────────────────────────────────────────────► PnL
-                                                                              │
-                                                                              ▼
-                                                                  ┌─ in-sample grid
-                                                                  ├─ walk-forward folds
-                                                                  ├─ stats (Sharpe, CI, DSR)
-                                                                  └─ graduation verdict
-```
-
-The orchestrator is
-[`PythonDataService/app/research/signal/engine.py`](https://github.com/tim1016/learn-ai/blob/master/PythonDataService/app/research/signal/engine.py)
-(`run_signal_engine`). Every numbered subsection below names the file and
-function that implements it.
 
 ---
 
@@ -356,7 +328,6 @@ is reserved for buckets that exceed a minimum independent-trade count
 **Status:** Stage 0 kill switch and the 0/1/2/3 ladder are implemented in
 the Python layer (Phase 1, 2026-04-30) —
 [`evaluate_graduation`](https://github.com/tim1016/learn-ai/blob/master/PythonDataService/app/research/signal/graduation.py).
-The corresponding UI rendering is being designed (Phase 3, in flight).
 
 A signal lives at exactly one stage. The stage is the **lowest** stage
 whose criteria it fails to advance from.
@@ -381,7 +352,8 @@ The thresholds above are the project defaults adopted from external
 methodology review (2026-04-30). Tightening or loosening them requires a
 PR that updates this section, the constants in
 `signal/graduation.py`, and the corresponding test in
-`tests/test_graduation_stage0.py`.
+`tests/test_graduation.py`, and records the change in
+[ADR 0073](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/adrs/0073-research-verdict-rules.md).
 
 ### 5.2 Stage 1 — weak candidate
 
@@ -459,111 +431,6 @@ return from `close_t` to `close_{t+15}`.
 
 ---
 
-## 7. API contract
-
-The Signal Engine surface is exposed via two GraphQL fields on the
-`Research` query type, backed by the FastAPI service.
-
-```graphql
-type Research {
-  runSignalEngine(input: SignalEngineInput!): SignalEngineResult!
-}
-
-type SignalEngineResult {
-  success: Boolean!
-  error: String
-
-  # Identifying
-  ticker: String!
-  featureName: String!
-  startDate: String!
-  endDate: String!
-
-  # In-sample grid
-  backtestGrid: [SignalBacktestResult!]!
-  bestThreshold: Float!
-  bestCostBps: Float!
-  deflatedSharpe: Float          # § 4.7 — Stage 1+
-
-  # Walk-forward
-  walkForward: WalkForwardResult
-  oosSharpeCi95: SharpeCi        # § 4.6 — Stage 1+
-
-  # Diagnostics
-  signalDiagnostics: SignalDiagnostics
-  signalBehavior: SignalBehavior
-  dataSufficiency: DataSufficiency
-  effectiveSample: EffectiveSampleSize
-  regimeCoverage: [RegimeBucket!]!   # includes effectiveTrades — § 4.11
-
-  # Verdict
-  graduation: GraduationResult!  # includes stage 0/1/2/3
-  researchLog: String!
-}
-```
-
-The full schema lives in
-[`Frontend/src/app/services/research.service.ts`](https://github.com/tim1016/learn-ai/blob/master/Frontend/src/app/services/research.service.ts).
-Fields tagged "Stage 1+" are populated by the backend only when the
-signal advances past Stage 0; otherwise they are `null` and the UI
-collapses the corresponding panels.
-
----
-
-## 8. UI surfaces
-
-The Signal Engine is the third tab under Research Lab → *Validate*. The
-top-level layout, top to bottom:
-
-1. **Run form** — ticker, feature, dates, flip-sign, regime-gate toggle.
-2. **Verdict block** — graduation stage (0 / 1 / 2 / 3 ladder), one-line
-   verdict, headline OOS Sharpe with 95 % CI.
-3. **Stage 0 collapse banner** *(only when rejected)* — explains why
-   downstream panels are hidden, with a *"Show diagnostic details anyway"*
-   disclosure.
-4. **Graduation criteria** — pass/fail per criterion with explanations.
-5. **Data sufficiency & coverage** — bar counts, `N_eff`, autocorrelation,
-   regime grid (now with effective-trades column).
-6. **Signal diagnostics** — z-score statistics, % time active, % filtered.
-7. **Signal behavior analysis** — hit rate, win/loss, skewness.
-8. **Walk-forward summary** — mean / median OOS Sharpe, % positive,
-   per-fold table with **per-fold threshold** column emphasised, OOS
-   equity curve, lifespan chart.
-9. **Backtest grid** — net Sharpe and turnover heatmaps, with the IS
-   grid headline showing **deflated** Sharpe alongside raw.
-10. **Parameter stability** — Sharpe-vs-threshold curve, stability score.
-11. **Temporal stability / alpha decay** — N≥5 guard; placeholder text
-    when underpowered.
-12. **Execution assumptions** — corrected to reflect § 6.
-
-The detailed formulas (Sharpe, `N_eff`, DSR, turnover, alpha decay) live
-in the **Methodology & Formulas** appendix page under
-*Documentation*, not on the Signal Engine page itself. Inline
-references are KaTeX-rendered tooltips that link to the appendix.
-
----
-
-## 9. Code cross-reference
-
-| Concept | Module | Function / class |
-|---|---|---|
-| Pipeline orchestrator | `app/research/signal/engine.py` | `run_signal_engine` |
-| Z-score / threshold filter | `app/research/signal/standardize.py` | `compute_train_zscore`, `apply_threshold_filter` |
-| Forward returns | `app/research/target.py` | `compute_15min_forward_return` |
-| Backtest kernel | `app/research/signal/backtest.py` | `run_backtest`, `run_backtest_grid` |
-| Walk-forward driver | `app/research/signal/walk_forward.py` | `run_walk_forward` |
-| Effective sample size | `app/research/signal/diagnostics.py` | `compute_effective_sample_size` |
-| Sharpe CI (Newey-West) | `app/research/signal/diagnostics.py` | `compute_sharpe_ci` |
-| Deflated Sharpe | `app/research/signal/diagnostics.py` | `compute_deflated_sharpe` |
-| Joint regime coverage | `app/research/signal/diagnostics.py` | `compute_joint_regime_coverage` |
-| Regime gate | `app/research/signal/regime.py` | `compute_bar_regime_gate`, `compute_daily_regime_labels` |
-| Graduation + Stage 0 | `app/research/signal/graduation.py` | `evaluate_graduation`, `_evaluate_stage0`, `_compute_stage_info` |
-| Frontend orchestrator | `Frontend/src/app/components/research-lab/signal-runner/` | `SignalRunnerComponent` |
-| Frontend report | `Frontend/src/app/components/research-lab/signal-report/` | `SignalReportComponent` |
-| GraphQL types | `Frontend/src/app/services/research.service.ts` | `SignalEngineResult` |
-
----
-
 ## 10. Known limitations and roadmap
 
 ### Documented limitations (current state)
@@ -611,7 +478,5 @@ machinery until at least one signal reaches Stage *N*.
 Internal references:
 - [`indicator-reliability-methodology.md`](https://github.com/tim1016/learn-ai/blob/master/docs/indicator-reliability-methodology.md)
   — companion authority for the IC-based reliability page.
-- [`architecture/options-math-authorities.md`](https://github.com/tim1016/learn-ai/blob/master/docs/architecture/options-math-authorities.md)
-  — pattern reference for "single-source-of-truth" docs.
 - [`.claude/rules/numerical-rigor.md`](https://github.com/tim1016/learn-ai/blob/master/.claude/rules/numerical-rigor.md)
   — repo-wide tolerance, timestamp, and equivalence policies.

@@ -1,8 +1,8 @@
-"""Six-station transaction-rail derivation (spec §7.1).
+"""Six-station transaction-rail derivation.
 
 Pure functions that turn one bot's decision receipts + the account order
 journal into the six-station rail for a *selected transaction*. The rail is a
-property of a transaction (one order intent), not the whole bot (§7.1).
+property of a transaction (one order intent), not the whole bot.
 
 Station derivation reads the durable evidence and never guesses:
 
@@ -33,7 +33,7 @@ from app.schemas.broker_v2_panel import StationView
 
 logger = logging.getLogger(__name__)
 
-# Evidence older than this is rendered ``unknown_stale`` (§7). One trading day
+# Evidence older than this is rendered ``unknown_stale``. One trading day
 # in ms — a decision or sweep older than the current session cannot be trusted
 # to describe the live pipeline.
 STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000
@@ -43,7 +43,7 @@ def transaction_refs_for_bot(sid: str, entries: list[OrderJournalEntry]) -> list
     """Return the bot's order_refs in journal order (most recent last).
 
     An order_ref names one transaction (one intent). The panel selects the most
-    recent by default; the journal tail can select any (§7.1).
+    recent by default; the journal tail can select any.
     """
     target_namespace = build_bot_order_namespace(sid)
     refs: list[str] = []
@@ -119,8 +119,7 @@ def _decision_for_transaction(
     """The bot's own most recent decision causally linked to ``transaction_ref``.
 
     An exact-key match (``intent_id`` or ``order_ref``) over the bounded
-    in-memory window — never the nearest-time or most-recent decision
-    (PRD Sec 19).
+    in-memory window — never the nearest-time or most-recent decision.
     """
     matches = [
         decision
@@ -302,7 +301,7 @@ def derive_stations(
     latest_reconciliation: OrderJournalEntry | None,
     now_ms: int,
 ) -> list[StationView]:
-    """Derive the six-station rail for one selected transaction (§7.1).
+    """Derive the six-station rail for one selected transaction.
 
     ``transaction_ref`` selects the transaction; ``None`` means no transaction
     is selected, so every order-scoped station is ``waiting`` and SIGNAL falls
@@ -313,9 +312,9 @@ def derive_stations(
     by ``seq``), used to derive SIGNAL. When a transaction *is* selected,
     SIGNAL must show the decision causally linked to it (via ``order_ref`` /
     ``intent_id``) — never an unrelated, more recent decision (issue #1729
-    AC #6/#7; PRD Sec 19 forbids joining by "latest signal, latest
-    transaction"). A decision-receipt store call outside this bounded window
-    is the caller's responsibility if the deeper stored-key join is needed.
+    AC #6/#7; joining by "latest signal, latest transaction" is forbidden). A
+    decision-receipt store call outside this bounded window is the caller's
+    responsibility if the deeper stored-key join is needed.
 
     Ownership validation: if ``transaction_ref`` is set but does not belong to
     ``sid``'s namespace (cross-bot contamination), every transaction-scoped

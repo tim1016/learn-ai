@@ -14,8 +14,6 @@ they happen, this client paces requests on the way out:
 This adds deterministic latency that the UI surfaces as "Your Polygon Starter
 plan allows 5 requests/minute — waiting X seconds for the next slot." Users
 see why the app is slow rather than guessing.
-
-See ``docs/references/polygon-throttle.md`` for the layman explanation.
 """
 
 import json
@@ -312,7 +310,7 @@ class PolygonClientService:
         **The ``insights`` array is vendor-asserted, not derived.** Each entry carries
         a sentiment label produced by Polygon's own unpublished model. We cannot
         reimplement it, so it can never satisfy the golden-fixture standard in
-        ``.claude/rules/numerical-rigor.md`` — it is recorded, never validated.
+        ADR 0069 §1 — it is recorded, never validated.
         Consumers must label it as external vendor data. Note also that Polygon scores
         an article whenever *it* runs the model, not at ``published_utc``: backfilled
         sentiment is scored by a model newer than the article, so it is unsafe as a
@@ -320,7 +318,7 @@ class PolygonClientService:
 
         **Temporal boundary.** The ``published_utc*`` *filters* stay vendor-format
         strings, which is a deliberate, documented deviation from
-        ``.claude/rules/temporal-rigor.md`` (CLAUDE.md philosophy #4): Polygon gives a
+        ADR 0022 (a), recorded in ADR 0022 (f): Polygon gives a
         bare ``YYYY-MM-DD`` whole-day semantics that an instant in milliseconds cannot
         express, so converting would narrow what a caller can ask for. This function is
         the designated ingestion boundary, and the direction that matters — vendor data

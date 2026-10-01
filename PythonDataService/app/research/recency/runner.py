@@ -2,17 +2,16 @@
 
 Orchestrates one Recency Chart launch: expands the grid (lazily), executes
 each (symbol, strategy, parameter-combo) backtest one at a time,
-computes every trade/run statistic in Python (design spec §7.1), assembles
+computes every trade/run statistic in Python, assembles
 a fingerprinted snapshot per run, and persists each snapshot independently
 so a failing child is isolated and reported ("N of M failed") rather than
-aborting the batch or being silently dropped (numerical-rigor: no silent
+aborting the batch or being silently dropped (no silent
 catches). Mirrors the walk-forward runner's injected-dependency shape
 (``app/research/walk_forward/runner.py``) — ``execute_backtest_fn`` and
 ``persist_fn`` are supplied by the caller so this module has no direct
 dependency on the engine HTTP layer or the .NET persistence transport,
 which keeps it testable with an in-memory double.
-Reference: PRD https://github.com/tim1016/learn-ai/issues/1577; design spec
-docs/superpowers/specs/2026-08-16-recency-chart-design.md §4, §5.3, D11.
+Reference: PRD https://github.com/tim1016/learn-ai/issues/1577.
 Canonical implementation: this file.
 Validated against: tests/research/recency/test_runner.py.
 """
@@ -77,7 +76,7 @@ class RecencyLaunchConfig:
 
 @dataclass(frozen=True)
 class RecencyTradeSnapshot:
-    """One trade as persisted into the recency-owned snapshot (design spec §4.1)."""
+    """One trade as persisted into the recency-owned snapshot."""
 
     fingerprint: str
     entry_ms: int

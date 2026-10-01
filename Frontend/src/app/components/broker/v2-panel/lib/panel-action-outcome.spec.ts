@@ -241,7 +241,7 @@ describe('nested legacy bodies that carry next_step', () => {
   // emitters — `_historical_recovery_refusal` and the coverage-proof refusals
   // in `alpaca_clerk_sqlite.py`. They previously rendered a formatted reason
   // code as remediation; they now render the server's own prose, which is what
-  // CLAUDE.md requires of backend-authored operator copy.
+  // ADR 0035 D12 requires of backend-authored operator copy.
   it('prefers server prose over a formatted reason code', () => {
     const legacy = new HttpErrorResponse({
       status: 409,

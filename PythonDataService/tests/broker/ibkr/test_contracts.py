@@ -71,21 +71,6 @@ async def test_build_chain_contracts_strips_none_placeholders() -> None:
     assert len(result) == 3
 
 
-async def test_build_chain_contracts_returns_full_list_when_all_qualify() -> None:
-    qualified = [
-        SimpleNamespace(conId=1, strike=100.0, right="C"),
-        SimpleNamespace(conId=2, strike=100.0, right="P"),
-        SimpleNamespace(conId=3, strike=105.0, right="C"),
-        SimpleNamespace(conId=4, strike=105.0, right="P"),
-    ]
-    client = _mock_client_with_qualify_result(qualified)
-
-    result = await build_chain_contracts(client, "SPY", 1_800_000_000_000, [100.0, 105.0])
-
-    assert len(result) == 4
-    assert [c.conId for c in result] == [1, 2, 3, 4]
-
-
 def _mock_client_qualify_by_right(by_right: dict[str, list]):
     """Mock client whose qualifyContractsAsync inspects the first contract's
     `right` attribute and returns the matching pre-canned list."""

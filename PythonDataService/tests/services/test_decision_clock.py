@@ -1,4 +1,4 @@
-"""Decision clock: trigger instants on the calendar (spec §4.4, §4.5)."""
+"""Decision clock: trigger instants on the calendar."""
 
 from __future__ import annotations
 

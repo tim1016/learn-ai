@@ -685,7 +685,7 @@ def build_persist_payload(
     # anchors and may be UTC midnight.  They are not safe chart bounds: a
     # close on the final session necessarily occurs later than that day's
     # midnight.  The strict report instead starts and ends at the timestamps
-    # actually covered by LEAN's curve/trade evidence, matching PRD §9.2.
+    # actually covered by LEAN's curve/trade evidence.
     covered_start_ms = min(
         [*mark_timestamps, *(trade.entry_ms_utc for trade in paired_trades)],
         default=start_date_ms,
@@ -807,8 +807,7 @@ def _compatibility_ledger_statistics(
     Formula: per-trade return = (exit_price - entry_price) / entry_price;
     portfolio metrics use ``statistics.summarize`` without an engine-native
     equity curve, so both engines consume the same closed-trade observations.
-    Reference: ``app.engine.results.statistics`` and the compatibility contract
-    in ``docs/references/reconciliations/engine-lab-runs-75-76-statistics-validation-plan.md``.
+    Reference: ``app.engine.results.statistics``.
     Canonical implementation: this adapter plus ``statistics.summarize``.
     Validated against: ``test_compatibility_pair_scores_the_same_closed_trade_ledger_contract``.
 

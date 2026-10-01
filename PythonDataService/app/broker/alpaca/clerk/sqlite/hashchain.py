@@ -1,9 +1,9 @@
-"""Hash-chain row format — pinned byte-for-byte in the contracts doc §7.
+"""Hash-chain row format — pinned byte-for-byte in ADR 0035's binding annex §7.
 
 ``row_hash = H(prev_hash || canonical(payload))``, where ``||`` is UTF-8
 string concatenation (not raw hash-byte concatenation) and ``canonical``
 is a fixed-key-order, no-whitespace JSON serialization. See
-``docs/architecture/alpaca-clerk-sqlite-pinned-contracts.md`` §7 for the full
+ADR 0035 D8 and its binding annex §7 for the full
 rationale; this module is the canonical implementation of that pin.
 """
 
@@ -16,9 +16,9 @@ from typing import Any
 
 GENESIS = "GENESIS"
 
-# The custody_transitions columns that participate in the hash, in the order
-# listed in the pinned contracts doc §11 / schema §3 — everything except
-# sequence, prev_hash, row_hash themselves.
+# The custody_transitions columns that participate in the hash, in the column
+# order of the table in ``schema.py`` — everything except sequence, prev_hash,
+# row_hash themselves.
 PAYLOAD_COLUMNS: tuple[str, ...] = (
     "authority_generation",
     "strategy_instance_id",

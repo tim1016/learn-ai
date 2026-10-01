@@ -5,9 +5,8 @@ stopped being the runtime's source of truth when an installation cut over to a
 saved profile. This module owns three things that must not drift apart:
 
 1. **Which variables are retired** — :data:`RETIRED_SETTINGS`. Exactly seven, and
-   the list is closed. ``docs/architecture/alpaca-configuration-ownership-inventory.md``
-   §F is the authority; :data:`NEVER_RETIRED_SETTINGS` records the other side of
-   that table so the distinction is asserted rather than remembered.
+   the list is closed (ADR 0060); :data:`NEVER_RETIRED_SETTINGS` records the other
+   side so the distinction is asserted rather than remembered.
 2. **How to read them without ever refusing to construct** — the two readers
    below.
 3. **The refusal their presence produces when a cut-over installation is asked
@@ -31,8 +30,8 @@ path, where an exception is a crash loop (#2014), so it must not have one.
 
 :class:`LegacyEnvironmentValues` mirrors ``AlpacaSettings``' field *types* so a
 parsed value is bit-identical to what the environment boot would have produced —
-which is what makes the imported envelope's ``sha`` equal the legacy one. Per
-CLAUDE.md guiding philosophy #5 this deliberate duplicate carries a parity test
+which is what makes the imported envelope's ``sha`` equal the legacy one. This
+deliberate duplicate carries a parity test
 naming its canonical file: ``tests/broker_configuration/test_legacy_environment.py``
 pins every field and the resulting envelope ``sha`` against ``AlpacaSettings``.
 
@@ -70,7 +69,7 @@ _ENDPOINT_MODE = RetiredSetting(
 )
 
 # The six risk-envelope values, in ``LiveEnvelopeValues`` field order so the
-# mapping below is read top-to-bottom against the contract's §2.4 table.
+# mapping below reads top-to-bottom against that dataclass.
 _ENVELOPE_SETTINGS: Final[tuple[RetiredSetting, ...]] = (
     RetiredSetting(
         env_var="ALPACA_LIVE_LOSS_FRACTION",
@@ -114,7 +113,7 @@ ENVELOPE_FIELD_BY_SETTING: Final[dict[str, str]] = {
     "live_xh_exit_bps": "xh_exit_bps",
 }
 
-# The other side of the ownership inventory's §F table, recorded so the
+# The other side of the retired settings above, recorded so the
 # distinction is a test rather than a memory. **These are not retired and must
 # keep working after cutover.** ``ALPACA_API_KEY_ID`` / ``ALPACA_API_SECRET_KEY``
 # in particular *are* the ``default`` credential slot: refusing a boot because

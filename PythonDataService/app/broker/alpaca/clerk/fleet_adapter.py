@@ -1,11 +1,11 @@
 """The Alpaca provider adapter — the first production fleet provider.
 
-Provider-owned declarations only (PRD FR-003/004): the immutable provider
-identity, the typed operation catalog the Alpaca clerk serves, account ID
-canonicalization, and the provider-authored summary projection. Every
-execution, custody, arming and recovery decision stays in the existing Alpaca
-authority machinery this adapter never imports — the fleet spine routes and
-verifies, it does not trade (ADR 0062 Decision 6).
+Provider-owned declarations only: the immutable provider identity, the typed
+operation catalog the Alpaca clerk serves, account ID canonicalization, and the
+provider-authored summary projection. Every execution, custody, arming and
+recovery decision stays in the existing Alpaca authority machinery this adapter
+never imports — the fleet spine routes and verifies, it does not trade (ADR 0062
+Decision 6).
 """
 
 from __future__ import annotations
@@ -87,15 +87,14 @@ _ONE_SHOT = OperationIdempotency.ONE_SHOT
 #: quiet. Declared on exactly the stop, cancel and flatten operations below.
 _QUIESCE = OperationDrainAdmission.QUIESCE
 
-#: The complete Alpaca operation catalog (delivery B, PRD §10.2). The catalog
+#: The complete Alpaca operation catalog (delivery B). The catalog
 #: is the single routing contract (ADR 0062 addendum, item 4): the
 #: coordinator's forwarding allowlist, the public clerk-scoped routes, the
 #: exported contract and the frontend builders all derive from these
 #: declarations, and the catalog grows only by reviewed change. Public paths
 #: are clerk-scope-relative (the coordinator prefixes
 #: ``/api/brokers/{broker}/clerks/{clerk_id}``); agent paths are what the
-#: agent process serves today. See docs/design/fleet-b-route-inventory.md for
-#: the per-operation dispositions and the retained-legacy surface.
+#: agent process serves today.
 ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
     {
         # ── Lane reads ────────────────────────────────────────────────────
@@ -828,7 +827,7 @@ class AlpacaProviderAdapter:
         lowercase, so `` ABC123 `` and ``abc123`` are one broker-qualified
         account. No shape is required or checked here — the registry treats
         the result as opaque and provider verification owns real account
-        discovery (PRD FR-051).
+        discovery.
         """
         return canonical_alpaca_account_id(external_account_id)
 

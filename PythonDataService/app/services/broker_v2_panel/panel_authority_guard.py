@@ -28,11 +28,11 @@ from app.schemas.broker_v2_panel import RecentDecisionView, RecentFillView
 class MixedAuthorityAggregateError(RuntimeError):
     """A panel evidence aggregate would have combined more than one account authority.
 
-    PRD Sec 15/FR-029: a roster or panel aggregate accepts exactly one Clerk
-    account authority (the real-paper account or one isolated ``sim:``
-    account) — never a blend of simulated and real-paper rows, and never rows
-    stamped for two different accounts of the same kind (e.g. one bot's
-    synthetic authority leaking into another bot's projection).
+    A roster or panel aggregate accepts exactly one Clerk account authority
+    (the real-paper account or one isolated ``sim:`` account) — never a blend
+    of simulated and real-paper rows, and never rows stamped for two different
+    accounts of the same kind (e.g. one bot's synthetic authority leaking into
+    another bot's projection).
     """
 
 

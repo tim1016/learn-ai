@@ -1,11 +1,9 @@
 """The shared DTOs for ``/api/brokers/alpaca/configuration``.
 
-Package B owns these and the generated OpenAPI artifacts until handoff (plan
-§6 dependency schedule); packages C, D and E build against them rather than
-each declaring their own. The shapes come from
-``docs/architecture/broker-configuration-profile-contract.md`` §2 and §4.
+Package B owns these and the generated OpenAPI artifacts until handoff;
+packages C, D and E build against them rather than each declaring their own.
 
-**This surface is provisional while ADR 0060 is Proposed** (contract §4): its
+**This surface is provisional while ADR 0060 is Proposed**: its
 open questions 2 and 5 can still change ``/credential-slots`` and the ``PATCH``
 semantics. The committed OpenAPI snapshot is regenerated with this change like
 any other endpoint addition and asserts nothing about permanence.
@@ -14,26 +12,25 @@ Conventions that are not negotiable here:
 
 * Every timestamp is ``int64 ms UTC`` and every such field ends ``_at_ms``,
   bounded by ``MAX_TIMESTAMP_MS`` — never ``2**63 - 1``
-  (`.claude/rules/temporal-rigor.md`).
+  (ADR 0022 (g)).
 * Every mutating request model is closed (``extra="forbid"``). Owner and actor
   are server-resolved; a body naming them is refused with
   ``owner_field_not_accepted``, never silently dropped.
 * No field carries a secret, a secret fragment, a secret length, or an
   environment-variable name. ``credential_slot`` is an opaque slot label.
 
-Two shapes here go beyond the contract's enumerated fields, both recorded
-rather than assumed:
+Two shapes here are recorded rather than assumed:
 
 * ``SelectionResponse.apply_requested_generation`` — which generation the
-  one-shot Apply was recorded against, so contract §5's "a repeated apply
-  against an already-recorded generation is a no-op success" has something to
-  compare. The alternative was inferring it from ``selection_generation - 1``.
-* ``ApplyRequest.expected_selection_generation`` — §5 names the fence only on
-  ``PUT /selection``; an Apply that names no generation cannot be idempotent
+  one-shot Apply was recorded against, so a repeated apply against an
+  already-recorded generation can be a no-op success. The alternative was
+  inferring it from ``selection_generation - 1``.
+* ``ApplyRequest.expected_selection_generation`` — ``PUT /selection`` carries
+  the generation fence; an Apply that names no generation cannot be idempotent
   or fenced, so it carries the same field.
 
-Three refusal reasons also go beyond §6's table, each documented at its
-definition in ``app/broker_configuration/errors.py``:
+Three refusal reasons are each documented at their definition in
+``app/broker_configuration/errors.py``:
 ``display_name_conflict`` (409), ``live_envelope_invalid`` (422) and
 ``paper_allowances_invalid`` (422).
 """
@@ -466,7 +463,7 @@ class NicknamePutRequest(_ClosedRequest):
 
 
 class SelectionResponse(_Response):
-    """Staged **and** effective, always both (contract §4).
+    """Staged **and** effective, always both.
 
     ``effective_acknowledged_at_ms`` is a historical acknowledgement: it says a
     worker once bound this revision, never that one is running now.

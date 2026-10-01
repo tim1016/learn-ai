@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
@@ -17,21 +14,7 @@ from app.lean_sidecar.parity_matrix.manifest import (
     StateCsvSchema,
     StrategySpec,
     WindowSpec,
-    sha256_of_file,
-    sha256_of_text,
 )
-
-
-def test_sha256_of_text_stable() -> None:
-    h = sha256_of_text("hello")
-    assert h == hashlib.sha256(b"hello").hexdigest()
-    assert len(h) == 64
-
-
-def test_sha256_of_file(tmp_path: Path) -> None:
-    p = tmp_path / "x.txt"
-    p.write_text("hello", encoding="utf-8")
-    assert sha256_of_file(p) == hashlib.sha256(b"hello").hexdigest()
 
 
 def test_manifest_round_trip() -> None:

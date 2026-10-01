@@ -1,6 +1,6 @@
 """TradingCalendar — single calendar source of truth for P2.5.
 
-Per docs/handoffs/2026-05-18-design-p2-5-date-semantics-v2.md, both the
+Per ADR 0022 (d), both the
 ``TrustedRunRequestModel`` validator and the staging iteration must
 consult ONE calendar so they cannot drift. This module exposes the
 four primitives both consumers need.

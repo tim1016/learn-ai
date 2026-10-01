@@ -44,7 +44,7 @@ def et_minute_of_day_ms(day: date, minute_of_day: int) -> int:
 
     Wall-clock arithmetic on an aware datetime, so the UTC offset is the one
     in force at that wall time — a fixed offset would be an hour wrong across
-    a DST boundary (temporal-rigor rule). The minutes are capability data;
+    a DST boundary. The minutes are capability data;
     this function holds no session literal of its own.
     """
     wall = datetime(day.year, day.month, day.day, tzinfo=_NY) + timedelta(minutes=minute_of_day)

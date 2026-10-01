@@ -1,4 +1,4 @@
-"""Regression tests for the account-scoped deploy alias (§3, §5).
+"""Regression tests for the account-scoped deploy alias.
 
 The deploy dialog POSTs to ``/api/brokers/{broker}/accounts/{account_id}/bots``
 but only the unscoped ``/{broker}/bots`` route existed — the scoped form

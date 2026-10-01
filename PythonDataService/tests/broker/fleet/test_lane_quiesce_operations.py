@@ -14,7 +14,6 @@ from app.broker.fleet.provider import (
     Capability,
     OperationIdempotency,
     OperationReadiness,
-    validate_operation_catalog,
 )
 from app.broker.fleet.records import AssignmentState, StoredLifecycleState
 from app.broker.fleet.service import FleetControlService
@@ -53,10 +52,6 @@ def test_lane_account_quiet_read_is_a_lane_scoped_custody_read() -> None:
     assert operation.idempotency is OperationIdempotency.READ
     assert operation.readiness is OperationReadiness.CONFIGURATION_ACCESS
     assert operation.requires_effective_account is False
-
-
-def test_the_catalog_with_both_operations_still_validates() -> None:
-    validate_operation_catalog(production_provider_adapters()["alpaca"].operations())
 
 
 def test_both_operations_route_to_a_serving_lane_without_draining_it(

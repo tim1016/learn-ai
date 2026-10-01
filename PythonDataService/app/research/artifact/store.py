@@ -5,8 +5,7 @@ atomic tmp+rename writes, load-and-validate-into-provided-Pydantic-
 types, list/filter, the optional hash hook, and the parent-run-id
 extractor — that every phase under ``app/research/`` would otherwise
 duplicate. Modeled on ``app/research/runs/storage.py`` (the most
-thorough of the four pre-seam storage modules); see
-``docs/architecture/research-artifact-seam.md`` for the design.
+thorough of the four pre-seam storage modules).
 
 The default artifacts root resolves via
 ``app.research.artifact.root.default_artifacts_root`` so the

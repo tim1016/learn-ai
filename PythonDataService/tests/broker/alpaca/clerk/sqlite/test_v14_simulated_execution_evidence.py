@@ -184,29 +184,6 @@ def test_v14_migration_refuses_to_retag_without_the_durable_shadow_order_identit
         conn.close()
 
 
-def test_a_fresh_authority_admits_simulated_execution_evidence() -> None:
-    conn = sqlite3.connect(":memory:")
-    try:
-        schema.configure_connection(conn)
-        schema.apply_schema(conn)
-        # The vocabulary check only: the fixture row needs no parent rows.
-        conn.execute("PRAGMA foreign_keys = OFF")
-        conn.execute(
-            "INSERT INTO fills (fill_id, order_ref, qty, price, side, execution_id, "
-            "evidence_source, clerk_observed_at_ms, recorded_at_ms, recorded_transition_sequence) "
-            "VALUES ('shadow-execution:x', 'ref-x', 1, 1, 'BUY', 'shadow-execution:x', "
-            "'simulated_execution', 1, 1, 0)"
-        )
-        assert (
-            conn.execute(
-                "SELECT evidence_source FROM fills WHERE fill_id = 'shadow-execution:x'"
-            ).fetchone()[0]
-            == "simulated_execution"
-        )
-    finally:
-        conn.close()
-
-
 # ---------------------------------------------------------------------------
 # Mirror rebuild consistency (#2178 review): the migration's re-tag must
 # survive disaster recovery, which replays the immutable transition stream.

@@ -8,12 +8,12 @@ vendor adapter at the ingestion boundary.
 Two conventions are load-bearing:
 
 - **Time is ``int64`` ms UTC.** Every temporal field is an integer count of
-  milliseconds since the Unix epoch, per ``.claude/rules/temporal-rigor.md``.
+  milliseconds since the Unix epoch.
   The adapter is the single conversion boundary: vendor RFC-3339 strings become
   ``int64`` ms there, exactly once. Fields carry the ``_ms`` suffix.
 - **Money and quantity are ``float``.** These are broker-reported figures for a
   read-only display surface (phase 1), not ported math or backtest PnL, so the
-  numerical-rigor Decimal discipline does not apply; ``float`` matches the IBKR
+  Decimal discipline does not apply; ``float`` matches the IBKR
   model precedent and serializes cleanly to the JSON consumers. The verbatim
   decimal strings are preserved losslessly in the capture journal regardless.
 """
@@ -334,7 +334,7 @@ class BrokerAsset(_ContractModel):
 class BrokerClockEvidence(_ContractModel):
     """Market-wide broker-clock evidence — not scheduled-session authority.
 
-    The canonical calendar module (``.claude/rules/temporal-rigor.md``) remains
+    The canonical calendar module (ADR 0022 (b), (c)) remains
     the sole source of scheduled session structure. This narrow live input may
     prove that the broker currently says the market is open or closed, but it
     cannot establish that any particular symbol is tradable or not halted. The

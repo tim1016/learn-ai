@@ -5,14 +5,13 @@ import {
   DataLabWorkspaceStore,
 } from './data-lab-workspace-store';
 
-/* /data-lab route family (PRD 2026-09-12 §7.1).
+/* /data-lab route family.
  *
  * One shell component with three lazy child routes. The workspace store is
  * provided on the parent route's injector so the shell and every child
  * (explore / export / validate) share one instance — state survives child
- * route navigation and dies with the shell (FR-002). `/data-lab` redirects
- * to `/data-lab/explore` after the shell normalizes legacy query state
- * (PRD §14). */
+ * route navigation and dies with the shell. `/data-lab` redirects
+ * to `/data-lab/explore` after the shell normalizes legacy query state. */
 
 export const DATA_LAB_ROUTES: Routes = [
   {

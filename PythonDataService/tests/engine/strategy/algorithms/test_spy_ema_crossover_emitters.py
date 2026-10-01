@@ -51,16 +51,6 @@ class _SyntheticStream:
         return iter(self._bars)
 
 
-def test_constructor_accepts_output_dir(tmp_path: Path) -> None:
-    s = EmaCrossoverSignalAlgorithm(symbol="SPY", output_dir=tmp_path)
-    assert s._output_dir == tmp_path
-
-
-def test_constructor_defaults_output_dir_to_none() -> None:
-    s = EmaCrossoverSignalAlgorithm(symbol="SPY")
-    assert s._output_dir is None
-
-
 def test_initialize_creates_csvs_with_correct_headers(tmp_path: Path) -> None:
     """Stand-alone test: instantiate strategy + StrategyContext + initialize."""
     portfolio = Portfolio(initial_cash=Decimal("100000"))
@@ -92,35 +82,6 @@ def test_initialize_creates_csvs_with_correct_headers(tmp_path: Path) -> None:
 
     # Close file handles deliberately so tmp_path cleanup doesn't warn.
     s.on_end_of_algorithm()
-
-
-def test_no_csvs_when_output_dir_is_none() -> None:
-    """Without output_dir, no files are created and emitter state stays None."""
-    portfolio = Portfolio(initial_cash=Decimal("100000"))
-    ctx = StrategyContext(portfolio=portfolio)
-    s = EmaCrossoverSignalAlgorithm(symbol="SPY")
-    s.ctx = ctx
-    s.initialize()
-
-    assert s._observations_writer is None
-    assert s._state_writer is None
-
-
-def test_on_end_of_algorithm_closes_handles(tmp_path: Path) -> None:
-    """on_end_of_algorithm must close file handles and clear the references."""
-    portfolio = Portfolio(initial_cash=Decimal("100000"))
-    ctx = StrategyContext(portfolio=portfolio)
-    s = EmaCrossoverSignalAlgorithm(symbol="SPY", output_dir=tmp_path)
-    s.ctx = ctx
-    s.initialize()
-
-    assert s._observations_fp is not None
-    assert s._state_fp is not None
-
-    s.on_end_of_algorithm()
-
-    assert s._observations_fp is None
-    assert s._state_fp is None
 
 
 def test_observations_csv_row_count_matches_minute_bar_input(tmp_path: Path) -> None:

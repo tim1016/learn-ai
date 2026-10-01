@@ -1,4 +1,4 @@
-"""Three-tier deploy-time parameter resolution (PRD Sec 10.3, #1728 Task 2).
+"""Three-tier deploy-time parameter resolution (#1728 Task 2).
 
 Registered defaults -> symbol profile -> explicit operator override, resolved
 once and sealed. ``resolve_deploy_strategy_params`` owns the merge;

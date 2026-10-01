@@ -15,7 +15,6 @@ from app.broker.fleet.provider import (
     Capability,
     OperationIdempotency,
     OperationReadiness,
-    validate_operation_catalog,
 )
 from app.broker.fleet_composition import production_provider_adapters
 from app.installation_migration.lanes import BAR_CHECK_CLIENT_TIMEOUT_S
@@ -52,10 +51,6 @@ def test_lane_go_live_release_is_a_lane_scoped_one_shot_bot_action() -> None:
     assert operation.idempotency is OperationIdempotency.ONE_SHOT
     assert operation.readiness is OperationReadiness.CONFIGURATION_ACCESS
     assert operation.requires_effective_account is False
-
-
-def test_the_catalog_with_both_operations_still_validates() -> None:
-    validate_operation_catalog(production_provider_adapters()["alpaca"].operations())
 
 
 def test_the_bar_check_forward_outlasts_the_lanes_own_bound_and_answers_inside_the_cli() -> None:

@@ -1,7 +1,6 @@
 """End-to-end LEAN sidecar smoke test against the pinned image.
 
-Per ``docs/architecture/lean-sidecar-lab.md`` §"Phase sequencing"
-Phase 1 (g): one full end-to-end run against a hard-coded trusted
+One full end-to-end run against a hard-coded trusted
 Python algorithm, no user input. This test:
 
 1. Resolves a fresh workspace under a temp artifacts root

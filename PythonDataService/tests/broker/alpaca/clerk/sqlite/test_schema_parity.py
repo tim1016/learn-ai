@@ -1,9 +1,9 @@
-"""Guiding-philosophy #5 parity: schema.py's DDL must match the pinned doc.
+"""``schema.SCHEMA_DDL`` builds the tables, columns, indexes and triggers the
+clerk store relies on, and its migrations carry live stores to the current
+version intact.
 
-If this test fails, either the doc changed without updating ``schema.py`` (or
-vice versa) — the pinned-contracts document is the reference, this module is
-the canonical implementation, and this test is what keeps them from
-drifting.
+The DDL is the schema's only copy; ADR 0035's binding annex states the
+invariants behind it.
 """
 
 from __future__ import annotations
@@ -13,97 +13,6 @@ from pathlib import Path
 
 from app.broker.alpaca.clerk.sqlite import database_verification, schema
 from tests.broker.alpaca.clerk.sqlite.conftest import build_v13_authority
-
-REPO_ROOT = Path(__file__).resolve().parents[6]
-
-
-def test_schema_ddl_matches_pinned_contracts_doc() -> None:
-    pinned = schema.load_pinned_ddl(REPO_ROOT)
-    assert pinned == schema.SCHEMA_DDL
-
-
-def test_schema_creates_all_pinned_tables() -> None:
-    """``holds`` is absent on purpose: v12 retired the table (ADR 0048 D2).
-
-    Its name survives as a read-only view over ``uncertainties``, asserted
-    separately by
-    :func:`test_holds_is_a_read_only_view_over_the_two_hold_causes`.
-    """
-    conn = sqlite3.connect(":memory:")
-    schema.configure_connection(conn)
-    schema.apply_schema(conn)
-    tables = {
-        row[0]
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name != 'sqlite_sequence'")
-    }
-    assert tables == {
-        "control_meta",
-        "account_risk_policy",
-        "deployment_budgets",
-        "strategy_instances",
-        "runs",
-        "custody_subjects",
-        "commands",
-        "effect_operations",
-        "orders",
-        "operation_order_links",
-        "fills",
-        "external_orders",
-        "bot_config",
-        "decision_receipts",
-        "envelope_reservations",
-        "positions",
-        "uncertainties",
-        "manual_order_tickets",
-        "manual_order_legs",
-        "manual_order_cancellations",
-        "reconciliations",
-        "receipts",
-        "custody_transitions",
-        "exit_recovery_checks",
-        "strategy_exit_terms",
-        "mirror_fence",
-    }
-
-
-def test_v9_execution_provenance_and_custody_subject_schema() -> None:
-    conn = sqlite3.connect(":memory:")
-    schema.configure_connection(conn)
-    schema.apply_schema(conn)
-
-    fills_columns = {row[1]: row for row in conn.execute("PRAGMA table_info(fills)")}
-    assert set(fills_columns) >= {
-        "execution_id",
-        "evidence_source",
-        "event_kind",
-        "superseded_execution_ref",
-        "fee",
-        "fee_fidelity",
-        "recorded_transition_sequence",
-    }
-    assert fills_columns["execution_id"][3] == 0
-    assert fills_columns["evidence_source"][4] == "'cumulative_recovery'"
-    assert fills_columns["event_kind"][4] == "'fill'"
-    assert fills_columns["fee_fidelity"][4] == "'not_reported'"
-
-    index_names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
-    assert {
-        "ux_fills_execution_id",
-        "ux_external_orders_broker_order_id",
-        "ix_decision_receipts_strategy_observed_at",
-        "ux_manual_order_legs_command",
-        "ux_manual_order_legs_effect",
-        "ux_manual_order_legs_order",
-        "ux_manual_order_legs_sequence",
-        "ix_manual_order_cancellations_effect",
-    } <= index_names
-
-    command_columns = {row[1]: row for row in conn.execute("PRAGMA table_info(commands)")}
-    effect_columns = {row[1]: row for row in conn.execute("PRAGMA table_info(effect_operations)")}
-    assert command_columns["subject_id"][3] == 1
-    assert effect_columns["subject_id"][3] == 1
-    assert command_columns["strategy_instance_id"][3] == 0
-    assert effect_columns["strategy_instance_id"][3] == 0
 
 
 def _authority_built_up_to(conn: sqlite3.Connection, target_version: int) -> None:

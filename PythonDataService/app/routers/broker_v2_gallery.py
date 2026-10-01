@@ -103,8 +103,8 @@ class _PanelChartFillSource:
     ``GalleryFillSource`` contract ``GalleryHub`` expects.
 
     Reuses the exact SQLite-vs-legacy fill authority branch the single-bot
-    detail chart's ``get_live_chart`` uses (CLAUDE.md single-source-of-truth
-    rule) but never lets one bot's unavailable fill evidence — a SQLite
+    detail chart's ``get_live_chart`` uses,
+    but never lets one bot's unavailable fill evidence — a SQLite
     revision race, a bot too new to have a projection yet — fail the whole
     gallery snapshot for every other bot; it logs and degrades to no markers
     for that bot instead.

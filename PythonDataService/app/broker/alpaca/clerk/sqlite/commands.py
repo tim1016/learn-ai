@@ -16,8 +16,7 @@ through :meth:`ClerkSqliteRepository.commit_first_transition` — there is no
 longer a separate ``reserve_command()`` step or a public ``serialized()``
 lock for this module to compose. Stop also now takes a caller-supplied
 ``lifecycle_run_id`` instead of resolving it from the currently active run
-(open-pr-review-2026-08-05.md P2 "Stop retry loses the active-run identity";
-see the pinned contract's §3a for the full rationale).
+(see ADR 0035's binding annex §3a for the full rationale).
 """
 
 from __future__ import annotations
@@ -89,7 +88,7 @@ def _operator_lifecycle_key(
     action: str,
     intended_end_state: str,
 ) -> str:
-    """Pinned contracts doc §3a — the operator-lifecycle natural key."""
+    """ADR 0035's binding annex §3a — the operator-lifecycle natural key."""
     return f"{account_id}:{strategy_instance_id}:{lifecycle_run_id}:{action}:{intended_end_state}"
 
 
@@ -281,9 +280,8 @@ def submit_stop_run(
     **not** resolved from the currently active run. A prior revision of this
     function did resolve it, which made a lost Stop response unrecoverable:
     a retry could no longer find an active run to resolve a key against,
-    since the first attempt had already stopped it
-    (open-pr-review-2026-08-05.md P2 "Stop retry loses the active-run
-    identity"). Because the identity is caller-supplied, the existing-command
+    since the first attempt had already stopped it.
+    Because the identity is caller-supplied, the existing-command
     lookup inside ``commit_first_transition`` runs *before* this function
     re-reads the active run, so a lost-response retry replays the completed
     Stop even though the run it targeted is no longer active.

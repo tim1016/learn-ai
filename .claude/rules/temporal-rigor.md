@@ -2,9 +2,7 @@
 
 The core scientific standard for **time** in this repo — representation, the trading calendar, and display. This is a peer of `numerical-rigor.md`: as authoritative for time as that document is for math. Read before any work that ingests, stores, transmits, computes with, or displays a timestamp, a trading date, or a market session.
 
-Decision record: `docs/architecture/adrs/0022-temporal-authority-calendar-and-timestamp.md`.
-
-Timestamp handling is the single largest source of divergence in backtesting. The rules are strict and there are no exceptions inside the scope defined below.
+The reasons behind these rules are in [ADR 0022](../../docs/architecture/adrs/0022-temporal-authority-calendar-and-timestamp.md). Its amendment (f) names the only accepted deviations; inside the scope below there are no other exceptions.
 
 ## Scope — what this rule governs, and what it does not
 
@@ -19,25 +17,20 @@ It explicitly does **not** govern:
 
 ## Canonical representation
 
-**Every temporal value in flight, at rest, or on the wire is an integer count of milliseconds since Unix epoch UTC (`int64 ms UTC`).** No exceptions. ISO strings, `datetime` / `DateTime` objects, tz-aware ISO-with-`Z`, and naive datetimes are all **disallowed as wire and storage formats**. Language-native types are allowed only for arithmetic within a single function; they must be converted back to `int64 ms UTC` before returning, writing, or serializing.
-
-Rationale: four different wire formats were in flight before this rule (`int ms`, naive-ISO-with-lying-`Z`, `"YYYY-MM-DD HH:MM"` that parses as local in the browser, .NET `DateTime` with `Kind=Local`-by-accident).
+**Every temporal value in flight, at rest, or on the wire is an integer count of milliseconds since Unix epoch UTC (`int64 ms UTC`).** ISO strings, `datetime` / `DateTime` objects, tz-aware ISO-with-`Z`, and naive datetimes are all **disallowed as wire and storage formats**. Language-native types are allowed only for arithmetic within a single function; they must be converted back to `int64 ms UTC` before returning, writing, or serializing.
 
 ### Ingest to the closest constructible instant
 
-When you consume a time from an external API (Polygon, IBKR, FRED), snap it to the **closest `int64 ms UTC` you can construct** for that value, at the ingestion boundary, and store that. The closest constructible instant is the most accurate durable representation — never keep the vendor's string.
+When you consume a time from an external API (Polygon, IBKR, FRED), snap it to the **closest `int64 ms UTC` you can construct** for that value, at the ingestion boundary, and store that. Never keep the vendor's string.
 
 ### The admissible range
 
-The int64 width is the *storage type*, not the bound. The largest instant this
-domain admits is `MAX_TIMESTAMP_MS` (`app/utils/session_anchors.py`) —
-`253402300799999`, the end of 9999-12-31 UTC, which is also the end of the
-range `datetime` can represent. Every `*_ms` schema field declares that
-ceiling; `le=2**63 - 1` is not a domain statement and must not appear in a
-schema bound. It is also not representable in a float64, so publishing it made
-the OpenAPI contract state a ceiling one higher than the one enforced (#1936).
-`2**63` still belongs in *representability* guards inside functions — "does
-this value fit an int64 column?" — which is a different question.
+The largest instant this domain admits is `MAX_TIMESTAMP_MS`
+(`app/utils/session_anchors.py`) — `253402300799999`, the end of 9999-12-31
+UTC — not the int64 width. Every `*_ms` schema field declares that ceiling;
+`le=2**63 - 1` must not appear in a schema bound. `2**63` still belongs in
+*representability* guards inside functions ("does this value fit an int64
+column?").
 
 ### Date-anchored and wall-clock values
 
@@ -47,36 +40,32 @@ Some values are semantically a **date** (option expiry `2026-06-19`, a "trading 
 - **Trading date** → the session open (09:30 ET) of that date, unless a surface states another anchor.
 - **Session boundaries** → the calendar's actual `market_open` / `market_close` for that date (respects half-days).
 
-"The closest Unix timestamp" is ambiguous for a bare date — *closest to which instant, midnight where?* The ET session anchor removes the ambiguity and, paired with the display modes below, prevents the date from drifting a calendar day at render time.
-
 ## Two and only two conversion boundaries
 
-1. **External-API ingestion.** Parse → `int64 ms UTC` immediately on receipt. Validate monotonicity and uniqueness at the same point and **fail fast** on violations: reject any duplicate timestamp and any non-strictly-increasing sequence with a descriptive error. Do not silently repair the feed (no `drop_duplicates`, no forward-fill, no reordering) — duplicates and gaps are signals about upstream corruption and must surface, not be masked. Everything downstream consumes `int64 ms`.
+1. **External-API ingestion.** Parse → `int64 ms UTC` immediately on receipt. Validate monotonicity and uniqueness at the same point and **fail fast** on violations: reject any duplicate timestamp and any non-strictly-increasing sequence with a descriptive error. Do not silently repair the feed (no `drop_duplicates`, no forward-fill, no reordering). Everything downstream consumes `int64 ms`.
 2. **UI rendering.** `int64 ms UTC` → a display string, via the shared display component (see "Display" below). The display-side string is never stored, never sent back to a server, never compared against another timestamp.
 
 No other place in the codebase converts timestamps for wire, storage, or serialization. Transient in-function timezone conversion for wall-clock semantics (see "Classical rules") is allowed, provided the result is not persisted and is converted back to canonical `int64 ms UTC` before return, write, or serialize.
 
 ### Readable time in exported CSVs
 
-A CSV the owner downloads to read in a spreadsheet is boundary 2 applied to a file, not a new wire format (owner decision 2026-09-19). Such a file may carry **one display-only wall-clock column** beside `unix_ts`, under these conditions:
+A CSV the owner downloads to read in a spreadsheet may carry **one display-only wall-clock column** beside `unix_ts`, under these conditions:
 
-- `unix_ts` (`int64 ms UTC`) is **always present, first, and not deselectable** — it is the column every consumer aligns on.
-- The readable column is rendered server-side from `unix_ts` in one owner-chosen IANA zone and is named for that zone (`time_america_chicago`), so a file never states a wall-clock without saying where.
+- `unix_ts` (`int64 ms UTC`) is **always present, first, and not deselectable**.
+- The readable column is rendered server-side from `unix_ts` in one owner-chosen IANA zone and is named for that zone (`time_america_chicago`).
 - Nothing in the repo parses the readable column back, stores it, or aligns on it.
-
-Surfaces: Data Lab `dataset.csv` (`build_csv_bytes` in `app/services/dataset_service.py`, `YYYY-MM-DD HH:MM:SS`) and the options companion's `iso_time` (`docs/options-companion-format.md`).
 
 ### Finite ingestion vs. live subscriptions
 
-The fail-fast rule above governs **finite** ingestion — a historical fetch is a closed dataset where a duplicate or gap *is* upstream corruption, so it must halt. An **active broker subscription** is a different boundary: a long-lived stream (e.g. IBKR `reqRealTimeBars`) can legitimately *redeliver* the bar it most recently sent, and the vendor does not contractually promise duplicate-free delivery. For these and only these live subscriptions, a redelivery of the most-recently-accepted element may be absorbed **idempotently** — but it must be **surfaced, never silenced**: logged with a structured `action` and incremented on an observable counter, exactly like the fail-fast path emits an error. The relaxation is narrow:
+Boundary 1's fail-fast rule governs **finite** ingestion: a historical fetch, a cache file, a set of vendor chunks. An **active broker subscription** (e.g. IBKR `reqRealTimeBars`), and only that, may absorb a redelivery of the most-recently-accepted element **idempotently**, and must **surface** it: log it with a structured `action` and count it on an observable counter. The relaxation is narrow:
 
 - Exact redelivery (same timestamp, same payload) → skip; do not double-count.
 - Same timestamp, *different* payload, before the aggregate it feeds is emitted → treat as a correction; recompute the open aggregate from its stored parts (never fold-and-sum).
-- Same timestamp, *different* payload, after that aggregate was emitted → ignore it: the emitted aggregate is never corrected or rebuilt, and the run does not die. Log it (`action="post_emit_correction_ignored"`) and count it (`LiveBarCounters.ignored_post_emit_correction`).
-- Any timestamp belonging to an *already-emitted* aggregate (i.e. `< last_accepted`) → still **fatal**; downstream has already consumed a now-stale value. Non-monotonic-within-the-open-aggregate stays fatal too until a real feed demonstrates otherwise.
-- A *new, later* timestamp inside a minute the **sparse-minute timer** emitted (#2376) → ignore it: outside RTH a minute short of twelve prints is emitted `SPARSE_MINUTE_EMIT_GRACE_MS` (8 s) after its close so the decision lands inside the delivery allowance, and a print that arrives after that emit is dropped, logged (`action="late_print_after_emit_ignored"`, with its delivery lag) and counted (`LiveBarCounters.ignored_late_print_after_emit`). This is a deliberate latency-over-completeness trade: the minute the run decided on can then differ from the vendor's historical minute, so a live-vs-backtest reconciliation classifies such a minute as a known divergence, not an engine bug. A minute emitted by count holds all twelve slots, so a later timestamp there stays fatal.
+- Same timestamp, *different* payload, after that aggregate was emitted → ignore it: never correct or rebuild the emitted aggregate, and do not end the run. Log it (`action="post_emit_correction_ignored"`) and count it (`LiveBarCounters.ignored_post_emit_correction`).
+- Any timestamp belonging to an *already-emitted* aggregate (i.e. `< last_accepted`) → **fatal**. A non-monotonic timestamp within the open aggregate is fatal too.
+- A *new, later* timestamp inside a minute the **sparse-minute timer** emitted (#2376) → ignore it; log it (`action="late_print_after_emit_ignored"`, with its delivery lag) and count it (`LiveBarCounters.ignored_late_print_after_emit`). Outside RTH the timer emits a minute short of twelve prints `SPARSE_MINUTE_EMIT_GRACE_MS` (8 s) after its close. A live-vs-backtest reconciliation classifies such a minute as a known divergence, not an engine bug. A later timestamp inside a minute emitted by count stays fatal.
 
-Reference implementation: `app/broker/ibkr/minute_assembler.py` (`policy="strict"` is the finite default; `policy="live_idempotent"` is the subscription relaxation). Silent `drop_duplicates`/forward-fill/reorder remains banned in both modes — absorbing a redelivery is not the same as repairing a feed.
+Reference implementation: `app/broker/ibkr/minute_assembler.py` (`policy="strict"` is the finite default; `policy="live_idempotent"` is the subscription relaxation). Silent `drop_duplicates`/forward-fill/reorder stays banned in both modes. ADR 0022 (h) and [ADR 0053](../../docs/architecture/adrs/0053-feed-continuity-same-run-recovery.md) §14, with its #2376 amendment, hold the reasons.
 
 ## Calendar authority
 

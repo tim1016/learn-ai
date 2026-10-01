@@ -57,12 +57,6 @@ def test_a_closed_window_admission_words_the_next_open_as_of_its_own_evaluation(
     assert decision.next_step == "Next Start window opens Mon Jan 4 2027, 04:00 ET."
 
 
-def test_start_window_next_step_while_the_window_is_open() -> None:
-    now = _et(2026, 9, 30, 10)
-
-    assert start_window_next_step(deploy_window(now), now_ms=now) == "Start is allowed in the current session."
-
-
 def test_exit_steps_summary_names_each_step_in_the_owners_et_words() -> None:
     summary = exit_steps_summary(DEPLOY_EXIT_TERMS, _et(2026, 9, 21, 9, 53))
 

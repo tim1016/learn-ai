@@ -1,8 +1,8 @@
 """The two seams this package declares and does not implement.
 
-Both belong to Package C of the user-owned broker configurations plan: the
+Both belong to Package C of the user-owned broker configurations work: the
 credential-slot allowlist and resolver, and read-only broker account
-verification (contract §7). This package owns the *storage* of what they
+verification. This package owns the *storage* of what they
 produce — an opaque slot string on a revision, and an account pin — so it
 declares the protocols its routes call and ships fail-closed defaults, rather
 than reaching into ``app/broker/alpaca/config.py`` or guessing an allowlist

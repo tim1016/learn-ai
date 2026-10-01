@@ -256,7 +256,7 @@ def serve_lane_presence(
     and never applied, an unconfigured installation has no usable environment
     settings), and the lane stays routable for ``configuration_access`` on
     every one of them — that is the whole point of beating while unbound. A
-    lane that answered those forwarded reads without the FR-076 identity echo
+    lane that answered those forwarded reads without the identity echo
     would have ``verify_identity_echo`` reject each response *after* the clerk
     executed it, so the echo installs here, with the beat, at lane level.
 
@@ -268,7 +268,7 @@ def serve_lane_presence(
     def _fleet_served_identity() -> dict[str, object] | None:
         """What this runtime actually serves, read at response time.
 
-        The identity echo (FR-076) derives from live state — the epoch
+        The identity echo derives from live state — the epoch
         follows re-registrations, the generation follows the selection
         transaction — never from what a caller pinned.
         """
@@ -292,7 +292,7 @@ async def lifespan(app: FastAPI):
     The dedicated coordinator role takes no installation lock at all: it owns
     no clerk volume, opens no profile or custody database, and its registry
     serializes through its own control-volume advisory lock (ADR 0062
-    addendum; audit 2026-09-13, finding 5's lock-scoping revision).
+    Decision 1).
     """
     if _FLEET_ROLE == "fleet_coordinator":
         async with _service_lifespan(app, worker_refusal=None):
@@ -307,7 +307,7 @@ async def lifespan(app: FastAPI):
     # the profiles database, before the broker client.
     fleet_lane = await _open_verified_fleet_lane()
     if fleet_lane is not None:
-        # An offline boot (FR-066) beats too: its beat is how it rejoins and
+        # An offline boot (ADR 0062 Decision 7) beats too: its beat is how it rejoins and
         # hears its drain or retirement once the coordinator answers (#2321);
         # its identity echo reads no session until then.
         #
@@ -456,7 +456,7 @@ async def _service_lifespan(
     # /api/brokers/{broker}/... can resolve them. Cheap and keyless: the client
     # builds credentials and network lazily on first call. Independent of the
     # IBKR (v1) lifecycle below. The coordinator role constructs no broker
-    # surface at all (FR-041).
+    # surface at all.
     if _ROLE_RUNS_CLERK:
         from app.broker.alpaca.broker import register_default_brokers
         from app.broker.contract.registry import get_broker_registry
@@ -518,7 +518,7 @@ async def _service_lifespan(
             # One context, passed to every consumer. The broker, the client it
             # builds, the execution websocket and the Clerk are all bound to this exact
             # revision's mode and credential pair, so none of them can answer for a
-            # configuration this worker did not bind (ADR 0060; plan §5.5).
+            # configuration this worker did not bind (ADR 0060).
             alpaca_settings = alpaca_binding.context.settings
             alpaca_broker = AlpacaBroker(settings=alpaca_settings)
             alpaca_clerk_root = alpaca_settings.clerk_dir
@@ -561,8 +561,8 @@ async def _service_lifespan(
                         bound_account
                     )
                     if fleet_lane.online:
-                        # FR-063: the reservation precedes custody and the
-                        # execution lease; the loser refuses to open authority.
+                        # The reservation precedes custody and the execution lease
+                        # (ADR 0062 Decision 7); the loser refuses to open authority.
                         await reserve_account(
                             fleet_lane, external_account_id=bound_account
                         )
@@ -784,7 +784,7 @@ async def _service_lifespan(
         # Shared MarketDataFeed — installed after the IBKR client is created
         # so it references the same process-local client the rest of the broker
         # stack uses. The feed is read-only (no orders); it is the one sanctioned
-        # cross-broker surface (phase-3 design §4, #1258 L2).
+        # cross-broker surface (#1258 L2).
         from app.marketdata.ibkr_feed import IbkrMarketDataFeed, set_market_data_feed
 
         set_market_data_feed(IbkrMarketDataFeed(ibkr_client))
@@ -1165,7 +1165,7 @@ if _ROLE_RUNS_CLERK:
         evidence=_fleet_lane_compatibility_evidence,
     )
 
-# The serving runtime's identity echo (fleet delivery B): fleet-addressed
+# The serving runtime's identity echo: fleet-addressed
 # requests — the ones a coordinator pins — are answered with the identity
 # this runtime actually serves, per response and per streamed event. Browser
 # traffic is untouched.
@@ -1261,7 +1261,7 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(engine.router, prefix="/api/engine", tags=["engine"])
     # LEAN Sidecar Lab — data-plane API in front of the launcher service.
     # Phase 2a exposes only the trusted sample; Phase 3+ unlocks user
-    # algorithm source. See docs/architecture/lean-sidecar-lab.md.
+    # algorithm source.
     app.include_router(lean_sidecar.router, prefix="/api/lean-sidecar", tags=["lean-sidecar"])
     app.include_router(chart.router, prefix="/api/chart", tags=["chart"])
     # QuantLib option pricing endpoints (/price, /compare).
@@ -1338,7 +1338,7 @@ if _ROLE_RUNS_CLERK:
         dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
     )
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
-# No live computation at request time (see docs/process/autonomous-decisions.md D-010).
+# No live computation at request time.
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])
 app.include_router(
     strategy_validation.router,
@@ -1443,9 +1443,9 @@ if _FLEET_COORDINATOR_SURFACE:
     if _fleet_qualification_history_router is not None:
         app.include_router(_fleet_qualification_history_router)
 
-    # The public clerk-scoped routing surface (fleet delivery B): one route
+    # The public clerk-scoped routing surface: one route
     # per catalog operation, forwarding through the lane router with the
-    # §10.3 envelope and §10.4 refusal families. A clerk agent mounts none
+    # command envelope and the stable refusal families. A clerk agent mounts none
     # of it — it serves its agent paths; the coordinator owns routing.
     from app.broker.fleet_composition import production_provider_adapters
     from app.routers import broker_clerks

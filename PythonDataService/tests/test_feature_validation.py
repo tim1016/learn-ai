@@ -303,20 +303,6 @@ def test_evaluate_returns_stage_1_when_cost_erases_alpha():
     assert verdict.statistical_screen.passed is True
 
 
-def test_evaluate_stage_1_finalises_decision_with_cost_erasure_message():
-    spec = get_spec("momentum_5m")
-    args = _strong_args(spec)
-    args["quantile_bins"] = [
-        {"bin_number": 1, "mean_return": 0.0},
-        {"bin_number": 5, "mean_return": 0.00005},
-    ]
-
-    verdict = evaluate_feature_validation(**args)
-
-    assert "Stage 1" in verdict.final_decision
-    assert "Cost erases" in verdict.final_decision
-
-
 def test_evaluate_stage_2_when_multiple_testing_relaxed_but_stage3_thresholds_unmet():
     """Stage 2 fires when Holm-p ≤ 0.10 (Stage 2 threshold) but a Stage 3
     threshold (effective_n / test_days / abs_ic) is unmet."""

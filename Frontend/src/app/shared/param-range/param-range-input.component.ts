@@ -5,7 +5,7 @@ import { parseValueList, type LowHighStepRange, type ParamRange, type ValueListR
 
 /**
  * One numeric strategy parameter's sweep-range editor: value-list or
- * low/high/step (design spec D4). A plain model()-bound presentational
+ * low/high/step. A plain model()-bound presentational
  * control, not a Signal Forms field. Its one validation surface is the
  * value list: text that does not parse stays in the field, is marked
  * invalid with the entry named, and publishes an empty list, which

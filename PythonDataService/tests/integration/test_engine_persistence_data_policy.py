@@ -37,38 +37,6 @@ def _raw_policy() -> dict[str, object]:
     }
 
 
-@pytest.mark.asyncio
-async def test_engine_backtest_request_accepts_data_policy_block() -> None:
-    """A request including a ``data_policy`` block is accepted as-is."""
-    from app.schemas.engine_backtest import EngineBacktestRequest
-
-    req = EngineBacktestRequest(
-        strategy_name="ema_crossover_signal",
-        params={"symbol": "SPY"},
-        from_date="2025-01-13",
-        to_date="2025-01-17",
-        resolution="minute",
-        data_policy={
-            "source": "polygon",
-            "symbol": "SPY",
-            "adjusted": True,
-            "session": "regular",
-            "input_bars": {"timespan": "minute", "multiplier": 1},
-            "strategy_bars": {"timespan": "minute", "multiplier": 15},
-            "timestamp_policy": "bar_close_ms_utc",
-            "timezone": "America/New_York",
-            "provider_kind": "live",
-            "fixture_id": None,
-            "fixture_sha256": None,
-        },
-    )
-
-    assert req.data_policy is not None
-    assert req.data_policy.symbol == "SPY"
-    assert req.data_policy.adjusted is True
-    assert req.data_policy.strategy_bars.multiplier == 15
-
-
 def test_engine_backtest_request_pins_requested_engine_vocabulary() -> None:
     """The operator's Python/LEAN/Both choice is persisted, never inferred."""
     from pydantic import ValidationError

@@ -30,8 +30,8 @@ Per-frame flow (the order is load-bearing):
 2. **Parse** JSON → the adapter's ``from_alpaca_trade_update`` →
    :class:`BrokerOrderEvent`.
 3. **Dedup** on a stable per-event key (``execution_id`` for a fill, else
-   ``order_id|event|timestamp``) under the temporal-rigor ``live_idempotent``
-   rule: an exact redelivery is skipped + counted; an event for an
+   ``order_id|event|timestamp``) under ADR 0035's live-idempotent websocket dedup
+   invariant: an exact redelivery is skipped + counted; an event for an
    already-**terminal** order is surfaced + counted (never silently dropped).
 4. **Attribute + journal** via the Clerk: the wire ``client_order_id`` decides
    OWNED (namespace is ours → ``ORDER_EVENT``) vs UNEXPLAINED (foreign / absent
@@ -280,8 +280,8 @@ def _event_key(
     Alpaca fills/partial_fills carry a unique ``execution_id``; that is the best
     identity. Non-fill events (new / canceled / …) have no execution id, so key
     on ``order_id|event|occurred_at_ms`` — a tuple stable across a redelivery of
-    the same lifecycle transition. The instant is the **canonical int64 ms**
-    (temporal-rigor), never the raw wire string: the live-socket path and the
+    the same lifecycle transition. The instant is the **canonical int64 ms**,
+    never the raw wire string: the live-socket path and the
     REST gap-reconcile path (which reconstructs the instant from stored ms)
     must produce the *same* key for the same transition, and a raw ISO string
     with sub-millisecond precision would not round-trip identically.
@@ -655,7 +655,7 @@ class TradeUpdatesConsumer:
                 if seen.terminal:
                     # The order was already terminal when first accepted; a repeat is
                     # a stale redelivery of a finalized order. Surface + count — the
-                    # temporal-rigor rule forbids silently dropping it.
+                    # live-idempotent dedup invariant (ADR 0035) forbids silently dropping it.
                     self._counters.stale_terminal += 1
                     logger.warning(
                         "alpaca trade_updates redelivered event for a terminal order",
@@ -1020,7 +1020,7 @@ def _stream_url(settings: AlpacaSettings) -> str:
     """Derive the ``/stream`` websocket URL from the mode-derived base URL.
 
     The base URL is already mode-derived (paper vs live) and never independently
-    configurable (config §7), so the ws URL cannot mismatch the mode: swap the
+    configurable, so the ws URL cannot mismatch the mode: swap the
     ``https`` scheme for ``wss`` and append ``/stream``.
     """
     return settings.base_url.replace("https://", "wss://", 1).rstrip("/") + "/stream"

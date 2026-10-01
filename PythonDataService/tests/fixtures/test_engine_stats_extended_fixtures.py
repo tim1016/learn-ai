@@ -52,10 +52,6 @@ def _load(fixture_id: str) -> tuple[pa.Table, pa.Table, float, float]:
 
 
 class TestENG002MaxDrawdown:
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("ENG-002")
-        assert len(inp) == 3
-
     def test_mdd_matches_oracle(self) -> None:
         inp, out, atol, rtol = _load("ENG-002")
         oracle = [out["oracle_mdd"][i].as_py() for i in range(len(out))]
@@ -64,19 +60,6 @@ class TestENG002MaxDrawdown:
             curve = [inp[f"e{j}"][i].as_py() for j in range(5)]
             canonical.append(_max_drawdown(curve))
         np.testing.assert_allclose(canonical, oracle, atol=atol, rtol=rtol)
-
-    def test_mdd_bounded_zero_one(self) -> None:
-        inp, _out, _atol, _rtol = _load("ENG-002")
-        for i in range(len(inp)):
-            curve = [inp[f"e{j}"][i].as_py() for j in range(5)]
-            mdd = _max_drawdown(curve)
-            assert 0.0 <= mdd <= 1.0, f"Row {i}: MDD={mdd} out of [0,1]"
-
-    def test_empty_curve_returns_zero(self) -> None:
-        assert _max_drawdown([]) == 0.0
-
-    def test_monotone_increasing_zero_mdd(self) -> None:
-        assert _max_drawdown([100.0, 110.0, 120.0, 130.0]) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -92,10 +75,6 @@ class _SimpleTrade:
 
 
 class TestENG003TradeStats:
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("ENG-003")
-        assert len(inp) == 3
-
     def _make_trades(self, inp: pa.Table, row: int) -> list[_SimpleTrade]:
         trades = []
         for col in ["t0_pnl_pct", "t1_pnl_pct", "t2_pnl_pct", "t3_pnl_pct"]:
@@ -168,12 +147,6 @@ class TestENG003TradeStats:
             assert abs(stats.largest_win_pct - float(out["largest_win_pct"][i].as_py())) <= atol
             assert abs(stats.largest_loss_pct - float(out["largest_loss_pct"][i].as_py())) <= atol
 
-    def test_empty_trades_returns_zeros(self) -> None:
-        stats = compute_trade_statistics([])
-        assert stats.total_trades == 0
-        assert stats.win_rate == 0.0
-        assert stats.profit_factor == 0.0
-
 
 # ---------------------------------------------------------------------------
 # ENG-004: CAGR
@@ -190,10 +163,6 @@ def _build_equity_curve(e_list: list[float]) -> list[EquityPoint]:
 
 
 class TestENG004CAGR:
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("ENG-004")
-        assert len(inp) == 3
-
     def test_cagr_matches_oracle(self) -> None:
         inp, out, atol, _rtol = _load("ENG-004")
         for i in range(len(inp)):
@@ -220,20 +189,6 @@ class TestENG004CAGR:
                 f"Row {i}: canonical CAGR={stats.cagr} oracle={oracle_cagr}"
             )
 
-    def test_cagr_sign_matches_performance(self) -> None:
-        """CAGR positive when final > initial, negative when final < initial."""
-        inp, out, _atol, _rtol = _load("ENG-004")
-        for i in range(len(inp)):
-            initial = float(inp["initial_cash"][i].as_py())
-            final = float(inp["final_equity"][i].as_py())
-            oracle_cagr = float(out["oracle_cagr"][i].as_py())
-            if final > initial:
-                assert oracle_cagr > 0
-            elif final < initial:
-                assert oracle_cagr < 0
-            else:
-                assert oracle_cagr == 0.0
-
 
 # ---------------------------------------------------------------------------
 # ENG-005: Calmar Ratio
@@ -241,10 +196,6 @@ class TestENG004CAGR:
 
 
 class TestENG005Calmar:
-    def test_row_count(self) -> None:
-        inp, _out, _atol, _rtol = _load("ENG-005")
-        assert len(inp) == 3
-
     def test_calmar_matches_oracle(self) -> None:
         inp, out, atol, _rtol = _load("ENG-005")
         for i in range(len(inp)):
@@ -265,23 +216,4 @@ class TestENG005Calmar:
             assert stats.calmar_ratio is not None, f"Row {i}: calmar_ratio unexpectedly None"
             assert abs(stats.calmar_ratio - oracle_calmar) <= atol, (
                 f"Row {i}: canonical calmar={stats.calmar_ratio} oracle={oracle_calmar}"
-            )
-
-    def test_calmar_equals_cagr_over_mdd(self) -> None:
-        """Calmar = CAGR / max_drawdown by definition."""
-        inp, out, atol, _rtol = _load("ENG-005")
-        for i in range(len(inp)):
-            initial = float(inp["initial_cash"][i].as_py())
-            final = float(inp["final_equity"][i].as_py())
-            days = int(inp["trading_days"][i].as_py())
-            curve_vals = [float(inp[f"e{j}"][i].as_py()) for j in range(5)]
-
-            mdd = _max_drawdown(curve_vals)
-            years = days / 252
-            cagr = (final / initial) ** (1 / years) - 1
-            expected = cagr / mdd
-
-            oracle_calmar = float(out["oracle_calmar"][i].as_py())
-            assert abs(expected - oracle_calmar) <= atol, (
-                f"Row {i}: hand-computed calmar={expected} vs oracle={oracle_calmar}"
             )

@@ -11,17 +11,10 @@ The assertions are **bit-exact** for:
   * RSI (to 2 decimal places)
   * PnL points (2 dp) and PnL percent (6 dp)
 
-Two ways to invoke:
-
-* As a pytest case (auto-skipped if the LEAN data folder isn't present):
+Run it as a pytest case (auto-skipped if the LEAN data folder isn't present):
 
       podman exec polygon-data-service python -m pytest \\
           app/engine/tests/test_spy_validation.py -v -m slow
-
-* As a manual script (errors loudly if the data folder isn't present):
-
-      cd PythonDataService
-      python -m app.engine.tests.test_spy_validation
 
 The LEAN data root is resolved in this order:
 
@@ -33,8 +26,7 @@ The LEAN data root is resolved in this order:
 
 The old hardcoded ``/sessions/ecstatic-hopeful-volta/mnt/Lean/Data`` was a
 remote-sandbox path that never resolved locally; it caused this test to
-be invokable only inside the original handoff sandbox. See
-``docs/handoffs/2026-06-09-lean-sidecar-applehv-sigill-and-parity-gates.md``.
+be invokable only inside the original handoff sandbox.
 """
 
 from __future__ import annotations
@@ -55,7 +47,7 @@ from app.engine.execution.order import FillMode
 from app.engine.strategy.algorithms.ema_crossover_signal import (
     EmaCrossoverSignalAlgorithm,
 )
-from app.utils.timestamps import ny_datetime, to_ms_utc
+from app.utils.timestamps import to_ms_utc
 
 EASTERN = ZoneInfo("America/New_York")
 FIXTURE_CSV = Path(__file__).parent / "fixtures" / "spy_lean_trades.csv"
@@ -152,11 +144,7 @@ def _compare_trades(
 
 
 def _run_engine(lean_data_root: Path) -> tuple[list, object]:  # type: ignore[type-arg]
-    """Drive the engine and return ``(trades, result)``.
-
-    Shared between the pytest case and the manual ``__main__`` entry so
-    both paths exercise the same orchestration.
-    """
+    """Drive the engine and return ``(trades, result)``."""
     reader = LeanMinuteDataReader(lean_data_root)
     strategy = EmaCrossoverSignalAlgorithm()
     engine = BacktestEngine(
@@ -201,55 +189,3 @@ def test_spy_ema_crossover_matches_lean_reference_trades() -> None:
 
     mismatches = _compare_trades(actual_trades, fixture)
     assert not mismatches, "Engine trade log diverges from LEAN reference:\n  " + "\n  ".join(mismatches[:20])
-
-
-def run_validation() -> None:
-    """Manual entry — verbose console output, no pytest assertions.
-
-    Preserved for ad-hoc operator runs and for the
-    ``python -m app.engine.tests.test_spy_validation`` invocation in the
-    original Phase 1 done definition.
-    """
-    fixture = _load_fixture()
-    expected_count = len(fixture)
-    print(f"Loaded {expected_count} expected trades from fixture")
-
-    lean_data_root = _resolve_lean_data_root()
-    if not lean_data_root.exists():
-        raise FileNotFoundError(
-            f"LEAN data root {lean_data_root} does not exist. Set LEAN_DATA_ROOT "
-            "(or stage ../Lean/Data) before invoking this script."
-        )
-
-    print("Running backtest (this may take a few minutes)...")
-    actual_trades, result = _run_engine(lean_data_root)
-    print(f"Engine produced {len(actual_trades)} trades")
-    print(f"Final equity: ${result.final_equity:.2f}")
-    print(f"Net profit: ${result.net_profit:.2f}")
-    print(f"Total fees: ${result.total_fees:.2f}")
-    print()
-
-    mismatches = _compare_trades(actual_trades, fixture)
-
-    print("=" * 70)
-    if not mismatches:
-        print("PASS: All trades match LEAN reference bit-exactly.")
-        return
-    print(f"FAIL: {len(mismatches)} mismatch(es) found")
-    for m in mismatches[:20]:
-        print(f"  {m}")
-    if len(mismatches) > 20:
-        print(f"  ... and {len(mismatches) - 20} more")
-
-    if actual_trades:
-        a = actual_trades[0]
-        e = fixture[0]
-        print()
-        print("First engine trade:")
-        print(f"  entry={ny_datetime(a.entry_time_ms)} price={a.entry_price} ema5={a.ema5} ema10={a.ema10} rsi={a.rsi}")
-        print("First fixture trade:")
-        print(f"  entry={e['entry']} price={e['entry_price']} ema5={e['ema5']} ema10={e['ema10']} rsi={e['rsi']}")
-
-
-if __name__ == "__main__":
-    run_validation()

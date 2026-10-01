@@ -1,8 +1,7 @@
 """Null-baseline research over a parent run.
 
-Phase E1 of the build-alpha-style research pipeline (architecture
-spec at ``docs/architecture/build-alpha-style-features-1-8-research-spec.md``
-§ Feature 7). Generates N alternative strategies (buy-and-hold or
+Phase E1 of the build-alpha-style research pipeline (Feature 7).
+Generates N alternative strategies (buy-and-hold or
 random EMA window pairs), runs each through the canonical engine on
 the parent's symbol / window / cost model, and aggregates target
 metrics into a *null distribution* — answers "did this strategy beat

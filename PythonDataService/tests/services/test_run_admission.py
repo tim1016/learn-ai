@@ -373,7 +373,7 @@ def test_start_admission_fact_age_boundary_is_explicit() -> None:
 # ── #1702: mode-tiered admission ────────────────────────────────────────
 #
 # Dry Run makes no broker contact and holds no custody, so every custody and
-# evidence gate below is "not applicable" to it per the PRD's gate table.
+# evidence gate below is "not applicable" to it.
 # Every case is paired: the same custody/evidence fact that admits Dry Run
 # must still deny trade — the guard in evaluate_run_admission is additive
 # only, never a relaxation of trade/paper strictness.

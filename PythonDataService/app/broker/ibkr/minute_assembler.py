@@ -23,7 +23,7 @@ Two duplicate policies govern how a repeated source timestamp is treated
 
 * ``"strict"`` (default) — any duplicate or non-monotonic source timestamp
   fails fast. This is the finite-historical-ingestion contract from
-  ``.claude/rules/numerical-rigor.md`` and keeps the parity tests honest.
+  ADR 0022 (h) and keeps the parity tests honest.
 * ``"live_idempotent"`` — used only by the live 5-second subscription.
   IBKR's docs do not promise duplicate-free delivery for an active
   ``reqRealTimeBars`` subscription, so a redelivery of the most recent
@@ -541,7 +541,7 @@ class MinuteAssembler:
         """Classify one emitted minute; the one ordering both feed paths dispatch on (#2364).
 
         ``touched`` is the caller's fact that an interruption cut this minute
-        open or landed in it (ruling P9, spec §4.2 rule 4); ``spans_interruption``
+        open or landed in it (ruling P9, spec #1921 §4.2 rule 4); ``spans_interruption``
         counts as touched too. Order matters and lives only here:
 
         1. Twelve prints is every print a minute can hold, so a minute holding
@@ -576,7 +576,7 @@ class MinuteAssembler:
         never a rebuild -- and surfaced on
         ``LiveBarCounters.ignored_post_emit_correction`` and a WARNING. IBKR
         does redeliver the latest 5-second bar on a live subscription (the
-        live relaxation in ``.claude/rules/temporal-rigor.md``), and a minute
+        live relaxation in ADR 0053 §14), and a minute
         emitted on its twelfth print would otherwise die on the correction the
         open minute used to absorb. Any *earlier* timestamp inside the flushed
         minute belongs to an already-emitted aggregate and stays fatal,

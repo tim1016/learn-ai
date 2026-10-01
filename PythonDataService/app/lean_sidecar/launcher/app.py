@@ -100,7 +100,7 @@ app = FastAPI(
     description=(
         "Owns Podman API access for the LEAN Sidecar Lab. Receives launch "
         "requests from the data plane; invokes a pinned LEAN container "
-        "with the security shape from lean-sidecar-lab.md."
+        "with the security shape from ADR 0070."
     ),
     version=LAUNCHER_VERSION,
     lifespan=_lifespan,

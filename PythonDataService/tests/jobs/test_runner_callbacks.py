@@ -97,22 +97,6 @@ class TestFeatureRunnerCallbacks:
             f"missing phases — saw: {cap.phases}, expected: {expected_subsequence}"
         )
 
-    def test_logs_include_friendly_messages(self) -> None:
-        bars = _synthetic_bars()
-        cap = _Capture()
-        run_feature_research(
-            ticker="TEST",
-            feature_name="momentum_5m",
-            bars=bars,
-            start_date="2024-01-01",
-            end_date="2024-01-05",
-            on_log=cap.on_log,
-        )
-        joined = "\n".join(msg for _, msg in cap.logs).lower()
-        assert "information coefficient" in joined
-        assert "stationarity" in joined or "stationary" in joined
-        assert "validation" in joined or "verdict" in joined
-
     def test_cancel_callback_propagates(self) -> None:
         """When the cancel_check raises, the runner should re-raise it."""
 

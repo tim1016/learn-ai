@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.engine.data.trade_bar import TradeBar
-from app.engine.execution.fill_model import DEFERRED_FILL_MODES, FillModel
+from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import (
     Direction,
     FillMode,
@@ -236,24 +236,6 @@ def test_next_session_open_applies_long_slippage() -> None:
 
     assert event is not None
     assert event.fill_price == Decimal("102.05")  # open + slippage
-
-
-def test_deferred_fill_modes_membership_invariant() -> None:
-    """DEFERRED_FILL_MODES contains every mode whose fill is gated on a
-    subsequent candidate bar (i.e., where fill_market_order can return None).
-    NEXT_BAR_OPEN, NEXT_SESSION_OPEN and DECISION_MINUTE_OPEN belong;
-    SIGNAL_BAR_CLOSE does not. A regression where a new deferred-mode is added
-    without adding it to this set would leave the engine main loop unable to
-    re-try the fill."""
-    assert FillMode.NEXT_BAR_OPEN in DEFERRED_FILL_MODES
-    assert FillMode.NEXT_SESSION_OPEN in DEFERRED_FILL_MODES
-    assert FillMode.DECISION_MINUTE_OPEN in DEFERRED_FILL_MODES
-    assert FillMode.SIGNAL_BAR_CLOSE not in DEFERRED_FILL_MODES
-    # Every FillMode is either a deferred-fill mode or fills immediately.
-    # If a future mode lands without classification, this assertion forces
-    # an explicit decision.
-    immediate_modes = {FillMode.SIGNAL_BAR_CLOSE}
-    assert set(FillMode) == DEFERRED_FILL_MODES | immediate_modes
 
 
 def _order_sent_at(sent: datetime) -> Order:

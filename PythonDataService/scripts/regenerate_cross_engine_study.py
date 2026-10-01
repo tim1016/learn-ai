@@ -13,9 +13,6 @@ the LEAN/Engine staging stubs):
      hashes.
   6. On fail: emit failure report to a sibling .failed/ dir; exit
      non-zero; leave committed cell directory untouched.
-
-Reference: docs/superpowers/specs/2026-05-21-cross-engine-golden-matrix-design.md
-            § "Regeneration workflow"
 """
 
 from __future__ import annotations

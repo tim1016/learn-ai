@@ -35,7 +35,7 @@ describe('DataLakeService', () => {
 
     const request = http.expectOne((candidate) => candidate.url === `${BASE}/coverage`);
     expect(request.request.params.get('symbol')).toBe('SPY');
-    // int64 ms UTC, never an ISO date: temporal-rigor allows one wire format
+    // int64 ms UTC, never an ISO date: ADR 0022 (a) allows one wire format
     // and the response has always spoken ms (`trading_date_ms`).
     expect(request.request.params.get('start_trading_date_ms')).toBe(
       String(tradingDateToMs('2026-05-18')),

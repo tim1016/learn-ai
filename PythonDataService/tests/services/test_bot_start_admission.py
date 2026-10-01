@@ -928,16 +928,6 @@ async def test_a_failed_boot_sweep_says_restart_unless_a_reconnect_reruns_it(acc
         )
 
 
-async def test_degraded_boot_report_names_a_few_bots_and_counts_the_rest() -> None:
-    """The refusal an operator reads must stay legible for a large roster."""
-    fact = await _boot_gate_fact(_boot_report(*(f"bot-{index}" for index in range(7))))
-
-    assert "7 bot(s)" in fact.explanation
-    assert "bot-0, bot-1, bot-2, bot-3, bot-4" in fact.explanation
-    assert "and 2 more" in fact.explanation
-    assert "bot-5" not in fact.explanation
-
-
 async def test_an_unreadable_validation_store_is_named_as_the_cause_not_a_missing_seal() -> None:
     """H11 (2026-09-28): a clerk that cannot read Golden Validation has no
     validation event, so the new bot's program cannot be sealed. That

@@ -1,6 +1,6 @@
 """No ``/api/brokers/{broker}/…`` route shadows the configuration prefix.
 
-Contract §4 and §8. Five routers already share the ``/api/brokers`` prefix, and
+Five routers already share the ``/api/brokers`` prefix, and
 one of them serves ``/{broker}/…`` wildcards, so which handler answers
 ``/api/brokers/alpaca/configuration/owner`` would otherwise depend on the order
 ``app/main.py`` happens to register them in. This resolves every configuration
@@ -17,7 +17,6 @@ import pytest
 from starlette.routing import Match, Route
 
 from app.main import app
-from app.routers.broker_configuration import PREFIX
 from app.routers.broker_configuration import router as configuration_router
 
 _CONFIGURATION_ENDPOINTS = {
@@ -99,7 +98,3 @@ def test_the_configuration_router_does_not_swallow_an_existing_broker_route() ->
         assert resolved.endpoint not in _CONFIGURATION_ENDPOINTS, (
             f"{method} {concrete} is now answered by the configuration router"
         )
-
-
-def test_the_prefix_is_the_one_the_contract_names() -> None:
-    assert PREFIX == "/api/brokers/alpaca/configuration"

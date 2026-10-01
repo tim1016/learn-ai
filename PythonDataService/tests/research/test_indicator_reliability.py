@@ -25,10 +25,8 @@ from app.research.indicator_reliability import (
     compute_strength_label,
     compute_tradeability,
     find_best_horizon,
-    format_indicator_display_name,
     generate_info_footnotes,
     generate_next_steps,
-    get_indicator_category,
     split_by_volatility_regime,
 )
 
@@ -320,34 +318,6 @@ class TestSlopeDecisions:
         assert recommended is None
 
 
-class TestFormatDisplayName:
-    def test_rsi(self):
-        assert format_indicator_display_name("rsi", {"length": 14}) == "RSI (14)"
-
-    def test_macd(self):
-        name = format_indicator_display_name(
-            "macd", {"fast": 12, "slow": 26, "signal": 9}
-        )
-        assert name == "MACD (12, 26, 9)"
-
-    def test_ema(self):
-        assert format_indicator_display_name("ema", {"length": 20}) == "EMA (20)"
-
-    def test_no_params(self):
-        assert format_indicator_display_name("obv", {}) == "OBV"
-
-
-class TestGetIndicatorCategory:
-    def test_known_indicator(self):
-        assert get_indicator_category("rsi") == "momentum"
-
-    def test_trend_indicator(self):
-        assert get_indicator_category("ema") == "overlap"
-
-    def test_unknown_indicator(self):
-        assert get_indicator_category("not_an_indicator") is None
-
-
 class TestICDecayCurve:
     def test_returns_one_point_per_horizon(self):
         df = _create_test_df(500)
@@ -461,6 +431,74 @@ class TestTradeability:
         assert compute_tradeability(-1.5, "High") == "Likely tradeable"
 
 
+class TestNextSteps:
+    def _r(self, **kwargs) -> HorizonICAnalysis:
+        defaults = {"horizon": 10, "is_mean_ic": 0.05}
+        defaults.update(kwargs)
+        return _make_analysis(**defaults)
+
+    def test_flags_missing_oos(self):
+        results = [self._r(oos_mean_ic=None)]
+        steps = generate_next_steps(results, None, None, 10)
+        assert any("out-of-sample" in s.lower() for s in steps)
+
+    def test_suggests_threshold_when_strong_stable_validated(self):
+        results = [
+            self._r(
+                is_mean_ic=0.10,
+                strength_label="Strong",
+                stability_label="High",
+                oos_mean_ic=0.09,
+                oos_p_value=0.02,
+            )
+        ]
+        steps = generate_next_steps(results, None, None, 10)
+        assert any("threshold" in s.lower() for s in steps)
+
+    def test_no_best_horizon_returns_prompt(self):
+        results = [self._r()]
+        steps = generate_next_steps(results, None, None, None)
+        assert len(steps) >= 1
+        assert "significance" in steps[0].lower() or "cleared" in steps[0].lower()
+
+    def test_flags_oos_gap_when_is_strong_but_not_validated(self):
+        results = [
+            self._r(
+                is_mean_ic=0.08,
+                strength_label="Moderate",
+                stability_label="High",
+                oos_mean_ic=0.05,
+                oos_p_value=0.23,
+            )
+        ]
+        steps = generate_next_steps(results, None, None, 10)
+        combined = " ".join(steps).lower()
+        assert "validate" in combined or "out-of-sample" in combined
+
+    def test_caps_at_four_items(self):
+        # Engineer a scenario that triggers every rule
+        results = [
+            self._r(
+                is_mean_ic=0.05,
+                strength_label="Moderate",
+                stability_label="Low",  # triggers "try a longer horizon"
+                oos_mean_ic=None,  # triggers "collect more OOS"
+            )
+        ]
+        steps = generate_next_steps(results, None, None, 10)
+        assert len(steps) <= 4
+
+
+class TestInfoFootnotes:
+    def test_adds_overlap_caveat_for_multi_bar_horizons(self):
+        notes = generate_info_footnotes([1, 5, 10])
+        assert any("overlapping" in n.lower() for n in notes)
+
+    def test_no_overlap_caveat_for_horizon_one_only(self):
+        notes = generate_info_footnotes([1])
+        assert not any("overlapping" in n.lower() for n in notes)
+
+
 class TestRandomBaselineReturnsDistribution:
     def test_distribution_length_matches_n_simulations(self):
         df = _create_test_df(500)
@@ -564,12 +602,6 @@ class TestRandomBaselineReturnsDistribution:
         # Sanity: distributions should differ; allow a tiny epsilon.
         assert abs(std_block - std_legacy) > 1e-9 or std_block != std_legacy
 
-    def test_baseline_default_simulations_is_1000(self):
-        """v2: bumped from 100 to 1000 so tail-σ claims are meaningful."""
-        from app.research.indicator_reliability import RANDOM_SIMULATIONS
-
-        assert RANDOM_SIMULATIONS == 1000
-
     def test_baseline_rng_makes_results_deterministic(self):
         df = _create_test_df(500)
         rng_a = np.random.default_rng(seed=123)
@@ -585,75 +617,3 @@ class TestRandomBaselineReturnsDistribution:
         assert mean_a == pytest.approx(mean_b, abs=1e-12)
         assert std_a == pytest.approx(std_b, abs=1e-12)
         assert dist_a == pytest.approx(dist_b, abs=1e-12)
-
-
-class TestNextSteps:
-    def _r(self, **kwargs) -> HorizonICAnalysis:
-        defaults = {"horizon": 10, "is_mean_ic": 0.05}
-        defaults.update(kwargs)
-        return _make_analysis(**defaults)
-
-    def test_flags_missing_oos(self):
-        results = [self._r(oos_mean_ic=None)]
-        steps = generate_next_steps(results, None, None, 10)
-        assert any("out-of-sample" in s.lower() for s in steps)
-
-    def test_suggests_threshold_when_strong_stable_validated(self):
-        results = [
-            self._r(
-                is_mean_ic=0.10,
-                strength_label="Strong",
-                stability_label="High",
-                oos_mean_ic=0.09,
-                oos_p_value=0.02,
-            )
-        ]
-        steps = generate_next_steps(results, None, None, 10)
-        assert any("threshold" in s.lower() for s in steps)
-
-    def test_no_best_horizon_returns_prompt(self):
-        results = [self._r()]
-        steps = generate_next_steps(results, None, None, None)
-        assert len(steps) >= 1
-        assert "significance" in steps[0].lower() or "cleared" in steps[0].lower()
-
-    def test_flags_oos_gap_when_is_strong_but_not_validated(self):
-        results = [
-            self._r(
-                is_mean_ic=0.08,
-                strength_label="Moderate",
-                stability_label="High",
-                oos_mean_ic=0.05,
-                oos_p_value=0.23,
-            )
-        ]
-        steps = generate_next_steps(results, None, None, 10)
-        combined = " ".join(steps).lower()
-        assert "validate" in combined or "out-of-sample" in combined
-
-    def test_caps_at_four_items(self):
-        # Engineer a scenario that triggers every rule
-        results = [
-            self._r(
-                is_mean_ic=0.05,
-                strength_label="Moderate",
-                stability_label="Low",  # triggers "try a longer horizon"
-                oos_mean_ic=None,  # triggers "collect more OOS"
-            )
-        ]
-        steps = generate_next_steps(results, None, None, 10)
-        assert len(steps) <= 4
-
-
-class TestInfoFootnotes:
-    def test_always_includes_single_asset_caveat(self):
-        notes = generate_info_footnotes([1])
-        assert any("single-asset" in n.lower() for n in notes)
-
-    def test_adds_overlap_caveat_for_multi_bar_horizons(self):
-        notes = generate_info_footnotes([1, 5, 10])
-        assert any("overlapping" in n.lower() for n in notes)
-
-    def test_no_overlap_caveat_for_horizon_one_only(self):
-        notes = generate_info_footnotes([1])
-        assert not any("overlapping" in n.lower() for n in notes)

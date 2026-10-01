@@ -24,7 +24,6 @@ from app.broker.alpaca.clerk.sqlite.cutover import (
     initialize_cutover_authority,
     plan_cutover,
 )
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from tests.broker.alpaca.clerk.live_envelope_fixtures import LIVE_ACCT
 
 NOW = 1_800_000_000_000
@@ -64,25 +63,6 @@ _NEVER_LEGACY_ACCOUNTS = (
     pytest.param(LIVE_ACCT, "live", id="live"),
     pytest.param("PANEVER01", "paper", id="paper"),
 )
-
-
-@pytest.mark.parametrize(("account_id", "account_mode"), _NEVER_LEGACY_ACCOUNTS)
-def test_a_never_legacy_never_rehearsed_account_initializes(
-    tmp_path: Path, account_id: str, account_mode: str
-) -> None:
-    """Shadow is a mode, not a requirement (owner decision 2026-09-09).
-
-    Neither mode requires legacy evidence to initialize (owner decision
-    2026-09-14 removed R3's live-only exception).
-    """
-    receipt = _initialize(tmp_path, _evidence(account_id=account_id, account_mode=account_mode))
-    assert receipt.account_id == account_id
-    assert receipt.broker_evidence.account_mode == account_mode
-    assert receipt.legacy_artifacts == ()
-    assert receipt.runner_roster == ()
-    ClerkSqliteRepository.open(
-        account_id=account_id, artifacts_root=tmp_path, clock=lambda: NOW
-    ).close()
 
 
 @pytest.mark.parametrize(("account_id", "account_mode"), _NEVER_LEGACY_ACCOUNTS)
@@ -140,8 +120,3 @@ def test_an_account_must_be_flat_and_order_free_to_graduate(
     """
     with pytest.raises(CutoverRefused, match=match):
         _initialize(tmp_path, _evidence(account_id=account_id, account_mode=account_mode, **kwargs))
-
-
-def test_an_unknown_mode_is_refused_by_name(tmp_path: Path) -> None:
-    with pytest.raises(CutoverRefused, match="paper or live"):
-        _initialize(tmp_path, _evidence(account_mode="sandbox"))

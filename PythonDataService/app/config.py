@@ -82,8 +82,8 @@ class FleetSettings(BaseSettings):
     # ``{"clrk_…": "svct_…"}``. Env-only credential material; never stored
     # in a registry and never logged.
     AGENT_SERVICE_TOKENS_JSON: str = ""
-    # The deployment namespace qualifying volume roots (audit 2026-09-13,
-    # finding 4).
+    # The deployment namespace qualifying volume roots (ADR 0062
+    # addendum, item 6).
     DEPLOYMENT_NAMESPACE: str = "host:local"
     # Heartbeat cadence; the registry's staleness window is 30 s.
     HEARTBEAT_INTERVAL_S: float = 10.0
@@ -212,8 +212,7 @@ class Settings(BaseSettings):
     POLYGON_API_KEY: str
     # Polygon's paid plans (Starter / Developer / Advanced / Business) have
     # no per-minute cap, so the throttle is off by default. Only the free
-    # Basic tier is 5/min — set this to 5 if you're on Basic. See
-    # docs/references/polygon-throttle.md for the full plan table.
+    # Basic tier is 5/min — set this to 5 if you're on Basic.
     POLYGON_RATE_LIMIT_PER_MIN: int = 0
 
     # FRED API (for dynamic risk-free rate)
@@ -241,7 +240,7 @@ class Settings(BaseSettings):
     # this shared secret is configured or a local-dev operator explicitly opts out.
     DATA_PLANE_CONTROL_SECRET: str = ""
     DATA_PLANE_ALLOW_UNAUTHENTICATED_CONTROL: bool = False
-    # Broker-v2 panel operator identity (spec §14, interim posture). Control
+    # Broker-v2 panel operator identity (interim posture). Control
     # mutations authenticate via DATA_PLANE_CONTROL_SECRET; the server attaches
     # THIS configured identity to journaled actions. Operator identity is never
     # a request field — no free-text identity input anywhere in the UI.
@@ -261,7 +260,7 @@ class Settings(BaseSettings):
     STARTUP_JOIN_BUDGET_MS: int = Field(default=180_000, ge=1_000, le=3_600_000)
     # How long after that close history is first asked for. IBKR serves the
     # closing minute's row at once but revised it up to ~1.3 s later in
-    # 3 of 16 minutes measured (docs/references/ibkr-history-resume-fill.md).
+    # 3 of 16 minutes measured (ADR 0053, #2410 amendment).
     STARTUP_JOIN_SETTLE_MS: int = Field(default=5_000, ge=0, le=60_000)
     # Dev-only broker fault-injection seam (PRD #1354). Off by default; the seam
     # ALSO fails closed unless the Alpaca posture is paper. Never enable in a
@@ -327,7 +326,7 @@ class Settings(BaseSettings):
     # container calls it via HTTP to extract market-hours-database.json
     # and symbol-properties-database.csv from the pinned LEAN image.
     # When running inside compose on Windows/WSL2, set to
-    # http://host.containers.internal:8090. See PythonDataService/CLAUDE.md.
+    # http://host.containers.internal:8090.
     LEAN_LAUNCHER_URL: str = "http://127.0.0.1:8090"
     LEAN_LAUNCHER_TOKEN: str = ""
 

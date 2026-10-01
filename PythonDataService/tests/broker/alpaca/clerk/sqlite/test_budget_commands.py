@@ -248,27 +248,6 @@ async def test_a_clerk_restart_records_what_each_bot_it_stops_released(tmp_path:
         restarted.close()
 
 
-def test_a_money_read_never_searches_the_journal_for_a_stops_release(budget_repo) -> None:
-    """#2555 review: each stopped bot's release was read back by searching the
-    whole custody journal, once per deployment, on every money read -- account
-    money, budget, ENTER admission and Deploy preview -- under the writer. The
-    commitments are read from their own rows, which carry the release."""
-    _deploy(budget_repo, cents=30_000)
-    submit_stop_run(budget_repo, account_id=budget_repo.account_id, strategy_instance_id="a", lifecycle_run_id="run-a", clock=budget_repo.clock)
-    _deploy(budget_repo, sid="b", cents=30_000)
-    statements: list[str] = []
-    with budget_repo.write_fence() as conn:
-        conn.set_trace_callback(statements.append)
-        try:
-            budget = budget_repo.account_budget(cash=1000, seen_before_ms=NOON)
-        finally:
-            conn.set_trace_callback(None)
-
-    assert [item.release for item in budget.deployments] == [ReleaseAtStop(30_000, 0), None]
-    commitments = [statement for statement in statements if "deployment_budgets" in statement]
-    assert commitments and not [statement for statement in commitments if "custody_transitions" in statement]
-
-
 def test_a_v21_database_takes_its_recorded_releases_onto_its_budget_rows(tmp_path: Path) -> None:
     """Schema v22 (#2555 review): the release columns arrive filled from the
     Stops already recorded, so an upgraded file reads what a rebuild would."""

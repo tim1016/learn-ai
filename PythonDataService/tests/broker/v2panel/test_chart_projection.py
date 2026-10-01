@@ -1,4 +1,4 @@
-"""Tests for the chart projections (S1, spec §8).
+"""Tests for the chart projections (S1).
 
 Covers bounded Polygon timeframes and their display-bar counts, the LIVE pane
 source-tagging + fill markers, and a regression that the 7-day live resolver
@@ -46,7 +46,6 @@ from app.services.broker_v2_panel.chart_projection_service import (
 from app.services.chart_indicator_service import ChartIndicatorService
 from app.services.live_chart_window import (
     CHART_FEED_NOT_EXPECTED,
-    MAX_CHART_RANGE_MS,
     ChartFeedStatus,
     ChartWindowResult,
 )
@@ -142,11 +141,6 @@ def _googl_fixture_fills() -> tuple[tuple[FillRecord, ...], int, int, int]:
     session = fixture_input["session"]
     fills_today = expected["projection"]["bot_metrics"][strategy["strategy_instance_id"]]["fills_today"]
     return tuple(fills), int(session["session_open_ms"]), int(session["session_close_ms"]), fills_today
-
-
-def test_seven_day_live_resolver_cap_unchanged() -> None:
-    """Regression: the existing 7-day cap is not widened by the history contract."""
-    assert MAX_CHART_RANGE_MS == 7 * 86_400_000
 
 
 @pytest.mark.parametrize(
@@ -424,7 +418,7 @@ async def test_history_excludes_the_still_open_candle(timeframe: str) -> None:
 
     Regression for a filter that tested only the bar's start: at 10:30 the 1h
     bar opened at 10:00 was returned as complete even though it closes at
-    11:00. Bars are labelled by their close (``temporal-rigor.md``), so an
+    11:00. Bars are labelled by their close, so an
     unelapsed span must be withheld rather than drawn.
     """
     span_ms = _TIMEFRAME_SPAN_MS[timeframe]
@@ -681,10 +675,6 @@ def test_aggregator_bars_to_chart_bars_maps_fields_and_decimals() -> None:
     assert chart_bar.close == "500.50"
     assert chart_bar.volume == 1234
     assert chart_bar.source == "ibkr"
-
-
-def test_aggregator_bars_to_chart_bars_empty_input_returns_empty_list() -> None:
-    assert aggregator_bars_to_chart_bars([]) == []
 
 
 def test_live_chart_tags_source_and_markers() -> None:

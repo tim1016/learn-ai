@@ -13,10 +13,9 @@ import { fakePickerWorld } from "../../../shared/symbol-picker/testing/fake-pick
 
 function makeTrade(overrides: Partial<RecencyTrade> = {}): RecencyTrade {
   // Default entry/exit are "now"-relative, not epoch-relative: the page
-  // computes a real Date.now()-anchored display window (design spec
-  // D18-D19), so a trade near the Unix epoch would always be virtualized
-  // out. Tests that specifically exercise window-cap behavior override
-  // entryMs/exitMs explicitly.
+  // computes a real Date.now()-anchored display window, so a trade near
+  // the Unix epoch would always be virtualized out. Tests that specifically
+  // exercise window-cap behavior override entryMs/exitMs explicitly.
   const recentEntry = Date.now() - 60_000;
   return {
     symbol: "SPY",

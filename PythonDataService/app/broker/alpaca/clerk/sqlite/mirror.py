@@ -1,7 +1,7 @@
-"""Write-only mirror — the two-phase fsync fence pinned in contracts doc §8.
+"""Write-only mirror — the two-phase fsync fence of ADR 0035's binding annex §4.
 
 Never read on the hot path (R9). Consulted only at startup (finalize-gap
-check, §9 check 9) and during disaster recovery (``rebuild``, §9.3/§13).
+check, annex §9 check 9) and during disaster recovery (``rebuild``).
 
 One mirror file is scoped to exactly one authority generation (rotation is
 the repository's job at reset time, not this module's).
@@ -23,9 +23,9 @@ from app.utils.timestamps import Clock
 class MirrorChainBroken(Exception):
     """A sequence gap, duplicate-with-different-hash, or hash mismatch.
 
-    Per §8: "fails closed rather than importing ambiguous data." Callers
-    must not catch this and proceed — it means the account stays failed
-    closed until a human recovery workflow runs.
+    It fails closed rather than importing ambiguous data. Callers must not
+    catch this and proceed — it means the account stays failed closed until a
+    human recovery workflow runs.
     """
 
 
@@ -130,8 +130,7 @@ class MirrorFile:
             # The directory-creation fsync (initialize()) predates this
             # file's existence and does not cover its own directory entry —
             # a separate durability gap the corrective foundation slice
-            # closes (open-pr-review-2026-08-05.md P2 "First mirror creation
-            # lacks parent-directory fsync").
+            # closes.
             fsync_directory(self._path.parent)
 
     def _read_records(self) -> list[dict[str, Any]]:
@@ -153,8 +152,7 @@ class MirrorFile:
         """Parse every mirror line into ``(prepares_by_sequence,
         finalize_by_sequence)`` — the one shared parse both ``reconcile()``
         (startup) and ``rebuild()`` (disaster recovery) verify against, so
-        the two integrity policies cannot silently diverge (open-pr-review-2026-08-05.md
-        P2 "use the same verifier for startup and rebuild"). Two FINALIZE
+        the two integrity policies cannot silently diverge. Two FINALIZE
         records at the same sequence with different hashes is genuine
         corruption and fails closed here, before either caller decides what
         to do with the parsed result.
@@ -200,12 +198,11 @@ class MirrorFile:
 
     def reconcile(self, committed_rows: list[dict[str, Any]], *, clock: Clock) -> None:
         """Startup check 9, corrected: every committed row, not only the
-        tail (open-pr-review-2026-08-05.md P2 "Only the mirror tail is
-        checked" — a tail-only check leaves an earlier unrecoverable gap
+        tail (a tail-only check leaves an earlier unrecoverable gap
         invisible).
 
         A row with no matching FINALIZE is finalized now from the row's own
-        committed data — a crash between §4 steps 2 and 3 leaves the DB
+        committed data — a crash between annex §4 steps 2 and 3 leaves the DB
         transaction as the durable fact and the mirror only catching up, so
         completing the fence here (rather than failing closed) is correct
         for every such row, not only the most recent one — **but only when
@@ -213,9 +210,8 @@ class MirrorFile:
         hash): completing a FINALIZE from the DB row alone, with no PREPARE
         to back it, would pass startup while leaving the mirror unable to
         ever reconstruct that row's ``payload_canonical`` again, silently
-        destroying the disaster-recovery property R9 exists to guarantee
-        (open-pr-review-2026-08-05.md P2 "require PREPARE before catching up
-        FINALIZE"). A row whose existing FINALIZE disagrees with the
+        destroying the disaster-recovery property R9 exists to guarantee.
+        A row whose existing FINALIZE disagrees with the
         committed row (different hash or generation) is genuine corruption
         and fails closed.
         """
@@ -287,8 +283,7 @@ class MirrorFile:
             if not matching_prepares:
                 raise MirrorChainBroken(f"sequence {sequence} FINALIZE has no matching PREPARE")
             record = matching_prepares[0]
-            # Belt-and-suspenders beyond row_hash equality (open-pr-review-2026-08-05.md
-            # P2 "require authority-generation equality in the pair"): the two
+            # Belt-and-suspenders beyond row_hash equality: the two
             # records' own top-level authority_generation fields must agree,
             # not only their (generation-derived) row_hash.
             if record["authority_generation"] != finalize_record["authority_generation"]:

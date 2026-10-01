@@ -526,7 +526,7 @@ class TestReplicateExpiryWithProvenance:
         assert 0.0 <= prov.max_single_strike_share <= 1.0
 
     def test_max_single_strike_share_uplifted_by_inflated_strike(self):
-        """Research-doc §8.2.5: a single strike with an anomalously large
+        """A single strike with an anomalously large
         quote dominates the variance integral via the ``c_i ∝ Q`` term.
         Asserted as a relative uplift over the same chain without the
         inflation — sidesteps absolute-calibration brittleness from
@@ -591,8 +591,6 @@ class TestSingleStrikeDominanceGate:
     """The gate iteratively drops the dominant strike and recomputes when
     ``max_single_strike_share`` exceeds threshold; it hard-fails after
     ``max_iterations`` attempts or below the strike-count floor.
-
-    See ``docs/architecture/iv-research-chat-notes.md (pruned 2026-09-12, git history)`` §5.8.
     """
 
     @staticmethod

@@ -4,38 +4,7 @@ What was verified, against what, on what date — for the change that gave the
 lake a root per `price_adjustment_mode`.
 
 **Date:** 2026-08-28
-**Design:** `docs/superpowers/specs/2026-08-28-lake-adjustment-dimension-design.md`
 **Code:** `app/data_lake/path_policy.py::resolve_lake_root`, `ensure_data`, `polygon_fetcher`, `app/engine/data/policy_store.py::resolve_data_roots`
-
-## 1. The 409 is gone
-
-Before: with `DATA_LAKE_ENABLED=true`, a default Strategy Lab backtest — which
-carries no explicit `data_policy` and therefore defaults to `adjusted=True` —
-was refused at root resolution with `LakeAdjustmentUnsupportedError`, surfaced
-as HTTP 409.
-
-After, against the live containerized data plane with the flag on:
-
-```http
-POST /api/engine/backtest
-{"strategy_name":"ema_crossover_signal","params":{"symbol":"SPY"},
- "from_date":"2025-06-02","to_date":"2025-06-06","auto_fetch":true}
-
-HTTP 200   success=True   total_trades=1
-lake_data_availability_hash=f13a5f788b82096e...
-```
-
-## 2. The on-disk migration preserved every artifact
-
-`scripts/migrate_lake_to_mode_roots.py --apply` on the live volume:
-
-| | before | after |
-|---|---|---|
-| `lake/equity/...` | 533 files | — |
-| `lake/raw/equity/...` | — | 533 files |
-
-Catalog rows were not touched and did not need to be: `FilePath` is
-root-relative, and the mode segment sits above the LEAN tree.
 
 ## 3. The fetcher genuinely honours the mode — proven across a real split
 
@@ -77,7 +46,6 @@ whole-root marker used to make impossible.
 - **Dividend adjustment.** Polygon's aggregate `adjusted` flag is split-only,
   which is why the mode is named `polygon_split_adjusted` rather than
   `polygon_adjusted`.
-
 
 ## 5. Corporate-action versions (#2454, 2026-09-26)
 

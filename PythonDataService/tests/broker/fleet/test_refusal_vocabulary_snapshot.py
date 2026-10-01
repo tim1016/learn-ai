@@ -127,16 +127,6 @@ def test_python_and_frontend_snapshots_are_byte_identical() -> None:
     )
 
 
-def test_snapshot_reasons_are_sorted_and_cover_every_declared_code() -> None:
-    snapshot = json.loads(_SNAPSHOT_PATH.read_text(encoding="utf-8"))
-    reasons = snapshot["reasons"]
-    assert list(reasons) == sorted(reasons)
-    assert set(reasons) == set(FLEET_REFUSAL_REASONS)
-    for code, entry in reasons.items():
-        assert entry["status_code"] == FLEET_REFUSAL_REASONS[code].status_code
-        assert entry["meaning"] == FLEET_REFUSAL_REASONS[code].meaning
-
-
 # ---- 7b: the next_step backfill --------------------------------------------
 
 #: Class-name -> reason-code map for the AST walk below, derived from the

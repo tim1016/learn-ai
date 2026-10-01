@@ -7,7 +7,7 @@ Scenarios covered:
   * Dividend exactly on a bar's date → that bar is NOT adjusted (strict <).
   * Polygon payload conversion ignores malformed rows.
 
-See docs/tv-polygon-validation-gotchas.md §1 for the underlying reason this
+TradingView adjusts for dividends; Polygon's ``adjusted=true`` adjusts for splits only, so this
 adjustment is needed. The magnitudes below are synthetic — we're testing
 the arithmetic, not SPY's actual dividend schedule.
 """

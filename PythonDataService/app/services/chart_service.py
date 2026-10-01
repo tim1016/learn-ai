@@ -276,7 +276,7 @@ _MS_PER_DAY = 86_400_000
 
 
 def _utc_midnight_ms(d: date) -> int:
-    """UTC-midnight anchor of ``d`` — the window START convention (PRD §12)."""
+    """UTC-midnight anchor of ``d`` — the window START convention."""
     return (d - _UNIX_EPOCH).days * _MS_PER_DAY
 
 
@@ -1444,7 +1444,7 @@ def get_chart_data(
             uncomputed=uncomputed,
         )
 
-    # ── Build response (vectorized — iterrows was 10-50x slower, audit § 5.4) ──
+    # ── Build response (vectorized — iterrows was 10-50x slower) ──
     df_bars = pd.DataFrame(
         {
             "t": df_resampled["timestamp"].astype("int64"),

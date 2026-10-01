@@ -40,7 +40,7 @@ from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 CALENDAR_IDENTITY = "NYSE"
 # The package version is part of the snapshot because it decides which sessions
 # exist; read from package metadata so the canonical calendar module stays the
-# only importer of pandas_market_calendars (temporal-rigor ban list).
+# only importer of pandas_market_calendars (ADR 0022 (d)).
 CALENDAR_PACKAGE_VERSION = _package_version("pandas_market_calendars")
 Resolution = Literal["minute", "daily"]
 
@@ -66,7 +66,7 @@ class DataSnapshot:
         return hash_payload(self.as_dict())
 
     def as_dict(self) -> dict[str, Any]:
-        """Receipt / wire form: every date is its ET-midnight ``int64 ms UTC`` anchor (temporal-rigor.md)."""
+        """Receipt / wire form: every date is its ET-midnight ``int64 ms UTC`` anchor (ADR 0022 (a))."""
         return {
             "symbol": self.symbol,
             "resolution": self.resolution,

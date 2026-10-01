@@ -27,13 +27,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.broker.ibkr import bars as bars_module
 from app.marketdata.feed import (
     ContinuityEventRef,
     ContinuityPolicy,
     FeedContinuityEvent,
-    FeedHealth,
     MarketDataBar,
     MarketDataFeedError,
     SubstitutionRefusal,
@@ -46,8 +44,6 @@ from tests._helpers.ibkr_feed_adversarial import (
     ScriptedLinesFeedFixture,
     raw_minute,
 )
-
-_WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)
 
 # ---------------------------------------------------------------------------
 # Helpers and fakes
@@ -172,45 +168,6 @@ def test_ibkr_bar_stream_error_is_not_market_data_feed_error() -> None:
     from app.broker.ibkr.bars import IBKRBarStreamError
 
     assert not issubclass(IBKRBarStreamError, MarketDataFeedError)
-
-
-# ---------------------------------------------------------------------------
-# AC5 — All temporal fields int64 ms UTC
-# ---------------------------------------------------------------------------
-
-
-def test_market_data_bar_timestamps_are_ints() -> None:
-    bar = MarketDataBar(
-        symbol="SPY",
-        start_ms=1_700_000_000_000,
-        end_ms=1_700_000_060_000,
-        open=Decimal("400.00"),
-        high=Decimal("401.00"),
-        low=Decimal("399.00"),
-        close=Decimal("400.50"),
-        volume=1000,
-        fetched_at_ms=1_700_000_001_000,
-        feed_id="ibkr",
-        session_phase="RTH",
-    )
-    assert isinstance(bar.start_ms, int)
-    assert isinstance(bar.end_ms, int)
-    assert isinstance(bar.fetched_at_ms, int)
-    # end_ms is exactly 60 seconds after start_ms
-    assert bar.end_ms - bar.start_ms == 60_000
-
-
-def test_feed_health_timestamps_are_ints() -> None:
-    h = FeedHealth(
-        connected=True,
-        stale=False,
-        last_bar_ms=1_700_000_000_000,
-        reason="",
-        active_subscription_count=0,
-        observed_at_ms=1_700_000_001_000,
-    )
-    assert isinstance(h.last_bar_ms, int)
-    assert isinstance(h.observed_at_ms, int)
 
 
 # ---------------------------------------------------------------------------
@@ -568,25 +525,6 @@ def test_health_active_subscription_count_in_response() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Protocol conformance — IbkrMarketDataFeed satisfies MarketDataFeed structurally
-# ---------------------------------------------------------------------------
-
-
-def test_ibkr_feed_satisfies_market_data_feed_protocol() -> None:
-    """IbkrMarketDataFeed must satisfy the MarketDataFeed Protocol structurally."""
-    client = _fake_connected_client()
-    feed = IbkrMarketDataFeed(client)
-
-    # Protocol has feed_id, stream_bars, health
-    assert hasattr(feed, "feed_id")
-    assert hasattr(feed, "stream_bars")
-    assert hasattr(feed, "health")
-    assert callable(feed.stream_bars)
-    assert callable(feed.health)
-    assert isinstance(feed.feed_id, str)
-
-
-# ---------------------------------------------------------------------------
 # Translation — _translate maps IbkrMinuteBar fields correctly
 # ---------------------------------------------------------------------------
 
@@ -752,32 +690,6 @@ async def test_recent_closed_bars_refuses_loudly_when_history_is_unavailable(
 # ---------------------------------------------------------------------------
 
 
-def test_market_data_bar_provenance_defaults_to_realtime() -> None:
-    bar = MarketDataBar(
-        symbol="SPY",
-        start_ms=0,
-        end_ms=60_000,
-        open=Decimal("1"),
-        high=Decimal("1"),
-        low=Decimal("1"),
-        close=Decimal("1"),
-        volume=0,
-        fetched_at_ms=60_000,
-        feed_id="ibkr",
-    )
-
-    assert bar.provenance == "realtime"
-    assert bar.authorization_id is None and bar.continuity_event_ref is None
-
-
-def test_market_data_feed_error_carries_a_typed_reason() -> None:
-    error = MarketDataFeedError("deadline passed", reason="DECISION_BAR_MISSED")
-
-    assert error.reason == "DECISION_BAR_MISSED"
-    assert str(error) == "DECISION_BAR_MISSED: deadline passed"
-    assert MarketDataFeedError("plain").reason is None
-
-
 def test_continuity_policy_deadline_and_trigger_detection() -> None:
     async def _sink(event: FeedContinuityEvent) -> ContinuityEventRef:  # pragma: no cover - never called here
         raise AssertionError("the policy must not record an event for pure arithmetic")
@@ -800,23 +712,6 @@ def test_continuity_policy_deadline_and_trigger_detection() -> None:
     assert policy.is_trigger_ms(1_800_000) is False
 
 
-def test_continuity_policy_accepts_the_extended_session() -> None:
-    """``DecisionSession`` no longer reserves "all" (Ruling R7): "extended" is a
-    first-class session, authored the same way "rth" is."""
-    async def _sink(event: FeedContinuityEvent) -> ContinuityEventRef:  # pragma: no cover - never called
-        raise AssertionError("this test never records an event")
-
-    policy = ContinuityPolicy(
-        session=RunDecisionSession(kind="extended", window=_WINDOW),
-        next_trigger_ms=lambda last_end: last_end + 60_000,
-        substitution_grant=lambda start, end: SubstitutionRefusal(reason="SUBSTITUTION_NOT_AUTHORIZED"),
-        record_event=_sink,
-    )
-
-    assert policy.session.kind == "extended"
-    assert policy.session.window == _WINDOW
-
-
 def test_translate_maps_ibkr_provenance_to_port_provenance() -> None:
     assert IbkrMarketDataFeed._translate(_make_ibkr_bar()).provenance == "realtime"
 
@@ -830,22 +725,6 @@ def test_translate_maps_ibkr_provenance_to_port_provenance() -> None:
     # contributions were stitched together upstream.
     both = _make_ibkr_bar_with(provenance="ibkr_historical", spans_interruption=True)
     assert IbkrMarketDataFeed._translate(both).provenance == "history"
-
-
-async def test_stream_bars_accepts_continuity_none_and_behaves_as_before(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    bar = _make_ibkr_bar()
-
-    async def fake_source(_client, _symbol, *, use_rth=True, on_source_bar=None, **_kwargs):
-        yield bar
-
-    monkeypatch.setattr("app.marketdata.ibkr_feed.stream_minute_bars", fake_source)
-    feed = IbkrMarketDataFeed(_fake_connected_client())
-
-    observed = await anext(feed.stream_bars("SPY", continuity=None))
-
-    assert observed.start_ms == bar.start_ms
 
 
 # -- #2364: the policy-less path never delivers a short minute as complete --

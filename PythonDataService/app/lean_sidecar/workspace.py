@@ -9,8 +9,6 @@ This module is the single source of truth for what lives where.
 Lake runs retain admitted inputs inside this workspace. The launcher's
 optional shared-lake mount remains available for direct launch requests;
 the orchestrator uses private inputs to preserve the consumed generation.
-
-Authority: docs/architecture/lean-sidecar-lab.md §"Workspace contract".
 """
 
 from __future__ import annotations

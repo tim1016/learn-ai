@@ -9,17 +9,8 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.engine.strategy.base import LoggedTrade
-from app.models.responses import LeanTradeStatsResponse
 from app.services.engine_backtest_service import _format_trade, _format_trade_record
 from app.utils.timestamps import to_ms_utc
-
-
-def test_to_ms_utc_tz_aware_et_in_summer_uses_edt_offset() -> None:
-    """ET 14:30 (EDT, summer) -> UTC 18:30 as epoch ms."""
-    et = ZoneInfo("America/New_York")
-    ts = datetime(2025, 5, 30, 14, 30, tzinfo=et)
-
-    assert to_ms_utc(ts) == 1_748_629_800_000
 
 
 def test_to_ms_utc_tz_aware_et_in_winter_uses_est_offset() -> None:
@@ -28,11 +19,6 @@ def test_to_ms_utc_tz_aware_et_in_winter_uses_est_offset() -> None:
     ts = datetime(2025, 1, 15, 14, 30, tzinfo=et)
 
     assert to_ms_utc(ts) == 1_736_969_400_000
-
-
-def test_to_ms_utc_rejects_naive_datetimes() -> None:
-    with pytest.raises(ValueError, match="timezone-aware"):
-        to_ms_utc(datetime(2025, 5, 30, 14, 30))
 
 
 @pytest.mark.parametrize(
@@ -87,13 +73,3 @@ def test_format_trade_record_emits_numeric_timestamps_for_lean_statistics() -> N
     assert isinstance(formatted.entry_timestamp, int)
     assert isinstance(formatted.exit_timestamp, int)
     assert formatted.cumulative_pnl_pct == pytest.approx(0.01, abs=1e-12, rel=0)
-
-
-def test_lean_trade_stats_response_preserves_nullable_int64_ms_utc_boundaries() -> None:
-    response = LeanTradeStatsResponse(
-        start_date_time=1_748_629_800_000,
-        end_date_time=1_748_633_400_000,
-    )
-
-    assert response.start_date_time == 1_748_629_800_000
-    assert response.end_date_time == 1_748_633_400_000

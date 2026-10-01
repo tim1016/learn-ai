@@ -26,13 +26,13 @@ import { ExportColumnPickerComponent } from './export-column-picker/export-colum
 import { columnsForPayload } from './export-csv-options';
 
 /**
- * Data Lab Build dataset (PRD §7.4).
+ * Data Lab Build dataset.
  *
- * NEVER mounts DataLabChartComponent and never calls the chart endpoint
- * (FR-004). The recipe is a progressive four-section form over the shared
+ * NEVER mounts DataLabChartComponent and never calls the chart endpoint.
+ * The recipe is a progressive four-section form over the shared
  * workspace state; columns/sessions/estimates come from the Python plan
- * receipt rendered verbatim (FR-012); generation goes through
- * `RunSessionService.start()` — the ONLY submission path (FR-005).
+ * receipt rendered verbatim; generation goes through
+ * `RunSessionService.start()` — the ONLY submission path.
  * The plan re-runs by itself whenever the recipe changes, so the
  * dataset.csv column picker always lists the current columns (owner
  * decision 2026-09-19).
@@ -97,8 +97,9 @@ export class ExportComponent {
 
   /** The stored receipt describes a recipe that no longer matches the live
    *  workspace (ticker/window/timeframe/indicators/options changed after the
-   *  plan ran). Its counts must not read as current in §4 — the template
-   *  labels the receipt stale until the automatic re-plan lands. */
+   *  plan ran). Its counts must not read as current in the Review and
+   *  generate section — the template labels the receipt stale until the
+   *  automatic re-plan lands. */
   readonly planReceiptStale = computed(() => {
     if (!this.planReceipt()) return false;
     const stored = this.store.datasetPlanReceiptSignature();
@@ -115,7 +116,7 @@ export class ExportComponent {
   readonly generateError = signal('');
 
   /** A run is active (fetching or bundling) — a second generate is
-   *  disabled meanwhile (PRD §16); cancellation stays available via the
+   *  disabled meanwhile; cancellation stays available via the
    *  shell-owned RunDock across routes. */
   readonly runActive = computed(
     () =>
@@ -247,7 +248,7 @@ export class ExportComponent {
     }
   }
 
-  /** The ONLY submission path (FR-005). */
+  /** The ONLY submission path. */
   async generate(): Promise<void> {
     if (this.generateBlocked()) return;
     const input = this.recipeInput();

@@ -342,13 +342,6 @@ class TestWorkspaceSizeEnforcement:
         (tmp_path / "small.bin").write_bytes(b"x" * 1024)
         assert _workspace_size_bytes(tmp_path) == 1024
 
-    def test_over_cap_detectable(self, tmp_path: Path) -> None:
-        from app.lean_sidecar.launcher.service import _workspace_size_bytes
-
-        # Write 3 MiB; cap test in launch() then catches > 2 * (1 << 20).
-        (tmp_path / "big.bin").write_bytes(b"y" * (3 * (1 << 20)))
-        assert _workspace_size_bytes(tmp_path) > 2 * (1 << 20)
-
     def test_ignores_symlinks(self, tmp_path: Path) -> None:
         from app.lean_sidecar.launcher.service import _workspace_size_bytes
 

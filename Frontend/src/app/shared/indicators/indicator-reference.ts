@@ -1,7 +1,7 @@
 /**
  * Indicator Reference — single source of truth for UI-facing indicator metadata.
  *
- * Layering note (per CLAUDE.md rule 5: "Python owns all math"):
+ * Layering note (per ADR 0068: Python owns the canonical math):
  *   - Calculation truth lives in `PythonDataService` (pandas-ta).
  *   - Param contract truth (names, types, min/max, defaults) lives in
  *     `PythonDataService/app/services/dataset_service.py:INDICATOR_CONFIGS`.

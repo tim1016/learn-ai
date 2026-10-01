@@ -115,29 +115,6 @@ Format for each gotcha:
 - **Detection.** For any matched trade pair in the log, subtract `learn_ai_entry_time - tv_entry_time`. If the answer is a multiple of 15 minutes and matches `holdBars × 15` for at least half of matches, it's this.
 - **Fix.** Same as #7, plus report exit times by the signal bar's open time instead of the exit-fill bar's close time. Pure presentation choice.
 
-## 9. `Indicator.update()` silently drops any `time <= current_time`
-
-- **Symptom.** Indicators appear to lag; a specific bar's indicator update seems to have been skipped. No error, no log line.
-- **Cause.** `app.engine.indicators.base.Indicator.update` guards:
-  ```python
-  if self._current_time is not None and time <= self._current_time:
-      return False
-  ```
-  This is correct for LEAN's intended dedup-on-identical-timestamp behavior, but it's silent. Any input that's out-of-order (pagination seams, merged caches, DST fold-back) gets thrown away.
-- **Impact.** Potentially high. Silent data loss is the worst kind of bug because nobody goes looking for it.
-- **Detection.** Add a counter:
-  ```python
-  self._dropped_updates = 0
-  ...
-  if ...:
-      self._dropped_updates += 1
-      if self._dropped_updates % 100 == 1:
-          logger.warning("%s dropped %d at %s", self.name, self._dropped_updates, time)
-      return False
-  ```
-  Then assert `== 0` in parity tests.
-- **Fix.** Add the logging. In addition, sort and dedup at the ingestion layer so this guard never fires in practice.
-
 ## 10. BATS is not "the SPY feed" — it's one venue
 
 - **Symptom.** After fixing #1 (dividends) and all other adjustment issues, TV-vs-Polygon close prices still disagree by ~1¢ median, ~3¢ at p95, occasionally ~15¢ at extremes.
@@ -223,7 +200,6 @@ Format for each gotcha:
 | CSV has ~400 rows no matter what | #6 Didn't scroll back |
 | Trade timestamps off by 15 min | #7 End-time vs open-time |
 | Trade timestamps off by 75 min | #8 Hold period + labeling |
-| Indicator seems to skip a bar | #9 Silent dedup |
 | All differences < 3¢ after fixing everything | #10 Feed noise floor |
 | RSI off by 2-5 points | #11 `ta.rsi` source |
 | Day N has 14 bars instead of 26 | #12 Half-day |
@@ -246,12 +222,3 @@ Format for each gotcha:
 7. Indicator NaN patterns look sane — EMA(200) warmup region is NOT all-NaN because TV pre-warms.
 
 If any of these fail, walk the gotcha list above before writing new code.
-
----
-
-## Related documents
-
-- `Downloads/learn-ai_EMA_Ingestion_Audit.md` — earlier audit of learn-ai's engine that misdiagnosed gotcha #1 as warmup (#3). Correction note pending.
-- `Downloads/Research_Plan_TV_vs_Polygon_Divergence.md` — the research plan this work executes.
-- `learn-ai_tv_indicator_dump_v6.pine` — the Pine dump script this document assumes.
-- `learn-ai_tv_export_procedure.md` — the step-by-step export procedure.

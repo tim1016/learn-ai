@@ -10,8 +10,7 @@ behind after every child backtest failed identically. Only the range
 Pydantic constraints (``ge``/``le``) are monotonic over a numeric range,
 so a value strictly inside ``[low, high]`` can never violate a bound its
 endpoints satisfy — this stays O(strategies) instead of O(grid size).
-Reference: PRD https://github.com/tim1016/learn-ai/issues/1577; design
-spec docs/superpowers/specs/2026-08-16-recency-chart-design.md.
+Reference: PRD https://github.com/tim1016/learn-ai/issues/1577.
 Canonical implementation: this file.
 Validated against: tests/research/recency/test_validation.py.
 """

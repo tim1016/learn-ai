@@ -7,9 +7,8 @@ plain integer or number. Recency used to inspect the raw model here
 (hidden parameters included), which could disagree with the schema the
 researcher sees; PRD #1926 generalized the rule and this module now
 delegates to it, so "which strategies can be swept" has one source.
-Reference: PRD https://github.com/tim1016/learn-ai/issues/1577 (design spec
-D1); PRD https://github.com/tim1016/learn-ai/issues/1926 "Domain and
-eligibility".
+Reference: PRD https://github.com/tim1016/learn-ai/issues/1577;
+PRD https://github.com/tim1016/learn-ai/issues/1926 "Domain and eligibility".
 Canonical implementation: app/research/sweep/eligibility.py.
 Validated against: tests/research/recency/test_eligibility.py,
 tests/research/sweep/test_eligibility.py.

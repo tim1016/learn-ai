@@ -1,6 +1,6 @@
 # Feed reconnect continuity (#1921)
 
-**Spec:** `docs/superpowers/specs/2026-09-02-feed-reconnect-continuity-design.md` (revision 7)
+**Spec:** the #1921 feed-reconnect continuity design, revision 7 (Git history; the § numbers below are its sections)
 **Decision:** `docs/architecture/adrs/0053-feed-continuity-same-run-recovery.md`
 **Status:** fail-closed floor shipped (spec slices 1–3). No substitution path exists in this build.
 
@@ -154,23 +154,3 @@ evidence and a run that dies has already said why.
 
 `bar_set_digest` includes `provenance` only when it is not `realtime` (omit-when-default), so
 existing receipts keep their digests and a substituted stream is correctly a different one.
-
-## Where the pieces live
-
-| Concern | File |
-|---|---|
-| Connection generation | `PythonDataService/app/broker/ibkr/client.py` |
-| Lease / registry / cancel fencing | `PythonDataService/app/broker/ibkr/bars.py` |
-| Minute assembler, completeness by count, post-flush absorb | `PythonDataService/app/broker/ibkr/minute_assembler.py` |
-| Port types (`ContinuityPolicy`, `FeedContinuityEvent`, provenance) | `PythonDataService/app/marketdata/feed.py` |
-| Interruption loop, wait, window resolution, event emission | `PythonDataService/app/marketdata/ibkr_feed.py`, `ibkr_continuity.py` |
-| Decision clock (ET floor, trigger instants) | `PythonDataService/app/services/decision_clock.py` |
-| Policy author, admission on delivery | `PythonDataService/app/services/feed_continuity_policy.py`, `bot_trade_strategy.py` |
-| Provenance columns, `source_stream_events`, evidence journal | `PythonDataService/app/services/source_bar_ledger.py` |
-| Receipt `continuity_event_digest` / `evidence_end_seq` | `PythonDataService/app/services/run_replay_proof.py`, `app/schemas/run_replay.py` |
-| Kill switch `IBKR_FEED_CONTINUITY_ENABLED` | `PythonDataService/app/broker/ibkr/config.py` |
-
-Tests: `tests/broker/ibkr/test_client_connection_generation.py`,
-`tests/broker/ibkr/test_minute_assembler.py`, `tests/marketdata/test_feed_continuity.py`,
-`tests/services/test_decision_clock.py`, `tests/services/test_feed_continuity_policy.py`,
-`tests/services/test_source_bar_ledger.py` (all under `PythonDataService/`).

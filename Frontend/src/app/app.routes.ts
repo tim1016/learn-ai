@@ -10,8 +10,9 @@ const loadBrokerLaneUnavailable = () =>
     (module) => module.BrokerLaneUnavailableComponent,
   );
 
-// A served document copies a canonical repo document; the copies listed in
-// `scripts/check_documentation_contract.py` fail CI when the two differ.
+// A served document copies a canonical repo document;
+// `PythonDataService/tests/contracts/test_served_document_copies.py` fails CI
+// when the two differ.
 const loadMarkdownDocPage = () =>
   import('./components/docs/markdown-doc-page.component').then(
     (module) => module.MarkdownDocPageComponent,
@@ -133,7 +134,7 @@ export const routes: Routes = [
   {
     // Data Lab shell (explore / export / validate child routes). The route
     // config owns the component-scoped workspace store — see
-    // components/data-lab/data-lab.routes.ts (PRD 2026-09-12 §7.1).
+    // components/data-lab/data-lab.routes.ts.
     path: "data-lab",
     loadChildren: () =>
       import("./components/data-lab/data-lab.routes").then(
@@ -158,7 +159,7 @@ export const routes: Routes = [
       ).then((m) => m.DataLabDocsComponent),
   },
   {
-    // Legacy /data-quality bookmark → the Validate child route (PRD §7.1).
+    // Legacy /data-quality bookmark → the Validate child route.
     // Any query params pass through; the Data Lab shell normalizes legacy
     // query state after landing.
     path: "data-quality",
@@ -300,7 +301,7 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
-    // ── The account workspace (ADR 0064 Decision 1, PRD §13/FR-092) ─────────
+    // ── The account workspace (ADR 0064 Decision 1, FR-092) ─────────────────
     // One account is one place: the account header and its tabs are this
     // parent, and each tab is a child, so moving between them never
     // re-creates the header or the shared account read. Home is the bare

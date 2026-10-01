@@ -90,7 +90,7 @@ async def select_live_clerk_runtime(
     # The world-to-mode rule is the closed table's, never a ``"live"`` literal
     # restated here: this is the one place a real-money authority decides mode
     # agreement, and a fourth spelling of the rule is a fourth thing to keep
-    # in step with `_MODE_ADMITTED_BY_WORLD` (repo philosophy #5).
+    # in step with `_MODE_ADMITTED_BY_WORLD`.
     if (
         not world_admits_account_mode("real_live", account.account_mode)
         or activation.account_id != account.account_id

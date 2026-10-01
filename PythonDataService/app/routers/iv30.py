@@ -66,8 +66,8 @@ class IvProvenancePayload(BaseModel):
     variance_contribution_synthetic: float
     strike_coverage_score: float
     # Defaulted because FastAPI response_model filters out fields not declared
-    # on the model — without this, the diagnostic added in research-doc §8.2.5
-    # is silently dropped from /api/edge/iv30/{vix-style,parametric} responses.
+    # on the model — without this, the single-strike-share diagnostic is
+    # silently dropped from /api/edge/iv30/{vix-style,parametric} responses.
     max_single_strike_share: float = 0.0
     per_strike_contributions: list[dict] | None = None
 
@@ -177,7 +177,7 @@ def _pick_straddle_pair(by_expiry: dict[int, list], target_days: int) -> tuple[i
 async def iv30_vix_style(req: Iv30LiveRequest) -> Iv30LiveResponse:
     """Live VIX-style IV30 from a fresh Polygon snapshot.
 
-    The acceptance criterion (plan §5.C): on a normal trading day, this
+    The acceptance criterion: on a normal trading day, this
     returns within 50 bps of the published CBOE VIX index value when
     called against SPY. The provenance object reports
     ``variance_contribution_synthetic ≈ 0`` and ``opra_mid`` ≈ 100% mix.

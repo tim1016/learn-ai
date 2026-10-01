@@ -60,7 +60,7 @@ def test_allowances_come_from_settings_and_are_absent_when_unset() -> None:
 def test_the_envelope_and_settings_constructors_agree_on_the_same_six_numbers() -> None:
     """A sealed envelope and an environment-configured one anchor identically.
 
-    The exit-pricing rule (ADR 0060; plan §0 D3) reads the allowance out of an
+    The exit-pricing rule (ADR 0060) reads the allowance out of an
     arming record's sealed envelope instead of out of settings, so the two
     adapters must not be able to disagree about the same numbers. Both are
     ``Decimal(str(...))`` conversions, deliberately: this is adapter-level
@@ -124,7 +124,7 @@ def test_an_allowance_of_a_hundred_percent_or_more_will_not_load(bps: str) -> No
 def test_every_anchor_across_the_dollar_band_is_a_valid_leg_limit_price(
     side: OrderSide, close: str, bps: str
 ) -> None:
-    """Parity for the duplicated $1 tick rule (CLAUDE.md guiding philosophy #5).
+    """Parity for the duplicated $1 tick rule.
 
     ``marketable_limit.py`` picks the tick from the *pre*-quantisation ``raw``;
     ``BrokerOrderLeg._limit_price_matches_order_type`` checks the *final*

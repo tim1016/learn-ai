@@ -9,7 +9,7 @@
  * snake_case because the data plane is reached directly, not through the
  * .NET proxy.
  *
- * Every temporal field is `int64 ms UTC` (`.claude/rules/temporal-rigor.md`).
+ * Every temporal field is `int64 ms UTC` (ADR 0022 (a) and (e)).
  * `*_trading_date_ms` values are date-anchored at the 09:30 ET session open
  * and must be rendered in `date-et` mode, never viewer-local.
  */
@@ -156,7 +156,7 @@ export interface BackfillDayEvent {
  * `start_trading_date_ms` / `end_trading_date_ms` are `int64 ms UTC`,
  * anchored at 12:00:00.000 UTC of the selected calendar date — a
  * deliberate, documented exception to the session-open anchor the rest of
- * the lake's wire vocabulary uses (`.claude/rules/temporal-rigor.md`, and
+ * the lake's wire vocabulary uses (ADR 0022 (f), and
  * `PythonDataService/app/data_lake/types.py`'s
  * `trading_date_to_calendar_anchor_ms`), chosen so the wire value never
  * depends on the browser's local timezone. `tradingDateToMs` (trading-range.ts)

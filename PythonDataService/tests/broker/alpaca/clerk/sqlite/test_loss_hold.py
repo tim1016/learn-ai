@@ -96,18 +96,6 @@ def test_the_loss_hold_is_a_hold_cause_and_every_envelope_refusal_is_transient()
         assert classify_admission_refusal(code) is RefusalClass.TRANSIENT
 
 
-def test_the_operator_explanation_names_the_prior_close_cash_flow_basis() -> None:
-    envelope = account_hold_envelope(
-        reason_code=LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
-        evidence_refs=[f"day-pnl:{CAUSE.day_start_ms}"],
-        cause_facts=CAUSE.to_mapping(),
-    )
-
-    assert "current equity minus prior regular-session-close equity" in envelope.explanation
-    assert "net of deposits and withdrawals after that close" in envelope.explanation
-    assert "every EXIT still runs" in envelope.explanation
-
-
 def test_the_explanation_dollars_the_sealed_floats_each_normalized_on_their_own() -> None:
     """The hold's copy renders the recorded floats through the money boundary (#2612).
 

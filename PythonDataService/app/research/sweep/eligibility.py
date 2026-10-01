@@ -12,7 +12,7 @@ cannot see. The answer is structured (flag, reason codes, offending public
 parameters) so the catalogue can explain itself; Recency Chart, Grid
 Search, and Walk-Forward all derive from this one predicate.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/1926 "Domain and
-  eligibility"; Recency Chart design spec D1 (the original numeric-only rule).
+  eligibility"; generalizes the Recency Chart's original numeric-only rule.
 Canonical implementation: this file.
 Validated against: tests/research/sweep/test_eligibility.py.
 """

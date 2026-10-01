@@ -2,9 +2,6 @@
 
 Schema is `schema_version=1`. Any non-additive change MUST bump
 schema_version and document the migration in the cell's attribution.md.
-
-Reference: docs/superpowers/specs/2026-05-21-cross-engine-golden-matrix-design.md
-            § "Cell manifest.json schema (v1)"
 """
 
 from __future__ import annotations

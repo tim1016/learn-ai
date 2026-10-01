@@ -1,7 +1,6 @@
 """LEAN data-folder round-trip fidelity test.
 
-Per ``docs/architecture/lean-sidecar-lab.md`` §"LEAN data-folder
-fidelity" (non-negotiable #9): write a tiny deterministic price series
+Write a tiny deterministic price series
 through ``lean_format.write_lean_day_zip``, then read it back through
 ``lean_format.LeanMinuteDataReader``. The reader/writer pair is the
 contract; if a future change breaks deci-cent encoding or
@@ -338,8 +337,8 @@ class TestDataFolderRoundTrip:
         """Prices on disk are ``price * 10000`` as integers (LEAN convention).
 
         Anything below the quantization floor (0.0001) cannot round-trip
-        exactly; that floor is documented in the ADR §"LEAN quantization
-        floor" and respected by the reconciliation tolerance.
+        exactly; that floor is documented in ADR 0070 decision 8 and
+        respected by the reconciliation tolerance.
         """
         symbol = "TST"
         trading_date = date(2025, 1, 9)

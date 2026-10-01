@@ -1,4 +1,4 @@
-/* Chart series color tokens (PRD 2026-09-12 data-lab workspace redesign §10).
+/* Chart series color tokens.
  *
  * Chart code stores token IDs — never hex, RGB, or arbitrary CSS strings —
  * and resolves `var(--chart-series-*)` only at the Lightweight Charts

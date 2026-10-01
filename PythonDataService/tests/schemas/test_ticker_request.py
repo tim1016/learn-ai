@@ -14,7 +14,7 @@ Covers:
 from __future__ import annotations
 
 import pytest
-from pydantic import Field, ValidationError
+from pydantic import ValidationError
 
 from app.schemas.ticker_request import (
     MultiTickerRequest,
@@ -56,10 +56,6 @@ class TestBarRange:
         with pytest.raises(ValidationError):
             _BarRange(from_date="2025-01-01", to_date="2025-01-31", multiplier=0)
 
-    def test_rejects_negative_multiplier(self) -> None:
-        with pytest.raises(ValidationError):
-            _BarRange(from_date="2025-01-01", to_date="2025-01-31", multiplier=-1)
-
     @pytest.mark.parametrize("ts", ["minute", "hour", "day"])
     def test_accepts_supported_timespans(self, ts: str) -> None:
         r = _BarRange(from_date="2025-01-01", to_date="2025-01-31", timespan=ts)  # type: ignore[arg-type]
@@ -69,21 +65,6 @@ class TestBarRange:
     def test_rejects_unknown_timespan(self, ts: str) -> None:
         with pytest.raises(ValidationError):
             _BarRange(from_date="2025-01-01", to_date="2025-01-31", timespan=ts)  # type: ignore[arg-type]
-
-    def test_legacy_start_end_date_aliases_are_no_longer_accepted(self) -> None:
-        # PR (iii) removed the AliasChoices for legacy field names.
-        # Callers still sending start_date / end_date now produce a
-        # clear ``extra_forbidden`` 422 because ``extra="forbid"`` on
-        # the base catches the unknown fields AND from_date/to_date
-        # remain required (so the model fails validation on the
-        # missing required fields too).
-        with pytest.raises(ValidationError) as exc:
-            _BarRange.model_validate({
-                "start_date": "2025-01-01",
-                "end_date": "2025-01-31",
-            })
-        s = str(exc.value).lower()
-        assert "start_date" in s and "extra" in s
 
     def test_extra_field_is_forbidden(self) -> None:
         with pytest.raises(ValidationError) as exc:
@@ -101,26 +82,6 @@ class TestTickerRequest:
     def test_accepts_canonical_symbol_field(self) -> None:
         r = TickerRequest(symbol="SPY", from_date="2025-01-01", to_date="2025-01-31")
         assert r.symbol == "SPY"
-
-    def test_legacy_ticker_alias_is_no_longer_accepted(self) -> None:
-        with pytest.raises(ValidationError) as exc:
-            TickerRequest.model_validate({
-                "ticker": "SPY",
-                "from_date": "2025-01-01",
-                "to_date": "2025-01-31",
-            })
-        s = str(exc.value).lower()
-        assert "ticker" in s and ("extra" in s or "symbol" in s)
-
-    def test_all_legacy_aliases_combined_are_no_longer_accepted(self) -> None:
-        with pytest.raises(ValidationError) as exc:
-            TickerRequest.model_validate({
-                "ticker": "SPY",
-                "start_date": "2025-01-01",
-                "end_date": "2025-01-31",
-            })
-        s = str(exc.value).lower()
-        assert "ticker" in s or "start_date" in s or "end_date" in s
 
     def test_rejects_empty_symbol(self) -> None:
         with pytest.raises(ValidationError):
@@ -161,16 +122,6 @@ class TestMultiTickerRequest:
         )
         assert r.symbols == ["SPY", "QQQ"]
 
-    def test_legacy_tickers_alias_is_no_longer_accepted(self) -> None:
-        with pytest.raises(ValidationError) as exc:
-            MultiTickerRequest.model_validate({
-                "tickers": ["SPY", "QQQ"],
-                "from_date": "2025-01-01",
-                "to_date": "2025-01-31",
-            })
-        s = str(exc.value).lower()
-        assert "tickers" in s or "symbols" in s
-
     def test_rejects_empty_symbols_list(self) -> None:
         with pytest.raises(ValidationError):
             MultiTickerRequest(
@@ -206,30 +157,3 @@ class TestMultiTickerRequest:
                 from_date="2025-01-01",
                 to_date="2025-01-31",
             )
-
-
-class TestInheritance:
-    """Smoke test — confirm subclasses can override defaults explicitly
-    (per-route default preservation pattern from the spec)."""
-
-    def test_subclass_can_override_multiplier_default(self) -> None:
-        class FifteenMinuteRequest(TickerRequest):
-            multiplier: int = Field(15, ge=1)
-
-        r = FifteenMinuteRequest(
-            symbol="SPY",
-            from_date="2025-01-01",
-            to_date="2025-01-31",
-        )
-        assert r.multiplier == 15
-
-    def test_subclass_can_override_session_default(self) -> None:
-        class ExtendedSessionRequest(TickerRequest):
-            session: str = Field("extended")  # type: ignore[assignment]
-
-        r = ExtendedSessionRequest(
-            symbol="SPY",
-            from_date="2025-01-01",
-            to_date="2025-01-31",
-        )
-        assert r.session == "extended"

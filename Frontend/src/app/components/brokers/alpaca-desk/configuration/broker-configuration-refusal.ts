@@ -1,12 +1,11 @@
-// Reads the broker-configuration surface's refusal contract
-// (`docs/architecture/broker-configuration-profile-contract.md` §6): a `detail`
+// Reads the broker-configuration surface's refusal contract: a `detail`
 // object carrying a code-like `reason` plus backend-authored `message` and an
 // optional `next_step`.
 //
 // This is deliberately not `components/broker/operation-error.ts`. That module
 // answers a narrower question — it returns the server's literal message string
 // (or a caller-supplied fallback) and classifies nothing. This surface needs
-// the refusal's `reason` as well, to tell a stale write (contract §5) apart
+// the refusal's `reason` as well, to tell a stale write apart
 // from every other rejection. Both modules share the same rule: every word the
 // operator reads is authored server-side and the client must not compose one.
 // The one thing this module writes itself is the sentence for a response that
@@ -16,7 +15,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { refusalBody } from '../../../../shared/errors/refusal-body';
 
-/** The two reasons that mean "someone else changed this first" (contract §5). */
+/** The two reasons that mean "someone else changed this first". */
 const STALE_WRITE_REASONS: ReadonlySet<string> = new Set([
   'revision_conflict',
   'selection_generation_conflict',

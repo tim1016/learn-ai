@@ -5,8 +5,7 @@ backtest. This module turns them into a stable, typed surface so the
 Phase 4 frontend renders consistent tables across LEAN versions and
 Phase 5 reconciliation has a deterministic structure to diff against.
 
-Authority: ``docs/architecture/lean-sidecar-lab.md`` §"Normalized output
-parser". Three rules survive every LEAN version bump:
+Three rules survive every LEAN version bump:
 
 1. **All timestamps cross this boundary as int64 ms UTC.** LEAN writes
    unix-seconds (often as float); the parser converts immediately.
@@ -14,7 +13,7 @@ parser". Three rules survive every LEAN version bump:
    stats are version- and definition-sensitive (Sharpe annualization
    constant, sample vs population stdev, benchmark selection). String
    pass-through preserves fidelity; downstream consumers parse when
-   they decide on a convention. See ADR §"Statistics parity scope".
+   they decide on a convention. See ADR 0070 decision 8.
 3. **Unknown fields are tolerated** (Pydantic ``extra="allow"``) so a
    minor LEAN version that adds fields doesn't crash the parser; the
    pinned ``normalized_parser_version`` records exactly what schema

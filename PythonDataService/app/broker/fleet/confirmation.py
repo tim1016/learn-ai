@@ -1,4 +1,4 @@
-"""The clerk's durable confirmation evidence (audit 2026-09-13, finding 2).
+"""The clerk's durable confirmation evidence.
 
 The handover from "local acknowledgement" to "fleet confirmation" spans two
 databases, and a process can die on either side of it. This module is the
@@ -8,19 +8,18 @@ generation, effective tuple, binding generation, and the instance and epoch
 that confirmed it — plus, since schema v2 (#2155), the last lifecycle the
 lane knew itself to hold. A lane that learns it was drained re-authors the
 file with ``lifecycle_state: draining``, and evidence in any non-provisioned
-lifecycle vouches for nothing: the FR-066 offline boot that would otherwise
+lifecycle vouches for nothing: the offline boot (ADR 0062 Decision 7) that would otherwise
 resurrect a drained binding is refused by the lane's own volume.
 
 It is evidence of an existing grant, never an independent one: the fleet
 registry remains the single authority for account ownership, and a local
-checkpoint cannot prove the original writer is offline or transfer anything
-(audit 2026-09-13, finding 2). Its two uses are exactly the crash protocol's
-two reconciliations:
+checkpoint cannot prove the original writer is offline or transfer anything.
+Its two uses are exactly the crash protocol's two reconciliations:
 
 - after a lost confirmation reply, the restarted clerk re-confirms the same
   identity instead of minting a new assignment;
 - with the coordinator unreachable, a recovered binding matching this
-  evidence may boot last-effective (FR-066) while every new assignment,
+  evidence may boot last-effective (ADR 0062 Decision 7) while every new assignment,
   changed binding and browser command fails closed — unless the evidence
   itself says the lane was drained, in which case it boots nothing.
 """
@@ -152,7 +151,7 @@ def read_confirmation_evidence(clerk_root: Path) -> ConfirmationEvidence | None:
         )
     # Schema v1 predates the lifecycle field; every v1 file was written at a
     # confirmation, and only a provisioned clerk confirms, so v1 reads back
-    # as provisioned — the legacy volume keeps its FR-066 story untouched
+    # as provisioned — the legacy volume keeps its offline-boot story untouched
     # (#2155's residual window is a v1 file that was never re-authored, not
     # a v1 file this reader refuses).
     lifecycle_state = StoredLifecycleState.PROVISIONED.value
@@ -247,7 +246,7 @@ def write_confirmation_evidence(clerk_root: Path, evidence: ConfirmationEvidence
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(f"{target.name}.tmp-{os.getpid()}")
     # Durability to the same bar as the registry's FULL-sync SQLite: the
-    # evidence is the FR-066 offline story, and a rename that outlived its
+    # evidence is the offline-boot story, and a rename that outlived its
     # data on power loss would vouch for a grant that no longer exists.
     with open(temporary, "w", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, sort_keys=True, separators=(",", ":")))
@@ -294,7 +293,7 @@ def evidence_vouches_for(
 ) -> bool:
     """Whether a recovered binding is the exact grant the evidence confirms.
 
-    This is the FR-066 test: only the already-confirmed exact last-effective
+    This is the offline-boot test: only the already-confirmed exact last-effective
     tuple may boot with the coordinator unavailable. Anything else — a
     changed account, profile or revision — waits for the coordinator. When
     the caller pins the current binding generation, it must equal the
