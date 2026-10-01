@@ -1030,6 +1030,15 @@ async def _service_lifespan(
     # Start the shared fleet snapshot before serving its REST/SSE readers.
     # Per-bot state is owned by the Alpaca Broker V2 projection runtime above.
 
+    # A clerk reads the Golden Search qualifications but cannot apply DDL, so
+    # the data plane applies the research schema as it starts (#2696). In the
+    # background: it logs its outcome and never holds startup on Postgres.
+    research_schema_task: asyncio.Task[None] | None = None
+    if _ROLE_RUNS_DATA_PLANE_CORE:
+        from app.research.persistence.db import ensure_schema_at_startup
+
+        research_schema_task = asyncio.create_task(ensure_schema_at_startup(), name="research-schema-ensure")
+
     # Last, so it measures the loop that is about to serve requests: one timer
     # wakeup a second, reporting any that arrives late. A stall on this loop
     # used to reach an operator only as a healthcheck streak, an expiring
@@ -1054,6 +1063,10 @@ async def _service_lifespan(
         loop_lag_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await loop_lag_task
+        if research_schema_task is not None:
+            research_schema_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await research_schema_task
         # A reconnect still in flight ends before custody comes down; an
         # attempt it interrupts closes whatever it opened (#2582).
         if alpaca_reconnect_task is not None:
