@@ -145,10 +145,13 @@ is unchanged.
    vendor rounding; a gap of one cent or more is a conflict.**
    - The constant is `TOTAL_PRICE_CONFLICT_ATOL = 0.01` per share, `rtol=0`
      (`sqlite/order_evidence.py`, #2460).
-   - Alpaca publishes prices in cents, so a smaller gap cannot be told
-     apart from rounding. A gap at or above one cent records a durable
-     `EXECUTION_PRICE_CONFLICT` episode. This is the same basis as the
-     reconciliation `FILL_PRICE_DRIFT` default (ADR 0069 §3).
+   - Alpaca publishes prices in cents at or above $1, so a smaller gap
+     cannot be told apart from rounding there. Below $1 the venue tick is
+     $0.0001, and the one-cent rule then reads a real sub-cent discrepancy
+     as rounding. A tick-aware tolerance is owed (#2770).
+   - A gap at or above one cent records a durable `EXECUTION_PRICE_CONFLICT`
+     episode. This is the same basis as the reconciliation `FILL_PRICE_DRIFT`
+     default (ADR 0069 §3).
    - The episode never rewrites recorded fills and never forbids reductions,
      because the quantity is the one thing both sides agree on. It clears
      when a later total agrees.

@@ -12,15 +12,19 @@ Research answers are only worth keeping if they can be found again and reproduce
 ## Decision
 
 1. **A run's identity is its input columns, and equal inputs must give equal result hashes.**
-   - `RunLedger` (`app/research/runs/ledger.py`) is the immutable identity record of one `StrategySpec` execution. Its identity columns:
+   - `RunLedger` (`app/research/runs/ledger.py`) is the immutable identity record of one `StrategySpec` execution. There is no single identity hash: the identity is the set of input columns the ledger records:
      - `strategy_spec_hash`: the spec after a Pydantic round-trip;
-     - `data_snapshot_id`;
      - `engine_name` / `ENGINE_VERSION`;
+     - `symbol`, `resolution_minutes`;
+     - the report window `start_ms` / `end_ms`, plus the data pre-roll start `warmup_start_ms`;
+     - `initial_cash`;
      - `fill_mode`, `commission_per_order`, `slippage_per_share`;
-     - `random_seed`;
-     - `prediction_set_hash`;
+     - `warmup_policy`, `random_seed`;
+     - `data_source`, `data_snapshot_id`, `prediction_set_hash`;
      - the parent lineage.
-   - Runs that agree on these columns must produce the same `result_hash`, `trade_log_hash` and `metrics_hash`. The deterministic engine guarantees it, and the run tests enforce it. The two sub-hashes exist to show *which* part of a result diverged.
+
+     `data_snapshot_id` starts at the pre-roll start, not at the report start. Two runs with the same `data_snapshot_id` can therefore differ in `start_ms`, and only the full column set identifies a run.
+   - Runs that agree on all of these columns must produce the same `result_hash`, `trade_log_hash` and `metrics_hash`. The deterministic engine guarantees it, and the run tests enforce it. The two sub-hashes exist to show *which* part of a result diverged.
    - `result_hash` excludes `run_id` (a per-run UUID would break the equal-inputs property) and `log_lines` (timing-dependent text).
    - `engine_git_commit` is informational, not identity.
    - **Bump `ENGINE_VERSION` when the engine's semantic output for a given input changes:** fill semantics, the drawdown definition, the annualization choice. Do not bump it for a cosmetic refactor.
