@@ -37,11 +37,6 @@ MANIFEST_PATH = GOLDEN_DIR / "manifest.json"
 sys.path.insert(0, str(PYTHON_SVC / "tests" / "fixtures"))
 sys.path.insert(0, str(PYTHON_SVC))
 
-# ── Generator imports (registered below) ─────────────────────────────────────
-# Each generator lives in its own module under scripts/fixture_generators/.
-# Import lazily so missing optional deps don't block the --list flag.
-
-
 # ── Manifest helpers ──────────────────────────────────────────────────────────
 
 
