@@ -19,7 +19,9 @@ broker order that executed it. Once Alpaca has posted every execution the
 answer counts, the slices recorded first leave its cumulative nothing to add,
 whatever a replacement's ``filled_qty`` means, and its acknowledgement ends
 the leg on them. Until then its cumulative folds as it always did, and the
-leg stays outstanding. A former member's answer -- the original Alpaca still
+leg stays outstanding; should that cumulative under-credit the chain, the
+chain's exact executions replace it once they cover the head's quantity
+(#2786). A former member's answer -- the original Alpaca still
 answers for under our client id once the chain moved on -- records nothing:
 the head's own answer, which the same resolution reads next, records the
 whole chain against the head's quantity.

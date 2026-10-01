@@ -126,6 +126,11 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
         "Execution coverage resolved",
         "An operator-approved proof replaced aggregate recovery with exact execution evidence.",
     ),
+    "EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN": (
+        "Manual order executions proven",
+        "The filled manual order's exact executions covered every share it asked for, so they replaced "
+        "the aggregate recovery and set the position to their total.",
+    ),
     "ATTRIBUTED_RESIDUE_DISCHARGED": (
         "Stranded residue discharged",
         "The operator wrote off an attributed position the broker did not hold, "
