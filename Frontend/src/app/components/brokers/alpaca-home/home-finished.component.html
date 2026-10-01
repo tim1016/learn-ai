@@ -61,10 +61,11 @@
     </table>
   }
 
-  @if (clearing(); as count) {
+  @if (clearOutcome(); as outcome) {
+    <app-home-clear-outcome [outcome]="outcome" [busy]="clearing() !== null"
+                             (retryRequested)="retryRequested.emit()" (dismissed)="outcomeDismissed.emit()" />
+  } @else if (clearing(); as count) {
     <p class="home-finished__empty" role="status">{{ copy.clearing(count) }}</p>
-  } @else if (clearOutcome(); as outcome) {
-    <app-home-clear-outcome [outcome]="outcome" (retryRequested)="retryRequested.emit()" (dismissed)="outcomeDismissed.emit()" />
   }
 </details>
 
