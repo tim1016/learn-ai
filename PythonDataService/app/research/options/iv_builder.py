@@ -18,7 +18,6 @@ import pandas as pd
 from app.research.options.contract_finder import find_bracket_contracts
 from app.services.fred_service import get_risk_free_rate
 from app.services.polygon_client import PolygonClientService
-from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 from app.volatility.solver import implied_volatility
 
 logger = logging.getLogger(__name__)
@@ -152,7 +151,7 @@ def _derive_iv_for_contract(
     stock_close: float,
     dte: int,
     option_type: str,
-    risk_free_rate: float = DEFAULT_RISK_FREE_RATE,
+    risk_free_rate: float,
 ) -> tuple[float | None, str]:
     """Derive IV for a single contract from a pre-fetched bar.
 

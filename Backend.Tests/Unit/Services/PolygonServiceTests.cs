@@ -173,9 +173,10 @@ public class PolygonServiceTests
         var handler = CreateHandler(HttpStatusCode.OK, new PricingCompareResponse { Success = true, RiskFreeRate = 0.043m });
         var service = CreateService(handler);
 
-        await service.PricingCompareAsync(100m, 100m, 0.20m, "2026-02-20", "call");
+        var result = await service.PricingCompareAsync(100m, 100m, 0.20m, "2026-02-20", "call");
 
         Assert.False(RequestCarriesRiskFreeRate(handler));
+        Assert.Equal(0.043m, result.RiskFreeRate);
     }
 
     private static StrategyLegInput CallLeg() =>

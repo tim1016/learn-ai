@@ -17,6 +17,7 @@ from app.volatility.analytics import (
     find_delta_strike,
 )
 from app.volatility.surface import SurfaceMethod, VolSurface, VolSurfaceBuilder
+from tests.volatility.conftest import bs_price
 
 
 @pytest.fixture
@@ -184,69 +185,42 @@ class TestFindDeltaStrike:
 class TestPutCallParityForward:
     """Put-call parity implied forward tests."""
 
-    def test_put_call_parity_forward_exists(self, flat_vol_chain: list[dict]) -> None:
-        """Implied forward is computed for at least one expiry."""
-        forwards = compute_put_call_parity_forward(flat_vol_chain)
+    @pytest.mark.parametrize("rate", [0.02, 0.08])
+    def test_put_call_parity_forward_is_the_bsm_forward_at_the_rate_passed(
+        self, spot: float, rate: float, base_vol: float
+    ) -> None:
+        """Matched BS call/put pairs imply F = S * exp(r*T) at every expiry."""
+        ttms = [0.25, 0.5, 1.0]  # exact at the six decimals the function keys expiries by
+        pairs = [
+            {"strike": k, "ttm": ttm, "option_price": bs_price(spot, k, ttm, rate, base_vol, is_call), "is_call": is_call}
+            for ttm in ttms
+            for k in (90.0, 95.0, 100.0, 105.0, 110.0)
+            for is_call in (True, False)
+        ]
 
-        if len(forwards) > 0:
-            assert len(forwards) > 0
-        else:
-            pytest.skip("No matched call/put pairs in test data")
+        forwards = compute_put_call_parity_forward(pairs, rate=rate)
 
-    def test_put_call_parity_forward_reasonable(self, spot: float, rate: float, flat_vol_chain: list[dict]) -> None:
-        """Implied forwards are close to S * exp(r*T) for flat vol."""
-        forwards = compute_put_call_parity_forward(flat_vol_chain, rate=rate)
+        assert sorted(forwards) == ttms
+        for ttm, implied_fwd in forwards.items():
+            # Parity is an identity for BS prices with q = 0, so the strict-float default holds.
+            assert implied_fwd == pytest.approx(spot * math.exp(rate * ttm), rel=0, abs=1e-9)
 
-        if len(forwards) > 0:
-            for ttm, implied_fwd in forwards.items():
-                expected_fwd = spot * math.exp(rate * ttm)
-
-                rel_error = abs(implied_fwd - expected_fwd) / expected_fwd
-                assert rel_error < 0.05  # Within 5% for flat vol data
-        else:
-            pytest.skip("No matched call/put pairs in test data")
-
-    def test_put_call_parity_forward_multiple_expiries(self, skewed_chain: list[dict]) -> None:
-        """Multiple expiries produce multiple forward estimates if data allows."""
-        forwards = compute_put_call_parity_forward(skewed_chain)
-
-        if len(forwards) >= 2:
-            assert len(forwards) >= 2
-        elif len(forwards) > 0:
-            pytest.skip("Less than 2 matched expiry pairs in test data")
-        else:
-            pytest.skip("No matched call/put pairs in test data")
-
-    def test_put_call_parity_forward_empty_returns_dict(self) -> None:
+    def test_put_call_parity_forward_empty_returns_dict(self, rate: float) -> None:
         """Empty option list returns empty dict."""
-        forwards = compute_put_call_parity_forward([])
+        forwards = compute_put_call_parity_forward([], rate=rate)
 
         assert forwards == {}
 
-    def test_put_call_parity_forward_only_calls_no_forwards(self) -> None:
+    def test_put_call_parity_forward_only_calls_no_forwards(self, rate: float) -> None:
         """Only calls (no puts) returns no forwards."""
         call_only = [
             {"strike": 100.0, "ttm": 0.1, "option_price": 5.0, "is_call": True},
             {"strike": 105.0, "ttm": 0.1, "option_price": 2.0, "is_call": True},
         ]
 
-        forwards = compute_put_call_parity_forward(call_only)
+        forwards = compute_put_call_parity_forward(call_only, rate=rate)
 
         assert forwards == {}
-
-    def test_put_call_parity_forward_matched_pairs(self) -> None:
-        """Matched call/put pairs produce forward."""
-        pairs = [
-            {"strike": 100.0, "ttm": 0.25, "option_price": 5.0, "is_call": True},
-            {"strike": 100.0, "ttm": 0.25, "option_price": 3.0, "is_call": False},
-            {"strike": 105.0, "ttm": 0.25, "option_price": 3.0, "is_call": True},
-            {"strike": 105.0, "ttm": 0.25, "option_price": 5.0, "is_call": False},
-        ]
-
-        forwards = compute_put_call_parity_forward(pairs)
-
-        assert 0.25 in forwards
-        assert forwards[0.25] > 0.0
 
 
 class TestSkewMetricsEdgeCases:

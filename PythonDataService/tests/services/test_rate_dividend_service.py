@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from app.services import dividend_service, fred_service, rate_dividend_service
+from app.services.fred_service import RATE_SOURCE_DEFAULT
 from app.services.rate_dividend_service import RateAndDividend, get_rate_and_dividend
+from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
 
 
 class FakePolygon:
@@ -33,7 +37,9 @@ def _clear_caches():
 
 class TestRateAndDividendFacade:
     def test_composes_fred_and_dividend(self, monkeypatch):
-        monkeypatch.setattr(rate_dividend_service, "get_risk_free_rate", lambda dte_days, observation_date: 0.0512)
+        monkeypatch.setattr(
+            rate_dividend_service, "get_risk_free_rate_and_source", lambda dte_days, observation_date: (0.0512, "FRED")
+        )
         polygon = FakePolygon(
             [
                 {"cash_amount": 1.62, "ex_dividend_date": "2024-03-15"},
@@ -61,9 +67,9 @@ class TestRateAndDividendFacade:
         def fake_rate(dte_days, observation_date):
             captured["dte_days"] = dte_days
             captured["observation_date"] = observation_date
-            return 0.05
+            return 0.05, "FRED"
 
-        monkeypatch.setattr(rate_dividend_service, "get_risk_free_rate", fake_rate)
+        monkeypatch.setattr(rate_dividend_service, "get_risk_free_rate_and_source", fake_rate)
         polygon = FakePolygon([])
         get_rate_and_dividend(
             ticker="SPY",
@@ -75,7 +81,9 @@ class TestRateAndDividendFacade:
         assert captured == {"dte_days": 60, "observation_date": "2024-12-20"}
 
     def test_non_payer_returns_zero_yield(self, monkeypatch):
-        monkeypatch.setattr(rate_dividend_service, "get_risk_free_rate", lambda dte_days, observation_date: 0.05)
+        monkeypatch.setattr(
+            rate_dividend_service, "get_risk_free_rate_and_source", lambda dte_days, observation_date: (0.05, "FRED")
+        )
         polygon = FakePolygon([])
         out = get_rate_and_dividend(
             ticker="TSLA",
@@ -86,3 +94,21 @@ class TestRateAndDividendFacade:
         )
         assert out.dividend_yield == 0.0
         assert out.rate == 0.05
+
+    def test_rate_resolves_when_the_dividend_lookup_cannot_run(self):
+        """With no spot the rate still resolves, and a FRED fallback is labelled as the default (#2764)."""
+        with patch.object(fred_service, "_fetch_all_tenors", return_value={}):
+            out = get_rate_and_dividend(
+                ticker="SPY",
+                spot_price=0.0,
+                polygon=FakePolygon([]),
+                dte_days=30,
+                observation_date="2024-12-20",
+            )
+
+        assert out == RateAndDividend(
+            rate=DEFAULT_RISK_FREE_RATE,
+            dividend_yield=None,
+            source_rate=RATE_SOURCE_DEFAULT,
+            source_dividend=None,
+        )

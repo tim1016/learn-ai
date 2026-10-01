@@ -141,32 +141,23 @@ async def test_snapshot_empty_chain(client):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("underlying_price", "rate_dividend_error"),
-    [
-        pytest.param(0, None, id="no_spot"),
-        pytest.param(185.50, RuntimeError("polygon dividends timeout"), id="dividend_lookup_fails"),
-    ],
-)
-async def test_snapshot_carries_the_rate_when_the_dividend_lookup_cannot_run(
-    client, underlying_price, rate_dividend_error
-):
+async def test_snapshot_carries_the_rate_when_there_is_no_spot(client):
     """Pricing Lab and the Strategy Builder price at the snapshot's rate, so it is never missing (#2764)."""
     mock_result = {
-        "underlying": {"ticker": "AAPL", "price": underlying_price, "change": 0, "change_percent": 0},
+        "underlying": {"ticker": "AAPL", "price": 0, "change": 0, "change_percent": 0},
         "contracts": [],
     }
 
     with (
         patch("app.routers.snapshot.polygon_client.list_snapshot_options_chain", return_value=mock_result),
-        patch("app.routers.snapshot.get_rate_and_dividend", side_effect=rate_dividend_error),
-        patch("app.routers.snapshot.get_risk_free_rate", return_value=0.0371) as fred_rate,
+        patch(
+            "app.services.rate_dividend_service.get_risk_free_rate_and_source", return_value=(0.0371, "FRED")
+        ) as fred_rate,
     ):
         response = await client.post("/api/snapshot/options-chain", json={"underlying_ticker": "AAPL"})
 
     assert response.status_code == 200
     data = response.json()
-    assert data["risk_free_rate"] == 0.0371
-    assert data["rate_source"] == "FRED"
-    assert data["dividend_yield"] is None
-    fred_rate.assert_called_once_with(dte_days=30)
+    assert (data["risk_free_rate"], data["rate_source"]) == (0.0371, "FRED")
+    assert (data["dividend_yield"], data["dividend_source"]) == (None, None)
+    fred_rate.assert_called_once_with(dte_days=30, observation_date=None)

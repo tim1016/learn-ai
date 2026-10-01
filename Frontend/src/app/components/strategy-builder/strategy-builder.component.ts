@@ -997,8 +997,7 @@ export class StrategyBuilderComponent implements OnDestroy {
 
       this.underlying.set(result.underlying);
       this.allContracts.set(result.contracts);
-      // Auto-populate riskFreeRate from FRED-sourced rate (Step 8 of IV-RV alignment).
-      // User can still override via UI.
+      // Python's rate (FRED, or its one default); this page has no rate input (#2764).
       if (result.riskFreeRate != null) {
         this.riskFreeRate.set(result.riskFreeRate);
       }
@@ -1154,6 +1153,8 @@ export class StrategyBuilderComponent implements OnDestroy {
           legInputs,
           expiration,
           spot,
+          // The in-browser curves' rate, so both sides price alike; null lets Python fill it (#2764).
+          this.riskFreeRate(),
         )
       );
 

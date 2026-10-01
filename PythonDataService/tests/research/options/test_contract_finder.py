@@ -54,7 +54,7 @@ class TestDeltaBasedStrikeSelection:
         """Should select the put closest to -0.25 delta."""
         strikes = [85, 90, 92, 95, 97, 100, 103, 105]
         contracts = self._make_contracts(strikes, "put")
-        result = _find_otm_put_by_delta(contracts, stock_close=100, dte_days=30)
+        result = _find_otm_put_by_delta(contracts, stock_close=100, dte_days=30, rfr=0.043)
         assert result is not None
         # 25Δ put is typically ~5-8% OTM for 30 DTE, ~25% vol
         assert result["strike_price"] < 100
@@ -63,7 +63,7 @@ class TestDeltaBasedStrikeSelection:
         """Should select the call closest to 0.25 delta."""
         strikes = [95, 97, 100, 103, 105, 108, 110, 115]
         contracts = self._make_contracts(strikes, "call")
-        result = _find_otm_call_by_delta(contracts, stock_close=100, dte_days=30)
+        result = _find_otm_call_by_delta(contracts, stock_close=100, dte_days=30, rfr=0.043)
         assert result is not None
         assert result["strike_price"] > 100
 
@@ -71,18 +71,18 @@ class TestDeltaBasedStrikeSelection:
         """With DTE=0, should fall back to 5% OTM offset."""
         strikes = [90, 95, 100, 105, 110]
         puts = self._make_contracts(strikes, "put")
-        result = _find_otm_put_by_delta(puts, stock_close=100, dte_days=0)
+        result = _find_otm_put_by_delta(puts, stock_close=100, dte_days=0, rfr=0.043)
         assert result is not None
         assert result["strike_price"] == 95  # 5% below 100
 
     def test_empty_contracts_returns_none(self):
-        result = _find_otm_put_by_delta([], stock_close=100, dte_days=30)
+        result = _find_otm_put_by_delta([], stock_close=100, dte_days=30, rfr=0.043)
         assert result is None
 
     def test_no_matching_type_returns_none(self):
         """Contracts of wrong type should return None."""
         calls_only = self._make_contracts([95, 100, 105], "call")
-        result = _find_otm_put_by_delta(calls_only, stock_close=100, dte_days=30)
+        result = _find_otm_put_by_delta(calls_only, stock_close=100, dte_days=30, rfr=0.043)
         assert result is None
 
 

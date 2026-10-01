@@ -540,6 +540,34 @@ describe('StrategyBuilderComponent', () => {
       expect(component.greekCurve().length).toBeGreaterThan(0);
       expect(component.liveGreeks()).not.toBeNull();
     });
+
+    it('sends the snapshot rate to the server analysis, even a rate of 0', async () => {
+      const chain = component.fetchChainSnapshot('SPY', '2099-01-01');
+      expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
+        data: {
+          getOptionsChainSnapshot: {
+            success: true,
+            underlying: { ticker: 'SPY', price: 100, change: 0, changePercent: 0 },
+            contracts: [],
+            count: 0,
+            riskFreeRate: 0,
+            dividendYield: null,
+            rateSource: 'FRED',
+            dividendSource: null,
+            error: null,
+          },
+        },
+      });
+      await chain;
+      withPricedLeg();
+
+      const analysis = component.analyzeStrategy();
+      const req = expectGraphQL(httpMock, 'analyzeOptionsStrategy');
+      expect(req.request.body.variables.riskFreeRate).toBe(0);
+
+      req.flush({ data: { analyzeOptionsStrategy: buildAnalysisResult() } });
+      await analysis;
+    });
   });
 
   // ── UX: zero-TTM banner ─────────────────────────────────────────

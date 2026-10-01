@@ -307,16 +307,19 @@ export class ExportComponent {
     if (Number.isFinite(value) && value >= 0) this.optionsDteDistance.set(Math.floor(value));
   }
 
-  onRateInput(target: 'riskFree' | 'dividendYield', event: Event): void {
+  onRiskFreeRateInput(event: Event): void {
     const raw = (event.target as HTMLInputElement).value;
-    if (target === 'riskFree' && raw.trim() === '') {
+    if (raw.trim() === '') {
       this.optRiskFreeRate.set(null);
       return;
     }
     const value = Number(raw);
-    if (!Number.isFinite(value)) return;
-    if (target === 'riskFree') this.optRiskFreeRate.set(value);
-    else this.optDividendYield.set(value);
+    if (Number.isFinite(value)) this.optRiskFreeRate.set(value);
+  }
+
+  onDividendYieldInput(event: Event): void {
+    const value = Number((event.target as HTMLInputElement).value);
+    if (Number.isFinite(value)) this.optDividendYield.set(value);
   }
 
   onOptionsFlagToggle(key: OptionsFlagKey, event: Event): void {

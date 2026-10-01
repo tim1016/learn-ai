@@ -150,10 +150,10 @@
           <input type="number" name="export-dte" min="0" [value]="optionsDteDistance()" (change)="onDteInput($event)" />
         </label>
         <label>Risk-free rate
-          <input type="number" name="export-rfr" step="0.01" placeholder="default" [value]="optRiskFreeRate()" (change)="onRateInput('riskFree', $event)" />
+          <input type="number" name="export-rfr" step="0.01" placeholder="default" [value]="optRiskFreeRate()" (change)="onRiskFreeRateInput($event)" />
         </label>
         <label>Dividend yield
-          <input type="number" name="export-dy" step="0.01" [value]="optDividendYield()" (change)="onRateInput('dividendYield', $event)" />
+          <input type="number" name="export-dy" step="0.01" [value]="optDividendYield()" (change)="onDividendYieldInput($event)" />
         </label>
         @for (flag of optionsFlags; track flag.key) {
           <label class="export__inline">

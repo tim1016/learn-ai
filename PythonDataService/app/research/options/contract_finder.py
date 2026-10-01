@@ -55,8 +55,8 @@ def _find_otm_put_by_delta(
     contracts: list[dict],
     stock_close: float,
     dte_days: int,
+    rfr: float,
     iv_estimate: float = DEFAULT_IV,
-    rfr: float = DEFAULT_RISK_FREE_RATE,
 ) -> dict | None:
     """Find OTM put closest to 25Δ. Falls back to 5% OTM offset."""
     puts = [c for c in contracts if c.get("contract_type") == "put"]
@@ -79,8 +79,8 @@ def _find_otm_call_by_delta(
     contracts: list[dict],
     stock_close: float,
     dte_days: int,
+    rfr: float,
     iv_estimate: float = DEFAULT_IV,
-    rfr: float = DEFAULT_RISK_FREE_RATE,
 ) -> dict | None:
     """Find OTM call closest to 25Δ. Falls back to 5% OTM offset."""
     calls = [c for c in contracts if c.get("contract_type") == "call"]
@@ -123,8 +123,8 @@ def _fetch_contracts_for_expiry(
 
     atm_call = _find_atm_strike(calls, stock_close)
     atm_put = _find_atm_strike(puts, stock_close)
-    otm_put = _find_otm_put_by_delta(contracts, stock_close, dte_days)
-    otm_call = _find_otm_call_by_delta(contracts, stock_close, dte_days)
+    otm_put = _find_otm_put_by_delta(contracts, stock_close, dte_days, rfr=DEFAULT_RISK_FREE_RATE)
+    otm_call = _find_otm_call_by_delta(contracts, stock_close, dte_days, rfr=DEFAULT_RISK_FREE_RATE)
 
     return {
         "atm_call": atm_call,

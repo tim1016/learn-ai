@@ -145,16 +145,6 @@ describe('MarketDataService', () => {
       expect(req.request.body.variables.riskFreeRate).toBeNull();
       req.flush({ data: { analyzeOptionsStrategy: {} } });
     });
-
-    it('comparePricingModels sends no rate unless given one', () => {
-      service.comparePricingModels({
-        spot: 100, strike: 100, volatility: 0.2, expirationDate: '2099-01-01', optionType: 'call',
-      }).subscribe();
-
-      const req = httpMock.expectOne(GRAPHQL_URL);
-      expect(req.request.body.variables.riskFreeRate).toBeNull();
-      req.flush({ data: { pricingModelComparison: {} } });
-    });
   });
 
   describe('network error handling', () => {

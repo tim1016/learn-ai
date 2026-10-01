@@ -21,7 +21,6 @@ from app.models.responses import (
     StockTickerSnapshot,
     UnderlyingSnapshot,
 )
-from app.services.fred_service import get_risk_free_rate
 from app.services.polygon_client import PolygonClientService
 from app.services.rate_dividend_service import get_rate_and_dividend
 
@@ -76,42 +75,24 @@ async def get_options_chain_snapshot(request: OptionsChainSnapshotRequest):
         logger.info(f"[Snapshot] Returning {len(contracts)} contracts for {request.underlying_ticker}")
 
         # Source live r and q for callers (pricing-lab, strategy-builder, etc.).
-        # The dividend lookup is best-effort and may leave q unset. The rate
-        # needs no spot and never fails (FRED falls back to the one Python
-        # default), so every snapshot carries it and the pricing pages never
-        # invent their own (#2764).
-        risk_free_rate: float | None = None
-        dividend_yield: float | None = None
-        rate_source: str | None = None
-        dividend_source: str | None = None
-        spot = underlying.price if underlying and underlying.price else None
-        if spot and spot > 0:
-            try:
-                rd = get_rate_and_dividend(
-                    ticker=request.underlying_ticker,
-                    spot_price=spot,
-                    polygon=polygon_client,
-                    dte_days=30,
-                )
-                risk_free_rate = rd.rate
-                dividend_yield = rd.dividend_yield
-                rate_source = rd.source_rate
-                dividend_source = rd.source_dividend
-            except Exception as exc:
-                logger.warning("[Snapshot] rate/dividend lookup failed: %s", exc)
-        if risk_free_rate is None:
-            risk_free_rate = get_risk_free_rate(dte_days=30)
-            rate_source = "FRED"
+        # The rate always resolves, so the pricing pages never invent their
+        # own; the dividend is best-effort (#2764).
+        rd = get_rate_and_dividend(
+            ticker=request.underlying_ticker,
+            spot_price=underlying.price or 0.0,
+            polygon=polygon_client,
+            dte_days=30,
+        )
 
         return OptionsChainSnapshotResponse(
             success=True,
             underlying=underlying,
             contracts=contracts,
             count=len(contracts),
-            risk_free_rate=risk_free_rate,
-            dividend_yield=dividend_yield,
-            rate_source=rate_source,
-            dividend_source=dividend_source,
+            risk_free_rate=rd.rate,
+            dividend_yield=rd.dividend_yield,
+            rate_source=rd.source_rate,
+            dividend_source=rd.source_dividend,
         )
 
     except Exception as e:

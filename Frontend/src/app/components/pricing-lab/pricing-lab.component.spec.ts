@@ -133,6 +133,28 @@ describe('PricingLabComponent', () => {
       expect(component.expirationsLoading()).toBe(false);
     });
 
+    it('takes a snapshot rate of exactly 0 as the rate', async () => {
+      const promise = component.fetchChain('SPY', '2099-01-01');
+      expectGraphQL(httpMock, 'getOptionsChainSnapshot').flush({
+        data: {
+          getOptionsChainSnapshot: {
+            success: true,
+            underlying: { ticker: 'SPY', price: 590, change: 0, changePercent: 0 },
+            contracts: [],
+            count: 0,
+            riskFreeRate: 0,
+            dividendYield: null,
+            rateSource: 'FRED',
+            dividendSource: null,
+            error: null,
+          },
+        },
+      });
+      await promise;
+
+      expect(component.riskFreeRate()).toBe(0);
+    });
+
     it('clears selected contract and prior server result when fetchChain runs again', async () => {
       // Seed prior state
       component.selectedContract.set(buildContract());

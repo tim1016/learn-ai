@@ -140,7 +140,7 @@ The value is computed by comparing the row's `contract_ticker` to the previous r
 
 All computation is in `PythonDataService/`. Per `CLAUDE.md` rule 5, .NET and Angular do not compute these numbers — they pass through.
 
-IV and Greeks use one flat annualized risk-free rate and one flat continuous dividend yield, both set in the export settings. An empty rate field sends no rate, so Python's one default applies (`DEFAULT_RISK_FREE_RATE` in `PythonDataService/app/services/risk_free_rate.py`); the dividend yield defaults to 0 %.
+IV and Greeks use one flat annualized risk-free rate and one flat continuous dividend yield, both set in the export settings. An empty rate field sends no rate, so Python's one default applies (`DEFAULT_RISK_FREE_RATE` in `PythonDataService/app/services/risk_free_rate.py`); the dividend yield defaults to 0 %. `options_companion_report.json` records the two values used, as `risk_free_rate` and `dividend_yield`.
 
 ### 7.1 Implied volatility
 

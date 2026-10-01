@@ -14,8 +14,6 @@ import math
 from dataclasses import dataclass
 from typing import Any, Final
 
-from app.services.risk_free_rate import DEFAULT_RISK_FREE_RATE
-
 TRADING_DAYS_PER_YEAR: Final[int] = 252
 CALENDAR_DAYS_PER_YEAR: Final[int] = 365
 
@@ -32,10 +30,10 @@ class SurfaceConventions:
     - Risk-free rate and dividend yield
     """
 
+    rate: float
     day_count: str = "Actual365Fixed"
     forward_model: str = "bsm"
     discount_model: str = "continuous"
-    rate: float = DEFAULT_RISK_FREE_RATE
     dividend_yield: float = 0.0
     calendar: str = "NullCalendar"
 
