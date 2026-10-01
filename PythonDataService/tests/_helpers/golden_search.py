@@ -39,6 +39,7 @@ def knob(
     neighbor: str = "1",
     default: str = "0",
     searchable: bool = True,
+    step: str | None = None,
 ) -> SearchKnob:
     return SearchKnob(
         name=name,
@@ -51,6 +52,7 @@ def knob(
         default_low=Decimal(low),
         default_high=Decimal(high),
         neighbor_step=Decimal(neighbor),
+        default_step=Decimal(step if step is not None else quantum),
         searchable_by_default=searchable,
         warmup_dependent=False,
         default_value=Decimal(default),
@@ -90,7 +92,8 @@ def synthetic_point(values: Mapping[str, object]) -> dict[str, Any]:
     return {"symbol": SYMBOL, **values}
 
 
-def plans_for(decl: SearchDeclaration, *, grid_step: float | None = None) -> tuple[KnobPlan, ...]:
+def plans_for(decl: SearchDeclaration, *, step: float | None = None) -> tuple[KnobPlan, ...]:
+    """Each knob at its declared defaults; ``step`` overrides every searched knob's default step."""
     return tuple(
         KnobPlan(
             name=k.name,
@@ -98,7 +101,7 @@ def plans_for(decl: SearchDeclaration, *, grid_step: float | None = None) -> tup
             low=float(k.default_low),
             high=float(k.default_high),
             fixed_value=float(k.default_value),
-            grid_step=grid_step,
+            step=(step if step is not None else float(k.default_step)) if k.searchable_by_default else None,
         )
         for k in decl.knobs
     )

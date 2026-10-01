@@ -33,19 +33,30 @@ _needs_track_e = pytest.mark.skipif(
 
 def test_ema_declaration_follows_the_owner_order_and_table() -> None:
     rows = [
-        (k.name, k.kind, k.domain_low, k.domain_high, k.quantum, k.default_low, k.default_high, k.neighbor_step, k.searchable_by_default)
+        (
+            k.name,
+            k.kind,
+            k.domain_low,
+            k.domain_high,
+            k.quantum,
+            k.default_low,
+            k.default_high,
+            k.neighbor_step,
+            k.default_step,
+            k.searchable_by_default,
+        )
         for k in _EMA_DECLARATION.knobs
     ]
 
     D = Decimal
     assert rows == [
-        ("gap", "decimal", D("0"), D("2"), D("0.01"), D("0"), D("0.6"), D("0.05"), True),
-        ("rsi_min", "decimal", D("0"), D("100"), D("1"), D("30"), D("60"), D("2"), True),
-        ("rsi_max", "decimal", D("0"), D("100"), D("1"), D("60"), D("90"), D("2"), True),
-        ("fast_period", "integer", D("2"), D("30"), D("1"), D("3"), D("12"), D("1"), True),
-        ("slow_period", "integer", D("3"), D("40"), D("1"), D("8"), D("30"), D("1"), True),
-        ("hold_bars", "integer", D("1"), D("26"), D("1"), D("2"), D("12"), D("1"), True),
-        ("gap_bps", "decimal", D("0"), D("100"), D("0.5"), D("0"), D("5"), D("0.5"), False),
+        ("gap", "decimal", D("0"), D("2"), D("0.01"), D("0"), D("0.6"), D("0.05"), D("0.05"), True),
+        ("rsi_min", "decimal", D("0"), D("100"), D("1"), D("30"), D("60"), D("2"), D("1"), True),
+        ("rsi_max", "decimal", D("0"), D("100"), D("1"), D("60"), D("90"), D("2"), D("1"), True),
+        ("fast_period", "integer", D("2"), D("30"), D("1"), D("3"), D("12"), D("1"), D("1"), True),
+        ("slow_period", "integer", D("3"), D("40"), D("1"), D("8"), D("30"), D("1"), D("1"), True),
+        ("hold_bars", "integer", D("1"), D("26"), D("1"), D("2"), D("12"), D("1"), D("1"), True),
+        ("gap_bps", "decimal", D("0"), D("100"), D("0.5"), D("0"), D("5"), D("0.5"), D("0.5"), False),
     ]
     assert [k.name for k in _EMA_DECLARATION.knobs if k.warmup_dependent] == ["fast_period", "slow_period"]
     assert [(f.label, f.value) for f in _EMA_DECLARATION.fixed] == [("RSI length", "14"), ("Decision cadence", "15 minutes")]
@@ -71,8 +82,17 @@ def test_ema_knob_agrees_with_the_registered_parameter_model(knob: SearchKnob) -
 
 @pytest.mark.parametrize("knob", _EMA_DECLARATION.knobs, ids=lambda k: k.name)
 def test_ema_knob_ranges_and_steps_sit_on_its_quantum_lattice(knob: SearchKnob) -> None:
-    for value in (knob.domain_low, knob.domain_high, knob.default_low, knob.default_high, knob.neighbor_step, knob.default_value):
+    for value in (
+        knob.domain_low,
+        knob.domain_high,
+        knob.default_low,
+        knob.default_high,
+        knob.neighbor_step,
+        knob.default_step,
+        knob.default_value,
+    ):
         assert is_quantized(knob, value), value
+    assert knob.default_step > 0
     assert knob.domain_low <= knob.default_low < knob.default_high <= knob.domain_high
     assert knob.domain_low <= knob.default_value <= knob.domain_high
 

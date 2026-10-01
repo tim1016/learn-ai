@@ -7,11 +7,16 @@ in protocol knob order. A combination that violates a declared constraint is
 counted invalid and never evaluated; the rest are evaluated in batches of at
 most :data:`GRID_BATCH_SIZE`. The winner is ``selection.best`` over every
 evaluated combination; with none eligible the winner is the seed and the stop
-reason ``no_eligible``. An audit grid places ``2·half_width + 1`` values per
-knob at ``center ± k·neighbor_step``: a value outside the knob's legal domain
-is untested (outside domain), a constraint violation is invalid, the rest
-are testable canonical points. Upper bound for one Grid run: the product of
-the searched axes' sizes.
+reason ``no_eligible``. A pair audit is a landscape over two searched knobs:
+each axis takes ``size`` values evenly spaced over that knob's planned range
+``[low, high]`` (quantized, deduped), with the value nearest the center's —
+the smaller one on a tie — replaced by the center's exact value, so the
+candidate's own cell is always on the map; every other knob stays at the
+center. A neighbor probe moves one knob one ``neighbor_step`` either way. A
+value outside the knob's legal domain is untested (outside domain), a
+constraint violation is invalid, the rest are testable canonical points.
+Upper bounds: one Grid run, the product of the searched axes' sizes; one
+pair audit, ``size²``.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Use the two
   search tools for different questions" and "Compare candidates and weaknesses".
 Canonical implementation: this file.
@@ -29,14 +34,16 @@ from typing import Any, Literal
 from app.research.golden_search.declarations import (
     Canonicalize,
     SearchDeclaration,
+    SearchKnob,
     canonicalizer,
     knob_scalars,
     knob_values,
     point_hash,
+    quantize,
     to_decimal,
     violates,
 )
-from app.research.golden_search.protocol import GoldenSearchProtocol, grid_size
+from app.research.golden_search.protocol import GoldenSearchProtocol, KnobPlan, grid_size
 from app.research.golden_search.selection import Candidate, best
 from app.research.golden_search.zoom import (
     BudgetExhausted,
@@ -49,14 +56,14 @@ from app.research.golden_search.zoom import (
 from app.research.sweep.grid import LowHighStepRange, expand_param
 
 GRID_BATCH_SIZE = 50
-PAIR_HALF_WIDTH = 2
+PAIR_GRID_SIZE = 5
 
 
 def max_grid_evaluations(protocol: GoldenSearchProtocol) -> int:
     """Upper bound on points one Grid run passes to ``evaluate``; raises when an axis is not a valid range."""
     size = grid_size(protocol)
     if size is None:
-        raise ValueError("every searched knob needs a valid low/high/grid_step range")
+        raise ValueError("every searched knob needs a valid low/high/step range")
     return size
 
 
@@ -64,9 +71,9 @@ def _axis(protocol: GoldenSearchProtocol, name: str) -> list[Decimal]:
     plan = next(plan for plan in protocol.knobs if plan.name == name)
     if plan.mode == "fixed":
         return [to_decimal(plan.fixed_value)]
-    if plan.grid_step is None:
-        raise ValueError(f"{name} is searched without a grid step")
-    return [to_decimal(value) for value in expand_param(LowHighStepRange(low=plan.low, high=plan.high, step=plan.grid_step))]
+    if plan.step is None:
+        raise ValueError(f"{name} is searched without a step")
+    return [to_decimal(value) for value in expand_param(LowHighStepRange(low=plan.low, high=plan.high, step=plan.step))]
 
 
 def run_grid(
@@ -166,6 +173,8 @@ class AuditCell:
 
 @dataclass(frozen=True)
 class PairGrid:
+    """A pair audit: rows are the pair's first knob (``y``), columns its second (``x``)."""
+
     x_knob: str
     y_knob: str
     x_values: tuple[float, ...]
@@ -203,30 +212,40 @@ def _audit_cell(
     )
 
 
-def _offsets(center: Decimal, step: Decimal, half_width: int) -> list[Decimal]:
-    return [center + step * offset for offset in range(-half_width, half_width + 1)]
+def _landscape_axis(knob: SearchKnob, plan: KnobPlan, center: Decimal, size: int) -> list[Decimal]:
+    low, high = to_decimal(plan.low), to_decimal(plan.high)
+    values = {quantize(knob, low + (high - low) * index / (size - 1)) for index in range(size)}
+    nearest = min(values, key=lambda value: (abs(value - center), value))
+    return sorted((values - {nearest}) | {center})
 
 
 def pair_grid(
     declaration: SearchDeclaration,
+    protocol: GoldenSearchProtocol,
     center: Mapping[str, Any],
     a: str,
     b: str,
     *,
-    half_width: int = PAIR_HALF_WIDTH,
+    size: int = PAIR_GRID_SIZE,
     canonicalize: Canonicalize | None = None,
 ) -> PairGrid:
-    """The ``(2·half_width + 1)²`` grid of knobs ``a`` (x) and ``b`` (y) around the canonical ``center`` at their neighbor steps."""
-    build = canonicalize or canonicalizer(declaration.strategy_key, str(center["symbol"]))
+    """The landscape of searched knobs ``a`` (rows) and ``b`` (columns) over their planned ranges, through ``center``."""
+    if size < 2:
+        raise ValueError("a pair audit needs at least two values per axis")
+    plans = {plan.name: plan for plan in protocol.knobs}
+    for name in (a, b):
+        if name not in plans or plans[name].mode != "search":
+            raise ValueError(f"{name} is not a searched knob of this plan")
+    build = canonicalize or canonicalizer(declaration.strategy_key, protocol.symbol)
     base = knob_values(declaration, center)
-    x_values = _offsets(base[a], declaration.knob(a).neighbor_step, half_width)
-    y_values = _offsets(base[b], declaration.knob(b).neighbor_step, half_width)
-    cells = tuple(_audit_cell(declaration, base, {a: x, b: y}, build) for y in y_values for x in x_values)
+    rows = _landscape_axis(declaration.knob(a), plans[a], base[a], size)
+    columns = _landscape_axis(declaration.knob(b), plans[b], base[b], size)
+    cells = tuple(_audit_cell(declaration, base, {a: row, b: column}, build) for row in rows for column in columns)
     return PairGrid(
-        x_knob=a,
-        y_knob=b,
-        x_values=tuple(float(value) for value in x_values),
-        y_values=tuple(float(value) for value in y_values),
+        x_knob=b,
+        y_knob=a,
+        x_values=tuple(float(value) for value in columns),
+        y_values=tuple(float(value) for value in rows),
         cells=cells,
     )
 

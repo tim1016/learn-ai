@@ -46,7 +46,7 @@ def _with_knob(p: GoldenSearchProtocol, name: str, **changes: object) -> GoldenS
 
 
 def _grid(p: GoldenSearchProtocol, steps: dict[str, float | None]) -> GoldenSearchProtocol:
-    knobs = tuple(dataclasses.replace(plan, grid_step=steps.get(plan.name)) for plan in p.knobs)
+    knobs = tuple(dataclasses.replace(plan, step=steps.get(plan.name)) for plan in p.knobs)
     return dataclasses.replace(p, method="grid", knobs=knobs)
 
 
@@ -77,9 +77,10 @@ _MUTATIONS: list[tuple[str, Callable[[GoldenSearchProtocol], GoldenSearchProtoco
     ("RANGE_OUTSIDE_DOMAIN", lambda p: _with_knob(p, "x", high=11.0)),
     ("RANGE_EMPTY", lambda p: _with_knob(p, "x", low=5.0, high=5.0)),
     ("RANGE_NOT_QUANTIZED", lambda p: _with_knob(p, "g", low=0.005)),
-    ("GRID_STEP_MISSING", lambda p: _grid(p, {"x": 1.0, "y": 1.0})),
-    ("GRID_STEP_INVALID", lambda p: _grid(p, {"x": 1.0, "y": 1.0, "g": 0.015})),
-    ("GRID_STEP_INVALID", lambda p: _grid(p, {"x": 1.0, "y": -1.0, "g": 0.01})),
+    ("STEP_MISSING", lambda p: _with_knob(p, "x", step=None)),
+    ("STEP_MISSING", lambda p: _grid(p, {"x": 1.0, "y": 1.0})),
+    ("STEP_INVALID", lambda p: _with_knob(p, "g", step=0.015)),
+    ("STEP_INVALID", lambda p: _grid(p, {"x": 1.0, "y": -1.0, "g": 0.01})),
     ("GRID_TOO_LARGE", lambda p: _grid(p, {"x": 1.0, "y": 1.0, "g": 0.01})),
     ("SEED_SYMBOL_MISMATCH", _seed(symbol="QQQ")),
     ("SEED_UNKNOWN_PARAMETER", _seed(w=1)),

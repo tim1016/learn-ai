@@ -1,8 +1,9 @@
 """The frozen Golden Search plan and every reason it can be refused before a study exists.
 
 Formula: a protocol is the complete plan a study is locked to — knobs (all
-declared knobs, in search order, each searched over a quantized range or
-held at a fixed value), seed and frozen incumbent, selection policy, Zoom
+declared knobs, in search order, each searched over a quantized range at a
+smallest step that is a multiple of its quantum, or held at a fixed value),
+seed and frozen incumbent, selection policy, Zoom
 settings, the half-open development interval ``[development_start,
 development_end)`` and final interval ``[final_start, final_end)`` with
 ``final_start == development_end``, fold lengths, audits, stress scenarios,
@@ -69,8 +70,9 @@ class KnobPlan:
     low: float
     high: float
     fixed_value: float
-    # Grid Search samples ``low..high`` by this step; Zoom ignores it.
-    grid_step: float | None = None
+    # The smallest step, required for a searched knob (#2696): Grid samples ``low..high`` by
+    # it, and Zoom stops refining the knob once a round's spacing reaches it.
+    step: float | None = None
 
 
 @dataclass(frozen=True)
@@ -161,7 +163,7 @@ class GoldenSearchProtocol:
                     "low": plan.low,
                     "high": plan.high,
                     "fixed_value": plan.fixed_value,
-                    "grid_step": plan.grid_step,
+                    "step": plan.step,
                 }
                 for plan in self.knobs
             ],
@@ -281,7 +283,7 @@ def _knob_plan(item: Mapping[str, Any]) -> KnobPlan:
         low=float(item["low"]),
         high=float(item["high"]),
         fixed_value=float(item["fixed_value"]),
-        grid_step=None if item["grid_step"] is None else float(item["grid_step"]),
+        step=None if item["step"] is None else float(item["step"]),
     )
 
 
@@ -391,10 +393,12 @@ def _validate_knobs(p: GoldenSearchProtocol, declaration: SearchDeclaration, ref
     for plan in p.knobs:
         knob = declared.get(plan.name)
         if knob is not None:
-            _validate_knob_plan(p.method, plan, knob, refusals)
+            _validate_knob_plan(plan, knob, refusals)
     if p.method == "grid" and not refusals.any_for("knobs."):
         size = grid_size(p)
-        if size is not None and size > p.budget_cap:
+        if size is None:
+            refusals.add("STEP_INVALID", "knobs", "The grid cannot be expanded from these ranges and steps.")
+        elif size > p.budget_cap:
             refusals.add(
                 "GRID_TOO_LARGE",
                 "knobs",
@@ -402,7 +406,7 @@ def _validate_knobs(p: GoldenSearchProtocol, declaration: SearchDeclaration, ref
             )
 
 
-def _validate_knob_plan(method: str, plan: KnobPlan, knob: SearchKnob, refusals: _Refusals) -> None:
+def _validate_knob_plan(plan: KnobPlan, knob: SearchKnob, refusals: _Refusals) -> None:
     where = f"knobs.{plan.name}"
     if plan.mode not in get_args(KnobMode):
         refusals.add("KNOB_MODE_INVALID", where, f"{knob.label}: the mode must be search or fixed, not {plan.mode!r}.")
@@ -435,30 +439,29 @@ def _validate_knob_plan(method: str, plan: KnobPlan, knob: SearchKnob, refusals:
         refusals.add("RANGE_EMPTY", where, f"{knob.label}: the low end {low} must be below the high end {high}.")
     if not (is_quantized(knob, low) and is_quantized(knob, high)):
         refusals.add("RANGE_NOT_QUANTIZED", where, f"{knob.label}: both ends must be multiples of {knob.quantum}.")
-    if method == "grid":
-        _validate_grid_step(plan, knob, refusals)
+    _validate_step(plan, knob, refusals)
 
 
-def _validate_grid_step(plan: KnobPlan, knob: SearchKnob, refusals: _Refusals) -> None:
-    where = f"knobs.{plan.name}.grid_step"
-    if plan.grid_step is None:
-        refusals.add("GRID_STEP_MISSING", where, f"{knob.label}: a grid search needs a step for every searched knob.")
+def _validate_step(plan: KnobPlan, knob: SearchKnob, refusals: _Refusals) -> None:
+    where = f"knobs.{plan.name}.step"
+    if plan.step is None:
+        refusals.add("STEP_MISSING", where, f"{knob.label}: a searched knob needs its smallest step.")
         return
-    if not _finite(plan.grid_step) or plan.grid_step <= 0:
-        refusals.add("GRID_STEP_INVALID", where, f"{knob.label}: the grid step must be a positive number.")
+    if not _finite(plan.step) or plan.step <= 0:
+        refusals.add("STEP_INVALID", where, f"{knob.label}: the step must be a positive number.")
         return
-    step = to_decimal(plan.grid_step)
+    step = to_decimal(plan.step)
     if not is_quantized(knob, step):
-        refusals.add("GRID_STEP_INVALID", where, f"{knob.label}: the grid step {step} must be a multiple of {knob.quantum}.")
+        refusals.add("STEP_INVALID", where, f"{knob.label}: the step {step} must be a multiple of {knob.quantum}.")
 
 
 def grid_size(p: GoldenSearchProtocol) -> int | None:
     """The product of the searched axes' sizes, or ``None`` when an axis is not a valid low/high/step range."""
     ranges: dict[str, ParamRange] = {}
     for plan in p.search_knobs:
-        if plan.grid_step is None:
+        if plan.step is None:
             return None
-        ranges[plan.name] = LowHighStepRange(low=plan.low, high=plan.high, step=plan.grid_step)
+        ranges[plan.name] = LowHighStepRange(low=plan.low, high=plan.high, step=plan.step)
     try:
         return sweep_grid_size([StrategyGridConfig(strategy_key=p.strategy_key, param_ranges=ranges)], [p.symbol])
     except ValueError:

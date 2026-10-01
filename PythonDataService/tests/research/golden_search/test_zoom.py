@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Mapping
 from decimal import Decimal
+from itertools import pairwise
 from typing import Any
 
 import numpy as np
@@ -76,7 +77,7 @@ def test_run_zoom_pairwise_trap_from_the_methodology_note_keeps_the_start() -> N
     result = _zoom(decl, plan, Landscape(lambda p: table[(p["x"], p["y"])]))
     grid = run_grid(
         declaration=decl,
-        protocol=dataclasses.replace(plan, method="grid", knobs=plans_for(decl, grid_step=1.0)),
+        protocol=dataclasses.replace(plan, method="grid", knobs=plans_for(decl, step=1.0)),
         seed=plan.seed,
         evaluate=Landscape(lambda p: table[(p["x"], p["y"])]),
         canonicalize=synthetic_point,
@@ -99,7 +100,7 @@ def test_run_zoom_interacting_landscape_misses_the_joint_move_and_says_so() -> N
     result = _zoom(decl, plan, Landscape(score))
     grid = run_grid(
         declaration=decl,
-        protocol=dataclasses.replace(plan, method="grid", knobs=plans_for(decl, grid_step=1.0)),
+        protocol=dataclasses.replace(plan, method="grid", knobs=plans_for(decl, step=1.0)),
         seed=plan.seed,
         evaluate=Landscape(score),
         canonicalize=synthetic_point,
@@ -205,6 +206,49 @@ def test_run_zoom_quantization_limit_stops_refining_and_ends_the_search() -> Non
     assert result.stop_reason == "quantization_limit"
 
 
+def test_run_zoom_refines_down_to_the_plan_step_and_never_finer() -> None:
+    gap = knob("gap", kind="decimal", high="2", quantum="0.01", default="0.2")
+    decl = declaration(gap)
+    plan = protocol(
+        decl,
+        knobs=(KnobPlan("gap", "search", 0.0, 0.6, 0.2, step=0.05),),
+        zoom=ZoomSettings(points=5, refinements=4, passes=2),
+    )
+
+    result = _zoom(decl, plan, Landscape(lambda p: -abs(p["gap"] - 0.37)))
+
+    # Spacing 0.15, then 0.075, then 0.0375 <= 0.05: the third round samples the 0.05 lattice and ends the knob.
+    first_pass = [r for r in result.rounds if r.pass_index == 0]
+    assert [(r.round_index, r.quantization_limit) for r in first_pass] == [(0, False), (1, False), (2, True)]
+    assert first_pass[1].values == (0.15, 0.22, 0.3, 0.38, 0.45)
+    assert first_pass[2].values == (0.35, 0.38, 0.4, 0.45)
+    assert result.winner["gap"] == 0.38
+    assert result.stop_reason == "quantization_limit"
+    for r in result.rounds:
+        sampled = sorted(Decimal(str(value)) for value in r.values if value != r.current_before)
+        assert all(b - a >= Decimal("0.05") for a, b in pairwise(sampled)), r
+
+
+def test_run_zoom_a_range_narrower_than_its_points_samples_the_step_lattice_at_once() -> None:
+    decl = declaration(knob("rsi", high="100", default="50"))
+    plan = protocol(decl, knobs=(KnobPlan("rsi", "search", 40.0, 55.0, 50.0, step=5.0),), zoom=ZoomSettings(points=5))
+
+    result = _zoom(decl, plan, Landscape(lambda p: -abs(p["rsi"] - 44)))
+
+    # Five points over 40..55 would be 3.75 apart, finer than the step of 5.
+    assert result.rounds[0].values == (40.0, 45.0, 50.0, 55.0)
+    assert result.rounds[0].quantization_limit
+    assert result.winner["rsi"] == 45
+
+
+def test_run_zoom_refuses_a_searched_knob_without_a_step() -> None:
+    decl = declaration()
+    plan = protocol(decl, knobs=tuple(dataclasses.replace(k, step=None) for k in plans_for(decl)))
+
+    with pytest.raises(ValueError, match="without a step"):
+        _zoom(decl, plan, Landscape(lambda p: 1.0))
+
+
 def test_run_zoom_no_eligible_point_returns_the_seed() -> None:
     decl = declaration()
     plan = protocol(decl, seed=synthetic_point({"x": 1, "y": 3}))
@@ -220,7 +264,7 @@ def test_run_zoom_no_eligible_point_returns_the_seed() -> None:
 def test_run_zoom_includes_the_current_value_in_every_round() -> None:
     gap = knob("gap", kind="decimal", high="2", quantum="0.01", default="0.2")
     decl = declaration(gap)
-    plan = protocol(decl, knobs=(KnobPlan("gap", "search", 0.0, 0.6, 0.2),), zoom=ZoomSettings(points=5, refinements=3, passes=2))
+    plan = protocol(decl, knobs=(KnobPlan("gap", "search", 0.0, 0.6, 0.2, step=0.01),), zoom=ZoomSettings(points=5, refinements=3, passes=2))
 
     result = _zoom(decl, plan, Landscape(lambda p: -abs(p["gap"] - 0.37)))
 
@@ -232,6 +276,7 @@ def test_run_zoom_includes_the_current_value_in_every_round() -> None:
 def test_run_zoom_never_sends_more_points_than_its_bound() -> None:
     rng = np.random.default_rng(seed=2696)
     decl = declaration(knob("x", high="40"), knob("y", high="40"), knob("z", kind="decimal", high="1", quantum="0.01"))
+    steps = {"x": [1.0, 2.0, 5.0], "y": [1.0, 3.0], "z": [0.01, 0.05, 0.1]}
     for _ in range(25):
         table: dict[tuple[Any, ...], float] = {}
 
@@ -244,7 +289,8 @@ def test_run_zoom_never_sends_more_points_than_its_bound() -> None:
         settings = ZoomSettings(
             points=int(rng.integers(3, 10)), refinements=int(rng.integers(0, 5)), passes=int(rng.integers(1, 6))
         )
-        plan = protocol(decl, zoom=settings)
+        knobs = tuple(dataclasses.replace(k, step=float(rng.choice(steps[k.name]))) for k in plans_for(decl))
+        plan = protocol(decl, zoom=settings, knobs=knobs)
         landscape = Landscape(score)
 
         _zoom(decl, plan, landscape)
@@ -292,10 +338,7 @@ def test_run_zoom_over_the_registered_ema_knobs_sends_canonical_points_without_f
     plan = dataclasses.replace(
         protocol(decl, seed=seed),
         strategy_key="ema_crossover_signal",
-        knobs=tuple(
-            KnobPlan(k.name, "search" if k.searchable_by_default else "fixed", float(k.default_low), float(k.default_high), float(k.default_value))
-            for k in decl.knobs
-        ),
+        knobs=plans_for(decl),
     )
     def score(p: Mapping[str, Any]) -> float:
         return -abs(p["gap"] - 0.33) - abs(p["rsi_min"] - 41) / 100
@@ -310,6 +353,7 @@ def test_run_zoom_over_the_registered_ema_knobs_sends_canonical_points_without_f
         assert isinstance(point["rsi_min"], float) and point["rsi_min"].is_integer()
     distinct = {point_hash("ema_crossover_signal", point) for point in landscape.sent}
     assert len(distinct) == len({tuple(sorted(point.items())) for point in landscape.sent})
-    # Separable, so the local search ends on the best point it evaluated (0.33 itself was never sampled).
+    # Separable, so the local search ends on the best point it evaluated. The gap's last round samples
+    # its 0.05 step lattice, so 0.33 itself is never sampled and 0.35 is the nearest allowed value.
     assert result.winner == max(landscape.sent, key=score)
-    assert result.winner["gap"] == 0.34
+    assert result.winner["gap"] == 0.35

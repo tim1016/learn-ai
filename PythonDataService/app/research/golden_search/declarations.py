@@ -2,7 +2,8 @@
 
 Formula: a declaration lists, in a fixed order, each searchable knob's exact
 public parameter name, legal domain ``[domain_low, domain_high]``, quantum
-``q`` (the smallest distinct step), default search range and neighbor step.
+``q`` (the smallest distinct step), default search range, default plan step
+and neighbor step.
 A value ``v`` is quantized to ``q · round_half_even(v / q)`` in exact
 ``Decimal`` arithmetic (seeded from the float's shortest repr, as
 ``app.research.sweep.grid`` does), then clamped to the domain. A point is the
@@ -55,6 +56,9 @@ class SearchKnob:
     default_low: Decimal
     default_high: Decimal
     neighbor_step: Decimal
+    # The smallest step a new plan starts from for this knob (#2696): Grid samples at it and
+    # Zoom stops refining at it. Always a multiple of ``quantum``.
+    default_step: Decimal
     searchable_by_default: bool
     warmup_dependent: bool
     # The registered parameter model's default — the value a canonical point
@@ -117,6 +121,7 @@ _EMA_DECLARATION = SearchDeclaration(
             default_low=_d("0.00"),
             default_high=_d("0.60"),
             neighbor_step=_d("0.05"),
+            default_step=_d("0.05"),
             searchable_by_default=True,
             warmup_dependent=False,
             default_value=_d("0.2"),
@@ -132,6 +137,7 @@ _EMA_DECLARATION = SearchDeclaration(
             default_low=_d("30"),
             default_high=_d("60"),
             neighbor_step=_d("2"),
+            default_step=_d("1"),
             searchable_by_default=True,
             warmup_dependent=False,
             default_value=_d("50"),
@@ -147,6 +153,7 @@ _EMA_DECLARATION = SearchDeclaration(
             default_low=_d("60"),
             default_high=_d("90"),
             neighbor_step=_d("2"),
+            default_step=_d("1"),
             searchable_by_default=True,
             warmup_dependent=False,
             default_value=_d("70"),
@@ -162,6 +169,7 @@ _EMA_DECLARATION = SearchDeclaration(
             default_low=_d("3"),
             default_high=_d("12"),
             neighbor_step=_d("1"),
+            default_step=_d("1"),
             searchable_by_default=True,
             warmup_dependent=True,
             default_value=_d("5"),
@@ -177,6 +185,7 @@ _EMA_DECLARATION = SearchDeclaration(
             default_low=_d("8"),
             default_high=_d("30"),
             neighbor_step=_d("1"),
+            default_step=_d("1"),
             searchable_by_default=True,
             warmup_dependent=True,
             default_value=_d("10"),
@@ -192,6 +201,7 @@ _EMA_DECLARATION = SearchDeclaration(
             default_low=_d("2"),
             default_high=_d("12"),
             neighbor_step=_d("1"),
+            default_step=_d("1"),
             searchable_by_default=True,
             warmup_dependent=False,
             default_value=_d("5"),
@@ -207,6 +217,7 @@ _EMA_DECLARATION = SearchDeclaration(
             default_low=_d("0"),
             default_high=_d("5"),
             neighbor_step=_d("0.5"),
+            default_step=_d("0.5"),
             searchable_by_default=False,
             warmup_dependent=False,
             default_value=_d("0"),

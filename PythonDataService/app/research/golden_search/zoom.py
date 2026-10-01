@@ -2,12 +2,16 @@
 
 Formula: ``current`` starts at the seed's canonical point and is evaluated
 first, alone. For pass ``p`` in ``0..passes-1``, for each searched knob in
-protocol order, with ``[lo, hi]`` its plan range, for round ``r`` in
-``0..refinements``:
-  1. sample ``points`` values evenly spaced over ``[lo, hi]`` (ends
-     included) in exact ``Decimal``, quantize each (half-even to the knob's
-     quantum, clamped to its domain), dedupe, and add the knob's current
-     value — the incumbent value is in every comparison;
+protocol order, with ``[lo, hi]`` its plan range and ``step`` its plan's
+smallest step, for round ``r`` in ``0..refinements``, with
+``spacing = (hi − lo) / (points − 1)``:
+  1. when ``spacing > step``, sample ``points`` values evenly spaced over
+     ``[lo, hi]`` (ends included) in exact ``Decimal`` and quantize each
+     (half-even to the knob's quantum, clamped to its domain); when
+     ``spacing <= step``, sample instead every value of the plan's step
+     lattice ``plan low + k · step`` inside ``[lo, hi]`` (at most ``points``
+     of them), so no round ever samples finer than the step. Dedupe and add
+     the knob's current value — the incumbent value is in every comparison;
   2. a sample whose point (``current`` with this knob replaced) violates a
      declared constraint is recorded invalid and never evaluated; the rest
      are evaluated as one batch, in ascending value order;
@@ -16,15 +20,14 @@ protocol order, with ``[lo, hi]`` its plan range, for round ``r`` in
      goes to the smaller ``|value − current|``, then the smaller value. The
      knob MOVES only when that best is strictly greater than the current
      objective, or the current point is ineligible and the best is eligible;
-  4. ``spacing = (hi − lo) / (points − 1)``; when ``spacing <= quantum`` the
-     round already sampled every quantized value in ``[lo, hi]`` and the
-     knob's refinement stops (a quantization limit). Otherwise the next
-     round searches ``[chosen − spacing, chosen + spacing]`` clipped to the
-     plan range.
+  4. when ``spacing <= step`` the round tested every value the step allows
+     in ``[lo, hi]`` and the knob's refinement stops (the minimum step is
+     reached: a quantization limit). Otherwise the next round searches
+     ``[chosen − spacing, chosen + spacing]`` clipped to the plan range.
 A pass that moves no knob ends the procedure: ``quantization_limit`` when
-every searched knob's last round reached its quantization limit (no finer
-move exists), else ``no_improvement`` (no improvement along the tested
-moves). ``pass_limit`` when the last pass still moved; ``budget`` when the
+every searched knob's last round reached its minimum step (no finer move
+the plan allows exists), else ``no_improvement`` (no improvement along the
+tested moves). ``pass_limit`` when the last pass still moved; ``budget`` when the
 evaluator raises :class:`BudgetExhausted` (the winner is ``current`` at that
 moment); ``no_eligible`` when the seed and every evaluated point are
 ineligible (the winner is the seed). ``budget`` outranks ``no_eligible``
@@ -45,7 +48,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Any, Literal
 
 from app.research.golden_search.declarations import (
@@ -108,7 +111,7 @@ class ZoomRound:
     # The objective each evaluated value scored (``None`` when undefined), in ``results`` order.
     objectives: tuple[tuple[float, float | None], ...] = ()
     # True on the round where this knob's refinement stopped because the sample spacing
-    # reached the knob's quantum.
+    # reached the plan's smallest step for the knob.
     quantization_limit: bool = False
 
     def as_dict(self) -> dict[str, Any]:
@@ -254,6 +257,13 @@ def _sample(knob: SearchKnob, low: Decimal, high: Decimal, points: int) -> set[D
     return {quantize(knob, low + span * index / (points - 1)) for index in range(points)}
 
 
+def _lattice(knob: SearchKnob, origin: Decimal, step: Decimal, low: Decimal, high: Decimal) -> set[Decimal]:
+    """Every ``origin + k·step`` inside ``[low, high]`` — the finest values a plan with this step allows there."""
+    first = int(((low - origin) / step).to_integral_value(rounding=ROUND_CEILING))
+    last = int(((high - origin) / step).to_integral_value(rounding=ROUND_FLOOR))
+    return {quantize(knob, origin + step * index) for index in range(max(first, 0), last + 1)}
+
+
 def _assignment_key(values: Mapping[str, Decimal]) -> tuple[tuple[str, Decimal], ...]:
     return tuple(sorted(values.items()))
 
@@ -353,29 +363,44 @@ class _ZoomRun:
         return "pass_limit"
 
     def _refine(self, pass_index: int, plan: KnobPlan) -> tuple[bool, bool]:
-        """Every refinement round on one knob; returns (moved, reached the knob's quantum)."""
+        """Every refinement round on one knob; returns (moved, reached the plan's step)."""
         knob = self.declaration.knob(plan.name)
+        if plan.step is None:
+            raise ValueError(f"{plan.name} is searched without a step")
+        step = to_decimal(plan.step)
         plan_low, plan_high = to_decimal(plan.low), to_decimal(plan.high)
         low, high = plan_low, plan_high
-        moved = reached_quantum = False
+        moved = reached_step = False
         for round_index in range(self.settings.refinements + 1):
             spacing = (high - low) / (self.settings.points - 1)
-            reached_quantum = spacing <= knob.quantum
-            chosen = self._round(pass_index, round_index, knob, low, high, reached_quantum=reached_quantum)
+            reached_step = spacing <= step
+            if reached_step:
+                sample = _lattice(knob, plan_low, step, low, high)
+            else:
+                sample = _sample(knob, low, high, self.settings.points)
+            chosen = self._round(pass_index, round_index, knob, low, high, sample, reached_step=reached_step)
             moved = moved or self.rounds[-1].moved
-            if reached_quantum:
+            if reached_step:
                 break
             low, high = max(plan_low, chosen - spacing), min(plan_high, chosen + spacing)
             if low >= high:
                 break
-        return moved, reached_quantum
+        return moved, reached_step
 
     def _round(
-        self, pass_index: int, round_index: int, knob: SearchKnob, low: Decimal, high: Decimal, *, reached_quantum: bool
+        self,
+        pass_index: int,
+        round_index: int,
+        knob: SearchKnob,
+        low: Decimal,
+        high: Decimal,
+        sample: set[Decimal],
+        *,
+        reached_step: bool,
     ) -> Decimal:
-        """Sample, evaluate and choose once; moves ``current`` when the choice improves on it."""
+        """Evaluate one round's sample and choose once; moves ``current`` when the choice improves on it."""
         before = self.current[knob.name]
-        values = sorted(_sample(knob, low, high, self.settings.points) | {before})
+        values = sorted(sample | {before})
         invalid: list[tuple[Decimal, str]] = []
         testable: list[tuple[Decimal, dict[str, Any]]] = []
         for value in values:
@@ -404,7 +429,7 @@ class _ZoomRun:
                 chosen=float(choice.value),
                 moved=choice.moved,
                 current_before=float(before),
-                quantization_limit=reached_quantum,
+                quantization_limit=reached_step,
             )
         )
         self.current[knob.name] = choice.value

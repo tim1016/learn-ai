@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import dataclasses
 
+import pytest
+
 from app.research.golden_search.declarations import KnobConstraint, canonical_point, violates
 from app.research.golden_search.grid_procedure import (
     GRID_BATCH_SIZE,
@@ -29,7 +31,7 @@ _BELOW = KnobConstraint("x", "<", "y", "x must be below y")
 
 
 def _grid_plan(decl, **overrides):  # type: ignore[no-untyped-def]
-    return protocol(decl, method="grid", knobs=plans_for(decl, grid_step=1.0), **overrides)
+    return protocol(decl, method="grid", knobs=plans_for(decl, step=1.0), **overrides)
 
 
 def _run(decl, plan, evaluate):  # type: ignore[no-untyped-def]
@@ -61,7 +63,7 @@ def test_run_grid_holds_fixed_knobs_and_steps_decimal_axes_exactly() -> None:
     plan = protocol(
         decl,
         method="grid",
-        knobs=(KnobPlan("gap", "search", 0.15, 0.6, 0.0, grid_step=0.15), KnobPlan("k", "fixed", 0.0, 4.0, 3.0)),
+        knobs=(KnobPlan("gap", "search", 0.15, 0.6, 0.0, step=0.15), KnobPlan("k", "fixed", 0.0, 4.0, 3.0)),
         seed=synthetic_point({"gap": 0.15, "k": 3}),
     )
     landscape = Landscape(lambda p: 1.0)
@@ -74,7 +76,7 @@ def test_run_grid_holds_fixed_knobs_and_steps_decimal_axes_exactly() -> None:
 
 def test_run_grid_budget_exhaustion_keeps_the_best_completed_batch() -> None:
     decl = declaration(knob("x", high="99"))
-    plan = protocol(decl, method="grid", knobs=(KnobPlan("x", "search", 0.0, 99.0, 0.0, grid_step=1.0),))
+    plan = protocol(decl, method="grid", knobs=(KnobPlan("x", "search", 0.0, 99.0, 0.0, step=1.0),))
     inner = Landscape(lambda p: float(p["x"]))
     calls = 0
 
@@ -104,28 +106,50 @@ def test_run_grid_with_nothing_eligible_returns_the_seed() -> None:
     assert "No combination" in result.stop_explanation
 
 
-def test_pair_grid_marks_cells_outside_the_domain_and_constraint_violations() -> None:
-    decl = declaration(knob("x", high="10"), knob("y", high="10"), constraints=(_BELOW,))
+_EMA_PAIR = declaration(
+    knob("fast", low="2", high="30", default="5"),
+    knob("slow", low="3", high="40", default="10"),
+    constraints=(KnobConstraint("fast", "<", "slow", "fast must be below slow"),),
+)
 
-    grid = pair_grid(decl, synthetic_point({"x": 1, "y": 3}), "x", "y", canonicalize=synthetic_point)
 
-    assert grid.x_values == (-1.0, 0.0, 1.0, 2.0, 3.0)
-    assert grid.y_values == (1.0, 2.0, 3.0, 4.0, 5.0)
+def _pair_plan(**overrides):  # type: ignore[no-untyped-def]
+    knobs = (KnobPlan("fast", "search", 3.0, 12.0, 5.0, step=1.0), KnobPlan("slow", "search", 8.0, 30.0, 10.0, step=1.0))
+    return protocol(_EMA_PAIR, knobs=knobs, seed=synthetic_point({"fast": 5, "slow": 10}), **overrides)
+
+
+def test_pair_grid_maps_the_planned_ranges_through_the_center_rows_first_knob() -> None:
+    grid = pair_grid(_EMA_PAIR, _pair_plan(), synthetic_point({"fast": 8, "slow": 21}), "fast", "slow", canonicalize=synthetic_point)
+
+    # Rows: fast over 3..12 -> 3, 5.25, 7.5, 9.75, 12 -> 3, 5, 8, 10, 12 (half-even); 8 is already the center.
+    assert (grid.y_knob, grid.y_values) == ("fast", (3.0, 5.0, 8.0, 10.0, 12.0))
+    # Columns: slow over 8..30 -> 8, 14, 19, 24, 30; 19 is nearest the center's 21 and is replaced by it.
+    assert (grid.x_knob, grid.x_values) == ("slow", (8.0, 14.0, 21.0, 24.0, 30.0))
     assert len(grid.cells) == 25
-    by_xy = {(cell.values["x"], cell.values["y"]): cell for cell in grid.cells}
-    assert by_xy[(-1.0, 3.0)].status == "outside_domain"
-    assert by_xy[(-1.0, 3.0)].reason == "untested: outside the legal domain"
-    assert by_xy[(2.0, 2.0)].status == "invalid"
-    assert by_xy[(2.0, 2.0)].reason == "x must be below y"
-    center = by_xy[(1.0, 3.0)]
-    assert center.status == "testable"
-    assert center.point == synthetic_point({"x": 1, "y": 3})
-    assert sum(cell.status == "outside_domain" for cell in grid.cells) == 5
-    # x < y fails where x >= y among in-domain cells: (1,1), (2,1), (3,1), (2,2), (3,2), (3,3).
-    assert sum(cell.status == "invalid" for cell in grid.cells) == 6
-    assert len(grid.testable) == 14
-    # Row-major: every x for the first y, then the next y.
-    assert [(c.values["x"], c.values["y"]) for c in grid.cells[:5]] == [(-1.0, 1.0), (0.0, 1.0), (1.0, 1.0), (2.0, 1.0), (3.0, 1.0)]
+    # Row-major: every column of the first row, then the next row.
+    assert [(c.values["fast"], c.values["slow"]) for c in grid.cells[:5]] == [(3.0, 8.0), (3.0, 14.0), (3.0, 21.0), (3.0, 24.0), (3.0, 30.0)]
+    by_cell = {(c.values["fast"], c.values["slow"]): c for c in grid.cells}
+    assert by_cell[(8.0, 21.0)].point == synthetic_point({"fast": 8, "slow": 21})
+    # fast < slow fails at (8, 8), (10, 8) and (12, 8).
+    assert sorted(key for key, c in by_cell.items() if c.status == "invalid") == [(8.0, 8.0), (10.0, 8.0), (12.0, 8.0)]
+    assert by_cell[(10.0, 8.0)].reason == "fast must be below slow"
+    assert len(grid.testable) == 22
+
+
+def test_pair_grid_breaks_a_nearest_tie_toward_the_smaller_value_and_keeps_an_off_range_center() -> None:
+    grid = pair_grid(_EMA_PAIR, _pair_plan(), synthetic_point({"fast": 4, "slow": 35}), "fast", "slow", canonicalize=synthetic_point)
+
+    # 4 is as near 3 as 5: the smaller, 3, makes way. 35 lies beyond the planned 30, which it replaces.
+    assert grid.y_values == (4.0, 5.0, 8.0, 10.0, 12.0)
+    assert grid.x_values == (8.0, 14.0, 19.0, 24.0, 35.0)
+
+
+def test_pair_grid_refuses_a_knob_the_plan_does_not_search() -> None:
+    plan = _pair_plan()
+    held = dataclasses.replace(plan, knobs=(plan.knobs[0], KnobPlan("slow", "fixed", 8.0, 30.0, 10.0)))
+
+    with pytest.raises(ValueError, match="slow is not a searched knob"):
+        pair_grid(_EMA_PAIR, held, synthetic_point({"fast": 5, "slow": 10}), "fast", "slow", canonicalize=synthetic_point)
 
 
 def test_neighbor_probes_step_one_knob_and_flag_the_domain_edge() -> None:
@@ -147,8 +171,8 @@ def test_run_grid_over_the_registered_ema_knobs_sends_canonical_points() -> None
         strategy_key="ema_crossover_signal",
         method="grid",
         knobs=(
-            KnobPlan("gap", "search", 0.0, 0.6, 0.2, grid_step=0.15),
-            KnobPlan("rsi_min", "search", 40.0, 60.0, 50.0, grid_step=10.0),
+            KnobPlan("gap", "search", 0.0, 0.6, 0.2, step=0.15),
+            KnobPlan("rsi_min", "search", 40.0, 60.0, 50.0, step=10.0),
             *(
                 KnobPlan(k.name, "fixed", float(k.default_low), float(k.default_high), float(k.default_value))
                 for k in decl.knobs
@@ -169,8 +193,8 @@ def test_run_grid_over_the_registered_ema_knobs_sends_canonical_points() -> None
 def test_max_grid_evaluations_is_the_product_of_searched_axes() -> None:
     decl = declaration(knob("x", high="10"), knob("y", high="4"), knob("z", default="1", searchable=False))
     plan = dataclasses.replace(_grid_plan(decl), knobs=(
-        KnobPlan("x", "search", 0.0, 10.0, 0.0, grid_step=2.0),
-        KnobPlan("y", "search", 0.0, 4.0, 0.0, grid_step=1.0),
+        KnobPlan("x", "search", 0.0, 10.0, 0.0, step=2.0),
+        KnobPlan("y", "search", 0.0, 4.0, 0.0, step=1.0),
         KnobPlan("z", "fixed", 0.0, 4.0, 1.0),
     ))
 
@@ -180,12 +204,14 @@ def test_max_grid_evaluations_is_the_product_of_searched_axes() -> None:
 def test_pair_grid_around_the_registry_point_uses_the_registered_canonical_form() -> None:
     decl = ema_declaration_in_schema()
     center = canonical_point("ema_crossover_signal", "SPY", {})
+    plan = dataclasses.replace(protocol(decl, seed=center), strategy_key="ema_crossover_signal")
 
-    grid = pair_grid(decl, center, "rsi_min", "rsi_max", half_width=2)
+    grid = pair_grid(decl, plan, center, "rsi_min", "rsi_max")
 
-    assert grid.x_values == (46.0, 48.0, 50.0, 52.0, 54.0)
-    assert grid.y_values == (66.0, 68.0, 70.0, 72.0, 74.0)
-    assert all(cell.status == "testable" for cell in grid.cells)
+    # rsi_min over 30..60 -> 30, 38, 45, 52, 60 with 52 replaced by 50; rsi_max over 60..90 with 68 replaced by 70.
+    assert grid.y_values == (30.0, 38.0, 45.0, 50.0, 60.0)
+    assert grid.x_values == (60.0, 70.0, 75.0, 82.0, 90.0)
+    assert [c.values for c in grid.cells if c.status == "invalid"] == [{"rsi_min": 60.0, "rsi_max": 60.0}]
     assert all(cell.point == canonical_point("ema_crossover_signal", "SPY", cell.point) for cell in grid.testable)
     centre = next(cell for cell in grid.cells if cell.values == {"rsi_min": 50.0, "rsi_max": 70.0})
     assert centre.point == center

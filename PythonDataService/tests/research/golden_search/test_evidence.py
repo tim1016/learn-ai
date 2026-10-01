@@ -22,10 +22,10 @@ from app.research.golden_search.evidence import (
     same_as,
 )
 from app.research.golden_search.grid_procedure import neighbor_probes, pair_grid
-from app.research.golden_search.protocol import SelectionPolicy
+from app.research.golden_search.protocol import KnobPlan, SelectionPolicy
 from app.research.walk_forward_study.verdict import Verdict
 from app.utils.session_anchors import et_midnight_ms
-from tests._helpers.golden_search import declaration, knob, metrics, synthetic_point
+from tests._helpers.golden_search import declaration, knob, metrics, protocol, synthetic_point
 
 _MINUTE_MS = 60_000
 
@@ -134,19 +134,35 @@ def test_neighborhood_distinguishes_failed_and_untested_neighbors() -> None:
 
 
 def test_pair_map_carries_every_cells_status_and_metrics() -> None:
-    grid = pair_grid(_decl(), synthetic_point({"x": 1, "y": 3}), "x", "y", canonicalize=synthetic_point)
-    center = next(cell for cell in grid.cells if cell.values == {"x": 1.0, "y": 3.0})
-    assert center.point_hash is not None
+    decl = declaration(
+        knob("fast", low="2", high="30"),
+        knob("slow", low="3", high="40"),
+        constraints=(KnobConstraint("fast", "<", "slow", "fast must be below slow"),),
+    )
+    plan = protocol(
+        decl,
+        knobs=(KnobPlan("fast", "search", 3.0, 12.0, 5.0, step=1.0), KnobPlan("slow", "search", 8.0, 30.0, 10.0, step=1.0)),
+        seed=synthetic_point({"fast": 5, "slow": 10}),
+    )
+    grid = pair_grid(decl, plan, synthetic_point({"fast": 8, "slow": 21}), "fast", "slow", canonicalize=synthetic_point)
+    center = next(cell for cell in grid.cells if cell.values == {"fast": 8.0, "slow": 21.0})
+    failed = next(cell for cell in grid.cells if cell.values == {"fast": 3.0, "slow": 8.0})
+    assert center.point_hash is not None and failed.point_hash is not None
 
-    view = pair_map(grid, {center.point_hash: metrics(1.5)})
+    view = pair_map(grid, {center.point_hash: metrics(1.5), failed.point_hash: metrics(None, status="failed")})
 
-    cells = {(cell["x"], cell["y"]): cell for cell in view["cells"]}
-    assert cells[(1.0, 3.0)]["status"] == "tested"
-    assert cells[(1.0, 3.0)]["metrics"] == metrics(1.5).as_dict()
-    assert cells[(-1.0, 3.0)]["status"] == "outside_domain"
-    assert cells[(3.0, 3.0)]["status"] == "invalid"
-    assert cells[(0.0, 3.0)]["status"] == "untested"
-    assert view["x_values"] == [-1.0, 0.0, 1.0, 2.0, 3.0]
+    # x is the column knob (slow), y the row knob (fast), cells row-major.
+    assert (view["x_knob"], view["y_knob"]) == ("slow", "fast")
+    assert view["x_values"] == [8.0, 14.0, 21.0, 24.0, 30.0]
+    assert view["y_values"] == [3.0, 5.0, 8.0, 10.0, 12.0]
+    assert [(cell["y"], cell["x"]) for cell in view["cells"][:2]] == [(3.0, 8.0), (3.0, 14.0)]
+    cells = {(cell["y"], cell["x"]): cell for cell in view["cells"]}
+    assert cells[(8.0, 21.0)]["status"] == "tested"
+    assert cells[(8.0, 21.0)]["metrics"] == metrics(1.5).as_dict()
+    assert cells[(3.0, 8.0)]["status"] == "failed"
+    assert cells[(10.0, 8.0)]["status"] == "invalid"
+    assert cells[(10.0, 8.0)]["metrics"] is None
+    assert cells[(5.0, 14.0)]["status"] == "untested"
 
 
 # ── Recommendation ──────────────────────────────────────────────────────

@@ -19,15 +19,17 @@ def test_estimate_pins_each_stage_bound_and_their_sum() -> None:
     # Zoom bound with 2 searched knobs, 5 points, 2 refinements, 2 passes: 1 + 2·2·3·6 = 73.
     assert max_evaluations(plan) == 73
     assert [(stage.stage, stage.max_evaluations) for stage in result.stages] == [
-        ("search", 73),
+        # The all-period procedure, then one 5x5 pair audit around its winner.
+        ("search", 73 + 25),
         ("recent", 73),
-        ("validation", 3 * (73 + 1)),
-        # 3 detail runs + 2 candidates · 2 neighbors · 2 knobs + one 5x5 pair grid + 3 candidates · 2 stress.
-        ("evidence", 3 + 8 + 25 + 6),
+        # Each fold: its procedure, its winner's test run and the incumbent's benchmark run.
+        ("validation", 3 * (73 + 2)),
+        # 3 detail runs + 2 candidates · 2 neighbors · 2 knobs + 3 candidates · 2 stress.
+        ("evidence", 3 + 8 + 6),
         ("exam", 2),
         ("proof", 3),
     ]
-    assert result.total_max == sum(stage.max_evaluations for stage in result.stages) == 415
+    assert result.total_max == sum(stage.max_evaluations for stage in result.stages) == 418
     assert result.reserved_for_exam_and_proof == 5
 
 
@@ -39,12 +41,12 @@ def test_estimate_serial_seconds_use_each_stage_window_length() -> None:
     # Grid Search's 1.4 s fixed + 0.3 s per month read (at least one month), per window, 30.4 days a month:
     #   search      73 x (1.4 + 0.3 x 366/30.4)              =  365.8644736842
     #   recent      73 x (1.4 + 0.3 x 184/30.4)              =  234.7526315789
-    #   validation  3 x (73 x (1.4 + 0.3 x 6) + 1.4 + 0.3 x 2) =  706.8
+    #   validation  3 x (73 x (1.4 + 0.3 x 6) + 2 x (1.4 + 0.3 x 2)) =  712.8
     #   evidence    17 x (1.4 + 0.3 x 366/30.4)              =   85.2013157895
     #   exam+proof  5 x (1.4 + 0.3 x 90/30.4)                =   11.4407894737
-    #   total                                                = 1404.0592105263; 60% = 842.4355263158
-    assert result.serial_seconds_high == 1404.1
-    assert result.serial_seconds_low == 842.4
+    #   total                                                = 1410.0592105263; 60% = 846.0355263158
+    assert result.serial_seconds_high == 1410.1
+    assert result.serial_seconds_low == 846.0
 
 
 def test_estimate_omits_the_recent_stage_and_audits_that_are_switched_off() -> None:
@@ -58,7 +60,7 @@ def test_estimate_omits_the_recent_stage_and_audits_that_are_switched_off() -> N
 
 def test_procedure_bound_for_grid_is_the_grid_product() -> None:
     decl = declaration(knob("x", high="10"), knob("y", high="10"))
-    plan = protocol(decl, method="grid", knobs=plans_for(decl, grid_step=1.0))
+    plan = protocol(decl, method="grid", knobs=plans_for(decl, step=1.0))
 
     assert procedure_bound(plan) == 121
     assert estimate(plan, folds=3).stages[0].max_evaluations == 121
