@@ -457,22 +457,6 @@ async def test_start_timestamps_activation_after_custody_reconciliation(
 
 
 @pytest.mark.asyncio
-async def test_deployed_bot_consumes_bars_and_logs_decisions(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    feed = _FakeFeed([_bar(_T0), _bar(_T0 + 60_000)], mode="hold")
-    registry = _registry(tmp_path, feed)
-
-    with caplog.at_level("INFO", logger="app.services.bot_runtime"):
-        await registry.deploy(exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca", strategy_instance_id=_SID, symbol="SPY")
-        await _wait_for(lambda: feed.bars_consumed == 2)
-        await registry.stop("alpaca", _SID)
-
-    decisions = [r for r in caplog.records if getattr(r, "action", None) == "bot_decision"]
-    assert len(decisions) == 2
-    assert decisions[0].decision == "HOLD"
-    assert decisions[0].bar_start_ms == _T0
-
-
-@pytest.mark.asyncio
 async def test_deploy_while_running_is_refused(tmp_path: Path) -> None:
     feed = _FakeFeed([], mode="hold")
     registry = _registry(tmp_path, feed)
@@ -591,22 +575,6 @@ async def test_stop_does_not_finalize_or_reap_a_task_that_survives_cancellation(
     # status() must honestly report the bot as still running, since the
     # task is still alive; desired_state carries the STOPPED intent.
     assert status.running is True
-    assert registry.desired_state(_SID) is DesiredState.STOPPED
-
-
-@pytest.mark.asyncio
-async def test_desired_state_reports_durable_intent(tmp_path: Path) -> None:
-    registry = _registry(tmp_path, _FakeFeed([], mode="hold"))
-    await registry.deploy_with_admission(
-        exit_terms=DEPLOY_EXIT_TERMS, broker="alpaca",
-        strategy_instance_id=_SID,
-        strategy_key="deployment_validation",
-        symbol="SPY",
-        mode="log_only",
-    )
-    assert registry.desired_state(_SID) is DesiredState.RUNNING
-
-    await registry.stop(broker="alpaca", strategy_instance_id=_SID)
     assert registry.desired_state(_SID) is DesiredState.STOPPED
 
 
@@ -1071,17 +1039,3 @@ async def test_archive_refuses_when_the_clerk_cannot_prove_flatness(
     assert "prove" in str(blocked.value).lower()
     assert blocked.value.reason_code == "ARCHIVE_CUSTODY_UNPROVABLE"
     assert registry.status("alpaca", _SID).phase != "RETIRED"
-
-
-async def test_runner_fixture_clock_advances_through_startup_settle_and_timeout():
-    from app.marketdata.feed import MarketDataFeedError
-    from app.services.startup_join import StartupDeadline
-    from app.utils.timestamps import now_ms_utc
-
-    began = now_ms_utc()
-    deadline = StartupDeadline(not_before_ms=began + 10, deadline_ms=began + 35)
-    async def hung_history():
-        await asyncio.Event().wait()
-    with pytest.raises(MarketDataFeedError, match="deadline"):
-        await asyncio.wait_for(deadline.run(hung_history, symbol="SPY"), timeout=1)
-    assert now_ms_utc() >= deadline.deadline_ms

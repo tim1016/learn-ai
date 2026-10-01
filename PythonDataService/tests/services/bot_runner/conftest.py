@@ -9,7 +9,6 @@ registry. Covers issue #1260 acceptance criteria:
 - stop -> durable STOPPED desired-state, clean task exit, OFF_DUTY evidence.
 - simulated crash -> typed durable crash evidence distinct from a clean stop;
   the registry reaps and never renders the bot healthy.
-- daemon-free by construction (no daemon-client / subprocess imports).
 - container-side artifact paths only (everything under the tmp_path root).
 - broker-tagged bindings.
 

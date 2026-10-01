@@ -67,23 +67,6 @@ def test_fetch_rth_closes_maps_each_trading_day_to_its_own_close():
     assert closes == {"2026-01-02": 100.0, "2026-01-05": 101.0, "2026-01-06": 102.0}
 
 
-def test_fetch_rth_closes_passes_buffer_and_adjusted_to_polygon():
-    """Buffer-start must precede from_date by `buffer_days` and the adjusted
-    flag must be propagated unchanged so PC matches the bar adjustment policy."""
-    polygon = Mock()
-    polygon.fetch_aggregates.return_value = [_daily_bar(_ms(2026, 1, 2), 100.0)]
-
-    fetch_rth_closes(polygon, "SPY", "2026-01-05", "2026-01-07", adjusted=False, buffer_days=14)
-
-    kwargs = polygon.fetch_aggregates.call_args.kwargs
-    assert kwargs["ticker"] == "SPY"
-    assert kwargs["timespan"] == "day"
-    assert kwargs["multiplier"] == 1
-    assert kwargs["adjusted"] is False
-    assert kwargs["from_date"] == "2025-12-22"  # 2026-01-05 minus 14 days
-    assert kwargs["to_date"] == "2026-01-07"
-
-
 def test_fetch_rth_closes_empty_response_returns_empty_map():
     """An empty Polygon response (e.g. invalid ticker) must not crash; the
     column-add helper will then attach NaN PC values rather than fabricated

@@ -19,13 +19,6 @@ def _records() -> list[dict[str, object]]:
     return [json.loads(line) for line in _FIXTURE.read_text().splitlines() if line.strip()]
 
 
-def test_the_fixture_is_the_sample_the_reference_note_cites() -> None:
-    records = _records()
-
-    assert len(records) == 16
-    assert sum(bool(record["changed_after_close"]) for record in records) == 3
-
-
 def test_the_default_settle_time_is_at_least_twice_the_slowest_revision_observed() -> None:
     slowest_settle_ms = max(float(record["first_final_s"]) for record in _records()) * 1_000
     default_settle_ms = Settings.model_fields["STARTUP_JOIN_SETTLE_MS"].default

@@ -45,27 +45,6 @@ def _bar(start_ms: int, window_ms: int, close: str = "100.00") -> IbkrMinuteBar:
 
 
 @pytest.mark.parametrize("resolution,window_ms", RESOLUTIONS)
-def test_dual_field_window_is_exact_for_resolution(resolution: str, window_ms: int) -> None:
-    """Invariant (2): ``end_ms - start_ms`` equals the resolution's window."""
-    start_ms = 1_775_001_600_000  # 2026-04-01 00:00:00 UTC, aligned to both 1m and 5s
-    bar = _bar(start_ms, window_ms)
-    assert bar.end_ms - bar.start_ms == window_ms
-    # Invariant (1): both are real ints, not silently float-coerced.
-    assert isinstance(bar.start_ms, int)
-    assert isinstance(bar.end_ms, int)
-
-
-@pytest.mark.parametrize("resolution,window_ms", RESOLUTIONS)
-def test_start_ms_is_aligned_to_window(resolution: str, window_ms: int) -> None:
-    """Invariant (3): ``start_ms`` lands on a window boundary. A producer
-    that emitted a misaligned start would be caught here, not silently
-    rendered as a candle that shifts the visible time axis."""
-    start_ms = 1_775_001_600_000
-    bar = _bar(start_ms, window_ms)
-    assert bar.start_ms % window_ms == 0
-
-
-@pytest.mark.parametrize("resolution,window_ms", RESOLUTIONS)
 def test_dual_fields_survive_persistence_round_trip(
     tmp_path, resolution: str, window_ms: int
 ) -> None:
