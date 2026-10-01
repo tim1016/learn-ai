@@ -52,7 +52,7 @@ def test_corrupt_json_read_raises(tmp_path: Path) -> None:
     path = tmp_path / "state.json"
     path.write_text("{ not json")
     repo = IndicatorStateRepo(path)
-    # Per spec: corrupt JSON is one of the failure modes the validation
+    # Corrupt JSON is one of the failure modes the validation
     # ladder catches. Repo.read raises; callers convert to receipt.
     with pytest.raises(Exception):
         repo.read()

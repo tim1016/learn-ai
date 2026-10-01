@@ -67,7 +67,7 @@ class DivergenceCategory(StrEnum):
 
 @dataclass(frozen=True)
 class Tolerances:
-    """Per-field comparison tolerances. Phase 3 defaults match the design spec."""
+    """Per-field comparison tolerances. Phase 3 defaults are ADR 0069 §3's."""
 
     fill_price_atol: Decimal = Decimal("0.01")
     commission_atol: Decimal = Decimal("0.01")
@@ -699,7 +699,7 @@ def reconcile_qc_aapl_phase3(
     """Reconcile QC's recorded backtest against ours and return a typed report.
 
     ``assert_fees`` toggles ``COMMISSION_DRIFT`` as a gating category. Set to
-    ``True`` only after the capture-smoke step (see Phase 3 spec §2.1.2)
+    ``True`` only after the capture-smoke step
     confirms QC's payload contains non-zero ``orderFeeAmount`` values
     (Branch A); leave ``False`` for Branch B fixtures where fees are
     informational only.

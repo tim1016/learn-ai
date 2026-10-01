@@ -1129,13 +1129,12 @@ class RefusalClass(StrEnum):
 # pass clears RECONCILIATION_INCOMPLETE, and RECONCILIATION_IN_PROGRESS ends
 # when the in-flight pass ends. Everything else — including every
 # CUSTODY_SUBJECT episode and every unknown future code — stays TERMINAL so
-# an unclassified refusal keeps today's fail-closed behavior (F19 fix shape:
-# ops study §9 "classify snapshot-staleness admission blocks as
-# retry-on-next-clock in the runner's error taxonomy"). Every envelope refusal
-# joins them: ADR 0059 forbids halting or pausing a bot for an account-scoped
-# fact, so an envelope refusal retries on the next decision clock. Every
-# budget refusal joins them for the same reason, including an account not yet
-# switched to budgets (#2553). The retired arming refusals (slice 7) stay in
+# an unclassified refusal keeps today's fail-closed behavior (the fix shape:
+# classify snapshot-staleness admission blocks as retry-on-next-clock in the
+# runner's error taxonomy). Every envelope refusal joins them: ADR 0059 forbids
+# halting or pausing a bot for an account-scoped fact, so an envelope refusal
+# retries on the next decision clock. Every budget refusal joins them for the
+# same reason, including an account not yet switched to budgets (#2553). The retired arming refusals (slice 7) stay in
 # the set so the ``blocked`` receipts already recorded under them still read
 # as transient. The unfoldable-broker-order entry pause (#2363) joins them for
 # the same ADR 0059 reason: it is an account-scoped fact an operator review ends, so a bot's

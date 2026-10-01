@@ -104,10 +104,10 @@ def adapt_sqlite_panel(
     adapter tests; the active source fails closed before calling this adapter
     without authoritative economic evidence.
 
-    ``repository`` is optional and used only as the PRD Sec 19 stored-key
-    fallback when the selected transaction ref is absent from the bounded
-    ``projection.operations`` window (§7.1's 50/100-row cap).  Without it, a
-    ref outside the window renders as "not found" rather than being resolved.
+    ``repository`` is optional and used only as the stored-key fallback when
+    the selected transaction ref is absent from the bounded
+    ``projection.operations`` window (its 50/100-row cap).  Without it, a ref
+    outside the window renders as "not found" rather than being resolved.
 
     ``flatten_verdict`` is the session an operator's flatten sent now would go
     out in, or the refusal the Clerk gives it
@@ -252,9 +252,9 @@ def _catalog_row_action(
     fold above; deriving the command from it would print N identical per-bot
     mutation buttons for one account-scoped problem. An account-scoped problem
     has an account-scoped cure, and fanning it out per bot is the same defect
-    family as the account-wide entry freeze this PRD exists to remove. Such a
-    row still reads ``needs_attention`` -- it is genuinely affected -- it just
-    offers no button.
+    family as an account-wide entry freeze. Such a row still reads
+    ``needs_attention`` -- it is genuinely affected -- it just offers no
+    button.
 
     This previously returned ``None`` unconditionally, on the reasoning that
     "recovery mutations require the bot panel's typed confirmation flow". The
@@ -1023,8 +1023,8 @@ class _ResolvedOrderEvidence:
 class _ResolvedOperationEvidence:
     """One effect operation's rail-relevant evidence, resolved by exact stored key.
 
-    Mirrors the subset of ``ProjectedOperation`` the rail actually reads
-    (§7.1). Built from unbounded exact-key repository reads
+    Mirrors the subset of ``ProjectedOperation`` the rail actually reads.
+    Built from unbounded exact-key repository reads
     (``ClerkSqliteRepository.effect_operation`` / ``.order`` /
     ``.orders_for_effect_operation`` — already used throughout the SQLite
     Clerk, e.g. ``exit_resolution.py``, ``reconcile.py``), never from a
@@ -1046,7 +1046,7 @@ class _OperationSelection:
     unbounded stored-key lookup. That is a materially different state from
     "no ref was requested" (``operation`` simply defaults to the most recent)
     and must render as explicit, named absence rather than silently
-    substituting another transaction (PRD Sec 19; issue #1729 AC #6/#7).
+    substituting another transaction (issue #1729 AC #6/#7).
     """
 
     operation: ProjectedOperation | _ResolvedOperationEvidence | None
@@ -1120,7 +1120,7 @@ def _transaction_rail(
 ) -> TransactionRail:
     selection = _select_operation(projection, selected_ref, repository=repository)
     if selection.unresolved_ref is not None:
-        # Explicit, named absence (PRD Sec 19): the requested transaction does
+        # Explicit, named absence: the requested transaction does
         # not exist anywhere in this bot's durable custody evidence. Echo the
         # searched ref back rather than substituting another transaction.
         return TransactionRail(

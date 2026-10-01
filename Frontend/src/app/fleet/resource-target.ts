@@ -35,7 +35,7 @@ export interface ResourceTarget {
   readonly routingEpoch: number | null;
 }
 
-/** The §10.3 command envelope a mutating clerk-scoped request carries. */
+/** The command envelope a mutating clerk-scoped request carries. */
 export interface CommandContext {
   capability: FleetCapability;
   idempotency_key?: string;
@@ -148,7 +148,7 @@ export function withCommand(
   });
 }
 
-/** The §10.3 envelope for a mutating request, built strictly from the frozen
+/** The command envelope for a mutating request, built strictly from the frozen
  * target: capability, durable identity, binding-generation fence and the
  * target identities. Absent optional dimensions are omitted, not nulled. */
 export function commandContextOf(target: ResourceTarget): CommandContext {

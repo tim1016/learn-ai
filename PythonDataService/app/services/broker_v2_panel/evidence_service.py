@@ -1,11 +1,11 @@
-"""Operator-gated raw-evidence service (spec §14, S4).
+"""Operator-gated raw-evidence service (S4).
 
 Exposes bounded, paged, redacted order-journal evidence for the operator lens.
 Every read is audit-logged server-side (who/when/what). Redaction is re-verified
 at response time — the capture journal already strips secrets; this layer
 confirms no sensitive fields survived.
 
-Design constraints (§14):
+Design constraints:
 - Bounded: max ``PAGE_SIZE_MAX`` entries per request.
 - Paged: cursor is the sequence position (int) of the first entry to return.
 - Size-capped: the total evidence bytes are bounded per page.
@@ -384,7 +384,7 @@ def read_evidence_page(
         transaction_ref: If given, filter to the selected SQLite effect operation.
         cursor: Opaque SQLite timeline cursor; ``None`` starts at the newest page.
         page_size: Capped at ``PAGE_SIZE_MAX``.
-        operator_identity: The configured server-side operator identity (§14).
+        operator_identity: The configured server-side operator identity.
         client_hint: Optional client-provided label for audit tracing.
 
     Returns:

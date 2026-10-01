@@ -94,7 +94,7 @@ class CommandResponse(BaseModel):
 class StopRunRequest(BaseModel):
     """``lifecycle_run_id`` is required (corrective foundation slice): Stop
     is no longer resolved from the currently active run, since that made a
-    lost response unrecoverable — see the pinned contract's §3a."""
+    lost response unrecoverable — see ADR 0035's binding annex §3a."""
 
     model_config = ConfigDict(frozen=True)
 

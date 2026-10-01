@@ -111,13 +111,13 @@ async def replay_warmup_bars(
     candidate but before Clerk intake captures it. Once a bucket's
     evaluation identity is *not* found in ``captured_decisions``, the first
     such bucket that still stages a live candidate is exactly the
-    recreated, uncaptured candidate PRD section 13.3 describes -- it is
-    discarded like everything else here, but also returned for the caller
-    to record as ``CANDIDATE_UNCAPTURED_AT_CRASH``; it is never routed to
-    custody and never given a broker contact. Any later "off-duty" bucket
+    recreated, uncaptured candidate -- it is discarded like everything else
+    here, but also returned for the caller to record as
+    ``CANDIDATE_UNCAPTURED_AT_CRASH``; it is never routed to custody and
+    never given a broker contact. Any later "off-duty" bucket
     also missing from ``captured_decisions`` is caught up the ordinary
-    (unflagged) way -- PRD section 13.3 step 6 names only the one recreated
-    candidate, step 7 silently catches up the rest. An empty/``None``
+    (unflagged) way -- only the one recreated candidate is flagged, the
+    rest are silently caught up. An empty/``None``
     ``captured_decisions`` (this instance has never captured a decision at
     all) never flags anything: every bucket here would then predate this
     instance's own live-decision authority, so none of it can be a genuine

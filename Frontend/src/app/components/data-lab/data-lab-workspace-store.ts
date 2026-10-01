@@ -6,7 +6,7 @@ import {
 } from '../../shared/trading-chart/chart-series-color-tokens';
 import { browserTimeZone, type ExportColumnSelection } from './export/export-csv-options';
 
-/* DataLabWorkspaceStore (PRD 2026-09-12 data-lab workspace redesign §7.2).
+/* DataLabWorkspaceStore.
  *
  * Component-scoped shared shell state for the /data-lab route family. The
  * store is NOT provided in any injector root — the route shell constructs it
@@ -79,7 +79,7 @@ export interface DataLabGenerationRunRef {
   readonly status: string;
 }
 
-/** Stable parameter-aware instance identity (PRD §9). Params are sorted so
+/** Stable parameter-aware instance identity. Params are sorted so
  *  `{a:1,b:2}` and `{b:2,a:1}` are the same instance. Pure. */
 export function dataLabIndicatorInstanceId(
   canonicalKey: string,
@@ -188,7 +188,7 @@ export class DataLabWorkspaceStore {
   private readonly _datasetPlanReceipt = signal<Readonly<Record<string, unknown>> | null>(null);
   /** Serialized request payload the current receipt describes. A receipt whose
    *  signature no longer matches the live recipe is stale and must not be
-   *  presented as current plan data (PRD §7.4 review finding). */
+   *  presented as current plan data. */
   private readonly _datasetPlanSignature = signal<string | null>(null);
   private readonly _newsState = signal<DataLabNewsState>('idle');
   private readonly _generationRun = signal<DataLabGenerationRunRef | null>(null);
@@ -232,8 +232,8 @@ export class DataLabWorkspaceStore {
    *  start = UTC midnight of the from-date, end = the to-date's final UTC
    *  instant) an equal pair names one trading day, but epoch zeros name
    *  nothing and would fetch 1970. A committed window is otherwise ordered
-   *  `startMsUtc <= endMsUtc`; the canonical half-open resolution (PRD §13
-   *  step 6) will tighten this further. */
+   *  `startMsUtc <= endMsUtc`; the canonical half-open resolution
+   *  will tighten this further. */
   commitScope(): DataLabScopeCommitResult {
     const draft = this._draft();
     const ticker = draft.ticker.trim().toUpperCase();
@@ -357,7 +357,7 @@ export class DataLabWorkspaceStore {
     return nextId;
   }
 
-  // ── Color overrides (theme-only tokens, PRD §10) ────────────
+  // ── Color overrides (theme-only tokens) ─────────────────────
   /** Approve a series-color token for an instance. Rejects unknown instances
    *  and non-token values (hex, RGB, arbitrary CSS strings). */
   setColorToken(instanceId: string, token: ChartSeriesColorToken): boolean {
@@ -406,7 +406,7 @@ export class DataLabWorkspaceStore {
   setRestoredChartSnapshot(snapshot: unknown | null): void {
     this._restoredChartSnapshot.set(snapshot);
     // A restored snapshot renders the old chart; if the current recipe or
-    // scope differs the chart is stale by definition — PRD §16 keeps that
+    // scope differs the chart is stale by definition — that stays
     // visible rather than hiding it behind a fresh-looking render.
     this._chartStale.set(true);
   }
@@ -662,7 +662,7 @@ export function createDataLabWorkspaceStore(): DataLabWorkspaceStore {
   return new DataLabWorkspaceStore();
 }
 
-/** The product's thirteen-indicator default recipe (PRD §4 — unchanged
+/** The product's thirteen-indicator default recipe (unchanged
  *  until a separate product decision). The shell seeds these into a fresh
  *  workspace; the collapsed Explore summary reads "13 active". */
 export const DEFAULT_DATA_LAB_INDICATORS: readonly {

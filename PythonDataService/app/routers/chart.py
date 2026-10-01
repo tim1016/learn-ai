@@ -78,7 +78,7 @@ async def chart_data(request: ChartDataRequest) -> ChartDataResponse:
         # Convert indicators to dict format
         indicator_dicts = [{"name": ind.name, "params": ind.params} for ind in request.indicators]
 
-        # Numeric window authority (PRD §12): start_ms_utc/end_ms_utc take
+        # Numeric window authority: start_ms_utc/end_ms_utc take
         # per-field precedence over the date strings, resolved to inclusive
         # UTC calendar dates — the inverse of the frontend's utcMsToIsoDate.
         try:
@@ -97,7 +97,7 @@ async def chart_data(request: ChartDataRequest) -> ChartDataResponse:
         # get_chart_data does heavy pandas work (Polygon fetch, resample, RTH
         # filter, indicator compute) — all synchronous. Running it directly in
         # the async handler blocked the event loop for 3-5 s and serialized
-        # every other request on this worker (audit § 5.6 — availability
+        # every other request on this worker (availability
         # checks that normally take 5 ms measured 2.0 s head-of-line).
         # asyncio.to_thread offloads to the default thread pool so the loop
         # stays responsive.

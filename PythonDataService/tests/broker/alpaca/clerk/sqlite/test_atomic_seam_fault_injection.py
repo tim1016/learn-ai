@@ -1,7 +1,6 @@
 """Fault-injection coverage at the Slice-2 atomic decision-to-custody seam.
 
-Issue #1728 (PRD section 16 "Decision and custody protocol", FR-018 through
-FR-024, FR-028), acceptance criterion #11: "Fault injection around every
+Issue #1728, acceptance criterion #11: "Fault injection around every
 durable write and port-contact boundary proves no orphaned effect, duplicate
 contact, silent divergence, or real-account write."
 
@@ -272,8 +271,8 @@ async def test_unknown_acknowledgement_recovers_same_effect_operation_id_without
 def test_atomic_decision_receipt_replay_is_idempotent_and_conflicting_replay_quarantines(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """PRD section 16: "replay of identical evidence returns the original
-    result; conflicting reuse is quarantined." Exercises
+    """Replay of identical evidence returns the original result; conflicting
+    reuse is quarantined. Exercises
     ``append_atomic_decision_receipt_row`` directly -- the exact primitive
     ``_commit_transition_row`` calls inside its own open transaction -- so
     this proves the invariant at the real atomic-write function, not at a

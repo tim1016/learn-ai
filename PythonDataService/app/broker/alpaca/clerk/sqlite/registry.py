@@ -1,12 +1,12 @@
-"""Established-accounts registry — pinned contracts doc §1a.
+"""Established-accounts registry — ADR 0035's binding annex §1a.
 
 Lives one directory above any single account (``accounts/alpaca/``, not
 ``accounts/alpaca/<account_id>/``) so deleting or corrupting one account's
 directory can never erase its own establishment evidence. This is what lets
 startup check 2 distinguish "this account's database was deleted" from
-"this account has never been initialized" — the PRD's own adversarial test
-15.4 ("remove clerk.db after authority was established and prove it is not
-recreated") has no other mechanism to appeal to.
+"this account has never been initialized" — the adversarial case "remove
+clerk.db after authority was established and prove it is not recreated" has no
+other mechanism to appeal to.
 """
 
 from __future__ import annotations

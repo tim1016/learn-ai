@@ -1,4 +1,4 @@
-"""The broker-neutral directory and provenance-preserving aggregation (PRD §9.9, §10.1)."""
+"""The broker-neutral directory and provenance-preserving aggregation."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from tests.broker.fleet.conftest import (
 
 #: Every field the directory may carry. Anything else — especially a balance,
 #: position, P&L or exposure quantity — is a fleet-computed financial fact,
-#: which FR-034 forbids.
+#: which ADR 0062 Decision 1 forbids.
 _ALLOWED_DIRECTORY_FIELDS = {
     "broker",
     "clerk_id",
@@ -82,7 +82,7 @@ def test_every_entry_carries_only_the_allowed_fields_and_never_the_worker_key(
     for entry in entries.values():
         assert set(entry) == _ALLOWED_DIRECTORY_FIELDS
         rendered = repr(entry)
-        # The worker key never crosses the public projection (FR-012).
+        # The worker key never crosses the public projection (ADR 0062 Decision 3).
         for lane in (alpha, beta):
             assert lane.worker_key not in rendered
 
@@ -110,7 +110,7 @@ def test_capability_evidence_differs_by_provider_and_undeclared_actions_refuse(
     fleet_service.require_capability(broker="fake_alpha", capability=Capability.ACCOUNT_READ)
     fleet_service.require_capability(broker="fake_beta", capability=Capability.ACCOUNT_READ)
     # …but gallery_read is beta's alone, and bot_action alpha's — no parity is
-    # inferred in either direction (FR-006).
+    # inferred in either direction (ADR 0062 Decision 6).
     with pytest.raises(BrokerClerkCapabilityUnavailable):
         fleet_service.require_capability(broker="fake_alpha", capability=Capability.GALLERY_READ)
     with pytest.raises(BrokerClerkCapabilityUnavailable):
@@ -120,9 +120,8 @@ def test_capability_evidence_differs_by_provider_and_undeclared_actions_refuse(
 def test_lifecycle_projects_from_observations_not_stored_flags(
     control_dir: Path, clock: FrozenClock, fleet_service
 ) -> None:
-    """FR-081 + audit 2026-09-13 finding 1: a historical acknowledgement never
-    presents as current liveness, and a heartbeat alone never presents as a
-    confirmed binding."""
+    """A historical acknowledgement never presents as current liveness, and a
+    heartbeat alone never presents as a confirmed binding."""
     lane = provision_lane(
         fleet_service, broker="fake_alpha", label="projecting", tmp_path=control_dir.parent
     )
@@ -233,7 +232,7 @@ def test_partial_aggregation_reports_each_lane_without_omission_or_substitution(
         "value": {"observation": "alpha-facts"},
     }
     # The failed lane is explicit partial failure: reported, not omitted, and
-    # it did not fail the healthy lane (FR-084).
+    # it did not fail the healthy lane.
     assert lanes[1]["ok"] is False
     assert lanes[1]["broker"] == "fake_beta"
     assert lanes[1]["error_reason"] == "clerk_unreachable"
@@ -307,7 +306,7 @@ def test_the_schema_refuses_a_second_live_assignment_for_one_clerk(
         )
 
 
-# ---- HTTP: GET /broker-clerks/aggregate/directory (PRD FR-083/084) --------
+# ---- HTTP: GET /broker-clerks/aggregate/directory --------------------------
 _TEST_SECRET = "test-aggregate-directory-secret"
 
 
@@ -406,8 +405,8 @@ async def test_http_directory_carries_the_lanes_own_bot_and_attention_counts(
 async def test_async_partial_aggregation_isolates_one_lanes_exception(
     fleet_service,
 ) -> None:
-    """FR-083/084 for async readers: one lane raising is its own ``ok: False``
-    entry, never an omission or a global failure (#2228)."""
+    """Async readers: one lane raising is its own ``ok: False`` entry, never an
+    omission or a global failure (#2228)."""
 
     async def healthy() -> dict[str, object]:
         return {"items": ["a"]}
@@ -434,7 +433,7 @@ async def test_async_partial_aggregation_surfaces_a_timed_out_lane_explicitly(
     fleet_service,
 ) -> None:
     """A slow lane is an explicit ``LaneReadTimeout`` failure of its own —
-    never a quiet lane, and never a delay for its siblings (FR-093)."""
+    never a quiet lane, and never a delay for its siblings."""
     import asyncio
 
     started = asyncio.get_event_loop().time()

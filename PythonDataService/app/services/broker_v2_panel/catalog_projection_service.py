@@ -1,9 +1,9 @@
-"""SQLite catalog projection for Broker V2 roster rows (spec §5).
+"""SQLite catalog projection for Broker V2 roster rows.
 
 The ``status_label`` maps the lifecycle phase to the closed status vocabulary
-(Working / Off duty / Retired, §5). ``needs_attention`` is the OR of the
+(Working / Off duty / Retired). ``needs_attention`` is the OR of the
 rollup's decision-based heuristic and lifecycle-derived attention (a hold, an
-unclean duty outcome) — the attention-first sort (§5) reads this flag.
+unclean duty outcome) — the attention-first sort reads this flag.
 ``group`` places the row on the account's Home (PRD #2560 D5/D7) and
 ``world_label`` names the world it trades in, worded once.
 """
@@ -25,7 +25,7 @@ from app.services.broker_v2_panel.panel_errors import DryRunRestoringError, Pane
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 
-# Phase → the closed status label (§5). RUNNING/STOPPED desired-state overlays
+# Phase → the closed status label. RUNNING/STOPPED desired-state overlays
 # the phase for the "Working" label so a stopped-but-on-duty bot reads honestly.
 _STATUS_LABEL_WORKING = "Working"
 _STATUS_LABEL_OFF_DUTY = "Off duty"
@@ -196,7 +196,7 @@ def unreadable_catalog_view(
 
 
 def status_label_for(status: BotStatusView) -> str:
-    """Map a bot's phase + liveness to the closed status vocabulary (§5).
+    """Map a bot's phase + liveness to the closed status vocabulary.
 
     An unclean terminal outcome overrides "Off duty" (S3b): a crashed run
     must never read the same as a deliberate stop. The label is the shared
@@ -254,7 +254,7 @@ def _strategy_label_for(status: BotStatusView) -> str:
 
 
 def _lifecycle_needs_attention(status: BotStatusView) -> bool:
-    """True when the lifecycle itself flags attention (§5).
+    """True when the lifecycle itself flags attention.
 
     An unclean terminal exit (CRASHED / EXITED_UNVERIFIED) needs an operator's
     eye even though the rollup's decision heuristic knows nothing about it.
@@ -315,7 +315,7 @@ def compose_catalog_view(
     holds_money: bool,
     latest_stop_ms: int | None,
 ) -> BotCatalogView:
-    """Compose one roster row from a bot's status and its rollup (§5).
+    """Compose one roster row from a bot's status and its rollup.
 
     The roster preserves the backend-owned Running or Stopped intent.
     ``world`` is the row's authority's; the row's own world follows its mode.

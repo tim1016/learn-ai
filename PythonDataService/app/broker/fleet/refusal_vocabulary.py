@@ -65,7 +65,7 @@ def _subclass_closure(cls: type[FleetControlError]) -> frozenset[type[FleetContr
 #: here with its mint site so the module remains a complete census.
 _MINTED_OUTSIDE_THE_CLOSURE: Final[frozenset[str]] = frozenset(
     {
-        # app/routers/broker_clerks.py `_envelope_invalid` -- a §10.3 command
+        # app/routers/broker_clerks.py `_envelope_invalid` -- a command
         # envelope failed validation before any routing decision, hence
         # before any FleetControlError could apply.
         "command_envelope_invalid",

@@ -1,4 +1,4 @@
-"""Provisioning, volume identity and the fail-before-authority gate (PRD §9.3)."""
+"""Provisioning, volume identity and the fail-before-authority gate."""
 
 from __future__ import annotations
 
@@ -111,7 +111,7 @@ def test_a_second_clerk_cannot_reuse_an_attested_volume(control_dir: Path, fleet
 def test_writable_subtrees_of_one_mounted_volume_never_host_two_clerks(
     control_dir: Path, fleet_service
 ) -> None:
-    """FR-020/021: distinct attestations do not make nested roots distinct
+    """Distinct attestations do not make nested roots distinct
     physical volumes — containment refuses in both directions."""
     parent_root = control_dir.parent / "volumes" / "one-physical-volume"
     parent_root.mkdir(parents=True)

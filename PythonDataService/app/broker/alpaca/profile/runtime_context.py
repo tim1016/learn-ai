@@ -34,7 +34,7 @@ EndpointMode = Literal["paper", "live"]
 
 # The six envelope field names, exactly as ``LiveEnvelopeValues`` declares them
 # — which is exactly what the contract's ``live_envelope`` block carries, so the
-# mapping between the two is an identity and no rename layer can drift (§2.4).
+# mapping between the two is an identity and no rename layer can drift.
 LIVE_ENVELOPE_FIELDS: Final[tuple[str, ...]] = (
     *(field for field, _ in ENVELOPE_SETTINGS_FIELDS),
     *RETIRED_ENVELOPE_FIELDS,
@@ -87,11 +87,11 @@ def _is_real_number(value: object) -> bool:
 def _envelope_settings(live_envelope: Mapping[str, object]) -> dict[str, float]:
     """The stored envelope as ``AlpacaSettings`` keyword arguments.
 
-    Checks the keys and the Python types on the way (contract §2.4), and keys
-    the result by settings field so the caller does not walk the same pairing a
-    second time. A historical revision's two session counts are type-checked
-    here and carried into the envelope by the caller, whose domain check
-    covers them: no setting holds them (#2629).
+    Checks the keys and the Python types on the way, and keys the result by
+    settings field so the caller does not walk the same pairing a second time.
+    A historical revision's two session counts are type-checked here and carried
+    into the envelope by the caller, whose domain check covers them: no setting
+    holds them (#2629).
     """
     supplied = set(live_envelope)
     expected = set(LIVE_ENVELOPE_FIELDS)
@@ -226,7 +226,7 @@ def resolve_runtime_context(
         # ``_enforce_mode_agreement`` refuse downstream: that validator's
         # message names six environment variables and says "Refusing to start",
         # which is ADR 0059's environment-source rule — exactly the rule
-        # ADR 0060 supersedes — and contract §6 renders ``message`` verbatim.
+        # ADR 0060 supersedes — and the operator surface renders ``message`` verbatim.
         raise RevisionIncomplete(
             "a live revision carries all four live envelope monetary values and this one "
             "carries none"

@@ -43,7 +43,7 @@ function durationLabelFor(trade: RecencySwimlaneTrade): string {
 }
 
 /**
- * Per-symbol trade swimlane (design spec §5.1, D6-D10): lanes sorted by
+ * Per-symbol trade swimlane: lanes sorted by
  * recency, sub-row-packed bars (never nudged along the time axis), fill
  * = PnL diverging color, opacity = Sharpe. This is the tracer-bullet
  * render — zoom/pan, the sticky ruler, display modes, combo fold/unfold,
@@ -79,7 +79,7 @@ export class RecencySwimlaneComponent {
   });
 
   /**
-   * Virtualization (design spec D13): only trades whose span overlaps the
+   * Virtualization: only trades whose span overlaps the
    * visible window are laid out at all — a trade entirely before or after
    * the window contributes nothing (not even to the PnL color domain or
    * sub-row packing of the trades that ARE shown). A trade straddling the

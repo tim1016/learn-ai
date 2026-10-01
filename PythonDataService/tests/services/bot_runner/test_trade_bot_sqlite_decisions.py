@@ -149,7 +149,7 @@ async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
             f"decision-bar:ibkr:SPY:{_RTH_MS + 2 * 60_000 + 60_000}",
         ]
         # decision_id/intent_id are now evaluation_id (decision_id ==
-        # evaluation_id, PRD section 16) -- a content-addressed SHA-256, not
+        # evaluation_id, ADR 0043 decision 5) -- a content-addressed SHA-256, not
         # a "{ms}:{KIND}" string. "deployment_validation" is now a
         # registered Signal Program (issue #1730 Slice 5), so its
         # evaluation_id comes from the real SignalSession's own trace. The
@@ -281,7 +281,7 @@ async def test_decision_receipt_failure_prevents_the_broker_effect(
     ``append_atomic_decision_receipt_row``, committed by
     ``ClerkSqliteRepository._commit_transition_row`` inside the SAME SQLite
     transaction as the ENTER/EXIT custody transition, before any broker
-    contact (PRD section 16; FR-018). This test used to fault-inject
+    contact (ADR 0043 decision 5). This test used to fault-inject
     ``SqliteDecisionReceipts.append`` -- a boundary the new atomic path never
     calls for an effect-bearing decision, so the injected fault was inert and
     the test only ever timed out. Retargeting the fault at the real boundary

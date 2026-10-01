@@ -1,15 +1,15 @@
 """Broker-v2 bot control panel routes (transport only).
 
-``/api/brokers/{broker}/...`` — the panel contract surface (spec §3-§8, §11).
+``/api/brokers/{broker}/...`` — the panel contract surface.
 The router validates/parses the HTTP request, calls the panel data-source
 facade, and translates typed panel errors to HTTP. No business logic lives here
 (router-freeze discipline).
 
-Account scope (§3): read/projection/action endpoints are account-scoped
+Account scope: read/projection/action endpoints are account-scoped
 (``/accounts/{account_id}/...``) and validate ``account_id`` against the
 broker's account (mismatch → 404).
 
-Identity (§14): control mutations authenticate via the always-on data-plane
+Identity: control mutations authenticate via the always-on data-plane
 control secret (the router prefix carries it); the server attaches the
 configured ``PANEL_OPERATOR_IDENTITY`` — operator identity is never a request
 field.
@@ -236,7 +236,7 @@ def _raise_action_error(error: ActionExecutionError, request: PanelActionRequest
     )
 
 
-# ── §4 Panel capability profile (broker-level) ───────────────────────────────
+# ── Panel capability profile (broker-level) ──────────────────────────────────
 
 
 @router.get(
@@ -257,7 +257,7 @@ async def get_panel_profile(broker: str) -> PanelProfile:
     return profile
 
 
-# ── §5 Catalog (account-scoped) ──────────────────────────────────────────────
+# ── Catalog (account-scoped) ─────────────────────────────────────────────────
 
 
 async def _catalog(broker: str, account_id: str) -> list[BotCatalogView]:
@@ -276,7 +276,7 @@ async def get_catalog_scoped(broker: str, account_id: str) -> list[BotCatalogVie
     return await _catalog(broker, account_id)
 
 
-# ── §5 Deploy (account-scoped alias of the bot-runner deploy route) ──────────
+# ── Deploy (account-scoped alias of the bot-runner deploy route) ─────────────
 
 
 @router.get(
@@ -523,7 +523,7 @@ async def deploy_bot_scoped(
         _raise_alpaca_deploy_error(error)
 
 
-# ── §7 Panel projection (account-scoped) ─────────────────────────────────────
+# ── Panel projection (account-scoped) ────────────────────────────────────────
 
 
 async def _panel(broker: str, account_id: str, sid: str, transaction_ref: str | None) -> BotPanelView:
@@ -755,7 +755,7 @@ def _live_stream_frame(
     )
 
 
-# ── §11 Presented-action execution (account-scoped + unscoped alias) ─────────
+# ── Presented-action execution (account-scoped + unscoped alias) ─────────────
 
 
 async def _run_action(broker: str, account_id: str, sid: str, request: PanelActionRequest) -> PanelActionResult:
@@ -816,7 +816,7 @@ async def run_quiesce_action_scoped(
     return await _run_action(broker, account_id, sid, request)
 
 
-# ── §11b Cohort flatten (ADR 0051, #1802) ────────────────────────────────────
+# ── Cohort flatten (ADR 0051, #1802) ─────────────────────────────────────────
 
 
 @router.get(
@@ -854,7 +854,7 @@ async def run_cohort_flatten_scoped(
     return result
 
 
-# ── §11c Clear finished bots (owner decision 2026-09-28, ADR 0052 §4) ────────
+# ── Clear finished bots (owner decision 2026-09-28, ADR 0052 §4) ─────────────
 
 
 @router.post(
@@ -880,7 +880,7 @@ async def clear_bots_scoped(
     return result
 
 
-# ── §8 Chart endpoints (account-scoped) ──────────────────────────────────────
+# ── Chart endpoints (account-scoped) ─────────────────────────────────────────
 
 
 async def _history_chart(
@@ -915,7 +915,7 @@ async def get_history_chart_scoped(
     return await _history_chart(broker, account_id, sid, timeframe)
 
 
-# ── §14 Operator-gated evidence (account-scoped) ─────────────────────────────
+# ── Operator-gated evidence (account-scoped) ─────────────────────────────────
 
 
 async def _read_evidence(

@@ -1,12 +1,12 @@
-"""Repository-spine adversarial tests — PRD §15.1/§15.4 subset in Slice-2 scope.
+"""Repository-spine adversarial tests — the Slice-2 subset of the clerk's kill, tamper and rebuild cases.
 
 Slice 2 ("Pass focused atomicity, idempotency, identity, corruption, and
 rebuild-from-mirror tests") does not yet have commands/effects/broker
-contact, so the PRD's broker-facing adversarial cases (idempotent commands,
+contact, so the broker-facing adversarial cases (idempotent commands,
 UNKNOWN reconciliation, EXIT flows) are out of scope here and land with
-their owning slices. This file covers every §15.4 case a bare repository
-spine can meaningfully exercise, plus the mirror-fence and hash-chain
-mechanics from §4/§7/§8/§9 of the pinned contracts doc.
+their owning slices. This file covers every case a bare repository spine can
+meaningfully exercise, plus the mirror-fence and hash-chain mechanics from
+§4/§7/§9 of ADR 0035's binding annex and ``sqlite/mirror.py``.
 """
 
 from __future__ import annotations
@@ -269,8 +269,8 @@ def test_open_a_never_initialized_account_raises_file_not_found(tmp_path: Path) 
 
 
 def test_remove_db_after_established_is_not_silently_recreated(tmp_path: Path) -> None:
-    """PRD §15.4: 'remove clerk.db after authority was established and prove
-    it is not recreated.' Closes the gap the Slice-1 review found."""
+    """Remove ``clerk.db`` after authority was established and prove it is not
+    recreated. Closes the gap the Slice-1 review found."""
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=_clock_seq())
     db_path = repo.db_path
     repo.close()
@@ -317,8 +317,8 @@ def test_append_transition_advances_sequence_hash_chain_and_revision(tmp_path: P
 def test_disk_full_before_mirror_prepare_fails_closed_without_transition(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PRD §15.1 'kill before the command commit: no command, no broker call',
-    generalized to the spine: if the mirror PREPARE fsync fails, no SQLite
+    """Kill before the command commit: no command, no broker call.
+    Generalized to the spine: if the mirror PREPARE fsync fails, no SQLite
     transaction opens and no row is appended."""
     clock = _clock_seq()
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
@@ -339,8 +339,8 @@ def test_disk_full_before_mirror_prepare_fails_closed_without_transition(
 def test_kill_after_sqlite_commit_before_mirror_finalize_reopen_finalizes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """PRD §15.4 'kill after SQLite commit but before mirror finalization:
-    ... an intact DB finalizes on restart.'"""
+    """Kill after SQLite commit but before mirror finalization: an intact DB
+    finalizes on restart."""
     clock = _clock_seq()
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
 
@@ -516,8 +516,8 @@ def test_rebuild_refuses_when_db_path_already_exists(tmp_path: Path) -> None:
 
 
 def test_tampered_mirror_line_fails_closed_on_rebuild(tmp_path: Path) -> None:
-    """PRD §15.4: 'tamper with a mirror line and prove hash-chain-break
-    detection fails closed (no tampered import).'"""
+    """Tamper with a mirror line and prove hash-chain-break detection fails
+    closed (no tampered import)."""
     clock = _clock_seq()
     repo = ClerkSqliteRepository.initialize(account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock)
     repo.register_strategy_instance(strategy_instance_id="spy-bot", symbol="SPY", config_hash="h1")

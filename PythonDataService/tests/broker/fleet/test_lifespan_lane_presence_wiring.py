@@ -179,7 +179,7 @@ def test_lane_presence_beats_once_open_and_stops_at_both_teardown_sites(
 
 
 def test_an_offline_booted_lane_beats_too_so_it_can_rejoin(tmp_path: Path) -> None:
-    """#2321: the beat is how an FR-066 offline boot rejoins and hears its
+    """#2321: the beat is how an offline boot rejoins and hears its
     drain or retirement, so ``lifespan`` installs it for an offline lane as
     well — reddening if the install is ever re-gated on being online.
 

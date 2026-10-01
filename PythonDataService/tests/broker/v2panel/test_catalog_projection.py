@@ -186,11 +186,11 @@ def _recovery_capability(
 def test_an_unclean_exit_is_labelled_distinctly_from_a_deliberate_stop() -> None:
     """S3b: three bots died mid-run and the roster read "Off duty . Flat".
 
-    The audit and `known-gaps.md` both record this as `needs_attention=false`.
-    That is wrong -- attention was already true for a crash, and the backend
-    already authored crash-specific `status_explanation`. What actually hid
-    the failure is the label: the roster renders `status_label`, and a crash
-    mapped to the same "Off duty" a clean stop produces.
+    The crash was read as `needs_attention=false`. That is wrong -- attention
+    was already true for a crash, and the backend already authored
+    crash-specific `status_explanation`. What actually hid the failure is the
+    label: the roster renders `status_label`, and a crash mapped to the same
+    "Off duty" a clean stop produces.
 
     The labels come from the shared operator-copy vocabulary rather than new
     strings invented here.
@@ -464,7 +464,7 @@ def test_an_account_scoped_hold_puts_no_per_bot_command_on_any_row() -> None:
     into *each* bot's snapshot, so one account-wide hold marks the whole fleet
     ``needs_attention``. Deriving the row command from that fold would hand N
     operators N per-bot mutation buttons for one problem -- the same fan-out
-    defect family as the account-wide entry freeze this PRD removes.
+    defect family as an account-wide entry freeze.
 
     Attention itself stays: the rows are genuinely affected, and saying so is
     honest. What must not appear is the button.

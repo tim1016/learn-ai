@@ -204,7 +204,7 @@ class DatasetGenerationRequest(BaseModel):
     )
     # Canonical numeric window (int64 ms UTC) — additive; per-field takes
     # precedence over the date strings so a generated dataset matches the
-    # planned half-open window (data-lab workspace redesign PRD §12).
+    # planned half-open window.
     start_ms_utc: int | None = Field(
         None,
         ge=0,
@@ -307,8 +307,7 @@ class DatasetPlanRequest(BaseModel):
     executed with the same fields. ``from_date``/``to_date`` remain
     date-intent strings for now; the additive ``start_ms_utc``/
     ``end_ms_utc`` fields are the canonical numeric form and take
-    precedence over the date strings when supplied (data-lab workspace
-    redesign PRD §12).
+    precedence over the date strings when supplied.
     """
 
     ticker: str = Field(..., min_length=1, max_length=20, description="Ticker symbol")

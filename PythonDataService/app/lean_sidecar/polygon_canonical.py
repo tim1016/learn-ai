@@ -174,7 +174,7 @@ class PolygonProvider:
 
     Always requests 1-minute bars at multiplier 1 — strategy timeframes
     are produced by per-engine consolidation, not by Polygon-native
-    aggregates. See spec §"Polygon data source".
+    aggregates.
     """
 
     polygon: PolygonClientService

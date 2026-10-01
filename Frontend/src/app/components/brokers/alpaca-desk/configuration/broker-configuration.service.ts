@@ -35,7 +35,7 @@ export interface RevisionContent {
 
 /**
  * Read/write client for the user-owned broker configuration surface
- * (ADR 0060, contract §4) at the clerk-scoped Alpaca configuration route.
+ * (ADR 0060) at the clerk-scoped Alpaca configuration route.
  *
  * Two things about this client are load-bearing:
  *
@@ -65,7 +65,7 @@ export interface RevisionContent {
 export class BrokerConfigurationService {
   private readonly http = inject(HttpClient);
 
-  /** Wrap one configuration command with the §10.3 envelope. Configuration
+  /** Wrap one configuration command with the command envelope. Configuration
    * commands are one-shot: provider-side selection state fences them, so
    * only the capability is mandatory. */
   private commandBody(target: ResourceTarget, payload: object): object {
@@ -176,7 +176,7 @@ export class BrokerConfigurationService {
     );
   }
 
-  /** New profile, copied content, no account pin carried over (contract §4). */
+  /** New profile, copied content, no account pin carried over. */
   cloneProfile(target: ResourceTarget, profileId: string, displayName: string): Promise<BrokerProfileDetail> {
     return firstValueFrom(
       this.http.post<BrokerProfileDetail>(

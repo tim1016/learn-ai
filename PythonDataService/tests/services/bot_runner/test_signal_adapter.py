@@ -116,7 +116,7 @@ async def test_human_override_strategies_emit_canonical_live_intents(
       (``TIMEFRAME_MISMATCH``) -- see ``_strategy_signal_bars``'s
       ``bar_minutes`` docstring. Every strategy this test currently covers
       that IS a Signal Program needs ``bar_minutes=15``; strategies not yet
-      promoted (PRD Slice 5 has not reached them) keep the cheaper
+      promoted (issue #1730 Slice 5 has not reached them) keep the cheaper
       1-minute default.
     * Settlement: a Signal Program leaves its stage pending until a runner
       reports an explicit disposition (``evaluation.settle_stage`` is

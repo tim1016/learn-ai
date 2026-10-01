@@ -1,4 +1,4 @@
-"""Tests for the panel projection (S1, spec §7).
+"""Tests for the panel projection (S1).
 
 Composes the health/clerk cards + six-station rail from journal fixtures and
 the presented actions through the SQLite adapter, and pins the revision
@@ -1811,7 +1811,7 @@ def test_program_build_view_replays_the_wiring_verdict_the_run_started_under() -
 
 
 def test_panel_exposes_sealed_program_build_proof_and_decision_causal_links() -> None:
-    """PRD Sec 11.1-11.4, 19: seal + build proof + FR-030 causal links reach the panel."""
+    """Seal + build proof + causal links reach the panel (ADR 0043)."""
     decision = decision_receipt(
         seq=3,
         ts_ms=_NOW - 500,
@@ -1917,7 +1917,7 @@ def test_panel_surfaces_unproven_for_a_registered_signal_program_with_no_evidenc
 
 
 def test_panel_renders_explicit_absence_when_no_seal_or_causal_links_supplied() -> None:
-    """PRD Sec 19: an absent link/seal is an explicit state, never inferred."""
+    """An absent link/seal is an explicit state, never inferred."""
     decision = decision_receipt(seq=4, ts_ms=_NOW - 500, outcome="no_action", reason_code="NO_SIGNAL")
     panel = _panel(_status(mode="trade"), _clerk_status(), [], decision)
 

@@ -1,6 +1,6 @@
 import type { FleetCapability } from './resource-target';
 
-/** The clerk fleet directory's wire shapes (PRD §10.1, backend
+/** The clerk fleet directory's wire shapes (backend
  * `ClerkDescriptor.public_fields()`). The directory is broker-neutral and
  * read-only; `provider_summary` is provider-authored and never interpreted
  * for financial meaning by the frontend. */

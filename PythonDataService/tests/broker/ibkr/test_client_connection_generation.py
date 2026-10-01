@@ -1,4 +1,4 @@
-"""connection_generation increments once per successful connect (spec §4.2 rule 1)."""
+"""connection_generation increments once per successful connect."""
 
 from __future__ import annotations
 

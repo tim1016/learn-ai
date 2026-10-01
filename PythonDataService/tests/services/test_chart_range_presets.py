@@ -15,7 +15,7 @@ Two contracts live here:
 * ``resolve_request_dates`` — the ``start_ms_utc``/``end_ms_utc`` fields on
   ``POST /api/chart/data`` take per-field precedence over the date strings
   and floor to UTC calendar dates, the exact inverse of the Data Lab
-  mapper's ``utcMsToIsoDate`` (data-lab workspace redesign PRD §12).
+  mapper's ``utcMsToIsoDate``.
 """
 
 from __future__ import annotations

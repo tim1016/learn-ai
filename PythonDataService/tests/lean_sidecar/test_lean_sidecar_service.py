@@ -125,7 +125,7 @@ def test_adjusted_false_with_raw_normalization_is_accepted() -> None:
 
 def test_runtime_polygon_adjustment_is_always_raw_for_adjusted_true() -> None:
     """PR B P1 (review feedback): ``data_policy.adjusted=True`` records
-    staging-pipeline INTENT (spec § 4.4) and must NOT be translated to
+    staging-pipeline INTENT and must NOT be translated to
     ``polygon_adjustment="adjusted"`` at runtime. The downstream
     ``fetch_canonical_minute_bars`` and bundled trusted templates only
     accept ``"raw"`` today, so emitting anything else would 500 every

@@ -170,7 +170,7 @@ describe('ExportComponent', () => {
     // Untouched checkboxes export every column, including later ones.
     expect(payload['columns']).toBeNull();
     expect(payload['time_zone']).toBe('America/Chicago');
-    // No HTTP of its own beyond the plan — generation is job-backed only (FR-005).
+    // No HTTP of its own beyond the plan — generation is job-backed only.
     http.verify();
   });
 

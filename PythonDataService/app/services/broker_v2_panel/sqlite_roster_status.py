@@ -9,7 +9,7 @@ what a bot may do or hides what a bot already did:
 
 * **Declared configuration.** Mode, quantity, and carryover policy come from
   SQLite's own ``config_json``; a row missing them is refused, never
-  defaulted (FR-031).
+  defaulted.
 * **Terminal outcome.** Receipt-first, projection-second -- see
   :func:`terminal_duty_outcome` for why it is that order and not either one
   alone.
@@ -237,7 +237,7 @@ def _declared_identity(
 ) -> tuple[str, BotConfigResource, DeclaredConfiguration]:
     """The immutable SQLite identity every roster row is composed from.
 
-    FR-031: the roster's immutable configuration is read from SQLite, not
+    The roster's immutable configuration is read from SQLite, not
     assumed. Mode, quantity and carryover policy were previously hardcoded to
     `trade` / `None` / `FORBID`, and `panel_data_source._status_in_binding_mode`
     only patched them back for `dry_run` -- so a `log_only` bot, which must

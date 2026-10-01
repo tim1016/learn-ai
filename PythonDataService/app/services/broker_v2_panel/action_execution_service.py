@@ -1,4 +1,4 @@
-"""Presented-action execution (spec §11).
+"""Presented-action execution.
 
 ``execute_action`` enforces the three execution invariants and dispatches to the
 backend capability that performs the action:
@@ -9,7 +9,7 @@ backend capability that performs the action:
 2. **Idempotency.** An ``idempotency_key`` seen before is a no-op — the same
    double-click or retry does not re-fire the action (``applied=False``).
 3. **Identity from the channel.** The operator identity is the configured
-   ``PANEL_OPERATOR_IDENTITY`` (§14), never a request field.
+   ``PANEL_OPERATOR_IDENTITY``, never a request field.
 
 The dispatch wires Archive (Clear); every other presented action is the
 SQLite recovery catalog's (``sqlite_panel_source.execute_sqlite_panel_action``).
@@ -393,11 +393,11 @@ class IdempotencyStore:
     Three states — ``in_flight``, ``succeeded``, ``failed`` — with an asyncio
     event that the first caller sets when execution resolves. Concurrent POSTs
     with the same key wait up to 5 s for the first execution to finish rather
-    than racing to double-fire the action (§11).
+    than racing to double-fire the action.
 
     The store is process-local — durable idempotency across restarts is a
     later-slice concern; within one process it makes double-clicks and retries
-    safe (§11).
+    safe.
     """
 
     def __init__(self, *, wait_timeout_s: float = _DEFAULT_IN_FLIGHT_WAIT_SECONDS) -> None:
@@ -608,7 +608,7 @@ async def execute_action(
     store: IdempotencyStore | None = None,
     availability_error: ActionNotAvailableError | None = None,
 ) -> PanelActionResult:
-    """Execute one presented action under the three invariants (§11).
+    """Execute one presented action under the three invariants.
 
     ``performers`` maps each executable action id to a coroutine that performs
     it and returns an outcome message. An action id absent from the map raises

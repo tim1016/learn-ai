@@ -55,7 +55,7 @@ RECENCY_LAUNCH_COLUMNS = FenceColumns(
 
 
 class LaunchNotFoundError(LookupError):
-    """A snapshot arrived for a launch that was never persisted — the launch must exist before dispatch (D20)."""
+    """A snapshot arrived for a launch that was never persisted — the launch must exist before dispatch."""
 
 
 class LaunchAccountingError(ValueError):

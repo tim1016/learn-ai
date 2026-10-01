@@ -1,7 +1,7 @@
 """Alpaca settings and mode agreement (Broker System v2, Layer 1).
 
-Ports the IBKR three-layer safety pattern to Alpaca (V1 Goodness Inventory,
-spec §10):
+Ports the IBKR three-layer safety pattern to Alpaca (ADR 0032's V1
+Goodness Inventory):
 
 1. ``ALPACA_MODE`` selects paper/live; the default is ``paper``. ``live`` is
    admitted only when every ``ALPACA_LIVE_*`` envelope value is present (ADR
@@ -40,7 +40,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BROKER_ID = "alpaca"
 _SERVICE_ROOT = Path(__file__).resolve().parents[3]
 
-# Base URL per mode. Derived, never independently configurable (spec §7).
+# Base URL per mode. Derived, never independently configurable.
 _BASE_URL_BY_MODE: dict[str, str] = {
     "paper": "https://paper-api.alpaca.markets",
     "live": "https://api.alpaca.markets",

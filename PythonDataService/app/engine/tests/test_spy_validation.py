@@ -11,17 +11,10 @@ The assertions are **bit-exact** for:
   * RSI (to 2 decimal places)
   * PnL points (2 dp) and PnL percent (6 dp)
 
-Two ways to invoke:
-
-* As a pytest case (auto-skipped if the LEAN data folder isn't present):
+Run it as a pytest case (auto-skipped if the LEAN data folder isn't present):
 
       podman exec polygon-data-service python -m pytest \\
           app/engine/tests/test_spy_validation.py -v -m slow
-
-* As a manual script (errors loudly if the data folder isn't present):
-
-      cd PythonDataService
-      python -m app.engine.tests.test_spy_validation
 
 The LEAN data root is resolved in this order:
 
@@ -151,11 +144,7 @@ def _compare_trades(
 
 
 def _run_engine(lean_data_root: Path) -> tuple[list, object]:  # type: ignore[type-arg]
-    """Drive the engine and return ``(trades, result)``.
-
-    Shared between the pytest case and the manual ``__main__`` entry so
-    both paths exercise the same orchestration.
-    """
+    """Drive the engine and return ``(trades, result)``."""
     reader = LeanMinuteDataReader(lean_data_root)
     strategy = EmaCrossoverSignalAlgorithm()
     engine = BacktestEngine(

@@ -4,7 +4,7 @@ Activates when `tests/fixtures/golden/qc-precomputed-predictions/qc_export.json`
 exists. Asserts:
 
 - every per-row prediction the importer emits equals QC's published value
-  within `atol=1e-9, rtol=0` (spec D8);
+  within `atol=1e-9, rtol=0`;
 - the importer's `prediction_set_hash` equals the value pinned in
   `tests/research/ml/fixtures/qc_known_hashes.json`.
 
@@ -54,7 +54,7 @@ def _import(tmp_path: Path):
 
 def test_qc_fixture_parity_per_row_predictions_match(tmp_path: Path) -> None:
     """Every row the importer emits must equal QC's published prediction
-    within atol=1e-9, rtol=0 (spec D8). Tolerance loosening is forbidden
+    within atol=1e-9, rtol=0. Tolerance loosening is forbidden
     without a documented reason in the reference doc."""
     raw = json.loads(_QC_EXPORT.read_text(encoding="utf-8"))
     qc_values_by_date = {

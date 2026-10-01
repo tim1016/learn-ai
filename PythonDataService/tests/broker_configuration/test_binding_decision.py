@@ -1,7 +1,7 @@
 """Which revision a start binds, and whether binding it is a switch.
 
-These are the rules behind four of package D's "done when" clauses, and they
-are worth reading together: staging never retargets a running bot, a crash with
+These are the rules behind package D's binding behaviour, and they are worth
+reading together: staging never retargets a running bot, a crash with
 a staged selection boots last-effective, same-account recovery works, and a
 different-account switch is the only shape that has to prove anything.
 """

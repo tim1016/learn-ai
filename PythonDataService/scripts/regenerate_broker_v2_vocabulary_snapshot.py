@@ -1,6 +1,6 @@
 """Regenerate the broker-v2 panel vocabulary snapshot.
 
-The broker-v2 bot control panel (spec §13) renders a **closed** operator
+The broker-v2 bot control panel renders a **closed** operator
 vocabulary authored on the Python side in
 ``app/broker/v2panel/vocabulary.py`` (``ALL_VOCABULARY_CODES``). This script
 writes its JSON snapshot in the PythonDataService tree. Pytest

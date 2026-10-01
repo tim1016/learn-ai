@@ -485,7 +485,7 @@ async def test_a_verifier_refusal_answers_in_the_contract_shape(
 ) -> None:
     """A credential refusal is a typed 409, never the catch-all 500.
 
-    ``BrokerProfileError`` already carries the contract §6 ``{reason, message,
+    ``BrokerProfileError`` already carries the ``{reason, message,
     next_step}`` payload and its own ``http_status``, but nothing translated
     it: it is not a ``BrokerConfigurationError``, so it reached the ``Exception``
     handler and the desk saw a generic fault on exactly the two routes that

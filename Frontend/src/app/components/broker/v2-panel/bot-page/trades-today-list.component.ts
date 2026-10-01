@@ -13,7 +13,7 @@ import { FillTableComponent } from './fill-table/fill-table.component';
 const INLINE_FILL_LIMIT = 4;
 
 /**
- * Fills list for today's session (spec §6, §10).
+ * Fills list for today's session.
  *
  * Renders raw fill events from the live chart response. P&L stays in the
  * adjacent trader summary, where the backend-provided totals are prominent.

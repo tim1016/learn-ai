@@ -22,10 +22,10 @@ import { windowToNewsQuery, NEWS_MAX_HEADLINES } from '../news-window-adapter';
 type NewsSectionState = 'idle' | 'loading' | 'ready' | 'stale' | 'error' | 'rate-limited';
 
 /**
- * Collapsed headlines section of Data Lab Explore (PRD §11).
+ * Collapsed headlines section of Data Lab Explore.
  *
- * Lazy by design: no request exists until the section is expanded
- * (FR-010), and a window change invalidates loaded headlines — the
+ * Lazy by design: no request exists until the section is expanded,
+ * and a window change invalidates loaded headlines — the
  * section turns stale instead of silently refetching. Responses that
  * arrive after the ticker/window changed are dropped.
  */
@@ -56,7 +56,7 @@ export class ExploreHeadlinesComponent {
 
   constructor() {
     // A committed-window change invalidates already-loaded headlines —
-    // mark the section stale instead of silently refetching (PRD §11).
+    // mark the section stale instead of silently refetching.
     effect(
       () => {
         this.window();
@@ -73,7 +73,7 @@ export class ExploreHeadlinesComponent {
 
   toggleNews(): void {
     this.newsExpanded.update((v) => !v);
-    // Lazy: fetch only when expanded (PRD §11 / FR-010).
+    // Lazy: fetch only when expanded.
     if (this.newsExpanded() && this.newsState() === 'idle') this.fetchNews();
   }
 

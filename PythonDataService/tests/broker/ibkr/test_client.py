@@ -585,7 +585,7 @@ def test_on_ib_error_stamps_last_event_ms_at_the_mutation_site(
 
 
 # ---------------------------------------------------------------------------
-# Log-level demotion (incident taxonomy PR-3, plan §4.1): "IBKR
+# Log-level demotion (incident taxonomy PR-3): "IBKR
 # connectivity lost" was demoted from WARNING to INFO because IBKR
 # codes 1100/504 are frequent transient blips during a healthy session
 # and the auto-reconnect-monitor already surfaces the cases that

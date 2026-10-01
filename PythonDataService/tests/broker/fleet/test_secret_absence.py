@@ -1,6 +1,6 @@
 """Secret material appears in no sink a full ceremony touches — asserted, not assumed.
 
-The spine never sees a credential (resolution is a Phase 2 code-owned
+The spine never sees a credential (resolution is a code-owned
 mapping). An environment-variable canary is not a test: ``app/broker/fleet/**``
 reads no environment variable, so the assertion can only ever pass. What is
 worth pinning is the negative space around values the ceremony genuinely
@@ -94,9 +94,9 @@ def _drive_ceremonies(fleet_service, clock: FrozenClock, tmp_path: Path) -> _Cer
     )
     assert secret_assignment is not None
 
-    # The clerk-side confirmation checkpoint (audit 2026-09-13, finding 2) is
-    # written by the agent's own boot path, not by the coordinator's
-    # registry — drive it directly so this sink is real, not assumed empty.
+    # The clerk-side confirmation checkpoint is written by the agent's own boot
+    # path, not by the coordinator's registry — drive it directly so this sink
+    # is real, not assumed empty.
     clerk = fleet_service._store.read_clerk(lane.clerk_id)
     assert clerk is not None
     write_confirmation_evidence(
@@ -224,8 +224,8 @@ def test_the_worker_key_is_stored_but_never_projected(
 def test_transport_service_tokens_are_stored_nowhere(
     control_dir: Path, fleet_service
 ) -> None:
-    """Audit 2026-09-13, finding 3: the environment-only transport tokens minted
-    at provisioning reach no registry byte and no projection."""
+    """The environment-only transport tokens minted at provisioning reach no
+    registry byte and no projection (ADR 0062 addendum, item 5)."""
     volume_root = control_dir.parent / "volumes" / "tokens"
     volume_root.mkdir(parents=True, exist_ok=True)
     provisioned = fleet_service.provision_clerk(

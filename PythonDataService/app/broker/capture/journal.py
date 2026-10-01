@@ -1,9 +1,9 @@
-"""Append-only JSONL capture journal (Broker System v2, §6).
+"""Append-only JSONL capture journal (Broker System v2, ADR 0032).
 
 The journal is the **broker-neutral** raw-capture medium: every vendor
 response — success *or* error — is recorded verbatim before any SDK parsing,
 so the on-disk record is exactly what the wire delivered. Files are canonical
-(design decision D3); any future Postgres projection is rebuildable from these
+(ADR 0032 decision D3); any future Postgres projection is rebuildable from these
 files and never authoritative.
 
 Layout::

@@ -7,8 +7,8 @@ directly.
 
 Phase 2a deliberately exposes **only** the trusted sample. The Phase 3
 "Container Execution Boundary + Fidelity Boundary" gate is what unlocks
-arbitrary user-source — that's tracked in the ADR §"Phase sequencing"
-and refused here with a clear note in the OpenAPI schema.
+arbitrary user-source (the container boundary is ADR 0070 decisions 4
+and 6) and is refused here with a clear note in the OpenAPI schema.
 """
 
 from __future__ import annotations
@@ -522,8 +522,8 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
     """Stage, launch, and write the manifest for one trusted-sample run.
 
     Phase 2a: trusted sample only. No algorithm-source field, no
-    arbitrary user input. See ADR §"Phase sequencing" for when that
-    gate opens (Phase 3).
+    arbitrary user input. ADR 0070 decision 6 governs when caller source
+    may run.
     """
     # PR B: ``payload.data_policy`` is either posted by the caller
     # directly or synthesized from legacy fields by

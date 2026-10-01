@@ -1,4 +1,4 @@
-"""Hash-chain row format — byte-level pin in contracts doc §7."""
+"""Hash-chain row format — byte-level pin in ADR 0035's binding annex §7."""
 
 from __future__ import annotations
 
@@ -46,8 +46,8 @@ def test_canonical_payload_includes_every_column_even_when_none() -> None:
 
 
 def test_compute_row_hash_is_string_not_byte_concatenation() -> None:
-    """A real prev_hash is a 64-char hex *string*; §7 pins concatenating it as
-    text, not decoding it to its 32 raw bytes first. These genuinely differ
+    """A real prev_hash is a 64-char hex *string*; the annex's §7 pins concatenating
+    it as text, not decoding it to its 32 raw bytes first. These genuinely differ
     (different byte lengths, not just different bytes) for any real hash —
     unlike GENESIS, which isn't valid hex and so can't discriminate this.
     """

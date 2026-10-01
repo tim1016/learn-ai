@@ -1,12 +1,11 @@
-"""Event-sourced SQLite repository spine — PRD Phase 1 / issue #1375, repaired
-by the corrective foundation slice.
+"""Event-sourced SQLite repository spine — issue #1375, repaired by the
+corrective foundation slice.
 
-Implements the pinned contract in
-ADR 0035 and its binding annex: the
-account-scoped ``clerk.db``, the R9 two-phase mirror fence, the fail-closed
-startup checks, and a durable, renewed per-account execution lease. SQL stays
+Implements ADR 0035 and its binding annex: the account-scoped ``clerk.db``, the
+R9 two-phase mirror fence, the fail-closed startup checks, and a durable,
+renewed per-account execution lease. SQL stays
 private to this storage package (principally ``reads.py``, ``writes.py``, and
-``repository_lifecycle.py``; PRD §9.2) — callers never see a cursor; they call
+``repository_lifecycle.py``) — callers never see a cursor; they call
 :meth:`ClerkSqliteRepository.commit_first_transition` (or
 :meth:`append_transition` for kinds with no idempotent-admission concept, e.g.
 bot registration) and read back typed snapshots.
@@ -14,9 +13,9 @@ bot registration) and read back typed snapshots.
 Corrective foundation slice:
 the prior ``reserve_command()`` + public ``serialized()`` design let a command
 become durable as a bare ``commands`` row with no ``custody_transitions``
-insert and no mirror fence — directly contradicting PRD §4 goal 3 and §9.3,
-both of which require reservation, effect creation, transition, fold, and
-revision advance in one SQLite transaction. Both are deleted here.
+insert and no mirror fence — contradicting the rule that reservation, effect
+creation, transition, fold, and revision advance happen in one SQLite
+transaction. Both are deleted here.
 :meth:`commit_first_transition` is the one operation that replaces them: a
 content-addressed lookup and (if fresh) a transition append, held under one
 private write coordinator, whose fold is what creates the command (and, from
@@ -118,19 +117,19 @@ class AlreadyInitialized(ClerkSqliteError):
 
 
 class DatabaseMissingAfterEstablishment(ClerkSqliteError):
-    """Startup check 2 (§9): ``clerk.db`` is gone but the registry proves it existed."""
+    """Startup check 2 (annex §9): ``clerk.db`` is gone but the registry proves it existed."""
 
 
 class DatabaseIdentityMismatch(ClerkSqliteError):
-    """Startup check 3-4 (§9): identity token, generation, or account_id does not match."""
+    """Startup check 3-4 (annex §9): identity token, generation, or account_id does not match."""
 
 
 class SchemaVersionMismatch(ClerkSqliteError):
-    """Startup check 5 (§9)."""
+    """Startup check 5 (annex §9)."""
 
 
 class IntegrityCheckFailed(ClerkSqliteError):
-    """Startup check 7 (§9): ``PRAGMA integrity_check`` did not return ``ok``."""
+    """Startup check 7 (annex §9): ``PRAGMA integrity_check`` did not return ``ok``."""
 
 
 class UnsupportedWalFilesystem(ClerkSqliteError):
@@ -138,7 +137,7 @@ class UnsupportedWalFilesystem(ClerkSqliteError):
 
 
 class HashChainBroken(ClerkSqliteError):
-    """Startup check 8 (§9): a stored row's hash disagrees with its recomputation."""
+    """Startup check 8 (annex §9): a stored row's hash disagrees with its recomputation."""
 
 
 class ExecutionLeaseHeld(ClerkSqliteError):
@@ -146,7 +145,7 @@ class ExecutionLeaseHeld(ClerkSqliteError):
 
 
 class ExecutionLeaseLost(ClerkSqliteError):
-    """§9a: this handle's lease expired or was reassigned; it can no longer write.
+    """Annex §9a: this handle's lease expired or was reassigned; it can no longer write.
 
     ``account_id`` names the authority whose lease lapsed. A write path that
     catches this for a bot whose custody lives under an isolated ``sim:``
@@ -176,7 +175,7 @@ class RecoveryInProgress(ClerkSqliteError):
 
 
 class RepositoryPoisoned(ClerkSqliteError):
-    """§9a: a transition committed but its mirror finalize was unconfirmed.
+    """Annex §9a: a transition committed but its mirror finalize was unconfirmed.
 
     No further mutation or operation claim is permitted until
     :meth:`ClerkSqliteRepository.reconcile_poison` (or a fresh ``open()``)
@@ -197,7 +196,7 @@ class ClerkSqliteRepository(
 
     Construct via :meth:`initialize` (a brand-new generation) or
     :meth:`open` (an existing one) — never call ``__init__`` directly, both
-    classmethods run the checks the pinned contract requires before handing
+    classmethods run the checks ADR 0035's binding annex requires before handing
     back a usable instance.
     """
 
@@ -241,8 +240,8 @@ class ClerkSqliteRepository(
         # Home's Finished results at the last custody revision read; created
         # on first use (``bot_results``), process-local like the line above.
         self._bot_results_memo: RevisionMemo[dict[str, BotResult]] | None = None
-        # Pinned contracts doc §2: "one application-owned write coordinator
-        # ... belt-and-suspenders, not a substitute for BEGIN IMMEDIATE."
+        # Annex §4: an application-owned write coordinator sits in front of
+        # BEGIN IMMEDIATE -- belt-and-suspenders, not a substitute for it.
         # BEGIN IMMEDIATE's lock only protects from the point it's acquired;
         # append_transition reads next-sequence/prev_hash/authority_generation
         # before that point, so this lock is what actually closes the window
@@ -281,7 +280,7 @@ class ClerkSqliteRepository(
         """This process's execution-lease identity — the same owner an
         operation claim should be acquired under, since a claim is only
         meaningful as proof that *this* live process is the one about to
-        contact the broker (§2's lease + claim close the same gap)."""
+        contact the broker (the lease + claim close the same gap, ADR 0035 D5)."""
         return self._lease_owner
 
     @property
@@ -348,8 +347,8 @@ class ClerkSqliteRepository(
         established-accounts registry already has an entry for this account
         with no matching database on disk. The only exception is a verified
         paper developer-reset authorization for that exact prior generation;
-        every other missing established database remains PRD §15.4's
-        fail-closed case.
+        every other missing established database stays a fail-closed
+        case (annex §9 check 2).
         """
         from app.broker.alpaca.clerk.sqlite.repository_lifecycle import (
             initialize_repository,
@@ -378,7 +377,7 @@ class ClerkSqliteRepository(
         lease_ttl_ms: int = DEFAULT_LEASE_TTL_MS,
         fold_registry: FoldRegistry = DEFAULT_FOLD_REGISTRY,
     ) -> ClerkSqliteRepository:
-        """Open an existing authority, running all fail-closed checks (§9)."""
+        """Open an existing authority, running all fail-closed checks (annex §9)."""
         from app.broker.alpaca.clerk.sqlite.repository_lifecycle import open_repository
 
         return open_repository(
@@ -394,7 +393,7 @@ class ClerkSqliteRepository(
         )
 
     # ------------------------------------------------------------------
-    # Lease renewal and poison handling (§9a)
+    # Lease renewal and poison handling (annex §9a)
     # ------------------------------------------------------------------
 
     def _renew_execution_lease(self) -> None:
@@ -504,7 +503,7 @@ class ClerkSqliteRepository(
             )
 
     def reconcile_poison(self) -> None:
-        """Re-run the exact §9 check-9 reconciliation; clear the poison flag
+        """Re-run the exact annex §9 check-9 reconciliation; clear the poison flag
         only if it finds the fence consistent."""
         with self._write_lock:
             rows = self.custody_transitions()
@@ -528,7 +527,7 @@ class ClerkSqliteRepository(
         no fold ran (R1: "a failed prepare, SQLite commit, or finalization
         produces no broker call" — this method is the fence that guarantees
         that for every caller above it). A failure *after* the SQLite commit
-        but during the finalize fsync poisons this handle (§9a) rather than
+        but during the finalize fsync poisons this handle (annex §9a) rather than
         leaving it able to accept further writes unaware the fence is
         unconfirmed.
         """
@@ -939,7 +938,7 @@ class ClerkSqliteRepository(
         payload: dict,
         decision_receipt: AtomicDecisionReceipt | None = None,
     ) -> int:
-        """Insert order matches the pinned §4 transaction matrix literally:
+        """Insert order matches the annex §4 transaction matrix literally:
         transition insert -> fold -> revision advance -> mirror_fence insert.
         """
         self._conn.execute("BEGIN IMMEDIATE")
@@ -1161,9 +1160,9 @@ class ClerkSqliteRepository(
             )
 
     def claim_before_broker_contact(self, effect_operation_id: str) -> OperationClaim:
-        """Claim under this process's own lease identity — pinned contract §2:
-        "a transactionally claimed operation work item ... acquired before any
-        broker contact." A live ``BEGIN IMMEDIATE`` transaction proves
+        """Claim under this process's own lease identity — ADR 0035 D5 and annex
+        §9a: a transactionally claimed operation work item is acquired before
+        any broker contact. A live ``BEGIN IMMEDIATE`` transaction proves
         single-writer-at-the-database; it does not prove single-*process*, so
         an event-loop stall or a slow network call between accepting an
         operation and its next broker call could otherwise let a stale owner
@@ -1592,8 +1591,8 @@ class ClerkSqliteRepository(
 
         The corrupt database (if present) is preserved for diagnosis, never
         overwritten in place — this writes a fresh database at the same path
-        only after the caller has moved the old one aside (matching PRD §13:
-        "the DB is preserved for diagnosis, never overwritten"). Callers own
+        only after the caller has moved the old one aside: the DB is
+        preserved for diagnosis, never overwritten. Callers own
         that move; this method assumes ``db_path`` does not exist yet.
         """
         from app.broker.alpaca.clerk.sqlite.rebuild import (

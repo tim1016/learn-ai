@@ -6,14 +6,14 @@ Activates when both:
 2. ``tests/research/ml/fixtures/qc_known_hashes.json`` carries the
    ``run_ledger_prediction_set_hash`` and ``result_hash`` keys.
 
-Both conditions are met after this PR: the §B fixture lands and the
-runtime hashes are pinned by capturing them from a one-shot run, then
+Both conditions are met: the fixture is committed and the runtime
+hashes are pinned by capturing them from a one-shot run, then
 asserting they reproduce on every subsequent CI invocation.
 
 The runtime test:
 
 * imports the captured ``qc_export.json`` into the v0.5 artifact format
-  via ``import_qc_fixture`` (matching the §C-data parity test's
+  via ``import_qc_fixture`` (matching the fixture parity test's
   provenance kwargs exactly, so the same ``prediction_set_hash`` lands);
 * builds a synthetic SPY daily bar stream whose consolidator output
   fires at exactly the 243 QC prediction timestamps (one minute bar per
@@ -140,7 +140,7 @@ def qc_spy_data_factory():
 def qc_artifacts_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the runner at a tmp-path-rooted artifact directory and import
     the QC fixture into it, so the runner's ``PredictionSet.load`` finds
-    the same artifact the §C-data parity test pinned."""
+    the same artifact the fixture parity test pinned."""
     root = tmp_path / "artifacts" / "predictions"
     root.mkdir(parents=True)
     monkeypatch.setenv("LEARN_AI_PREDICTION_ARTIFACTS_ROOT", str(root))

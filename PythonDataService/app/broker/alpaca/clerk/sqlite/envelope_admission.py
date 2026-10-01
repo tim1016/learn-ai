@@ -72,8 +72,8 @@ def require_envelope_admission(
     """Admit one ENTER against the envelope, or raise; returns what it reserves."""
     if leg.side is not OrderSide.BUY:
         # Long-only engine invariant, not a refusal: a short program would need
-        # a named LIVE_ENVELOPE_* code of its own, which is a fifth code beyond
-        # the plan's four and an owner decision (follow-up).
+        # a named LIVE_ENVELOPE_* code of its own, which is an owner decision
+        # (follow-up).
         raise ValueError("the envelope admits BUY legs only; every program ENTER is a BUY")
     if repo.budget_authority_version() != BUDGET_AUTHORIZATION:
         raise _refuse(BUDGETS_NOT_SWITCHED_ON, BUDGETS_NOT_SWITCHED_ON_WHY)

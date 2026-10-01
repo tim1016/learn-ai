@@ -20,9 +20,8 @@ ADR 0060 Decision 5 deliberately ships no worker identity:
 | `effective_acknowledged` | yes | yes |
 | `apply_refused` | yes | yes (ADR 0060 Decision 4.3) |
 
-Contract §2.6 names only the first two. The other two advance it for the
-reason stated in ``records.py``: whoever still holds the pre-consumption
-generation must not be able to act on it.
+The last two advance it for the reason stated in ``records.py``: whoever
+still holds the pre-consumption generation must not be able to act on it.
 """
 
 from __future__ import annotations
@@ -115,8 +114,8 @@ def apply_refused(current: InstallationSelection, *, reason: str) -> Installatio
 def is_recorded_apply(current: InstallationSelection, expected_generation: int) -> bool:
     """Whether an Apply naming ``expected_generation`` is already recorded.
 
-    Contract §5: "a repeated apply against an already-recorded generation is a
-    no-op success." A retry may name either the generation the request was
+    A repeated apply against an already-recorded generation is a no-op
+    success. A retry may name either the generation the request was
     recorded at or the one it produced, so both count.
     """
     return current.apply_requested and expected_generation in (

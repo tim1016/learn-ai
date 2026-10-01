@@ -60,7 +60,7 @@ def test_allowances_come_from_settings_and_are_absent_when_unset() -> None:
 def test_the_envelope_and_settings_constructors_agree_on_the_same_six_numbers() -> None:
     """A sealed envelope and an environment-configured one anchor identically.
 
-    The exit-pricing rule (ADR 0060; plan §0 D3) reads the allowance out of an
+    The exit-pricing rule (ADR 0060) reads the allowance out of an
     arming record's sealed envelope instead of out of settings, so the two
     adapters must not be able to disagree about the same numbers. Both are
     ``Decimal(str(...))`` conversions, deliberately: this is adapter-level

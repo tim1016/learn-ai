@@ -2,7 +2,7 @@
 
 Orchestrates one Recency Chart launch: expands the grid (lazily), executes
 each (symbol, strategy, parameter-combo) backtest one at a time,
-computes every trade/run statistic in Python (design spec §7.1), assembles
+computes every trade/run statistic in Python, assembles
 a fingerprinted snapshot per run, and persists each snapshot independently
 so a failing child is isolated and reported ("N of M failed") rather than
 aborting the batch or being silently dropped (no silent
@@ -76,7 +76,7 @@ class RecencyLaunchConfig:
 
 @dataclass(frozen=True)
 class RecencyTradeSnapshot:
-    """One trade as persisted into the recency-owned snapshot (design spec §4.1)."""
+    """One trade as persisted into the recency-owned snapshot."""
 
     fingerprint: str
     entry_ms: int

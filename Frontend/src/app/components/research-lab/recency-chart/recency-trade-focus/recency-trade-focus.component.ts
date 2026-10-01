@@ -23,13 +23,13 @@ function parseParams(paramsJson: string | undefined): ParsedParam[] | null {
 }
 
 /**
- * Pinned-trade focus panel (design spec D9, D24): shown once a swimlane
+ * Pinned-trade focus panel: shown once a swimlane
  * bar is clicked. Reports the trade's combo, entry/exit, holding period,
  * PnL, a link to the underlying study, and an explicit in-sample/OOS
  * caption — every field is Python-authored data passed through as-is.
- * The on-demand price sparkline (design spec §4, "Further Notes") is
- * deferred: it needs a Polygon-backed price-history endpoint that does
- * not exist yet, which is separate scope from this panel's own render.
+ * The on-demand price sparkline is deferred: it needs a Polygon-backed
+ * price-history endpoint that does not exist yet, which is separate scope
+ * from this panel's own render.
  */
 @Component({
   selector: "app-recency-trade-focus",

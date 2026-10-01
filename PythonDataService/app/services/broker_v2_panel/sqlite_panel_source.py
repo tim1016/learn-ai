@@ -600,7 +600,7 @@ def _decision_receipt_from_resource(
             f"SQLite decision receipt {resource.seq} facts must be an object."
         )
     try:
-        # FR-019 defines `decision_id` == `evaluation_id`, and the atomic
+        # `decision_id` == `evaluation_id` (ADR 0043 decision 5), and the atomic
         # writer stamps both keys to that one value, so reading either is
         # equivalent rather than a choice between two different facts. The
         # second read is a compatibility path for rows persisted before both

@@ -337,8 +337,8 @@ class TestDataFolderRoundTrip:
         """Prices on disk are ``price * 10000`` as integers (LEAN convention).
 
         Anything below the quantization floor (0.0001) cannot round-trip
-        exactly; that floor is documented in the ADR §"LEAN quantization
-        floor" and respected by the reconciliation tolerance.
+        exactly; that floor is documented in ADR 0070 decision 8 and
+        respected by the reconciliation tolerance.
         """
         symbol = "TST"
         trading_date = date(2025, 1, 9)

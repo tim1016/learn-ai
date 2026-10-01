@@ -1,4 +1,4 @@
-"""Map alpaca-py / HTTP failures to broker-contract errors (spec §9).
+"""Map alpaca-py / HTTP failures to broker-contract errors.
 
 The mapping is asserted by tests:
 

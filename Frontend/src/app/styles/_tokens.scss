@@ -41,7 +41,7 @@ $bear: #ef5350;  // was #e5334e — TV red
 $warn: #ff9800;  // was #f59e0b — TV warn
 $info: #29b6f6;  // TV info (new)
 
-// ── Chart series palette (PRD 2026-09-12 data-lab §10) ─────
+// ── Chart series palette ─────
 // Named, theme-owned series colors for indicator overlays and
 // sub-panel lines. Chart code stores token IDs only and resolves
 // var(--chart-series-*) at the chart boundary. Contrast verified

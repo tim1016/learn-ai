@@ -186,7 +186,7 @@ def _requires_command_capacity(method: str, path: str) -> bool:
     command pool instead. That costs those specific endpoints command-pool
     capacity, never the other way around, so it does not weaken the
     invariant above; the generic lane runtime deliberately has no provider
-    catalog to consult for a finer classification (PRD FR-005).
+    catalog to consult for a finer classification (ADR 0062 Decision 6).
     """
     if method in _SAFE_METHODS:
         return False

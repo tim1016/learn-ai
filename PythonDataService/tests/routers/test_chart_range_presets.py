@@ -1,7 +1,7 @@
 """`/api/chart` numeric-window authority and the range-presets endpoint.
 
 The chart request's ``start_ms_utc``/``end_ms_utc`` are declared additive-
-first fields (data-lab workspace redesign PRD §12); these tests pin that the
+first fields; these tests pin that the
 router actually honors them — per-field precedence over the date strings,
 floored to UTC calendar dates, with an inverted numeric window refused as
 ``INVALID_RANGE`` — and that ``GET /api/chart/range-presets`` is a thin,

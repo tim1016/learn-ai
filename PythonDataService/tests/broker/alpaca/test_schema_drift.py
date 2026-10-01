@@ -1,4 +1,4 @@
-"""Schema-drift guard (spec §9).
+"""Schema-drift guard.
 
 Recursively diffs the key sets of the captured raw Alpaca payloads against the
 alpaca-py model field names (and aliases). If Alpaca ships a field the SDK does

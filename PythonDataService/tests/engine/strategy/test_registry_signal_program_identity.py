@@ -149,7 +149,7 @@ def test_every_factory_built_program_carries_its_registration_identity() -> None
 
 
 def test_registry_protocol_and_parameter_schema_versions_mirror_their_one_declaration() -> None:
-    """PRD §11.1 sealed-completeness fix: ``protocol_version`` and
+    """Sealed-completeness fix: ``protocol_version`` and
     ``parameter_schema_version`` are each declared exactly once — on
     ``SignalSession``/``EmaCrossoverSignalParams`` respectively —
     and the registry contract only ever mirrors that constant. This is the

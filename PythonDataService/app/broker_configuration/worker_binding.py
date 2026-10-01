@@ -78,9 +78,9 @@ logger = logging.getLogger(__name__)
 class PriorObligations:
     """What a previously-bound account still owes, or that we cannot tell.
 
-    ``readable`` is not a diagnostic; it is half the decision. The plan's rule
-    is that a start which cannot *prove* the prior account is clear must refuse,
-    so an unreadable probe and a probe reporting an open position lead to the
+    ``readable`` is not a diagnostic; it is half the decision. The rule is that a
+    start which cannot *prove* the prior account is clear must refuse, so an
+    unreadable probe and a probe reporting an open position lead to the
     same place.
     """
 
@@ -337,7 +337,7 @@ def _bootstrap_from_environment(
         # environment really is the source, and an operator with a half-edited
         # ``.env`` needs to know which line is missing. It goes to the log
         # only. The operator-facing ``message`` below stays in profile
-        # vocabulary, because contract §6 renders it verbatim in the UI and
+        # vocabulary, because the UI renders it verbatim and
         # ADR 0060 supersedes exactly the environment-source rule that prose
         # states. ``alpaca_configuration_error_detail`` keeps only Pydantic's
         # ``msg`` text, which never echoes the credential-bearing input.

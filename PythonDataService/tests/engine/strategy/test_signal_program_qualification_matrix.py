@@ -27,8 +27,8 @@ dedup/rounding), ``app/engine/data/trade_bar.py``,
 ``app/engine/strategy/signal_intent.py``, ``app/utils/timestamps.py``, and
 ``app/lean_sidecar/trading_calendar.py`` among them — could change an
 ``EvaluationTrace`` while leaving ``artifact_digest`` unchanged: a stale
-receipt would validate a build that was never re-qualified (PRD FR-008,
-S11.4).
+receipt would validate a build that was never re-qualified (ADR 0043
+decision 2).
 
 The naive fix — hash the whole 22-file closure — is equally wrong in the
 other direction: it also drags in ``app/engine/execution/*`` (commission,
@@ -103,7 +103,7 @@ def _corpus_path(key: str) -> Path:
 @pytest.mark.slow
 @pytest.mark.parametrize("key", _SEALED_PROGRAMS)
 def test_validated_settings_corpus_has_a_pinned_trace_root(key: str) -> None:
-    """The runtime admission gate (PRD S11.4): a program edit that changes
+    """The runtime admission gate (ADR 0043 decision 2): a program edit that changes
     behaviour without also updating its sealed ``golden_trace_root`` must
     fail here, not slip through as a "qualified" receipt.
     ``scripts/run_signal_program_build_qualification.py`` binds each emitted

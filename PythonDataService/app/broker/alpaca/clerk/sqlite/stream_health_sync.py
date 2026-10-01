@@ -15,7 +15,7 @@ Ownership is now split cleanly:
   I/O is involved and a broker outage cannot delay raise or release.
 - **ENTER owns its own refusal.** The entry-time check is unchanged and
   still refuses immediately on unhealthy channels; it simply no longer
-  writes the account-scoped record. That is the PRD's governing rule:
+  writes the account-scoped record. That is the governing rule:
   state is produced by one background tap and consumed by another.
 """
 

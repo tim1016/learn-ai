@@ -281,7 +281,7 @@ def test_seal_signal_semantics_come_from_the_registry_contract() -> None:
 
 def test_sealed_protocol_version_mismatch_fails_closed() -> None:
     """Sealed-completeness fix, sibling to the provider-mismatch test below:
-    every newly widened §11.1 field must fail build-proof on mismatch too, at
+    every newly widened sealed field must fail build-proof on mismatch too, at
     the same cadence as program_version/golden_trace_root/provider. Exercises
     one representative new field end to end through ``prove_running_program_build``'s
     real ``or`` chain, rather than only asserting the chain's source contains it.
@@ -300,7 +300,7 @@ def test_sealed_protocol_version_mismatch_fails_closed() -> None:
 
 def test_sealed_provider_identity_mismatch_fails_closed() -> None:
     """#1729 AC4: "provider" proof means the sealed qualification-lineage
-    identity (PRD Sec 11.6) is present and unchanged against the currently
+    identity is present and unchanged against the currently
     registered contract -- not a live-feed parity gate. A seal claiming a
     different provider than the registry cannot prove its running build,
     at the same cadence as the program_version/golden_trace_root checks."""
@@ -622,8 +622,8 @@ def test_artifact_drift_still_fails_closed_whatever_the_toggle_says(
     """Issue #1735's scope note, encoded.
 
     The toggle governs only the newly-added wiring coverage. Drift in the
-    already-covered artifacts is the admission control the PRD was built
-    around, and stays blocking in both toggle positions -- otherwise turning
+    already-covered artifacts is the admission control this gate exists
+    for, and stays blocking in both toggle positions -- otherwise turning
     the toggle off would quietly widen what can start.
     """
     monkeypatch.setattr(settings, "SIGNAL_PROGRAM_WIRING_DIGEST_ENFORCED", enforced)

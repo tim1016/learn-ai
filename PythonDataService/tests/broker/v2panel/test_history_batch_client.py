@@ -348,7 +348,7 @@ async def test_healthy_response_round_trips_bars_and_notices(
 async def test_fetch_batch_sends_no_token_in_the_request_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No key or token appears in the payload (FR-010) -- only the identity
+    """No key or token appears in the payload -- only the identity
     headers carry the token; the JSON body carries none of it."""
     seen_bodies: list[bytes] = []
 

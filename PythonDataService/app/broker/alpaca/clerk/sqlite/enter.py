@@ -11,15 +11,15 @@ a position. Two phases, deliberately separable:
   content-addressed ``(strategy_instance_id, decision_id)`` identity through
   :meth:`ClerkSqliteRepository.commit_first_transition`, whose
   ``ENTER_ACCEPTED`` fold atomically creates the effect operation and its
-  order row (both ``accepted`` — see the pinned contract's §4/§5) through the
+  order row (both ``accepted`` — see ADR 0035's binding annex §4/§5) through the
   full R9 mirror fence. No broker call happens inside it, and none may
   happen before it returns (R1).
 - :func:`submit_enter` — calls :func:`accept_enter`, then claims the effect
-  operation (Scope D's CAS fencing token — pinned contract §2: "a
-  transactionally claimed operation work item ... acquired before any broker
-  contact") before it ever calls the broker, and only for a fresh
-  reservation. A lost response (``BrokerUnavailable``) is never fabricated
-  into a terminal outcome; it folds ``unknown`` and hands off to
+  operation (Scope D's CAS fencing token — ADR 0035 D5: every broker contact
+  needs "a transactionally claimed operation work item") before it ever calls
+  the broker, and only for a fresh reservation. A lost response
+  (``BrokerUnavailable``) is never fabricated into a terminal outcome; it folds
+  ``unknown`` and hands off to
   the shared exact-order resolver immediately, the same function a later,
   out-of-process recovery sweep would call for an intent that never even
   reached the broker (accepted, then the process died before the try block

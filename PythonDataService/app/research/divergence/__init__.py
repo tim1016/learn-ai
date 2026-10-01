@@ -1,8 +1,7 @@
 """Data-divergence research module.
 
 Quantifies per-bar and per-trade differences between TradingView-sourced
-and Polygon-sourced indicator values, per the research plan at
-``Downloads/Research_Plan_TV_vs_Polygon_Divergence.md``.
+and Polygon-sourced indicator values.
 
 Public entry points:
   * ``ingest.tv_ingest`` — parse TradingView Pine-script CSV dumps.

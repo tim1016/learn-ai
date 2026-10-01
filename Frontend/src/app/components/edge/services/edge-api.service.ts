@@ -49,7 +49,7 @@ interface RealizedVsIvSeriesResponse {
     latest_confidence: number;
     floor: number;
     gated_now: boolean;
-    /** Server-side flag (research-doc §7.11): the latest bar's confidence
+    /** Server-side flag (ADR 0071 decision 11): the latest bar's confidence
      *  was computed via the drop-health-factor branch because the recorder
      *  row lacked an explicit health_score. Confidence collapsed to
      *  (1 − vcs); the UI should still mark the bar as "based on imputed

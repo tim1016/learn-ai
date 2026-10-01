@@ -206,7 +206,7 @@ def stage_empty_corporate_action_dirs(workspace: Workspace) -> None:
     """Create empty ``factor_files`` / ``map_files`` subdirectories.
 
     A reconciliation-grade run requires real factor and map files (see
-    ADR §"Corporate actions and metadata policy"). For the
+    ADR 0070 decision 8). For the
     non-reconciliation trusted sample the windows have no corporate
     actions, so an empty directory is enough to silence LEAN's
     ``LocalDiskMapFileProvider`` warning and keep the run output

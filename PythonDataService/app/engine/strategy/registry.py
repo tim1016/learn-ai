@@ -117,8 +117,8 @@ class SignalProgramContract:
 
     This is the single canonical description of a Signal Program's semantic
     surface (issue #1728 sibling finding: the v2 seal was materially
-    incomplete against PRD §11.1 because half of it had no declared source at
-    all). ``app.services.signal_program_admission.build_start_program_seal``
+    incomplete because half of it had no declared source at all).
+    ``app.services.signal_program_admission.build_start_program_seal``
     copies the ``signals``/``decision_streams``/``bar_integrity``/
     ``exit_eligibility``/``numerical_provenance`` values straight from this
     contract into ``ConfiguredSignalProgramSeal`` — the same objects, not a
@@ -901,7 +901,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # the honest figure.
             #
             # But this field governs a second thing: `replay_warmup_bars`
-            # (app/services/bot_trade_strategy_warmup.py) sizes FR-016
+            # (app/services/bot_trade_strategy_warmup.py) sizes
             # crash-candidate recreation from it. At zero the replay has no
             # window to rebuild from: `recent_closed_bars(lookback_days=0)`
             # builds the IBKR duration string "0 D", which is not valid. That
@@ -942,7 +942,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # it says: this program has TWO exit paths, and only one of them
             # is describable here. The countdown below is the ordinary exit.
             # The session stop/flatten barrier is the other, and
-            # `ExitEligibilityContract`'s vocabulary -- built for PRD §17's
+            # `ExitEligibilityContract`'s vocabulary -- built for the
             # "level- or countdown-true" question of when a discarded EXIT
             # must re-emit -- has no word for a session-time barrier.
             #

@@ -2,29 +2,29 @@
 
 One seam for provisioning, volume verification, session registration,
 broker-qualified assignment fencing, routing attempts and the broker-neutral
-directory. The refusals this service raises are PRD §10.4's stable families
-plus the internal families added by the 2026-09-13 audit; storage lives in
-``store.py``, identity minting in ``identity.py``, and provider declarations
-in ``provider.py``.
+directory. The refusals this service raises are the stable refusal families
+(ADR 0062 Decision 5) plus the internal families its addendum adds; storage
+lives in ``store.py``, identity minting in ``identity.py``, and provider
+declarations in ``provider.py``.
 
 The load-bearing invariants, each with a test:
 
 - Assignment ownership never expires. Nothing in this service consults
-  heartbeat age before refusing a rival reservation (PRD FR-054); liveness
+  heartbeat age before refusing a rival reservation (ADR 0062 Decision 4); liveness
   only projects ``unreachable`` in the directory.
 - Volume identity is proven before authority: registration and reservation
-  both verify the marker against the registry row (PRD FR-025/026), and root
+  both verify the marker against the registry row (ADR 0062 Decision 2), and root
   comparisons are qualified by deployment namespace so equal path strings in
   two containers never masquerade as one physical volume.
-- Observed facts never confirm anything (audit 2026-09-13, finding 1): a
+- Observed facts never confirm anything (ADR 0062 addendum, item 1): a
   heartbeat refreshes liveness projections only; the confirmed binding
   observation lives on the assignment row, is fenced by the confirming
   instance and epoch, refuses stale generations, and is the only routing
   fence for execution operations.
-- The directory computes no financial facts (PRD FR-034) and never exposes
-  ``worker_key`` (FR-012).
+- The directory computes no financial facts (ADR 0062 Decision 1) and never
+  exposes ``worker_key`` (ADR 0062 Decision 3).
 - Routing attempts pin their context before dispatch, and a delivered
-  outcome is terminal (audit 2026-09-13, finding 7).
+  outcome is terminal (ADR 0062 addendum, item 7).
 - A clerk that has served leaves service only through the drain ceremony
   (ADR 0063): drain closes the door, the deadline bounds the wait, and the
   normal retirement path refuses without a lane-quiet confirmation rather
@@ -162,7 +162,7 @@ ATTESTATION_KINDS = frozenset({_COMPOSE_NAMED_VOLUME})
 #: The namespace a single-host, unfenced deployment provisions into. Real
 #: deployments name their own (for example ``compose:prod``); roots compare
 #: only within one namespace, because the same path in two containers is two
-#: mounts, not one shared volume (audit 2026-09-13, finding 4).
+#: mounts, not one shared volume (ADR 0062 addendum, item 6).
 DEFAULT_DEPLOYMENT_NAMESPACE = "host:local"
 
 _NAMESPACE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,63}$")
@@ -186,8 +186,8 @@ class ProvisionedClerk:
     operator's uncommitted environment files — the agent-to-coordinator
     token and the coordinator-to-agent token. They are never stored in the
     registry; the ``worker_key`` in ``clerk`` remains the stored durable
-    identity and is never a transport credential (audit 2026-09-13,
-    finding 3).
+    identity and is never a transport credential (ADR 0062 addendum,
+    item 5).
     """
 
     clerk: ClerkRecord
@@ -211,7 +211,7 @@ class FleetControlService:
     ) -> None:
         """Bind the registry store, the deployment's adapters, and the clock."""
         self._store = store
-        # Constructor injection is the extension boundary (PRD FR-002): a
+        # Constructor injection is the extension boundary (ADR 0062 Decision 6): a
         # test-only fake adapter is passed here and never enters the
         # code-owned production mapping.
         self._provider_adapters: Mapping[str, BrokerProviderAdapter] = (
@@ -261,7 +261,7 @@ class FleetControlService:
         return dict(self._provider_adapters)
 
     def require_capability(self, *, broker: str, capability: Capability) -> None:
-        """Refuse an operation the provider does not declare (PRD FR-006)."""
+        """Refuse an operation the provider does not declare (ADR 0062 Decision 6)."""
         adapter = self._adapter(broker)
         if capability not in adapter.capabilities:
             raise BrokerClerkCapabilityUnavailable(
@@ -292,10 +292,10 @@ class FleetControlService:
         The attestation for a compose named volume is the volume's name —
         deployment-owned and nonsecret. The root must be a fresh canonical
         mount; a root that already carries a marker is a copied or re-mounted
-        volume and refuses (PRD FR-026). Root comparisons run only against
+        volume and refuses (ADR 0062 Decision 2). Root comparisons run only against
         clerks in the same deployment namespace: equal path strings across
         namespaces are different mounts, and different strings do not prove
-        different volumes (audit 2026-09-13, finding 4).
+        different volumes (ADR 0062 addendum, item 6).
         """
         self._require_recovery_hold_clear()
         if not broker or not display_label:
@@ -384,7 +384,7 @@ class FleetControlService:
             retired_at_ms=None,
         )
         with self._store.transaction() as conn:
-            # FR-020/021: writable subtrees of one mounted volume never host
+            # Writable subtrees of one mounted volume never host
             # two clerks. Distinct attestations do not make nested roots
             # distinct physical volumes, so containment is refused in both
             # directions — but only within one deployment namespace, where
@@ -470,7 +470,7 @@ class FleetControlService:
 
         Served by the coordinator's internal surface so a remote agent can
         run the volume gate locally — the coordinator never inspects an
-        agent-local path (audit 2026-09-13, finding 4).
+        agent-local path.
         """
         clerk = self._require_clerk(clerk_id)
         return {
@@ -516,7 +516,7 @@ class FleetControlService:
         resolved from the deployment duration and the trading calendar, in
         one transaction.
 
-        Idempotent without extending the bound (§7.3): re-draining a
+        Idempotent without extending the bound (ADR 0063 §7.3): re-draining a
         draining clerk returns the existing record with both instants
         untouched — a retry loop must not make the deadline decorative. The
         write-once trigger beneath the store seam is the fence a race cannot
@@ -572,7 +572,7 @@ class FleetControlService:
         return drained
 
     def retire_clerk(self, *, clerk_id: str) -> ClerkRecord:
-        """Retirement is terminal; IDs are never recycled (PRD FR-013, ADR 0063).
+        """Retirement is terminal; IDs are never recycled (ADR 0062 Decision 3, ADR 0063).
 
         A clerk that provably never served — no row in the append-only
         assignment history, none in the append-only session history, and no
@@ -1020,7 +1020,7 @@ class FleetControlService:
     ) -> LaneQuietConfirmationRecord:
         """ADR 0063 Decision 2's gate, read from the lane's own answer.
 
-        Shared by retirement and by the three handover paths (§4.1's
+        Shared by retirement and by the three handover paths (ADR 0063 §4.1's
         amendment: the hole closes only if the confirmation is wired into
         release, re-reservation and reassignment, not retirement alone).
         Returns the fresh, quiet confirmation it accepted.
@@ -1126,7 +1126,7 @@ class FleetControlService:
     ) -> ApprovedEndpointRecord:
         """Approve or re-target one clerk's internal agent destination.
 
-        Deployment-owned placement evidence (audit 2026-09-13, finding 4): a
+        Deployment-owned placement evidence (ADR 0062 addendum, item 6): a
         registration may cite ``endpoint_ref`` but can never change what it
         points at. The reference and the clerk binding are stable; only the
         destination moves, by re-running this ceremony.
@@ -1178,7 +1178,7 @@ class FleetControlService:
 
         The worker key is compared with ``hmac.compare_digest``. A restart of
         the same clerk presents a new instance id and supersedes the previous
-        session under a higher epoch (FR-065's idempotent same-clerk
+        session under a higher epoch (the idempotent same-clerk
         recovery); the archived session keeps the epoch history auditable.
         Retirement refuses registration — routing to a retired clerk is gone
         for good. Draining refuses with the typed ``ClerkLaneDraining`` so a
@@ -1192,8 +1192,8 @@ class FleetControlService:
         label for the clerk's broker — the coordinator's routing allowlist
         derives from its own catalog, so a mixed build (an older agent
         registering against a newer coordinator's expanded catalog) refuses
-        at registration instead of failing per-operation later (audit
-        2026-09-13, finding 6).
+        at registration instead of failing per-operation later
+        (ADR 0062 addendum, item 4).
 
         ``volume_root`` is the co-located caller's re-proof of the mounted
         root. It is optional because the coordinator process may not have
@@ -1326,7 +1326,7 @@ class FleetControlService:
 
         An observation updates liveness projections only; it can never move
         an assignment, a lifecycle state, a confirmed binding observation or
-        ownership of anything (audit 2026-09-13, finding 1). The optional
+        ownership of anything (ADR 0062 addendum, item 1). The optional
         summary must be the bounded typed observation; agent-authored
         free-form JSON refuses.
 
@@ -1392,16 +1392,16 @@ class FleetControlService:
         external_account_id: str,
         volume_root: Path | None = None,
     ) -> AccountAssignmentRecord:
-        """Reserve ``(broker, canonical account)`` for one clerk (PRD §9.6).
+        """Reserve ``(broker, canonical account)`` for one clerk.
 
         The provider adapter alone canonicalizes the external ID; the key is
         provider-qualified, so the same raw string under another provider is a
         different reservation. A rival active reservation or assignment
         refuses — *regardless of heartbeat age*: liveness never transfers
-        ownership (FR-054). Re-reserving is defined for the same owner in
+        ownership (ADR 0062 Decision 4). Re-reserving is defined for the same owner in
         both live states: a reserved row returns as-is, and an effective row
         is the same-owner resume of a restarted clerk, returning the
-        confirmed facts untouched (audit 2026-09-13, finding 1). A released
+        confirmed facts untouched (ADR 0062 addendum, item 1). A released
         row is a transfer — release followed by reserve is the reassignment
         ceremony's two-step reach — and carries that ceremony's gate: it
         moves only if its release was covered by the predecessor's lane-quiet
@@ -1691,11 +1691,11 @@ class FleetControlService:
         effective_profile_id: str | None = None,
         effective_revision: int | None = None,
     ) -> AccountAssignmentRecord:
-        """Record the worker's confirmed binding observation (PRD FR-064).
+        """Record the worker's confirmed binding observation.
 
         One transaction compares the authenticated clerk, the *current*
         session's instance and epoch, the reserved-or-effective assignment
-        owner, and the proposed binding facts (audit 2026-09-13, finding 1):
+        owner, and the proposed binding facts (ADR 0062 addendum, item 1):
 
         - a confirmation from a superseded session refuses atomically;
         - a generation lower than the confirmed one refuses — restoring old
@@ -1862,7 +1862,7 @@ class FleetControlService:
         operator: str,
         change_ref: str,
     ) -> AccountAssignmentRecord:
-        """The host-only release ceremony (PRD FR-055, ADR 0063 Decisions 4/4.1).
+        """The host-only release ceremony (ADR 0063 Decisions 4/4.1).
 
         Terminal for the generation: the row records ``released`` and stays
         in the append-only history, which is what makes "never expire into
@@ -1978,7 +1978,7 @@ class FleetControlService:
         draining, command-quiet and past the drain deadline. Past all of
         those, the predecessor's current session must hold a fresh, quiet
         lane-quiet confirmation (#2154). That confirmation is also what
-        answers §7.1: a lane only confirms after it has learned its drain,
+        answers ADR 0063 §7.1: a lane only confirms after it has learned its drain,
         and learning it tombstones the volume evidence an offline boot would
         otherwise resurrect, so a confirming lane is exactly one the drain
         reached. A lane that cannot answer is never reassigned.
@@ -2055,7 +2055,7 @@ class FleetControlService:
                         attestation=(bounded_operator, bounded_change_ref),
                     )
                 else:
-                    # §4.1's predecessor preconditions, in order, each naming the
+                    # ADR 0063 §4.1's predecessor preconditions, in order, each naming the
                     # first outstanding item.
                     predecessor = self._require_draining_predecessor_past_deadline(
                         conn, existing.clerk_id, now=now
@@ -2128,10 +2128,10 @@ class FleetControlService:
         """Resolve a routed operation's clerk, verifying path identities.
 
         ``clerk_id`` is resolved first, then the path broker must equal the
-        clerk's immutable broker (PRD FR-071). A retired clerk and a clerk
+        clerk's immutable broker (ADR 0062 Decision 5). A retired clerk and a clerk
         with no live session are not routable. When the caller pins an epoch
         or a binding generation, a mismatch refuses rather than silently
-        retargeting (FR-073/078).
+        retargeting (ADR 0062 Decision 5).
 
         A draining clerk routes only what ``routable_while_draining`` admits
         — the operation's own ``ProviderOperation.routable_while_draining``,
@@ -2140,7 +2140,7 @@ class FleetControlService:
         open exposure refuses, so the drain still closes the door on new
         work; the default refuses, so a caller that names nothing is closed.
 
-        Readiness closes the admission gap (audit 2026-09-13, finding 1):
+        Readiness closes the admission gap (ADR 0062 addendum, item 3):
         ``execution`` operations route only against the *confirmed* effective
         assignment — a heartbeat carrying plausible binding facts proves
         nothing — while ``configuration_access`` operations stay routable for
@@ -2231,7 +2231,7 @@ class FleetControlService:
         ):
             # A replacement session inherits nothing: until it re-confirms
             # from the clerk's current effective binding, the lane is still
-            # starting and not command-routable (audit 2026-09-13, finding 1).
+            # starting and not command-routable (ADR 0062 addendum, item 1).
             raise ClerkUnreachable(
                 f"Clerk {clerk_id}'s confirmed binding was presented by session "
                 f"{assignment.confirmed_agent_instance_id}/"
@@ -2284,7 +2284,7 @@ class FleetControlService:
         command cannot stop a retry from crossing a restart — plus the
         confirmed binding generation when the operation carries one. A crash
         between decision and delivery leaves provable "never sent" evidence
-        (audit 2026-09-13, finding 7). Retrying the same lane-scoped
+        (ADR 0062 addendum, item 7). Retrying the same lane-scoped
         idempotency key returns the existing attempt — unless the retry names
         a different operation, target or pinned context, which is a conflict,
         never a silent cross-attribution.
@@ -2354,7 +2354,7 @@ class FleetControlService:
         attempt already dispatched and not settled is either still in flight
         or its outcome was lost (ADR 0063's reconciliation obligation), and a
         same-key retry must reconcile it by identity rather than deliver the
-        command a second time (ADR 0062 D11, #2319).
+        command a second time (ADR 0062 addendum, item 7, #2319).
         """
         now = self._clock()
         with self._store.transaction() as conn:
@@ -2485,11 +2485,11 @@ class FleetControlService:
     # ---- directory ---------------------------------------------------------
 
     def directory(self, *, include_retired: bool = False) -> dict[str, object]:
-        """The broker-neutral, read-only lane directory (PRD §10.1).
+        """The broker-neutral, read-only lane directory.
 
         Every entry carries broker and clerk identity; the provider summary is
         authored by the provider adapter from registry-held facts only. No
-        financial quantity is computed, combined or projected here (FR-034).
+        financial quantity is computed, combined or projected here (ADR 0062 Decision 1).
         """
         now = self._clock()
         entries: list[dict[str, object]] = []
@@ -2596,7 +2596,7 @@ class FleetControlService:
     def aggregate_lane_reads(
         self, lane_reads: Sequence[tuple[str, str, Callable[[], Mapping[str, object]]]]
     ) -> dict[str, object]:
-        """Provenance-preserving partial aggregation (PRD FR-083/084).
+        """Provenance-preserving partial aggregation (ADR 0062 Decision 1).
 
         Each lane contributes an independent reader. One lane's exception is
         reported as that lane's explicit failure — never omission, never
@@ -2638,14 +2638,14 @@ class FleetControlService:
         The async twin of :meth:`aggregate_lane_reads`, for reads that leave
         the process — a lane-scoped read through the lane router, never a
         local descriptor projection. The per-lane contract is unchanged
-        (PRD FR-083/084): one lane's exception is that lane's explicit
+        (ADR 0062 Decision 1): one lane's exception is that lane's explicit
         ``ok: False`` entry, never an omission, a substitution, or a failure
         for every other lane. A lane that exceeds ``lane_timeout_s`` is the
         same explicit failure — surfaced as ``LaneReadTimeout`` so a slow
         lane is never mistaken for a quiet one — and lanes are awaited
-        concurrently, so one slow lane cannot delay the others' answers
-        (FR-093's transport half). The coordinator still combines no values:
-        each lane's mapping returns untouched.
+        concurrently, so one slow lane cannot delay the others' answers. The
+        coordinator still combines no values: each lane's mapping returns
+        untouched.
         """
         now = self._clock()
 
@@ -2718,7 +2718,7 @@ class FleetControlService:
             # exact code, durably marks its confirmation evidence as drained,
             # and never boots that binding offline again. A generic refusal
             # here would be indistinguishable from unreachability and send
-            # the lane down the FR-066 offline path instead.
+            # the lane down the offline-boot path instead.
             raise ClerkLaneDraining(
                 f"Clerk {clerk.clerk_id} is draining; a drained lane never "
                 "returns to service.",
@@ -2853,10 +2853,10 @@ def _project_lifecycle(
     """Durable states pass through; live states project from observations.
 
     A stored flag would let a historical acknowledgement present itself as
-    current liveness (PRD FR-081), so readiness is recomputed from the
+    current liveness, so readiness is recomputed from the
     session's freshness and the *confirmed* assignment every time. Readiness
     requires a confirmed binding observation — a heartbeat alone projects at
-    most ``starting`` (audit 2026-09-13, finding 1). A clerk the registry
+    most ``starting`` (ADR 0062 addendum, item 1). A clerk the registry
     says holds several effective assignments is corrupted and projects
     ``degraded`` rather than presenting an arbitrary one as healthy.
     """

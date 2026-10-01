@@ -13,7 +13,7 @@ Three rules survive every LEAN version bump:
    stats are version- and definition-sensitive (Sharpe annualization
    constant, sample vs population stdev, benchmark selection). String
    pass-through preserves fidelity; downstream consumers parse when
-   they decide on a convention. See ADR §"Statistics parity scope".
+   they decide on a convention. See ADR 0070 decision 8.
 3. **Unknown fields are tolerated** (Pydantic ``extra="allow"``) so a
    minor LEAN version that adds fields doesn't crash the parser; the
    pinned ``normalized_parser_version`` records exactly what schema

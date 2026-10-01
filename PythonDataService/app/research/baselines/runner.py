@@ -62,10 +62,10 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
-# Default null-distribution coverage. Architecture spec § Feature 7
-# calls out Sharpe / max drawdown / profit factor / return as the
-# headline comparisons; we add ``win_rate`` and ``expectancy_pct``
-# because they're cheap and complete the workbench's metrics card.
+# Default null-distribution coverage. Sharpe / max drawdown / profit factor
+# / return are the headline comparisons; we add ``win_rate`` and
+# ``expectancy_pct`` because they're cheap and complete the workbench's
+# metrics card.
 _DEFAULT_TARGET_METRICS = (
     "sharpe_ratio",
     "total_return_pct",
@@ -142,8 +142,8 @@ def run_baselines(
     # we just repeat the same spec sample_count times — every run
     # produces the same trade list, but the ``BaselineRunRecord`` /
     # null-distribution layer doesn't special-case zero-variance
-    # methods. (The architecture spec calls B&H out as a *single*
-    # baseline; sample_count=1 is the sensible default for it.)
+    # methods. (B&H is a *single* baseline; sample_count=1 is the
+    # sensible default for it.)
     try:
         spec_records = _generate_specs(parent_ledger, request, rng)
     except ValueError as exc:

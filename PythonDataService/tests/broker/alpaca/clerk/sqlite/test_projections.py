@@ -648,7 +648,7 @@ def test_operation_page_is_stable_when_a_new_operation_appends(tmp_path: Path, m
     one ENTER effect operation live under one strategy at once, and #1722
     fenced a fresh ENTER behind ATTRIBUTED_EXPOSURE_EXISTS/ENTER_IN_PROGRESS
     whenever attributed exposure or a nonterminal ENTER already exists (ADR
-    0042, PRD FR-020). The read layer must still paginate correctly over
+    0042). The read layer must still paginate correctly over
     however many operations exist (idempotent replay, legacy data, a future
     carve-out), so bypass the fence to construct that state directly.
     """
@@ -723,7 +723,7 @@ def test_operation_page_does_not_drop_an_operation_whose_updated_at_ms_advances_
     remaining page. It must still be reachable via the next page.
 
     Exercising three simultaneously-live ENTER operations under one
-    strategy is itself now fenced (#1722, ADR 0042, PRD FR-020:
+    strategy is itself now fenced (#1722, ADR 0042:
     ATTRIBUTED_EXPOSURE_EXISTS/ENTER_IN_PROGRESS) — bypass that write-side
     fence here since this test is about read-side pagination, which must
     still be correct over however many operations the ledger holds.
@@ -792,7 +792,7 @@ def test_recovery_policy_reads_working_orders_outside_the_operation_page(
     monkeypatch,
 ) -> None:
     """Needs two simultaneously-live ENTER operations under one strategy,
-    which #1722's ENTER fence (ADR 0042, PRD FR-020) now refuses through the
+    which #1722's ENTER fence (ADR 0042) now refuses through the
     normal decision path — bypass it here since this test is about the
     read-side recovery policy, not write-side admission.
     """

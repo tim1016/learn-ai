@@ -163,7 +163,7 @@ class RunResource:
 
 @dataclass(frozen=True)
 class EffectOperationResource:
-    """A row of ``effect_operations`` — Clerk-owned ENTER/EXIT/... work (§7)."""
+    """A row of ``effect_operations`` — Clerk-owned ENTER/EXIT/... work."""
 
     effect_operation_id: str
     authority_generation: int

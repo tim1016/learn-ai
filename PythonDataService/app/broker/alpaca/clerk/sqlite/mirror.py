@@ -1,7 +1,7 @@
-"""Write-only mirror — the two-phase fsync fence pinned in contracts doc §8.
+"""Write-only mirror — the two-phase fsync fence of ADR 0035's binding annex §4.
 
 Never read on the hot path (R9). Consulted only at startup (finalize-gap
-check, §9 check 9) and during disaster recovery (``rebuild``, §9.3/§13).
+check, annex §9 check 9) and during disaster recovery (``rebuild``).
 
 One mirror file is scoped to exactly one authority generation (rotation is
 the repository's job at reset time, not this module's).
@@ -23,9 +23,9 @@ from app.utils.timestamps import Clock
 class MirrorChainBroken(Exception):
     """A sequence gap, duplicate-with-different-hash, or hash mismatch.
 
-    Per §8: "fails closed rather than importing ambiguous data." Callers
-    must not catch this and proceed — it means the account stays failed
-    closed until a human recovery workflow runs.
+    It fails closed rather than importing ambiguous data. Callers must not
+    catch this and proceed — it means the account stays failed closed until a
+    human recovery workflow runs.
     """
 
 
@@ -202,7 +202,7 @@ class MirrorFile:
         invisible).
 
         A row with no matching FINALIZE is finalized now from the row's own
-        committed data — a crash between §4 steps 2 and 3 leaves the DB
+        committed data — a crash between annex §4 steps 2 and 3 leaves the DB
         transaction as the durable fact and the mirror only catching up, so
         completing the fence here (rather than failing closed) is correct
         for every such row, not only the most recent one — **but only when

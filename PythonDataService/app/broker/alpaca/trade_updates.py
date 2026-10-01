@@ -1020,7 +1020,7 @@ def _stream_url(settings: AlpacaSettings) -> str:
     """Derive the ``/stream`` websocket URL from the mode-derived base URL.
 
     The base URL is already mode-derived (paper vs live) and never independently
-    configurable (config §7), so the ws URL cannot mismatch the mode: swap the
+    configurable, so the ws URL cannot mismatch the mode: swap the
     ``https`` scheme for ``wss`` and append ``/stream``.
     """
     return settings.base_url.replace("https://", "wss://", 1).rstrip("/") + "/stream"

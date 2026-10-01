@@ -76,7 +76,7 @@ class _OpenInterruption:
     #: behind it. A gap no interruption explains is an ordinary gap, and
     #: ordinary gaps are non-fatal (ruling P11).
     recovered_ref: ContinuityEventRef | None = None
-    #: The minute the first post-recovery source bar landed in (spec §4.2
+    #: The minute the first post-recovery source bar landed in (spec #1921 §4.2
     #: rule 4: that bar's timestamp decides which minute the live stream can
     #: complete). Every print of that minute before the landing was lost to
     #: the interruption, and nothing on the bar records it -- like the open
@@ -121,7 +121,7 @@ class ContinuityLoop:
     spec pins lives here. Ruling P6 -- a minute already complete when the
     socket died is a delivered bar, and the deadline derives from it -- now
     holds by construction: the assembler emits a minute on its twelfth print
-    (#2345), so it was delivered before the interruption opened. Spec §4.2
+    (#2345), so it was delivered before the interruption opened. Spec #1921 §4.2
     rule 9 -- no bar reaches the consumer before the evidence explaining it --
     is kept by :meth:`open_interruption` recording the ``interruption`` before
     the loop resubscribes, so every bar after it follows its evidence.
@@ -215,7 +215,7 @@ class ContinuityLoop:
         watermark already moved; the open minute, if any, is short and becomes
         the one the interruption touched. A sink that cannot be written raises
         out of this call before the loop resubscribes, so no later bar can
-        precede the evidence explaining it (spec §4.2 rule 9).
+        precede the evidence explaining it (spec #1921 §4.2 rule 9).
         """
         if self.last_delivered_end_ms is None:
             if self.assembler.open_minute_start_ms is None:
@@ -296,7 +296,7 @@ class ContinuityLoop:
         await self._refuse_decision_bar_missed(interruption.deadline_ms)
 
     def observe_source_bar(self, source_ms: int) -> None:
-        """Note where the resubscribed line landed (spec §4.2 rule 4).
+        """Note where the resubscribed line landed (spec #1921 §4.2 rule 4).
 
         Called for every raw 5-second bar that advances the source watermark.
         The first one after a recovery names the landing minute: every print
@@ -465,7 +465,7 @@ class ContinuityLoop:
 
         Runs only for the first emitted bar after a recorded interruption. A gap
         with no interruption behind it is an ordinary gap, which the port
-        promises is non-fatal (spec §6) -- scanning on every bar would make one
+        promises is non-fatal (spec #1921 §6) -- scanning on every bar would make one
         fatal.
         """
         last_delivered_end_ms = self.last_delivered_end_ms

@@ -101,8 +101,8 @@ def test_a_live_revision_without_an_envelope_is_incomplete_not_a_crash(
     assert info.value.http_status == 422
     # Profile vocabulary, not the settings validator's. That message names six
     # environment variables and says "Refusing to start" — the ADR 0059
-    # environment-source rule ADR 0060 supersedes — and contract §6 renders
-    # ``message`` to the operator verbatim.
+    # environment-source rule ADR 0060 supersedes — and the operator surface
+    # renders ``message`` verbatim.
     assert "live envelope" in info.value.detail
     for banned in ("ALPACA_", "environment file", "Refusing to start"):
         assert banned not in info.value.message
@@ -160,9 +160,9 @@ def test_a_stored_value_of_the_wrong_python_type_is_refused(
     value: object,
     only_default_slot_injected: AlpacaCredentialEnvironment,
 ) -> None:
-    # Pydantic's lax mode would coerce every one of these; the contract's
-    # type-fidelity rule (§2.4) means the sha must never be taken over a
-    # coerced stand-in for what was stored.
+    # Pydantic's lax mode would coerce every one of these; ADR 0060 Decision 6's
+    # type-fidelity rule means the sha must never be taken over a coerced
+    # stand-in for what was stored.
     stored = {**COMPLETE_ENVELOPE, field: value}
 
     with pytest.raises(RevisionIncomplete, match=field):

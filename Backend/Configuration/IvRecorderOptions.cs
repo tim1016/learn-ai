@@ -18,8 +18,8 @@ public class IvRecorderOptions
 
     /// <summary>
     /// Underlying tickers to record per slot. Start with SPY only; expand
-    /// after 30 sessions of clean data validate the pipeline (research-doc
-    /// §7 / §9).
+    /// after 30 sessions of clean data validate the pipeline (ADR 0071
+    /// decision 8).
     /// </summary>
     public List<string> Tickers { get; set; } = new();
 
@@ -27,7 +27,7 @@ public class IvRecorderOptions
     /// Daily snapshot times in <c>HH:mm</c> America/New_York wall-clock,
     /// Mon–Fri only. Default: 09:35 / 12:30 / 15:55 / 16:00 ET — the
     /// 15:55 slot runs alongside 16:00 for the trial-month experiment
-    /// described in research-doc §7.6 / §8.2.3, comparing solver-fail
+    /// described in ADR 0071 decision 7, comparing solver-fail
     /// rate, spread width, vcs, and IV30 stability before deciding
     /// whether to swap.
     /// </summary>

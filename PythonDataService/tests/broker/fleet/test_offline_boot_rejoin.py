@@ -2,7 +2,7 @@
 
 - #2320: a coordinator that *answers* with a typed refusal (a retired or
   unknown clerk, a mixed-build version fence) was read as "unavailable", so
-  the lane booted its last binding offline under FR-066 against the very
+  the lane booted its last binding offline against the very
   coordinator that had just refused it.
 - #2321: a lane that did boot offline (the coordinator really was down) never
   tried to register again, so it never rejoined and never heard a drain or a
@@ -154,7 +154,7 @@ async def _until(predicate: Callable[[], bool], *, what: str, deadline_s: float 
 async def _offline_lane(
     coordinator: _Coordinator, provisioned: ProvisionedClerk, root: Path
 ) -> FleetLaneBoot:
-    """Restart the lane while the coordinator is down: FR-066's offline boot."""
+    """Restart the lane while the coordinator is down: the offline boot."""
     assert not coordinator.up
     boot = await open_fleet_lane(settings=_remote_settings(provisioned), volume_root=root)
     assert boot is not None and not boot.online
@@ -190,7 +190,7 @@ async def test_a_version_fence_refusal_is_not_unavailability(
     protocol_version: int,
 ) -> None:
     """#2340's probe: both mixed-build fences answer 409 from a reachable
-    coordinator, and neither may land in FR-066's offline family."""
+    coordinator, and neither may land in the offline family."""
     service = _service(control_dir, clock)
     try:
         provisioned = _enrolled_lane(service, tmp_path, clock)
@@ -335,7 +335,7 @@ async def test_an_offline_booted_lane_rejoins_and_learns_its_drain(
         )
         start_heartbeat(boot, interval_s=0.02)
         await asyncio.sleep(0.1)
-        assert not boot.online  # still down: FR-066 keeps riding it out
+        assert not boot.online  # still down: the offline fallback keeps riding it out
 
         coordinator.up = True
         await _until(lambda: boot.online, what="the offline lane rejoined")

@@ -1,7 +1,7 @@
 """Shared fixtures for the fleet spine suite.
 
-The two test-only fake providers prove the extension boundary (PRD Phase 6 /
-FR-002): they implement the adapter protocol, declare *different* capability
+The two test-only fake providers prove the extension boundary (ADR 0062
+Decision 6): they implement the adapter protocol, declare *different* capability
 sets, canonicalize accounts *differently* (the headline boundary proof
 alongside the capability split), and reach the service only through
 constructor injection — never through the production registry.

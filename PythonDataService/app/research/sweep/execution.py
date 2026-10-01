@@ -5,7 +5,7 @@ before every item and once more after the last item completes, so a
 cancellation that arrives while the last item executes is never lost
 (issue #1928, review F12) — and per-item isolation, so a failing item is
 returned as its own result rather than aborting the run. The Recency Chart
-runner established the contract (PRD #1577, design spec D11); Grid Search
+runner established the contract (PRD #1577); Grid Search
 (PRD #1926) and Walk-Forward (PRD #1925) share this module rather than each
 transcribing the loop.
 

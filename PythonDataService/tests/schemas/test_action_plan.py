@@ -170,7 +170,7 @@ def test_unknown_strike_selector_rejected() -> None:
 
 
 def test_delta_strike_selector_deliberately_unavailable() -> None:
-    """ADR 0012 §"Schema shape" / Slice 1C — ``delta`` is hidden from the
+    """ADR 0012 / Slice 1C — ``delta`` is hidden from the
     deployable schema until Slice 6 ships its resolver. An operator must
     not be able to deploy a plan the engine cannot run."""
 
@@ -201,7 +201,7 @@ def test_absolute_expiry_missing_expiration_ms_rejected() -> None:
 
 
 def test_absolute_expiry_round_trips_as_int64_ms() -> None:
-    """ADR 0012 §"Schema shape" / repo timestamp policy — wire format is
+    """Repo timestamp policy (ADR 0022) — wire format is
     ``int64`` ms UTC. Display conversion to ``America/New_York`` lives at
     the UI boundary, not in the schema."""
 

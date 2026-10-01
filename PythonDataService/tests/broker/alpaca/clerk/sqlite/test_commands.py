@@ -176,10 +176,9 @@ def test_stop_command_id_is_scoped_to_the_lifecycle_run_id(repo: ClerkSqliteRepo
 def test_stop_retry_after_run_already_stopped_replays_the_completed_result(
     repo: ClerkSqliteRepository,
 ) -> None:
-    """Corrective foundation slice, the exact defect the fix closes
-    (open-pr-review-2026-08-05.md P2 "Stop retry loses the active-run
-    identity"): a lost-response retry of a Stop must return the original
-    completed command even though the run it targeted is no longer active
+    """Corrective foundation slice, the exact defect the fix closes (a Stop
+    retry losing the active-run identity): a lost-response retry of a Stop
+    must return the original completed command even though the run it targeted is no longer active
     — and even after a *different* run has since started and stopped."""
     submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1")
     stop1 = submit_stop_run(
