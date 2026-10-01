@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from app.config import settings
 from app.engine.strategy.params import decision_timeframe_ms_for
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
+from app.research.golden_search.qualifications import registry_point_matches
 from app.schemas.run_admission import (
     ProgramBuildAdmissionFact,
     StrategyValidationAdmissionFact,
@@ -194,7 +195,7 @@ def build_start_program_seal(
         parameter_schema_version=contract.parameter_schema_version,
         golden_trace_root=contract.golden_trace_root,
         parameters=parameters,
-        parameters_match_validated_settings=_parameters_match(contract, effective),
+        parameters_match_validated_settings=registry_point_matches(contract, effective),
         data=SignalDataContract(
             provider=contract.provider,
             symbol=binding.symbol.upper(),
@@ -614,13 +615,6 @@ def _seal_checks(
         # the sealed program still *is* the registered one, and since ADR 0054
         # it is reported as `corpus_coverage` on the proof rather than
         # refusing it -- see `prove_running_program_build`.
-    )
-
-
-def _parameters_match(contract: SignalProgramContract, effective: dict[str, Any]) -> bool:
-    return (
-        str(effective.get("symbol", "")).upper() in contract.validated_symbols
-        and all(effective.get(name) == value for name, value in contract.validated_settings.items())
     )
 
 
