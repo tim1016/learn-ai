@@ -4,12 +4,9 @@
 **Run window:** 2024-03-28 → 2026-03-27, $100,000 starting cash, $53M estimated capacity
 **LEAN version:** v2.5.0.0
 **Output directory:** `Lean/Launcher/bin/Debug/`
-**Companion files in this folder:**
-- [`inventory.json`](spy-lean-output/inventory.json) — mechanical catalog of every field in every output file
-- [`verify.py`](spy-lean-output/verify.py) — independent Python recomputation of every KPI from the raw equity curve and trade list
-- [`source-map.md`](spy-lean-output/source-map.md) — flat "field → C# file:line" cheat sheet
+**Companion files (removed; in Git history):** `inventory.json` (a catalog of every field in every output file), `verify.py` (an independent Python recomputation of every KPI from the raw equity curve and trade list) and `source-map.md` (a flat "field → C# file:line" cheat sheet). The pinned [LEAN native statistics oracle](references/lean-native-statistics-oracle-v1.md) supersedes this unpinned study.
 
-> **How to read this document.** Every section maps one output field (or chart series) to three things: **what it is**, **how it is computed** in the LEAN C# source, and **the value we actually got** in this run. The numbers in the third column were reconciled independently by `verify.py` — 21 of 29 core KPIs match LEAN's reported value to four or more decimals without any access to LEAN's internals; the 8 that didn't match are called out with their exact discrepancy and cause.
+> **How to read this document.** Every section maps one output field (or chart series) to three things: **what it is**, **how it is computed** in the LEAN C# source, and **the value we actually got** in this run. The numbers in the third column were reconciled independently by `verify.py` (removed; in Git history) — 21 of 29 core KPIs match LEAN's reported value to four or more decimals without any access to LEAN's internals; the 8 that didn't match are called out with their exact discrepancy and cause.
 
 ---
 
@@ -79,7 +76,7 @@ Key fields:
 - **`isMarketable`** — always `true` for our market orders.
 - **`priceAdjustmentMode`** — `0` (Raw), consistent with the algorithm's `SetDataNormalizationMode(DataNormalizationMode.Raw)`.
 
-The full list of order fields is in `inventory.json` under `order_fields`.
+The full list of order fields was in `inventory.json` under `order_fields` (removed; in Git history).
 
 ---
 
@@ -320,7 +317,7 @@ Reconciliation: exact match. ✅
 
 These are computed purely from the list of closed `Trade` objects and do not touch the equity curve. They live in `TradeStatistics.cs` and are maintained incrementally (Welford's algorithm) as each trade is closed.
 
-For space, I'll group them by theme and give the formula for the non-obvious ones; every field is in `inventory.json` and pinned to a line in [`source-map.md`](spy-lean-output/source-map.md).
+For space, I'll group them by theme and give the formula for the non-obvious ones; every field was in `inventory.json` and pinned to a line in `source-map.md` (both removed; in Git history).
 
 ### 9.1 Counts and totals
 
