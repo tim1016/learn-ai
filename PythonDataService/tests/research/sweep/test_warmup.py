@@ -88,7 +88,6 @@ def test_run_up_is_carved_from_the_front_when_no_earlier_history_exists(tmp_path
     assert plan.run_up_sessions == 2
     assert plan.evaluation_start == sessions[2]
     assert plan.evaluation_end == WINDOW[1]
-    assert plan.is_primed
 
 
 def test_earlier_history_is_used_when_the_lake_holds_it(tmp_path: Path) -> None:

@@ -23,7 +23,6 @@ from app.services import signal_program_admission as admission_module
 from app.services.bot_binding_repository import (
     BotBindingRepository,
     BrokerBotBinding,
-    LegacyMigrationLineageRecord,
     alpaca_v1_action_plan,
 )
 from app.services.bot_carryover import configuration_hash
@@ -358,28 +357,6 @@ def test_v2_seal_appends_without_rewriting_v1_identity_bytes(tmp_path: Path) -> 
         / "program_build_evidence"
         / "run-2.json"
     ).is_file()
-
-
-def test_historical_clone_lineage_remains_readable_without_a_clone_writer(tmp_path: Path) -> None:
-    repository = BotBindingRepository(
-        tmp_path,
-        instance_dir_for=lambda sid: tmp_path / "live_state" / sid,
-    )
-    record = LegacyMigrationLineageRecord(
-        strategy_instance_id="historical-clone",
-        migrated_from_strategy_instance_id=_SID,
-        reason="Historical v1 parameters could not reconstruct an exact seal.",
-        created_at_ms=_NOW,
-    )
-    path = tmp_path / "live_state" / record.strategy_instance_id / "legacy_migration_lineage.json"
-    path.parent.mkdir(parents=True)
-    original = record.model_dump_json().encode()
-    path.write_bytes(original)
-
-    assert repository.read_legacy_migration_lineage(record.strategy_instance_id) == record
-    assert path.read_bytes() == original
-    assert not hasattr(repository, "ensure_legacy_migration_clone_lineage")
-    assert not hasattr(admission_module, "reconstruct_legacy_program_seal")
 
 
 def _sma_binding(resolution_minutes: int) -> BrokerBotBinding:

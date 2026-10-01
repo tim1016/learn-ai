@@ -320,8 +320,6 @@ _SVI_PARAMS: list[tuple[float, float, float, float, float]] = [
 _SVI_K_VALUES: list[float] = [-0.30, -0.15, -0.05, 0.00, 0.05, 0.15, 0.30]
 _SVI_TTM = 0.5
 _SVI_FORWARD = 100.0
-_SVI_N_STRIKES = len(_SVI_K_VALUES)
-_SVI_N_CASES = len(_SVI_PARAMS)
 
 
 def generate_iv002(version_dir: Path, justification: str = "") -> None:

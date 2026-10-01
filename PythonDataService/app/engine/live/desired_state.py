@@ -71,9 +71,6 @@ def stable_desired_state_path(artifacts_root: Path, strategy_instance_id: str) -
     """Canonical on-disk path for a strategy instance's desired-state file.
 
     Layout: <artifacts_root>/live_state/<strategy_instance_id>/desired_state.json
-    Sits alongside ``live_state.json`` (the order-idempotency sidecar)
-    under the same per-strategy directory — see
-    ``live_state_sidecar.stable_live_state_path``.
 
     The id is validated as a single safe path segment (fail-fast at the
     boundary) so a caller-controlled value can never escape
@@ -201,7 +198,7 @@ class DesiredStateRepo:
     def write(self, record: DesiredStateRecord) -> None:
         """Atomic write under advisory lock: serialise to a sibling .tmp,
         fsync, os.replace, then fsync the parent dir so the rename
-        survives a crash. Mirrors ``LiveStateSidecarRepo.write``.
+        survives a crash.
         """
         root_real = os.path.realpath(os.fspath(self._trusted_root))
         candidate = os.path.realpath(os.fspath(self._path))

@@ -18,7 +18,6 @@ from app.broker.alpaca.profile.credentials import (
     CREDENTIAL_SLOTS,
     AlpacaCredentialEnvironment,
     CredentialSlotAvailability,
-    credential_slot_available,
     describe_credential_slots,
     is_known_credential_slot,
     resolve_credentials,
@@ -120,11 +119,6 @@ def test_a_slot_off_the_allowlist_never_reaches_an_environment_lookup(slot: obje
     assert info.value.known_slots == CREDENTIAL_SLOTS
 
 
-def test_an_unknown_slot_is_a_refusal_for_availability_too() -> None:
-    with pytest.raises(CredentialSlotUnknown):
-        credential_slot_available("POLYGON_API_KEY", environment=_RefusingEnvironment())
-
-
 def test_is_known_credential_slot_reads_no_environment() -> None:
     assert is_known_credential_slot("default") is True
     assert is_known_credential_slot("live") is True
@@ -160,7 +154,6 @@ def test_a_half_injected_slot_is_unavailable_not_half_resolved(
         credential_live_key_id=key_id, credential_live_secret_key=secret_key
     )
 
-    assert credential_slot_available("live", environment=environment) is False
     with pytest.raises(CredentialSlotUnavailable):
         resolve_credentials("live", environment=environment)
 

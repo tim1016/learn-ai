@@ -10,7 +10,7 @@
 
 ### What the lake already is in the tree
 
-`PythonDataService/app/data_lake/` holds a complete, working implementation: `ensure_data.py` (the delta-fetch entry point, `async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult`), `catalog_client.py` (an `asyncpg` pool against Postgres — claim/lease/coverage queries, no bar bytes), `catalog_schema.py` (the Python mirror of the EF Core migration, drift-tested against `pg_catalog`), `path_policy.py`, `lean_writer.py`, `factor_files.py`, `map_files.py`, `sweep.py` (lease-expiry reclaim), and the Polygon-side fetchers. `catalog_schema.DATA_LAKE_ARTIFACTS` has no bytes/blob column — only `FilePath`, `FileSha256`, `FileSizeBytes`, row counts, timestamps, and lease/claim state. Postgres was built to hold metadata about the files, never the files' contents. `Backend/Migrations/20260521033222_AddDataLakeArtifactsAndRuns.cs` is the EF Core migration that owns the schema, per the design's service-role split (Backend owns Postgres migrations; Python owns the only writer).
+`PythonDataService/app/data_lake/` holds a complete, working implementation: `ensure_data.py` (the delta-fetch entry point, `async def ensure_data(spec: DataRunSpec) -> DataAvailabilityResult`), `catalog_client.py` (an `asyncpg` pool against Postgres — claim/lease/coverage queries, no bar bytes), `catalog_schema.py` (the Python mirror of the EF Core migration, drift-tested against `pg_catalog`), `path_policy.py`, `lean_writer.py`, `factor_files.py`, `map_files.py`, and the Polygon-side fetchers. `catalog_schema.DATA_LAKE_ARTIFACTS` has no bytes/blob column — only `FilePath`, `FileSha256`, `FileSizeBytes`, row counts, timestamps, and lease/claim state. Postgres was built to hold metadata about the files, never the files' contents. `Backend/Migrations/20260521033222_AddDataLakeArtifactsAndRuns.cs` is the EF Core migration that owns the schema, per the design's service-role split (Backend owns Postgres migrations; Python owns the only writer).
 
 The lake is currently reachable in-process (`app/routers/data_lake.py` exposes `ensure_data` over a thin `POST /api/data-lake/ensure-data` used by the observatory/backfill surface this PRD's later slices add) but is not yet the engines' or charts' read path — `DATA_LAKE_ENABLED` defaults `False`, the Python engine and LEAN sidecar still resolve data through the older policy-store cache (`app/engine/data/policy_store.py`), and no Backend code path calls `ensure-data` or `prepare-run` today (grep confirms only the EF migration references those table names). This ADR names the target authority; wiring the remaining consumers onto it is the rest of the PRD's slices, several of which are landing in parallel with this record. Per ADR 0039 Decision 1, the `Accepted` status below states standing, not that every consumer has been re-pointed yet — acceptance settles the decision, not the rollout.
 
@@ -22,7 +22,7 @@ The lake's design is `docs/architecture/adrs/0049-data-lake-is-the-market-data-a
 git show 8441f4f6^:docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md
 ```
 
-The lake's live source cites that spec by section number throughout (e.g. `catalog_schema.py`'s docstring points at "§ 3", `sweep.py`'s at "§ 4.4"); this ADR does the same, and any successor reading a `§ N` citation in the code should recover the spec with the command above before assuming the section renumbered.
+The lake's live source cites that spec by section number throughout (e.g. `catalog_schema.py`'s docstring points at "§ 3"); this ADR does the same, and any successor reading a `§ N` citation in the code should recover the spec with the command above before assuming the section renumbered.
 
 The spec's **§2.1 service roles** table draws the authority split this ADR ratifies: Python `app/data_lake/` is "the only writer to the lake" and hosts the reader; Postgres is "Catalog + audit. Knows what artifacts exist and whether they are valid. **Never stores bar bytes.**" Its **§2.2 volume layout / mount table** enforces that split at the mount boundary — a writer-only `LEAN_DATA_WRITE_ROOT` mount (`/lean-data-writer`, rw) that only `app/data_lake/` ever references, versus a `LEAN_DATA_ROOT` mount (`/lean-data`, ro) for every reader (`LeanMinuteDataReader`, the LEAN sidecar's own `/lean-run/data` mount), with `lake/` and `staging/` sharing one filesystem specifically so the atomic `rename(2)` publish is real, not copy-then-unlink. Its **§2.3 control flow** is the flow Decision 3 below deliberately departs from.
 
@@ -117,7 +117,7 @@ The pruned design spec is recovered with:
 git show 8441f4f6^:docs/architecture/adrs/0049-data-lake-is-the-market-data-authority.md
 ```
 
-Sections cited above: §2.1 (service roles), §2.2 (volume layout / mount table), §2.3 (control flow, the flow Decision 3 departs from), §3 (catalog schema, mirrored by `catalog_schema.py`), §4.4 (concurrency primitives, used by `sweep.py`).
+Sections cited above: §2.1 (service roles), §2.2 (volume layout / mount table), §2.3 (control flow, the flow Decision 3 departs from), §3 (catalog schema, mirrored by `catalog_schema.py`), §4.4 (concurrency primitives).
 
 ### 6. TimescaleDB deferral — two triggers, two different consequences, neither decided here
 

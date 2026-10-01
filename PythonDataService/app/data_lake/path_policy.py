@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path, PurePosixPath
 from typing import Literal, get_args
-from uuid import UUID
 
 from app.config import settings
 from app.data_lake.types import PriceAdjustmentMode
@@ -318,24 +317,3 @@ class LeanMetadataPath:
             # existing single-market scope (``Market = Literal["usa"]``).
             return PurePosixPath("alternative") / "interest-rate" / "usa" / "interest-rate.csv"
         raise ValueError(f"unknown metadata kind: {self.kind!r}")
-
-
-def staging_path_for(
-    rel_lake_path: PurePosixPath,
-    request_id: UUID,
-    worker_id: str,
-    attempt: int,
-) -> PurePosixPath:
-    """Build the per-attempt staging path for a given final relative path.
-
-    Structurally prevents retry/parallel-worker collisions: every attempt
-    writes to its own subtree under staging/. The atomic rename promotes
-    the .tmp file to its final position in the lake.
-    """
-    return (
-        PurePosixPath("staging")
-        / str(request_id)
-        / worker_id
-        / f"attempt_{attempt}"
-        / rel_lake_path.with_suffix(rel_lake_path.suffix + ".tmp")
-    )

@@ -1051,11 +1051,6 @@ def _custody_timeline(
     )
 
 
-def _window_summary(page: OperationPage) -> ClerkCustodyWindowSummary:
-    operations = page.operations
-    return _all_window_summary(operations, record_count=len(operations))
-
-
 def _all_window_summary(
     operations: list[ProjectedOperation] | tuple[ProjectedOperation, ...],
     *,

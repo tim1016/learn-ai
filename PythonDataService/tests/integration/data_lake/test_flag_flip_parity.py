@@ -1,54 +1,22 @@
-"""Flagship parity: the lake serves the same run the policy cache did (#1839).
+"""A window the lake imported costs nothing at the provider (#1839).
 
-This is the slice's central claim, made executable. The data lake replaces the
-policy-keyed cache as the market-data authority, and everything downstream --
-two backtest engines, a chart, a manifest fingerprint on a run receipt --
-depends on the replacement being an identity rather than an approximation.
+The data lake replaced the policy-keyed cache as the market-data authority.
+These two tests hold the part of that claim no native-lake test repeats: a
+window imported from the old cache is served by the chart split-read and by an
+engine backtest without a single provider call.
 
-Equivalence levels, per ``.claude/rules/numerical-rigor.md``, and they are not
-all the same level. Stating which claim is which is the point:
-
-* **Bit-exact, across the import.** ``cache_import`` promotes the cache zip's
-  bytes verbatim (``atomic_write_and_promote(content=verified.raw_bytes)``), so
-  an imported lake artifact is byte-identical to the cache zip it came from --
-  same SHA-256, therefore same ``data_availability_hash``. This is the claim
-  the acceptance criterion ("identical manifest fingerprint for lake-read vs
-  cache-read of the same run spec") actually rests on, and it is provable
-  rather than approximate.
-* **Bit-exact, for the bars.** Both readers decode the same integers off the
-  same deci-cent grid into ``Decimal``, so the bar streams are compared with
-  exact equality. There is no ``atol`` here and there should not be: a
-  tolerance would be admitting a difference that cannot arise, and would hide
-  one that could.
-* **Row-exact, NOT byte-exact, writer-to-writer.** For a day each path fetches
-  *fresh*, the two writers produce identical rows in non-identical archives:
-  the lake writer terminates its CSV with a newline and the policy writer does
-  not. Byte-equality between the two writers is claimed nowhere in this repo.
-  ``tests/unit/data_lake/test_deci_cent_canonical.py`` owns that weaker claim
-  in full -- both halves of it, since only that file builds the two zips from
-  the same bars and can therefore assert the inequality for its real reason.
-  This file owns the strong claim, and shows the row-level agreement on the
-  imported day for continuity.
-
-**Daily infrastructure.** The pull-request shards have no Postgres. The daily
-suite supplies a disposable, migrated catalog, so all eight tests execute
-there. Since #2456 a reader admits a lake file only against a root identity and
-a committed catalog receipt, so the five tests that read the imported lake
-through that admission carry the ``slow`` mark and run daily only (they are red
-there until #2660 lands). The byte-identity and writer-agreement tests still
-exercise the byte path without consulting the catalog, which keeps those claims
-runnable on a plain developer checkout. What the catalog contributes to the
-fingerprint is the artifact's identity and its ``file_sha256``; both are
-reconstructed here from the bytes actually on disk, which is where the catalog
-gets them from too.
+**Daily infrastructure.** The pull-request shards have no Postgres. Since
+#2456 a reader admits a lake file only against a root identity and a committed
+catalog receipt, so the chart test carries the ``slow`` mark and runs daily
+only (it is red there until #2660 lands); the engine test goes through
+``ensure_data`` and therefore needs the disposable, migrated catalog the daily
+suite supplies.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
-import zipfile
 from datetime import date
 from pathlib import Path
 from uuid import uuid4
@@ -58,14 +26,10 @@ import pytest
 from app.config import settings
 from app.data_lake.atomic import atomic_write_and_promote
 from app.data_lake.cache_import import verify_and_read_zip
-from app.data_lake.ensure_data import _compute_data_availability_hash
-from app.data_lake.lean_writer import build_minute_trade_zip_bytes
 from app.data_lake.path_policy import LeanMinuteBarPath, resolve_lake_root, resolve_staging_root
-from app.data_lake.types import ArtifactRecord, PriceAdjustmentMode
-from app.engine.data.lean_format import LeanMinuteDataReader
-from app.engine.data.policy_store import resolve_data_roots, snapshot_minute_trade_zips
+from app.data_lake.types import PriceAdjustmentMode
 from app.lean_sidecar.trading_calendar import session_open_ms_utc
-from tests._helpers.lean_store import make_minute_bars, seed_store_day
+from tests._helpers.lean_store import seed_store_day
 
 SYMBOL = "SPY"
 DAY_ONE = date(2026, 1, 5)  # Monday
@@ -99,7 +63,7 @@ def imported_lake(tmp_path: Path, cache_root: Path, monkeypatch: pytest.MonkeyPa
     anything malformed, then ``atomic_write_and_promote`` of ``raw_bytes``.
     What is deliberately absent is the catalog -- the claim/lease bookkeeping,
     which decides *whether* to write and records *that* it was written, and
-    which is outside this fixture's byte-equivalence claim (see the module
+    which the chart's catalog-free read never consults (see the module
     docstring). Nothing it does changes a byte.
     """
     # Same location the autouse ``_isolate_data_lake_write_root`` guard in
@@ -109,22 +73,6 @@ def imported_lake(tmp_path: Path, cache_root: Path, monkeypatch: pytest.MonkeyPa
     write_root = tmp_path / "lean-data-writer"
     monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
     return _import_cache_bytes(cache_root, "raw")
-
-
-@pytest.fixture
-def imported_lake_adjusted(tmp_path: Path, cache_root: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The same window, imported into the adjusted-mode root instead.
-
-    Since #1866 the mode is a segment of the root, so a symbol can be
-    imported into either root independently. This fixture reuses the raw
-    cache's bytes under the adjusted mode -- fine for what it proves (an
-    adjusted request resolves and reads its own root), and out of scope for
-    what it does not (whether Polygon's split adjustment matches LEAN's
-    factor-file one, which #1866 explicitly left unanswered).
-    """
-    write_root = tmp_path / "lean-data-writer"
-    monkeypatch.setattr(settings, "LEAN_DATA_WRITE_ROOT", str(write_root))
-    return _import_cache_bytes(cache_root, "polygon_split_adjusted")
 
 
 def _import_cache_bytes(cache_root: Path, mode: PriceAdjustmentMode) -> Path:
@@ -159,235 +107,6 @@ def _lake_relative_path(trading_date: date):
     ).relative_path()
 
 
-def _artifact_records(root: Path) -> list[ArtifactRecord]:
-    """Reconstruct the catalog rows a run's fingerprint is computed over.
-
-    Every field the fingerprint consumes comes off the bytes on disk, which is
-    where ``complete_artifact`` gets them from as well -- so a record built
-    here and a record the catalog wrote for the same file agree by
-    construction, not by coincidence.
-    """
-    records: list[ArtifactRecord] = []
-    for artifact_id, trading_date in enumerate(WINDOW, start=1):
-        relative = _lake_relative_path(trading_date)
-        payload = (root / Path(*relative.parts)).read_bytes()
-        bars = list(LeanMinuteDataReader([root], session="extended").read_day(SYMBOL, trading_date))
-        records.append(
-            ArtifactRecord(
-                id=artifact_id,
-                artifact_kind="time_series_bars",
-                market="usa",
-                symbol=SYMBOL,
-                trading_date=trading_date,
-                resolution="minute",
-                data_type="trade",
-                provider="polygon",
-                price_adjustment_mode="raw",
-                data_contract_hash="c" * 64,
-                file_path=str(relative),
-                file_sha256=hashlib.sha256(payload).hexdigest(),
-                row_count=len(bars),
-                first_bar_start_ms=bars[0].start_ms,
-                last_bar_start_ms=bars[-1].start_ms,
-            )
-        )
-    return records
-
-
-# ---------------------------------------------------------------------------
-# The claim.
-# ---------------------------------------------------------------------------
-
-
-def test_imported_lake_artifacts_are_byte_identical_to_their_cache_zips(
-    cache_root: Path, imported_lake: Path
-) -> None:
-    """The strong claim, and the one everything below rests on.
-
-    The importer promotes ``verified.raw_bytes`` -- it does not re-encode --
-    so the lake artifact and the cache zip are the same file under two names.
-    Everything downstream (the SHA the catalog records, the fingerprint the
-    run receipt carries, the bytes LEAN reads off the mount) inherits that.
-    """
-    for trading_date in WINDOW:
-        cache_bytes = _cache_zip_path(cache_root, trading_date).read_bytes()
-        lake_bytes = (imported_lake / Path(*_lake_relative_path(trading_date).parts)).read_bytes()
-
-        assert lake_bytes == cache_bytes, trading_date
-        assert hashlib.sha256(lake_bytes).hexdigest() == hashlib.sha256(cache_bytes).hexdigest()
-
-
-@pytest.mark.slow  # reads through lake admission: needs the catalog
-def test_lake_read_and_cache_read_produce_the_same_manifest_fingerprint(
-    cache_root: Path, imported_lake: Path
-) -> None:
-    """The acceptance criterion, stated as the equality it actually is.
-
-    ``data_availability_hash`` is a SHA-256 over each artifact's identity and
-    its ``file_sha256``. The identity is the same on both sides because the
-    lake's path policy and the policy store's layout agree on
-    ``equity/usa/minute/<symbol>/<date>_trade.zip``; the hash is the same
-    because the import copied bytes. So the fingerprints match, and a run that
-    switched from one root to the other would record the same receipt.
-    """
-    lake_hash = _compute_data_availability_hash(_artifact_records(imported_lake))
-    cache_hash = _compute_data_availability_hash(_artifact_records(cache_root))
-
-    assert lake_hash == cache_hash
-    # Not a degenerate equality: the hash is over real content, so mutating
-    # one byte of one day must break it. Without this the test would pass on
-    # two empty record lists.
-    tampered = _artifact_records(imported_lake)
-    tampered[0] = tampered[0].model_copy(update={"file_sha256": "0" * 64})
-    assert _compute_data_availability_hash(tampered) != cache_hash
-
-
-@pytest.mark.slow  # reads through lake admission: needs the catalog
-def test_lake_read_and_cache_read_produce_identical_bar_streams(
-    cache_root: Path, imported_lake: Path
-) -> None:
-    """Exact equality, no tolerance -- and the tolerance choice is the claim.
-
-    Both sides decode the same integers off LEAN's deci-cent grid into
-    ``Decimal``, so no floating-point step exists between the bytes and these
-    values. An ``atol`` here would admit a difference that cannot arise and
-    conceal one that could.
-    """
-    lake_bars = list(LeanMinuteDataReader([imported_lake], session="regular").iter_bars(SYMBOL, DAY_ONE, DAY_THREE))
-    cache_bars = list(LeanMinuteDataReader([cache_root], session="regular").iter_bars(SYMBOL, DAY_ONE, DAY_THREE))
-
-    assert len(lake_bars) == 3 * 390
-    assert lake_bars == cache_bars
-
-
-@pytest.mark.slow  # reads through lake admission: needs the catalog
-def test_both_engines_resolve_the_same_artifact_hashes_for_one_run(
-    imported_lake: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """AC: the Python engine and the LEAN sidecar consume identical bytes.
-
-    Asserted at the config/manifest seam, the way #1834's tests do -- no
-    container is launched. The Python engine resolves its roots through
-    ``policy_store.resolve_data_roots`` and hashes what it will read
-    (``snapshot_minute_trade_zips``); the sidecar resolves the same window
-    through the lake mount. Both must name the same files with the same
-    digests, because "both engines read the same bytes" is the property the
-    whole two-engine parity programme is built on.
-    """
-    from app.lean_sidecar.lake_mount import resolve_lake_artifacts
-
-    _seed_lake_run_prerequisites(imported_lake)
-
-    engine_roots = resolve_data_roots(source="polygon", adjusted=False)
-    assert engine_roots == [imported_lake]
-    engine_receipt = snapshot_minute_trade_zips(
-        engine_roots,
-        symbol=SYMBOL,
-        start=DAY_ONE,
-        end=DAY_THREE,
-        adjusted=False,
-        session="regular",
-    )
-
-    sidecar_artifacts = resolve_lake_artifacts(
-        lake_root=imported_lake,
-        symbol=SYMBOL,
-        start=DAY_ONE,
-        end=DAY_THREE,
-    )
-
-    engine_digests = {entry["path"]: entry["sha256"] for entry in engine_receipt["files"]}
-    sidecar_digests = {
-        str(path.relative_to(imported_lake)): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sidecar_artifacts.trade_zip_paths
-    }
-
-    assert engine_digests == sidecar_digests
-    assert len(engine_digests) == len(WINDOW)
-
-
-def test_the_two_writers_agree_on_rows_for_the_imported_day(imported_lake: Path) -> None:
-    """The weaker claim: same rows out of two different writers.
-
-    A day the *lake* fetches fresh goes through ``lean_writer``; the same day
-    fetched through the pre-lake path goes through ``lean_format``. Since
-    #1839 both encode prices with the one canonical deci-cent rule, so the
-    decoded rows are identical even though the archives are not.
-
-    **The byte-INEQUALITY is guarded elsewhere, deliberately.** It cannot be
-    asserted here: this compares a five-bar lake zip against the imported
-    390-bar day, so the bytes differ because the row counts differ, and the
-    assertion would still pass if the writers became byte-identical -- a
-    guard that cannot fail for its stated reason is worse than none. The real
-    guard builds both zips from the *same* bars and lives in
-    ``tests/unit/data_lake/test_deci_cent_canonical.py``
-    (``test_both_writers_encode_identically_on_sub_grid_prices``); that is
-    where a future change making the writers byte-identical gets caught.
-    """
-    bars = make_minute_bars(SYMBOL, DAY_ONE, count=5)
-    lake_written = build_minute_trade_zip_bytes(
-        SYMBOL,
-        DAY_ONE.strftime("%Y%m%d"),
-        [_as_lake_bar(bar) for bar in bars],
-    )
-    store_written = (imported_lake / Path(*_lake_relative_path(DAY_ONE).parts)).read_bytes()
-
-    assert _csv_rows(lake_written)[:5] == _csv_rows(store_written)[:5]
-
-
-def _as_lake_bar(bar):
-    from app.data_lake.lean_writer import MinuteTradeBar
-    from app.utils.timestamps import datetime_at_ms
-    from tests._helpers.lean_store import EASTERN
-
-    return MinuteTradeBar(
-        bar_start_et=datetime_at_ms(bar.start_ms, tz=EASTERN),
-        open=bar.open,
-        high=bar.high,
-        low=bar.low,
-        close=bar.close,
-        volume=bar.volume,
-    )
-
-
-def _csv_rows(zip_bytes: bytes) -> list[str]:
-    import io
-
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-        body = zf.read(zf.namelist()[0]).decode("ascii")
-    return [line for line in body.split("\n") if line]
-
-
-def _seed_lake_run_prerequisites(lake_root: Path) -> None:
-    """Everything a lake-mode sidecar run needs *besides* the trade zips.
-
-    Quote artifacts, the daily artifact, and the two metadata databases --
-    exactly what ``resolve_lake_artifacts`` demands before it will serve a
-    run. The trade zips are deliberately not (re)written here: they are the
-    imported bytes under test, and the shared ``seed_lake_minute_day`` helper
-    would overwrite them with the lake writer's own encoding, quietly
-    destroying the byte-identity the assertions above depend on.
-    """
-    from app.data_lake.derived_quote import build_minute_quote_zip_bytes
-    from tests._helpers.lake_fixture import seed_lake_daily, seed_lake_metadata, to_lake_bars
-
-    for trading_date in WINDOW:
-        relative = LeanMinuteBarPath(
-            market="usa", symbol=SYMBOL, trading_date=trading_date, data_type="quote"
-        ).relative_path()
-        destination = lake_root / Path(*relative.parts)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(
-            build_minute_quote_zip_bytes(
-                SYMBOL,
-                trading_date.strftime("%Y%m%d"),
-                to_lake_bars(make_minute_bars(SYMBOL, trading_date)),
-            )
-        )
-    seed_lake_daily(lake_root, SYMBOL, WINDOW, count=390)
-    seed_lake_metadata(lake_root)
-
-
 # ---------------------------------------------------------------------------
 # Zero provider calls over a window the lake already covers.
 # ---------------------------------------------------------------------------
@@ -410,7 +129,6 @@ def test_chart_serves_a_covered_completed_window_with_zero_provider_calls(
     """
     from app.services.chart_bar_source import compose_chart_bars
 
-
     def _provider_must_not_be_called(from_date: str, to_date: str):
         raise AssertionError(f"the provider was called for {from_date}..{to_date} over a fully-covered window")
 
@@ -426,40 +144,6 @@ def test_chart_serves_a_covered_completed_window_with_zero_provider_calls(
         # test does not change meaning as the calendar moves.
         now_ms=_ms_after_the_window(),
         lake_root=imported_lake,
-    )
-
-    assert len(composed.bars) == 3 * 390
-    assert [span.source for span in composed.spans] == ["lake"]
-    assert composed.notice_code is None
-
-
-@pytest.mark.slow  # reads through lake admission: needs the catalog
-def test_chart_serves_an_adjusted_request_from_its_own_imported_root(
-    imported_lake_adjusted: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The other half of the split-read claim, from the chart's side.
-
-    This used to assert the opposite: the lake held raw bytes only, so an
-    adjusted chart request fell all the way back to the provider. #1866 made
-    the mode a segment of the root, so an adjusted request now resolves its
-    own imported root exactly like the raw test above resolves its -- same
-    zero-provider-calls claim, different root.
-    """
-    from app.services.chart_bar_source import compose_chart_bars
-
-
-    def _provider_must_not_be_called(from_date: str, to_date: str):
-        raise AssertionError(f"the provider was called for {from_date}..{to_date} over a fully-covered window")
-
-    composed = compose_chart_bars(
-        ticker=SYMBOL,
-        from_date=DAY_ONE.isoformat(),
-        to_date=DAY_THREE.isoformat(),
-        adjusted=True,
-        fetch_provider=_provider_must_not_be_called,
-        session="rth",
-        now_ms=_ms_after_the_window(),
-        lake_root=imported_lake_adjusted,
     )
 
     assert len(composed.bars) == 3 * 390
@@ -495,7 +179,7 @@ def test_engine_backtest_over_an_imported_window_makes_zero_provider_calls(
 ) -> None:
     """AC: end to end, through the catalog, with no Polygon call at all.
 
-    The catalog-backed companion to the byte-level claims above, and the
+    The catalog-backed companion to the chart test above, and the
     production sequence in miniature: write a policy cache, import it, then
     back-test the window it covers. This is the only assertion in this file
     that needs Postgres, and the one that cannot be made without it -- "zero
@@ -505,11 +189,11 @@ def test_engine_backtest_over_an_imported_window_makes_zero_provider_calls(
     to catch.
 
     The import is real (``import_cache_root``), not simulated. That matters
-    for a reason the byte-level fixture above deliberately does not cover:
+    for a reason the chart fixture above deliberately does not cover:
     artifacts on disk with no catalog rows are **invisible** to the lake.
     ``ensure_data`` asks the catalog what exists, so a lake populated by
-    copying files -- which is what the fixture above does, correctly, for a
-    claim about bytes -- would send this run straight to Polygon for every
+    copying files -- which is what the fixture above does, correctly, for the
+    chart's catalog-free read -- would send this run straight to Polygon for every
     day. Only the import makes the bytes findable.
 
     ``respx`` asserts at the transport layer rather than by mocking the

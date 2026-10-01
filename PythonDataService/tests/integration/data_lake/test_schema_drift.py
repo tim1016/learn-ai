@@ -17,13 +17,9 @@ import asyncpg
 import pytest
 
 from app.config import settings
-from app.data_lake.catalog_schema import ALL_TABLES as DATA_LAKE_TABLES
-from app.data_lake.catalog_schema import TableExpectation
-from app.services.clerk_transaction_projection_schema import ALL_TABLES as CLERK_TRANSACTION_PROJECTION_TABLES
+from app.data_lake.catalog_schema import ALL_TABLES, TableExpectation
 
 pytestmark = pytest.mark.asyncio
-
-ALL_TABLES = (*DATA_LAKE_TABLES, *CLERK_TRANSACTION_PROJECTION_TABLES)
 
 
 def _postgres_url() -> str:

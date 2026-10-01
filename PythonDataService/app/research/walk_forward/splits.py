@@ -364,17 +364,7 @@ def _snap_to_ny_midnight(ms: int) -> int:
     return int(midnight.timestamp() * 1000)
 
 
-def ms_to_date_str(ms: int) -> str:
-    """Format an ``int64 ms UTC`` (anchored at NY midnight) as ``YYYY-MM-DD``.
-
-    The runner accepts ``date`` objects as the start/end window; this
-    helper converts a fold's ms boundary into the date the runner
-    expects.
-    """
-    return datetime.fromtimestamp(ms / 1000, tz=_NY).strftime("%Y-%m-%d")
-
-
 def date_str_to_ms(s: str) -> int:
-    """Inverse of ``ms_to_date_str`` — parse ``YYYY-MM-DD`` to NY-midnight ms."""
+    """Parse ``YYYY-MM-DD`` to NY-midnight ms."""
     dt = datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=_NY)
     return int(dt.timestamp() * 1000)

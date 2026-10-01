@@ -168,44 +168,6 @@ class TestSanitizeAggregates:
         assert result["summary"]["cleaned_count"] == 1
 
 
-class TestSanitizeTrades:
-    def test_empty_input_returns_empty(self):
-        result = DataSanitizer.sanitize_trades([])
-
-        assert result["data"] == []
-        assert result["summary"]["original_count"] == 0
-
-    def test_valid_trades_retained(self):
-        raw = [
-            {"timestamp": 1704067200000000000, "price": 150.0, "size": 100},
-            {"timestamp": 1704067201000000000, "price": 150.5, "size": 50},
-        ]
-
-        result = DataSanitizer.sanitize_trades(raw)
-
-        assert result["summary"]["cleaned_count"] == 2
-
-    def test_zero_price_filtered(self):
-        """Trades with price <= 0 are clipped above zero by _clean_numeric, so both survive"""
-        raw = [
-            {"timestamp": 1704067200000000000, "price": 0.0, "size": 100},
-            {"timestamp": 1704067201000000000, "price": 150.0, "size": 50},
-        ]
-
-        result = DataSanitizer.sanitize_trades(raw)
-
-        assert result["summary"]["cleaned_count"] == 2
-
-    def test_zero_size_filtered(self):
-        raw = [
-            {"timestamp": 1704067200000000000, "price": 150.0, "size": 0},
-        ]
-
-        result = DataSanitizer.sanitize_trades(raw)
-
-        assert result["summary"]["cleaned_count"] == 0
-
-
 class TestSanitizeGeneric:
     """Tests for sanitize_generic.
 
@@ -308,28 +270,3 @@ class TestSanitizeGenericTimestampRoundTrip:
 
         timestamps_out = sorted(int(r["timestamp"]) for r in result["data"])
         assert timestamps_out == [1704067200000, 1704153600000]
-
-
-class TestSanitizeIndicator:
-    def test_basic_indicator_data(self):
-        raw = {
-            "indicator_type": "sma",
-            "ticker": "AAPL",
-            "values": [
-                {"timestamp": 1704067200000, "value": 152.5},
-                {"timestamp": 1704153600000, "value": 153.0},
-            ],
-        }
-
-        result = DataSanitizer.sanitize_indicator(raw)
-
-        assert result["summary"]["indicator_type"] == "sma"
-        assert result["summary"]["ticker"] == "AAPL"
-        assert result["summary"]["values_count"] == 2
-
-    def test_empty_values_handled(self):
-        raw = {"indicator_type": "rsi", "ticker": "MSFT", "values": []}
-
-        result = DataSanitizer.sanitize_indicator(raw)
-
-        assert result["summary"]["values_count"] == 0

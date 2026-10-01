@@ -218,65 +218,6 @@ async def test_fail_artifact_updates_to_failed(clean_artifacts, pool):
     assert row["LastError"] == "provider_rate_limited"
 
 
-async def test_refresh_lease_extends_expiry(clean_artifacts, pool):
-    identity = _minute_identity()
-    artifact_id = await catalog_client.claim_minute_bar(
-        identity=identity,
-        worker_id="w-1",
-        lease_ttl_ms=300_000,
-        data_contract_hash="a" * 64,
-        file_path="x.zip",
-    )
-    assert artifact_id is not None
-
-    # Read initial lease expiry.
-    conn = await asyncpg.connect(_postgres_url())
-    try:
-        before = await conn.fetchval(
-            'SELECT "LeaseExpiresAtMs" FROM "DataLakeArtifacts" WHERE "Id" = $1',
-            artifact_id,
-        )
-    finally:
-        await conn.close()
-
-    ok = await catalog_client.refresh_lease(
-        artifact_id=artifact_id,
-        worker_id="w-1",
-        lease_ttl_ms=600_000,
-        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
-    )
-    assert ok is True
-
-    conn = await asyncpg.connect(_postgres_url())
-    try:
-        after = await conn.fetchval(
-            'SELECT "LeaseExpiresAtMs" FROM "DataLakeArtifacts" WHERE "Id" = $1',
-            artifact_id,
-        )
-    finally:
-        await conn.close()
-    assert after > before
-
-
-async def test_refresh_lease_rejects_wrong_owner(clean_artifacts, pool):
-    identity = _minute_identity()
-    artifact_id = await catalog_client.claim_minute_bar(
-        identity=identity,
-        worker_id="w-1",
-        lease_ttl_ms=300_000,
-        data_contract_hash="a" * 64,
-        file_path="x.zip",
-    )
-    assert artifact_id is not None
-    ok = await catalog_client.refresh_lease(
-        artifact_id=artifact_id,
-        worker_id="w-IMPOSTOR",
-        lease_ttl_ms=600_000,
-        lease_generation=catalog_client.INITIAL_LEASE_GENERATION,
-    )
-    assert ok is False
-
-
 async def test_steal_or_retry_steals_expired_lease(clean_artifacts, pool):
     identity = _minute_identity()
     artifact_id = await catalog_client.claim_minute_bar(
@@ -1156,8 +1097,8 @@ async def test_a_stale_writer_cannot_mutate_the_winners_generation(clean_artifac
     Owner alone cannot discriminate: ensure_data's ``_WORKER_ID`` is
     per-process, so two concurrent operations in one process present the same
     lease owner and only the generation tells them apart. A stale writer that
-    could still fail or heartbeat the row would clobber the winner just as
-    surely as one that could complete it.
+    could still fail the row would clobber the winner just as surely as one
+    that could complete it.
     """
     rel_path = PurePosixPath("equity/usa/minute/spy/20240520_trade.zip")
     artifact_id = await _claim_a(rel_path)
@@ -1187,16 +1128,6 @@ async def test_a_stale_writer_cannot_mutate_the_winners_generation(clean_artifac
     ), "a stale generation must not be able to fail the winner's row"
 
     assert (
-        await catalog_client.refresh_lease(
-            artifact_id=artifact_id,
-            worker_id="writer-a",
-            lease_ttl_ms=900_000,
-            lease_generation=a_generation,
-        )
-        is False
-    ), "a stale generation must not be able to heartbeat the winner's lease"
-
-    assert (
         await catalog_client.complete_artifact(
             artifact_id=artifact_id,
             row_count=999,
@@ -1211,17 +1142,6 @@ async def test_a_stale_writer_cannot_mutate_the_winners_generation(clean_artifac
 
     after = await _lease_row(artifact_id)
     assert dict(after) == dict(before), "no stale-generation call may have changed the row"
-
-    # The winner's own generation still works, so the fence is not blanket denial.
-    assert (
-        await catalog_client.refresh_lease(
-            artifact_id=artifact_id,
-            worker_id="writer-a",
-            lease_ttl_ms=900_000,
-            lease_generation=b_generation,
-        )
-        is True
-    )
 
 
 async def test_completing_clears_a_reclaimed_rows_stale_error_message(clean_artifacts, pool):

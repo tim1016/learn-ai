@@ -126,9 +126,6 @@ class TestResolveRootContext:
 
 
 class TestRootContextPathResolution:
-    def test_lake_container_matches_path_policy(self, tmp_path: Path):
-        ctx = RootContext(root_id=_ROOT_A, base_root=tmp_path)
-        assert ctx.lake_container() == lake_container_within(tmp_path)
 
     def test_lake_root_matches_path_policy(self, tmp_path: Path):
         ctx = RootContext(root_id=_ROOT_A, base_root=tmp_path)

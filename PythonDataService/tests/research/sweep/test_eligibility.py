@@ -11,7 +11,6 @@ from app.research.sweep.eligibility import (
     REASON_NO_SIGNAL_PROGRAM,
     REASON_NON_NUMERIC_PUBLIC_PARAMETER,
     REASON_NOT_PRODUCTION_CANDIDATE,
-    eligible_strategy_keys,
     non_numeric_parameters,
     sweep_eligibility,
 )
@@ -30,7 +29,6 @@ def test_the_operational_harness_is_excluded_by_category_not_by_a_list() -> None
 
     assert answer.eligible is False
     assert REASON_NOT_PRODUCTION_CANDIDATE in answer.reason_codes
-    assert "deployment_validation" not in eligible_strategy_keys()
 
 
 def test_a_non_numeric_public_parameter_excludes_and_is_named() -> None:

@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration, public_params_schema
+from app.engine.strategy.registry import StrategyRegistration, public_params_schema
 
 REASON_NOT_PRODUCTION_CANDIDATE = "NOT_PRODUCTION_CANDIDATE"
 REASON_NO_SIGNAL_PROGRAM = "NO_SIGNAL_PROGRAM"
@@ -69,12 +69,3 @@ def sweep_eligibility(registration: StrategyRegistration) -> SweepEligibility:
     if offending:
         reasons.append(REASON_NON_NUMERIC_PUBLIC_PARAMETER)
     return SweepEligibility(eligible=not reasons, reason_codes=tuple(reasons), offending_parameters=offending)
-
-
-def eligible_strategy_keys() -> list[str]:
-    """Catalogue-visible registrations a sweep may offer, in registry order."""
-    return [
-        key
-        for key, registration in _STRATEGY_REGISTRY.items()
-        if registration.catalog_visible and sweep_eligibility(registration).eligible
-    ]

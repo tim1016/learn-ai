@@ -126,7 +126,7 @@ explicitly marked ``'failed'`` via ``catalog_client.fail_artifact`` rather
 than left stranded in ``'fetching'`` forever. This importer does not itself
 retry a failed or in-flight row on a later run (it has no lease-stealing
 loop); recovering one requires an external tool calling
-``catalog_client.steal_or_retry_minute_bar`` (or the sweep), the same as any
+``catalog_client.steal_or_retry_minute_bar``, the same as any
 other stuck artifact in the catalog.
 
 Usage::
@@ -917,7 +917,7 @@ async def _import_one_zip(
         # for it, permanently reporting in_flight_or_incomplete with no way
         # for this tool to recover it (see the module docstring's recovery
         # note). Marking it 'failed' at least makes the row visible to
-        # catalog_client.steal_or_retry_minute_bar / the sweep.
+        # catalog_client.steal_or_retry_minute_bar.
         await catalog_client.fail_artifact(
             artifact_id=claim_result,
             last_error="io_error",

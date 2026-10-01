@@ -18,7 +18,6 @@ import os
 import shutil
 import subprocess
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
@@ -46,26 +45,6 @@ IMAGE_INTEREST_RATE = f"{IMAGE_LEAN_DATA_ROOT}/alternative/interest-rate"
 
 class MetadataStagingError(RuntimeError):
     """The image-bundled metadata could not be extracted."""
-
-
-@dataclass(frozen=True, slots=True)
-class StagedRun:
-    """Materialized view of what is on disk before the launcher runs.
-
-    Returned by :func:`stage_python_run` so the manifest writer can
-    hash exactly the files that ended up in the workspace, rather than
-    re-scanning the directory tree and risk capturing artifacts a
-    previous run left behind.
-    """
-
-    workspace: Workspace
-    algorithm_source_path: Path
-    config_path: Path
-    bar_zip_paths: tuple[Path, ...]
-    market_hours_path: Path | None
-    symbol_properties_path: Path | None
-    factor_files: tuple[Path, ...]
-    map_files: tuple[Path, ...]
 
 
 def stage_algorithm_source(workspace: Workspace, source: str) -> Path:
@@ -239,21 +218,6 @@ def stage_empty_corporate_action_dirs(workspace: Workspace) -> None:
     workspace.ensure_layout()
     for sub in ("factor_files", "map_files"):
         (workspace.data_dir / "equity" / "usa" / sub).mkdir(parents=True, exist_ok=True)
-
-
-def list_factor_map_files(workspace: Workspace) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
-    """List staged factor and map files under the workspace data dir.
-
-    Empty tuples are returned when no files are present — that is the
-    Phase 1 trusted-sample case (no corporate actions in window) and is
-    intentionally distinct from the reconciliation-grade requirement
-    that both lists be non-empty for affected symbols.
-    """
-    factor_root = workspace.data_dir / "equity" / "usa" / "factor_files"
-    map_root = workspace.data_dir / "equity" / "usa" / "map_files"
-    factors = tuple(sorted(factor_root.rglob("*.csv"))) if factor_root.exists() else ()
-    maps = tuple(sorted(map_root.rglob("*.csv"))) if map_root.exists() else ()
-    return factors, maps
 
 
 def list_metadata_databases(

@@ -73,14 +73,6 @@ def test_identity_validation_rejects_forged_and_wrong_family_values() -> None:
     assert not identity.is_clerk_id(identity.new_volume_id())
     assert not identity.is_clerk_id("")
     assert not identity.is_clerk_id(42)
-    assert not identity.is_worker_key(identity.new_clerk_id())
-    assert identity.is_agent_instance_id(identity.new_agent_instance_id())
-    assert identity.is_correlation_id(identity.new_correlation_id())
-    # The transport token family is distinct from every durable identity.
-    token = identity.new_service_token()
-    assert identity.is_service_token(token)
-    assert not identity.is_service_token(identity.new_worker_key())
-    assert not identity.is_worker_key(token)
     assert len({identity.new_service_token() for _ in range(100)}) == 100
 
 

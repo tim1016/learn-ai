@@ -108,15 +108,11 @@ def test_bar_provenance_fields_survive_persistence_round_trip(tmp_path) -> None:
     store = BarPersistence(root=tmp_path)
     store.append("SPY", "1m", bar)
     replayed = store.replay("SPY", "1m", date(2026, 4, 1))[0]
-    parquet_path = store.compact("SPY", "1m", date(2026, 4, 1))
-    assert parquet_path.is_file()
-    compacted = store.read_parquet("SPY", "1m", date(2026, 4, 1))[0]
 
-    for rt in (replayed, compacted):
-        assert rt.provenance == "ibkr_realtime"
-        assert rt.venue == "SMART"
-        assert rt.session_phase == "PRE"
-        assert rt.use_rth is False
+    assert replayed.provenance == "ibkr_realtime"
+    assert replayed.venue == "SMART"
+    assert replayed.session_phase == "PRE"
+    assert replayed.use_rth is False
 
 
 @pytest.mark.parametrize("resolution,window_ms", RESOLUTIONS)

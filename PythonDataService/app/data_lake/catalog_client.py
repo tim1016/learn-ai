@@ -536,7 +536,7 @@ async def select_minute_bar_lease_status(identity: ArtifactIdentity) -> MinuteBa
 # claim_* INSERT starts a row at generation INITIAL_LEASE_GENERATION,
 # steal_or_retry_minute_bar and refresh_complete_artifact each increment it
 # by exactly 1 on every reclaim, and every protected mutation
-# (publish_under_lease, complete_artifact, fail_artifact, refresh_lease)
+# (publish_under_lease, complete_artifact, fail_artifact)
 # validates the caller's recorded generation atomically against the
 # durable row instead of trusting the caller's own
 # recollection of still holding the lease -- a check a paused/stale writer
@@ -1106,34 +1106,6 @@ async def mark_complete_artifact_failed(
     """
     async with connection() as conn:
         result = await conn.execute(query, artifact_id, last_error, error_message)
-    return _rows_affected(result) > 0
-
-
-async def refresh_lease(
-    artifact_id: int,
-    worker_id: str,
-    lease_ttl_ms: int,
-    lease_generation: int,
-) -> bool:
-    """Heartbeat: extend a lease as long as the calling worker still holds it
-    at ``lease_generation``.
-
-    Returns True when the lease was updated; False when this writer no longer
-    holds that generation (stolen by the sweep, or reclaimed by a sibling
-    operation sharing the same per-process worker id -- which is why the
-    generation, not just the owner, is part of the predicate).
-    """
-    now_ms = int(time.time() * 1000)
-    query = """
-        UPDATE "DataLakeArtifacts"
-           SET "LeaseExpiresAtMs" = $3
-         WHERE "Id" = $1
-           AND "LeaseOwner" = $2
-           AND "LeaseGeneration" = $4
-           AND "Status" = 'fetching';
-    """
-    async with connection() as conn:
-        result = await conn.execute(query, artifact_id, worker_id, now_ms + lease_ttl_ms, lease_generation)
     return _rows_affected(result) > 0
 
 

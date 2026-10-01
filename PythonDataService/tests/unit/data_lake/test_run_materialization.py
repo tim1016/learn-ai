@@ -368,9 +368,10 @@ async def test_ensure_data_reclaims_a_failed_minute_artifact_instead_of_polling_
     contention, per ``_CONTENTION_REASONS`` — which sends the bridge into a
     poll loop that re-tries the exact same failed claim every interval until
     ``fetch_timeout_seconds`` elapses, because the row never transitions on
-    its own. The fix reclaims a 'failed' row via the same primitive the
-    lease-expiry sweep uses, so the very next ``ensure_data`` pass gets a
-    fresh attempt at the bytes — no polling required to get there.
+    its own. The fix reclaims a 'failed' row through the same reclaim
+    protocol that takes over a lease-expired row (``reclaim_after_lost_claim``),
+    so the very next ``ensure_data`` pass gets a fresh attempt at the bytes —
+    no polling required to get there.
     """
     mock_launcher()
     responses = iter(
