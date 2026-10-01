@@ -24,11 +24,11 @@ and the fleet refusal vocabulary (see
   directly and derives its compile-time-checked operation-id union from it;
   ``operation-url.spec.ts`` exercises ``operationUrl`` against it.
 
-A CI job (``broker-v2-vocabulary-contract``, extended by Task 10) regenerates
-all three snapshots (broker-v2 panel, fleet refusal, fleet operation
-catalog) from live source on every PR and diffs each pair against its
-committed copies, so a hand-edit to either operation-catalog file -- even
-one applied identically to both -- fails CI.
+``test_operation_catalog_snapshot.py`` also regenerates the snapshot from
+live source on every PR, requires the committed Python copy to match it byte
+for byte, and requires the two committed copies to be byte-identical, so a
+hand-edit to either operation-catalog file -- even one applied identically to
+both -- fails CI.
 
 Usage::
 

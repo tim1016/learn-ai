@@ -8,9 +8,9 @@ capture failure can be discarded by the next command in a pasted block — the
 three rounds of hand-rolled runbook shell that this file replaces each shipped
 a gate that could not refuse.
 
-Stdlib only and 3.9-compatible, mirroring ``scripts/check_adr_status.py``: the
-operator running this holds broker credentials on a real-money path and should
-not have to install anything, and the macOS system ``python3`` is still 3.9.
+Stdlib only and 3.9-compatible: the operator running this holds broker
+credentials on a real-money path and should not have to install anything, and
+the macOS system ``python3`` is still 3.9.
 ``jq``/``shasum`` are likewise not portable prerequisites (GNU/Linux hosts ship
 ``sha256sum``, not ``shasum``), so no gate here shells out to either.
 

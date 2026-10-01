@@ -112,9 +112,9 @@ assumed. `CONTEXT.md`'s Identity ladder remains the identity term list.
 
 Unconditionally — naming the `CONTEXT.md` section it added, or stating that none
 is owed. The condition is *not* "if it introduces domain language": no grep can
-decide that predicate, and Decision 4 is only worth making if ADR 0039's gate can
-check it. The author decides whether vocabulary is owed; the gate checks only that
-the line exists. Existing ADRs are **not** back-filled — the rule applies from the
+decide that predicate, and an unconditional line is one a grep can check. The
+author decides whether vocabulary is owed; a check need only see that the line
+exists. Existing ADRs are **not** back-filled — the rule applies from the
 next accepted ADR forward, so the corpus is not rejected wholesale. This is not
 a new invention — ADRs 0036, 0037, and 0038 each carry one, and ADR 0039 states
 why it owes none. It is the observed working practice made into a rule, and it is
@@ -122,7 +122,8 @@ the obligation that was missing: for three weeks the glossary went unupdated
 because nothing but a grilling session ever triggered an update, and feature work
 never did.
 
-It is also grep-checkable, so ADR 0039's CI gate can carry it.
+It is also grep-checkable. ADR 0039's CI gate carried it until that gate was cut
+on 2026-09-30 (ADR 0039's amendment, #2751); authors and review now keep it.
 
 ## Considered and rejected
 
@@ -174,8 +175,8 @@ follow-up work.
    artifact families; two retire, and the two survivors — SQLite registration/run
    folds, and runner JSON instance/run records — need two distinct names. ADR 0038
    consequence 6 handed this decision to #1595; it is now owed as vocabulary.
-7. **The `Vocabulary:` line becomes checkable** by ADR 0039's gate. Until that
-   gate exists, Decision 4 is as unenforced as the practice it formalises.
+7. **The `Vocabulary:` line is checkable by grep, but no CI gate checks it.**
+   ADR 0039's gate checked it until that gate was cut on 2026-09-30 (#2751).
 8. **Archival is a follow-up, not a non-decision — and it is per-trigger.** When
    the IBKR bot-control surface is deleted, sections labelled **retiring (ADR
    0038)** move to the historical record; when the legacy-JSONL custody cutover

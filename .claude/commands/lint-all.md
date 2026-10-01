@@ -7,7 +7,7 @@ Run both local linters and report results.
 
 2. **Angular/TypeScript** (ESLint — what CI runs):
    ```bash
-   cd Frontend && npx eslint src/ && npx eslint tests/e2e --max-warnings 0
+   cd Frontend && npx eslint src/ --max-warnings 0 && npx eslint tests/e2e --max-warnings 0
    ```
 
 Run both. Report a summary: linter name, errors found, warnings.

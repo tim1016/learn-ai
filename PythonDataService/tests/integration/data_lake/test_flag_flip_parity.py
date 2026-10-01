@@ -30,15 +30,17 @@ all the same level. Stating which claim is which is the point:
   This file owns the strong claim, and shows the row-level agreement on the
   imported day for continuity.
 
-**Daily infrastructure.** The two-minute pull-request job deliberately has no
-Postgres and defers this directory. The daily suite supplies a disposable,
-migrated catalog, so all eight tests execute there. Seven tests still exercise
-the byte path without consulting the catalog -- the importer's own verification
-and promote primitives, the readers, and the fingerprint function -- which
-keeps those claims independently runnable on a plain developer checkout. What
-the catalog contributes to the fingerprint is the artifact's identity and its
-``file_sha256``; both are reconstructed here from the bytes actually on disk,
-which is where the catalog gets them from too.
+**Daily infrastructure.** The pull-request shards have no Postgres. The daily
+suite supplies a disposable, migrated catalog, so all eight tests execute
+there. Since #2456 a reader admits a lake file only against a root identity and
+a committed catalog receipt, so the five tests that read the imported lake
+through that admission carry the ``slow`` mark and run daily only (they are red
+there until #2660 lands). The byte-identity and writer-agreement tests still
+exercise the byte path without consulting the catalog, which keeps those claims
+runnable on a plain developer checkout. What the catalog contributes to the
+fingerprint is the artifact's identity and its ``file_sha256``; both are
+reconstructed here from the bytes actually on disk, which is where the catalog
+gets them from too.
 """
 
 from __future__ import annotations
@@ -215,6 +217,7 @@ def test_imported_lake_artifacts_are_byte_identical_to_their_cache_zips(
         assert hashlib.sha256(lake_bytes).hexdigest() == hashlib.sha256(cache_bytes).hexdigest()
 
 
+@pytest.mark.slow  # reads through lake admission: needs the catalog
 def test_lake_read_and_cache_read_produce_the_same_manifest_fingerprint(
     cache_root: Path, imported_lake: Path
 ) -> None:
@@ -239,6 +242,7 @@ def test_lake_read_and_cache_read_produce_the_same_manifest_fingerprint(
     assert _compute_data_availability_hash(tampered) != cache_hash
 
 
+@pytest.mark.slow  # reads through lake admission: needs the catalog
 def test_lake_read_and_cache_read_produce_identical_bar_streams(
     cache_root: Path, imported_lake: Path
 ) -> None:
@@ -256,6 +260,7 @@ def test_lake_read_and_cache_read_produce_identical_bar_streams(
     assert lake_bars == cache_bars
 
 
+@pytest.mark.slow  # reads through lake admission: needs the catalog
 def test_both_engines_resolve_the_same_artifact_hashes_for_one_run(
     imported_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -388,6 +393,7 @@ def _seed_lake_run_prerequisites(lake_root: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow  # reads through lake admission: needs the catalog
 def test_chart_serves_a_covered_completed_window_with_zero_provider_calls(
     imported_lake: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -427,6 +433,7 @@ def test_chart_serves_a_covered_completed_window_with_zero_provider_calls(
     assert composed.notice_code is None
 
 
+@pytest.mark.slow  # reads through lake admission: needs the catalog
 def test_chart_serves_an_adjusted_request_from_its_own_imported_root(
     imported_lake_adjusted: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
