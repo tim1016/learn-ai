@@ -6,6 +6,12 @@ reports from real market data, within atol=1e-3 (0.1 vol).
 Oracle: vendor_observed — IBKR TWS modelGreeks.impliedVol.
 Canonical: PythonDataService/app/volatility/solver.py::implied_volatility
 
+Price alignment: IBKR backs impliedVol out of modelGreeks.optPrice, so the
+tests invert ibkr_model_price. Inverting the bid/ask mid instead leaves a
+call/put fingerprint: calls off by about 0.06 vol, puts by about 0.002 vol.
+The asymmetry comes from IBKR's discrete-dividend adjustments, which move
+calls more than puts.
+
 Run standalone (no FastAPI app needed):
   python -m pytest tests/fixtures/test_ibkr_iv_fixtures.py -v --noconftest
 

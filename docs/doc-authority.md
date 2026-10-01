@@ -4,14 +4,6 @@
 
 **Agent convention:** Only docs marked `canonical` or `protected-canonical` should be used as implementation authority. `supporting` docs provide context and provenance. There is no `docs/archive/` tree anymore — retired material lives in Git history (pruned 2026-09-12).
 
-**2026-07-04, 2026-08-19, and 2026-09-12 prunes.** Point-in-time implementation plans, session
-handoffs, shipped-feature PRDs, closed audit findings, the retired IBKR
-launcher/evaluator operating record, the entire `docs/archive/` tree, shipped
-superpowers plans/specs, retired-protocol reference notes, and dead validation
-artifacts were **hard-deleted to Git history**. Git history
-is their provenance record. Open defects belong in `docs/known-gaps.md`; current
-Alpaca Broker V2 behavior belongs in `docs/broker-clerk-fleet-authority.md`.
-
 **Agent instructions:** `AGENTS.md` holds every rule Claude and Codex share;
 `CLAUDE.md` imports it, and `.claude/**` holds the Claude-only configuration.
 
@@ -42,7 +34,7 @@ held to the same live-navigation guarantee.
 | Agent behavior | `AGENTS.md`, then the routed rule file or skill | Surface the conflict |
 | Product/system decision | Accepted ADR | A later explicit supersession wins |
 | Mathematical port target | Pinned vendored reference, plus the golden fixture and parity test | Surface unresolved disagreement |
-| Engine ownership | `docs/architecture/engine-authority-map.md` | Follow its migration plan |
+| Engine ownership | `docs/architecture/engine-authority-map.md` | Surface the conflict |
 | Current runtime/wire shape | Manifest/config, generated contract, implementation, and executable tests | Docs describe evidence; they do not override it |
 | Framework behavior | Installed manifest plus official version-matched docs | Do not rely on prose version caches |
 | Open defect | `docs/known-gaps.md` | Closed findings are deleted or retained only in durable decision history |
@@ -134,13 +126,13 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 
 | Doc | Domain | Replaces / supersedes | Last reviewed |
 |---|---|---|---|
-| `docs/architecture/options-math-authorities.md` | Options math | `options-routes-research.md` cleanup record (pruned to git history 2026-09-12) | 2026-04-29 |
-| `docs/broker-clerk-fleet-authority.md` | **Current** broker clerk fleet control plane and Alpaca Broker V2 operating authority | `docs/broker-v2-operator-manual.md` and its generated served copy (retired 2026-09-14, #2060) | 2026-09-14 |
+| `docs/architecture/options-math-authorities.md` | Options-math dispatch rules (which module a caller must use) | `options-routes-research.md` cleanup record (pruned to git history 2026-09-12) | 2026-04-29 |
+| `docs/broker-clerk-fleet-authority.md` | Broker clerk fleet: accepted risks, operator-visible gaps, divergences from ADRs 0062/0063, operator vocabulary | `docs/broker-v2-operator-manual.md` and its generated served copy (retired 2026-09-14, #2060) | 2026-09-14 |
 | `docs/runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md` | Focused Alpaca SQLite recovery/cutover subprocedure incorporated by `docs/broker-clerk-fleet-authority.md`; no independent policy authority | — | 2026-08-06 |
 | `docs/architecture/ibkr-integration-tdd.md` | IBKR read/evidence design rationale and retired-actuation record ("why") | Former Phase 3/4 submit/cancel design (retired by #1583) | 2026-08-19 |
-| `docs/engine-persistence-authority.md` | Engine-side `BacktestEngine` runs persisting through `.NET` (parity gate + 6/8-category compare) | — | 2026-05-19 |
+| `docs/engine-persistence-authority.md` | Why engine runs persist through one Python path, and its known category gaps | — | 2026-05-19 |
 | `docs/ibkr-integration-authority.md` | Current read-only IBKR capability/account/order-history/market-data authority and retired-actuation boundary | Retired phase plans and the pre-#1583 executable snapshot (Git history) | 2026-08-19 |
-| `docs/ml-predictions-authority.md` | ML predictions (prediction-set artifact, StrategySpec wiring, QC parity infra) | — | 2026-05-12 |
+| `docs/ml-predictions-authority.md` | ML predictions: scope, producing a prediction set, validation status by phase | — | 2026-05-12 |
 | `docs/signal-engine-authority.md` | Signal engine | — | — |
 | `docs/known-gaps.md` | Living open-defect backlog (what is still broken or deferred) | consolidates the pruned audit-finding trees | 2026-08-19 |
 
@@ -151,18 +143,17 @@ the next accepted ADR forward; **existing ADRs are not back-filled**.
 | Doc | Domain | Notes |
 |---|---|---|
 | `docs/architecture-manual.md` | Plain-language architecture map for the owner (lanes, seams, sources of truth, design weak spots) | A map, not an authority: it links to the ADRs and canonical docs it summarises and yields to them. Served in-app at `/docs/architecture-manual` from a byte copy the documentation contract checks |
-| `docs/architecture/broker-configuration-profile-contract.md` | Record shapes, credential-slot scheme, route surface and error taxonomy for broker configuration profiles | The shared contract packages B-E implement under ADR 0060; not authority over the ADR |
-| `docs/architecture/iv-ownership-research.md` | IV pipeline research | ~32k tokens; authoritative research backing IV pipeline |
-| `docs/architecture/options-research.md` | Options implementation truth | Self-declared single-source doc for surviving options surfaces; §5 pipeline stubs still being authored |
+| `docs/architecture/broker-configuration-profile-contract.md` | Broker configuration profile rules code cannot state (server-resolved owner, credential slots, identity truth layers, future-clerk invariants) | Supports ADR 0060; not authority over the ADR |
+| `docs/architecture/iv-ownership-research.md` | IV tolerances, primary sources and worked examples | The decisions are ADR 0071 |
+| `docs/architecture/options-research.md` | Options vendor facts and the lognormal POP assumption | Outside facts and one documented non-equivalence |
 | `docs/indicator-reliability-methodology.md` | Indicator reliability details | Served in-app at `/docs/indicator-reliability-methodology` from a byte copy the documentation contract checks |
-| `docs/references/alpaca-sqlite-clerk-invariant-traceability.md` | ADR 0035 invariant-to-code/test evidence | Supports ADR 0035 and issue #1395 review |
 | `docs/references/alpaca-sqlite-clerk-recovery-language.md` | Trader/operator action-language matrix | Backend-authored wording contract evidence; operator policy remains in the manuals |
 | `docs/references/alpaca-sqlite-clerk-source-guarantees.md` | Alpaca guarantee-to-implementation matrix | Official-source provenance for adapter constraints |
-| `docs/references/clerk-invariants.md` | Clerk custody invariants (EXIT reducing quantity, fill-quantity tolerance/delta pricing, position-drift tolerance) | Consolidated 2026-09-12 from three per-invariant stubs; defers to the pinned contracts doc |
-| `docs/references/pandas-ta-dispatch.md` | Port attributions for the sixteen pandas-ta pass-through indicators dispatched by Data Lab | Consolidated 2026-09-12 from sixteen per-indicator stubs; ported indicators keep their own notes |
+| `docs/references/clerk-invariants.md` | Clerk custody invariants (EXIT reducing quantity, fill-quantity tolerance/delta pricing, position-drift tolerance) | The rules are ADR 0030 and ADR 0036; this note keeps the tests that pin them and the coverage-set tolerance |
+| `docs/references/pandas-ta-dispatch.md` | Defaults and quirks of the pandas-ta pass-through indicators Data Lab dispatches | Equal to the pinned pandas-ta by reference; no port and no fixture |
 | `docs/math-rigor.md` | Variance-time and FRED rate backing | Cited by the IV and FRED-rate provenance blocks |
 | `docs/options-companion-format.md` | Options companion data format | Operational reference |
-| `docs/spy-lean-output-report.md` | SPY LEAN reconciliation | Evidential artifact |
+| `docs/spy-lean-output-report.md` | LEAN statistics vs `verify.py`: the accepted divergences | Evidential artifact |
 | `docs/tv-polygon-validation-gotchas.md` | TradingView/Polygon alignment | Operational gotchas |
 
 ---
@@ -175,14 +166,3 @@ is pruned to git history (as the broker-session-mirror and daemon-diagnostics
 PRDs were on 2026-07-04). Verify status before trusting them as current.
 
 None is in flight today.
-
----
-
-## Retired material (Git history only)
-
-The `docs/archive/` tree was deleted outright in the 2026-09-12 prune —
-retired material is recovered from Git history when needed, not kept as a
-parallel tree. Retired IBKR launcher/evaluator plans, runbooks, audits,
-handoffs, prompts, and point-in-time artifacts were already being deleted
-rather than archived under the earlier prunes; the 2026-09-12 prune
-extended that to everything the archive tree still held.

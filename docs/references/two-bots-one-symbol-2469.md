@@ -7,42 +7,10 @@ origin/master `772d10dc`. The files first cited in the review revision
 `clerk/sqlite/runtime.py`) are identical at both commits. Tests:
 [`test_two_bots_one_symbol.py`](../../PythonDataService/tests/broker/alpaca/clerk/sqlite/test_two_bots_one_symbol.py).
 
-Evidence labels: **[test]** a test in that file (command at the end), **[code]** a
+Evidence labels: **[test]** a test in that file, **[code]** a
 file:line at `79c79f22` (paths under `PythonDataService/app/` unless stated),
 **[doc]** a primary public source listed at the end, **[fixture]** data already
 committed in the repo.
-
-## Answer
-
-**Allow the setup, with guards; don't refuse it.**
-
-- **Attribution is exact per bot.** Each bot owns its own orders, fills, position,
-  FIFO results and budget. Its EXIT sells only its own shares.
-- **The broker sees one net position.** Reconciliation can check the total, but
-  it cannot say which bot a missing share belonged to.
-- **Alpaca refuses opposite-side orders.** While either order is open, Alpaca
-  rejects a buy and a sell on the same symbol in one account as a potential wash
-  trade (HTTP 403, paper included). Two long-only bots hit this when one enters
-  while the other exits.
-- **The Clerk handles that refusal poorly today:**
-  - it reads the refusal as bad credentials;
-  - a refused ENTER kept its cash claim forever (fixed by #2553);
-  - a refused EXIT was re-sent automatically, but late: 120 s after the
-    refusal in the regular session, and at the next session outside it (a
-    17:00 refusal was retried at 04:00 the next morning). Since #2622 it is
-    re-sent on the first pass after the other order ends, in any session
-    (section 2).
-  - The EXIT escalates to `EXIT_STUCK` only if the other bot's order is still
-    working through 8 minutes of regular-session retries: 10 minutes after a
-    regular-session refusal. Then automatic retries stop. #2622 left this
-    unchanged.
-- **Day trading and settlement no longer constrain this.** Alpaca says the
-  pattern-day-trader rule no longer applies, and it removed the rule's fields
-  from the account object (a changelog entry dated 2026-07-06 by its URL). All
-  Alpaca accounts are margin accounts.
-- **A2 (#2441) is fixed on master.** A second, stricter gate now also refuses
-  every ENTER after any bot's fill until cash is re-read; since #2623 that ENTER
-  waits for the re-read instead of being dropped.
 
 ## 1. How shares and fills are attributed
 
@@ -383,121 +351,6 @@ Two bots on one symbol add no new path: the bound is account-wide.
   per-order notional cap bullet). The code reads Alpaca `cash`, which is not
   settled cash.
 - **Two bots change nothing here.** Settlement is account-level.
-
-## 4. A2 / #2441 (cash race) on master
-
-**Fixed and still in place.**
-
-- **The fix.** The observation is stamped before the broker reads
-  [code] `clerk/sqlite/live_envelope_sync.py:328`. Fills recorded up to
-  `FILL_VISIBILITY_GRACE_MS = 5_000` before that stay reserved
-  [code] `clerk/live_envelope.py:90,241`. Commits `f656066f` (#2473) and
-  `d0cf484c` (#2487, measured lag at most 401 ms).
-- **Its tests pass.**
-  - `test_live_envelope_sync.py -k "while_the_broker_is_read or just_before_the_read"`: 3 passed.
-  - `test_live_envelope.py`, `test_envelope_admission.py`, `test_envelope_reservations.py`: 48 passed.
-- **A second gate closes it again.** The observation also records the fill
-  sequence before its reads (`live_envelope_sync.py:329`). Any fill recorded
-  since then refuses all ENTERs (section 1). The double-spend A2 described now
-  needs both gates to fail.
-- **Nothing new from the same-symbol setup.** The sibling-fill refusal is a
-  separate cost, drafted below.
-
-## 5. Recommendation: allow, with guards
-
-**Why not refuse:**
-
-- **Attribution is sound per bot:** positions, FIFO results, budgets and EXIT
-  sizing (section 1).
-- **The design already expects many bots per account:**
-  - ADR 0059 D4.1 reserves working ENTERs "across all instances".
-  - ADR 0062 D2 puts every bot of an account behind one clerk.
-  - The watchdog is written for netted subjects
-    (`exit_watchdog.py:413-416`, "A +10, B −10, broker 0").
-- **Refusing would bring back a retired guard.** The all-in coexistence guard of
-  ADR 0009 §13 was deleted with `engine/live/pre_flight.py` in `366545ba` (#1678).
-- **It sits next to an owner rejection.** A symbol-exclusive rule is close to the
-  "one symbol at a time" restriction the owner rejected in ADR 0059, though not
-  the same thing.
-
-**Why guard:** Alpaca's wash-trade protection makes opposite-side orders from two
-bots fail predictably. Today each failure has a cost:
-
-- a refused ENTER held a cash claim that never released (fixed by #2553);
-- the refusal is labelled as bad credentials;
-- a refused EXIT goes out late: 120 s later in the regular session, or at the
-  next session outside it. The owner also sees a refused-exit notice in the
-  meantime;
-- a refused EXIT escalates to `EXIT_STUCK` if the other order keeps working
-  through 8 minutes of regular-session retries.
-
-The Clerk already knows every working order in the account, since it placed them.
-It can apply Alpaca's documented table before sending, instead of learning it
-from a 403.
-
-**Owner decision needed:** when bot A must EXIT while bot B's opposite order is
-working on the same symbol. Waiting is mostly what the Clerk already does: A's
-exit is refused, and A retries on its own once B's order ends. The question is
-whether its two costs are acceptable: an exit that goes out late (two minutes,
-or the next session), and escalation when B's order keeps working through
-8 minutes of regular-session retries.
-
-1. **Keep today's behaviour.** Accept both costs and add only a Deploy notice.
-2. **Check before sending** (recommended). The Clerk holds A's exit while B's
-   order is open and sends it on the first pass after B's order ends, in the
-   same session. Nothing is sent to be refused. Escalation stays as today.
-3. **Exits come first.** A cancels B's working ENTER, then sells.
-
-**Owner decision (2026-09-29, #2622): retry within seconds, plus a Deploy
-warning.** Neither option 2 as filed nor option 3 was chosen. A's refused exit
-is sent again on the first pass after the opposite order ends, in any session,
-and Deploy warns when another bot in the account already trades the symbol.
-A refused ENTER stays dropped, and escalation is unchanged (section 2).
-
-## 6. Follow-ups (drafted; numbers filled in by the orchestrator)
-
-- **Follow-up A went into #2553** (comment on that issue): a refused or rejected
-  ENTER keeps its cash claim forever (bug, all accounts). #2553 reworks the same
-  claim query. It has landed; the two cases now pass.
-- **#2621:** Alpaca's order-level 403 reads as a credentials failure, and
-  its code is dropped.
-- **#2622:** the owner decision above: a refused exit is re-sent once the
-  opposite order ends, and Deploy warns about another bot on the symbol.
-- **#2623:** one bot's fill refuses the other bots' entries until the next
-  reading, and the decision is lost (owner decision).
-- **#2624:** remove the pattern-day-trader and day-trading-buying-power
-  fields Alpaca retired.
-- **#2625:** retire the stale coexistence-guard and capital-sleeve glossary
-  entries, and correct ADR 0059's "settled cash".
-
-## 7. Dead machinery found
-
-| Item | Evidence | Proposed removal |
-|---|---|---|
-| `pattern_day_trader`, `daytrading_buying_power`: ingested, modelled, rendered. Always absent from Alpaca since 2026-07-06. | [code] section 3; [fixture] 2026-07-24 capture | #2624: remove from adapter, `BrokerAccountSnapshot`, OpenAPI/TS types, the account card and margin rows, the synthetic brokers and ~15 test constructors, and `test_malformed_pattern_day_trader_is_rejected`. |
-| The CONTEXT.md "all-in coexistence guard" and "capital sleeve (future — not v1)" entries describe a guard deleted in `366545ba` and a sleeve that bot budgets replaced. ADR 0009 §13 still reads as live. | [code] no `coexist` match under `app/`; CONTEXT.md:936-958 | #2625 |
-| `app/engine/live/account_registry.py:73` `bot_order_namespace_for_instance` duplicates the canonical `order_identity.build_bot_order_namespace` with a hard-coded format. It is used only by three test helpers and one re-export. | [code] grep | Trivial: point the three test helpers at `build_bot_order_namespace` and delete the duplicate and its re-export (`account_artifacts.py:1316`, `account_registry.py:474`). No issue needed. |
-
-## Tests and commands
-
-From `PythonDataService/`:
-
-```text
-DATA_PLANE_CONTROL_SECRET="" .venv/bin/python -m pytest tests/broker/alpaca/clerk/sqlite/test_two_bots_one_symbol.py -q -rxX
-46 passed
-```
-
-- **Reuse.** The file uses the existing Clerk fixtures and fake broker ports:
-  `conftest._FakeTradePort`, `_make_held_position` and `_fill_entry` (the fill
-  half of `_make_held_position`, split out so a test can fill an entry it
-  submitted earlier); the budget harness from `test_budget_commands`;
-  `_append_slice`; the watchdog harness from `test_reconcile`; `POST_CLOSE_MS`
-  from `test_exit`; and the live-touch pricing from `test_exit_send_session`.
-- **The former xfails.** The file carried strict xfails for #2621 (the error
-  mapping), the two #2553 cash-claim cases, and the two #2647 cases of a
-  manual buy limit cancelled at Alpaca (by the sweep and by its
-  `trade_updates` frame). Each passed once its issue landed, and its mark was
-  removed.
 
 ## Sources
 

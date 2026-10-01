@@ -1,7 +1,7 @@
 # ADR 0072 — A research run is identified by a canonical hash of its inputs; parameter cells, trade evidence and model predictions are hashed inputs too
 
 **Status:** Accepted 2026-09-30
-**Provenance:** Entry 9 of [#2745](https://github.com/tim1016/learn-ai/issues/2745), merged from #2742 G and F and #2741 kept why 3 (artifact-seam decisions 1–2). Recorded here so that later clean-up slices can delete their only other homes: the Recency Chart design spec's D11 and D16 (PRD [#1577](https://github.com/tim1016/learn-ai/issues/1577), 2026-08-16), the ML "predictions as data" v0.5 design (2026-05-09), and the research artifact-seam decisions. The hashing rationale is also in `docs/references/run-ledger.md`. Written by [#2749](https://github.com/tim1016/learn-ai/issues/2749).
+**Provenance:** Entry 9 of [#2745](https://github.com/tim1016/learn-ai/issues/2745), merged from #2742 G and F and #2741 kept why 3 (artifact-seam decisions 1–2). Recorded here so that later clean-up slices can delete their only other homes: the Recency Chart design spec's D11 and D16 (PRD [#1577](https://github.com/tim1016/learn-ai/issues/1577), 2026-08-16), the ML "predictions as data" v0.5 design (2026-05-09), and the research artifact-seam decisions. Written by [#2749](https://github.com/tim1016/learn-ai/issues/2749).
 **Vocabulary:** none owed — run ledger, `params_hash`, evidence fingerprint and prediction set are research terms, outside the live trading and operator domain that `CONTEXT.md` covers.
 **Related:** ADR 0069 (strict equivalence — the reason identical inputs must reproduce identical hashes), ADR 0055 (Python-owned research tables), ADR 0056 D3 (a walk-forward study freezes one data snapshot and one code identity), ADR 0057 D5 (Recency redelivery is answered by `params_hash`), ADR 0061 (a validated configuration is an identity), ADR 0022 (`int64 ms UTC`).
 
@@ -67,4 +67,4 @@ Research answers are only worth keeping if they can be found again and reproduce
 
 - Any new input that can change a result must join the identity: a ledger column, the fingerprint, or a new hashed artifact. A schema change is a `schema_version` bump. Old ledgers keep loading, and no existing hash is rewritten.
 - New identities use `runs/hashing.py::hash_payload`. The two frozen encoders, `params_hash` and `trade_fingerprint`, must not be "unified" with it without a migration. Changing either one changes every persisted `params_hash` and fingerprint, and breaks ADR 0057 D5's redelivery matching.
-- `docs/references/run-ledger.md` keeps the identity-column and exclusion details as a receipt. The decisions are here.
+- `docs/references/run-ledger.md` keeps only the `data_snapshot_id` delimiter constraint. The decisions, identity columns and exclusions are here.

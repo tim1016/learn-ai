@@ -19,9 +19,9 @@ run-log functional items were **not** re-verified in that pass — confirm befor
 committing effort. The account-registry and architecture P1 clusters were
 rechecked on **2026-08-17**. The IBKR B-05 order-cancel finding was closed by
 deleting the complete order-actuation boundary on **2026-08-19**. The §1
-safety-critical, §2 architecture-P1, and §7 contract-drift clusters were pruned
-on **2026-08-19** after their items were verified closed or retired (see those
-sections); §5 was re-verified still-open the same day, with its clock-constant
+safety-critical cluster and the former architecture-P1 and contract-drift clusters
+were pruned on **2026-08-19** after their items were verified closed or retired
+(git history is the record); §5 was re-verified still-open the same day, with its clock-constant
 count corrected after #1687. On **2026-08-24** the backlog was reconciled
 against the F1–F19 adjudication table from the same-day session (PR #1747):
 §1 now carries the two safety-critical findings, §9 lifts the remaining open
@@ -65,46 +65,6 @@ through the presented action — flattening them remains the operator's call. Th
 previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
 #1665) remain closed as of 2026-08-19; git history is the record.
 
-## 2. Architecture-investigation P1 tier
-
-No known-open items. The P0 safety issues and the carried-forward P1 tier from
-`architecture-investigation-2026-07-02.md` (deleted to git history in the
-2026-07-04 prune, commit `8441f4f6`) are all resolved or retired; git history is
-the record — the account-truth enforcement/observation split and the
-crashed-sibling `ACTIVE` liveness leak (commit `29388133`, with regression
-tests), non-atomic ledger/parquet writes (commit `10433952` plus #1584), and the
-committed dev-default control secret (#1652). The R3 recovery-daemon item was
-retired with the deprecated IBKR bot-control surface (evaluator control plane
-#1678, legacy broker control #1679; the accepted Alpaca Clerk cutover is
-complete, ADR-0035).
-
-## 3. Broker subsystem (re-verified 2026-08-19)
-
-The B-05 direct-cancel risk is closed by deletion: no application route or
-production helper can cancel an IBKR order. B-06 and B-09--B-13 remain fixed in
-current code and their regressions pass. The disconnect-blindness cluster
-(B-02/03/04/08) was reachability-reviewed on 2026-08-19 and is closed-by-fix
-(commit `dce2b5d0`): all four sit on live runtime paths (the IBKR feed,
-`/orders/stream`, `/pnl/stream`, and the always-registered `errorEvent`
-handler), each fails closed on hard *or* soft (1100) disconnect, and each named
-halt-on-disconnect regression test passes on master. No open broker gaps remain.
-
-## 4. Broker session mirror — deferred product/safety decisions
-
-Shipped read-only (ADR-0018, PRs #881–#908). Four items were intentionally not
-built because they need a product/safety decision or authority the codebase does
-not yet provide:
-
-- **Exact 1:1 data-plane socket de-dup** — `/api/broker/health` publishes the
-  data-plane `client_id`/account/host/port but not `local_port` or host PID, so
-  the reconciler cannot join a health row to a specific `lsof` row without
-  guessing. Needs a data-plane socket-identity contract.
-- **Durable orphaned-socket incident lifecycle** — orphan notices are projected
-  on live rows only, not persisted as acknowledgeable/resolvable incidents.
-  Decide whether they enter the incident store and what resolves them.
-- **Strong orphan attribution without PID/run-dir evidence** — a raw Gateway
-  socket with no live PID and no run-dir stays `ghost`; may under-classify real
-  orphaned bot sockets. Needs a durable session-level socket-identity history.
 ## 5. Numerical-rigor & frontend debt (deferred, P2)
 
 - **Golden-fixture coverage gap** — most canonical math still lacks a registered
@@ -145,16 +105,6 @@ not yet provide:
   over a 1-min equity-curve denominator — was fixed in #160, commit `1f512213`,
   and is guarded by `test_exposure_uses_consolidated_bar_resolution`; pruned from
   this backlog 2026-08-19 after verifying the test passes on master.)*
-- **ML-V-002** — provenance blocks missing on
-  `research/parity/qc_reconciler.py` and the prediction-set `artifact.py`.
-  *(2026-05-12 ML-predictions run)*
-
-## 7. Contract-surface drift gates
-
-No known-open items. The vocabulary-snapshot source-pinning, Broker V2 REST
-generated-type, and accepted-ADR `Vocabulary:` metadata gates previously tracked
-here (issues #1666, #1667, #1668) are closed and merged to master as of
-2026-08-19; git history is the record.
 
 ## 7b. Orphans left by the 2026-08-28 signal/asset decoupling sweep
 
@@ -244,20 +194,6 @@ idempotency lookup ordered after the presentation check) is
 informational-only in the handoff and is deliberately **not** tracked here as
 a defect.
 
-- **F16 — `retire`'s eligibility guard is narrower than the class it exists
-  to clear. RESOLVED 2026-08-30 (#1795).** *Reframed 2026-08-26; widened
-  2026-08-30.* The guard required a dead *strategy key* while the zombie's
-  dead thing was its *symbol*, so the panel simultaneously said "This bot can
-  still run." and "Resume is blocked." The contradiction was fixed
-  2026-08-26 (blocker copy claims no runnability), and the widening landed
-  2026-08-30: the reconciliation sweep's post-pass probe records definitive
-  `get_asset` answers durably (`app/broker/alpaca/symbol_validity.py`), and
-  `evaluate_retirement` accepts either proof of permanent inadmissibility —
-  dead strategy key, or a broker-confirmed unlisted symbol — with the
-  custody guard still the last word. The read path stays pure (#1776): both
-  the panel guard and the retire commit read the store, never the broker.
-  **Superseded 2026-09-29 (#2578):** Retire and the symbol-validity store are
-  removed; Clear (archive) is the only way off Home.
 - **F17 — `prepare_safe_flatten` enablement vs. its view-action nature
   (low; reduced 2026-08-26).** The executor landed (#1756) and the POST path
   now raises a typed `ActionNotAvailableError` — "This recovery capability is
@@ -361,7 +297,7 @@ branch.
 ## 10. 2026-08-25 fleet-stress findings (PR #1772, pruned 2026-08-26)
 
 The live 54-bot campaign's audit is in Git history. S15c is safety-critical and lives
-in §1; retire is tracked as F16 in §9 rather than duplicated here.
+in §1.
 
 **Pruned 2026-08-26**, each against an explicit live acceptance in §2 of
 the 2026-08-26 fleet stress audit — git history carries the audit and the
@@ -431,10 +367,6 @@ is the durable index, the issue is the working brief.
   emergent effect is cohort-scale stranding whose only remedy is N×3 clicks.
   **#1802** (needs design) — a cohort-scoped flatten, the inverse-scoped
   sibling of the Two-Tap account-hold rule.
-- **T1 — narrow retire misses its motivating case. RESOLVED 2026-08-30.**
-  The operator-visible contradiction went 2026-08-26; the widening landed
-  2026-08-30 via the sweep-produced symbol-validity store. See §9 F16 and
-  **#1795**. Superseded 2026-09-29: Retire is removed (#2578).
 - **T5 — panel reads 503 under write pressure (medium).** An honest
   fail-closed torn-read guard, but one torn read ends the request, so it
   surfaces as flakiness exactly when an operator inspects an active bot.
@@ -633,7 +565,7 @@ re-arms the server-authored timeframe auto-correct, and numeric
   carries a real engine-parity comparison; the missing-row misclassification
   above is what remains open. Evidence:
   [incident report](audits/live-ema-spy-missed-entry-2026-09-17.md),
-  [final-bar decisions note, section 5](./references/final-bar-decisions-2467.md).
+  [final-bar decisions note](./references/final-bar-decisions-2467.md).
 
 ## Backtest vs reality: when a bot ends (#2607, 2026-09-29)
 

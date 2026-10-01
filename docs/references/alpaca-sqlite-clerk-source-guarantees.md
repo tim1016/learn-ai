@@ -15,6 +15,5 @@ Clerk must enforce. The current scope does not implement order replacement/PATCH
 
 Official documentation describes broker behavior, not atomicity across this process and
 Alpaca. Capture-before-contact, content-addressed command/effect identity, monotonic
-evidence, append-mirror finalization, and fail-closed recovery are Clerk guarantees and
-are validated separately in
-`docs/references/alpaca-sqlite-clerk-invariant-traceability.md`.
+evidence, append-mirror finalization, and fail-closed recovery are Clerk guarantees
+(ADR 0035), not broker ones.

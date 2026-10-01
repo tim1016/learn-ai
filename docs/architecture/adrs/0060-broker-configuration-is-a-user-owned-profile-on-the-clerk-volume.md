@@ -143,7 +143,7 @@ The account's custody and bot files retain the existing forensic quarantine and 
 ## Consequences
 
 - ADR 0059 carries a supersession note naming this ADR and the one clause it replaces. `docs/references/alpaca-live-envelope.md` and `docs/references/alpaca-live-arming.md` change "environment settings" to "the effective profile revision" and keep every other word.
-- The contract for packages B–E is [`docs/architecture/broker-configuration-profile-contract.md`](../broker-configuration-profile-contract.md): record shapes, credential-slot scheme, route surface and error taxonomy. It is the shared contract, not one agent's private design.
+- The contract for packages B–E is [`docs/architecture/broker-configuration-profile-contract.md`](../broker-configuration-profile-contract.md): record shapes, credential-slot scheme, route surface and error taxonomy. It is the shared contract, not one agent's private design. *(2026-10-01, #2763: the record shapes, route surface and error taxonomy now live only in code; the doc keeps the rules code cannot state.)*
 - The route surface is a new literal prefix `/api/brokers/alpaca/configuration`. `configuration` is not a claimed depth-2 segment under the existing `/api/brokers/{broker}/…` wildcard routes, so no existing route shadows it; a contract test pins that.
 - `CONTEXT.md` § "Broker configuration profiles" owns: *broker profile*, *profile revision*, *staged selection*, *effective revision*, *Apply*, *credential slot*, *account nickname*, *local owner*, *installation*.
 - The `.env` files keep every secret and every deployment-bootstrap variable. The migrated non-secret entries are removed from normal runtime wiring by package F, with the importer and the historical tests as the only remaining readers.

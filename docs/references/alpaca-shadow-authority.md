@@ -1,63 +1,11 @@
-# Alpaca shadow authority — the custody world, the session journal, the twin comparison, and the receipt
+# Alpaca shadow authority — the custody world, fill models and cold start
 
-**Status:** historical slice-4 provenance with current supersession (2026-09-27).
-Shadow remains an independently activated simulation authority with no-submit
-ports and shared simulated economics. PRD #2540 / #2547 removes its session
-journal, receipt, exclusively used paper-twin comparison, and sessions/receipt
-CLI commands. They grant no deployment permission and are not prerequisites.
-Configuration is the normal activation surface; the `activate` CLI recovery
-fallback remains. Historical descriptions below do not restore retired controls.
-
-ADR 0059 D2 says a live Alpaca account never gets a mutating Clerk until a sealed
-instance has proven itself. This note records what slice 4 built to make that
-true, the decisions taken inside the plan's rulings, and what was deliberately
-left for later.
-
-Every temporal value named here is `int64 ms UTC`. A trading date is one
-ET-anchored instant — the calendar's session open for that day — never a string
-and never a date type; see `.claude/rules/temporal-rigor.md`.
-
-## What was built
-
-**1. The Shadow Account Authority.** `PythonDataService/app/broker/alpaca/clerk/shadow_broker.py`
-holds the three objects the world is made of: `ShadowOrderBook` (synthesized
-orders and their settlement), `NoSubmitAlpacaTradePort` (a `BrokerTradePort`
-over the book that holds no Alpaca client, so nothing in the module can reach
-the vendor's write API), and `ShadowAccountReadPort` (the composite read port).
-`compose_shadow_ports` binds one live read port into that world for one live
-account. `app/broker/alpaca/clerk/shadow_authority.py` is the boot story:
-`select_shadow_clerk_runtime` is what `active_authority.select_active_clerk_runtime`
-calls when the broker-observed account resolves `account_mode == "live"` and no
-live activation record exists for it; with one, the live authority is composed
-instead (graduation, [alpaca-live-authority](alpaca-live-authority.md)). It
-returns an `ActiveClerkRuntime` with `authority_kind="shadow"` — or a typed
-`unavailable` runtime, never an aborted data-plane startup. `real_live` custody
-is the live authority's (slice 7).
-
-**2. The activation fence.** `app/broker/alpaca/clerk/shadow_activation.py`
-gives the `shadow:` world its own append-only, sha256-sealed activation ledger,
-modelled on the synthetic fence. No startup path appends to it;
-`shadow_authority.activate_shadow_clerk_authority` is the one writer, and the
-operator is the one caller. Without a record, a live boot refuses
-`SHADOW_ACTIVATION_REQUIRED`; with a record whose `authority_generation` or
-`db_identity_token` does not match the repository it names, it refuses
-`SHADOW_ACTIVATION_RECORD_INVALID`.
-
-**3. Session accounting and the gate.** `app/broker/alpaca/clerk/shadow_sessions.py`
-journals each ET trading day's sweep cleanliness;
-`app/services/alpaca_shadow_reconciliation.py` pairs one day's synthesized fills
-against the paper twin's under the repo's divergence taxonomy and judges every
-trading day since the shadow instance first ran.
-
-**4. The receipt and the operator surface.**
-`app/broker/alpaca/clerk/shadow_receipt.py` seals the passed gate into an
-append-only per-instance receipt, over the shared write discipline in
-`app/broker/alpaca/clerk/sealed_ledger.py`.
-`PythonDataService/scripts/manage_alpaca_shadow.py` is the operator CLI, and the
-existing live verdict (`app/services/alpaca_live_verdict.py`) gained the durable
-observation behind its slice-1 `shadow_state` field — `observe_shadow_state` —
-and a `clerk_authority` widened to `shadow`. Ruling R13: the operator surface is a CLI, not an
-endpoint — an endpoint would only wrap the same functions.
+**Status:** slice-4 design, current as of 2026-09-27. Shadow is an
+independently activated simulation authority with no-submit ports and shared
+simulated economics (`shadow_authority.py`, `shadow_broker.py`,
+`shadow_activation.py`). PRD #2540 / #2547 removed its session journal,
+receipt, paper-twin comparison and their CLI commands; they grant no
+deployment permission and are not prerequisites.
 
 ## Worlds and paths
 
@@ -69,12 +17,12 @@ parallel copy of all three.
 
 | What | Where |
 |---|---|
-| Custody database, synthesized-order WAL, session journal | `accounts/alpaca/shadow:<live_account_id>/` — `clerk.db`, `simulated_orders.jsonl`, `shadow_sessions.jsonl` |
-| Activation fence and receipts | `accounts/shadow/` — `shadow_activation.jsonl`, `shadow_receipts.jsonl` |
+| Custody database, synthesized-order WAL | `accounts/alpaca/shadow:<live_account_id>/` — `clerk.db`, `simulated_orders.jsonl` |
+| Activation fence | `accounts/shadow/` — `shadow_activation.jsonl` |
 | Per-instance retained source bars | `accounts/alpaca/shadow-evidence:<strategy_instance_id>/` |
 
 The ADR's "under `accounts/shadow/<live_account_id>/`" is satisfied in spirit by
-the `accounts/shadow/` fence and receipt ledgers, which scope by row rather than
+the `accounts/shadow/` fence ledger, which scopes by row rather than
 by directory; the custody database is at `accounts/alpaca/shadow:<id>/`. `shadow-evidence:` is deliberately not `shadow:`: an
 evidence namespace is never a custody identity, and one function —
 `account_authority.evidence_account_id_for` — chooses it for both the binding
@@ -187,284 +135,34 @@ rather than a permissive one:
   a recorded follow-up: an account past 500 historical orders cannot shadow
   until one exists.
 
-## Session accounting
-
-`ShadowSessionRecorder` is a sweep listener; `ShadowSessionLedger` is the
-append-only journal beside the shadow custody database. Rather than journal
-every pass, it keeps three row kinds per ET trading date, each keyed by that
-date's calendar session open in `int64 ms UTC`:
-
-- `day_opened` — the first pass observed on that date, with the instant it
-  happened.
-- `non_clean` — a pass whose sweep verdict was not `clean`, deduplicated while
-  consecutive verdicts repeat.
-- `session_closed_clean` — the first clean pass at or after the declared
-  window's close (the calendar's close when no window is declared).
-
-A day is **complete** iff it was opened, closed clean, and was never non-clean
-(`ShadowDayState.complete`). The **"opened late" rule** is separate and is the
-gate's, not the journal's: if the sweep's first pass came *after* the instance's
-decision session opened, the day is `sweep_opened_late` and does not count — a
-process that started at noon cannot vouch for the morning.
-
-## Twin reconciliation
-
-`reconcile_twin_day` orders each side's fills by `(filled_at_ms, order_ref)` and
-pairs them **by index**. The first failing rule classifies a pair, and the order
-of the rules is itself a decision: a fill with no partner, or partners on
-different symbols, is `DECISION_MISMATCH`; then different sides is
-`DIRECTION_MISMATCH`; then different quantities is `QUANTITY_MISMATCH`; only
-then is `|shadow.price - twin.price| > atol` `FILL_PRICE_DRIFT`. Direction is
-judged before quantity because a side flip is a different decision, and
-reporting it as a quantity difference would route the operator to
-position-sizing when the bug is in order construction.
-
-**The gating set is narrowed locally** to
-`{DECISION_MISMATCH, DIRECTION_MISMATCH, QUANTITY_MISMATCH}` — a strict subset
-of the repo-wide gating set in `.claude/rules/numerical-rigor.md`. The reason is
-in the ADR: shadow proves the live plumbing, not execution quality, and
-*synthesized fills are optimistic by construction*, so a shadow-vs-paper twin
-comparison that gated on price would be gating on the synthesis rather than on
-the port. `FILL_PRICE_ATOL = $0.01` (the taxonomy's own default) is therefore
-computed, classified and **reported, never gated**; the day's
-`max_fill_price_drift` rides the report. The taxonomy enum itself is untouched:
-`app/research/parity/qc_reconciler.py::DivergenceCategory` stays the one
-vocabulary, kept in lockstep as `numerical-rigor.md` requires.
-
-What the pairing does **not** prove is written into the module's own Math
-Provenance Contract: pairing is by sequence and shape, **never by decision bar**.
-Two fills agreeing on symbol, side and quantity pair index-for-index however far
-apart in the session they sit, so a day can be counted on decisions that were
-not made at the same time. `max_fill_time_drift_ms` measures exactly that
-distance and reports it — a diagnostic, never a divergence category and never
-gating. Joining on the decision bar is a follow-up below.
-
-**Reading the two sides.** Fills are read **per bot** —
-`SqliteEconomicProjectionReader.bot_fill_window` over the ET calendar day
-`[et_midnight_ms(day), et_day_end_ms(day))` — behind a memoised
-`bot_economic_snapshot(...).execution_coverage == "complete"` assertion. The
-account-wide `account_fill_window` was the obvious read and is the wrong one: it
-refuses the whole account, time-unbounded, whenever *any* filled external order
-exists, so one external fill on the paper account would fence this gate forever.
-An external order is by schema definition outside every registered bot namespace
-and is never a decision of the sealed program under comparison; whether the
-Clerk vouches for *this instance's* executions is the question that matters, and
-the coverage assertion asks exactly that. A window an authority will not vouch
-for makes the day `not_evaluable` — a typed verdict carrying the reader's own
-sentence, which does not count and never reads as a pass, and which does not
-destroy every other day's verdict by escaping as an exception.
-
-**A Clerk-fenced twin day reads as `DECISION_MISMATCH`,** not as a data gap: if
-the twin could not decide that day, the shadow side has fills the twin side does
-not, the first unpaired fill classifies as a decision divergence, and the day is
-`twin_diverged`. That is the honest reading — the two worlds disagreed about
-whether to trade — and it keeps "the evidence is unreadable" (`not_evaluable`)
-distinct from "the evidence says they disagreed".
-
-**Twin identity** is `twins_agree`: the configured signal hash, the action plan,
-the size and the carryover policy, plus a shadow side sealed to a `shadow:`
-account and a twin side that is not. It is **never** the instance id, the
-account, or the outer seal hash — both of those legitimately differ between the
-two worlds. Session shape is checked separately at the gate
-(`shadow_binding.use_rth != twin_binding.use_rth` is a `ShadowTwinMismatch`),
-because the seal carries no session shape and twins deciding on different
-minutes would otherwise fail closed as a misleading twin divergence.
-
-**A session counts** (ruling R10) when the journal shows the day opened at or
-before the instance's decision session opened, closed clean after it closed, with no
-non-clean pass; one run **on each side** — the shadow instance and its paper
-twin — spanned the whole decision session, because a day the twin was not
-running yields no twin fills and would otherwise reconcile against a silent
-shadow day and count vacuously; and
-the twin reconciliation has no gating divergence. The other five outcomes —
-`sweep_not_clean`, `sweep_opened_late`, `run_not_covering`, `twin_diverged`,
-`not_evaluable` — are named states, not silence.
-
-**The shadow authority also rehearses the live risk envelope (ADR 0059 D4,
-slice 5)**, on the live account's real cash — net of what its own synthesized
-fills would have spent, so the reserved amount never double-counts a fill the
-paper twin also made. An envelope refusal on the shadow side is therefore read
-the same way any other one-sided decision is: it is a twin decision mismatch,
-so that day does not count. See
-[alpaca-live-envelope](alpaca-live-envelope.md).
-
-## Receipt
-
-`ShadowReceipt` carries `schema_version`, `live_account_id`,
-`strategy_instance_id`, `configured_signal_hash`, `twin_account_id`,
-`twin_strategy_instance_id`, `required_sessions`, the `sessions` themselves
-(each a `session_open_ms` in `int64 ms UTC`, the `shadow_run_id`, and the
-`reconciliation_sha256` naming that day's comparison), `written_at_ms`, and
-`receipt_sha256` sealed over the rest.
-
-The receipt proves its own invariants rather than trusting its writer, because
-slice 6 trusts the receipt and not the process that wrote it: it refuses a
-repeated session, a list shorter than `required_sessions`, a `required_sessions`
-below 1, a `written_at_ms` or `session_open_ms` outside `[0, MAX_TIMESTAMP_MS]`,
-and a `live_account_id` or `twin_account_id` naming a reserved `shadow:` or
-`sim:` identity. `current(strategy_instance_id, configured_signal_hash=…,
-required_sessions=…)` is the read slice 6's arming ceremony will call, and it
-re-checks the seal and the count on every read — so a re-appended older row can
-only answer for a caller it still satisfies, and no monotonicity guard on file
-order is needed.
-
-The receipt ledger and the activation ledger are different records with
-different error types but the same file on disk, so **one write discipline**
-serves both, in `sealed_ledger.py`: canonical JSON (`sort_keys`, tight
-separators, `ensure_ascii`), sha256 sealing over that canonical form (each store
-verifies its own rows against it on read, in its `from_payload`, using the
-shared `canonical_sha256`), refusal of a symlinked or otherwise non-regular ledger
-file, and a durable append that fsyncs the handle and fsyncs the parent
-directory on creation. A correction to any of those — adding `O_NOFOLLOW`,
-changing when the parent is fsynced — lands once instead of protecting one
-ledger.
-
 ## Operator recipe
 
-Deploying onto a live account goes through the shadow authority and says so on
-the wire: `execution_mode` gained an honest `shadow` value rather than reusing
-`paper` (ruling R14 — a label that lies is the ADR 0011 failure mode), and panel
-deploy refuses a non-paper account whose primary custody world is not `shadow`,
-naming activation as the next action. The paper twin runs on the paper host,
-over the same days, sharing the shadow instance's configured signal, action
-plan, size and carryover policy.
+Configuration is the normal activation surface. The `activate` CLI is the
+recovery fallback.
 
 The shadow custody database these commands read and write lives on the
 VM-local `alpaca-clerk-data` named volume the running worker mounts at
 `/app/artifacts/alpaca_clerk` (see `compose.yaml`), not on the host tree at
 `PythonDataService/artifacts/alpaca_clerk` — that host tree is mounted
 read-only at `/app/alpaca_clerk_legacy` and normal runtime never reads
-authority from it. Run every command below from the repo root (where
+authority from it. Run the command below from the repo root (where
 `compose.yaml` lives) inside a one-shot `python-service` container against
 that same volume, the same pattern the
 [SQLite Clerk recovery/cutover runbook](../runbooks/alpaca-sqlite-clerk-recovery-and-cutover.md)
 uses. A host-side `python -m scripts.manage_alpaca_shadow` invocation writes
-`activate`'s fence and `receipt`'s seal into the unmounted legacy tree
-instead: the worker never sees them, and slice 6's arming ceremony (which
-reads `ShadowReceiptStore.current(...)` from the same volume) never finds
-the receipt `apply` needs. Both custody databases are read `mode=ro` and no
-lease is taken; `sessions` writes nothing at all.
+`activate`'s fence into the unmounted legacy tree instead, and the worker
+never sees it.
 
 ```bash
-# 1. Once per live account, before the first shadow boot.
+# Once per live account, before the first shadow boot.
 podman compose run --rm --no-deps python-service \
   python -m scripts.manage_alpaca_shadow --live-account-id <ACCOUNT> \
   --artifacts-root /app/artifacts/alpaca_clerk \
   activate
-
-# 2. Any time: judge every trading day since the shadow instance first ran.
-podman compose run --rm --no-deps python-service \
-  python -m scripts.manage_alpaca_shadow --live-account-id <ACCOUNT> \
-  --artifacts-root /app/artifacts/alpaca_clerk \
-  --live-state-root /app/artifacts/live_runs \
-  sessions \
-    --strategy-instance-id <SHADOW_SID> \
-    --twin-account-id <PAPER_ACCOUNT> \
-    --twin-strategy-instance-id <TWIN_SID> \
-    --twin-artifacts-root <PAPER_HOST_CLERK_DIR>
-
-# 3. When the gate holds: seal the receipt.
-podman compose run --rm --no-deps python-service \
-  python -m scripts.manage_alpaca_shadow --live-account-id <ACCOUNT> \
-  --artifacts-root /app/artifacts/alpaca_clerk \
-  --live-state-root /app/artifacts/live_runs \
-  receipt \
-    --strategy-instance-id <SHADOW_SID> \
-    --twin-account-id <PAPER_ACCOUNT> \
-    --twin-strategy-instance-id <TWIN_SID> \
-    --twin-artifacts-root <PAPER_HOST_CLERK_DIR>
 ```
-
-`--twin-artifacts-root <PAPER_HOST_CLERK_DIR>` names the Paper twin's own
-Clerk root, read on whatever host or volume the Paper worker's deployment
-uses — a separate topology question from the live/shadow Clerk volume above,
-and outside this note's scope.
-
-**The data plane must stay up, and sweeping cleanly, until the declared
-window's close.** A day is journaled `session_closed_clean` only by a clean
-sweep pass at or after that close — the broker's declared window, 20:00 ET,
-which is not the RTH close and does not narrow for an RTH-only instance.
-Shutting the plane down at 16:00 ET therefore counts no session at all, and
-the day reports `sweep_not_clean` with "the sweep did not close the day clean".
-
-`--required-sessions` falls back to the effective profile revision's `shadow_sessions` (resolved through `cli_binding`, ADR 0060); the repo's
-`.env` does not set it today, so either the flag or the setting must be supplied
-or the command refuses. Both are bounded `>= 1` — a gate of zero sessions is
-satisfied by no evidence, so it is not a gate.
-
-`--now-ms` is **both** the judging clock and the receipt's `written_at_ms`. A
-replayed old value therefore backdates a receipt, but it cannot strengthen one:
-it bounds the judged day range downward, and the receipt validator independently
-refuses repeated sessions, a session list shorter than the required count, and a
-timestamp past `MAX_TIMESTAMP_MS`.
-
-Exit codes: `0` when the command answered (including `sessions` on an
-unsatisfied gate — reporting is its whole job); `1` when the command cannot be
-run as asked: a reserved `shadow:`/`sim:` identity, a binding or custody
-database that is not there, a required session count nobody stated, an economic
-projection the authority will not vouch for (`EconomicProjectionUnavailable`), a
-receipt the sealer will not accept, or a usage refusal — an absent flag, an
-unknown subcommand, a flag outside its bound; `2` when `receipt` found the gate
-unsatisfied, or when the named twin is not this instance's twin
-(`SHADOW_TWIN_MISMATCH`). Every invocation writes exactly one JSON object to
-stdout, and every temporal value in it is `int64 ms UTC`, so a script reads the
-`error` key rather than inferring a cause from an exit code. (`--help` is
-argparse's own usage text and exits `0`; it runs no command.)
-
-**The verdict banner.** `GET /api/brokers/{broker}/live-verdict` reports
-`clerk_authority="shadow"` and a `shadow_state` of `none` / `in_progress` /
-`complete`, and its headline reads `LIVE account <id> — shadow authority active,
-no instance armed`. The headline deliberately names the **live**
-account: `shadow:` is the runtime's custody namespace for the same account, not
-part of its number.
-
-`shadow_state == "complete"` is **account-wide**: `observe_shadow_state` asks
-`ShadowReceiptStore.any_for_account(live_account_id)`, while slice 6's arming
-gate will ask the instance-scoped `ShadowReceiptStore.current(...)`. An operator
-can therefore read "complete" for an account whose second instance is still
-mid-shadow. Per-instance progress on the verdict is a follow-up (ruling R12).
-
-The endpoint **propagates a corrupt receipt ledger or session journal as a 500,
-by design**: `observe_shadow_state` raises rather than answering `"none"`,
-because a corrupt proof is not the absence of one and must never render as "no
-progress yet". Only invalid Alpaca settings are absorbed, into the
-`"unconfigured"` verdict.
-
-Graduation — the live cutover — is the step after the receipt; stop the shadow
-instances first, because after it they are foreign to the live authority.
-
-## Validation
-
-`PythonDataService/tests/broker/alpaca/clerk/test_shadow_broker.py`,
-`test_shadow_activation.py`, `test_shadow_sessions.py`, `test_shadow_receipt.py`,
-`test_synthesized_orders.py`, `test_account_worlds.py`, `test_active_authority.py`;
-`PythonDataService/tests/broker/alpaca/clerk/sqlite/test_runtime_shadow.py` and
-`test_qualification_shadow_trace.py`;
-`PythonDataService/tests/services/test_alpaca_shadow_reconciliation.py`,
-`test_alpaca_live_verdict.py`;
-`PythonDataService/tests/routers/test_alpaca_live_verdict_endpoint.py`;
-`PythonDataService/tests/scripts/test_manage_alpaca_shadow.py`;
-`PythonDataService/tests/broker/v2panel/test_panel_deploy_shadow.py`;
-`PythonDataService/tests/contracts/test_alpaca_active_authority_wiring.py`;
-`Frontend/src/app/components/broker/broker-deploy-page/alpaca-deploy-workflow.component.spec.ts`.
 
 ## Follow-ups (not this slice)
 
 - **A paginated order-history walk.** Cold start proves an empty Clerk namespace
   from one 500-row page; an account past 500 historical orders refuses
   `SHADOW_NAMESPACE_UNPROVEN` and cannot shadow until the walk exists.
-- **The decision-bar join for the twin comparison.** Pairing is by sequence and
-  shape today; `max_fill_time_drift_ms` reports how far apart the paired fills
-  sat but never gates. Joining on the decision bar itself would make "the same
-  decision" provable rather than inferred.
-- **Overnight (20:00–04:00 ET).** A separate venue and separate data; not a
-  decision phase, so not a shadow phase.
-- **Per-instance shadow progress on the live verdict.** `shadow_state` is
-  account-wide today (see "Operator recipe").
-- **Slice 6 arming consumes `ShadowReceiptStore.current`.** Since slice 7 the
-  arming ceremony records a current receipt when the instance holds one and
-  arms without one (shadow is a mode, not a requirement — owner decision
-  2026-09-09); `LIVE_SHADOW_INCOMPLETE` stays defined in `live_arming.py` for
-  the verdict's vocabulary. This slice produces the receipt
-  that gate reads; the gate itself is
-  [alpaca-live-arming](alpaca-live-arming.md).

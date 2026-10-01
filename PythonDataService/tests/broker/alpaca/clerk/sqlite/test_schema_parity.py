@@ -1,9 +1,9 @@
-"""Guiding-philosophy #5 parity: schema.py's DDL must match the pinned doc.
+"""``schema.SCHEMA_DDL`` builds the tables, columns, indexes and triggers the
+clerk store relies on, and its migrations carry live stores to the current
+version intact.
 
-If this test fails, either the doc changed without updating ``schema.py`` (or
-vice versa) — the pinned-contracts document is the reference, this module is
-the canonical implementation, and this test is what keeps them from
-drifting.
+The DDL is the schema's only copy; ADR 0035's binding annex states the
+invariants behind it.
 """
 
 from __future__ import annotations
@@ -13,13 +13,6 @@ from pathlib import Path
 
 from app.broker.alpaca.clerk.sqlite import database_verification, schema
 from tests.broker.alpaca.clerk.sqlite.conftest import build_v13_authority
-
-REPO_ROOT = Path(__file__).resolve().parents[6]
-
-
-def test_schema_ddl_matches_pinned_contracts_doc() -> None:
-    pinned = schema.load_pinned_ddl(REPO_ROOT)
-    assert pinned == schema.SCHEMA_DDL
 
 
 def _authority_built_up_to(conn: sqlite3.Connection, target_version: int) -> None:

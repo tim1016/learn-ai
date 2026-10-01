@@ -1,6 +1,6 @@
 # bs-price-cross-engine — cross-engine parity fixture
 
-**Constructed:** 2026-04-26 (Phase 1.4 of `docs/architecture/numerical-authority-migration-plan.md`)
+**Constructed:** 2026-04-26 (Phase 1.4 of the numerical-authority migration; decision in `docs/architecture/adrs/0068-python-owns-the-canonical-math.md`)
 **Purpose:** pin equivalence between the two in-repo Black-Scholes implementations:
 - closed-form, continuous-time → `app/services/bs_greeks.py::bs_european_price`
 - QuantLib analytic engine → `app/services/quantlib_pricer.py::price_option` with `engine=PricingEngine.ANALYTIC_BS`

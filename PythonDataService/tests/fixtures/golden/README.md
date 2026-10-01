@@ -158,4 +158,3 @@ This fixture is stored in Parquet format (not Arrow IPC). See `attribution.md` i
 
 - `docs/architecture/engine-authority-map.md` — engine-level ownership map
 - `.claude/rules/numerical-rigor.md` — scientific standards
-- `docs/references/golden-fixtures/` — per-fixture markdown docs

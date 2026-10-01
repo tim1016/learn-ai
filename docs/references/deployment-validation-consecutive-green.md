@@ -68,9 +68,8 @@ run a fresh backtest (including at least one NYSE half day in the window to
 exercise the new barrier), reconcile it against the Python engine's output,
 then update `deployment_validation`'s manifest entry with the new
 `qc_cloud_backtest_id`, evidence hashes, and reconciliation diagnostics, and
-record a fresh accepted flag event. This is a manual step — see
-`docs/architecture/strategy-validation-deploy-rehome-prd.md` for the process
-this manifest's evidence chain follows.
+record a fresh accepted flag event. This is a manual step; ADR 0020 holds
+the decision this manifest's evidence chain follows.
 
 ## Implementations
 
@@ -87,7 +86,7 @@ audit copy under `references/qc-shadow/`.
 
 ## Validation
 
-- Signal Program promotion (issue #1730): sealed contract, pinned trace root, build receipt, and the custody split are recorded in [`deployment-validation-signal.md`](deployment-validation-signal.md); seam behaviour is pinned by `PythonDataService/tests/engine/strategy/test_deployment_validation_signal_program.py`
+- Signal Program promotion (issue #1730): the custody split is recorded in the canonical implementation's docstrings and the pinned trace root in `PythonDataService/tests/fixtures/golden/deployment-validation-signal/v1/`; seam behaviour is pinned by `PythonDataService/tests/engine/strategy/test_deployment_validation_signal_program.py`
 - Engine behavior: `PythonDataService/tests/engine/test_deployment_validation_strategy.py`
 - Cross-implementation session-window parity (canonical Python, QC shadow copy, LEAN trusted template): `PythonDataService/tests/engine/test_deployment_validation_session_window_parity.py` against `PythonDataService/tests/fixtures/golden/deployment-validation-session-window/`
 - Deployment artifacts: `PythonDataService/tests/engine/live/test_deployment_validation_deploy_artifacts.py`

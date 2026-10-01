@@ -67,7 +67,7 @@ vega               float        gated by include_vega
 rho                float        gated by include_rho
 ```
 
-**Float formatting:** 8 decimal places (`f"{v:.8f}"`). `None` and `NaN` serialize as the empty string. See `_fmt` in `options_companion_service.py`.
+**Float formatting:** 8 decimal places (`f"{v:.8f}"`). `None` and `NaN` serialize as the empty string.
 
 **Sort key:** rows within a slot CSV are strictly ascending by `unix_ts`.
 
@@ -136,33 +136,11 @@ The value is computed by comparing the row's `contract_ticker` to the previous r
 
 ---
 
-## 6. Configuration summary
-
-Fields on `OptionsCompanionConfig`:
-
-| Field | Type | Default | Notes |
-|---|---|---|---|
-| `enabled` | bool | `false` | Master switch for the companion files |
-| `strikes_each_side` | int (1..25) | **3** *(was 5)* | N strikes above AND below ATM per side |
-| `include_calls` | bool | `true` | Suppresses the entire `calls/` folder when false |
-| `include_puts` | bool | `true` | Suppresses the entire `puts/` folder when false |
-| `dte_distance` | int (0..30) | **0** | Replaces `expiry_mode` + `max_dte`. 0 = 0DTE same-day |
-| `include_ohlcv` | bool | `true` | OHLCV columns per slot CSV |
-| `include_vwap` | bool | `true` | VWAP column |
-| `include_transactions` | bool | `true` | Transaction-count column |
-| `include_open_interest` | bool | `false` | Always-blank column (Polygon does not serve per-minute OI) |
-| `include_iv` | bool | `true` | Implied volatility column |
-| `include_delta`/`gamma`/`theta`/`vega` | bool | `true` | Greeks |
-| `include_rho` | bool | `false` | Greek (less commonly needed) |
-| `include_discontinuity` | bool | `true` | The discontinuity column on every slot CSV |
-| `risk_free_rate` | float (0..0.25) | `0.05` | Flat annualized rate for IV/Greeks solves |
-| `dividend_yield` | float (0..0.25) | `0.0` | Flat continuous dividend yield |
-
----
-
 ## 7. Calculation references
 
 All computation is in `PythonDataService/`. Per `CLAUDE.md` rule 5, .NET and Angular do not compute these numbers — they pass through.
+
+IV and Greeks use one flat annualized risk-free rate and one flat continuous dividend yield, both set in the export settings (defaults 5 % and 0 %).
 
 ### 7.1 Implied volatility
 
@@ -186,7 +164,7 @@ Source: `PythonDataService/app/volatility/solver.py` — `implied_volatility(...
 
 When any reject fires, IV and all Greeks for that row are blank.
 
-**Surface-based IV is intentionally not used as input.** Building a per-minute volatility surface across the full chain is impractical at minute resolution. Surface-based IV is a deferred cross-check, tracked in `docs/options-cross-section-overview.md` and the references backlog. The per-bar solve is the input; the surface is the future validator.
+**Surface-based IV is intentionally not used as input.** Building a per-minute volatility surface across the full chain is impractical at minute resolution. Surface-based IV is a deferred cross-check. The per-bar solve is the input; the surface is the future validator.
 
 **Determinism.** Same inputs → same IV. Status enum lets every row carry a diagnostic from `SolveStatus` — see `solver.py` lines 39–47.
 
@@ -246,26 +224,6 @@ These match the legacy `quantlib_pricer.price_option` output conventions (see `q
 The companion fetches option aggregates at the **same `(timespan, multiplier)` as the underlying**. Polygon's `/v2/aggs/ticker/{ticker}/range` endpoint shares one UTC-anchored bar grid across stocks and options, so timestamps from the two series align exactly.
 
 Defensive bar-grid floor (`_bar_grid_floor_ms` in `options_companion_service.py`) is applied to the underlying-spot lookup map, so any future micro-drift between the two series degrades gracefully — affected rows lose IV/Greeks rather than silently pairing with the wrong spot.
-
----
-
-## 9. Implementation references
-
-| Concern | File | Symbol |
-|---|---|---|
-| Slot selection (offset → contract) | `options_companion_service.py` | `_select_strikes_with_slots` |
-| Slot label | `options_companion_service.py` | `_slot_label` |
-| Anchor (prior-day close) | `options_companion_service.py` | `_prior_day_close_map` |
-| Underlying↔option timestamp alignment | `options_companion_service.py` | `_underlying_close_map`, `_bar_grid_floor_ms` |
-| DTE expiry resolution | `options_companion_service.py` | `_resolve_target_expiry` |
-| Discontinuity tagging | `options_companion_service.py` | `_mark_discontinuity` |
-| Per-bar IV + Greeks orchestration | `options_companion_service.py` | `_compute_row_greeks` |
-| Closed-form Greeks compute | `options_companion_service.py` | `_bsm_greeks`, `_norm_cdf`, `_norm_pdf` |
-| IV solver | `volatility/solver.py` | `implied_volatility(..., min_ttm=...)` |
-| Polygon expirations endpoint | `services/polygon_client.py` | `list_options_expirations(..., expired=...)` |
-| Pydantic config | `models/requests.py` | `OptionsCompanionConfig` |
-| ZIP packing | `services/dataset_service.py` | `build_zip_bytes(options_slot_files=...)` |
-| FastAPI route | `routers/dataset.py` | `_build_zip_with_events`, via `/api/jobs-internal/dataset-zip` |
 
 ---
 
@@ -335,12 +293,3 @@ The combination of (1)+(2)+(3) explains the all-blank Greeks + zero-rows skip pa
 - `days_skipped: 0` for in-range trading days with listed expiries.
 - IV populates on ~95 % of 0DTE rows; the remainder are correctly rejected by the IV solver (deep OTM or thin premiums).
 - Greeks populate wherever IV does, with intraday-correct magnitudes (no saturation).
-
-### 10.4 Test fixture (still planned)
-
-A golden-fixture parity test is still **pending** for this pipeline. Per the `numerical-rigor.md` math-debt rule this is a deliberate pay-down task on touch, not a hard prerequisite. The fixture will be a pinned input set (one trading day of SPY minute bars + the listed 0DTE chain on that day) with:
-
-- Reference IV computed via QuantLib **and** SciPy Brent independently; require agreement to `atol=1e-9`.
-- Reference Greeks from `_bsm_greeks` compared against an independent closed-form implementation (e.g. `py_vollib`); require agreement to `atol=1e-6, rtol=1e-6` (matching the project tolerance for Greeks per `.claude/rules/numerical-rigor.md`).
-
-The service's module docstring records it as pending a parity pass. The 2026-04-25 parity check in §10.1–§10.2 stands as the current empirical evidence that the pipeline produces sensible numbers; the golden fixture is the formal cross-check.
