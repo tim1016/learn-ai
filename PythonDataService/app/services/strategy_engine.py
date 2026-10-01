@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import date, datetime
+from datetime import datetime
 
 import numpy as np
 from scipy.stats import lognorm, norm
@@ -29,10 +29,25 @@ from app.models.strategy import (
     StrategyLeg,
 )
 from app.services.bs_greeks import black_scholes_greeks, bs_european_price
+from app.utils.session_anchors import et_date_at_ms
+from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
 MAX_PROFIT_CAP = 999_999.99
+
+
+def calendar_days_to_expiry(expiration_date: str, now_ms: int | None = None) -> int:
+    """Calendar days from today's ET date to ``expiration_date`` (``YYYY-MM-DD``), floored at 0.
+
+    Today is the America/New_York date at ``now_ms`` (the wall clock when
+    omitted), never the host's local date. The chain snapshot looks its
+    risk-free rate up at this same DTE, so the rate the Strategy Builder
+    prices at and the tenor this engine prices over agree (#2789).
+    """
+    at_ms = now_ms_utc() if now_ms is None else now_ms
+    expiry = datetime.strptime(expiration_date, "%Y-%m-%d").date()
+    return max((expiry - et_date_at_ms(at_ms)).days, 0)
 
 
 def compute_payoff_at_expiry(legs: list[StrategyLeg], price: float) -> float:
@@ -622,10 +637,7 @@ def analyze_strategy(request: StrategyAnalyzeRequest) -> StrategyAnalyzeResponse
             request.expiration_date,
         )
 
-        # Days to expiry
-        exp_date = datetime.strptime(request.expiration_date, "%Y-%m-%d").date()
-        today = date.today()
-        days_to_expiry = max((exp_date - today).days, 0)
+        days_to_expiry = calendar_days_to_expiry(request.expiration_date)
 
         strategy_cost = compute_strategy_cost(request.legs)
 

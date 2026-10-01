@@ -295,8 +295,9 @@ export class StrategyBuilderComponent implements OnDestroy {
   // ── Analysis ──────────────────────────────────────────────
   analysisResult = signal<StrategyAnalyzeResult | null>(null);
   /**
-   * Python's rate, from the chain snapshot. Null until one arrives: the in-browser
-   * curves (ADR 0068 exception 1) never invent a rate of their own (#2764).
+   * Python's rate at the selected expiration's tenor, from that expiration's chain
+   * snapshot (#2789). Null until it arrives: the in-browser curves (ADR 0068
+   * exception 1) never invent a rate of their own (#2764).
    */
   riskFreeRate = signal<number | null>(null);
   priceRangePct = signal(0.05);
@@ -984,6 +985,8 @@ export class StrategyBuilderComponent implements OnDestroy {
   async fetchChainSnapshot(ticker: string, expiration: string): Promise<void> {
     this.chainLoading.set(true);
     this.error.set(null);
+    // The rate belongs to one expiration; never price this one at another's (#2789).
+    this.riskFreeRate.set(null);
 
     try {
       const result = await firstValueFrom(
@@ -997,7 +1000,8 @@ export class StrategyBuilderComponent implements OnDestroy {
 
       this.underlying.set(result.underlying);
       this.allContracts.set(result.contracts);
-      // Python's rate (FRED, or its one default); this page has no rate input (#2764).
+      // Python's rate at this expiration's tenor (FRED, or its one default); this
+      // page has no rate input (#2764, #2789).
       if (result.riskFreeRate != null) {
         this.riskFreeRate.set(result.riskFreeRate);
       }
@@ -1153,7 +1157,8 @@ export class StrategyBuilderComponent implements OnDestroy {
           legInputs,
           expiration,
           spot,
-          // The in-browser curves' rate, so both sides price alike; null lets Python fill it (#2764).
+          // The in-browser curves' rate, the selected expiration's, so both sides price
+          // alike; null lets Python fill it (#2764, #2789).
           this.riskFreeRate(),
         )
       );
