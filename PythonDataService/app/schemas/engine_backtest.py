@@ -72,17 +72,6 @@ class EngineBacktestRequest(BaseModel):
             "more realistic execution cost."
         ),
     )
-    limit_penetration: float = Field(
-        0.0,
-        ge=0,
-        description=(
-            "Dollar amount the bar must penetrate past a resting limit's "
-            "price before the fill is recognized. Measured against the "
-            "adverse extreme — low for buy limits, high for sell limits. "
-            "Default 0 = TradingView-style touch fill; 0.02 for US "
-            "equities is a realistic 2-tick queue-position model."
-        ),
-    )
     # Optional overrides — when omitted, the strategy's own defaults (set in
     # its Initialize equivalent) are used.
     from_date: str | None = Field(
@@ -287,7 +276,7 @@ class EngineBacktestRequest(BaseModel):
             raise ValueError("us-equity-raw-ibkr-v1 requires regular-session minute bars")
         if self.fill_mode != "signal_bar_close":
             raise ValueError("us-equity-raw-ibkr-v1 requires fill_mode=signal_bar_close")
-        if self.slippage_per_share != 0 or self.limit_penetration != 0:
+        if self.slippage_per_share != 0:
             raise ValueError("us-equity-raw-ibkr-v1 does not permit execution overrides")
         # The profile pins fees the same way it pins fills: a flat commission
         # the run would ignore is a conflict at the boundary, not a default to

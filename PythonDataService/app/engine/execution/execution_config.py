@@ -30,14 +30,6 @@ class ExecutionConfig:
     fill_mode: FillMode = FillMode.SIGNAL_BAR_CLOSE
     commission_per_order: Decimal = field(default_factory=lambda: Decimal("1.00"))
     slippage_per_share: Decimal = field(default_factory=lambda: Decimal(0))
-    # Dollar penetration required past a resting limit's price before
-    # the engine counts the bar as a fill. Measured against the bar's
-    # adverse extreme: the low for a buy limit, the high for a sell
-    # limit. Default 0 = touch fill (TradingView's permissive default).
-    # For US equities a ``Decimal("0.02")`` = 2 cents = 2 ticks gives
-    # a realistic queue-position model without simulating the order
-    # book directly.
-    limit_penetration: Decimal = field(default_factory=lambda: Decimal(0))
 
     def build_fill_model(self) -> FillModel:
         return FillModel(

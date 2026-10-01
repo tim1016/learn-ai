@@ -72,10 +72,6 @@ TIMESTAMP_STRING_TYPE_ALLOWS = [
         "Frontend/src/app/services/golden-fixtures.types.ts",
         "Golden-manifest metadata is an external artifact timestamp, not a trading timestamp wire contract.",
     ),
-    Allow(
-        "Frontend/src/app/models/market-monitor.ts",
-        "Live-vendor liveness payload is an external API boundary; canonicalization belongs at ingestion.",
-    ),
 ]
 
 

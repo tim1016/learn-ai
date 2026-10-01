@@ -84,37 +84,6 @@ def _proposed(dossier: service.GoldenValidationDossier) -> dict:
     }
 
 
-def test_an_accepted_current_review_applies_only_to_its_exact_configuration() -> None:
-    dossier = _dossier()
-
-    receipt = service.assess(dossier, _proposed(dossier))
-    changed = service.assess(dossier, {**_proposed(dossier), "symbol": "MSFT"})
-
-    assert receipt.applicable is True
-    assert receipt.classification == "reviewed_deviations"
-    assert "independent Paper or Live safety gates" in receipt.explanation
-    assert changed.applicable is False
-    assert changed.mismatched_fields == ("symbol",)
-
-
-def test_changed_engine_evidence_requires_a_new_review_before_applicability() -> None:
-    dossier = _dossier(evidence_revision="b" * 64)
-
-    receipt = service.assess(dossier, _proposed(dossier))
-
-    assert receipt.applicable is False
-    assert receipt.mismatched_fields == ()
-    assert "evidence changed" in receipt.explanation.lower()
-
-
-def test_historical_null_program_version_requires_an_explicit_reviewed_version() -> None:
-    dossier = _dossier(program_version=None, authorized_program_version="ema-v1")
-
-    receipt = service.assess(dossier, _proposed(_dossier()))
-
-    assert receipt.applicable is True
-
-
 def test_a_historical_v2_agreement_is_not_promoted_to_certificate_grade_agreement() -> None:
     dossier = _dossier()
     verdict = {

@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import inspect
 import io
-import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -1124,8 +1123,8 @@ def project_output_columns(
     """Project the canonical ordered output-column list for a dataset.
 
     This is the ONE column-projection authority shared by every export
-    surface (generate-csv, generate-zip's dataset.csv/columns.csv, and
-    the fetch-free ``POST /api/dataset/plan`` receipt) so their column
+    surface (the dataset ZIP's dataset.csv/columns.csv and the
+    fetch-free ``POST /api/dataset/plan`` receipt) so their column
     lists cannot drift.
 
     ``PC`` (previous trading day's close) sits before ``open`` when
@@ -1205,138 +1204,6 @@ def build_csv_bytes(df: pd.DataFrame, columns: list[str], time_zone: str | None 
         leading: list[Any] = [ts] if time_labels is None else [ts, time_labels[position]]
         writer.writerow(leading + [_fmt(row.get(col)) for col in columns])
     return output.getvalue().encode("utf-8")
-
-
-def build_metadata_json(
-    ticker: str,
-    from_date: str,
-    to_date: str,
-    bar_count: int,
-    column_meta: list[dict[str, Any]],
-    ohlcv_cols: list[str],
-    session: str = "extended",
-    forward_fill: bool = False,
-    raw_bar_count: int = 0,
-    filled_bar_count: int = 0,
-    time_zone: str | None = None,
-) -> bytes:
-    """Generate CSV metadata JSON describing every column and its calculation."""
-    base_columns = [
-        {
-            "column": "unix_ts",
-            "type": "int",
-            "description": "Unix timestamp in milliseconds (UTC)",
-            "source": "Polygon.io",
-        },
-    ]
-    if time_zone is not None:
-        base_columns.append(
-            {
-                "column": time_column_name(time_zone),
-                "type": "string",
-                "description": _time_column_description(time_zone),
-                "source": "Derived from unix_ts",
-            }
-        )
-    for col in ohlcv_cols:
-        desc_map = {
-            "PC": "Previous trading day's RTH close for the underlying ticker",
-            "open": "Opening price of the minute bar",
-            "high": "Highest price during the minute bar",
-            "low": "Lowest price during the minute bar",
-            "close": "Closing price of the minute bar",
-            "volume": "Number of shares traded during the minute bar",
-            "vwap": "Volume-weighted average price for the minute bar",
-            "transactions": "Number of transactions in the minute bar",
-        }
-        source_map = {
-            "PC": "Polygon.io REST API (list_aggs, daily timespan)",
-        }
-        base_columns.append(
-            {
-                "column": col,
-                "type": "float" if col != "transactions" else "int",
-                "description": desc_map.get(col, col),
-                "source": source_map.get(col, "Polygon.io REST API (list_aggs)"),
-            }
-        )
-
-    # Session column (added by _tag_session_column)
-    base_columns.append(
-        {
-            "column": "session",
-            "type": "string",
-            "description": "Trading session: rth (regular 09:30-16:00 ET), pre (pre-market), or post (after-hours)",
-            "source": "Derived from NYSE calendar",
-        }
-    )
-
-    indicator_columns = []
-    for meta in column_meta:
-        desc = _describe_indicator_column(meta["indicator"], meta["column"], meta["params"])
-        indicator_columns.append(
-            {
-                "column": meta["column"],
-                "type": "float",
-                "indicator": meta["indicator"],
-                "parameters": meta["params"],
-                "library": meta["library"],
-                "description": desc,
-            }
-        )
-
-    metadata = {
-        "dataset": {
-            "ticker": ticker,
-            "from_date": from_date,
-            "to_date": to_date,
-            "timespan": "minute",
-            "multiplier": 1,
-            "bar_count": bar_count,
-            "generated_at_ms": now_ms_utc(),
-        },
-        "data_source": {
-            "provider": "Polygon.io",
-            "plan": "Starter (2-year history, 15-min delayed)",
-            "api": "REST v2 list_aggs with auto-pagination",
-            "chunking": f"Date range split into ~{_DAYS_PER_CHUNK}-day windows to stay within {_POLYGON_MAX_BARS} bar API limit",
-        },
-        "calculation_engine": {
-            "library": "pandas-ta",
-            "version": getattr(ta, "version", "unknown"),
-            "description": "Technical Analysis library for Python built on pandas, providing 150+ indicators",
-            "url": "https://github.com/twopirllc/pandas-ta",
-        },
-        "columns": base_columns + indicator_columns,
-        "processing": {
-            "session_filter": session,
-            "session_description": "Regular Trading Hours 09:30-16:00 ET"
-            if session == "rth"
-            else "Extended hours (pre-market + RTH + after-hours)",
-            "forward_fill": forward_fill,
-            "forward_fill_description": "Missing minute bars filled with previous close (volume=0)"
-            if forward_fill
-            else "No fill — raw Polygon data with gaps",
-            "raw_bars_from_polygon": raw_bar_count,
-            "bars_after_processing": filled_bar_count or bar_count,
-            "bars_added_by_fill": (filled_bar_count - raw_bar_count) if forward_fill and filled_bar_count else 0,
-        },
-        "known_behaviors": {
-            "vwap": "Polygon VWAP is a daily rolling VWAP, not per-bar. It accumulates across the session and routinely falls outside a single bar's H/L range. This is correct behavior.",
-            "supertrend_nans": "supertl (long/support) is NaN during downtrends; superts (short/resistance) is NaN during uptrends. This is by design — use supert for the main line and supertd for direction.",
-            "polygon_0700_contamination": "Polygon includes late-reported settlement trades in minute aggregates around 07:00-07:02 ET, inflating close prices by $4-6 on some bars. TradingView filters these out. This causes EMA/indicator divergence vs TradingView — longer-period EMAs recover more slowly from the contaminated bar.",
-            "flat_bars": "Bars where High=Low=Open=Close occur in pre/post market when only 1 trade happens in the minute. Expected in extended hours.",
-            "saturday_data": "Some bars may appear on Saturday UTC — these are Friday after-hours trades past midnight UTC. Filtered out when session='rth'.",
-        },
-        "notes": [
-            "All float values are rounded to 6 decimal places",
-            "Empty cells indicate NaN (indicator warm-up period or insufficient data)",
-            "Timestamps represent the start of each minute bar (bar-open convention)",
-            "Input timestamps are accepted only when unique and strictly increasing",
-            "VWAP is a daily rolling accumulation — not bounded by individual bar H/L",
-        ],
-    }
-    return json.dumps(metadata, indent=2).encode("utf-8")
 
 
 _INDICATOR_DESCRIPTIONS: dict[str, dict[str, str]] = {

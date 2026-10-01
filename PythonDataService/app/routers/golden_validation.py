@@ -8,8 +8,6 @@ from app.research.golden_validation import service
 from app.research.persistence.db import with_connection
 from app.schemas.golden_validation import (
     DesignateGoldenRunRequest,
-    GoldenValidationApplicabilityRequest,
-    GoldenValidationApplicabilityResponse,
     GoldenValidationResponse,
     ReviewGoldenRunRequest,
 )
@@ -73,33 +71,6 @@ async def list_golden_runs(
         limit=limit,
     )
     return [GoldenValidationResponse.from_dossier(dossier) for dossier in dossiers]
-
-
-@router.get("/{golden_run_id}", response_model=GoldenValidationResponse)
-async def get_golden_run(golden_run_id: int) -> GoldenValidationResponse:
-    dossier = await with_connection(service.get_dossier, golden_run_id)
-    if dossier is None:
-        raise _not_found(f"Validation Golden Run {golden_run_id} was not found.")
-    return GoldenValidationResponse.from_dossier(dossier)
-
-
-@router.post("/{golden_run_id}/applicability", response_model=GoldenValidationApplicabilityResponse)
-async def assess_golden_run(
-    golden_run_id: int,
-    body: GoldenValidationApplicabilityRequest,
-) -> GoldenValidationApplicabilityResponse:
-    dossier = await with_connection(service.get_dossier, golden_run_id)
-    if dossier is None:
-        raise _not_found(f"Validation Golden Run {golden_run_id} was not found.")
-    receipt = service.assess(dossier, body.as_configuration())
-    return GoldenValidationApplicabilityResponse(
-        golden_validation_id=receipt.golden_validation_id,
-        applicable=receipt.applicable,
-        state=receipt.state,
-        classification=receipt.classification,
-        mismatched_fields=list(receipt.mismatched_fields),
-        explanation=receipt.explanation,
-    )
 
 
 @router.post("/{golden_run_id}/reviews", response_model=GoldenValidationResponse)

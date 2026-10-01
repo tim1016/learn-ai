@@ -661,7 +661,6 @@ def _execute_engine_backtest_core(
         fill_mode=fill_mode,
         commission_per_order=Decimal(str(request.commission_per_order)),
         slippage_per_share=Decimal(str(request.slippage_per_share)),
-        limit_penetration=Decimal(str(request.limit_penetration)),
     )
     engine = _build_backtest_engine(
         reader=reader,
@@ -1186,7 +1185,6 @@ def _persisted_execution_config(request: EngineBacktestRequest) -> dict[str, Any
         compatibility_profile=request.compatibility_profile,
         warmup_from_date=request.warmup_from_date,
         slippage_per_share=request.slippage_per_share,
-        limit_penetration=request.limit_penetration,
     )
 
 

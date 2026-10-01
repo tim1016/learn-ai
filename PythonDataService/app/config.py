@@ -278,16 +278,8 @@ class Settings(BaseSettings):
         """Parse TRUSTED_HOSTS into a list for TrustedHostMiddleware."""
         return [host.strip() for host in self.TRUSTED_HOSTS.split(",") if host.strip()]
 
-    # Data sanitization settings
-    MAX_NULL_PERCENTAGE: float = 0.1  # 10% max nulls allowed
-    REMOVE_DUPLICATES: bool = True
-    FILL_METHOD: str = "ffill"  # forward fill for time series
-
     # .NET backend URL for study persistence
     BACKEND_URL: str = "http://localhost:5000"
-
-    # Rate limiting (optional)
-    MAX_REQUESTS_PER_MINUTE: int = 100
 
     # Data lake. Default-ON since #1839: the lake is the market-data
     # authority for historical bars in both adjustment modes (ADR 0049),
@@ -311,13 +303,6 @@ class Settings(BaseSettings):
     # DATA_LAKE_ENABLED flag that used to select between them), so a
     # deployment without POSTGRES_URL has no market data at all.
     POSTGRES_URL: str = ""
-    # Rebuildable read model over canonical lifecycle/account artifacts.
-    # Requires POSTGRES_URL when enabled; files remain canonical when disabled
-    # or unavailable.
-    # Clerk-native operator transaction history. This is deliberately a
-    # separate read model from lifecycle projection tables and can fail
-    # without changing Clerk acknowledgement durability.
-    CLERK_TRANSACTION_PROJECTION_ENABLED: bool = False
     # Issue #1735 step 3. Off, a strategy-wiring digest that no longer matches
     # its golden-qualification receipt is reported and Start/Resume proceed;
     # on, it fails closed like any other build drift. Deliberately default-off:

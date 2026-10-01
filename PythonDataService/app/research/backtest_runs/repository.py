@@ -54,8 +54,6 @@ PARITY_FAILURE_STATUSES: frozenset[str] = frozenset({"run_failed", "persist_fail
 PARITY_SUPERSEDABLE_STATUSES: frozenset[str] = frozenset({"pending"}) | PARITY_FAILURE_STATUSES
 PARITY_VERDICT_VERSION = 3
 
-DeleteOutcome = Literal["deleted", "not_found", "recency_member", "golden_validation_evidence"]
-
 
 def _may_be_superseded(existing: Mapping[str, Any]) -> bool:
     """Whether a landed companion's verdict may replace the row already there."""
@@ -100,7 +98,6 @@ class RunRow:
     @property
     def engine(self) -> Engine:
         return _ENGINE_BY_SOURCE[self.source]
-
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,38 +303,6 @@ async def _insert_trades(conn: asyncpg.Connection, run_id: int, trades: tuple[Tr
 async def update_notes(conn: asyncpg.Connection, run_id: int, notes: str | None) -> bool:
     result = await conn.execute("UPDATE research_backtest_runs SET notes = $2 WHERE id = $1", run_id, notes)
     return result.endswith(" 1")
-
-
-async def delete_run(conn: asyncpg.Connection, run_id: int) -> DeleteOutcome:
-    """Hard-delete a run unless durable research evidence still points at it.
-
-    A study backing a live Recency run must go through Recency soft-delete
-    (design spec D22, P0-4): deleting it here would break "forever until you
-    soft-delete it" out from under the chart. Both tables are Python-owned
-    now, so the guard is a join rather than the cross-owner read it used to be.
-    """
-    async with conn.transaction():
-        exists = await conn.fetchval("SELECT 1 FROM research_backtest_runs WHERE id = $1 FOR UPDATE", run_id)
-        if exists is None:
-            return "not_found"
-        if await is_recency_member(conn, run_id):
-            return "recency_member"
-        # Import here to keep the general backtest repository independent at
-        # module load time while still sharing one transaction and row lock.
-        from app.research.golden_validation.repository import is_run_protected
-
-        if await is_run_protected(conn, run_id):
-            return "golden_validation_evidence"
-        await conn.execute("DELETE FROM research_backtest_runs WHERE id = $1", run_id)
-    return "deleted"
-
-
-async def is_recency_member(conn: asyncpg.Connection, run_id: int) -> bool:
-    """True iff ``run_id`` backs a non-tombstoned Recency run."""
-    live = await conn.fetchval(
-        'SELECT count(*) FROM "RecencyRuns" WHERE "StudyId" = $1 AND "DeletedAtMs" IS NULL', run_id
-    )
-    return int(live) > 0
 
 
 # ── Reads ────────────────────────────────────────────────────────────────

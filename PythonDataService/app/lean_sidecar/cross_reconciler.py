@@ -364,37 +364,3 @@ def compare_cross_engine(
         counts_by_category=counts_by_category,
         divergences=divergences,
     )
-
-
-def internal_fill_to_dict(fill: _InternalFill, *, ms_to_utc: bool = True) -> dict:
-    """Render an internal fill to a dict the router can spread into
-    ``CrossEngineFillSnapshotModel``.
-
-    ``fill_price`` and ``fee`` come out as strings — cent-exact wire
-    matching the rest of the lean_sidecar surface.
-
-    ``fill_quantity`` is rendered as ``int`` (truncated) so the existing
-    UI keeps rendering whole-share counts unchanged. When the internal
-    Decimal quantity is fractional (LEAN can emit ``100.5``-style
-    fills), the full precision goes into ``fill_quantity_raw`` as a
-    string — mirroring the Phase 5a fee reconciler's
-    ``fill_quantity_raw`` convention. Consumers ignoring the new field
-    keep the old int-only behavior; consumers that care see the exact
-    value.
-    """
-    qty_decimal = fill.fill_quantity
-    qty_int = int(qty_decimal)
-    raw = (
-        str(qty_decimal)
-        if Decimal(qty_int) != qty_decimal
-        else None
-    )
-    return {
-        "symbol": fill.symbol,
-        "side": fill.side,
-        "fill_quantity": qty_int,
-        "fill_quantity_raw": raw,
-        "fill_price": str(fill.fill_price),
-        "fill_time_ms_utc": int(fill.fill_time_ms_utc),
-        "fee": None if fill.fee is None else str(fill.fee),
-    }

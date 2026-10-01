@@ -9,7 +9,6 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.schemas.chart import (
-    AllowedTimeframesRequest,
     ChartDataRequest,
     ChartDataResponse,
     ChartIndicatorBatchRequest,
@@ -19,13 +18,10 @@ from app.schemas.chart import (
 )
 from app.services.chart_indicator_service import ChartIndicatorService, get_chart_indicator_service
 from app.services.chart_service import (
-    TIMEFRAME_DEFS,
-    get_allowed_timeframes,
     get_chart_data,
     resolve_range_presets,
     resolve_request_dates,
 )
-from app.services.dataset_service import INDICATOR_CONFIGS
 from app.utils.timestamps import now_ms_utc
 
 router = APIRouter()
@@ -162,27 +158,6 @@ async def chart_data(request: ChartDataRequest) -> ChartDataResponse:
         )
 
 
-@router.post("/allowed-timeframes")
-async def allowed_timeframes(request: AllowedTimeframesRequest):
-    """
-    Return allowed timeframes for the given date range and session.
-    Frontend should use this as the source of truth for timeframe availability.
-    """
-    try:
-        allowed, estimates, recommended = get_allowed_timeframes(request.from_date, request.to_date, request.session)
-        return {
-            "allowed_timeframes": allowed,
-            "estimated_bars_per_timeframe": estimates,
-            "recommended_timeframe": recommended,
-        }
-    except Exception as e:
-        logger.error(f"[CHART] Allowed timeframes error: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"error_code": "INTERNAL_ERROR", "detail": str(e)},
-        )
-
-
 @router.get("/range-presets", response_model=ChartRangePresetsResponse)
 async def range_presets(session: Literal["rth", "extended"] = "rth") -> ChartRangePresetsResponse:
     """Calendar-resolved quick ranges ("last N trading sessions") for chart scope UIs.
@@ -207,43 +182,3 @@ async def range_presets(session: Literal["rth", "extended"] = "rth") -> ChartRan
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error_code": "INTERNAL_ERROR", "detail": str(e)},
         )
-
-
-@router.get("/timeframes")
-async def list_timeframes():
-    """Return all supported timeframes with metadata."""
-    return {"timeframes": [{"key": key, "minutes": val["minutes"]} for key, val in TIMEFRAME_DEFS.items()]}
-
-
-@router.get("/available-indicators")
-async def list_chart_indicators():
-    """Return indicators available for chart overlays and panels."""
-    return {
-        "indicators": {
-            name: {
-                "params": configs,
-                "panel": "main"
-                if name
-                in {
-                    "ema",
-                    "sma",
-                    "dema",
-                    "tema",
-                    "wma",
-                    "hma",
-                    "kama",
-                    "zlma",
-                    "rma",
-                    "alma",
-                    "bbands",
-                    "supertrend",
-                    "vwap",
-                    "psar",
-                    "kc",
-                    "donchian",
-                }
-                else name,
-            }
-            for name, configs in INDICATOR_CONFIGS.items()
-        }
-    }

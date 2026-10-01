@@ -113,7 +113,7 @@ async def test_a_run_with_more_than_five_hundred_trades_reports_itself_truncated
     assert run["trades"][0]["entryTimestamp"] < run["trades"][-1]["entryTimestamp"]
 
 
-async def test_notes_round_trip_and_delete_refuses_a_live_recency_member(client) -> None:
+async def test_notes_round_trip(client) -> None:
     _requires_ephemeral_db()
     symbol = _symbol()
     run_id = await _seed(engine_payload(symbol=symbol))
@@ -123,32 +123,3 @@ async def test_notes_round_trip_and_delete_refuses_a_live_recency_member(client)
         assert noted.status_code == 200 and noted.json() == {"id": run_id, "notes": "keep"}
         assert (await c.get(f"/api/research/backtest-runs/{run_id}")).json()["notes"] == "keep"
         assert (await c.patch("/api/research/backtest-runs/999999999/notes", json={"notes": "x"})).status_code == 404
-
-        async def _recency_member(conn, deleted_at_ms: int | None) -> int:
-            launch_id = f"launch-{symbol}"
-            await conn.execute(
-                """
-                INSERT INTO "RecencyLaunches" ("Id", "ConfigJson", "ExpectedRuns", "SucceededRuns", "FailedRuns", "Status", "CreatedAtMs")
-                VALUES ($1, '{}'::jsonb, 1, 1, 0, 'COMPLETED', 1) ON CONFLICT ("Id") DO NOTHING
-                """,
-                launch_id,
-            )
-            return await conn.fetchval(
-                """
-                INSERT INTO "RecencyRuns" ("RecencyLaunchId", "StrategyKey", "Symbol", "ParamsJson", "ParamsHash", "StudyId", "TotalPnl", "CreatedAtMs", "DeletedAtMs")
-                VALUES ($1, 'sma_crossover', $2, '{}'::jsonb, 'h', $3, 0, 1, $4) RETURNING "Id"
-                """,
-                launch_id,
-                symbol,
-                run_id,
-                deleted_at_ms,
-            )
-
-        recency_run_id = await with_connection(_recency_member, None)
-        refused = await c.delete(f"/api/research/backtest-runs/{run_id}")
-        assert refused.status_code == 409 and refused.json()["detail"]["code"] == "RECENCY_MEMBER"
-
-        await with_connection(lambda conn: conn.execute('UPDATE "RecencyRuns" SET "DeletedAtMs" = 1 WHERE "Id" = $1', recency_run_id))
-        assert (await c.delete(f"/api/research/backtest-runs/{run_id}")).status_code == 204
-        assert (await c.get(f"/api/research/backtest-runs/{run_id}")).status_code == 404
-        assert (await c.delete(f"/api/research/backtest-runs/{run_id}")).status_code == 404

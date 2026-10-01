@@ -141,18 +141,6 @@ describe('DataLabChartComponent data-source notice', () => {
     expect(container.textContent).not.toContain('history_provider_fallback');
   });
 
-  it('explains the raw-only lake when adjusted prices force the provider path', async () => {
-    const { container } = await renderChartWith(
-      chartResponse({
-        boundary_ms_utc: null,
-        notice_code: 'adjusted_prices_provider_only',
-      }),
-    );
-
-    expect(screen.getByRole('status').textContent).toContain('unadjusted prices only');
-    expect(container.textContent).not.toContain('adjusted_prices_provider_only');
-  });
-
   it('explains a symbol the lake does not carry', async () => {
     const { container } = await renderChartWith(
       chartResponse({ boundary_ms_utc: null, notice_code: 'symbol_provider_only' }),

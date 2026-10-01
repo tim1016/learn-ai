@@ -197,22 +197,6 @@ def test_prepare_generation_request_rejects_a_column_the_recipe_cannot_produce()
 
 
 @pytest.mark.asyncio
-async def test_generate_csv_unknown_column_is_422_without_fetching(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _fetch_must_not_run(*_args: Any, **_kwargs: Any) -> None:
-        raise AssertionError("a bad column selection must be rejected before fetching bars")
-
-    monkeypatch.setattr(dataset_router, "_fetch_and_process", _fetch_must_not_run)
-    api = FastAPI()
-    api.include_router(dataset_router.router, prefix="/api/dataset")
-    async with httpx.AsyncClient(transport=ASGITransport(app=api), base_url="http://test") as client:
-        response = await client.post(
-            "/api/dataset/generate-csv", json={**_RECIPE, "columns": ["close", "ema_20"]}
-        )
-    assert response.status_code == 422
-    assert "ema_20" in response.json()["detail"]
-
-
-@pytest.mark.asyncio
 async def test_dataset_zip_job_rejects_unknown_column_before_queueing(monkeypatch: pytest.MonkeyPatch) -> None:
     """The Data Lab page generates through this job — a bad selection must
     fail the POST, never queue a run that fetches bars and then dies."""

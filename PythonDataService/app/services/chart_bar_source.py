@@ -19,18 +19,11 @@ the composed stream goes through :func:`assert_canonical_bar_stream`, the same
 fail-fast ingestion gate the provider path uses, so any overlap surfaces as an
 error instead of being silently repaired.
 
-Three things fall back to the provider and say so in the response:
+Two things fall back to the provider and say so in the response:
 
-* a completed session the lake does not hold yet (``lake_gap``);
-* an adjusted request used to fall back wholesale, because the lake stored
-  raw bytes only and serving those for an adjusted chart would be a silent
-  numerical error (``price_adjustment_unsupported``). #1839 gave the lake a
-  root per adjustment mode, so an adjusted chart now reads the adjusted root
-  and a miss there is an ordinary ``lake_gap``. The reason and its
-  ``adjusted_prices_provider_only`` notice are kept in the response contract
-  — the Angular chart switches on that code — but nothing produces them any
-  more; deleting them would be a cross-stack contract change, which this
-  data-plane slice is not;
+* a completed session the lake does not hold yet (``lake_gap``). #1839 gave
+  the lake a root per adjustment mode, so an adjusted chart reads the
+  adjusted root and a miss there is an ordinary ``lake_gap`` too;
 * a ticker the lake cannot address — an index or option prefix such as
   ``I:SPX``, or a path-unsafe string — which is rejected here, before any
   filesystem path is built, and served by the identical provider call the
@@ -98,7 +91,6 @@ SpanReason = Literal[
     "completed_sessions",
     "current_session",
     "lake_gap",
-    "price_adjustment_unsupported",
     "symbol_not_lake_addressable",
 ]
 
@@ -107,7 +99,6 @@ SpanReason = Literal[
 #: still-forming session came from the provider, which is the design, not a gap.
 NoticeCode = Literal[
     "history_provider_fallback",
-    "adjusted_prices_provider_only",
     "symbol_provider_only",
 ]
 
@@ -170,8 +161,6 @@ class ComposedBars:
         reasons = {span.reason for span in self.spans}
         if "symbol_not_lake_addressable" in reasons:
             return "symbol_provider_only"
-        if "price_adjustment_unsupported" in reasons:
-            return "adjusted_prices_provider_only"
         if "lake_gap" in reasons:
             return "history_provider_fallback"
         return None
@@ -418,8 +407,7 @@ def _execute_plan(
 
     # Invariant since #1866, but kept named rather than inlined at its three
     # use sites: `_plan_segments` takes the reason as a parameter, and a lake
-    # that cannot serve a mode would want to say so again here (the retained
-    # `price_adjustment_unsupported` reason is that shape). One name is
+    # that cannot serve a mode would want to say so again here. One name is
     # cheaper than three literals and a re-widened signature.
     history_fallback_reason: SpanReason = "lake_gap"
     lake_dates: frozenset[date] = frozenset()

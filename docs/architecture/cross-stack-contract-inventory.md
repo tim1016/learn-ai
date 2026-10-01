@@ -34,7 +34,7 @@ preference for one stack, determines which generated contract applies.
 | `strategy-validation.service.ts` | `/api/strategy-validation/**`, `/api/engine/strategies`, `/api/spec-strategy/fixtures/**` | Direct FastAPI; generated schema is available for the next typed migration slices. |
 | `strategy-runs.service.ts`, `baselines.service.ts`, `monte-carlo.service.ts`, `walk-forward.service.ts` | `/api/research/strategy-runs/**` | Direct FastAPI research-run contracts. |
 | `lean-sidecar.service.ts` | `/api/lean-sidecar/**` | Direct FastAPI comparison boundary. |
-| `market-monitor.service.ts`, `golden-fixtures.service.ts` | `/api/market/**`, `/api/golden-fixtures/**` | Direct FastAPI read boundaries. |
+| `golden-fixtures.service.ts` | `/api/golden-fixtures/**` | Direct FastAPI read boundary. |
 | Edge and research-lab API services | `/api/edge/**`, `/api/research/**`, `/api/data-quality/**`, `/api/dataset/**` | Direct FastAPI analysis boundaries. |
 
 ## Angular → .NET jobs → FastAPI

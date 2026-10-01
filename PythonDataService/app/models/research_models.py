@@ -254,19 +254,6 @@ class RunFeatureResearchResponse(BaseModel):
     error: str | None = None
 
 
-class FeatureInfoResponse(BaseModel):
-    """Feature metadata for the information panel."""
-
-    name: str
-    formula_latex: str
-    variables: str
-    example: str
-    interpretation: str
-    implementation_note: str
-    window: int
-    category: str
-
-
 # ─── Signal Engine Models ─────────────────────────────────────
 
 
