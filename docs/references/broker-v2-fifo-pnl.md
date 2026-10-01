@@ -18,12 +18,8 @@ mathematically specified in the module docstring of `fifo_pnl.py`.
 
 `PythonDataService/app/broker/alpaca/clerk/fifo_pnl.py`
 
-**Distinct from** `Backend/Services/Implementation/PositionEngine.cs`, which accounts
-over EF/Postgres lots for the portfolio engine.  The two instances are parallel,
-not duplicates: they operate on different data stores (Alpaca SQLite effective
-fills vs. Postgres lots) with different consumers (bot-panel P&L vs. portfolio-engine lot
-accounting) and are not expected to produce the same numbers (different scope,
-different fill sources).
+The .NET FIFO engine over EF/Postgres lots (`PositionEngine.cs`) was removed
+with the Portfolio page (#2756); this is the only FIFO lot implementation.
 
 ## Tolerance used and why
 

@@ -33,22 +33,10 @@ cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m scrip
 | `Frontend/src/test-setup.ts` | Test environment initialization, global stubs (ResizeObserver) |
 | `Frontend/tsconfig.spec.json` | TypeScript config for test files |
 
-### Mocks
-
-| File | What it mocks |
-|------|---------------|
-| `Frontend/src/testing/mocks/lightweight-charts.mock.ts` | `createChart`, `CandlestickSeries`, `LineSeries`, `HistogramSeries` — jsdom has no Canvas API |
-| `Frontend/src/testing/mocks/polygon-client.mock.ts` | `@polygon.io/client-js` — ESM-only package |
-
 ### Test Factories
 
 `Frontend/src/testing/factories/market-data.factory.ts` provides:
 - `createMockAggregate(overrides?)` — single OHLCV bar
-- `createMockAggregates(count)` — array of bars with incrementing dates/prices
-- `createMockAggregatesTimeSeries(count)` — minute-interval bars with sinusoidal prices
-- `createMockSummary(overrides?)` — period statistics
-- `createMockTicker(overrides?)` — ticker entity
-- `createMockIndicatorSeries(overrides?)` — SMA/EMA/RSI series data
 
 ### Component Specs
 
@@ -70,9 +58,7 @@ cd PythonDataService && DATA_PLANE_CONTROL_SECRET="" ./.venv/bin/python -m scrip
 
 | Spec | Key tests |
 |------|-----------|
-| `market-data.service.spec.ts` | GraphQL query/variables mapping, response parsing, indicator queries, error handling |
-| `market-monitor.service.spec.ts` | Python REST API integration, caching (shareReplay), clearCache(), error handling |
-| `ticker.service.spec.ts` | GraphQL tickers query, aggregate stats mapping |
+| `market-data.service.spec.ts` | GraphQL query/variables mapping, response parsing, error handling |
 | `polygon.service.spec.ts` | Client initialization, environment-based config |
 
 ### Replay Engine Specs (extensive)
@@ -141,19 +127,13 @@ Backend.Tests/
 ├── Helpers/
 │   └── TestDbContextFactory.cs           # In-memory EF Core database factory
 └── Unit/
-    ├── Models/
-    │   └── StockAggregateTests.cs        # 5 tests — IsValid() method
     ├── Services/
     │   ├── MarketDataServiceTests.cs     # 11 tests — GetOrCreateTicker, cache hit/miss, upsert, force refresh
     │   ├── LstmServiceTests.cs           # 8 tests — training/validation submit, job status deserialization, models list
     │   ├── BacktestServiceTests.cs       # Strategy execution tests
     │   ├── PolygonServiceTests.cs        # HTTP client integration
-    │   ├── TechnicalAnalysisServiceTests.cs  # TA service delegation
-    │   ├── SanitizationServiceTests.cs   # Data sanitization logic
     │   └── ReplayDeterminismTests.cs     # Replay determinism guarantees
     └── GraphQL/
-        ├── MutationTests.cs              # FetchStockAggregates success/error/empty
-        ├── MutationSanitizeAndBacktestTests.cs  # Sanitize + backtest mutations
         └── QueryTests.cs                 # GraphQL query resolvers
 ```
 
@@ -168,12 +148,10 @@ Backend.Tests/
 
 ### Key Test Classes
 
-**StockAggregateTests** (5 tests): OHLCV validation rules
-
 **MarketDataServiceTests** (11 tests):
 - `GetOrCreateTickerAsync` — new/existing/different markets
 - `GetOrFetchAggregatesAsync` — cache hit, cache miss, force refresh
-- `FetchAndStoreAggregatesAsync` — insert new, upsert existing, mixed new+existing, empty response, options market detection
+- `FetchAndStoreAggregatesAsync` — mixed new+existing upsert, empty response, options market detection
 
 **LstmServiceTests** (8 tests):
 - `StartTrainingAsync` / `StartValidationAsync` — job submission and error handling
@@ -228,14 +206,10 @@ testpaths = tests
 ```
 PythonDataService/tests/
 ├── __init__.py
-├── conftest.py                    # Shared fixtures (AsyncClient, make_sample_bars)
+├── conftest.py                    # Shared fixtures (AsyncClient)
 ├── test_health.py                 # 2 tests — GET /health, GET /
-├── test_indicators.py             # 5 tests — POST /api/indicators/calculate
-├── test_ta_service.py             # 5 tests — TechnicalAnalysisService unit tests
 ├── test_aggregates.py             # Aggregates endpoint tests
 ├── test_snapshot.py               # Snapshot endpoint tests
-├── test_market_monitor.py         # Market status/holidays tests
-├── test_sanitize_endpoint.py      # Sanitization endpoint tests
 ├── test_sanitizer.py              # Sanitizer service unit tests
 ├── test_strategy_engine.py        # 45+ tests — strategy engine (payoff, Greeks, POP, EV, edge cases)
 ├── test_strategy_endpoint.py      # 9 tests — /api/strategy/analyze endpoint integration + validation
@@ -313,8 +287,6 @@ python -m pytest tests/ --cov=app --cov-report=term-missing
 
 | Issue | Cause | Solution |
 |-------|-------|----------|
-| Chart spec failures in jsdom | No Canvas API | `lightweight-charts.mock.ts` via `moduleNameMapper` |
-| `@polygon.io/client-js` import error | ESM-only package | `polygon-client.mock.ts` via `moduleNameMapper` |
 | PrimeNG p-table re-sorts component data | `[sortField]` mutates the backing array | Assert data presence, not specific order |
 | Random parallel failures on Windows | Jest/Vitest worker contention | `maxWorkers: '50%'` in config |
 | Python tests need local deps | The host venv is the gate, and it is not created by `setup-macos.sh` | `./bootstrap-host-venv.sh` from the repo root |
@@ -328,7 +300,7 @@ Components still lacking tests:
 - `OptionsChainComponent` — complex `visibleRows` computed signal
 - `LstmTrainComponent` / `LstmValidateComponent` — ML training UI
 - `StrategyBuilderComponent` / `OptionsStrategyLabComponent` — strategy analysis UI
-- `SnapshotsComponent` / `TrackedInstrumentsComponent` — data display
+- `SnapshotsComponent` — data display
 - All LSTM chart components (PredictionChart, TrainingHistoryChart, ResidualsChart, FoldMetricsChart)
 - `LstmService` (Angular) — async job polling via `interval` + `switchMap`
 

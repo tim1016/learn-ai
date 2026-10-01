@@ -278,10 +278,6 @@ expirations/strikes/option-chain/option-contracts/option-surface, ibkr
 evidence (+stream). Documented here only so the inventory is complete; they
 are outside the fleet and outside new development.
 
-## Examples
-
-`/api/examples/alpaca-bot-control/fixtures` — developer fixtures.
-
 ## Contract consequences
 
 - Capability vocabulary widens in code (the enum's documented review process):

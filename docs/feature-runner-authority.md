@@ -680,11 +680,8 @@ The Angular `feature-report` component renders, in order:
 | [`PythonDataService/app/research/validation/ic.py`](../PythonDataService/app/research/validation/ic.py) | Daily IC, NW t-stat, N_eff, hit rate. |
 | [`PythonDataService/app/research/validation/quantile.py`](../PythonDataService/app/research/validation/quantile.py) | Quintile bucketing + monotonicity ratio. |
 | [`PythonDataService/app/research/validation/robustness.py`](../PythonDataService/app/research/validation/robustness.py) | Monthly breakdown, regime ICs, train/test split, structural-break sliding test. |
-| [`PythonDataService/app/routers/research.py`](../PythonDataService/app/routers/research.py) | `/api/research/run-feature` + DTO mappers. |
-| [`PythonDataService/app/models/research_models.py`](../PythonDataService/app/models/research_models.py) | Pydantic v2 request/response models. |
 | [`Backend/Models/DTOs/ResearchModels.cs`](../Backend/Models/DTOs/ResearchModels.cs) | C# DTOs (snake-case JSON ↔ PascalCase). |
 | [`Backend/GraphQL/Types/ResearchResult.cs`](../Backend/GraphQL/Types/ResearchResult.cs) | Hot Chocolate v15 GraphQL types with `[GraphQLName]` overrides. |
-| [`Backend/GraphQL/Types/ResearchResultMapper.cs`](../Backend/GraphQL/Types/ResearchResultMapper.cs) | DTO → GraphQL type mapping (single source for both `runFeatureResearch` and `runOptionsFeatureResearch`). |
 | [`Frontend/src/app/services/research.service.ts`](../Frontend/src/app/services/research.service.ts) | TS interfaces + GraphQL queries. |
 | [`Frontend/src/app/components/research-lab/feature-report/`](../Frontend/src/app/components/research-lab/feature-report/) | Angular component rendering the verdict block + legacy banners. |
 | [`PythonDataService/tests/research/test_target.py`](../PythonDataService/tests/research/test_target.py) | Pin contract guarantees of the rewrite (time-vs-bars, session, schema, gate). |

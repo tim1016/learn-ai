@@ -463,7 +463,6 @@ Keep all data, let diagnostics and research decide how to filter.
 | `iv_builder.py` | Add `quality_flag` column to output DataFrame |
 | `diagnostics.py` | Report quality distribution in diagnostics |
 | `options_runner.py` | Option to filter by quality in research |
-| `Backend/Models/MarketData/OptionsIvSnapshot.cs` | Add `QualityFlag` column |
 
 ### Tests
 
