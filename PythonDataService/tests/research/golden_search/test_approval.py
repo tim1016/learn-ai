@@ -41,8 +41,6 @@ from app.research.golden_search.qualifications import (
     get_default,
     get_qualification,
     get_qualification_by_study,
-    insert_qualification,
-    set_default_cas,
 )
 from app.research.golden_validation import repository as golden_repo
 from app.research.golden_validation import service as golden_validation
@@ -51,6 +49,7 @@ from app.research.sweep.snapshot import DataSnapshot, capture_data_snapshot
 from app.schemas.engine_backtest import EngineBacktestRequest, EngineBacktestResponse
 from app.services import signal_program_admission as admission_module
 from app.utils.session_anchors import et_midnight_ms
+from tests._helpers.golden_qualification import canonical_point, seed_qualification
 from tests._helpers.lean_store import seed_store_day
 from tests.research.backtest_runs.payloads import engine_payload
 from tests.services.test_signal_program_admission import _copied_source_tree
@@ -223,52 +222,13 @@ async def _approve(request: ApprovalRequest, caller: _Caller, blobs: BlobStore) 
 
 async def _prior_default(conn: asyncpg.Connection, symbol: str, unique: str) -> str:
     """An earlier qualified version already holding the stock's default."""
-    run_id = (await backtest_repo.insert_run(conn, record_from_payload(engine_payload(symbol=symbol)))).run_id
-    designated = await golden_validation.designate(
-        conn, source_run_id=run_id, command_id=f"prior-{unique}", label="prior", rationale="prior", actor="local:owner"
-    )
-    reviewed = await golden_validation.review(
-        conn,
-        golden_run_id=designated.golden_run.id,
-        command_id=f"prior-review-{unique}",
-        expected_evidence_revision=designated.evidence.revision,
-        decision="accept",
-        reason="prior",
-        quantconnect_backtest_id=None,
-        authorized_program_version=None,
-        actor="local:owner",
-    )
-    study_id = f"prior-study-{unique}"
-    await _study(conn, study_id, symbol)
-    point = {**CONTRACT.validated_settings, "rsi_min": 40.0, "symbol": symbol}
-    prior = await insert_qualification(
+    prior = await seed_qualification(
         conn,
         qualification_id=f"gq-prior-{unique}",
-        program_key=PROGRAM,
-        program_version=CONTRACT.program_version,
-        parameter_schema_version=CONTRACT.parameter_schema_version,
         symbol=symbol,
-        params=point,
+        params=canonical_point(symbol, rsi_min=40.0),
         artifact_digest="1" * 64,
-        wiring_digest="2" * 64,
-        study_id=study_id,
-        golden_run_id=designated.golden_run.id,
-        golden_review_id=reviewed.latest_review.id,
-        proof={"schema_version": 1},
-        research={},
-        note="prior",
-        approved_by="local:owner",
-        created_at_ms=1,
-    )
-    await set_default_cas(
-        conn,
-        program_key=PROGRAM,
-        symbol=symbol,
-        qualification_id=prior.id,
-        expected_qualification_id=None,
-        reason="prior",
-        actor="local:owner",
-        now_ms=1,
+        make_default=True,
     )
     return prior.id
 

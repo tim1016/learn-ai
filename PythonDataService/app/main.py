@@ -59,6 +59,7 @@ from app.routers import (
     engine,
     fleet_compatibility_reads,
     golden_fixtures,
+    golden_qualifications,
     golden_validation,
     grid_search,
     indicator_reliability,
@@ -1222,6 +1223,13 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
         golden_validation.router,
         prefix="/api/research/golden-validations",
         tags=["research-golden-validation"],
+        dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+    )
+    # Golden Search qualified versions (#2696): list, Deploy offer, revoke, re-proof.
+    app.include_router(
+        golden_qualifications.router,
+        prefix="/api/research/golden-qualifications",
+        tags=["research-golden-qualifications"],
         dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
     )
     # Parameter Grid Search (PRD #1926): the research surface plus its jobs-boundary entry.

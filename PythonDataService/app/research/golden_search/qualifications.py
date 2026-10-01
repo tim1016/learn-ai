@@ -595,6 +595,10 @@ class QualificationNotFoundError(LookupError):
     """No qualified version has this id."""
 
 
+class QualificationAlreadyRevokedError(RuntimeError):
+    """A revocation was asked of a qualified version another command already revoked."""
+
+
 @dataclass(frozen=True, slots=True)
 class Revocation:
     """A recorded revocation and whether it cleared the (program, stock) default."""
@@ -638,6 +642,11 @@ async def revoke_qualification(
             )
             return Revocation(event=event, cleared_default=False)
         await _lock_default_pointer(conn, qualification.program_key, qualification.symbol)
+        recorded = (await events_for(conn, [qualification_id]))[qualification_id]
+        if any(event.kind == "revoked" for event in recorded):
+            raise QualificationAlreadyRevokedError(
+                f"Golden Search qualification {qualification_id!r} is already revoked"
+            )
         pointer = await conn.fetchrow(
             """
             SELECT qualification_id FROM research_golden_defaults
@@ -910,6 +919,7 @@ __all__ = [
     "DefaultQualification",
     "EventKind",
     "GoldenDefault",
+    "QualificationAlreadyRevokedError",
     "QualificationEvent",
     "QualificationEventConflictError",
     "QualificationEvidence",
