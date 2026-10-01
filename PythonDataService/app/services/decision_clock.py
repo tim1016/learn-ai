@@ -67,8 +67,8 @@ def floor_to_period_ms_et(timestamp_ms: int, period_ms: int) -> int:
     Validated against:
         ``tests/services/test_decision_clock.py::test_floor_to_period_ms_et_matches_the_consolidators_floor``
 
-    **Why this duplicate exists** (CLAUDE.md guiding philosophy #5 permits a
-    duplicate only for a real reason, with a parity test naming the canonical
+    **Why this duplicate exists** (ADR 0053 §15 records it; a duplicate is
+    allowed only for a real reason, with a parity test naming the canonical
     file). The canonical copy lives in a *sealed artifact*: both
     ``trade_bar_consolidator.py`` and ``app/utils/timestamps.py`` are listed in
     every program's ``artifact_paths`` in ``app/engine/strategy/registry.py``,
@@ -129,8 +129,7 @@ def rth_trigger_instants(session_date: date, *, timeframe_ms: int) -> list[int]:
         for each bucket ``[b, b + timeframe_ms)`` from ``floor_et(open)`` while
         ``b < close``: ``min(b + timeframe_ms, close)``.
     Reference:
-        Spec ``docs/superpowers/specs/2026-09-02-feed-reconnect-continuity-design.md``
-        §4.4, amended by #2303: ``app/engine/consolidators/trade_bar_consolidator.py``
+        ADR 0053 §2 (the trigger rule), amended by #2303: ``app/engine/consolidators/trade_bar_consolidator.py``
         alone emits bucket K on the first source minute of K+1, but the live
         runner ``scan``s each bar's close (``bot_trade_strategy._drain_bar``),
         so K is decided on the minute that closes it. Session bounds come from

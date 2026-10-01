@@ -39,7 +39,7 @@ class RunCancelledError(Exception):
 class CanonicalBarsError(ValueError):
     """Polygon returned bars that violate the canonical-input contract.
 
-    Per .claude/rules/numerical-rigor.md § "External-API ingestion",
+    Per ADR 0022 (h),
     duplicates and non-monotonic timestamps must surface as errors,
     not be silently repaired.
     """
@@ -258,7 +258,7 @@ def fetch_bars_chunks_raw(
     """Return chunk-concatenated bars WITHOUT dedup or re-sort.
 
     This is the canonical-input path used by the LEAN sidecar: per
-    ``.claude/rules/numerical-rigor.md`` § "External-API ingestion",
+    ADR 0022 (h),
     duplicates and non-monotonic timestamps must surface as errors at
     the ingestion boundary, not be silently repaired. Callers that want
     the legacy sanitized behavior (frontend Data Lab, indicator

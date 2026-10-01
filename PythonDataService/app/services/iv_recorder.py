@@ -5,11 +5,9 @@ price-normalization + provenance-aware VIX-style replication, and persists
 the result with full provenance so the historical IV pipeline can be built
 forward-only from the day this recorder ships.
 
-See ``docs/architecture/iv-ownership-research.md`` for the consolidated
-research document covering math, decisions, reviewer feedback, and the
-forward plan. Section §7.5 explains why the .NET host's Quartz scheduler
+ADR 0071 decision 6 explains why the .NET host's Quartz scheduler
 (``AddIvRecorder`` / ``IvRecorderRegistration``) owns the cron, not an
-in-process Python scheduler, and §7.4 explains why this is a JSONL file
+in-process Python scheduler, and decision 8 explains why this is a JSONL file
 store today (Postgres after burn-in).
 
 This module exposes:
@@ -60,7 +58,7 @@ the 15:55 vs 16:00 decision is downstream of measurement."""
 class RecordedIvSnapshot:
     """One captured slot.
 
-    All scalar timestamps are int64 ms UTC (CLAUDE.md rule). The
+    All scalar timestamps are int64 ms UTC. The
     ``raw_chain`` field is the per-contract bid/ask we ingested, so a
     future solver upgrade can re-derive IV without re-fetching from
     Polygon.

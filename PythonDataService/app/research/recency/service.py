@@ -116,7 +116,7 @@ async def create_launch(launch: ValidatedLaunch, *, request: dict[str, Any]) -> 
 
 
 def window_date(ms: int) -> str:
-    """Trading-date string for ``EngineBacktestRequest.from_date`` / ``to_date`` — ET-anchored (temporal-rigor.md), never a UTC ``strftime``."""
+    """Trading-date string for ``EngineBacktestRequest.from_date`` / ``to_date`` — ET-anchored (ADR 0022 (a)), never a UTC ``strftime``."""
     return ms_to_et_date_string(ms)
 
 

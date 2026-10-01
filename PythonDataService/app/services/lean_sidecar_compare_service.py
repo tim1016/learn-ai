@@ -45,8 +45,8 @@ Formula (PNL):
     realized_pnl = (exit_price - entry_price) * quantity
 
 Canonical implementation: this file.
-Reference: .claude/rules/numerical-rigor.md → "Trade-level reconciliation
-    taxonomy"; LEAN EMA-crossover plan Task 3.1.
+Reference: ADR 0069 §6 (the trade-level reconciliation
+    taxonomy).
 Validated against: tests/services/test_lean_sidecar_compare_service.py
 """
 
@@ -110,7 +110,7 @@ def reconcile_trade_lists(
     Alignment strategy: trades are matched by 1-indexed sequence position
     (trade_number if present, otherwise list index). A trade present on
     only one side is a DECISION_MISMATCH. Matched trades are compared
-    field-by-field using the tolerance rules from numerical-rigor.md.
+    field-by-field using the tolerance rules from ADR 0069 §3.
 
     Returns CompareResult with a divergence list and the earliest
     divergent timestamp.

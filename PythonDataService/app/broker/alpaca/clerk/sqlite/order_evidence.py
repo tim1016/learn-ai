@@ -4,8 +4,8 @@ The R4 ("never fabricate a terminal outcome") and R7 ("order identity
 resolution by exact ``client_order_id``") discipline applies identically
 whether the order being resolved is an ENTER's own submit or an EXIT's
 cancel-the-entry / submit-the-reducing-order steps — both domain modules
-route through this one gate rather than each keeping its own copy
-(CLAUDE.md guiding-philosophy #5: single source of truth). Nothing here
+route through this one gate rather than each keeping its own copy.
+Nothing here
 decides *when* to call the broker or what to do next; it only records what
 an observed (or absent, or lost) ``BrokerOrder`` snapshot means.
 """
@@ -100,7 +100,7 @@ def submit_absence_grace_ms() -> int:
 #: above it is a real economic disagreement and is recorded as
 #: ``EXECUTION_PRICE_CONFLICT``. Same $0.01/share basis as the
 #: ``FILL_PRICE_DRIFT`` default in the reconciliation taxonomy
-#: (``.claude/rules/numerical-rigor.md``). See ``docs/references/clerk-invariants.md``.
+#: (ADR 0069 §3). See ADR 0036, 2026-09-30 amendment, item 3.
 TOTAL_PRICE_CONFLICT_ATOL = 0.01
 
 

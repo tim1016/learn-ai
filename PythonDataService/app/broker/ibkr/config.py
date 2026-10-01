@@ -121,7 +121,7 @@ class IbkrSettings(BaseSettings):
     # source, not its owner (#2077).
     live_bars_root: str = "/app/artifacts/live_bars"
 
-    # ADR-0028 Stage 3C — one fleet owner polls the daemon's batched
+    # One fleet owner polls the daemon's batched
     # ``/instances`` snapshot. Per-bot hubs consume its stamped observation;
     # they never create their own daemon cadence.
     live_runner_fleet_poll_interval_seconds: float = Field(
@@ -191,8 +191,7 @@ def live_artifacts_root() -> Path:
     Identical to ``account_truth_refresh.account_truth_artifacts_root()``
     — same underlying setting, same resolved directory — but lives in
     this already-retained feed config module so its callers don't
-    import an account-bucket module for a path lookup. See
-    ``docs/superpowers/specs/2026-08-26-ibkr-decommission-slice-0-design.md``.
+    import an account-bucket module for a path lookup.
     """
     return Path(get_settings().live_runs_root).parent
 

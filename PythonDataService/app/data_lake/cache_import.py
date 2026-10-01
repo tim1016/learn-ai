@@ -465,7 +465,7 @@ def _fetch_range_anchors_ms(fetch: dict[str, Any]) -> tuple[int, int] | None:
     """Anchor one fetch entry's from_date/to_date to int64 ms UTC via the
     canonical calendar's session-open anchor, or None if unparsable.
 
-    Per .claude/rules/temporal-rigor.md's date-anchored-value convention
+    Per ADR 0022 (a)'s date-anchored-value convention
     ("Trading date -> the session open (09:30 ET) of that date"): a bare
     ISO date is not itself a valid wire/storage format, so it's anchored at
     construction time via app.lean_sidecar.trading_calendar.session_open_ms_utc
@@ -487,7 +487,7 @@ def build_provider_params(cache_root: Path, provenance: dict[str, Any]) -> dict[
 
     * ``fetch_ranges_ms``: first-class, top-level, int64-ms-UTC anchored
       (via the canonical calendar's session-open anchor) fetch ranges --
-      the queryable, wire-legal form per .claude/rules/temporal-rigor.md.
+      the queryable, wire-legal form per ADR 0022 (a).
     * ``original_provenance``: the *entire* original document embedded
       verbatim, ISO date strings and all. This is a preserved, opaque audit
       document -- the evidence of the refetch leak (#1830), not garbage to
@@ -530,7 +530,7 @@ def verify_and_read_zip(zip_path: Path, symbol: str, trading_date: date) -> Veri
     price field (mirrors ``app.data_lake.lean_writer.to_deci_cent``'s refusal
     of negative prices as upstream corruption), a non-strictly-increasing
     timestamp (finite ingestion is fail-fast per
-    .claude/rules/temporal-rigor.md -- a duplicate or out-of-order row is a
+    ADR 0022 (h) -- a duplicate or out-of-order row is a
     signal of upstream corruption, never silently reordered or
     deduplicated), or zero data rows.
     """

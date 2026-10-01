@@ -161,7 +161,7 @@ BarProvenanceTag = Literal["realtime", "realtime_across_reconnect", "historical_
 class MarketDataBar(BaseModel):
     """Broker-neutral closed 1-minute bar.
 
-    All temporal values are ``int64 ms UTC`` per ``.claude/rules/temporal-rigor.md``.
+    All temporal values are ``int64 ms UTC``.
     ``start_ms`` is the bar-open boundary (inclusive); ``end_ms`` is bar-close
     (exclusive), i.e. ``end_ms = start_ms + 60_000``.
 

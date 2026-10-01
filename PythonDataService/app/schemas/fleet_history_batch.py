@@ -125,7 +125,7 @@ class HistoryBatchRequest(HistoryBatchQuery):
     ``clerk_id`` the coordinator authenticates the call against (checked
     against the header identity by ``app.routers.internal_fleet``'s
     ``_authorized_agent``) to ``HistoryBatchQuery``'s fields -- no ``date``
-    or ISO timestamp crosses this boundary (``temporal-rigor.md``); the
+    or ISO timestamp crosses this boundary; the
     coordinator does the ms->ET date conversion with the canonical NYSE
     calendar helpers.
 

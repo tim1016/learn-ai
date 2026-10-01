@@ -4,8 +4,8 @@ Field names are the ones the retired GraphQL ``backtestRuns`` /
 ``backtestRun`` queries emitted — camelCase, ``totalPnL`` and ``pnL``
 included — because the wire contract is unchanged in this slice; the
 run-history table and the run report read exactly these names. The
-snake_case-response convention in ``.claude/rules/python.md`` is therefore
-deliberately not applied here.
+snake_case-response convention is therefore
+deliberately not applied here (ADR 0058 decision 6).
 
 Each response validates straight from the repository's row dataclass
 (``from_attributes``): a wire field that renames a column names that column

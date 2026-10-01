@@ -94,8 +94,7 @@ _QUIESCE = OperationDrainAdmission.QUIESCE
 #: declarations, and the catalog grows only by reviewed change. Public paths
 #: are clerk-scope-relative (the coordinator prefixes
 #: ``/api/brokers/{broker}/clerks/{clerk_id}``); agent paths are what the
-#: agent process serves today. See docs/design/fleet-b-route-inventory.md for
-#: the per-operation dispositions and the retained-legacy surface.
+#: agent process serves today.
 ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
     {
         # ── Lane reads ────────────────────────────────────────────────────

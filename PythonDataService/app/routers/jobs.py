@@ -6,8 +6,8 @@ endpoints, mints the ``job_id``, and writes the initial state record to
 Redis. Python receives the ``job_id`` and runs the actual work, emitting
 progress events to the same Redis keys.
 
-The split keeps the architecture aligned with the project rule: Python
-owns all math, .NET is transport.
+The split keeps the architecture aligned with ADR 0068: Python
+owns the math, .NET is transport.
 
 Field naming
 ------------

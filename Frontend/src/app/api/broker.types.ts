@@ -3871,7 +3871,7 @@ export interface paths {
          *     rather than omitted.
          *
          *     The window arrives as two ``int64 ms UTC`` values, not ISO dates.
-         *     ``.claude/rules/temporal-rigor.md`` allows exactly one wire format for a
+         *     ADR 0022 (a) allows exactly one wire format for a
          *     temporal value and a trading date is not an exception to it — it is a
          *     date-anchored value, carried as the millisecond instant of that session's
          *     open and resolved back through ``America/New_York``
@@ -10940,7 +10940,7 @@ export interface components {
         };
         /**
          * DivergenceCategory
-         * @description Categorical divergence types — see numerical-rigor.md.
+         * @description Categorical divergence types — see ADR 0069 §6.
          * @enum {string}
          */
         DivergenceCategory: "fixture_insufficient" | "decision_mismatch" | "direction_mismatch" | "quantity_mismatch" | "fill_price_drift" | "commission_drift" | "pnl_drift" | "order_type_mismatch";
@@ -15233,18 +15233,17 @@ export interface components {
         };
         /**
          * NumericalProvenanceContract
-         * @description The Math Provenance Contract (CLAUDE.md #2/#5), sealed as program identity.
+         * @description The Math Provenance Contract (ADR 0068 Decision 2), sealed as program identity.
          *
          *     Mirrors the ``Formula``/``Reference``/``Canonical implementation``/
-         *     ``Validated against`` block already required by the
-         *     ``learn-ai-validation`` skill and present in
+         *     ``Validated against`` block already required by
+         *     ADR 0068 Decision 2 and present in
          *     ``ema_crossover_signal.py``'s own module docstring; this is that same
          *     fact, made part of the immutable seal rather than living only in prose
          *     that could drift unnoticed. ``tolerance_atol``/``tolerance_rtol`` are
          *     ``None`` at ``equivalence_level="bit_exact"`` — the trace/decision
          *     identity in ``signal_program.py`` is Decimal-exact and SHA-256-compared,
-         *     not tolerance-compared; the documented ``1e-9`` absolute tolerance in
-         *     ``docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md``
+         *     not tolerance-compared; the documented ``1e-9`` absolute tolerance
          *     applies one level down, to the EMA/RSI *value* parity against LEAN.
          */
         NumericalProvenanceContract: {
@@ -15505,8 +15504,8 @@ export interface components {
          *     from ATM (e.g. ``calls/atm-03.csv``, ``calls/atm.csv``, ``puts/atm+02.csv``).
          *     Each file is a fixed-schema time series for that slot across all trading
          *     days in range; the contract filling the slot rolls daily and is recorded
-         *     as the ``contract_ticker`` row value. See ``docs/options-companion-format.md``
-         *     for the full spec; computation lives in ``options_companion_service``.
+         *     as the ``contract_ticker`` row value. Computation lives in
+         *     ``options_companion_service``.
          */
         OptionsCompanionConfig: {
             /**
@@ -16539,8 +16538,7 @@ export interface components {
          * @description What the price the operator proposed does against the Clerk's quote (#2007).
          *
          *     Every number an operator reads before confirming is computed by the Clerk
-         *     and rendered as-is; the browser never derives one (AGENTS.md § "Python
-         *     owns all math").
+         *     and rendered as-is; the browser never derives one (ADR 0068).
          */
         ProposedLimitEvaluationResponse: {
             /** Band Cap Bps */
@@ -18528,8 +18526,7 @@ export interface components {
          * SpecTradeResponse
          * @description Single trade emitted by a spec backtest.
          *
-         *     Timestamps are ``int64 ms UTC`` per the repo-wide wire-format rule
-         *     (see ``.claude/rules/numerical-rigor.md`` § "Timestamp rigor"). UI
+         *     Timestamps are ``int64 ms UTC`` on the wire. UI
          *     callers convert to local-time strings at the display boundary; no
          *     other layer should be reading these fields as strings.
          */
@@ -19937,7 +19934,7 @@ export interface components {
             session?: ("regular" | "extended") | null;
             /**
              * Start Ms Utc
-             * @description Inclusive window start as int64 ms since Unix epoch UTC. Per .claude/rules/numerical-rigor.md, every wire timestamp is int64 ms UTC; ISO strings are not accepted.
+             * @description Inclusive window start as int64 ms since Unix epoch UTC. Every wire timestamp is int64 ms UTC; ISO strings are not accepted.
              */
             start_ms_utc: number;
             /**

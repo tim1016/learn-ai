@@ -11,8 +11,8 @@ starts exhausting the service (D11 — no product cap, but engineering rails).
 strategy's parameter assignment — the first component of the Recency
 Chart's canonical evidence fingerprint (design spec §3, D16) and the cell
 identity of a Grid Search (PRD #1926) and a Walk-Forward study (PRD #1925).
-Reference: PRD https://github.com/tim1016/learn-ai/issues/1577; design spec
-docs/superpowers/specs/2026-08-16-recency-chart-design.md §5.3, D11, D16;
+Reference: PRD https://github.com/tim1016/learn-ai/issues/1577; ADR 0072
+decision 4 (Recency Chart D11);
 PRD https://github.com/tim1016/learn-ai/issues/1926 "Grid and workload".
 Canonical implementation: this file (moved from app/research/recency/grid.py
 when #1926 generalized it; the vocabulary is unchanged).

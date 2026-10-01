@@ -212,8 +212,7 @@ class Settings(BaseSettings):
     POLYGON_API_KEY: str
     # Polygon's paid plans (Starter / Developer / Advanced / Business) have
     # no per-minute cap, so the throttle is off by default. Only the free
-    # Basic tier is 5/min — set this to 5 if you're on Basic. See
-    # docs/references/polygon-throttle.md for the full plan table.
+    # Basic tier is 5/min — set this to 5 if you're on Basic.
     POLYGON_RATE_LIMIT_PER_MIN: int = 0
 
     # FRED API (for dynamic risk-free rate)
@@ -261,7 +260,7 @@ class Settings(BaseSettings):
     STARTUP_JOIN_BUDGET_MS: int = Field(default=180_000, ge=1_000, le=3_600_000)
     # How long after that close history is first asked for. IBKR serves the
     # closing minute's row at once but revised it up to ~1.3 s later in
-    # 3 of 16 minutes measured (docs/references/ibkr-history-resume-fill.md).
+    # 3 of 16 minutes measured (ADR 0053, #2410 amendment).
     STARTUP_JOIN_SETTLE_MS: int = Field(default=5_000, ge=0, le=60_000)
     # Dev-only broker fault-injection seam (PRD #1354). Off by default; the seam
     # ALSO fails closed unless the Alpaca posture is paper. Never enable in a
@@ -327,7 +326,7 @@ class Settings(BaseSettings):
     # container calls it via HTTP to extract market-hours-database.json
     # and symbol-properties-database.csv from the pinned LEAN image.
     # When running inside compose on Windows/WSL2, set to
-    # http://host.containers.internal:8090. See PythonDataService/CLAUDE.md.
+    # http://host.containers.internal:8090.
     LEAN_LAUNCHER_URL: str = "http://127.0.0.1:8090"
     LEAN_LAUNCHER_TOKEN: str = ""
 

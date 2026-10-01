@@ -1,7 +1,6 @@
 """Typed profile-resolution errors carrying the contract's ``reason`` codes.
 
-Shapes follow ``docs/architecture/broker-configuration-profile-contract.md``
-§6: a code-like snake_case ``reason``, operator-readable ``message`` prose and
+Each error carries a code-like snake_case ``reason``, operator-readable ``message`` prose and
 a ``next_step``, which a router hands straight to ``HTTPException(detail=...)``
 via :meth:`BrokerProfileError.as_detail`. ``reason`` is the stable code the
 Frontend renders through the shared ``receiptLabel`` pipe; ``message`` and

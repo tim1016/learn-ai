@@ -5,8 +5,7 @@ backtest. This module turns them into a stable, typed surface so the
 Phase 4 frontend renders consistent tables across LEAN versions and
 Phase 5 reconciliation has a deterministic structure to diff against.
 
-Authority: ``docs/architecture/lean-sidecar-lab.md`` §"Normalized output
-parser". Three rules survive every LEAN version bump:
+Three rules survive every LEAN version bump:
 
 1. **All timestamps cross this boundary as int64 ms UTC.** LEAN writes
    unix-seconds (often as float); the parser converts immediately.

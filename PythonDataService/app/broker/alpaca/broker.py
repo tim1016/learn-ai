@@ -206,7 +206,7 @@ def _activity_page_oldest_ms(
 
 
 # Alpaca's documented extended session, 04:00–20:00 ET ("Orders at Alpaca" §
-# Extended Hours Trading, verified 2026-09-08; docs/references/alpaca-extended-hours.md).
+# Extended Hours Trading, verified 2026-09-08).
 # The overnight session (20:00–04:00) is a separate venue and is not part of
 # the decision clock in slice 3 (ADR 0059 D5.2; ruling R1 in the slice-3 plan).
 ALPACA_EXTENDED_HOURS_WINDOW = ExtendedHoursWindow(open_minute_et=4 * 60, close_minute_et=20 * 60)

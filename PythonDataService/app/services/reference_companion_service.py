@@ -164,7 +164,7 @@ def build_news_csv(
                 "publisher",
                 "title",
                 "author",
-                # Canonical int64 ms UTC per temporal-rigor — the vendor's RFC3339
+                # Canonical int64 ms UTC — the vendor's RFC3339
                 # string is not carried into a durable artifact.
                 "published_utc_ms",
                 "article_url",

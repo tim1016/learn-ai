@@ -1,13 +1,11 @@
 """Reproducibility manifest writer.
 
-Per ``docs/architecture/lean-sidecar-lab.md`` §"Reproducibility manifest",
 ``manifest.json`` records every input that can affect the run's output so
 that a normalized result can be replayed (or detected as un-replayable)
 later. Anything that changes the manifest hash set invalidates existing
 reconciliation fixtures derived from it.
 
-Every timestamp written here is ``int64 ms UTC``. Per
-``.claude/rules/numerical-rigor.md`` §"Timestamp rigor", no
+Every timestamp written here is ``int64 ms UTC``; no
 ``datetime``/``DateTime``/ISO string crosses this boundary.
 """
 

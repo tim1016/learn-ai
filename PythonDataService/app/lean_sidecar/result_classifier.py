@@ -12,9 +12,6 @@ This module parses LEAN's structured log and produces a
 ``LaunchResponse``. Callers can then decide whether the run is
 acceptable for compatibility (warnings allowed) or
 reconciliation-grade (no analysis failures, no failed data requests).
-
-Authority: ``docs/architecture/lean-sidecar-lab.md`` §"Phase 1b
-progress" — *clean-run classification beyond exit_code*.
 """
 
 from __future__ import annotations

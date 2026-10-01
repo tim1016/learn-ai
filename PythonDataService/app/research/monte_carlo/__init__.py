@@ -1,8 +1,7 @@
 """Monte Carlo risk analysis over a parent run's trade list.
 
-Phase D of the build-alpha-style research pipeline (architecture spec at
-``docs/architecture/build-alpha-style-features-1-8-research-spec.md`` §
-Feature 5). Takes the trade list from an existing ``RunLedger`` and
+Phase D of the build-alpha-style research pipeline (Feature 5).
+Takes the trade list from an existing ``RunLedger`` and
 simulates N alternate paths via two methods:
 
   * **Reshuffle** — same trades, different order. Tests path

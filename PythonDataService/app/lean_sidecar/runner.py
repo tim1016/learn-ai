@@ -3,8 +3,7 @@
 This module owns the `podman run` command construction and execution. It
 is the only place in the codebase that may spawn a container that
 executes user-supplied source. Every flag in the constructed command
-maps back to a row in ``docs/architecture/lean-sidecar-lab.md``
-§"Container execution boundary".
+maps back to a boundary in ADR 0070 decision 4.
 
 The runner is intentionally a thin, testable function on top of
 ``subprocess``: the launcher service wraps it with request validation,

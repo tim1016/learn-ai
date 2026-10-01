@@ -1,7 +1,6 @@
 """Pydantic v2 wire models for IBKR data.
 
-Per ``docs/architecture/iv-ownership-research.md`` and the project
-``numerical-rigor`` rules:
+Conventions (time per ADR 0022 (a)):
 
 * All timestamps are ``int64`` ms since Unix epoch UTC. ib_async returns
   ``datetime`` objects; conversion to ms happens at this seam (the

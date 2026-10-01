@@ -1,7 +1,4 @@
-"""Cross-engine parity matrix — 4 tickers × 4 nested windows = 16 cells.
-
-Reference: docs/superpowers/specs/2026-05-21-cross-engine-golden-matrix-design.md
-"""
+"""Cross-engine parity matrix — 4 tickers × 4 nested windows = 16 cells."""
 
 from __future__ import annotations
 

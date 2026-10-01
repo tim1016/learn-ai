@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
-#: An instant in the domain's admissible range (temporal-rigor.md).
+#: An instant in the domain's admissible range (ADR 0022 (g)).
 InstantMs = Annotated[int, Field(ge=0, le=MAX_TIMESTAMP_MS)]
 
 

@@ -1,6 +1,6 @@
 """FastAPI router for the Edge feature.
 
-Endpoints (per docs/architecture/edge-feature-design.md):
+Endpoints:
 - POST /api/edge/realized-vs-iv/series
 
 v1 implementation note:
@@ -302,8 +302,7 @@ def _parse_iv_series(
     surfaced via the returned ``health_imputed`` series so the UI can mark
     the bar visually rather than silently treat it as fully validated.
 
-    See ``docs/architecture/iv-ownership-research.md`` Reviewer Feedback Log
-    and ``docs/architecture/iv-research-chat-notes.md (pruned 2026-09-12, git history)`` §5.3.
+    See ADR 0071 decision 11.
     """
     if not iv_series:
         return pd.Series(index=bars_index, dtype=float), None, None

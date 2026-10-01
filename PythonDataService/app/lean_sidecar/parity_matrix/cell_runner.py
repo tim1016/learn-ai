@@ -9,8 +9,8 @@ Gate order — short-circuit on failure:
   Gate 2: state.csv per-bar parity within atol=1e-9
   Gate 3: trade-level cross-reconciler (8-category taxonomy)
 
-Reference: docs/superpowers/specs/2026-05-21-cross-engine-golden-matrix-design.md
-           § "Tolerances and acceptance gates"
+Reference: tests/fixtures/golden/cross-engine-studies/README.md
+           (the cross-engine golden matrix)
 """
 
 from __future__ import annotations

@@ -3,9 +3,8 @@
 Formula: If all 17 required sub-scores exist, readiness = round_half_up(
   Σ fixed_dimension_weight[d] · dimension_score[d]); otherwise the verdict is
   incomplete and has no composite, grade, or deployment signal.
-Reference: docs/references/reconciliations/
-  engine-lab-runs-75-76-statistics-validation-plan.md § "Replace dynamic
-  readiness reweighting with a fixed completeness contract".
+Reference: ADR 0073 decision 4 (a fixed completeness contract, no dynamic
+  readiness reweighting).
 Canonical implementation: this file.
 Validated against: PythonDataService/tests/services/test_run_verdict_parity.py.
 """

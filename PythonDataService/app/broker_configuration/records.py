@@ -1,13 +1,12 @@
 """The stored records of the broker-configuration profiles database.
 
-One frozen dataclass per record shape in
-``docs/architecture/broker-configuration-profile-contract.md`` §2. These are
+One frozen dataclass per stored record shape. These are
 the domain values the store reads and writes and the service reasons over; the
 Pydantic DTOs in ``app/schemas/broker_configuration.py`` are built from them
 and never replace them.
 
-Every timestamp is ``int64 ms UTC`` and every such field ends ``_at_ms``
-(`.claude/rules/temporal-rigor.md`). No record carries a secret, a secret
+Every timestamp is ``int64 ms UTC`` and every such field ends ``_at_ms``.
+No record carries a secret, a secret
 fragment, a secret length, or an environment variable name — a profile
 references an opaque credential *slot* and nothing else (contract §3).
 """

@@ -5,8 +5,7 @@ Formula: ``broker_delta = equity[-1] - equity[0]``;
 C2.start_open_pnl_total - C2.fee_total`` when C2 has complete marks, fees,
 and execution coverage; and
 ``residual = broker_delta - local_delta``.
-Reference: ``docs/prds/2026-08-12-broker-account-desk-lens-redesign.md``
-  Contract C3, and the shared ``DivergenceCategory`` taxonomy in
+Reference: PRD #1460 Contract C3, and the shared ``DivergenceCategory`` taxonomy in
   ``app.research.parity.qc_reconciler``.
 Canonical implementation: this file.
 Validated against:
@@ -27,7 +26,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection_models import AccountPnl
 from app.broker.contract.models import BrokerPortfolioHistory
 from app.research.parity.qc_reconciler import DivergenceCategory
 
-# Accumulated-P&L default from .claude/rules/numerical-rigor.md.  These names
+# Accumulated-P&L default from ADR 0069 §3.  These names
 # are part of C3's numerical provenance and are returned to every consumer.
 ACCOUNT_PNL_RECONCILIATION_ATOL = 1e-6
 ACCOUNT_PNL_RECONCILIATION_RTOL = 0.0
@@ -67,7 +66,7 @@ def reconcile_broker_curve_to_local_pnl(
     (realized_pnl_total + end_open_pnl - start_open_pnl - fee_total)`` when
     all open lots are marked and execution and fee coverage are complete.
     Reference: PRD #1460, Contract C3; accumulated-P&L tolerance policy in
-      ``.claude/rules/numerical-rigor.md``.
+      ADR 0069 §3.
     Canonical implementation: this file.
     Validated against:
       ``tests/services/test_account_pnl_reconciliation.py``.

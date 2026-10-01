@@ -1,6 +1,6 @@
 """LEAN Sidecar Lab — Phase 1 runner spike.
 
-Authority: docs/architecture/lean-sidecar-lab.md.
+Authority: ADR 0070.
 
 This package owns the data-plane glue for the LEAN Sidecar Lab: workspace
 staging, manifest writing, trusted-sample wiring, and the launcher service

@@ -6,7 +6,7 @@ symbols into a single snapshot/update pair for the gallery's SSE channel; it
 reuses ``ChartBar`` and ``ChartFillMarker`` from ``app.schemas.broker_v2_panel``
 rather than redefining bar/marker shapes.
 
-Temporal fields are ``int64 ms UTC`` per ``.claude/rules/temporal-rigor.md``.
+Temporal fields are ``int64 ms UTC``.
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ class GalleryBotView(BaseModel):
     realized_pnl_today: float | None
     open_pnl: float | None
     # Null-safe sum of the two fields above, computed once here (not
-    # re-derived client-side — CLAUDE.md single-source-of-truth rule: a
+    # re-derived client-side — ADR 0068: a
     # frontend addition of two already-fetched numbers is still a second P&L
     # authority outside Python). `None` only when both components are `None`;
     # a lone-present component contributes its own value, matching the

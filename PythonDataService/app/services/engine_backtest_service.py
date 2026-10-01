@@ -646,7 +646,7 @@ def _execute_engine_backtest_core(
         # Before this was wired, the policy value round-tripped through the
         # response but never reached the reader, and Polygon-sourced caches
         # (which retain pre/post-market by design) silently fed 04:00-20:00 ET
-        # bars to the consolidator. See ``.claude/rules/numerical-rigor.md``
+        # bars to the consolidator. See ADR 0069 §6
         # → ``DECISION_MISMATCH`` and the divergence trace at
         # ``StrategyExecutions`` rows 41/42 (run on 2026-05-21).
         session_mode = "regular"

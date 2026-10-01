@@ -14,7 +14,7 @@ This module is the single mapping. Each caller converts the returned
 (``live_chart_window.ChartOverlayNotice`` for LIVE,
 ``app.schemas.broker_v2_panel.ChartOverlayNoticeView`` for HISTORY) rather
 than importing each other's private mapping, so the two panes cannot drift
-onto a second vocabulary (CLAUDE.md guiding philosophy #5).
+onto a second vocabulary.
 
 Issue #2204 adds a second kind of caller: the Clerk's internal transport to
 the fleet-coordinator role's history-batch operation

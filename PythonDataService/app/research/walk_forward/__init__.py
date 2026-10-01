@@ -1,8 +1,7 @@
 """Walk-forward analysis over ``StrategySpec`` runs.
 
-Phase C of the build-alpha-style research pipeline (architecture spec at
-``docs/architecture/build-alpha-style-features-1-8-research-spec.md`` §
-Feature 4). Splits a date window into train/test folds, optionally selects a
+Phase C of the build-alpha-style research pipeline (Feature 4).
+Splits a date window into train/test folds, optionally selects a
 fully-materialized candidate spec on each train window, freezes it for test,
 and aggregates fold-level metrics into a combined OOS curve. Fixed-spec 4A
 and candidate-grid 4B share the same canonical runner.
@@ -13,7 +12,7 @@ persisted under ``artifacts/runs/<fold_run_id>/`` with
 finds them. The walk-forward result itself is persisted under
 ``artifacts/walk-forward/<walk_forward_id>/{config,result}.json``.
 
-See ``docs/references/walk-forward.md`` for the split-policy choices
+See ADR 0073 decision 3 for the split-policy choices
 and the compounded-vs-rebased combined-curve decision.
 """
 

@@ -1,9 +1,9 @@
 """IV term-structure builder for research options pipeline.
 
-Formula: 30-day constant-maturity IV via linear-in-σ interpolation between the two nearest expiries bracketing 30 calendar days (T1 < 30 ≤ T2). Correct interpolation is variance-time: σ²_30·30 = w·σ²_T1·T1 + (1-w)·σ²_T2·T2 — scheduled upgrade per docs/math-rigor.md Upgrade 1.
-Reference: Internal — docs/math-rigor.md Upgrade 1 (variance interpolation spec, industry standard); CBOE VIX Whitepaper (2019) for variance-time basis.
+Formula: 30-day constant-maturity IV via linear-in-σ interpolation between the two nearest expiries bracketing 30 calendar days (T1 < 30 ≤ T2). Correct interpolation is variance-time: σ²_30·30 = w·σ²_T1·T1 + (1-w)·σ²_T2·T2 — a scheduled upgrade.
+Reference: CBOE VIX Whitepaper (2019) for the variance-time basis (industry standard).
 Canonical implementation: app/research/options/iv_builder.py
-Validated against: NONE — pending (pending-fixture per registry; current linear-in-σ implementation has known bias per math-rigor.md)
+Validated against: NONE — pending fixture (the current linear-in-σ implementation has a known bias)
 """
 from __future__ import annotations
 

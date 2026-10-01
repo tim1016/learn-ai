@@ -510,8 +510,7 @@ class ProposedLimitEvaluationResponse(BaseModel):
     """What the price the operator proposed does against the Clerk's quote (#2007).
 
     Every number an operator reads before confirming is computed by the Clerk
-    and rendered as-is; the browser never derives one (AGENTS.md § "Python
-    owns all math").
+    and rendered as-is; the browser never derives one (ADR 0068).
     """
 
     model_config = ConfigDict(frozen=True)

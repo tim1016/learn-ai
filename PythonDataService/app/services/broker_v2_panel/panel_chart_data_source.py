@@ -112,7 +112,7 @@ async def resolve_symbol_and_fills(
     Extracted so the bot gallery wall's marker projection
     (``gallery_hub.GalleryHub``) reuses this exact resolution instead of
     re-deriving it, keeping the wall and the single-bot detail chart from ever
-    diverging on fill provenance (CLAUDE.md single-source-of-truth rule).
+    diverging on fill provenance.
     """
     resolved = await validate_account(broker, account_id)
     try:

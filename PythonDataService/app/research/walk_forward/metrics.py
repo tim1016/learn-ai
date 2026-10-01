@@ -16,8 +16,8 @@ Formula:
     Sharpes ``[0.0001, 2, 2, 2, 2, 2]`` and test Sharpes ``[0.001, 0.1, …]``
     lose 95% of their Sharpe in five folds; the mean reports 1.71, the
     median 0.05).
-Reference: repository-internal research contract documented in
-  docs/references/walk-forward.md and docs/references/walk-forward-study.md.
+Reference: repository-internal research contract; the study verdict is
+  ADR 0056 decision 5.
 Canonical implementation: this file.
 Validated against: tests/research/walk_forward/test_metrics.py.
 """

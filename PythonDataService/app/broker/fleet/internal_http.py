@@ -109,7 +109,7 @@ class FleetTransportRefused(Exception):
 #: ``TtlCache`` defaults its clock to ``time.monotonic``, which is the right
 #: tool for this: the expiry deadline is local, in-process arithmetic that
 #: is never stored, put on the wire, or serialized, so it sits outside this
-#: repo's temporal authority (``.claude/rules/temporal-rigor.md`` governs
+#: repo's temporal authority (ADR 0022 governs
 #: representation and scheduled session structure, neither of which this
 #: is) — and a wall clock could step backwards under NTP correction or a
 #: DST transition, which would let a TTL stall (never expire) or fire

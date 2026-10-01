@@ -502,7 +502,7 @@ def custody_fee_attribution(
     a historical population never grants permission to ignore missing facts.
 
     Formula: existing session fee model/apportionment over selected effective fills.
-    Reference: docs/references/alpaca-fee-attribution.md; PRD #2540.
+    Reference: ADR 0059 fee attribution amendment; PRD #2540.
     Canonical implementation: app.services.alpaca_fee_attribution.attribute_session_fees.
     Validated against: tests/broker/alpaca/clerk/sqlite/test_fee_evidence.py.
     """

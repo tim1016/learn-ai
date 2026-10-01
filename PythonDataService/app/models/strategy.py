@@ -1,6 +1,6 @@
 """Pydantic models for options strategy analysis.
 
-Phase 1.1 of `docs/architecture/numerical-authority-migration-plan.md` extends
+Phase 1.1 of the Python math-authority move (ADR 0068) extends
 the response with optional current-time fields (current-time P&L curve,
 Greek curves, per-leg diagnostics). These additions are gated behind
 opt-in request flags so existing callers see zero change in payload shape

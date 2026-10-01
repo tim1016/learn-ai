@@ -915,8 +915,7 @@ def _build_safe_flatten_plan(
     Formula: signed close quantity = -attributed_qty; side is SELL for a
       positive attributed quantity and BUY for a negative attributed quantity;
       displayed quantity = abs(attributed_qty).
-    Reference: docs/prds/alpaca-account-clerk-sqlite-control-plane.md R6-R7;
-      docs/references/alpaca-sqlite-clerk-recovery-language.md.
+    Reference: ADR 0035.
     Canonical implementation: this file.
     Validated against:
       tests/broker/alpaca/clerk/sqlite/test_recovery_policy.py::

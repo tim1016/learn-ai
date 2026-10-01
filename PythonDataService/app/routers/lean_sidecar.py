@@ -76,8 +76,7 @@ _MAX_TRADING_DAYS = 504
 _MAX_STARTING_CASH = 10_000_000.0
 _MIN_STARTING_CASH = 1_000.0
 
-# Window inputs are int64 ms UTC per ``.claude/rules/numerical-rigor.md``
-# §"Timestamp rigor". Trading-day semantics live below this boundary
+# Window inputs are int64 ms UTC. Trading-day semantics live below this boundary
 # (the orchestrator resolves the ms range into trading dates after
 # converting to ET).
 _MIN_EPOCH_MS = 1_000_000_000_000  # 2001-09-09 — well before any LEAN data we'd run
@@ -100,8 +99,7 @@ def _date_for_session_open_ms(ms: int, *, role: str) -> date:
     if dt_et.hour != 9 or dt_et.minute != 30 or dt_et.second != 0 or dt_et.microsecond != 0:
         raise ValueError(
             f"{role} must be the session-open millisecond (09:30 ET of a "
-            f"trading day) per the P2.5 contract; got {dt_et.isoformat()}. "
-            "See docs/handoffs/2026-05-18-design-p2-5-date-semantics-v2.md."
+            f"trading day), the ADR 0022 trading-date anchor; got {dt_et.isoformat()}."
         )
     return dt_et.date()
 
@@ -210,7 +208,7 @@ class TrustedRunRequestModel(BaseModel):
         le=_MAX_EPOCH_MS,
         description=(
             "Inclusive window start as int64 ms since Unix epoch UTC. "
-            "Per .claude/rules/numerical-rigor.md, every wire timestamp "
+            "Every wire timestamp "
             "is int64 ms UTC; ISO strings are not accepted."
         ),
     )

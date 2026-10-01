@@ -236,7 +236,7 @@ def test_an_entry_on_the_final_bar_closes_as_a_zero_duration_forced_close():
     prices it against the final observed close. Entry and exit therefore share
     a timestamp, which is honest — the round trip really did last no time, and
     there is no later instant to move the exit to. Fabricating one would
-    violate ``.claude/rules/temporal-rigor.md``; dropping the trade or
+    record an instant that never happened; dropping the trade or
     suppressing the entry would diverge from the strategy's own signal.
 
     Before the terminal close was admitted, ``validate_trade_log`` rejected the

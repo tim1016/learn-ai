@@ -45,7 +45,7 @@ class JsonlWal(Generic[RecordT]):  # noqa: UP046 - Python 3.11 runtime; PEP 695 
         that opens, reads, or truncates the file goes through this property
         rather than touching ``self._path``. Until PR-C of #1813 the same four
         lines were inlined at four separate sites here, which is exactly the
-        canonical-helper duplication CLAUDE.md guiding-philosophy #5 governs —
+        canonical-helper duplication to avoid —
         four copies of a security check are four places for a fix to miss.
 
         Keep the ``realpath`` + ``startswith(root_prefix)`` shape. That is the

@@ -33,8 +33,7 @@ The LEAN data root is resolved in this order:
 
 The old hardcoded ``/sessions/ecstatic-hopeful-volta/mnt/Lean/Data`` was a
 remote-sandbox path that never resolved locally; it caused this test to
-be invokable only inside the original handoff sandbox. See
-``docs/handoffs/2026-06-09-lean-sidecar-applehv-sigill-and-parity-gates.md``.
+be invokable only inside the original handoff sandbox.
 """
 
 from __future__ import annotations

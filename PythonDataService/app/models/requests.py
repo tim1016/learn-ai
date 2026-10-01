@@ -87,8 +87,8 @@ class OptionsCompanionConfig(BaseModel):
     from ATM (e.g. ``calls/atm-03.csv``, ``calls/atm.csv``, ``puts/atm+02.csv``).
     Each file is a fixed-schema time series for that slot across all trading
     days in range; the contract filling the slot rolls daily and is recorded
-    as the ``contract_ticker`` row value. See ``docs/options-companion-format.md``
-    for the full spec; computation lives in ``options_companion_service``.
+    as the ``contract_ticker`` row value. Computation lives in
+    ``options_companion_service``.
     """
 
     enabled: bool = Field(False, description="Emit options companion CSV files in the ZIP")

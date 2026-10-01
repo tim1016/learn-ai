@@ -431,7 +431,7 @@ def _fill_times_are_admissible(trade: _TradeLike) -> bool:
     ``on_end_of_algorithm`` emits its exit at ``ctx.current_time_ms``). The
     round trip really did last no time: price P&L is zero and fees are
     charged. Nothing later exists to price the exit at, and fabricating a
-    timestamp would violate ``.claude/rules/temporal-rigor.md``.
+    timestamp would record an instant that never happened.
 
     The exemption is keyed on the engine's own forced-close label, so an equal
     pair reached any other way stays an error, and an *inverted* pair — an

@@ -612,8 +612,7 @@ def _oos_retention(mean_oos_sharpe: float | None, parent_sharpe: float | None) -
     """Ratio of OOS Sharpe to the parent full-window Sharpe.
 
     Formula: oos_retention = mean_oos_sharpe / parent_sharpe.
-    Reference: Internal Build Alpha-style validation contract; see
-      docs/references/walk-forward.md.
+    Reference: Internal Build Alpha-style validation contract.
     Canonical implementation: this file.
     Validated against: tests/research/walk_forward/test_runner.py::test_oos_retention_uses_parent_sharpe
     """

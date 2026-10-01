@@ -38,7 +38,7 @@ a split-adjusted dividend feed, which Polygon's raw ``cash_amount`` is not,
 and porting it verbatim made a later split rescale every earlier dividend
 day (~0.135 pp each) and made LEAN raw-mode backtests pay ``cash × S``
 ($0.205 instead of $0.82 for AAPL). See
-``docs/references/lean-factor-file-dividend-pricing.md`` and the golden
+ADR 0069 §8 (accepted departures) and the golden
 fixture ``tests/fixtures/golden/lean-factor-file-aapl/``.
 
 The builder emits exactly the actions its :class:`FactorFilePlan` keeps

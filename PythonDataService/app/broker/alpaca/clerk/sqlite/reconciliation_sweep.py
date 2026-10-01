@@ -40,7 +40,6 @@ type DutySettleHook = Callable[[], Awaitable[None]]
 # choice, not ported math: at 3x cadence a single missed renewal (transient
 # disk stall, scheduler delay) still leaves ~2/3 of the TTL before the lease
 # expires and writes fail closed. Pinned by test_reconcile.py's cadence assert.
-# Rationale: docs/references/alpaca-sqlite-clerk-lease-heartbeat-cadence.md
 _LEASE_HEARTBEATS_PER_TTL = 3
 
 

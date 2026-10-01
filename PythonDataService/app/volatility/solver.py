@@ -41,9 +41,8 @@ QUANTLIB_MAX_ITER: int = 200
 QUANTLIB_TOLERANCE: float = 1e-8
 # 1 minute, in years. The data-lab companion solves IV per minute on 0DTE
 # contracts where ttm is a fraction of a day; the previous "1 calendar day"
-# floor silently returned EXPIRED for every 0DTE bar (see
-# docs/references/reconciliations/data-lab-spy-2026-04-17-to-2026-04-24.md
-# § Finding 3.1). The Brent fallback handles continuous TTM correctly.
+# floor silently returned EXPIRED for every 0DTE bar.
+# The Brent fallback handles continuous TTM correctly.
 MIN_TIME_TO_EXPIRY: float = 1.0 / (365.0 * 24.0 * 60.0)
 MIN_OPTION_PRICE: float = 0.001  # reject near-zero premiums
 

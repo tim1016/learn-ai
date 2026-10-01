@@ -158,11 +158,10 @@ def compose_today_statement(
       today's ET fee day, bots and this app's orders only. Every part is
       exact: FIFO's exact totals (``AccountPnlAttribution.exact_*``), never
       their float views, whose one rounding can cross a half cent (#2556).
-    Reference: ``CONTEXT.md`` "Account day P&L" (the prior-close anchor, and
-      why lifetime unrealized P&L is not a day figure); the C3 local delta in
+    Reference: the C3 local delta in
       ``app/services/account_pnl_reconciliation.py``; FIFO per
-      ``docs/references/broker-v2-fifo-pnl.md``; fees per
-      ``docs/references/alpaca-fee-attribution.md``.
+      ``app.broker.alpaca.clerk.fifo_pnl``; fees per
+      ADR 0059's fee attribution amendment.
     Canonical implementation: this function (the parts come from
       ``SqliteEconomicProjectionReader.account_pnl_attribution`` through
       ``sqlite_account_pnl_attribution`` and from

@@ -50,7 +50,7 @@ def _validated_catalog_strategy_key(value: str) -> str:
 
 
 #: Canonical equity/ETF symbol shape, shared by every schema that accepts a
-#: raw ticker at a wire boundary (CLAUDE.md guiding philosophy #5 — do not
+#: raw ticker at a wire boundary (do not
 #: write a second regex). ``app.schemas.fleet_history_batch`` reuses this
 #: exact pattern rather than defining its own.
 SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,11}$")

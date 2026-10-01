@@ -1,7 +1,6 @@
 """The refusal vocabulary of the broker-configuration surface.
 
-Every refusal carries a code-like ``reason`` plus backend-authored prose, the
-shape ``docs/architecture/broker-configuration-profile-contract.md`` §6 pins:
+Every refusal carries a code-like ``reason`` plus backend-authored prose:
 the Frontend renders ``reason`` through the shared ``receiptLabel`` pipe and
 never composes ``message`` or ``next_step`` itself.
 

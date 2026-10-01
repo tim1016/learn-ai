@@ -74,8 +74,7 @@ def is_exactly_int(value: object) -> bool:
     has no business on the credential-resolution path. The parity test that
     pins the two against each other is
     ``tests/broker/alpaca/profile/test_runtime_context.py::
-    test_the_integer_predicate_agrees_with_the_sealed_record_validator``
-    (CLAUDE.md guiding philosophy #5).
+    test_the_integer_predicate_agrees_with_the_sealed_record_validator``.
     """
     return type(value) is int
 

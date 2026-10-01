@@ -12,8 +12,7 @@ exists (``command_envelope_invalid``), and two codes written directly as
 JSON on raw-ASGI compatibility-retirement paths (``compatibility_read_retired``,
 ``compatibility_retirement_state_invalid``).
 
-Per decision 9 (docs/superpowers/plans/2026-09-14-fleet-lane-e-frontend-fence-and-refusals.md
-Task 7a) these reasons do **not** enter the exported OpenAPI contract -- the
+These reasons do **not** enter the exported OpenAPI contract -- the
 frontend's copy map locks against a committed snapshot instead, regenerated
 and compared by ``tests/broker/fleet/test_refusal_vocabulary_snapshot.py``.
 This module is the Python authority ``build_snapshot()``

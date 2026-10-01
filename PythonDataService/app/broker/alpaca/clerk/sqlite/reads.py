@@ -1194,7 +1194,7 @@ def manual_reduction_available_quantity(
     Formula: ``max(0, folded_manual_long - pending_manual_sell_qty)`` where
     each pending sell quantity is its requested quantity less its current
     effective filled quantity.
-    Reference: docs/prds/2026-08-13-sqlite-clerk-manual-orders.md §8.
+    Reference: none external.
     Canonical implementation: this file.
     Validated against: tests/broker/alpaca/clerk/sqlite/test_manual_orders.py::
       test_manual_sell_reserves_only_its_subject_long_position.
