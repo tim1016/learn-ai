@@ -535,6 +535,24 @@ async def test_revise_forks_a_linked_study_and_leaves_the_original_untouched(dri
     assert (original.revision, original.state) == (row.revision, row.state)
 
 
+async def test_two_concurrent_revisions_under_one_key_fork_one_study(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    row = await driver.lock(symbol)
+    key = driver.key()
+    payload = {"protocol": plan_request(symbol, budget_cap=4000)}
+
+    answers = await asyncio.gather(
+        driver.command(row, "revise", payload, idempotency_key=key),
+        driver.command(row, "revise", payload, idempotency_key=key),
+        return_exceptions=True,
+    )
+
+    forks = [answer for answer in answers if isinstance(answer, service.CommandOutcome)]
+    refused = [answer for answer in answers if not isinstance(answer, service.CommandOutcome)]
+    assert forks and all(isinstance(item, GoldenSearchRefusal) and item.code == "IDEMPOTENCY_CONFLICT" for item in refused)
+    children = await conn.fetch("SELECT id FROM research_golden_search_studies WHERE parent_study_id = $1", row.id)
+    assert [child["id"] for child in children] == [forks[0].study.id]
+
+
 async def test_a_technical_approval_failure_reads_back_failed_and_can_be_retried(driver: Driver, symbol: str) -> None:
     row = await driver.advance(await driver.to_candidate(symbol), "select_candidate", {"candidate_key": "all_period"})
     row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})

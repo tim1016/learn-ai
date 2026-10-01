@@ -569,11 +569,15 @@ async def run_command(
         protocol = protocol_from_request(require_mapping(body.get("protocol"), "payload.protocol"))
         prepared = await asyncio.to_thread(prepare_lock, protocol, idempotency_key=key, parent_study_id=study_id, roots=roots, identity=identity)
     async with connection() as conn, conn.transaction():
-        if await repo.get_command(conn, study_id, key) is not None:
-            raise GoldenSearchRefusal("A concurrent request used this idempotency key.", code="IDEMPOTENCY_CONFLICT", kind="conflict")
+        # Commands on one study serialize on its row lock, so the key is checked once the lock is held:
+        # a concurrent twin (a revise, which moves no revision) is refused here, not by the key's primary key.
         row = await repo.lock_study(conn, study_id)
         if row is None:
             raise _not_found(study_id)
+        if await repo.get_command(conn, study_id, key) is not None:
+            raise GoldenSearchRefusal(
+                "A concurrent request used this idempotency key.", code="IDEMPOTENCY_CONFLICT", kind="conflict", study=row
+            )
         if (row.revision, row.status, row.job_id, row.attempt) != (seen.revision, seen.status, seen.job_id, seen.attempt):
             raise _stale(row)
         outcome = await _apply(conn, row, command, body, prepared=prepared)
