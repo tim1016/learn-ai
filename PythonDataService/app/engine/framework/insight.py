@@ -87,12 +87,6 @@ class InsightScore:
             self.magnitude = clamped
         self.updated_at_ms = now_ms_utc()
 
-    def get_score(self, score_type: InsightScoreType) -> float:
-        """Read a score dimension."""
-        if score_type == InsightScoreType.DIRECTION:
-            return self.direction
-        return self.magnitude
-
     def finalize(self, timestamp_ms: int) -> None:
         """Lock the score — no further updates allowed."""
         self.is_final_score = True
