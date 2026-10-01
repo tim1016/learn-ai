@@ -2,10 +2,7 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import type {
-  DataPlaneHealth,
   ExpirationsResponse,
-  BrokerCapabilityResponse,
-  IbkrApiEvidenceEvent,
   IbkrConnectionHealth,
   IbkrStrikeList,
   OptionContractsResponse,
@@ -14,9 +11,8 @@ import type {
 /**
  * REST client for the retained ``/api/broker`` market-data feed surface:
  * feed session lifecycle (``connect`` / ``disconnect`` / ``reconnect``),
- * connection and data-plane health, capability probes, the option-chain
- * market-data reads (``expirations`` / ``strikes`` /
- * ``searchOptionContracts``), and the ``ibkrApiEvidence`` audit read.
+ * connection health, and the option-chain market-data reads
+ * (``expirations`` / ``strikes`` / ``searchOptionContracts``).
  *
  * SSE endpoints (option-chain, option-surface) do **not** route through
  * this service — use the ``brokerSse()`` helper in ``broker-sse.ts`` so
@@ -29,20 +25,6 @@ export class MarketDataFeedService {
 
   health(): Promise<IbkrConnectionHealth> {
     return firstValueFrom(this.http.get<IbkrConnectionHealth>(`${this.base}/health`));
-  }
-
-  dataPlaneHealth(): Promise<DataPlaneHealth> {
-    return firstValueFrom(
-      this.http.get<DataPlaneHealth>(`${this.base}/data-plane/health`),
-    );
-  }
-
-  ibkrApiEvidence(afterSeq = 0, limit = 250): Promise<IbkrApiEvidenceEvent[]> {
-    return firstValueFrom(
-      this.http.get<IbkrApiEvidenceEvent[]>(`${this.base}/ibkr/evidence`, {
-        params: { after_seq: afterSeq, limit },
-      }),
-    );
   }
 
   connect(): Promise<IbkrConnectionHealth> {
@@ -60,22 +42,6 @@ export class MarketDataFeedService {
   reconnect(): Promise<IbkrConnectionHealth> {
     return firstValueFrom(
       this.http.post<IbkrConnectionHealth>(`${this.base}/reconnect`, {}),
-    );
-  }
-
-  capability(): Promise<BrokerCapabilityResponse> {
-    return firstValueFrom(
-      this.http.get<BrokerCapabilityResponse>(`${this.base}/capability`),
-    );
-  }
-
-  probeCapability(symbols: string[] = ['SPY', 'QQQ']): Promise<BrokerCapabilityResponse> {
-    return firstValueFrom(
-      this.http.post<BrokerCapabilityResponse>(
-        `${this.base}/capability/probe`,
-        {},
-        { params: { symbols: symbols.join(',') } },
-      ),
     );
   }
 
