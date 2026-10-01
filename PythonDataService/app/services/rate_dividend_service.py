@@ -63,15 +63,16 @@ def get_rate_and_dividend(
     """
     rate, source_rate = get_risk_free_rate_and_source(dte_days=dte_days, observation_date=observation_date)
     dividend: float | None = None
-    try:
-        dividend = compute_dividend_yield(
-            ticker=ticker,
-            spot_price=spot_price,
-            polygon=polygon,
-            observation_date=observation_date,
-        )
-    except Exception as exc:
-        logger.warning("[RD] %s dividend lookup failed; q left unset: %s", ticker, exc)
+    if spot_price > 0:
+        try:
+            dividend = compute_dividend_yield(
+                ticker=ticker,
+                spot_price=spot_price,
+                polygon=polygon,
+                observation_date=observation_date,
+            )
+        except Exception:
+            logger.warning("[RD] %s dividend lookup failed; q left unset", ticker, exc_info=True)
     logger.debug(
         "[RD] %s @ %s: r=%.4f q=%s (spot=%.2f, dte=%d)",
         ticker,

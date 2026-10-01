@@ -55,6 +55,7 @@ def _find_otm_put_by_delta(
     contracts: list[dict],
     stock_close: float,
     dte_days: int,
+    *,
     rfr: float,
     iv_estimate: float = DEFAULT_IV,
 ) -> dict | None:
@@ -79,6 +80,7 @@ def _find_otm_call_by_delta(
     contracts: list[dict],
     stock_close: float,
     dte_days: int,
+    *,
     rfr: float,
     iv_estimate: float = DEFAULT_IV,
 ) -> dict | None:
