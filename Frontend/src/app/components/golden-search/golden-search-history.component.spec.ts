@@ -15,7 +15,11 @@ function summary(overrides: Partial<StudySummary> = {}): StudySummary {
 
 describe('GoldenSearchHistoryComponent', () => {
   it('lists each study with enough to judge it, and opens it on its own page', async () => {
-    const list = vi.fn(async (_filters: StudyListFilters) => [summary(), summary({ id: 'study-0002-bbbb', state: 'approved', exam_outcome: 'meets_rules', exposure_claim: 'confirmatory', hidden: true })]);
+    const list = vi.fn(async (_filters: StudyListFilters) => [
+      summary(),
+      summary({ id: 'study-0002-bbbb', state: 'approved', exam_outcome: 'meets_rules', exposure_claim: 'confirmatory', hidden: true }),
+      summary({ id: 'study-0003-cccc', state: 'exam_running', presented_status: 'running', exposure_claim: 'exploratory' }),
+    ]);
     await render(GoldenSearchHistoryComponent, {
       inputs: { capabilities: [emaCapability()] },
       providers: [provideRouter([]), ...fakePickerWorld().providers, { provide: GoldenSearchService, useValue: { list } }],
@@ -29,6 +33,8 @@ describe('GoldenSearchHistoryComponent', () => {
     expect(rows[2].textContent).toMatch(/Meets Rules · confirmatory/);
     expect(rows[2].textContent).toContain('Hidden');
     expect(within(rows[2]).getByRole('link', { name: /open study study-00/i }).getAttribute('href')).toBe('/golden-search/study-0002-bbbb');
+    expect(rows[3].textContent).toMatch(/Opened · exploratory/);
+    expect(rows[3].textContent).not.toContain('Held back');
   });
 
   it('asks the server again for each filter, hidden studies only on request', async () => {

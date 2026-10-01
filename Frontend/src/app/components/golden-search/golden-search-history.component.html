@@ -47,7 +47,13 @@
               </td>
               <td class="num">{{ row.consumed_evaluations }} / {{ row.budget_cap }}</td>
               <td>
-                @if (row.exam_outcome; as outcome) { {{ outcome | receiptLabel }} · {{ row.exposure_claim ?? 'claim unknown' }} } @else { <span class="muted">Held back</span> }
+                @if (row.exam_outcome; as outcome) {
+                  {{ outcome | receiptLabel }} · {{ row.exposure_claim ?? 'claim unknown' }}
+                } @else if (row.exposure_claim; as claim) {
+                  Opened · {{ claim }}
+                } @else {
+                  <span class="muted">Held back</span>
+                }
               </td>
               <td><a pButton size="small" [text]="true" [routerLink]="['/golden-search', row.id]" [attr.aria-label]="'Open study ' + row.id.slice(0, 8)">Open</a></td>
             </tr>
