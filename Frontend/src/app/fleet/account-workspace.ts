@@ -69,7 +69,7 @@ export const DEPLOY_AGAIN_QUERY_PARAM = 'from';
 export const GOLDEN_QUALIFICATION_QUERY_PARAM = 'golden_qualification';
 
 /** Where "Use in Deploy" lands: the account list, where choosing the account
- * is the owner's step (FR-096). */
+ * is the owner's step (#2696). */
 export const GOLDEN_DEPLOY_HANDOFF_ROUTE = '/brokers/alpaca';
 
 type BotHistoryRow = components['schemas']['FleetBotHistoryRow'];

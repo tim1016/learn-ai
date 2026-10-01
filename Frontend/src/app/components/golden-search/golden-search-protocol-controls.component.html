@@ -3,7 +3,7 @@
   <h3 id="gs-reject-title">What would make you reject a candidate?</h3>
   <div class="fields">
     <label class="field"><span>Primary objective</span>
-      <select (change)="onObjective($event)">
+      <select (change)="onObjective($event)" aria-label="Primary objective">
         @for (measure of measures; track measure) { <option [value]="measure" [selected]="measure === p.policy.objective">{{ measure | receiptLabel }}</option> }
       </select>
     </label>
@@ -23,7 +23,7 @@
     <div class="fields">
       <label class="field"><span>Starting capital ($)</span><input #cash pInputText type="number" min="0" step="1000" [value]="p.execution.initial_cash" [attr.aria-invalid]="numberInvalid('initial_cash')" (input)="onNumber('initial_cash', cash.value)" /></label>
       <label class="field"><span>Fill assumption</span>
-        <select (change)="onFillMode($event)">
+        <select (change)="onFillMode($event)" aria-label="Fill assumption">
           @for (option of fillModes; track option.value) { <option [value]="option.value" [selected]="option.value === p.execution.fill_mode">{{ option.label }}</option> }
         </select>
       </label>

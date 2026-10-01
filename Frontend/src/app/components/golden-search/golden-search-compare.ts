@@ -9,7 +9,7 @@
 import { knobsByName, percentText, pointEntries, ratioText, signedPercentText } from './golden-search-display';
 import type { CandidateKey, EvidenceCandidate, Finding, Metrics, PairMap, PairMapCell, Point, PointValue, StrategyCapability } from './golden-search.types';
 
-/** The order the mock reads candidates in: the searches first, the frozen incumbent last. */
+/** Candidates read the searches first and the frozen incumbent last. */
 const CANDIDATE_ORDER: readonly CandidateKey[] = ['all_period', 'recent', 'incumbent'];
 
 /** Where each candidate came from, in operator copy. */
@@ -85,7 +85,7 @@ export function candidateRows(candidates: readonly EvidenceCandidate[]): Candida
       otherFlags: candidate.flags.filter((flag) => !DRAWDOWN_FLAGS.has(flag.code) && !TRADE_FLAGS.has(flag.code)),
     });
   }
-  // A row whose representative sits later in the order (the incumbent) keeps the mock's order: searches first.
+  // A row represented by the incumbent still reads after the searches.
   return rows.sort((a, b) => CANDIDATE_ORDER.indexOf(a.key) - CANDIDATE_ORDER.indexOf(b.key));
 }
 
