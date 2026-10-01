@@ -1,0 +1,66 @@
+<section class="study" aria-labelledby="gs-study-title">
+  <a class="back" routerLink="/golden-search"><i class="pi pi-arrow-left" aria-hidden="true"></i> All studies</a>
+  @if (loadError(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
+
+  @if (detail(); as d) {
+    <app-golden-search-study-strip [study]="d" [capability]="capability()" />
+
+    <nav class="steps" aria-label="Research steps">
+      <ol>
+        @for (step of steps(); track step.id; let i = $index) {
+          <li>
+            <button type="button" [attr.aria-current]="step.id === selectedStep() ? 'step' : null" [attr.data-progress]="step.progress" (click)="selectStep(step.id)">
+              <span class="num" aria-hidden="true">{{ i + 1 }}</span>{{ step.label }} <span class="sr-only">{{ progressText[step.progress] }}</span>
+            </button>
+          </li>
+        }
+      </ol>
+    </nav>
+
+    <section class="guidance" aria-labelledby="gs-guidance-title">
+      <h3 id="gs-guidance-title">{{ d.guidance.headline }}</h3>
+      <p>{{ d.guidance.detail }}</p>
+      @if (d.progress; as progress) {
+        <p class="progress" role="status">
+          {{ progress.stage | receiptLabel }}: {{ progress.completed | number }} of at most {{ progress.total_max | number }} evaluations
+          <progress [value]="progress.completed" [max]="progress.total_max" [attr.aria-label]="(progress.stage | receiptLabel) + ' progress'"></progress>
+        </p>
+      }
+      @if (d.failure_reason; as reason) { <p class="refusal">{{ reason }}</p> }
+      <div aria-live="polite">
+        @if (actionRefusal(); as refusal) { <p class="refusal" role="alert"><strong>{{ refusal.code | receiptLabel }}</strong> — {{ refusal.message }}</p> }
+        @if (actionMessage(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
+      </div>
+      <div class="actions">
+        @if (primary(); as action) {
+          <button pButton type="button" [disabled]="busy()" (click)="runPrimary(action)"><span>{{ action.label }}</span><i class="pi pi-arrow-right" aria-hidden="true"></i></button>
+        }
+        <span class="spacer"></span>
+        @if (canCancel()) {
+          <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="busy()" (click)="cancel()"><i class="pi pi-stop" aria-hidden="true"></i><span>Cancel</span></button>
+        }
+        @if (canFinish()) {
+          <button pButton type="button" size="small" [disabled]="busy()" (click)="finish()"><i class="pi pi-forward" aria-hidden="true"></i><span>Finish</span></button>
+        } @else if (finishRefusal(); as reason) {
+          <span class="muted">Finish unavailable — {{ reason }}</span>
+        }
+        @if (canHide()) {
+          <app-confirm-delete label="Hide" confirmLabel="Confirm hide" groupLabel="Confirm hiding the study" [outlined]="true" [busy]="busy()" prompt="Hide this study? Its plan, trials and final-test exposure stay recorded." (confirmed)="hide()" />
+        }
+      </div>
+    </section>
+
+    <div class="step-body">
+      <app-golden-search-scope-line [scope]="d.scope" />
+      @switch (selectedStep()) {
+        @case ('plan') { <app-golden-search-plan-summary [study]="d" [capability]="capability()" /> }
+        @case ('search') { <app-golden-search-search-step [study]="d" [capability]="capability()" /> }
+        @case ('test') { <app-golden-search-test-step [study]="d" [capability]="capability()" /> }
+        @case ('compare') { <app-golden-search-compare-step [guidance]="d.guidance" /> }
+        @case ('decision') { <app-golden-search-decision-step [guidance]="d.guidance" /> }
+      }
+    </div>
+  } @else if (loadError() === null) {
+    <p class="muted" role="status">Loading the study…</p>
+  }
+</section>

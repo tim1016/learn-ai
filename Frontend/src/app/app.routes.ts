@@ -211,6 +211,20 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "golden-search",
+    loadComponent: () =>
+      import("./components/golden-search/golden-search-page.component").then(
+        (m) => m.GoldenSearchPageComponent
+      ),
+  },
+  {
+    path: "golden-search/:studyId",
+    loadComponent: () =>
+      import("./components/golden-search/golden-search-page.component").then(
+        (m) => m.GoldenSearchPageComponent
+      ),
+  },
+  {
     path: "strategy-validation",
     loadComponent: () =>
       import(

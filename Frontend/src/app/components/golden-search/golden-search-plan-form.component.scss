@@ -1,0 +1,22 @@
+@use '../../styles/eyebrow-heading' as *;
+
+:host { display: block; min-width: 0; }
+.plan { display: grid; gap: var(--space-4); border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-surface); padding: var(--space-4); min-width: 0; }
+.plan__header { display: grid; gap: var(--space-1); }
+.plan__header h2 { @include eyebrow-heading; margin: 0; }
+p { margin: 0; }
+.muted { color: var(--text-secondary); font-size: var(--fs-xs); }
+.notice { border: 1px solid var(--border-light); border-radius: var(--radius); padding: var(--space-2) var(--space-3); font-size: var(--fs-xs); }
+.subject { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-3); align-items: end; }
+.subject__fixed { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.field { display: grid; gap: var(--space-1); font-size: var(--fs-xs); min-width: 0; }
+.unavailable { margin: 0; padding-left: var(--space-4); display: grid; gap: var(--space-1); font-size: var(--fs-xs); color: var(--text-secondary); }
+.refusal { color: var(--bear); font-size: var(--fs-sm); }
+.plan__footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-3); align-items: end; border-top: 1px solid var(--border-light); padding-top: var(--space-3); }
+.lock { display: grid; gap: var(--space-2); justify-items: end; }
+
+@media (max-width: 768px) {
+  .plan { padding: var(--space-3); }
+  .plan__footer { grid-template-columns: minmax(0, 1fr); }
+  .lock { justify-items: stretch; }
+}

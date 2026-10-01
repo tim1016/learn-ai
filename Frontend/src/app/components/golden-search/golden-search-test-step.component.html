@@ -1,0 +1,69 @@
+@if (validation(); as v) {
+  <div class="step">
+    <p class="note" role="note"><i class="pi pi-info-circle" aria-hidden="true"></i> Every fold repeats the frozen search on its own training months, from the original ranges and starting point, then tests only its winner on the months that follow. This judges the selection procedure, not any one candidate.</p>
+    <p>{{ v.explanation }}</p>
+
+    @if (v.verdict; as verdict) {
+      <section class="verdict" [attr.data-label]="verdict.label" aria-labelledby="gs-verdict-title">
+        <p class="eyebrow">Legacy verdict · {{ verdict.based_on }}</p>
+        <h3 id="gs-verdict-title">{{ verdict.label }}</h3>
+        <p>{{ verdict.reason }}</p>
+        <dl class="facts">
+          <div><dt>Median fold retention</dt><dd>{{ verdict.study_retention === null ? '—' : (verdict.study_retention | percent: '1.0-0') }}</dd></div>
+          <div><dt>Median test Sharpe</dt><dd>{{ verdict.median_test_sharpe === null ? '—' : (verdict.median_test_sharpe | number: '1.2-2') }}</dd></div>
+          <div><dt>Test-period trades</dt><dd>{{ verdict.oos_trade_count }}</dd></div>
+        </dl>
+      </section>
+    }
+
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Folds">
+      <table class="folds">
+        <caption>Folds — training winner and its test result</caption>
+        <thead>
+          <tr><th scope="col">Fold</th><th scope="col">Training</th><th scope="col">Test</th><th scope="col">Status</th><th scope="col">Winner vs starting point</th><th scope="col">Training result</th><th scope="col">Test result</th><th scope="col">Current settings, same test</th></tr>
+        </thead>
+        <tbody>
+          @for (row of rows(); track row.fold.fold_index) {
+            <tr [class.failed-row]="row.fold.status === 'failed'">
+              <th scope="row">{{ row.fold.fold_index + 1 }}</th>
+              <td class="dates"><app-timestamp-display [value]="row.fold.train_start_ms" mode="date-et" /> → <app-timestamp-display [value]="row.fold.train_end_ms - 1" mode="date-et" /></td>
+              <td class="dates"><app-timestamp-display [value]="row.fold.test_start_ms" mode="date-et" /> → <app-timestamp-display [value]="row.fold.test_end_ms - 1" mode="date-et" /></td>
+              <td>
+                <span class="tag" [attr.data-status]="row.fold.status">{{ row.fold.status | receiptLabel }}</span>
+                @if (row.fold.failure_reason) { <span class="reason">{{ row.fold.failure_reason | receiptLabel }}</span> }
+              </td>
+              <td>{{ row.changes ?? 'No winner' }}</td>
+              <td><app-golden-search-metrics [metrics]="row.fold.train_metrics" [compact]="true" /></td>
+              <td><app-golden-search-metrics [metrics]="row.fold.test_metrics" [compact]="true" /></td>
+              <td><app-golden-search-metrics [metrics]="row.fold.incumbent_test_metrics" [compact]="true" /></td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <section class="linked" aria-labelledby="gs-linked-title">
+      <h3 id="gs-linked-title">The procedure's test history</h3>
+      <p class="muted">Test-period returns linked across folds; each fold starts flat with fresh capital. A missing fold breaks the line. Dashed: the current settings on the same test months.</p>
+      <app-golden-search-linked-line [points]="v.linked" [benchmark]="v.incumbent_linked" />
+      <div class="table-wrap" role="region" tabindex="0" aria-label="Linked test-period return">
+        <table class="linked-table">
+          <caption>Linked test-period return by fold</caption>
+          <thead><tr><th scope="col">Fold</th><th scope="col">Test ends</th><th scope="col" class="num">Linked return</th><th scope="col" class="num">Current settings</th></tr></thead>
+          <tbody>
+            @for (point of linkedRows(); track point.fold_index) {
+              <tr>
+                <th scope="row">{{ point.fold_index + 1 }}</th>
+                <td><app-timestamp-display [value]="point.test_end_ms - 1" mode="date-et" /></td>
+                <td class="num">{{ point.linked_return === null ? 'Line broken — fold missing' : (point.linked_return | percent: '1.2-2') }}</td>
+                <td class="num">{{ point.benchmark === null ? 'Line broken — fold missing' : (point.benchmark | percent: '1.2-2') }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+} @else {
+  <p class="pending" role="status">{{ pending() }}</p>
+}

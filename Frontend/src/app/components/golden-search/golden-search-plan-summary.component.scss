@@ -1,0 +1,11 @@
+:host { display: block; min-width: 0; }
+.summary { display: grid; gap: var(--space-3); }
+.summary__header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-2); }
+.summary__header p { margin: 0; font-size: var(--fs-sm); }
+.muted { color: var(--text-secondary); font-size: var(--fs-xs); }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-2) var(--space-4); margin: 0; font-size: var(--fs-xs); }
+.facts dt { color: var(--text-secondary); }
+.facts dd { margin: 0; font-variant-numeric: tabular-nums; }
+.receipt { border-top: 1px solid var(--border-light); padding-top: var(--space-3); }
+code { font-family: var(--font-mono); }
+.item { display: block; }

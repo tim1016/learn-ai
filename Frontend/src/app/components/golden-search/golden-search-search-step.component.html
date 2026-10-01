@@ -1,0 +1,30 @@
+@let s = study();
+<div class="step">
+  @if (s.results.search; as search) {
+    <app-golden-search-procedure
+      headingId="gs-search-all-period"
+      heading="All-period search"
+      description="Fit on the whole development interval from the frozen starting point. In-sample: these numbers chose the settings."
+      [procedure]="search"
+      [method]="s.method"
+      [capability]="capability()"
+    />
+    @if (s.protocol.recent_window) {
+      @if (s.results.recent; as recent) {
+        <app-golden-search-procedure headingId="gs-search-recent" heading="Recent window" [description]="recentDescription()" [procedure]="recent" [method]="s.method" [capability]="capability()" />
+      } @else {
+        <p class="muted">The recent-window procedure has no result yet.</p>
+      }
+    }
+  } @else {
+    <p class="pending" role="status">{{ pending() }}</p>
+  }
+
+  <section aria-label="Engine runs for this study">
+    <dl class="counts">
+      <div><dt>Engine runs used</dt><dd>{{ s.consumed_evaluations | number }} of {{ s.budget_cap | number }}</dd></div>
+      <div><dt>Answered from cache</dt><dd>{{ s.cache_hits | number }}</dd></div>
+      <div><dt>Skipped as invalid</dt><dd>{{ s.invalid_points | number }}</dd></div>
+    </dl>
+  </section>
+</div>
