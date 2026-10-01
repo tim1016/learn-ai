@@ -124,25 +124,13 @@ class ApprovalRequest:
 
 @dataclass(frozen=True)
 class ApprovalCheckpoint:
-    """What a resumed approval reuses rather than redoes; the caller persists it between steps.
-
-    ``proof_reserved`` / ``run_reserved`` record that a step's reserved
-    evaluations were already drawn, so a worker that dies mid-step resumes
-    without drawing them twice.
-    """
+    """What a resumed approval reuses rather than redoes; the caller persists it between steps."""
 
     run_id: int | None = None
     proof: dict[str, Any] | None = None
-    proof_reserved: bool = False
-    run_reserved: bool = False
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "run_id": self.run_id,
-            "proof": None if self.proof is None else dict(self.proof),
-            "proof_reserved": self.proof_reserved,
-            "run_reserved": self.run_reserved,
-        }
+        return {"run_id": self.run_id, "proof": None if self.proof is None else dict(self.proof)}
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any] | None) -> ApprovalCheckpoint:
@@ -154,12 +142,7 @@ class ApprovalCheckpoint:
             raise ValueError("an approval checkpoint's run_id is an integer")
         if proof is not None and not isinstance(proof, Mapping):
             raise ValueError("an approval checkpoint's proof is an object")
-        return cls(
-            run_id=run_id,
-            proof=None if proof is None else dict(proof),
-            proof_reserved=payload.get("proof_reserved") is True,
-            run_reserved=payload.get("run_reserved") is True,
-        )
+        return cls(run_id=run_id, proof=None if proof is None else dict(proof))
 
 
 @dataclass(frozen=True)
@@ -187,14 +170,16 @@ def approve_study(
     *,
     checkpoint: ApprovalCheckpoint,
     save_checkpoint: Callable[[ApprovalCheckpoint], None],
-    consume_reserved: Callable[[int], None],
+    consume_reserved: Callable[[str, int], None],
     on_commit: Callable[[asyncpg.Connection, str], Awaitable[None]],
     cancel_check: Callable[[], object] = lambda: None,
     blob_store: BlobStore | None = None,
 ) -> ApprovalOutcome:
     """Prove, record and publish one study's candidate; synchronous, for the job worker thread.
 
-    ``consume_reserved(n)`` draws from the study's proof reservation,
+    ``consume_reserved(step, n)`` draws a step's evaluations from the
+    study's proof reservation once: a step already drawn (by an attempt
+    that died before its checkpoint) draws nothing,
     ``save_checkpoint`` persists progress between steps, and ``on_commit``
     is the caller's own fenced study update, awaited inside the publish
     transaction so the study reads approved exactly when the version is
@@ -249,7 +234,7 @@ def _approve(
     *,
     checkpoint: ApprovalCheckpoint,
     save_checkpoint: Callable[[ApprovalCheckpoint], None],
-    consume_reserved: Callable[[int], None],
+    consume_reserved: Callable[[str, int], None],
     on_commit: Callable[[asyncpg.Connection, str], Awaitable[None]],
     cancel_check: Callable[[], object],
     blob_store: BlobStore,
@@ -277,14 +262,14 @@ def _approve(
             checkpoint.proof, request, canonical, contract, artifact_digest, wiring_digest, blob_store
         )
     )
+    if proof is None and checkpoint.proof is not None and not _built_by(checkpoint.proof, artifact_digest, wiring_digest):
+        # A run saved under another build cannot stand beside a proof rebuilt under this one.
+        checkpoint = dataclasses.replace(checkpoint, run_id=None)
     if proof is None:
         # A cancel requested while an earlier step ran must stop here, before
         # more work and long before anything is published.
         cancel_check()
-        if not checkpoint.proof_reserved:
-            _consume(consume_reserved, PROOF_EVALUATIONS)
-            checkpoint = dataclasses.replace(checkpoint, proof_reserved=True)
-            save_checkpoint(checkpoint)
+        _consume(consume_reserved, "proof", PROOF_EVALUATIONS)
         proof = _build_proof(request, canonical, blob_store, artifact_digest, wiring_digest)
         checkpoint = dataclasses.replace(checkpoint, proof=proof.as_dict())
         save_checkpoint(checkpoint)
@@ -293,10 +278,7 @@ def _approve(
     run_id = checkpoint.run_id
     if run_id is None:
         cancel_check()
-        if not checkpoint.run_reserved:
-            _consume(consume_reserved, RUN_EVALUATIONS)
-            checkpoint = dataclasses.replace(checkpoint, run_reserved=True)
-            save_checkpoint(checkpoint)
+        _consume(consume_reserved, "run", RUN_EVALUATIONS)
         run_id = _persist_full_run(request, canonical, cancel_check=cancel_check)
         checkpoint = dataclasses.replace(checkpoint, run_id=run_id)
         save_checkpoint(checkpoint)
@@ -404,9 +386,9 @@ def _canonical_candidate(registration: StrategyRegistration, request: ApprovalRe
     return canonical
 
 
-def _consume(consume_reserved: Callable[[int], None], evaluations: int) -> None:
+def _consume(consume_reserved: Callable[[str, int], None], step: str, evaluations: int) -> None:
     try:
-        consume_reserved(evaluations)
+        consume_reserved(step, evaluations)
     except BudgetExhausted as exc:
         raise _ApprovalFailure(
             "BUDGET_EXHAUSTED",
@@ -503,6 +485,12 @@ def _reusable_proof(
         )
         return None
     return proof
+
+
+def _built_by(payload: Mapping[str, Any], artifact_digest: str, wiring_digest: str) -> bool:
+    """Whether a saved proof was built under the running build (its reuse already checked that it reads)."""
+    proof = ProofRecord.from_dict(payload)
+    return (proof.artifact_digest, proof.wiring_digest) == (artifact_digest, wiring_digest)
 
 
 def _require_blobs(proof: ProofRecord, blob_store: BlobStore) -> None:

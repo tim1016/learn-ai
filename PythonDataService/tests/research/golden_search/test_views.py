@@ -20,6 +20,7 @@ from app.research.golden_search.guidance import (
     params_sentence,
     research_weakness,
     study_guidance,
+    weakness_items,
 )
 from app.research.golden_search.models import EvaluationRecord, StudyRow
 from app.research.golden_search.planning import protocol_from_request
@@ -91,6 +92,21 @@ def test_weakness_names_every_reason_an_approval_must_acknowledge() -> None:
         "EXAM_NOT_ENOUGH_EVIDENCE",
         "EXPOSURE_PREVIOUSLY_USED",
     ]
+
+
+def test_the_exam_view_names_each_weakness_the_approval_acknowledges() -> None:
+    checks = [
+        {"code": "NET_POSITIVE", "label": "Positive net result after stated costs", "status": "fail", "detail": ""},
+        {"code": "DRAWDOWN_WITHIN", "label": "Worst drawdown within your ceiling", "status": "pass", "detail": ""},
+    ]
+    weak = {"outcome": "does_not_meet_rules", "claim": "exploratory", "exposure_state": "history_unknown", "checks": checks}
+
+    assert weakness_items(weak) == [
+        {"code": "EXAM_DOES_NOT_MEET_RULES", "text": "failing the stated rules (positive net result after stated costs)"},
+        {"code": "EXPOSURE_HISTORY_UNKNOWN", "text": "the unknown history of this test interval"},
+    ]
+    assert weakness_items({**weak, "outcome": "meets_rules", "claim": "confirmatory"}) == []
+    assert weakness_items({**weak, "outcome": None}) == []  # not scored yet
 
 
 # ── Permitted actions ────────────────────────────────────────────────────

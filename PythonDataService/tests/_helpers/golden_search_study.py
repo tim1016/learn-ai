@@ -217,13 +217,13 @@ class FakeApproval:
         self.requests.append(request)
         self.checkpoints.append(checkpoint)
         if checkpoint.proof is None:
-            consume_reserved(2)
+            consume_reserved("proof", 2)
             checkpoint = FakeCheckpoint(proof={"trace_root": "t" * 64})
             save_checkpoint(checkpoint)
         if self.fail_with is not None:
             return FakeOutcome("failed", None, *self.fail_with)
         if checkpoint.run_id is None:
-            consume_reserved(1)
+            consume_reserved("run", 1)
             checkpoint = FakeCheckpoint(run_id=7, proof=checkpoint.proof)
             save_checkpoint(checkpoint)
         qualification_id = "q" + request.study_id[:31]

@@ -31,6 +31,7 @@ from app.research.golden_search.guidance import (
     params_sentence,
     study_guidance,
     validation_explanation,
+    weakness_items,
 )
 from app.research.golden_search.models import CommandName, EvaluationRecord, StudyRow
 from app.research.golden_search.protocol import GoldenSearchProtocol
@@ -380,6 +381,7 @@ def exam_view(stored: Mapping[str, Any]) -> dict[str, Any]:
         "retention": stored["retention"],
         "candidate_metrics": stored["candidate_metrics"],
         "incumbent_metrics": stored["incumbent_metrics"],
+        "weakness": weakness_items(stored),
     }
 
 

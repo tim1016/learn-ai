@@ -588,8 +588,8 @@ def run_qualification(ctx: StageContext, binding: ApprovalBinding, blob_store: A
     def save_checkpoint(checkpoint: Any) -> None:
         run_sync(with_connection(repo.save_checkpoint, study_id, attempt, checkpoint.as_dict()))
 
-    def consume_reserved(count: int) -> None:
-        evaluator.consume(count, step="proof")
+    def consume_reserved(step: str, count: int) -> None:
+        evaluator.consume(count, step="proof", once_key=f"approval:{step}")
 
     async def on_commit(conn: Any, qualification_id: str) -> None:
         # Runs inside the approval's publish transaction: the study turns approved with it or not at all.
