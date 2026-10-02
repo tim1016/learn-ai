@@ -33,9 +33,6 @@
                 @if (row.reasonCode) {
                   <span class="decision__reason">{{ row.reasonCode | receiptLabel }}</span>
                 }
-                @if (row.authorityKind) {
-                  <span class="decision__authority">{{ row.authorityKind | receiptLabel }}</span>
-                }
               </span>
             </button>
             @if (row.explanation; as explanation) {

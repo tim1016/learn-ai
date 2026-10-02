@@ -1,0 +1,12 @@
+@if (attentionReason(); as reason) {
+  <p class="notice notice--attention" role="note">{{ reason }}</p>
+}
+@if (panel().experimental_notice; as notice) {
+  <app-experimental-notice [notice]="notice" />
+}
+@if (cleared()) {
+  <p class="notice" role="note">
+    Cleared: this bot will not run again, and its records here are read-only.
+    <a [routerLink]="history().commands" [queryParams]="history().queryParams">Every cleared bot is in History</a>.
+  </p>
+}

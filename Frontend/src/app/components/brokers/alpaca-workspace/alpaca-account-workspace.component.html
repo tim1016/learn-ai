@@ -1,6 +1,6 @@
 <div class="account-workspace" [attr.data-lane]="laneTone()">
   <header class="account-workspace__header">
-    <h1 class="account-workspace__name">
+    <h1 class="account-workspace__name" [class.account-workspace__sr-only]="onBotPage()">
       @if (accountName(); as name) {
         {{ name.name }}
         @if (name.disambiguator; as label) {
@@ -11,7 +11,7 @@
       }
     </h1>
 
-    <app-alpaca-lane-mode-chip [chip]="modeChip()" variant="badge" />
+    <app-alpaca-lane-mode-chip [chip]="modeChip()" [variant]="onBotPage() ? 'stacked' : 'badge'" />
 
     @if (accountStatus(); as status) {
       <span class="account-workspace__fact">
@@ -25,7 +25,7 @@
     } @else {
       @let header = money();
       @if (header.kind === 'ready') {
-        <dl class="account-workspace__figures">
+        <dl class="account-workspace__figures" [class.account-workspace__figures--compact]="onBotPage()">
           <div><dt>Free to deploy</dt><dd>{{ header.view.free_to_deploy_usd | authoredUsd }}</dd></div>
           <div><dt>Cash</dt><dd>{{ header.view.cash_usd | authoredUsd }}</dd></div>
           <div>
@@ -39,7 +39,7 @@
         </dl>
       } @else {
         @if (brokerReading(); as reading) {
-          <dl class="account-workspace__figures">
+          <dl class="account-workspace__figures" [class.account-workspace__figures--compact]="onBotPage()">
             <div>
               <dt>Equity</dt>
               <dd>{{ reading.equity ? (reading.equity | authoredUsd) : 'Unavailable' }}</dd>
@@ -61,9 +61,17 @@
       }
     }
 
+    @if (pageControls(); as controls) {
+      <div class="account-workspace__page-controls">
+        <ng-container [ngTemplateOutlet]="controls" />
+      </div>
+    }
+
     @if (deployRoute(); as route) {
+      <!-- On a bot's page the bot's own main action is the one filled button. -->
       <a
         class="account-workspace__deploy"
+        [class.account-workspace__deploy--quiet]="onBotPage()"
         [routerLink]="route"
         [attr.aria-current]="activeTab() === 'deploy' ? 'page' : null"
       >Deploy a bot</a>

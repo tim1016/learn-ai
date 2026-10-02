@@ -1,6 +1,7 @@
 /** #2794 R2, R6: the bot page's toolbar renders the backend's action list --
  * offered actions as icon buttons, blocked ones disabled with their reason,
- * not-needed ones only in All actions. */
+ * those past the bar's room named under More, not-needed ones only in All
+ * actions. */
 import { provideRouter } from '@angular/router';
 import { render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
@@ -103,6 +104,7 @@ describe('BotToolbarComponent (#2794)', () => {
     const user = userEvent.setup();
     await renderToolbar(runningPanel());
 
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
     await user.click(screen.getByRole('button', { name: 'All actions' }));
 
     const list = screen.getByRole('region', { name: 'All actions for this bot' });
@@ -117,10 +119,46 @@ describe('BotToolbarComponent (#2794)', () => {
     const user = userEvent.setup();
     await renderToolbar(runningPanel());
 
+    await user.click(screen.getByRole('button', { name: 'More actions' }));
     await user.click(screen.getByRole('checkbox', { name: 'Labels' }));
 
     expect(screen.getByRole('button', { name: 'Check against Alpaca' }).textContent?.trim()).toBe('Check against Alpaca');
     expect(localStorage.getItem('bot-page.toolbar.labels.v1')).toBe('on');
+  });
+
+  it('keeps five icons on the bar and names the rest under More; Stop and Sell always stay on the bar', async () => {
+    const user = userEvent.setup();
+    const panel = runningPanel();
+    await renderToolbar({
+      ...panel,
+      bot_page: {
+        ...fakeBotPage(panel),
+        toolbar: [
+          toolbarEntry({ action_id: 'stop_bot_decisions', label: 'Stop', tone: 'danger', primary: true }),
+          toolbarEntry({ action_id: 'prepare_safe_flatten', label: 'Sell', tone: 'danger' }),
+          toolbarEntry({ action_id: 'change_end', label: 'Change end' }),
+          toolbarEntry({ action_id: 'manual_order', label: 'Manual order' }),
+          toolbarEntry({ action_id: 'reconcile_now', label: 'Check against Alpaca', group: 'fix' }),
+          toolbarEntry({ action_id: 'cancel_verified_working_orders', label: 'Cancel open orders', group: 'fix' }),
+          toolbarEntry({ action_id: 'discharge_attributed_residue', label: 'Write off missing shares', group: 'fix' }),
+          toolbarEntry({ action_id: 'open_custody_timeline', label: 'Custody timeline', group: 'inspect' }),
+          toolbarEntry({ action_id: 'build_proof', label: 'Build proof', group: 'inspect' }),
+        ],
+      },
+    });
+
+    const toolbar = screen.getByRole('toolbar', { name: 'Actions for this bot' });
+    expect(within(toolbar).getByRole('button', { name: 'Sell' }).textContent?.trim()).toBe('Sell');
+    expect(within(toolbar).getByRole('button', { name: 'Write off missing shares' })).toBeTruthy();
+    expect(within(toolbar).queryByRole('button', { name: 'Custody timeline' })).toBeNull();
+    const more = within(toolbar).getByRole('button', { name: 'More actions' });
+    expect(more.textContent?.trim()).toBe('2');
+
+    await user.click(more);
+
+    const menu = screen.getByRole('group', { name: 'More actions for this bot' });
+    expect(within(menu).getByRole('button', { name: 'Custody timeline' }).textContent?.trim()).toBe('Custody timeline');
+    expect(within(menu).getByRole('button', { name: 'Build proof' }).textContent?.trim()).toBe('Build proof');
   });
 
   it('keeps a blocked Manual order where it is, saying why, and an entry it does not know inert', async () => {

@@ -53,13 +53,14 @@ describe('RecentDecisionsListComponent', () => {
     expect(screen.getAllByText('No Action')).toHaveLength(1);
   });
 
-  it('renders each decision with its authority visibly distinguishable (issue #1729 AC #8)', async () => {
-    await renderList([SYNTHETIC_DECISION]);
+  it('renders each decision’s outcome and reason, leaving the account’s world to the page', async () => {
+    await renderList([{ ...SYNTHETIC_DECISION, authority_account_id: 'PA-TEST', authority_kind: 'real_paper' }]);
 
     expect(screen.getByRole('list', { name: 'Recent decisions' })).toBeTruthy();
     expect(screen.getByText('Entered')).toBeTruthy();
     expect(screen.getByText('Cross Up')).toBeTruthy();
-    expect(screen.getByText('Synthetic')).toBeTruthy();
+    // "Real Paper" was a raw authority code, and on a Live account a wrong one.
+    expect(screen.queryByText('Real Paper')).toBeNull();
     // #2183: "Recent decisions" carries the eyebrow look itself now; the
     // separate "Simulation" label above it is retired.
     expect(screen.getByRole('heading', { name: 'Recent decisions' })).toBeTruthy();

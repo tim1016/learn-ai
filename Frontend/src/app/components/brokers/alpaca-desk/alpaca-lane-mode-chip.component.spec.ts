@@ -40,6 +40,17 @@ describe('AlpacaLaneModeChipComponent', () => {
     expect(screen.queryByText('· Shadow')).toBeNull();
   });
 
+  it('stacks the world over its detail, and keeps a mode with no detail on one line', async () => {
+    const view = await render(AlpacaLaneModeChipComponent, {
+      inputs: { chip: { tone: 'live', mode: 'LIVE · real money' }, variant: 'stacked' },
+    });
+
+    expect(screen.getByText('LIVE').nextElementSibling?.textContent?.trim()).toBe('real money');
+
+    await view.rerender({ inputs: { chip: { tone: 'reading', mode: 'Reading account mode…' }, variant: 'stacked' } });
+    expect(screen.getByText('Reading account mode…')).toBeTruthy();
+  });
+
   it('words each world one way, from the server verdict alone', () => {
     expect(verdictModeChip(fakeVerdictState('paper'))).toEqual({ tone: 'paper', mode: 'PAPER · practice money' });
     expect(verdictModeChip(fakeVerdictState('live'))).toEqual({ tone: 'live', mode: 'LIVE · real money' });

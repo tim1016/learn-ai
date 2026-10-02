@@ -136,6 +136,46 @@
   &[aria-current='page'] { box-shadow: inset 0 0 0 2px var(--text-on-accent); }
 }
 
+/* A bot's page: the money tightens to two by two, the bot's name, figures
+   and actions (its `WorkspaceHeaderSlot` controls) sit right of it, and
+   Deploy a bot steps back to an outline, so the bot's own main action is the
+   one filled button. On a narrow window the bot's controls wrap to a line of
+   their own, still above the tabs. */
+.account-workspace__figures--compact {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: auto auto;
+  gap: 0.15rem var(--space-4);
+}
+
+.account-workspace__figures--compact div {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.account-workspace__figures--compact dd {
+  font-size: var(--fs-xs);
+}
+
+.account-workspace__page-controls {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.account-workspace__page-controls + .account-workspace__deploy {
+  margin-left: 0;
+}
+
+.account-workspace__deploy--quiet {
+  background: transparent;
+  color: var(--accent-text);
+
+  &:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+}
+
 .account-workspace__tabs {
   display: flex;
   flex: 0 0 auto;

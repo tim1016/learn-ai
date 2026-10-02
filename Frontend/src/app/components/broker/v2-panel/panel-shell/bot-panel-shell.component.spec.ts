@@ -33,6 +33,7 @@ import {
 } from '../../../../fleet/fleet-directory-testing';
 import { LANE_FENCE_REFRESH_FAILED_MESSAGE } from '../../../../fleet/lane-fence';
 import { fakeStrategyView } from '../../../../testing/strategy-view-fixtures';
+import { WorkspaceHeaderSlot } from '../../../brokers/alpaca-workspace/workspace-header-slot.service';
 
 const messageService = { add: vi.fn() };
 const chartMocks = vi.hoisted(() => {
@@ -896,7 +897,8 @@ describe('BotPanelShellComponent', () => {
     );
     expect(screen.queryByText('run-current')).toBeNull();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
-    // The backend's summary line names the run, never a ticking time.
+    // The backend's summary line names the run, never a ticking time; the status opens it.
+    await userEvent.click(screen.getByRole('button', { name: 'Running' }));
     expect(screen.getByText(/^Running since /)).toBeTruthy();
 
 
@@ -1639,9 +1641,37 @@ describe('BotPanelShellComponent', () => {
     expect(screen.getByRole('toolbar', { name: 'Actions for this bot' })).toBeTruthy();
     expect(screen.queryByRole('tab', { name: 'Trader' })).toBeNull();
     expect(screen.queryByRole('tab', { name: 'Operator' })).toBeNull();
-    // #2794 R4: chart, money and decisions above; orders, health and setup below.
-    expect([...container.querySelectorAll('.bot-board > .bot-board__panel')].map((panel) => panel.classList[1]))
-      .toEqual(['bot-board__chart', 'bot-board__money', 'bot-board__decisions', 'bot-board__orders', 'bot-board__health', 'bot-board__setup']);
+    // The chart on the left; on the right, money, orders and setup, then decisions and health.
+    const panels = (selector: string): string[] =>
+      [...container.querySelectorAll(selector)].map((panel) => panel.classList[1]);
+    expect(panels('.bot-board > .bot-board__panel')).toEqual(['bot-board__chart']);
+    expect(panels('.bot-board__column:first-child > .bot-board__panel'))
+      .toEqual(['bot-board__money', 'bot-board__orders', 'bot-board__setup']);
+    expect(panels('.bot-board__column:last-child > .bot-board__panel'))
+      .toEqual(['bot-board__decisions', 'bot-board__health']);
+  });
+
+  it('hands its name, figures and actions to the workspace header, and takes them back when it goes', async () => {
+    const slot = new WorkspaceHeaderSlot();
+    const { fixture, container } = await render(BotPanelShellComponent, {
+      inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+      providers: [
+        provideRouter([]),
+        { provide: WorkspaceHeaderSlot, useValue: slot },
+        { provide: BrokerV2PanelService, useValue: mockService },
+        { provide: BrokersService, useValue: brokersMock },
+        { provide: MessageService, useValue: messageService },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(slot.content()).not.toBeNull();
+    expect(container.querySelector('app-bot-page-header')).toBeNull();
+    expect(screen.queryByRole('toolbar', { name: 'Actions for this bot' })).toBeNull();
+
+    fixture.destroy();
+    expect(slot.content()).toBeNull();
   });
 
   it('prices the tape from the last IBKR bar and never reads a Polygon snapshot (H15)', async () => {
@@ -2264,6 +2294,7 @@ describe('BotPanelShellComponent', () => {
 
       const banner = container.querySelector('app-bot-page-header');
       expect(banner?.textContent).toContain('Running');
+      await userEvent.click(screen.getByRole('button', { name: 'Running' }));
       expect(screen.getByText('Running since Tue Nov 14 2023, 17:13 ET · no decisions, no trades.')).toBeTruthy();
       expect(banner?.textContent).not.toContain('LIVE');
       expect(banner?.querySelector('app-alpaca-lane-mode-chip')).toBeNull();

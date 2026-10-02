@@ -1,9 +1,11 @@
+import { NgTemplateOutlet } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
   DestroyRef,
   ElementRef,
   Injector,
+  type TemplateRef,
   afterNextRender,
   afterRenderEffect,
   computed,
@@ -69,6 +71,7 @@ import {
 } from '../../../../fleet/lane-fence';
 import { openLaneFence } from '../../../../fleet/open-lane-fence';
 import { WorkspaceTitleContextService } from '../../../../shell/workspace-title-context.service';
+import { WorkspaceHeaderSlot } from '../../../brokers/alpaca-workspace/workspace-header-slot.service';
 import {
   actionOutcomeToast,
   deriveActionRejection,
@@ -76,6 +79,7 @@ import {
   type ActionRejection,
 } from '../lib/panel-action-outcome';
 import { BotPageHeaderComponent } from '../bot-page/bot-page-header.component';
+import { BotPageNoticesComponent } from '../bot-page/bot-page-notices.component';
 import { BotToolbarComponent } from '../bot-page/bot-toolbar.component';
 import { BotHealthGroupsComponent } from '../bot-page/bot-health-groups.component';
 import { BotOrderRecordsComponent } from '../bot-page/bot-order-records.component';
@@ -190,15 +194,19 @@ function spaceBelow(element: HTMLElement): number {
 const RUN_TAPE_PADDING_MS = 15 * 60_000;
 
 /**
- * The bot page (PRD #2794): one screen, no scrolling at 1440×900.
+ * The bot page (PRD #2794).
  *
- * Top to bottom: the header with the bot's own status and the backend's
- * one-line run summary; the toolbar of every action the owner can take now;
- * the last action's outcome, which takes the keyboard when it lands; for a
- * stopped bot that still holds shares, the warning with Flatten beside it;
- * then the board -- the chart (the strategy's own decision candles, the
- * market tape one tab away), this bot's money and its decisions on top, its
- * orders, health and setup below -- each panel scrolling inside itself.
+ * The bot's name, its own status (which opens the backend's one-line run
+ * summary), its figures and the toolbar of every action the owner can take
+ * now sit in the account workspace's header beside Deploy a bot. Below the
+ * tabs: why the bot needs attention, when it does; the last action's
+ * outcome, which takes the keyboard when it lands; for a stopped bot that
+ * still holds shares, the warning with Flatten beside it; then the board --
+ * the chart (the strategy's own decision candles, the market tape one tab
+ * away) on the left at the window's height, and on the right two columns of
+ * panels as tall as their content: money, orders and setup; decisions and
+ * health. The page scrolls; the chart stays put and no panel scrolls inside
+ * itself.
  *
  * ## Shell responsibilities
  * - Route parameter extraction (broker, clerk, account, sid).
@@ -223,11 +231,13 @@ const RUN_TAPE_PADDING_MS = 15 * 60_000;
     BotHealthGroupsComponent,
     BotOrderRecordsComponent,
     BotPageHeaderComponent,
+    BotPageNoticesComponent,
     BotSetupComponent,
     BotToolbarComponent,
     OperatorRunHistoryComponent,
     RouterLink,
     DeploymentBudgetComponent,
+    NgTemplateOutlet,
     RecentDecisionsListComponent,
     StrandedPositionWarningComponent,
     TimestampDisplayComponent,
@@ -472,6 +482,12 @@ export class BotPanelShellComponent {
   private readonly boardView = viewChild<ElementRef<HTMLElement>>('board');
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
+  /** The account workspace's header, where the bot's name, figures and
+   * actions go; `null` outside a workspace, where they stay on this page. */
+  private readonly headerSlot = inject(WorkspaceHeaderSlot, { optional: true });
+  protected readonly inWorkspaceHeader = this.headerSlot !== null;
+  private readonly pageControls = viewChild<TemplateRef<unknown>>('pageControls');
+
   /** FR-006 (#2202): history read identity is broker + clerk + account + sid
    * + timeframe only. `ResourceTarget.bindingGeneration`/`routingEpoch` fence
    * commands, not reads — keying this on `this.target()` made a fleet
@@ -636,21 +652,34 @@ export class BotPanelShellComponent {
       });
     });
     // The window names a bot's page by the bot (ADR 0064 Decision 6), and the
-    // bot's label is panel data the shell above does not read. This is the one
-    // fact this page publishes upward; it is cleared on the way out so no
-    // other page can inherit it.
+    // bot's label is panel data the shell above does not read. It is cleared
+    // on the way out so no other page can inherit it.
     effect(() => this.titleContext.setBotLabel(this.panel()?.strategy_label ?? null));
-    // #2794 R4: the board fills the window below whatever sits above it --
-    // banner, toolbar, a receipt, the holding warning -- so the page itself
-    // does not scroll; its panels scroll inside themselves.
+    // The bot's name, figures and actions go up into the workspace header,
+    // and come back down with this page.
+    const slot = this.headerSlot;
+    if (slot !== null) {
+      effect((onCleanup) => {
+        const controls = this.pageControls();
+        if (controls === undefined) return;
+        slot.show(controls);
+        onCleanup(() => slot.clear(controls));
+      });
+    }
+    // The chart fills the window below whatever sits above the board -- a
+    // receipt, the holding warning -- and stays put while the panels beside
+    // it scroll with the page; no panel scrolls inside itself.
     afterRenderEffect((onCleanup) => {
       const board = this.boardView()?.nativeElement;
       if (board === undefined || typeof ResizeObserver === 'undefined') return;
       const host = this.host.nativeElement;
       const fit = (): void => {
+        // The page itself ends at the window's bottom and scrolls inside, under the header.
+        const hostTop = host.getBoundingClientRect().top + window.scrollY;
+        host.style.setProperty('--bot-page-height', `${window.innerHeight - hostTop - spaceBelow(host)}px`);
         // Where the board starts with nothing scrolled: the window's scroll and the host's own.
         const top = board.getBoundingClientRect().top + window.scrollY + host.scrollTop;
-        host.style.setProperty('--bot-board-height', `${window.innerHeight - top - spaceBelow(board)}px`);
+        host.style.setProperty('--bot-chart-height', `${window.innerHeight - top - spaceBelow(board)}px`);
       };
       // A frame later, so a fit never resizes what the observer is reporting on.
       let frame = 0;

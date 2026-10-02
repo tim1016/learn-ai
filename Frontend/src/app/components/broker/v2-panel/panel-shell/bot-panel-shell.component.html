@@ -32,23 +32,26 @@
     @let profileData = profile.value()!;
 
     <div class="bot-page">
-      <app-bot-page-header
-        [panel]="panelData"
-        [backRoute]="backRoute()"
-        [backLabel]="backLabel"
-        [clerkId]="clerkId()"
-      />
-      <section class="bot-page__actions" aria-label="Bot actions">
-        <app-bot-toolbar
-          [panel]="panelData"
-          [pending]="actionPending()"
-          [deployAgain]="deployAgain()"
-          [manualOrder]="manualOrderNavigation()"
-          (actionRequested)="onActionRequested($event)"
-          (changeEnd)="endCard()?.openEditor()"
-          (buildProof)="proofOpen.set(true)"
-        />
-      </section>
+      <!-- The bot's name, figures and actions: drawn in the account workspace's
+           header when there is one (WorkspaceHeaderSlot), here otherwise. -->
+      <ng-template #pageControls>
+        <section class="bot-page__controls" aria-label="This bot">
+          <app-bot-page-header [panel]="panelData" [backRoute]="backRoute()" [backLabel]="backLabel" />
+          <app-bot-toolbar
+            [panel]="panelData"
+            [pending]="actionPending()"
+            [deployAgain]="deployAgain()"
+            [manualOrder]="manualOrderNavigation()"
+            (actionRequested)="onActionRequested($event)"
+            (changeEnd)="endCard()?.openEditor()"
+            (buildProof)="proofOpen.set(true)"
+          />
+        </section>
+      </ng-template>
+      @if (!inWorkspaceHeader) {
+        <ng-container [ngTemplateOutlet]="pageControls" />
+      }
+      <app-bot-page-notices [panel]="panelData" [clerkId]="clerkId()" />
 
       @if (actionReceipt(); as receipt) {
         <app-panel-action-receipt [receipt]="receipt" (dismissed)="dismissActionReceipt()" />
@@ -119,84 +122,91 @@
           </ng-template>
         </div>
 
-        <div class="bot-board__panel bot-board__money">
-          <app-deployment-budget
-            [target]="target()"
-            [strategyInstanceId]="panelData.strategy_instance_id"
-            [revision]="panelData.revision"
-            [holdsShares]="holdsShares()"
-            [openPnl]="panelData"
-          />
-        </div>
+        <div class="bot-board__side">
+          <div class="bot-board__column">
+            <div class="bot-board__panel bot-board__money bot-board__panel--bare">
+              <app-deployment-budget
+                [target]="target()"
+                [strategyInstanceId]="panelData.strategy_instance_id"
+                [revision]="panelData.revision"
+                [holdsShares]="holdsShares()"
+                [openPnl]="panelData"
+              />
+            </div>
 
-        <div class="bot-board__panel bot-board__decisions">
-          <app-recent-decisions-list
-            [decisions]="panelData.recent_decisions"
-            [strategyView]="strategyViewValue()"
-            [(selectedBarCloseMs)]="selectedDecisionBarMs"
-          />
-          @if (panelData.mode === 'log_only') {
-            <p class="observation-note" role="status">
-              <strong>Observation only.</strong> This bot records decisions but does not place broker orders.
-            </p>
-          } @else {
-            <app-run-fills-list
-              [fills]="runFills()"
-              [fillCount]="runFillCount()"
-              [runStartedAtMs]="runStartedAtMs()"
-            />
-          }
-        </div>
+            <section class="bot-board__panel bot-board__orders" aria-labelledby="bot-orders-title">
+              <h3 id="bot-orders-title" class="bot-board__title">Orders</h3>
+              <app-bot-order-records
+                [panel]="panelData"
+                [profile]="profileData"
+                [broker]="broker()"
+                [clerkId]="clerkId()"
+                [accountId]="accountId()"
+                [sid]="sid()"
+                [activated]="true"
+                (transactionSelected)="onTransactionSelected($event)"
+              />
+            </section>
 
-        <section class="bot-board__panel bot-board__orders" aria-labelledby="bot-orders-title">
-          <h3 id="bot-orders-title" class="bot-board__title">Orders</h3>
-          <app-bot-order-records
-            [panel]="panelData"
-            [profile]="profileData"
-            [broker]="broker()"
-            [clerkId]="clerkId()"
-            [accountId]="accountId()"
-            [sid]="sid()"
-            [activated]="true"
-            (transactionSelected)="onTransactionSelected($event)"
-          />
-        </section>
+            <div class="bot-board__panel bot-board__setup">
+              <app-bot-setup [panel]="panelData" [settings]="strategyViewValue()?.settings ?? null" [(proofOpen)]="proofOpen" />
+              <details class="bot-board__runs">
+                <summary>Run history</summary>
+                <app-operator-run-history
+                  [broker]="broker()"
+                  [clerkId]="clerkId()"
+                  [strategyInstanceId]="sid()"
+                  [currentRunState]="currentRunState()"
+                  (runRefreshRequested)="currentRun.reload()"
+                  [botRunning]="panelData.health.running"
+                  [feedContinuity]="feedContinuity()"
+                />
+              </details>
+            </div>
 
-        <div class="bot-board__panel bot-board__health">
-          @if (panelData.bot_page; as page) {
-            <app-bot-health-groups
-              [health]="page.health"
-              [marketPulse]="panelData.market_pulse"
-              [startupJoin]="panelData.startup_join ?? null"
-              [dutyOutcome]="stranded() ? null : (panelData.health.duty_outcome ?? null)"
-              [clerkGuidance]="panelData.mission_verdict.state === 'blocked' ? panelData.mission_verdict : null"
-            />
-          }
-        </div>
+            @if (panelData.end; as end) {
+              <app-bot-end-card
+                [end]="end"
+                [dryRun]="panelData.mode === 'dry_run'"
+                [locked]="actionPending()"
+                [save]="saveBotEnd"
+                [showChange]="false"
+              />
+            }
+          </div>
 
-        <div class="bot-board__panel bot-board__setup">
-          <app-bot-setup [panel]="panelData" [settings]="strategyViewValue()?.settings ?? null" [(proofOpen)]="proofOpen" />
-          @if (panelData.end; as end) {
-            <app-bot-end-card
-              [end]="end"
-              [dryRun]="panelData.mode === 'dry_run'"
-              [locked]="actionPending()"
-              [save]="saveBotEnd"
-              [showChange]="false"
-            />
-          }
-          <details class="bot-board__runs">
-            <summary>Run history</summary>
-            <app-operator-run-history
-              [broker]="broker()"
-              [clerkId]="clerkId()"
-              [strategyInstanceId]="sid()"
-              [currentRunState]="currentRunState()"
-              (runRefreshRequested)="currentRun.reload()"
-              [botRunning]="panelData.health.running"
-              [feedContinuity]="feedContinuity()"
-            />
-          </details>
+          <div class="bot-board__column">
+            <div class="bot-board__panel bot-board__decisions bot-board__panel--bare">
+              <app-recent-decisions-list
+                [decisions]="panelData.recent_decisions"
+                [strategyView]="strategyViewValue()"
+                [(selectedBarCloseMs)]="selectedDecisionBarMs"
+              />
+              @if (panelData.mode === 'log_only') {
+                <p class="observation-note" role="status">
+                  <strong>Observation only.</strong> This bot records decisions but does not place broker orders.
+                </p>
+              } @else {
+                <app-run-fills-list
+                  [fills]="runFills()"
+                  [fillCount]="runFillCount()"
+                  [runStartedAtMs]="runStartedAtMs()"
+                />
+              }
+            </div>
+
+            <div class="bot-board__panel bot-board__health">
+              @if (panelData.bot_page; as page) {
+                <app-bot-health-groups
+                  [health]="page.health"
+                  [marketPulse]="panelData.market_pulse"
+                  [startupJoin]="panelData.startup_join ?? null"
+                  [dutyOutcome]="stranded() ? null : (panelData.health.duty_outcome ?? null)"
+                  [clerkGuidance]="panelData.mission_verdict.state === 'blocked' ? panelData.mission_verdict : null"
+                />
+              }
+            </div>
+          </div>
         </div>
       </div>
     </div>

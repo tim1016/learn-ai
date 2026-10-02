@@ -1,5 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, effect, inject, viewChild, type TemplateRef } from '@angular/core';
 import {
   Router,
   RouterOutlet,
@@ -35,6 +35,7 @@ import { AlpacaAccountListPageComponent } from '../alpaca-desk/alpaca-account-li
 import { BrokerConfigurationService } from '../alpaca-desk/configuration/broker-configuration.service';
 import { AlpacaAccountWorkspaceComponent } from './alpaca-account-workspace.component';
 import { AlpacaSurfaceNotReadyTabComponent } from './alpaca-surface-not-ready-tab.component';
+import { WorkspaceHeaderSlot } from './workspace-header-slot.service';
 
 const LANE_URL = `/brokers/alpaca/clerks/${TEST_CLERK_ID}`;
 const WORKSPACE_URL = `${LANE_URL}/accounts/${TEST_ACCOUNT_ID}`;
@@ -71,8 +72,26 @@ class HistoryStubComponent {}
 })
 class SettingsStubComponent {}
 
-@Component({ selector: 'app-bot-stub', template: '<section aria-label="Bot">Bot page</section>' })
-class BotStubComponent {}
+/** Hands its controls to the header the way the real bot page does. */
+@Component({
+  selector: 'app-bot-stub',
+  template: `
+    <ng-template #controls><button type="button">Stop</button></ng-template>
+    <section aria-label="Bot">Bot page</section>
+  `,
+})
+class BotStubComponent {
+  private readonly slot = inject(WorkspaceHeaderSlot);
+  private readonly controls = viewChild.required<TemplateRef<unknown>>('controls');
+
+  constructor() {
+    effect((onCleanup) => {
+      const controls = this.controls();
+      this.slot.show(controls);
+      onCleanup(() => this.slot.clear(controls));
+    });
+  }
+}
 
 @Component({
   selector: 'app-deploy-stub',
@@ -489,6 +508,30 @@ describe('AlpacaAccountWorkspaceComponent', () => {
       expect(
         screen.getAllByRole('link').filter((link) => link.getAttribute('aria-current') === 'page'),
       ).toHaveLength(1);
+    });
+
+    it('makes room for the bot in the header: the name is for screen readers, LIVE stacks, Deploy a bot steps back', async () => {
+      await renderWorkspace({ url: `${WORKSPACE_URL}/bots/sid-1`, verdict: fakeVerdictState('live') });
+
+      const stop = await screen.findByRole('button', { name: 'Stop' });
+      expect(stop.closest('header')).not.toBeNull();
+      expect(screen.getByRole('heading', { name: 'Paper', level: 1 }).classList).toContain('account-workspace__sr-only');
+      expect(screen.getByText('LIVE').nextElementSibling?.textContent?.trim()).toBe('real money');
+      expect(screen.getByRole('link', { name: 'Deploy a bot' }).classList).toContain('account-workspace__deploy--quiet');
+      const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
+      expect(results.violations).toEqual([]);
+    });
+
+    it('takes the bot’s controls back, and shows the name again, when the bot’s page goes', async () => {
+      const { view, router } = await renderWorkspace({ url: `${WORKSPACE_URL}/bots/sid-1` });
+      await screen.findByRole('button', { name: 'Stop' });
+
+      await router.navigateByUrl(`${WORKSPACE_URL}/activity`);
+      await view.fixture.whenStable();
+
+      expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+      expect(screen.getByRole('heading', { name: 'Paper', level: 1 }).classList).not.toContain('account-workspace__sr-only');
+      expect(screen.getByText('PAPER · practice money')).toBeTruthy();
     });
   });
 

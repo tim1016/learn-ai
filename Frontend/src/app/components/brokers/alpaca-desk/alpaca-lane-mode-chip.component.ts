@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
 import type { LaneModeChip } from '../../../services/alpaca-live-verdict.service';
 
@@ -18,6 +18,16 @@ import type { LaneModeChip } from '../../../services/alpaca-live-verdict.service
 export class AlpacaLaneModeChipComponent {
   readonly chip = input.required<LaneModeChip>();
   /** `badge` is the workspace header's mode badge (PRD #2560 D4): the same
-   * words, filled with the lane colour. */
-  readonly variant = input<'chip' | 'badge'>('chip');
+   * words, filled with the lane colour. `stacked` is that badge on a bot's
+   * page, where the header is short of room: the world over its detail,
+   * "LIVE" over "real money". */
+  readonly variant = input<'chip' | 'badge' | 'stacked'>('chip');
+
+  /** The mode split at its " · " for the stacked badge; `null` keeps one line,
+   * as for a mode still being read, which has no detail to stack. */
+  protected readonly stackedWords = computed(() => {
+    if (this.variant() !== 'stacked') return null;
+    const [world, ...detail] = this.chip().mode.split(' · ');
+    return detail.length > 0 ? { world, detail: detail.join(' · ') } : null;
+  });
 }

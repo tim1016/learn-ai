@@ -144,6 +144,11 @@ function botBanner(page: Page): Locator {
   return page.locator('app-bot-page-header');
 }
 
+/** What the bot page says under the tabs: cleared, experimental, needs attention. */
+function botNotices(page: Page): Locator {
+  return page.locator('app-bot-page-notices');
+}
+
 /** The bot page's toolbar, where a stopped bot offers Deploy again (#2794). */
 function botToolbar(page: Page): Locator {
   return page.getByRole('toolbar', { name: 'Actions for this bot' });
@@ -407,8 +412,8 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     // ── The cleared bot's page, from its History row: read-only, Deploy again. ─
     await history.getByRole('link', { name: WALKED_BOT, exact: true }).click();
     await expect(page).toHaveURL(`${PAPER_WORKSPACE}/bots/${WALKED_BOT}`);
-    await expect(botBanner(page)).toContainText(CLEARED_NOTE);
-    await expect(botBanner(page).getByRole('link', { name: 'Every cleared bot is in History' }))
+    await expect(botNotices(page)).toContainText(CLEARED_NOTE);
+    await expect(botNotices(page).getByRole('link', { name: 'Every cleared bot is in History' }))
       .toHaveAttribute('href', `${PAPER_HISTORY}?status=cleared`);
     await botToolbar(page).getByRole('link', { name: 'Deploy again' }).click();
     await expect(page).toHaveURL(`${PAPER_WORKSPACE}/deploy?from=${WALKED_BOT}`);
@@ -427,7 +432,7 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     await history.getByRole('link', { name: DRY_RUN_BOT, exact: true }).click();
     await expect(page).toHaveURL(`${PAPER_WORKSPACE}/bots/${DRY_RUN_BOT}`);
     await expect(botBanner(page)).toContainText(WORLD_LABELS.dry_run);
-    await expect(botBanner(page)).toContainText(CLEARED_NOTE);
+    await expect(botNotices(page)).toContainText(CLEARED_NOTE);
     await botToolbar(page).getByRole('link', { name: 'Deploy again' }).click();
     await expect(page).toHaveURL(`${PAPER_WORKSPACE}/deploy?from=${DRY_RUN_BOT}`);
     await expect(page.getByRole('region', { name: 'Deploy again' })).toContainText(`Prefilled from ${DRY_RUN_BOT}.`);
@@ -538,7 +543,7 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     await world.install(page);
 
     await page.goto(`${PAPER_WORKSPACE}/bots/${WALKED_BOT}`);
-    await expect(botBanner(page).getByRole('note')).toContainText(DV_EXPERIMENTAL_NOTICE);
+    await expect(botNotices(page).getByRole('note')).toContainText(DV_EXPERIMENTAL_NOTICE);
     const end = page.getByRole('region', { name: 'End', exact: true });
     await expect(end).toContainText(WALK_DEFAULT_END.headline);
     await expect(end).toContainText(WALK_DEFAULT_END.explanation);

@@ -1,0 +1,4 @@
+:host { display: grid; gap: var(--space-1); }
+:host:empty { display: none; }
+.notice { margin: 0; color: var(--text-secondary); font-size: var(--fs-xs); }
+.notice--attention { color: var(--bear-text, var(--bear)); font-size: var(--fs-sm); }

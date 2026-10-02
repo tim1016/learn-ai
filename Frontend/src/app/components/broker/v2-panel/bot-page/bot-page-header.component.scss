@@ -4,33 +4,49 @@
 
 .sr-only { @include visually-hidden; }
 
+// Two short lines, the height of the account's figures beside it: the way
+// back, strategy and symbol over the bot's name and status.
 .bot-header {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  align-items: center;
   gap: var(--space-4);
 }
 
-.bot-header__lead {
+.bot-header__identity {
   display: grid;
   min-width: 0;
-  gap: var(--space-1);
+  gap: 0.1rem;
 }
 
-.bot-header__identity {
+.bot-header__meta {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-2) var(--space-3);
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.bot-header__strategy {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .bot-header__back {
   color: var(--text-secondary);
-  font-size: var(--fs-xs);
   text-decoration: none;
 
   &:hover,
   &:focus-visible { text-decoration: underline; }
+}
+
+.bot-header__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .bot-header__name {
@@ -38,28 +54,44 @@
   overflow-wrap: anywhere;
   color: var(--text-primary);
   font-family: var(--font-mono);
-  font-size: var(--fs-lg);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
 }
 
-.bot-header__meta {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-}
+.bot-header__status-anchor { position: relative; }
 
 .bot-header__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   padding: 1px var(--space-2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 999px;
+  background: transparent;
   color: var(--text-secondary);
+  font: inherit;
   font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+
+  .pi { font-size: 0.55rem; }
+
+  &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  &[aria-expanded='true'] { background: var(--bg-elevated); }
 
   &[data-state='running'] {
     border-color: color-mix(in srgb, var(--bull) 55%, var(--border));
     color: var(--bull);
+
+    // The feed is live while the bot runs; the summary says when it last updated.
+    &::before {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--bull);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--bull) 22%, transparent);
+      content: '';
+    }
   }
 
   &[data-state='ended_holding'] {
@@ -74,14 +106,24 @@
 }
 
 .bot-header__summary {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: var(--fs-sm);
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  display: grid;
+  gap: var(--space-1);
+  width: max-content;
+  max-width: 24rem;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-card);
+
+  p { margin: 0; color: var(--text-primary); font-size: var(--fs-sm); line-height: 1.45; }
 }
 
-.bot-header__reason,
-.bot-header__cleared {
-  margin: 0;
+.bot-header__feed {
   color: var(--text-secondary);
   font-size: var(--fs-xs);
 }
@@ -104,6 +146,7 @@
     color: var(--text-primary);
     font-family: var(--font-mono);
     font-size: var(--fs-md);
+    white-space: nowrap;
   }
 
   .positive { color: var(--bull); }
@@ -117,6 +160,7 @@
 }
 
 @media (max-width: 720px) {
-  .bot-header { flex-direction: column; }
+  .bot-header { flex-wrap: wrap; }
   .bot-header__figures { text-align: left; }
+  .bot-header__summary { max-width: calc(100vw - 2 * var(--space-4)); }
 }
