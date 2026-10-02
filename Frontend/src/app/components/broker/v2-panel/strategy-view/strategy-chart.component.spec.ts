@@ -6,6 +6,7 @@ import {
   STRATEGY_RUN_STARTED_AT_MS,
   STRATEGY_RUN_STOPPED_AT_MS,
   barCloseMs,
+  fakeStrategyCandle,
   fakeStrategyView,
 } from '../../../../testing/strategy-view-fixtures';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
@@ -37,6 +38,8 @@ function mockChart(initialWidth = 800) {
   let width = initialWidth;
   const timeScale = {
     fitContent: vi.fn(), logicalToCoordinate: vi.fn(), width: () => width,
+    setVisibleLogicalRange: vi.fn(),
+    getVisibleLogicalRange: vi.fn((): { from: number; to: number } | null => ({ from: 0, to: 3 })),
     subscribeSizeChange: vi.fn(), unsubscribeSizeChange: vi.fn(),
     /** The library measuring its auto-sized canvas, a frame after creation. */
     resize: (next: number) => {
@@ -160,17 +163,44 @@ describe('StrategyChartComponent (#2639)', () => {
     expect(bar.createPriceLine.mock.calls[0][0]).toMatchObject({ lineStyle: 2 });
   });
 
-  it('fits a run’s bars to the width only once the chart has measured one, and keeps the viewer’s zoom after', async () => {
+  it('opens on the run once the chart has measured its width, and keeps the viewer’s zoom after', async () => {
     const { timeScale, fixture } = await renderChart(fakeStrategyView(), 'g_rule', 0);
-    expect(timeScale.fitContent).not.toHaveBeenCalled();
+    expect(timeScale.setVisibleLogicalRange).not.toHaveBeenCalled();
 
     timeScale.resize(640);
-    expect(timeScale.fitContent).toHaveBeenCalledTimes(1);
+    // Four bars, the first decision at index 2: the run plus the bars before
+    // it, with room on the right for the run's end line.
+    expect(timeScale.setVisibleLogicalRange).toHaveBeenCalledExactlyOnceWith({ from: 0, to: 6 });
 
     timeScale.resize(700);
     fixture.componentRef.setInput('view', fakeStrategyView({ notices: ['A refreshed read.'] }));
     await fixture.whenStable();
-    expect(timeScale.fitContent).toHaveBeenCalledTimes(1);
+    expect(timeScale.setVisibleLogicalRange).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens on a long warmup’s last session, not every warmup day', async () => {
+    const warmup = Array.from({ length: 60 }, (_, index) =>
+      fakeStrategyCandle(index, { phase: 'before_start', phase_text: BEFORE_START_TEXT }),
+    );
+    const decided = fakeStrategyCandle(60, { outcome: 'no_action', reason_code: 'NO_ZAP', decision_seq: 1 });
+    const { timeScale } = await renderChart(
+      fakeStrategyView({ candles: [...warmup, decided], run_started_at_ms: barCloseMs(59) + 1 }),
+      'g_rule',
+      640,
+    );
+
+    expect(timeScale.setVisibleLogicalRange).toHaveBeenCalledExactlyOnceWith({ from: 34, to: 63 });
+  });
+
+  it('brings a selected decision’s candle on screen', async () => {
+    const { timeScale, fixture } = await renderChart(fakeStrategyView(), 'g_rule', 640);
+    timeScale.setVisibleLogicalRange.mockClear();
+    timeScale.getVisibleLogicalRange.mockReturnValue({ from: 0, to: 1 });
+
+    fixture.componentRef.setInput('selectedBarCloseMs', barCloseMs(3));
+    await fixture.whenStable();
+
+    expect(timeScale.setVisibleLogicalRange).toHaveBeenCalledExactlyOnceWith({ from: 2.5, to: 3.5 });
   });
 
   it('marks entry and exit decisions only', async () => {

@@ -47,6 +47,12 @@ function rows(): HTMLElement[] {
 }
 
 describe('RecentDecisionsListComponent', () => {
+  it('says "No action" once when the reason only restates the outcome', async () => {
+    await renderList([{ ...SYNTHETIC_DECISION, outcome: 'no_action', reason_code: 'NO_ACTION' }]);
+
+    expect(screen.getAllByText('No Action')).toHaveLength(1);
+  });
+
   it('renders each decision with its authority visibly distinguishable (issue #1729 AC #8)', async () => {
     await renderList([SYNTHETIC_DECISION]);
 

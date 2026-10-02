@@ -39,6 +39,8 @@ import {
   BAND_LINE_COLOR,
   decisionMarkers,
   lineColorHex,
+  openingRange,
+  rangeRevealing,
   strategyLinePlans,
   toChartTime,
   toGateShadedCandles,
@@ -137,6 +139,10 @@ export class StrategyChartComponent implements AfterViewInit {
     effect(() => this.renderCandles());
     effect(() => this.renderLines());
     effect(() => this.renderOverlays());
+    effect(() => {
+      const selected = this.selectedBarCloseMs();
+      untracked(() => this.revealSelected(selected));
+    });
   }
 
   ngAfterViewInit(): void {
@@ -200,12 +206,26 @@ export class StrategyChartComponent implements AfterViewInit {
     this.fitIfPending();
   }
 
-  /** Fit a new run's bars to the width, once the chart has one. */
+  /** Open a new run on its own bars (plus a session before them), once the chart has a width. */
   private fitIfPending(): void {
     const timeScale = this.chart?.timeScale();
     if (!this.fitPending || timeScale === undefined || timeScale.width() <= 0) return;
     this.fitPending = false;
-    timeScale.fitContent();
+    const view = this.view();
+    const range = openingRange(view.candles, view.run_started_at_ms ?? null);
+    if (range === null) timeScale.fitContent();
+    else timeScale.setVisibleLogicalRange(range);
+  }
+
+  /** A row selected beside the chart brings its candle on screen. */
+  private revealSelected(barCloseMs: number | null): void {
+    const timeScale = this.chart?.timeScale();
+    if (barCloseMs === null || timeScale === undefined) return;
+    const index = this.view().candles.findIndex((candle) => candle.bar_close_ms === barCloseMs);
+    const visible = timeScale.getVisibleLogicalRange();
+    if (index < 0 || visible === null) return;
+    const next = rangeRevealing(visible, index);
+    if (next !== null) timeScale.setVisibleLogicalRange(next);
   }
 
   /** A refresh with the same lines on the same panes only re-reads their

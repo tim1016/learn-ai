@@ -223,6 +223,36 @@ export function resolveActiveGate(
     ?? null;
 }
 
+/** Bars shown before the run's first decision when the chart opens: one regular session of 15-minute bars. */
+const OPENING_CONTEXT_BARS = 26;
+/** Empty slots kept right of the last candle, so the run's end line and its label stay on screen. */
+const OPENING_RIGHT_PAD_BARS = 3;
+
+/**
+ * The bar range the chart opens on: the run, with a session of the bars the
+ * bot evaluated before it, rather than every warmup day squeezed to one side.
+ * `null` when there is nothing to show.
+ */
+export function openingRange(
+  candles: readonly StrategyViewCandle[],
+  startedAtMs: number | null,
+): { from: number; to: number } | null {
+  if (candles.length === 0) return null;
+  const firstAfterStart = startedAtMs === null ? -1 : candles.findIndex((candle) => candle.bar_close_ms > startedAtMs);
+  const anchor = firstAfterStart === -1 ? candles.length - 1 : firstAfterStart;
+  return { from: Math.max(0, anchor - OPENING_CONTEXT_BARS), to: candles.length - 1 + OPENING_RIGHT_PAD_BARS };
+}
+
+/** The visible bar range, moved just enough to bring bar `index` into view; `null` when it already is. */
+export function rangeRevealing(
+  range: { from: number; to: number },
+  index: number,
+): { from: number; to: number } | null {
+  if (index >= range.from && index <= range.to) return null;
+  const half = (range.to - range.from) / 2;
+  return { from: index - half, to: index + half };
+}
+
 export function candleAt(
   candles: readonly StrategyViewCandle[],
   barCloseMs: number | null,
@@ -269,7 +299,9 @@ function decisionRow(decision: RecentDecisionView): DecisionRowView {
     beforeStart: false,
     phaseText: null,
     outcome: decision.outcome,
-    reasonCode: decision.reason_code,
+    // "No action · No action" says one thing twice; a reason that only
+    // restates its outcome is left out.
+    reasonCode: decision.reason_code.toUpperCase() === decision.outcome.toUpperCase() ? null : decision.reason_code,
     authorityKind: decision.authority_kind ?? null,
     explanation: decision.explanation ?? null,
     checks: orderedChecks(decision.explanation?.checks ?? []),
