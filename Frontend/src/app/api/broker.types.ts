@@ -10426,6 +10426,28 @@ export interface components {
              */
             sign: "gt" | "lt";
         };
+        /**
+         * CustomGateSave
+         * @description A gate to save, with the deployed settings it was previewed under.
+         *
+         *     A recorded value's name follows the settings (``ADX20`` under
+         *     ``adx_period=20``), so the gate is checked against them, as its preview was.
+         */
+        CustomGateSave: {
+            /** Expression */
+            expression: string;
+            /** Label */
+            label: string;
+            /** Settings */
+            settings?: {
+                [key: string]: number | string | boolean | null;
+            };
+            /**
+             * Sign
+             * @enum {string}
+             */
+            sign: "gt" | "lt";
+        };
         /** DataAvailabilityResult */
         DataAvailabilityResult: {
             /**
@@ -34371,7 +34393,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CustomGateInput"];
+                "application/json": components["schemas"]["CustomGateSave"];
             };
         };
         responses: {
@@ -34482,7 +34504,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CustomGateInput"];
+                "application/json": components["schemas"]["CustomGateSave"];
             };
         };
         responses: {

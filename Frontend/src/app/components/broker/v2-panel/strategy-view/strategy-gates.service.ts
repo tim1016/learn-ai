@@ -2,46 +2,48 @@ import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
-import { environment } from '../../../../../environments/environment';
 import type {
   CustomGate,
-  CustomGateInput,
+  CustomGateSave,
   GateCatalogue,
   GateEvaluationRequest,
   GateEvaluationResponse,
   StrategyGateList,
 } from '../lib/broker-v2-panel.types';
 
+const STRATEGY_GATES_BASE = '/api/strategy-gates';
+
 /**
  * Custom Dark Bright Gates on the data plane (#2639): saved per strategy, so
  * every bot running it and Strategy Lab read the same list, and judged there
- * on the candles the page already shows. Writes carry the data-plane control
- * intent through the shared interceptor.
+ * on the candles the page already shows. The base is relative so the dev
+ * proxy attaches the data-plane control secret to writes; the shared
+ * interceptor adds the control intent it checks for.
  */
 @Injectable({ providedIn: 'root' })
 export class StrategyGatesService {
   private readonly http = inject(HttpClient);
 
   private url(strategyKey: string, ...rest: string[]): string {
-    return [`${environment.pythonServiceUrl}/api/strategy-gates`, strategyKey, ...rest]
+    return [STRATEGY_GATES_BASE, strategyKey, ...rest]
       .map((part, index) => (index === 0 ? part : encodeURIComponent(part)))
       .join('/');
   }
 
   /** The catalogue indicators a gate can read, from the same rules that judge one. */
   catalogue(): Promise<GateCatalogue> {
-    return firstValueFrom(this.http.get<GateCatalogue>(`${environment.pythonServiceUrl}/api/strategy-gates/catalogue`));
+    return firstValueFrom(this.http.get<GateCatalogue>(`${STRATEGY_GATES_BASE}/catalogue`));
   }
 
   list(strategyKey: string): Promise<StrategyGateList> {
     return firstValueFrom(this.http.get<StrategyGateList>(this.url(strategyKey)));
   }
 
-  create(strategyKey: string, gate: CustomGateInput): Promise<CustomGate> {
+  create(strategyKey: string, gate: CustomGateSave): Promise<CustomGate> {
     return firstValueFrom(this.http.post<CustomGate>(this.url(strategyKey), gate));
   }
 
-  replace(strategyKey: string, gateId: string, gate: CustomGateInput): Promise<CustomGate> {
+  replace(strategyKey: string, gateId: string, gate: CustomGateSave): Promise<CustomGate> {
     return firstValueFrom(this.http.put<CustomGate>(this.url(strategyKey, gateId), gate));
   }
 

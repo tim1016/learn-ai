@@ -11413,6 +11413,62 @@
         "title": "CustomGateInput",
         "type": "object"
       },
+      "CustomGateSave": {
+        "additionalProperties": false,
+        "description": "A gate to save, with the deployed settings it was previewed under.\n\nA recorded value's name follows the settings (``ADX20`` under\n``adx_period=20``), so the gate is checked against them, as its preview was.",
+        "properties": {
+          "expression": {
+            "maxLength": 400,
+            "minLength": 1,
+            "title": "Expression",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Settings",
+            "type": "object"
+          },
+          "sign": {
+            "enum": [
+              "gt",
+              "lt"
+            ],
+            "title": "Sign",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "expression",
+          "sign"
+        ],
+        "title": "CustomGateSave",
+        "type": "object"
+      },
       "DataAvailabilityResult": {
         "properties": {
           "artifacts": {
@@ -65868,7 +65924,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CustomGateInput"
+                "$ref": "#/components/schemas/CustomGateSave"
               }
             }
           },
@@ -66156,7 +66212,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CustomGateInput"
+                "$ref": "#/components/schemas/CustomGateSave"
               }
             }
           },

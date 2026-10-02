@@ -7,6 +7,7 @@ import {
   computed,
   inject,
   input,
+  linkedSignal,
   output,
   signal,
   viewChild,
@@ -34,7 +35,8 @@ let nextGatePickerId = 0;
  * Each of those swaps out the focused button, so focus is moved on purpose:
  * into the editor when it opens, back to the button that opened it when it
  * closes, onto the confirmation when Delete asks, and to "+ New gate" once a
- * gate is gone.
+ * gate is gone. An open editor or a pending Delete belongs to the strategy it
+ * was opened on, and closes when the panel shows another.
  */
 @Component({
   selector: 'app-strategy-gate-picker',
@@ -48,6 +50,7 @@ export class StrategyGatePickerComponent {
   readonly activeGate = input.required<StrategyViewGateView>();
   /** The viewer's gates saved on this strategy: the ones Edit and Delete apply to. */
   readonly savedGates = input<readonly CustomGate[]>([]);
+  readonly strategyKey = input.required<string>();
   readonly strategyName = input.required<string>();
   readonly variables = input<readonly GateVariableGroup[]>([]);
   readonly draftRefusal = input<string | null>(null);
@@ -67,8 +70,14 @@ export class StrategyGatePickerComponent {
     gatesStrategyFirst(this.gates()).filter((gate) => gate.gate_id !== DRAFT_GATE_ID),
   );
   /** `{ gate: null }` writes a new gate; `null` shows the list. */
-  protected readonly editing = signal<{ readonly gate: CustomGate | null } | null>(null);
-  protected readonly confirmingDelete = signal<string | null>(null);
+  protected readonly editing = linkedSignal<string, { readonly gate: CustomGate | null } | null>({
+    source: this.strategyKey,
+    computation: (key, previous) => (previous?.source === key ? previous.value : null),
+  });
+  protected readonly confirmingDelete = linkedSignal<string, string | null>({
+    source: this.strategyKey,
+    computation: (key, previous) => (previous?.source === key ? previous.value : null),
+  });
   protected readonly removeError = signal<string | null>(null);
 
   private readonly trigger = viewChild.required<ElementRef<HTMLButtonElement>>('trigger');

@@ -19,6 +19,8 @@ import { settledRead } from './settled-read';
 import { strategyChartTimes, strategyIndicatorBars } from './strategy-view-model';
 
 interface CalculatedIndicators {
+  /** The strategy whose candles these were computed on: a kept answer never crosses to another. */
+  readonly strategyKey: string;
   readonly results: readonly ChartIndicatorResult[];
   readonly error: string | null;
 }
@@ -68,8 +70,13 @@ export function strategyCatalogueIndicators(view: Signal<StrategyViewResponse | 
         : { symbol: read.symbol, view: read, selected: chosen };
     },
     stream: ({ params }) => indicators.calculateBars(params.symbol, strategyIndicatorBars(params.view.candles), params.selected).pipe(
-      map((response): CalculatedIndicators => ({ results: response.indicators, error: null })),
+      map((response): CalculatedIndicators => ({
+        strategyKey: params.view.strategy_key,
+        results: response.indicators,
+        error: null,
+      })),
       catchError(() => of<CalculatedIndicators>({
+        strategyKey: params.view.strategy_key,
         results: [],
         error: 'Indicators could not be calculated on these candles.',
       })),
@@ -77,10 +84,15 @@ export function strategyCatalogueIndicators(view: Signal<StrategyViewResponse | 
   });
   // The last settled answer, kept while a newer read is computed.
   const settled = settledRead(calculation);
+  /** The kept answer, while it is for the strategy shown. */
+  const current = computed(() => {
+    const calculated = settled().value;
+    return calculated !== null && calculated.strategyKey === view()?.strategy_key ? calculated : null;
+  });
   // Only what is still selected: a removed indicator's line goes at once.
   const results = computed(() => {
     const chosen = selected();
-    return (settled().value?.results ?? []).filter((result) => chosen.some((entry) => resultBelongsToIndicator(result, entry)));
+    return (current()?.results ?? []).filter((result) => chosen.some((entry) => resultBelongsToIndicator(result, entry)));
   });
 
   return {
@@ -94,7 +106,7 @@ export function strategyCatalogueIndicators(view: Signal<StrategyViewResponse | 
     calculating: computed(() => selected().length > 0 && calculation.isLoading()),
     error: computed(() => {
       if (catalog.supportFailed()) return 'The chart indicator catalogue could not be loaded.';
-      return settled().value?.error ?? null;
+      return current()?.error ?? null;
     }),
     add: (entry) => selected.update((current) => selectChartIndicator(current, entry)),
     remove: (id) => selected.update((current) => current.filter((indicator) => indicator.id !== id)),

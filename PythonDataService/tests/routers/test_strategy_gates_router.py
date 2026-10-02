@@ -106,6 +106,36 @@ async def test_an_unreadable_gate_store_is_a_503_naming_the_store(client: httpx.
     assert (listed.status_code, listed.json()["detail"]["code"]) == (503, "GATE_STORE_UNAVAILABLE")
 
 
+async def test_a_gate_store_that_cannot_be_locked_is_a_503_not_a_bare_500(tmp_path: Path) -> None:
+    (tmp_path / "blocker").write_text("a file where the store's folder should be", encoding="utf-8")
+    app = FastAPI()
+    app.include_router(strategy_gates.router, prefix="/api/strategy-gates")
+    app.dependency_overrides[strategy_gates.get_gate_store] = lambda: StrategyGateStore(
+        tmp_path / "blocker" / "gates.json"
+    )
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as blocked:
+        created = await blocked.post(_EMA, json={"label": "g", "expression": "close - open", "sign": "gt"})
+
+    assert (created.status_code, created.json()["detail"]["code"]) == (503, "GATE_STORE_UNAVAILABLE")
+
+
+async def test_a_gate_is_saved_under_the_deployed_settings_it_was_previewed_under(client: httpx.AsyncClient) -> None:
+    # Under adx_period=20 the bot records ADX20; under the defaults ADX20 would be the catalogue's ADX, which a gate cannot read.
+    gate = {"label": "Trend strength", "expression": "ADX20 - 25", "sign": "gt"}
+    async with client:
+        saved = await client.post("/api/strategy-gates/spy_strategy_a", json={**gate, "settings": {"adx_period": 20}})
+        replaced = await client.put(
+            f"/api/strategy-gates/spy_strategy_a/{saved.json()['gate_id']}",
+            json={**gate, "expression": "ADX20 - 30", "settings": {"adx_period": 20}},
+        )
+        undeployed = await client.post("/api/strategy-gates/spy_strategy_a", json=gate)
+
+    assert saved.status_code == 201, saved.text
+    assert [(t["coefficient"], t["variable"]) for t in saved.json()["terms"]] == [(1.0, "ADX20")]
+    assert (replaced.status_code, replaced.json()["constant"]) == (200, -30.0)
+    assert (undeployed.status_code, undeployed.json()["detail"]["code"]) == (422, "GATE_EXPRESSION_REFUSED")
+
+
 async def test_the_catalogue_lists_what_a_gate_can_read_as_it_is_written(client: httpx.AsyncClient) -> None:
     async with client:
         listed = await client.get("/api/strategy-gates/catalogue")

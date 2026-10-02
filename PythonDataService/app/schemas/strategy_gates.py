@@ -17,6 +17,8 @@ GateSign = Literal["gt", "lt"]
 # A gate's numbers are finite: an infinite coefficient would be written to the
 # shared gate file as null and break every strategy's gates.
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+# The deployed settings a gate is read under, by name.
+GateSettings = dict[str, FiniteFloat | int | str | bool | None]
 
 
 class GateTerm(BaseModel):
@@ -36,6 +38,16 @@ class CustomGateInput(BaseModel):
     label: str = Field(min_length=1, max_length=60)
     expression: str = Field(min_length=1, max_length=400)
     sign: GateSign
+
+
+class CustomGateSave(CustomGateInput):
+    """A gate to save, with the deployed settings it was previewed under.
+
+    A recorded value's name follows the settings (``ADX20`` under
+    ``adx_period=20``), so the gate is checked against them, as its preview was.
+    """
+
+    settings: GateSettings = Field(default_factory=dict)
 
 
 class CustomGate(BaseModel):
@@ -87,7 +99,7 @@ class GateEvaluationRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     symbol: str = Field(min_length=1, max_length=20)
-    settings: dict[str, FiniteFloat | int | str | bool | None] = Field(default_factory=dict)
+    settings: GateSettings = Field(default_factory=dict)
     candles: list[GateCandle] = Field(max_length=20_000)
     draft: CustomGateInput | None = None
 
@@ -159,6 +171,7 @@ class GateRequestInvalidBody(BaseModel):
 __all__ = [
     "CustomGate",
     "CustomGateInput",
+    "CustomGateSave",
     "GateCandle",
     "GateCatalogue",
     "GateCatalogueEntry",
@@ -167,6 +180,7 @@ __all__ = [
     "GateRefusal",
     "GateRefusalBody",
     "GateRequestInvalidBody",
+    "GateSettings",
     "GateSign",
     "GateTerm",
     "StrategyGateList",
