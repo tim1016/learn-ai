@@ -330,6 +330,7 @@ class GoldenSearchDefaults(GoldenSearchProtocol):
 
     final_months: int = Field(description="The final interval's length in whole months, as laid out.")
     incumbent_label: str
+    incumbent_sentence: str = Field(description="The incumbent's settings at a glance, e.g. 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars'.")
     exposure: GoldenSearchExposure
 
 
@@ -368,10 +369,16 @@ class GoldenSearchRunUp(_Wire):
     data_start_ms: InstantMs
 
 
+class GoldenSearchKnobValues(_Wire):
+    name: str
+    values: int | None = Field(description="Settings the knob can take: 1 when held, its range's size at its step when searched, null when that range is not valid.")
+
+
 class GoldenSearchPreflight(_Wire):
     """A plan's review: refusals are data in a 200, never a 400."""
 
     refusals: list[GoldenSearchProtocolRefusal]
+    knob_values: list[GoldenSearchKnobValues]
     estimate: GoldenSearchEstimate | None
     folds: list[GoldenSearchFold]
     exposure: GoldenSearchExposure | None

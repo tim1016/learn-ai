@@ -476,6 +476,28 @@ def grid_size(p: GoldenSearchProtocol) -> int | None:
         return None
 
 
+def knob_value_counts(p: GoldenSearchProtocol) -> dict[str, int | None]:
+    """How many settings each knob can take: 1 when held, its range's size at its step when searched, ``None`` when that range is not valid.
+
+    Each searched axis is counted exactly as :func:`grid_size` counts it, so a
+    Grid plan's size is the product of these counts.
+    """
+    counts: dict[str, int | None] = {}
+    for plan in p.knobs:
+        if plan.mode != "search":
+            counts[plan.name] = 1
+            continue
+        if plan.step is None:
+            counts[plan.name] = None
+            continue
+        axis = {plan.name: LowHighStepRange(low=plan.low, high=plan.high, step=plan.step)}
+        try:
+            counts[plan.name] = sweep_grid_size([StrategyGridConfig(strategy_key=p.strategy_key, param_ranges=axis)], [p.symbol])
+        except ValueError:
+            counts[plan.name] = None
+    return counts
+
+
 def _validate_seed(p: GoldenSearchProtocol, declaration: SearchDeclaration, refusals: _Refusals) -> None:
     declared = {knob.name: knob for knob in declaration.knobs}
     seed_symbol = p.seed.get("symbol")

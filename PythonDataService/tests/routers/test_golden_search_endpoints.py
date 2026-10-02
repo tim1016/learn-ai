@@ -565,6 +565,7 @@ async def test_defaults_are_a_plan_the_client_can_send_straight_back(client: htt
     assert defaults["final_start_ms"] == defaults["development_end_ms"] < defaults["final_end_ms"]
     assert one.json()["final_end_ms"] == defaults["final_end_ms"] and one.json()["final_start_ms"] > defaults["final_start_ms"]
     assert (defaults["final_months"], one.json()["final_months"]) == (3, 1)
-    plan = {key: value for key, value in defaults.items() if key not in ("final_months", "incumbent_label", "exposure")}
+    assert defaults["incumbent_sentence"] == "Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars"
+    plan = {key: value for key, value in defaults.items() if key not in ("final_months", "incumbent_label", "incumbent_sentence", "exposure")}
     reviewed = await client.post(f"{BASE}/preflight", json=plan)
     assert reviewed.status_code == 200, reviewed.text

@@ -18031,6 +18031,11 @@
             "title": "Incumbent Label",
             "type": "string"
           },
+          "incumbent_sentence": {
+            "description": "The incumbent's settings at a glance, e.g. 'Gap $0.20 \u00b7 RSI 50\u201370 \u00b7 EMA 5/10 \u00b7 hold 5 bars'.",
+            "title": "Incumbent Sentence",
+            "type": "string"
+          },
           "knobs": {
             "items": {
               "$ref": "#/components/schemas/GoldenSearchKnobPlan"
@@ -18129,6 +18134,7 @@
           "budget_cap",
           "final_months",
           "incumbent_label",
+          "incumbent_sentence",
           "exposure"
         ],
         "title": "GoldenSearchDefaults",
@@ -19356,6 +19362,33 @@
         "title": "GoldenSearchKnobSummary",
         "type": "object"
       },
+      "GoldenSearchKnobValues": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settings the knob can take: 1 when held, its range's size at its step when searched, null when that range is not valid.",
+            "title": "Values"
+          }
+        },
+        "required": [
+          "name",
+          "values"
+        ],
+        "title": "GoldenSearchKnobValues",
+        "type": "object"
+      },
       "GoldenSearchLinkedReturn": {
         "additionalProperties": false,
         "properties": {
@@ -19738,6 +19771,13 @@
             "title": "Folds",
             "type": "array"
           },
+          "knob_values": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchKnobValues"
+            },
+            "title": "Knob Values",
+            "type": "array"
+          },
           "refusals": {
             "items": {
               "$ref": "#/components/schemas/GoldenSearchProtocolRefusal"
@@ -19758,6 +19798,7 @@
         },
         "required": [
           "refusals",
+          "knob_values",
           "estimate",
           "folds",
           "exposure",

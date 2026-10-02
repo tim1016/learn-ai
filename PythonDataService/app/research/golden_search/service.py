@@ -38,7 +38,7 @@ from app.research.golden_search.actions import (
 )
 from app.research.golden_search.declarations import declaration_for, point_hash, unavailable_reason
 from app.research.golden_search.exposure_rules import EXPOSURE_EXPLANATIONS, claim_for, exposure_state
-from app.research.golden_search.guidance import research_weakness
+from app.research.golden_search.guidance import params_sentence, research_weakness
 from app.research.golden_search.models import (
     CANDIDATE_KEYS,
     COMMANDS,
@@ -216,8 +216,16 @@ async def resolve_incumbent(
     )
 
 
-async def lake_first_session(symbol: str) -> date | None:
-    """The symbol's first complete minute session in the adjusted lake, or ``None`` when the catalog cannot say."""
+@dataclass(frozen=True)
+class LakeSessions:
+    """The first and last complete minute sessions the adjusted lake holds for a symbol."""
+
+    first: date
+    last: date
+
+
+async def lake_sessions(symbol: str) -> LakeSessions | None:
+    """The symbol's first and last complete minute sessions in the adjusted lake, or ``None`` when the catalog cannot say."""
     from app.data_lake import catalog_client
     from app.data_lake.types import polygon_mode_for
     from app.research.grid_search.service import SWEEP_DATA_POLICY
@@ -229,14 +237,14 @@ async def lake_first_session(symbol: str) -> date | None:
         )
     except Exception:
         logger.warning(
-            "lake coverage unreadable; proposing the default development length",
+            "lake coverage unreadable; proposing the default intervals without it",
             extra={"action": "golden_search_lake_coverage_unreadable", "symbol": symbol},
             exc_info=True,
         )
         return None
     for span in spans:
-        if span.symbol.upper() == symbol and span.first_trading_date_ms is not None:
-            return et_date_at_ms(span.first_trading_date_ms)
+        if span.symbol.upper() == symbol and span.first_trading_date_ms is not None and span.last_trading_date_ms is not None:
+            return LakeSessions(first=et_date_at_ms(span.first_trading_date_ms), last=et_date_at_ms(span.last_trading_date_ms))
     return None
 
 
@@ -248,21 +256,24 @@ async def defaults(
     training_months: int = DEFAULT_TRAINING_MONTHS,
     test_months: int = DEFAULT_TEST_MONTHS,
     now_ms: int | None = None,
-    earliest_session: Callable[[str], Awaitable[date | None]] = lake_first_session,
+    lake_coverage: Callable[[str], Awaitable[LakeSessions | None]] = lake_sessions,
     running_digest: Callable[[SignalProgramContract], str] = _running_artifact_digest,
 ) -> dict[str, Any]:
-    """A complete starting plan with the intervals computed here, the incumbent's name and the final interval's exposure."""
+    """A complete starting plan with the intervals computed here, the incumbent's name and settings, and the final interval's exposure."""
     symbol = _symbol(symbol)
-    if declaration_for(strategy_key) is None:
+    declaration = declaration_for(strategy_key)
+    if declaration is None:
         reason = unavailable_reason(strategy_key) or "No Golden Search declaration exists for this strategy."
         raise GoldenSearchRefusal(reason, code="STRATEGY_UNAVAILABLE", field="strategy_key")
     incumbent = await resolve_incumbent(strategy_key, symbol, running_digest=running_digest)
+    coverage = await lake_coverage(symbol)
     protocol = default_protocol(
         strategy_key,
         symbol,
         incumbent.ref,
         now_ms=now_ms_utc() if now_ms is None else now_ms,
-        earliest_session=await earliest_session(symbol),
+        earliest_session=None if coverage is None else coverage.first,
+        latest_session=None if coverage is None else coverage.last,
         final_months=final_months,
         training_months=training_months,
         test_months=test_months,
@@ -272,6 +283,7 @@ async def defaults(
         **protocol.as_dict(),
         "final_months": final_months,
         "incumbent_label": incumbent.label,
+        "incumbent_sentence": params_sentence(declaration, incumbent.ref.params),
         "exposure": await exposure_view(symbol, protocol.final_start_ms, protocol.final_end_ms),
     }
 

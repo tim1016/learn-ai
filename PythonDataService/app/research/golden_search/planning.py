@@ -14,11 +14,16 @@ window's need so a window behind an early close is still fully primed.
 
 Formula (default intervals): the final interval is the last ``final_months``
 whole ET calendar months ending at the first day of the current ET month
-(completed sessions only). Development is the longest whole-month range
+(completed sessions only), cut short to end after the lake's last complete
+session when the lake stops inside it. Development is the longest whole-month range
 ending at the final start that (a) plans whole walk-forward folds, (b)
 leaves at least one calendar month of lake history before it for the
 run-up (24 months when the lake's first session is unknown), and (c) keeps
 the default plan's conservative evaluation bound within its budget.
+
+Formula (default ranges): a searched knob's range is its declared default
+range widened to hold the seed's and the incumbent's values, so the search
+always covers where it starts and the benchmark it must beat.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Plan before
   seeing results", "Open one final test"; ``app/research/sweep/warmup.py``.
 Canonical implementation: this file.
@@ -61,6 +66,7 @@ from app.research.golden_search.protocol import (
     KnobPlan,
     ProtocolRefusal,
     canonical_json,
+    knob_value_counts,
     recent_window_ms,
 )
 from app.research.grid_search.service import (
@@ -319,11 +325,12 @@ def review_plan(protocol: GoldenSearchProtocol, *, roots: Sequence[Path] | None 
 
 
 def preflight_view(plan: PlanReview, exposure: Mapping[str, Any] | None) -> dict[str, Any]:
-    """The preflight answer: refusals, the estimate against the cap, folds, exposure and run-up."""
+    """The preflight answer: refusals, the estimate against the cap, each knob's value count, folds, exposure and run-up."""
     review = plan.review
     study_estimate = review.estimate if review is not None else None
     return {
         "refusals": [refusal.as_dict() for refusal in plan.refusals],
+        "knob_values": [{"name": name, "values": count} for name, count in knob_value_counts(plan.protocol).items()],
         "estimate": None
         if study_estimate is None
         else {**study_estimate.as_dict(), "budget_cap": plan.protocol.budget_cap},
@@ -510,6 +517,17 @@ def _whole_months(start: date, end: date) -> int:
     return max(0, (end.year - start.year) * 12 + (end.month - start.month))
 
 
+def _final_end_day(month_end: date, final_start: date, latest_session: date | None) -> date:
+    """The final interval's exclusive end: the month boundary, or the day after the lake's last session inside the interval.
+
+    A lake that stops before the interval starts is left to the availability
+    check, which names the missing sessions and the backfill.
+    """
+    if latest_session is None or not final_start <= latest_session < month_end:
+        return month_end
+    return latest_session + timedelta(days=1)
+
+
 def default_protocol(
     strategy_key: str,
     symbol: str,
@@ -517,6 +535,7 @@ def default_protocol(
     *,
     now_ms: int,
     earliest_session: date | None,
+    latest_session: date | None = None,
     final_months: int = DEFAULT_FINAL_MONTHS,
     training_months: int = DEFAULT_TRAINING_MONTHS,
     test_months: int = DEFAULT_TEST_MONTHS,
@@ -528,17 +547,19 @@ def default_protocol(
         raise GoldenSearchRefusal(reason, code="STRATEGY_UNAVAILABLE")
     if min(final_months, training_months, test_months) < 1:
         raise GoldenSearchRefusal("Interval lengths must be at least one month.", code="INTERVALS_INVALID")
-    final_end_day = _month_start(et_date_at_ms(now_ms))
-    final_start_day = add_months(final_end_day, -final_months)
+    month_end = _month_start(et_date_at_ms(now_ms))
+    final_start_day = add_months(month_end, -final_months)
+    final_end_day = _final_end_day(month_end, final_start_day, latest_session)
     # Fixed knobs hold the seed's values, so the plan never contradicts where it starts.
     start = default_seed(strategy_key, symbol, source=incumbent.source, params=incumbent.params)
     seed = knob_values(declaration, start)
+    benchmark = knob_values(declaration, incumbent.params)
     knobs = tuple(
         KnobPlan(
             name=knob.name,
             mode="search" if knob.searchable_by_default else "fixed",
-            low=float(knob.default_low),
-            high=float(knob.default_high),
+            low=float(min(knob.default_low, seed[knob.name], benchmark[knob.name])),
+            high=float(max(knob.default_high, seed[knob.name], benchmark[knob.name])),
             fixed_value=float(seed[knob.name]),
             step=float(knob.default_step) if knob.searchable_by_default else None,
         )
