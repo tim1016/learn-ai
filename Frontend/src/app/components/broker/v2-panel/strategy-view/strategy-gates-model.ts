@@ -121,6 +121,8 @@ export interface GateVariableGroup {
   /** Said under the title, e.g. that the chart computes these. */
   readonly note: string | null;
   readonly chips: readonly GateVariableChip[];
+  /** Why this group offers nothing right now, said in place of its chips. */
+  readonly unavailable?: string;
 }
 
 /**
@@ -133,7 +135,7 @@ export interface GateVariableGroup {
  */
 export function gateVariableGroups(
   view: StrategyViewResponse,
-  catalogue: readonly GateCatalogueEntry[],
+  catalogue: readonly GateCatalogueEntry[] | null,
 ): GateVariableGroup[] {
   const settings = Object.entries(view.settings ?? {}).flatMap(([name, value]): GateVariableChip[] =>
     typeof value === 'number' ? [{ name, hint: String(value) }] : [],
@@ -147,14 +149,21 @@ export function gateVariableGroups(
     },
     { title: 'Settings', note: 'as deployed', chips: settings },
     { title: 'Candle', note: null, chips: CANDLE_VARIABLES.map((name) => ({ name, hint: `the bar’s ${name}` })) },
-    {
-      title: 'Catalogue',
-      note: 'chart-computed from these candles',
-      chips: catalogue
-        .filter((indicator) => !recorded.has(indicator.variable.toUpperCase()))
-        .map((indicator) => ({ name: indicator.variable, hint: indicator.description })),
-    },
-  ].filter((group) => group.chips.length > 0);
+    catalogue === null
+      ? {
+          title: 'Catalogue',
+          note: 'chart-computed from these candles',
+          chips: [],
+          unavailable: 'The data plane did not list its catalogue. Refresh to try again.',
+        }
+      : {
+          title: 'Catalogue',
+          note: 'chart-computed from these candles',
+          chips: catalogue
+            .filter((indicator) => !recorded.has(indicator.variable.toUpperCase()))
+            .map((indicator) => ({ name: indicator.variable, hint: indicator.description })),
+        },
+  ].filter((group) => group.chips.length > 0 || group.unavailable !== undefined);
 }
 
 /** A refused gate request in the data plane's words, else `fallback`. */

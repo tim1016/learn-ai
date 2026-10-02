@@ -93,7 +93,7 @@ export class StrategyGateEditorComponent {
   protected readonly groups = computed(() => {
     const query = this.catalogueQuery().trim().toLowerCase();
     return this.variables().map((group) => {
-      if (group.title !== 'Catalogue') return { ...group, searchable: false };
+      if (group.title !== 'Catalogue' || group.unavailable !== undefined) return { ...group, searchable: false };
       const matches = group.chips.filter(
         (chip) => query === '' || chip.name.toLowerCase().includes(query) || chip.hint.toLowerCase().includes(query),
       );

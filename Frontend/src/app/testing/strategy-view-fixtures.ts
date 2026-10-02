@@ -180,6 +180,12 @@ export const FAKE_INDICATOR_CATALOGUE: IndicatorCategory[] = [
     ],
   },
   {
+    name: 'Volume',
+    indicators: [
+      { name: 'obv', category: 'Volume', description: 'On-balance volume', configurable_params: [] },
+    ],
+  },
+  {
     name: 'Momentum',
     indicators: [
       {

@@ -16,7 +16,6 @@ from app.schemas.strategy_gates import (
     CustomGate,
     CustomGateInput,
     GateCatalogue,
-    GateCatalogueEntry,
     GateEvaluationRequest,
     GateEvaluationResponse,
     GateRefusalBody,
@@ -71,20 +70,7 @@ def _compiled(strategy_key: str, draft: CustomGateInput) -> tuple[list, float]:
 @router.get("/catalogue", response_model=GateCatalogue)
 async def catalogue() -> GateCatalogue:
     """The catalogue indicators a gate can read, so the editor offers no name the data plane would refuse."""
-    indicators = await asyncio.to_thread(gate_catalogue)
-    return GateCatalogue(
-        indicators=[
-            GateCatalogueEntry(
-                name=indicator.name,
-                description=indicator.description,
-                variable=indicator.variable,
-                default_length=indicator.default_length,
-                min_length=indicator.min_length,
-                max_length=indicator.max_length,
-            )
-            for indicator in indicators
-        ]
-    )
+    return GateCatalogue(indicators=list(await asyncio.to_thread(gate_catalogue)))
 
 
 @router.get("/{strategy_key}", response_model=StrategyGateList, responses=_REFUSALS)
@@ -100,7 +86,8 @@ async def list_gates(strategy_key: str, store: StrategyGateStore = Depends(get_g
 async def create_gate(
     strategy_key: str, draft: CustomGateInput, store: StrategyGateStore = Depends(get_gate_store)
 ) -> CustomGate:
-    terms, constant = _compiled(strategy_key, draft)
+    # Resolving a catalogue name may compute the catalogue probe once; keep it off the event loop.
+    terms, constant = await asyncio.to_thread(_compiled, strategy_key, draft)
     now_ms = now_ms_utc()
     try:
         return store.create(
@@ -124,7 +111,8 @@ async def create_gate(
 async def replace_gate(
     strategy_key: str, gate_id: str, draft: CustomGateInput, store: StrategyGateStore = Depends(get_gate_store)
 ) -> CustomGate:
-    terms, constant = _compiled(strategy_key, draft)
+    # Resolving a catalogue name may compute the catalogue probe once; keep it off the event loop.
+    terms, constant = await asyncio.to_thread(_compiled, strategy_key, draft)
     try:
         existing = store.get(strategy_key, gate_id)
         return store.replace(
