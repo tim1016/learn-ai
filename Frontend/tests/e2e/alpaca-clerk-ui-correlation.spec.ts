@@ -44,6 +44,9 @@ const ACCOUNT_MONEY_PATH = `${ACCOUNT_SCOPE}/money`;
 /** The day chart's two indicator catalogs (the one bot view, PRD #2560 D2). */
 const INDICATOR_CATALOG_PATH = '/api/dataset/available';
 const SUPPORTED_CHART_INDICATORS_PATH = '/api/chart/indicators/supported';
+/** The strategy chart's gate catalogue (#2639), once per mount. */
+const GATE_CATALOGUE_PATH = '/api/strategy-gates/catalogue';
+const EMPTY_GATE_CATALOGUE: components['schemas']['GateCatalogue'] = { indicators: [] };
 
 const EMA_CATALOG_ENTRY: IndicatorInfo = {
   name: 'ema',
@@ -79,6 +82,7 @@ const BACKGROUND_READS: ReadonlyMap<string, unknown> = new Map<string, unknown>(
     total: 1,
   }],
   [SUPPORTED_CHART_INDICATORS_PATH, SUPPORTED_CHART_INDICATORS],
+  [GATE_CATALOGUE_PATH, EMPTY_GATE_CATALOGUE],
 ]);
 
 interface CorrelationContext {
@@ -339,7 +343,7 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
       }
       if (path.endsWith(`/bots/${STRATEGY_INSTANCE_ID}/evidence`)
         && url.searchParams.get('client_hint') === 'bot-page-order-records') {
-        // The Order records fold reads its audit trail once opened: read-only,
+        // The Orders panel reads its audit trail on load: read-only,
         // answered, and not part of this campaign's evidence-click surface.
         await route.fulfill({ json: {
           strategy_instance_id: STRATEGY_INSTANCE_ID, account_id: ACCOUNT_ID, transaction_ref: null,
@@ -524,16 +528,11 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
       } else {
         await page.reload();
       }
-      // One view (PRD #2560 D2): the transaction trace lives in the Order
-      // records fold, closed until the owner opens it.
-      const orderRecords = page.locator('details.fold', { hasText: 'Order records' });
-      await page.getByText('Order records', { exact: true }).click();
-      const orderRecordsOpen = await observeUntil(
-        () => orderRecords.getAttribute('open'),
-        (value) => value !== null,
-      );
-      await acceptanceAssertion(testInfo, { check: 'order records fold open', pageLoad }, () => {
-        expect(orderRecordsOpen).not.toBeNull();
+      // The transaction trace lives in the Orders panel, on the page (#2794).
+      const orderRecords = page.getByRole('region', { name: 'Orders', exact: true });
+      const orderRecordsVisible = await observeVisible(orderRecords);
+      await acceptanceAssertion(testInfo, { check: 'orders panel visible', pageLoad }, () => {
+        expect(orderRecordsVisible).toBe(true);
       });
       const deployAgainLink = page.getByRole('link', { name: /^Deploy again$/ });
       const deployAgainLinkVisible = await observeVisible(deployAgainLink);
@@ -708,12 +707,14 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         accountMoney: readsPerPageLoad(ACCOUNT_MONEY_PATH),
         indicatorCatalog: readsPerPageLoad(INDICATOR_CATALOG_PATH),
         supportedChartIndicators: readsPerPageLoad(SUPPORTED_CHART_INDICATORS_PATH),
+        gateCatalogue: readsPerPageLoad(GATE_CATALOGUE_PATH),
         attentionPolledOnEveryPageLoad: readsPerPageLoad(AGGREGATE_ATTENTION_PATH)
           .every((count) => count >= 1),
       }).toEqual({
         accountMoney: oncePerPageLoad,
         indicatorCatalog: oncePerPageLoad,
         supportedChartIndicators: oncePerPageLoad,
+        gateCatalogue: oncePerPageLoad,
         attentionPolledOnEveryPageLoad: true,
       });
     });

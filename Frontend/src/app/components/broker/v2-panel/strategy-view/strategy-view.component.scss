@@ -45,7 +45,9 @@
 
 .strategy-view__legend-computed small { color: var(--text-subtle); font-size: var(--fs-xxs); }
 
-.strategy-view__chart { flex: 1; min-height: 22rem; }
+// The panel holds the chart's floor; this one only keeps the axes readable in
+// the bot page's board, where the window sets the height (#2794).
+.strategy-view__chart { flex: 1; min-height: 10rem; }
 
 .strategy-view__notices {
   margin: 0;

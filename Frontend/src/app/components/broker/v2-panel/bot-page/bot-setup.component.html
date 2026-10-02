@@ -13,13 +13,12 @@
         </dd>
       </div>
     }
-    @if (bot.end; as end) {
-      <div><dt>End</dt><dd>{{ end.headline }}</dd></div>
-    }
     @if (bot.exit_terms; as terms) {
       <div>
         <dt>Exit allowance</dt>
-        <dd>{{ terms.exit_allowance_bps === null ? 'Not set' : terms.exit_allowance_bps + ' bps' }}</dd>
+        <dd>
+          @if (terms.exit_allowance_bps === null) { Not set } @else { {{ terms.exit_allowance_bps }} bps }
+        </dd>
       </div>
       <div><dt>Band · spread cap</dt><dd>{{ terms.band_multiple }}× · {{ terms.spread_cap_bps }} bps</dd></div>
     }

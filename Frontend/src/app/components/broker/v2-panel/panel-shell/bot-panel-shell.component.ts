@@ -5,6 +5,7 @@ import {
   ElementRef,
   Injector,
   afterNextRender,
+  afterRenderEffect,
   computed,
   effect,
   inject,
@@ -190,6 +191,18 @@ const FLATTEN_STEP_ACTIONS: Readonly<Record<FlattenStepId, PanelAction['action_i
  * - Action execution, each command owned by the bot it was sent to (#2471),
  *   including the one-confirmation Flatten sequence (hurdle H30).
  */
+/** The padding, borders and margins between an element's bottom edge and the document's. */
+function spaceBelow(element: HTMLElement): number {
+  let space = 0;
+  for (let node = element.parentElement; node !== null && node !== document.documentElement; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    for (const edge of [style.paddingBottom, style.borderBottomWidth, style.marginBottom]) {
+      space += Number.parseFloat(edge) || 0;
+    }
+  }
+  return space;
+}
+
 /** How far either side of a finished run its tape reaches (the data plane allows 30 minutes). */
 const RUN_TAPE_PADDING_MS = 15 * 60_000;
 
@@ -286,8 +299,8 @@ export class BotPanelShellComponent {
     });
   });
 
-  /** The toolbar's Change end opens the bot's end card; its Build proof opens the hashes in Setup. */
-  protected readonly changingEnd = signal(false);
+  /** The toolbar's Change end opens the end card's fields; its Build proof opens the hashes in Setup. */
+  protected readonly endCard = viewChild(BotEndCardComponent);
   protected readonly proofOpen = signal(false);
 
   /** The frozen lane context (FR-094): every request and command this shell
@@ -454,6 +467,8 @@ export class BotPanelShellComponent {
   private readonly receiptView = viewChild(PanelActionReceiptComponent);
   private readonly strandedWarning = viewChild(StrandedPositionWarningComponent);
   private readonly flattenTicketView = viewChild<ElementRef<HTMLElement>>('flattenTicket');
+  private readonly boardView = viewChild<ElementRef<HTMLElement>>('board');
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
   /** FR-006 (#2202): history read identity is broker + clerk + account + sid
    * + timeframe only. `ResourceTarget.bindingGeneration`/`routingEpoch` fence
@@ -609,6 +624,39 @@ export class BotPanelShellComponent {
     // fact this page publishes upward; it is cleared on the way out so no
     // other page can inherit it.
     effect(() => this.titleContext.setBotLabel(this.panel()?.strategy_label ?? null));
+    // #2794 R4: the board fills the window below whatever sits above it --
+    // banner, toolbar, a receipt, the holding warning -- so the page itself
+    // does not scroll; its panels scroll inside themselves.
+    afterRenderEffect((onCleanup) => {
+      const board = this.boardView()?.nativeElement;
+      if (board === undefined || typeof ResizeObserver === 'undefined') return;
+      const fit = (): void => {
+        const top = board.getBoundingClientRect().top + window.scrollY;
+        this.host.nativeElement.style.setProperty('--bot-board-height', `${window.innerHeight - top - spaceBelow(board)}px`);
+      };
+      // A frame later, so a fit never resizes what the observer is reporting on.
+      let frame = 0;
+      const refit = (): void => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(fit);
+      };
+      const observer = new ResizeObserver(refit);
+      // The page around the board grows when a receipt or warning appears above it;
+      // above that, anything up to the body can push it down.
+      if (board.parentElement !== null) observer.observe(board.parentElement);
+      for (let node: Element | null = board.parentElement; node !== null && node !== document.body; node = node.parentElement) {
+        for (let above = node.previousElementSibling; above !== null; above = above.previousElementSibling) {
+          observer.observe(above);
+        }
+      }
+      window.addEventListener('resize', refit);
+      fit();
+      onCleanup(() => {
+        cancelAnimationFrame(frame);
+        observer.disconnect();
+        window.removeEventListener('resize', refit);
+      });
+    });
     this.destroyRef.onDestroy(() => {
       this.titleContext.setBotLabel(null);
       this.liveStore.stop();

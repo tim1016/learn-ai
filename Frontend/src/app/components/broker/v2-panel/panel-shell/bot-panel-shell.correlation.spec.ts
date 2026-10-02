@@ -212,12 +212,7 @@ describe('BotPanelShellComponent #1413 correlation campaign', () => {
       await fixture.whenStable();
       shellRecreations += 1;
 
-      const orderRecords = screen.getByText('Order records').closest('details');
-      if (orderRecords === null) throw new Error('Expected the Order records fold.');
-      orderRecords.open = true;
-      fireEvent(orderRecords, new Event('toggle'));
-      await fixture.whenStable();
-      fixture.detectChanges();
+      // The order records sit open in the Orders panel (#2794).
       expect(screen.getByRole('link', { name: /^Deploy again$/ })).toBeTruthy();
 
       const source = StubEventSource.instances.at(-1);

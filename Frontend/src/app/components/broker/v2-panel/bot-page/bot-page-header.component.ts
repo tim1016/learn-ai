@@ -2,6 +2,8 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import { RouterLink } from '@angular/router';
 
 import { accountWorkspaceHistoryLink } from '../../../../fleet/account-workspace';
+import { LANE_MODE_WORDING } from '../../../../services/alpaca-live-verdict.service';
+import { AlpacaLaneModeChipComponent } from '../../../brokers/alpaca-desk/alpaca-lane-mode-chip.component';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { ExperimentalNoticeComponent } from '../../../../shared/experimental-notice/experimental-notice.component';
 import { AuthoredUsdPipe } from '../../../../shared/pipes/authored-usd.pipe';
@@ -17,7 +19,8 @@ interface HeldFigure {
  * The bot page's banner (#2794 R1, R3, R9): which bot this is and the way
  * back, one status the bot owns, the backend's one-line summary of its run,
  * and its key figures. It carries no LIVE chip -- the top bar and account
- * strip say that -- no account-scoped verdict and no ticking time.
+ * strip say that -- no account-scoped verdict and no ticking time. A Dry Run
+ * is still marked as simulated cash: its money is not the account's (H23).
  *
  * A cleared bot's page, opened from History (#2574), says it was cleared and
  * links back to History. A strategy that is not a trading strategy says so
@@ -26,7 +29,7 @@ interface HeldFigure {
 @Component({
   selector: 'app-bot-page-header',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AssetIdentityComponent, AuthoredUsdPipe, ExperimentalNoticeComponent, RouterLink],
+  imports: [AlpacaLaneModeChipComponent, AssetIdentityComponent, AuthoredUsdPipe, ExperimentalNoticeComponent, RouterLink],
   templateUrl: './bot-page-header.component.html',
   styleUrl: './bot-page-header.component.scss',
 })
@@ -43,6 +46,11 @@ export class BotPageHeaderComponent {
       .sort((left, right) => left.symbol.localeCompare(right.symbol)),
   );
   protected readonly cleared = computed(() => this.panel().status === 'cleared');
+  protected readonly dryRunChip = { tone: 'dry_run', mode: LANE_MODE_WORDING.dry_run } as const;
+  /** Screen-reader word of each new panel revision, with no visual time ticking. */
+  protected readonly snapshotStatus = computed(
+    () => `Revision ${this.panel().revision}${this.panel().health.running ? ' running' : ' stopped'}`,
+  );
   protected readonly history = computed(() => accountWorkspaceHistoryLink(
     { broker: this.panel().broker, clerkId: this.clerkId() },
     { status: 'cleared' },

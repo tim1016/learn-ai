@@ -23,8 +23,8 @@
 // inside itself, so the page does not.
 .bot-board {
   display: grid;
-  flex: 1 1 auto;
-  min-height: 34rem;
+  height: var(--bot-board-height, auto);
+  min-height: 26rem;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr);
   gap: var(--space-2);
@@ -41,11 +41,23 @@
 }
 
 .bot-board__chart { grid-column: span 6; padding: 0; overflow: hidden; }
+// The cell sets the chart's height; the charts' own floors would spill out of it.
+.bot-board__chart app-bot-chart-panel,
+.bot-board__chart app-bot-day-chart { min-height: 0; }
 .bot-board__money { grid-column: span 3; }
 .bot-board__decisions { grid-column: span 3; }
 .bot-board__orders { grid-column: span 6; }
 .bot-board__health { grid-column: span 3; }
 .bot-board__setup { grid-column: span 3; }
+
+.bot-board__title {
+  margin: 0 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 
 .bot-board__runs {
   margin-top: var(--space-2);
@@ -118,6 +130,7 @@
 // Narrow windows: two columns, then one; the page scrolls instead of the panels.
 @media (max-width: 1100px) {
   .bot-board {
+    height: auto;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-rows: auto;
   }

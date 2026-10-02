@@ -20,4 +20,14 @@
       }
     </ul>
   }
+  @if (marketPulse(); as pulse) {
+    <h4 class="health__group">Market right now</h4>
+    <p class="health__market" [class.health__market--attention]="pulse.attention_required">
+      <strong>{{ pulse.headline }}</strong>
+      <span class="health__note">{{ pulse.explanation }}</span>
+      @if (pulse.next_step; as nextStep) {
+        <span class="health__note">{{ nextStep }}</span>
+      }
+    </p>
+  }
 </section>

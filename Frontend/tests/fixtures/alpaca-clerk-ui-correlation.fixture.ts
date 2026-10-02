@@ -6,6 +6,7 @@ import type {
   EvidencePage,
   PanelProfile,
 } from '../../src/app/components/broker/v2-panel/lib/broker-v2-panel.types';
+import { fakeBotPage } from '../../src/app/testing/bot-panel-fixtures';
 
 interface UiCorrelationCampaignV4 {
   readonly schema_version: 4;
@@ -71,7 +72,7 @@ export const PROFILE: PanelProfile = {
 };
 
 export function panelAtRevision(revision: number): BotPanelView {
-  return {
+  const panel: BotPanelView = {
     strategy_instance_id: STRATEGY_INSTANCE_ID,
     strategy_key: 'ema_crossover',
     strategy_label: 'Ema Crossover',
@@ -192,6 +193,8 @@ export function panelAtRevision(revision: number): BotPanelView {
     open_pnl_usd: null,
     open_pnl_direction: null,
   };
+  // What the backend leads the bot page with (#2794).
+  return { ...panel, bot_page: fakeBotPage(panel) };
 }
 
 export function snapshotAtRevision(

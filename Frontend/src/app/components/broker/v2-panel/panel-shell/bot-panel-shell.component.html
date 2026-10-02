@@ -38,15 +38,17 @@
         [backLabel]="backLabel"
         [clerkId]="clerkId()"
       />
-      <app-bot-toolbar
-        [panel]="panelData"
-        [pending]="actionPending()"
-        [deployAgain]="deployAgain()"
-        [manualOrder]="manualOrderNavigation()"
-        (actionRequested)="onActionRequested($event)"
-        (changeEnd)="changingEnd.set(!changingEnd())"
-        (buildProof)="proofOpen.set(true)"
-      />
+      <section class="bot-page__actions" aria-label="Bot actions">
+        <app-bot-toolbar
+          [panel]="panelData"
+          [pending]="actionPending()"
+          [deployAgain]="deployAgain()"
+          [manualOrder]="manualOrderNavigation()"
+          (actionRequested)="onActionRequested($event)"
+          (changeEnd)="endCard()?.openEditor()"
+          (buildProof)="proofOpen.set(true)"
+        />
+      </section>
 
       @if (actionReceipt(); as receipt) {
         <app-panel-action-receipt [receipt]="receipt" (dismissed)="dismissActionReceipt()" />
@@ -86,14 +88,8 @@
         <app-flatten-fills [fills]="flattenFills()" />
       }
 
-      @if (changingEnd()) {
-        @if (panelData.end; as end) {
-          <app-bot-end-card [end]="end" [dryRun]="panelData.mode === 'dry_run'" [locked]="actionPending()" [save]="saveBotEnd" />
-        }
-      }
-
-      <div class="bot-board">
-        <section class="bot-board__panel bot-board__chart" aria-label="Chart">
+      <div #board class="bot-board">
+        <div class="bot-board__panel bot-board__chart">
           <app-bot-chart-panel
             [symbol]="panelData.symbol"
             [view]="strategyViewValue()"
@@ -119,9 +115,9 @@
               (historyRetry)="histChart.reload()"
             />
           </ng-template>
-        </section>
+        </div>
 
-        <section class="bot-board__panel bot-board__money" aria-label="Money">
+        <div class="bot-board__panel bot-board__money">
           <app-deployment-budget
             [target]="target()"
             [strategyInstanceId]="panelData.strategy_instance_id"
@@ -129,9 +125,9 @@
             [holdsShares]="holdsShares()"
             [openPnl]="panelData"
           />
-        </section>
+        </div>
 
-        <section class="bot-board__panel bot-board__decisions" aria-label="Decisions">
+        <div class="bot-board__panel bot-board__decisions">
           <app-recent-decisions-list
             [decisions]="panelData.recent_decisions"
             [strategyView]="strategyViewValue()"
@@ -149,9 +145,10 @@
               [tradingDateMs]="runStartedAtMs()"
             />
           }
-        </section>
+        </div>
 
-        <section class="bot-board__panel bot-board__orders" aria-label="Orders">
+        <section class="bot-board__panel bot-board__orders" aria-labelledby="bot-orders-title">
+          <h3 id="bot-orders-title" class="bot-board__title">Orders</h3>
           <app-bot-order-records
             [panel]="panelData"
             [profile]="profileData"
@@ -164,14 +161,23 @@
           />
         </section>
 
-        <section class="bot-board__panel bot-board__health" aria-label="Health">
+        <div class="bot-board__panel bot-board__health">
           @if (panelData.bot_page; as page) {
-            <app-bot-health-groups [health]="page.health" />
+            <app-bot-health-groups [health]="page.health" [marketPulse]="panelData.market_pulse" />
           }
-        </section>
+        </div>
 
-        <section class="bot-board__panel bot-board__setup" aria-label="Setup">
+        <div class="bot-board__panel bot-board__setup">
           <app-bot-setup [panel]="panelData" [settings]="strategyViewValue()?.settings ?? null" [(proofOpen)]="proofOpen" />
+          @if (panelData.end; as end) {
+            <app-bot-end-card
+              [end]="end"
+              [dryRun]="panelData.mode === 'dry_run'"
+              [locked]="actionPending()"
+              [save]="saveBotEnd"
+              [showChange]="false"
+            />
+          }
           <details class="bot-board__runs">
             <summary>Run history</summary>
             <app-operator-run-history
@@ -184,7 +190,7 @@
               [feedContinuity]="feedContinuity()"
             />
           </details>
-        </section>
+        </div>
       </div>
     </div>
   }

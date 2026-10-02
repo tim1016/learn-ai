@@ -1,4 +1,8 @@
+@use '../../../../styles/visually-hidden' as *;
+
 :host { display: block; min-width: 0; }
+
+.sr-only { @include visually-hidden; }
 
 .bot-header {
   display: flex;

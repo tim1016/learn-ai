@@ -896,10 +896,8 @@ describe('BotPanelShellComponent', () => {
     );
     expect(screen.queryByText('run-current')).toBeNull();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
-    const runTimes = within(fixture.nativeElement.querySelector('.run-timing'));
-    expect(runTimes.getByText(
-      formatTimestampDisplay(makeRun().started_at_ms, { granularity: 'time' }),
-    )).toBeTruthy();
+    // The backend's summary line names the run, never a ticking time.
+    expect(screen.getByText(/^Running since /)).toBeTruthy();
 
 
     openDisclosure('Runs');
@@ -1624,7 +1622,7 @@ describe('BotPanelShellComponent', () => {
     });
   });
 
-  it('renders one view: the header once, no Trader/Operator switch, and the audit folded away', async () => {
+  it('renders one view: the banner, the toolbar and the six-panel board, with no Trader/Operator switch', async () => {
     const { fixture, container } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
@@ -1637,12 +1635,13 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(container.querySelectorAll('app-bot-banner')).toHaveLength(1);
+    expect(container.querySelectorAll('app-bot-page-header')).toHaveLength(1);
+    expect(screen.getByRole('toolbar', { name: 'Actions for this bot' })).toBeTruthy();
     expect(screen.queryByRole('tab', { name: 'Trader' })).toBeNull();
     expect(screen.queryByRole('tab', { name: 'Operator' })).toBeNull();
-    const folds = [...container.querySelectorAll<HTMLDetailsElement>('app-bot-details details.fold')];
-    expect(folds.length).toBeGreaterThan(0);
-    expect(folds.every((fold) => !fold.open)).toBe(true);
+    // #2794 R4: chart, money and decisions above; orders, health and setup below.
+    expect([...container.querySelectorAll('.bot-board > .bot-board__panel')].map((panel) => panel.classList[1]))
+      .toEqual(['bot-board__chart', 'bot-board__money', 'bot-board__decisions', 'bot-board__orders', 'bot-board__health', 'bot-board__setup']);
   });
 
   it('prices the tape from the last IBKR bar and never reads a Polygon snapshot (H15)', async () => {
@@ -1875,10 +1874,9 @@ describe('BotPanelShellComponent', () => {
     });
     await fixture.whenStable();
 
-    openDisclosure('Audit trail');
-    await fixture.whenStable();
+    // The audit trail is on the page, in the Orders panel (#2794).
     fixture.detectChanges();
-    fireEvent.click(screen.getByRole('button', { name: /Submit acknowledged at/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Submit acknowledged at/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Select transaction tx-001 on rail' }));
     await fixture.whenStable();
 
@@ -2261,6 +2259,48 @@ describe('BotPanelShellComponent', () => {
         `${term.textContent?.trim()} ${term.nextElementSibling?.textContent?.trim()}`);
     }
 
+    it('leads with the bot’s own status and the backend’s summary, and no LIVE chip (#2794 R1, R3)', async () => {
+      const { container } = await renderPage({ ...PANEL, mode: 'trade' });
+
+      const banner = container.querySelector('app-bot-page-header');
+      expect(banner?.textContent).toContain('Running');
+      expect(screen.getByText('Running since Tue Nov 14 2023, 17:13 ET · no decisions, no trades.')).toBeTruthy();
+      expect(banner?.textContent).not.toContain('LIVE');
+      expect(banner?.querySelector('app-alpaca-lane-mode-chip')).toBeNull();
+    });
+
+    it('splits health into this run and the account right now (#2794 R9)', async () => {
+      await renderPage({ ...PANEL, mode: 'trade' });
+
+      const health = screen.getByRole('region', { name: 'Health' });
+      expect(within(health).getAllByRole('heading', { level: 4 }).map((heading) => heading.textContent?.trim()))
+        .toEqual(['During this run', 'Account right now', 'Market right now']);
+      expect(within(health).getByRole('list', { name: 'During this run' }).textContent).toContain('IBKR market data feed');
+    });
+
+    it('reads a finished run’s tape from that run’s window, not the newest bars (#2794 R7)', async () => {
+      const getHistoryChart = vi.fn().mockResolvedValue(mockService.getHistoryChart());
+      await renderPage({ ...PANEL, mode: 'trade', health: { ...PANEL.health, running: false } }, { getHistoryChart });
+
+      // The fixture's run ran a minute to 1_700_000_001_000; the tape reaches 15 minutes either side.
+      await vi.waitFor(() => expect(getHistoryChart).toHaveBeenLastCalledWith(
+        expect.anything(), 'sid-001', '1m', { fromMs: 1_700_000_001_000 - 60_000 - 900_000, toMs: 1_700_000_001_000 + 900_000 },
+      ));
+    });
+
+    it('says no bot by that name is on this account, with the way back, instead of loading forever', async () => {
+      const missing = new HttpErrorResponse({
+        status: 404,
+        error: { detail: { message: 'No bot \'sid-001\' is bound to broker \'alpaca\'.', why: null, next_action: null } },
+      });
+      await renderPage(PANEL, { getLiveSnapshot: vi.fn().mockRejectedValue(missing) });
+
+      const notFound = await screen.findByRole('alert', { name: 'No bot named sid-001 on this account' });
+      expect(within(notFound).getByText('No bot \'sid-001\' is bound to broker \'alpaca\'.')).toBeTruthy();
+      expect(within(notFound).getByRole('link', { name: 'Back to Home' })).toBeTruthy();
+      expect(screen.queryByText('Loading bot control…')).toBeNull();
+    });
+
     it('shows a running bot with Stop, its money statement verbatim, and no stranded warning', async () => {
       await renderPage({
         ...PANEL, mode: 'trade', exposure: { QQQ: 2.5 }, actions: [fakeSqliteStopAction()], primary_action: 'stop_bot_decisions',
@@ -2268,7 +2308,7 @@ describe('BotPanelShellComponent', () => {
       });
       await screen.findByText('Holding its position');
 
-      expect(screen.getByRole('button', { name: 'Stop bot decisions' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
       expect(statement()).toEqual([
         'Budget set aside at deploy $1,000.00',
         'Realized gains and losses $0.00',

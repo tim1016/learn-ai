@@ -11,6 +11,7 @@
             [icon]="icons[entry.action_id]"
             [showLabel]="showLabel(entry)"
             [showMoves]="false"
+            [hint]="entry.reason"
             [tone]="tone(entry)"
             [pending]="pending()"
             (triggered)="actionRequested.emit($event)"
@@ -51,6 +52,7 @@
                 class="toolbar__button"
                 [attr.aria-label]="entry.label"
                 [attr.aria-disabled]="entry.availability !== 'available'"
+                [disabled]="pending()"
                 [title]="entry.reason"
                 (click)="open(entry)"
               >

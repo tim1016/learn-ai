@@ -139,9 +139,14 @@ function historyRow(page: Page, sid: string): Locator {
   return historyTab(page).getByRole('row').filter({ has: page.getByRole('link', { name: sid, exact: true }) });
 }
 
-/** The bot page's header, where a cleared bot says so and offers Deploy again. */
+/** The bot page's banner, where a cleared bot says so (#2794). */
 function botBanner(page: Page): Locator {
-  return page.locator('app-bot-banner');
+  return page.locator('app-bot-page-header');
+}
+
+/** The bot page's toolbar, where a stopped bot offers Deploy again (#2794). */
+function botToolbar(page: Page): Locator {
+  return page.getByRole('toolbar', { name: 'Actions for this bot' });
 }
 
 /** The page as the app shell serves it passes AXE, landmarks and all. */
@@ -150,7 +155,7 @@ async function expectNoAxeViolations(page: Page): Promise<void> {
   expect(axe.violations.map(({ id, nodes }) => `${id}: ${nodes.map((node) => node.target.join(' ')).join(' | ')}`)).toEqual([]);
 }
 
-/** `bot-banner.component.html`'s note on a cleared bot's page. */
+/** `bot-page-header.component.html`'s note on a cleared bot's page. */
 const CLEARED_NOTE = 'Cleared: this bot will not run again, and its records here are read-only.';
 
 test.describe('The owner walks one account (PRD #2560)', () => {
@@ -405,7 +410,7 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     await expect(botBanner(page)).toContainText(CLEARED_NOTE);
     await expect(botBanner(page).getByRole('link', { name: 'Every cleared bot is in History' }))
       .toHaveAttribute('href', `${PAPER_HISTORY}?status=cleared`);
-    await botBanner(page).getByRole('link', { name: 'Deploy again' }).click();
+    await botToolbar(page).getByRole('link', { name: 'Deploy again' }).click();
     await expect(page).toHaveURL(`${PAPER_WORKSPACE}/deploy?from=${WALKED_BOT}`);
     await expect(page.getByRole('region', { name: 'Deploy again' })).toContainText(`Prefilled from ${WALKED_BOT}.`);
 
@@ -423,7 +428,7 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     await expect(page).toHaveURL(`${PAPER_WORKSPACE}/bots/${DRY_RUN_BOT}`);
     await expect(botBanner(page)).toContainText(WORLD_LABELS.dry_run);
     await expect(botBanner(page)).toContainText(CLEARED_NOTE);
-    await botBanner(page).getByRole('link', { name: 'Deploy again' }).click();
+    await botToolbar(page).getByRole('link', { name: 'Deploy again' }).click();
     await expect(page).toHaveURL(`${PAPER_WORKSPACE}/deploy?from=${DRY_RUN_BOT}`);
     await expect(page.getByRole('region', { name: 'Deploy again' })).toContainText(`Prefilled from ${DRY_RUN_BOT}.`);
 
@@ -533,12 +538,13 @@ test.describe('The owner walks one account (PRD #2560)', () => {
     await world.install(page);
 
     await page.goto(`${PAPER_WORKSPACE}/bots/${WALKED_BOT}`);
-    await expect(page.locator('app-bot-banner').getByRole('note')).toContainText(DV_EXPERIMENTAL_NOTICE);
+    await expect(botBanner(page).getByRole('note')).toContainText(DV_EXPERIMENTAL_NOTICE);
     const end = page.getByRole('region', { name: 'End', exact: true });
     await expect(end).toContainText(WALK_DEFAULT_END.headline);
     await expect(end).toContainText(WALK_DEFAULT_END.explanation);
 
-    await end.getByRole('button', { name: 'Change end' }).click();
+    // Change end sits on the toolbar (#2794); the End card shows the result.
+    await botToolbar(page).getByRole('button', { name: 'Change end' }).click();
     const editor = page.getByRole('dialog', { name: 'Change this bot’s end' });
     await expect(editor.getByLabel('End date')).toBeFocused();
     // The time is typed in the owner's own zone, with the market's beside it.

@@ -72,6 +72,8 @@ export class PanelActionButtonComponent {
   readonly showLabel = input(true);
   /** When false a blocker's cure is not offered beside the button; the toolbar lists it elsewhere. */
   readonly showMoves = input(true);
+  /** The page's own tooltip -- what the action does, or why it waits -- in place of the backend's system copy. */
+  readonly hint = input<string | null>(null);
 
   readonly triggered = output<PanelActionTrigger>();
   readonly moveRequested = output<OperatorMove>();
@@ -94,6 +96,8 @@ export class PanelActionButtonComponent {
    * beside it.
    */
   protected readonly tooltip = computed(() => {
+    const hint = this.hint();
+    if (hint !== null) return hint;
     const blockers = this.visibleBlockers();
     return blockers.length === 0
       ? this.action().explanation

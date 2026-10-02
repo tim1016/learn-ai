@@ -1,4 +1,5 @@
 <header class="bot-header">
+  <span class="sr-only" role="status" aria-live="polite" aria-atomic="true" [attr.aria-label]="snapshotStatus()">{{ snapshotStatus() }}</span>
   <div class="bot-header__lead">
     <div class="bot-header__identity">
       <a class="bot-header__back" [routerLink]="backRoute()"><span aria-hidden="true">←</span> {{ backLabel() }}</a>
@@ -8,6 +9,9 @@
         <span aria-hidden="true">·</span>
         <app-asset-identity [symbol]="panel().symbol" size="sm" />
       </p>
+      @if (panel().mode === 'dry_run') {
+        <app-alpaca-lane-mode-chip [chip]="dryRunChip" />
+      }
       @if (page(); as lead) {
         <span
           class="bot-header__status"
