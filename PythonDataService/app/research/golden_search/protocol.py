@@ -24,10 +24,10 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Literal, get_args
+from typing import Any, Literal, cast, get_args
 
 from app.research.golden_search.declarations import (
     SearchDeclaration,
@@ -62,6 +62,13 @@ _FILL_MODES: tuple[str, ...] = get_args(FillModeName)
 _SYMBOL = re.compile(SYMBOL_PATTERN)
 
 
+#: The importance scale each knob of a new plan carries (ADR 0074 decision 10): the more important a knob, the
+#: earlier Zoom moves it. A new plan starts every knob at the middle of the scale.
+IMPORTANCE_LOW = 1
+IMPORTANCE_HIGH = 10
+DEFAULT_IMPORTANCE = 5
+
+
 @dataclass(frozen=True)
 class KnobPlan:
     """One declared knob's role in the plan: searched over ``[low, high]`` or held at ``fixed_value``."""
@@ -74,6 +81,8 @@ class KnobPlan:
     # The smallest step, required for a searched knob (#2696): Grid samples ``low..high`` by
     # it, and Zoom stops refining the knob once a round's spacing reaches it.
     step: float | None = None
+    # IMPORTANCE_LOW..IMPORTANCE_HIGH, higher searched first; ``None`` on a legacy plan, which keeps its own order.
+    importance: int | None = None
 
 
 @dataclass(frozen=True)
@@ -162,17 +171,7 @@ class GoldenSearchProtocol:
             "strategy_key": self.strategy_key,
             "symbol": self.symbol,
             "method": self.method,
-            "knobs": [
-                {
-                    "name": plan.name,
-                    "mode": plan.mode,
-                    "low": plan.low,
-                    "high": plan.high,
-                    "fixed_value": plan.fixed_value,
-                    "step": plan.step,
-                }
-                for plan in self.knobs
-            ],
+            "knobs": [_knob_dict(plan) for plan in self.knobs],
             "seed": dict(self.seed),
             "incumbent": {
                 "source": self.incumbent.source,
@@ -230,7 +229,7 @@ class GoldenSearchProtocol:
             strategy_key=str(body["strategy_key"]),
             symbol=str(body["symbol"]),
             method=body["method"],
-            knobs=tuple(_knob_plan(_strict(item, KnobPlan, "knob")) for item in body["knobs"]),
+            knobs=tuple(_knob_plan(_strict({"importance": None, **item}, KnobPlan, "knob")) for item in body["knobs"]),
             seed=dict(body["seed"]),
             incumbent=IncumbentRef(
                 source=incumbent["source"],
@@ -290,6 +289,21 @@ def _strict(data: object, shape: type, what: str) -> Mapping[str, Any]:
     return data
 
 
+def _knob_dict(plan: KnobPlan) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "name": plan.name,
+        "mode": plan.mode,
+        "low": plan.low,
+        "high": plan.high,
+        "fixed_value": plan.fixed_value,
+        "step": plan.step,
+    }
+    # Absent on a legacy knob, so a legacy plan keeps its hash.
+    if plan.importance is not None:
+        body["importance"] = plan.importance
+    return body
+
+
 def _knob_plan(item: Mapping[str, Any]) -> KnobPlan:
     return KnobPlan(
         name=str(item["name"]),
@@ -298,7 +312,21 @@ def _knob_plan(item: Mapping[str, Any]) -> KnobPlan:
         high=float(item["high"]),
         fixed_value=float(item["fixed_value"]),
         step=None if item["step"] is None else float(item["step"]),
+        importance=item["importance"],
     )
+
+
+def by_importance(knobs: Sequence[KnobPlan], declared: Sequence[str]) -> tuple[KnobPlan, ...]:
+    """``knobs`` in search order: higher importance first, ties in the declaration's order (ADR 0074 decision 10).
+
+    A plan where any knob lacks a whole-number importance (a legacy plan, or
+    one validation will refuse knob by knob) keeps its own order. Angular's
+    ``byImportance`` shows the same order; contracts/fixtures/golden-search-importance-order-v1.json pins both.
+    """
+    if any(isinstance(plan.importance, bool) or not isinstance(plan.importance, int) for plan in knobs):
+        return tuple(knobs)
+    rank = {name: index for index, name in enumerate(declared)}
+    return tuple(sorted(knobs, key=lambda plan: (-cast(int, plan.importance), rank.get(plan.name, len(rank)))))
 
 
 def _stress(item: Mapping[str, Any]) -> StressScenario:
@@ -408,6 +436,7 @@ def _validate_knobs(p: GoldenSearchProtocol, declaration: SearchDeclaration, ref
         knob = declared.get(plan.name)
         if knob is not None:
             _validate_knob_plan(plan, knob, refusals)
+    _validate_importance(p, declared, refusals)
     if p.method == "grid" and not refusals.any_for("knobs."):
         size = grid_size(p)
         if size is None:
@@ -417,6 +446,21 @@ def _validate_knobs(p: GoldenSearchProtocol, declaration: SearchDeclaration, ref
                 "GRID_TOO_LARGE",
                 "knobs",
                 f"The grid has {size} combinations, more than the budget of {p.budget_cap} evaluations.",
+            )
+
+
+def _validate_importance(p: GoldenSearchProtocol, declared: Mapping[str, SearchKnob], refusals: _Refusals) -> None:
+    """Every knob carries an importance on the scale, or none does (a legacy plan, searched in its own order)."""
+    if all(plan.importance is None for plan in p.knobs):
+        return
+    for plan in p.knobs:
+        label = declared[plan.name].label if plan.name in declared else plan.name
+        value = plan.importance
+        if isinstance(value, bool) or not isinstance(value, int) or not IMPORTANCE_LOW <= value <= IMPORTANCE_HIGH:
+            refusals.add(
+                "IMPORTANCE_INVALID",
+                f"knobs.{plan.name}.importance",
+                f"{label}: the importance must be a whole number from {IMPORTANCE_LOW} to {IMPORTANCE_HIGH}.",
             )
 
 

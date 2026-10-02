@@ -67,7 +67,7 @@ from app.research.golden_search.planning import (
     review_plan,
     study_id_for,
 )
-from app.research.golden_search.protocol import IncumbentRef
+from app.research.golden_search.protocol import DEFAULT_IMPORTANCE, IMPORTANCE_HIGH, IMPORTANCE_LOW, IncumbentRef
 from app.research.golden_search.stages import ApprovalBinding, StageOutcome, execute_stage, stage_refusal, stage_total
 from app.research.golden_search.views import candidate_detail, study_detail, study_summary
 from app.research.persistence import lifecycle
@@ -146,6 +146,7 @@ def capabilities() -> list[dict[str, Any]]:
                 else [{"left": c.left, "op": c.op, "right": c.right, "message": c.message} for c in declaration.constraints],
                 "default_pair_audits": [] if declaration is None else [list(pair) for pair in declaration.default_pair_audits],
                 "default_expected_trades_per_year": DEFAULT_EXPECTED_TRADES_PER_YEAR,
+                "importance": {"low": IMPORTANCE_LOW, "high": IMPORTANCE_HIGH, "default": DEFAULT_IMPORTANCE},
             }
         )
     return rows

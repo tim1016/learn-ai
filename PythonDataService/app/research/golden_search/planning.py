@@ -39,7 +39,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from itertools import product
@@ -68,11 +68,13 @@ from app.research.golden_search.evaluator import context_digest, execution_conte
 from app.research.golden_search.models import GoldenSearchRefusal, NewStudy
 from app.research.golden_search.procedure_history import fold_windows
 from app.research.golden_search.protocol import (
+    DEFAULT_IMPORTANCE,
     GoldenSearchProtocol,
     IncumbentRef,
     KnobPlan,
     ProtocolRefusal,
     SelectionPolicy,
+    by_importance,
     canonical_json,
     knob_value_counts,
     recent_window_ms,
@@ -131,7 +133,7 @@ def _canonical_or_raw(strategy_key: str, symbol: str, params: Mapping[str, Any])
 
 
 def protocol_from_request(data: Mapping[str, Any]) -> GoldenSearchProtocol:
-    """A frozen plan from a request: symbol upper-cased, the seed defaulted, both canonical.
+    """A frozen plan from a request: symbol upper-cased, the seed defaulted, both canonical, knobs in importance order.
 
     The seed defaults to a registry incumbent's point, and to the registry
     point when the incumbent is a qualification (see :func:`default_seed`).
@@ -153,7 +155,12 @@ def protocol_from_request(data: Mapping[str, Any]) -> GoldenSearchProtocol:
             else _canonical_or_raw(strategy_key, symbol, dict(raw_seed))
         )
         body.update(symbol=symbol, seed=seed, incumbent={**incumbent, "params": incumbent_params})
-        return GoldenSearchProtocol.from_dict(body)
+        protocol = GoldenSearchProtocol.from_dict(body)
+        declaration = declaration_for(strategy_key)
+        if declaration is None:
+            return protocol
+        # The frozen knob order is the search order: by importance, ties in the declaration's order.
+        return replace(protocol, knobs=by_importance(protocol.knobs, [knob.name for knob in declaration.knobs]))
     except (KeyError, TypeError, ValueError) as exc:
         raise GoldenSearchRefusal(f"The plan is malformed: {exc}", code="PROTOCOL_MALFORMED") from exc
 
@@ -583,6 +590,7 @@ def _default_knob(knob: SearchKnob, seed: Decimal, benchmark: Decimal) -> KnobPl
         high=float(quantize(knob, max(knob.default_high, seed, benchmark), ROUND_CEILING)),
         fixed_value=float(seed),
         step=float(knob.default_step) if knob.searchable_by_default else None,
+        importance=DEFAULT_IMPORTANCE,
     )
 
 

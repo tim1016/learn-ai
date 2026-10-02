@@ -49,6 +49,10 @@ export function knobInputId(name: string, field: KnobNumberField): string {
   return `gs-plan-knob-${name}-${field}`;
 }
 
+export function importanceInputId(name: string): string {
+  return `gs-plan-knob-${name}-importance`;
+}
+
 export function numberInputId(field: ProtocolNumberField): string {
   return `gs-plan-${field}`;
 }
@@ -83,11 +87,14 @@ export const REFUSAL_INPUTS: Readonly<Record<string, string>> = {
   pair_audits: PAIR_AUDITS_INPUT_ID,
 };
 
-/** The knob a refusal names (`knobs.<name>`, `knobs.<name>.step` or `seed.<name>`), and whether it names the step. */
-export function refusalKnob(field: string | null): { readonly name: string; readonly step: boolean } | null {
-  const match = field === null ? null : /^(knobs|seed)\.(\w+)(\.step)?$/.exec(field);
+/** Which part of a knob's row a refusal names: its value cell, its step or its importance. */
+export type KnobRefusalPart = 'value' | 'step' | 'importance';
+
+/** The knob a refusal names (`knobs.<name>`, `knobs.<name>.step`, `knobs.<name>.importance` or `seed.<name>`), and the part. */
+export function refusalKnob(field: string | null): { readonly name: string; readonly part: KnobRefusalPart } | null {
+  const match = field === null ? null : /^(knobs|seed)\.(\w+)(?:\.(step|importance))?$/.exec(field);
   if (match === null || match[2] === 'symbol') return null;
-  return { name: match[2], step: match[3] !== undefined };
+  return { name: match[2], part: (match[3] as KnobRefusalPart | undefined) ?? 'value' };
 }
 
 /** The input a refusal's field belongs to in the form as it stands, or null. */
@@ -97,7 +104,8 @@ export function refusalTarget(field: string | null, knobs: readonly KnobPlan[]):
   if (named === null) return REFUSAL_INPUTS[field] ?? null;
   const knob = knobs.find((plan) => plan.name === named.name);
   if (knob === undefined) return null;
-  if (named.step) return knob.mode === 'search' ? knobInputId(knob.name, 'step') : null;
+  if (named.part === 'importance') return importanceInputId(knob.name);
+  if (named.part === 'step') return knob.mode === 'search' ? knobInputId(knob.name, 'step') : null;
   return knobInputId(knob.name, knob.mode === 'search' ? 'low' : 'fixed_value');
 }
 

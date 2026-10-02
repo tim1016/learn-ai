@@ -107,6 +107,10 @@ async def test_preflight_for_a_strategy_without_a_declaration_is_a_refusal_not_a
         pytest.param(lambda plan: plan["knobs"][0].update(mode="sweep"), id="unknown-knob-mode"),
         pytest.param(lambda plan: plan.pop("incumbent"), id="missing-incumbent"),
         pytest.param(lambda plan: plan["policy"].update(max_drawdown_ceiling=float("nan")), id="non-finite-number"),
+        # A score or a rate that is not a whole number is refused, never coerced (true would read as 1).
+        pytest.param(lambda plan: plan["knobs"][0].update(importance=True), id="boolean-importance"),
+        pytest.param(lambda plan: plan["knobs"][0].update(importance=5.5), id="fractional-importance"),
+        pytest.param(lambda plan: plan.update(expected_trades_per_year=True), id="boolean-trade-frequency"),
     ],
 )
 async def test_a_body_that_is_not_a_plan_at_all_is_a_422(client: httpx.AsyncClient, mutate: Any) -> None:

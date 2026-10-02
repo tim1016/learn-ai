@@ -18544,6 +18544,9 @@
             "title": "Fixed",
             "type": "array"
           },
+          "importance": {
+            "$ref": "#/components/schemas/GoldenSearchImportanceScale"
+          },
           "knobs": {
             "items": {
               "$ref": "#/components/schemas/GoldenSearchCapabilityKnob"
@@ -18576,7 +18579,8 @@
           "fixed",
           "constraints",
           "default_pair_audits",
-          "default_expected_trades_per_year"
+          "default_expected_trades_per_year",
+          "importance"
         ],
         "title": "GoldenSearchCapability",
         "type": "object"
@@ -19981,6 +19985,31 @@
         "title": "GoldenSearchGuidance",
         "type": "object"
       },
+      "GoldenSearchImportanceScale": {
+        "additionalProperties": false,
+        "description": "How important each knob is to its owner; the more important, the earlier the search moves it.",
+        "properties": {
+          "default": {
+            "title": "Default",
+            "type": "integer"
+          },
+          "high": {
+            "title": "High",
+            "type": "integer"
+          },
+          "low": {
+            "title": "Low",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "low",
+          "high",
+          "default"
+        ],
+        "title": "GoldenSearchImportanceScale",
+        "type": "object"
+      },
       "GoldenSearchIncumbent": {
         "additionalProperties": false,
         "properties": {
@@ -20117,6 +20146,17 @@
             "title": "High",
             "type": "number"
           },
+          "importance": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Importance"
+          },
           "low": {
             "title": "Low",
             "type": "number"
@@ -20167,6 +20207,18 @@
           "high": {
             "title": "High",
             "type": "number"
+          },
+          "importance": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "1-10, higher searched first; null on a plan that keeps its own knob order.",
+            "title": "Importance"
           },
           "low": {
             "title": "Low",

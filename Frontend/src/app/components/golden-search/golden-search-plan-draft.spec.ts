@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { etMidnightMs } from '../../shared/date/et-midnight';
-import { applyPlanEdit, draftFromDefaults, draftFromProtocol, draftMonths, knobProblemKey, numberProblemKey, wireProtocol, withServerDates, type PlanDraft } from './golden-search-plan-draft';
+import { applyPlanEdit, byImportance, draftFromDefaults, draftFromProtocol, draftMonths, knobProblemKey, numberProblemKey, wireProtocol, withImportance, withServerDates, type PlanDraft } from './golden-search-plan-draft';
+import importanceOrder from '@repo-contracts/fixtures/golden-search-importance-order-v1.json';
 import { defaults, emaCapability, protocol } from './testing/fixtures';
 
 function draft(): PlanDraft {
@@ -82,12 +83,33 @@ describe('applyPlanEdit', () => {
     expect(again.protocol.knobs.find((k) => k.name === 'gap')?.step).toBe(0.1);
   });
 
-  it('reorders the search order and stops at either end', () => {
-    const up = applyPlanEdit(draft(), { kind: 'knob-move', name: 'fast_period', offset: -1 }, emaCapability());
-    expect(up.protocol.knobs.map((k) => k.name).slice(0, 4)).toEqual(['gap', 'rsi_min', 'fast_period', 'rsi_max']);
+  it('orders the search by importance, highest first, with ties in the strategy order', () => {
+    const raised = applyPlanEdit(draft(), { kind: 'knob-importance', name: 'hold_bars', importance: 9 }, emaCapability());
+    expect(raised.protocol.knobs.map((k) => k.name)).toEqual(['hold_bars', 'gap', 'rsi_min', 'rsi_max', 'fast_period', 'slow_period', 'gap_bps']);
 
-    const first = applyPlanEdit(draft(), { kind: 'knob-move', name: 'gap', offset: -1 }, emaCapability());
-    expect(first.protocol.knobs).toEqual(protocol().knobs);
+    const tied = applyPlanEdit(raised, { kind: 'knob-importance', name: 'slow_period', importance: 9 }, emaCapability());
+    expect(tied.protocol.knobs.map((k) => k.name).slice(0, 2)).toEqual(['slow_period', 'hold_bars']);
+    expect(tied.protocol.knobs.find((k) => k.name === 'slow_period')?.importance).toBe(9);
+
+    const lowered = applyPlanEdit(tied, { kind: 'knob-importance', name: 'gap', importance: 1 }, emaCapability());
+    expect(lowered.protocol.knobs.at(-1)?.name).toBe('gap');
+  });
+
+  it('shows the search order the server freezes for every pinned case', () => {
+    expect(emaCapability().knobs.map((knob) => knob.name)).toEqual(importanceOrder.declared);
+    for (const { scores, order } of importanceOrder.cases) {
+      const knobs = [...protocol().knobs].reverse().map((knob) => ({ ...knob, importance: scores[knob.name as keyof typeof scores] }));
+      expect(byImportance(knobs, emaCapability()).map((knob) => knob.name)).toEqual(order);
+    }
+  });
+
+  it('ranks a revised legacy plan at the starting importance and leaves a ranked plan in order', () => {
+    const legacy = protocol({ knobs: [...protocol().knobs].reverse().map(({ importance: _importance, ...knob }) => knob) });
+    const ranked = withImportance(legacy, emaCapability());
+    expect(ranked.knobs.map((k) => k.importance)).toEqual(Array(7).fill(5));
+    expect(ranked.knobs.map((k) => k.name)).toEqual(emaCapability().knobs.map((k) => k.name));
+    const scored = protocol({ knobs: [...protocol().knobs].reverse() });
+    expect(withImportance(scored, emaCapability()).knobs.map((k) => k.name)).toEqual(emaCapability().knobs.map((k) => k.name));
   });
 
   it('adds and removes a pair audit without duplicating it', () => {
@@ -167,7 +189,7 @@ describe('knobs-reset', () => {
   it('restores the knob table, start and pair audits the plan began with, keeping every other edit', () => {
     let edited = applyPlanEdit(draft(), { kind: 'knob-mode', name: 'fast_period', mode: 'fixed' }, emaCapability());
     edited = applyPlanEdit(edited, { kind: 'knob-number', name: 'fast_period', field: 'fixed_value', raw: '7' }, emaCapability());
-    edited = applyPlanEdit(edited, { kind: 'knob-move', name: 'hold_bars', offset: -1 }, emaCapability());
+    edited = applyPlanEdit(edited, { kind: 'knob-importance', name: 'hold_bars', importance: 8 }, emaCapability());
     edited = applyPlanEdit(edited, { kind: 'pair', pair: ['rsi_min', 'rsi_max'], included: false }, emaCapability());
     edited = applyPlanEdit(edited, { kind: 'knob-number', name: 'gap', field: 'low', raw: '' }, emaCapability());
     edited = applyPlanEdit(edited, { kind: 'number', field: 'budget_cap', raw: '' }, emaCapability());

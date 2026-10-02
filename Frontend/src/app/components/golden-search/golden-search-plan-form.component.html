@@ -1,6 +1,9 @@
 <div class="plan">
+  <app-golden-search-process current="plan" />
   @if (reviseFrom(); as source) {
-    <p class="notice" role="note">Revising study {{ source.id.slice(0, 8) }} as a new study: these controls start from its frozen plan. Locking creates a new linked study; the original study and its evidence keep their settings.</p>
+    <p class="notice" role="note">Revising study {{ source.id.slice(0, 8) }} as a new study: these controls start from its frozen plan. Locking creates a new linked study; the original study and its evidence keep their settings.
+      @if (revisingUnranked()) { The original searched its knobs in its own order; this revision ranks them by importance, starting every knob at {{ capability()?.importance?.default }}, so they are searched in the strategy's order until you change a score. }
+    </p>
   }
 
   <section class="card" aria-label="Strategy, instrument and starting point">

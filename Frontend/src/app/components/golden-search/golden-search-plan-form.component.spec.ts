@@ -9,7 +9,7 @@ import { REFUSAL_INPUTS, refusalTarget } from './golden-search-plan-problems';
 import { GoldenSearchService, type CommandOutcome } from './golden-search.service';
 import { etMidnightMs } from '../../shared/date/et-midnight';
 import type { CreateStudyRequest, DefaultsMonths, GoldenSearchDefaults, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyCommandRequest, StudyDetail } from './golden-search.types';
-import { defaults, emaCapability, frequencyProtocol, INCUMBENT_PARAMS, preflight as preflightFixture, studyDetail, unavailableCapability } from './testing/fixtures';
+import { defaults, emaCapability, frequencyProtocol, INCUMBENT_PARAMS, preflight as preflightFixture, protocol as protocolFixture, studyDetail, unavailableCapability } from './testing/fixtures';
 
 /** The defaults laid out for a four-month final test: the development range ends where the final test starts. */
 function fourMonthDefaults(): GoldenSearchDefaults {
@@ -133,6 +133,45 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(screen.getByRole('list', { name: 'Constraints' }).textContent).toContain('Fast EMA length < Slow EMA length');
     expect(screen.getByText(/registry validated settings/i)).not.toBeNull();
     expect(screen.getByText('Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars')).not.toBeNull();
+  });
+
+  it('starts every knob at importance 5; a higher score moves the knob to the top, keeps focus, and locks with the plan', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    const order = (): string[] => screen.getAllByRole('rowheader').map((header) => header.textContent?.trim().split('\n')[0] ?? '');
+    expect(screen.getAllByRole('combobox', { name: / importance$/ }).map((select) => (select as HTMLSelectElement).value)).toEqual(Array(7).fill('5'));
+    expect(order()[0]).toMatch(/^Crossover gap/);
+
+    const hold = screen.getByRole('combobox', { name: 'Hold time importance' });
+    fireEvent.change(hold, { target: { value: '9' } });
+    await waitFor(() => expect(order()[0]).toMatch(/^Hold time/));
+    await waitFor(() => expect(document.activeElement?.id).toBe(hold.id));
+
+    await waitFor(() => expect(lockButton().disabled).toBe(false));
+    fireEvent.click(lockButton());
+    await waitFor(() => expect(service.createStudy).toHaveBeenCalledTimes(1));
+    const knobs = service.createStudy.mock.lastCall?.[0].protocol.knobs ?? [];
+    expect(knobs.map((knob) => [knob.name, knob.importance]).slice(0, 2)).toEqual([['hold_bars', 9], ['gap', 5]]);
+  });
+
+  it('ranks a revised legacy plan at importance 5 and says the order changed', async () => {
+    const service = fakeService();
+    const legacyKnobs = [...protocolFixture().knobs].reverse().map(({ importance: _importance, ...knob }) => knob);
+    await renderForm(service, { reviseFrom: studyDetail('awaiting_validation', { protocol: protocolFixture({ knobs: legacyKnobs }) }) });
+    await waitFor(() => expect(screen.getByText(/plan is ready to lock/i)).not.toBeNull());
+
+    expect(screen.getByRole('note').textContent).toContain('this revision ranks them by importance, starting every knob at 5');
+    expect(screen.getAllByRole('rowheader')[0].textContent).toContain('Crossover gap');
+    expect(service.preflight.mock.lastCall?.[0].knobs.every((knob) => knob.importance === 5)).toBe(true);
+  });
+
+  it('shows where the plan sits in the research process', async () => {
+    await renderForm(fakeService());
+
+    const process = screen.getByRole('list', { name: 'Research process' });
+    expect(within(process).getAllByRole('listitem').map((item) => item.textContent?.trim())).toEqual(['1 Plan', '2 Research', '3 Compare', '4 Final test', '5 Decision', '6 Deploy']);
+    expect(process.querySelector('[aria-current="step"]')?.textContent).toContain('Plan');
   });
 
   it('debounces a burst of edits into one preflight of the latest plan', async () => {
@@ -314,7 +353,7 @@ describe('GoldenSearchPlanFormComponent', () => {
     const { view } = await renderForm(service);
     await pickSpy(service, view);
     const knobs = defaults().knobs;
-    const fields = [...Object.keys(REFUSAL_INPUTS).filter((field) => !hidden.includes(field)), ...knobs.flatMap((knob) => [`knobs.${knob.name}`, `seed.${knob.name}`, ...(knob.mode === 'search' ? [`knobs.${knob.name}.step`] : [])])];
+    const fields = [...Object.keys(REFUSAL_INPUTS).filter((field) => !hidden.includes(field)), ...knobs.flatMap((knob) => [`knobs.${knob.name}`, `seed.${knob.name}`, `knobs.${knob.name}.importance`, ...(knob.mode === 'search' ? [`knobs.${knob.name}.step`] : [])])];
 
     const missing = fields.filter((field) => {
       const target = refusalTarget(field, knobs);

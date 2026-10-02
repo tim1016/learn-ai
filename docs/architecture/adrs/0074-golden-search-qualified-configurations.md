@@ -139,6 +139,22 @@ retain their separate fixed selection and final-test floors and unchanged
 protocol hashes. Revising starts a new study; it never changes recorded rules
 or reclassifies historical evidence.
 
+### 10. The owner ranks each knob's importance, and the search follows it
+
+Owner decision, 2026-10-02, for [#2811](https://github.com/tim1016/learn-ai/issues/2811):
+instead of a measured sensitivity ranking, which no study yet records across
+plans, the user scores each knob's **importance from 1 to 10**. A new plan
+starts every knob at 5 and the user can change any score before lock. The
+plan's knobs are ordered by importance, highest first, with ties kept in the
+strategy's declared order. That order is both the order the plan page shows and
+the order Zoom moves the knobs in each pass; it is frozen with the plan. The
+score changes no range, step or rule and is not evidence that a knob matters.
+Grid evaluates every combination, so for Grid the order is only presentation.
+
+A legacy plan carries no importance and keeps its own order and hash. Revising
+one starts every knob at 5, so its revision is searched in the strategy's order
+until the user changes a score.
+
 ## Consequences
 
 - An owner-approved tuple for one stock is deployable in Paper or Live without a code edit, a qualification script or a restart. Other stocks keep the registry point.

@@ -9,8 +9,9 @@ import { GoldenSearchCostControlsComponent } from './golden-search-cost-controls
 import { incumbentLabel, pointDifferences } from './golden-search-display';
 import { GoldenSearchKnobTableComponent } from './golden-search-knob-table.component';
 import { GoldenSearchMethodChoiceComponent, METHOD_HINTS } from './golden-search-method-choice.component';
-import { applyPlanEdit, draftFromDefaults, draftFromProtocol, draftMonths, MONTH_FIELDS, wireProtocol, withServerDates, type PlanDraft, type PlanEdit } from './golden-search-plan-draft';
+import { applyPlanEdit, draftFromDefaults, draftFromProtocol, draftMonths, isRanked, MONTH_FIELDS, wireProtocol, withImportance, withServerDates, type PlanDraft, type PlanEdit } from './golden-search-plan-draft';
 import { GoldenSearchPlanFooterComponent } from './golden-search-plan-footer.component';
+import { GoldenSearchProcessComponent } from './golden-search-process.component';
 import { refusalProblems, unreadableProblems } from './golden-search-plan-problems';
 import { GoldenSearchProtocolControlsComponent } from './golden-search-protocol-controls.component';
 import { GoldenSearchRefinementControlsComponent } from './golden-search-refinement-controls.component';
@@ -41,6 +42,7 @@ import { IdempotencyKeys } from './idempotency-keys';
     GoldenSearchKnobTableComponent,
     GoldenSearchMethodChoiceComponent,
     GoldenSearchPlanFooterComponent,
+    GoldenSearchProcessComponent,
     GoldenSearchProtocolControlsComponent,
     GoldenSearchRefinementControlsComponent,
     GoldenSearchTimeWindowsComponent,
@@ -86,6 +88,11 @@ export class GoldenSearchPlanFormComponent {
   protected readonly unavailable = computed(() => this.capabilities().filter((c) => !c.available));
   protected readonly capability = computed(() => this.capabilities().find((c) => c.strategy_key === this.strategyKey()) ?? null);
   protected readonly revising = computed(() => this.reviseFrom() !== null);
+  /** A revised legacy plan searched its knobs in its own order; the revision ranks them by importance instead. */
+  protected readonly revisingUnranked = computed(() => {
+    const source = this.reviseFrom();
+    return source !== null && !isRanked(source.protocol.knobs);
+  });
   protected readonly blocked = computed(() => {
     if ((this.draft()?.problems.size ?? 0) > 0) return 'Some values cannot be read yet. Fix them and the plan is checked again.';
     if (this.layingDates()) return 'Laying out the dates for these months…';
@@ -243,7 +250,7 @@ export class GoldenSearchPlanFormComponent {
     this.incumbentLabel.set(incumbentLabel(study.protocol.incumbent));
     this.incumbentSentence.set(null);
     this.defaultsError.set(null);
-    this.draft.set(draftFromProtocol(study.protocol));
+    this.draft.set(draftFromProtocol(withImportance(study.protocol, this.capability())));
     this.scheduleCheck();
   }
 

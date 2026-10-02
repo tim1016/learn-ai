@@ -1,9 +1,9 @@
-import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, ElementRef, inject, Injector, input, output } from '@angular/core';
 import { InputText } from 'primeng/inputtext';
 
 import { fullPointEntries } from './golden-search-display';
-import { isVaried, knobProblemKey, type KnobNumberField, type PlanEdit } from './golden-search-plan-draft';
-import { knobInputId, refusalKnob, withoutLabel } from './golden-search-plan-problems';
+import { isRanked, isVaried, knobProblemKey, type KnobNumberField, type PlanEdit } from './golden-search-plan-draft';
+import { importanceInputId, knobInputId, refusalKnob, withoutLabel } from './golden-search-plan-problems';
 import type { CapabilityKnob, GoldenSearchMethod, KnobPlan, Point, PointValue, ProtocolRefusal, StrategyCapability } from './golden-search.types';
 
 const VALUE_FIELDS: readonly { field: KnobNumberField; label: string }[] = [
@@ -16,8 +16,6 @@ interface KnobRow {
   readonly plan: KnobPlan;
   readonly knob: CapabilityKnob | null;
   readonly label: string;
-  readonly first: boolean;
-  readonly last: boolean;
   readonly searched: boolean;
   /** Searched from a value to itself: the plan holds the knob there. */
   readonly single: boolean;
@@ -30,6 +28,7 @@ interface KnobRow {
   readonly values: number | null | undefined;
   readonly rangeRefusals: readonly string[];
   readonly stepRefusals: readonly string[];
+  readonly importanceRefusals: readonly string[];
 }
 
 function outsideRange(plan: KnobPlan, start: PointValue | undefined): number | null {
@@ -42,8 +41,10 @@ function outsideRange(plan: KnobPlan, start: PointValue | undefined): number | n
  * smallest step; off, it is held at a value (its starting value unless edited).
  * A range whose ends meet is held at that value too. The Values column is the
  * server's count of each knob's settings, and the server's refusals for a knob
- * show on its row. Up/down change the search order. Fixed program controls
- * and the declared rules sit beneath. Read-only for a locked study's frozen plan.
+ * show on its row. Each knob's importance (ADR 0074 decision 10) sets the search
+ * order, most important first and ties in the strategy's order; a legacy plan
+ * without importance keeps its own order. Fixed program controls and the
+ * declared rules sit beneath. Read-only for a locked study's frozen plan.
  */
 @Component({
   selector: 'app-golden-search-knob-table',
@@ -68,6 +69,16 @@ export class GoldenSearchKnobTableComponent {
   readonly edit = output<PlanEdit>();
 
   protected readonly inputId = knobInputId;
+  protected readonly importanceId = importanceInputId;
+  private readonly injector = inject(Injector);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+
+  /** Whether the plan ranks its knobs by importance; a legacy plan has no importance column. */
+  protected readonly ranked = computed(() => isRanked(this.knobs()));
+  protected readonly scale = computed(() => {
+    const scale = this.capability()?.importance;
+    return scale === undefined ? [] : Array.from({ length: scale.high - scale.low + 1 }, (_, index) => scale.low + index);
+  });
 
   private readonly pointValues = (point: Point | null): ReadonlyMap<string, PointValue> =>
     new Map(point === null ? [] : fullPointEntries(point, this.capability()).map((entry) => [entry.name, entry.value]));
@@ -78,8 +89,7 @@ export class GoldenSearchKnobTableComponent {
     const golden = this.pointValues(this.golden());
     const values = this.values();
     const refused = this.refusalsByKnob();
-    const plans = this.knobs();
-    return plans.map((plan, index) => {
+    return this.knobs().map((plan) => {
       const knob = declared.get(plan.name) ?? null;
       const label = knob?.label ?? plan.name;
       const goldenValue = golden.get(plan.name) ?? null;
@@ -88,16 +98,15 @@ export class GoldenSearchKnobTableComponent {
         plan,
         knob,
         label,
-        first: index === 0,
-        last: index === plans.length - 1,
         searched: plan.mode === 'search',
         single: plan.mode === 'search' && !isVaried(plan),
         golden: goldenValue,
         startsAt: startValue !== undefined && goldenValue !== null && startValue !== goldenValue ? startValue : null,
         startOutside: outsideRange(plan, startValue),
         values: values === null ? undefined : (values.get(plan.name) ?? null),
-        rangeRefusals: (refused.get(plan.name)?.range ?? []).map((message) => withoutLabel(message, label)),
+        rangeRefusals: (refused.get(plan.name)?.value ?? []).map((message) => withoutLabel(message, label)),
         stepRefusals: (refused.get(plan.name)?.step ?? []).map((message) => withoutLabel(message, label)),
+        importanceRefusals: (refused.get(plan.name)?.importance ?? []).map((message) => withoutLabel(message, label)),
       };
     });
   });
@@ -116,12 +125,12 @@ export class GoldenSearchKnobTableComponent {
   });
 
   private readonly refusalsByKnob = computed(() => {
-    const byKnob = new Map<string, { range: string[]; step: string[] }>();
+    const byKnob = new Map<string, { value: string[]; step: string[]; importance: string[] }>();
     for (const refusal of this.refusals()) {
       const named = refusalKnob(refusal.field);
       if (named === null) continue;
-      const entry = byKnob.get(named.name) ?? { range: [], step: [] };
-      (named.step ? entry.step : entry.range).push(refusal.message);
+      const entry = byKnob.get(named.name) ?? { value: [], step: [], importance: [] };
+      entry[named.part].push(refusal.message);
       byKnob.set(named.name, entry);
     }
     return byKnob;
@@ -147,7 +156,11 @@ export class GoldenSearchKnobTableComponent {
     this.edit.emit({ kind: 'knob-number', name, field, raw });
   }
 
-  protected move(name: string, offset: -1 | 1): void {
-    this.edit.emit({ kind: 'knob-move', name, offset });
+  /** A new score can move the row; focus stays on its importance control so the keyboard does not lose its place. */
+  protected onImportance(name: string, event: Event): void {
+    if (!(event.target instanceof HTMLSelectElement)) return;
+    this.edit.emit({ kind: 'knob-importance', name, importance: Number(event.target.value) });
+    const id = importanceInputId(name);
+    afterNextRender(() => this.host.nativeElement.querySelector<HTMLSelectElement>(`[id="${id}"]`)?.focus(), { injector: this.injector });
   }
 }

@@ -54,7 +54,7 @@ export type PlanEdit =
   | { readonly kind: 'method'; readonly method: GoldenSearchMethod }
   | { readonly kind: 'knob-mode'; readonly name: string; readonly mode: KnobMode }
   | { readonly kind: 'knob-number'; readonly name: string; readonly field: KnobNumberField; readonly raw: string }
-  | { readonly kind: 'knob-move'; readonly name: string; readonly offset: -1 | 1 }
+  | { readonly kind: 'knob-importance'; readonly name: string; readonly importance: number }
   | { readonly kind: 'knobs-reset' }
   | { readonly kind: 'objective'; readonly objective: RankingMeasure }
   | { readonly kind: 'fill-mode'; readonly fillMode: FillModeName }
@@ -230,13 +230,30 @@ function withSteps(protocol: ProtocolRequest, capability: StrategyCapability | n
   };
 }
 
-function moveKnob(protocol: ProtocolRequest, name: string, offset: -1 | 1): ProtocolRequest {
-  const index = protocol.knobs.findIndex((knob) => knob.name === name);
-  const target = index + offset;
-  if (index < 0 || target < 0 || target >= protocol.knobs.length) return protocol;
-  const knobs = [...protocol.knobs];
-  [knobs[index], knobs[target]] = [knobs[target], knobs[index]];
-  return { ...protocol, knobs };
+/** Whether every knob carries an importance score; a legacy plan has none and keeps its own order. */
+export function isRanked(knobs: readonly KnobPlan[]): boolean {
+  return knobs.every((knob) => knob.importance != null);
+}
+
+/**
+ * Knobs in search order (ADR 0074 decision 10): higher importance first, ties
+ * in the strategy's declared order. A plan where any knob has no importance (a
+ * legacy plan) keeps its own order. The server's `protocol.by_importance`
+ * freezes the same order; contracts/fixtures/golden-search-importance-order-v1.json pins both.
+ */
+export function byImportance(knobs: readonly KnobPlan[], capability: StrategyCapability | null): KnobPlan[] {
+  // The server sorts only whole-number scores too; anything else is refused knob by knob.
+  if (!knobs.every((knob) => Number.isInteger(knob.importance))) return [...knobs];
+  const rank = new Map((capability?.knobs ?? []).map((knob, index) => [knob.name, index]));
+  const position = (name: string): number => rank.get(name) ?? rank.size;
+  return [...knobs].sort((a, b) => (b.importance ?? 0) - (a.importance ?? 0) || position(a.name) - position(b.name));
+}
+
+/** A plan with every knob scored (a legacy plan's at the scale's starting importance), in the order the server will freeze. */
+export function withImportance(protocol: ProtocolRequest, capability: StrategyCapability | null): ProtocolRequest {
+  const start = capability?.importance.default;
+  if (start === undefined) return protocol;
+  return { ...protocol, knobs: byImportance(protocol.knobs.map((knob) => ({ ...knob, importance: knob.importance ?? start })), capability) };
 }
 
 function setNumber(protocol: ProtocolRequest, field: Exclude<ProtocolNumberField, 'final_months'>, value: number): ProtocolRequest {
@@ -294,8 +311,10 @@ export function applyPlanEdit(draft: PlanDraft, edit: PlanEdit, capability: Stra
       const patched = withFixedSeed(patchKnob(protocol, edit.name, (knob) => ({ ...knob, [edit.field]: value })), edit.name);
       return { ...draft, protocol: patched, problems: withoutHiddenKnobProblems(withProblem(problems, key, null), patched, edit.name) };
     }
-    case 'knob-move':
-      return { ...draft, protocol: moveKnob(protocol, edit.name, edit.offset), problems };
+    case 'knob-importance': {
+      const scored = patchKnob(protocol, edit.name, (knob) => ({ ...knob, importance: edit.importance }));
+      return { ...draft, protocol: { ...scored, knobs: byImportance(scored.knobs, capability) }, problems };
+    }
     case 'knobs-reset': {
       const { knobs, seed, pair_audits } = draft.origin;
       const kept = new Map([...problems].filter(([key]) => problemField(key)?.kind !== 'knob'));

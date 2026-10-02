@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -25,7 +26,7 @@ from app.research.golden_search.planning import (
     review_plan,
     slowest_requirement,
 )
-from app.research.golden_search.protocol import IncumbentRef, KnobPlan
+from app.research.golden_search.protocol import IncumbentRef, KnobPlan, by_importance
 from app.research.sweep.warmup import probe_warmup_samples
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from tests._helpers.golden_search_study import (
@@ -75,6 +76,56 @@ def test_a_request_that_is_not_a_plan_is_refused_as_malformed() -> None:
     with pytest.raises(GoldenSearchRefusal) as refused:
         protocol_from_request(request)
     assert refused.value.code == "PROTOCOL_MALFORMED"
+
+
+# ── Importance (ADR 0074 decision 10) ────────────────────────────────────
+
+
+def _ranked(request: dict[str, object], scores: dict[str, int | None]) -> dict[str, object]:
+    knobs = [{**knob, "importance": scores.get(knob["name"], 5)} for knob in request["knobs"]]  # type: ignore[attr-defined]
+    return {**request, "knobs": knobs}
+
+
+def test_a_new_plan_starts_every_knob_at_the_middle_importance_in_the_declared_order() -> None:
+    plan = default_protocol(EMA, "SPY", registry_incumbent(EMA, "SPY"), now_ms=OCTOBER_15, earliest_session=None)
+    assert [knob.importance for knob in plan.knobs] == [5] * len(_ema().knobs)
+    assert [knob.name for knob in plan.knobs] == [knob.name for knob in _ema().knobs]
+
+
+def test_importance_orders_the_frozen_search_highest_first_with_ties_in_the_declared_order() -> None:
+    request = plan_request("SPY")
+    shuffled = {**request, "knobs": list(reversed(request["knobs"]))}
+    protocol = protocol_from_request(_ranked(shuffled, {"hold_bars": 9, "rsi_min": 7, "gap": 7}))
+    assert [knob.name for knob in protocol.knobs] == ["hold_bars", "gap", "rsi_min", "rsi_max", "fast_period", "slow_period", "gap_bps"]
+    assert [knob.name for knob in protocol.search_knobs] == ["hold_bars", "gap"]
+    # The scores are part of the frozen plan.
+    assert protocol.protocol_hash() != protocol_from_request(_ranked(request, {})).protocol_hash()
+
+
+ORDER_FIXTURE = Path(__file__).resolve().parents[4] / "contracts" / "fixtures" / "golden-search-importance-order-v1.json"
+
+
+def test_the_search_order_matches_the_order_the_plan_page_shows() -> None:
+    fixture = json.loads(ORDER_FIXTURE.read_text())
+    assert fixture["declared"] == [knob.name for knob in _ema().knobs]
+    for case in fixture["cases"]:
+        knobs = [KnobPlan(name=name, mode="fixed", low=0.0, high=0.0, fixed_value=0.0, importance=case["scores"][name]) for name in reversed(fixture["declared"])]
+        assert [knob.name for knob in by_importance(knobs, fixture["declared"])] == case["order"]
+
+
+def test_a_plan_without_importance_keeps_its_own_order_and_writes_no_score() -> None:
+    request = plan_request("SPY")
+    shuffled = {**request, "knobs": list(reversed(request["knobs"]))}
+    protocol = protocol_from_request(shuffled)
+    assert [knob.name for knob in protocol.knobs] == [knob["name"] for knob in shuffled["knobs"]]
+    assert all("importance" not in knob for knob in protocol.as_dict()["knobs"])
+
+
+@pytest.mark.parametrize("bad", [0, 11, True, None])
+def test_every_knob_needs_an_importance_on_the_scale_once_any_has_one(bad: int | None) -> None:
+    protocol = protocol_from_request(_ranked(plan_request("SPY"), {"rsi_max": bad}))
+    refusals = {(item.code, item.field) for item in review(protocol, _ema()).refusals}
+    assert refusals == {("IMPORTANCE_INVALID", "knobs.rsi_max.importance")}
 
 
 # ── Run-up ───────────────────────────────────────────────────────────────
