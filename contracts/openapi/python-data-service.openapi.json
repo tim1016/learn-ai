@@ -3080,17 +3080,6 @@
             ],
             "title": "Verdictversion"
           },
-          "warmupFromDate": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Warmupfromdate"
-          },
           "winRate": {
             "title": "Winrate",
             "type": "number"
@@ -3144,8 +3133,7 @@
           "trades",
           "tradesTruncated",
           "parityVerdicts",
-          "closingBarSkips",
-          "warmupFromDate"
+          "closingBarSkips"
         ],
         "title": "BacktestRunDetailResponse",
         "type": "object"
@@ -3523,6 +3511,38 @@
           "isSyntheticExit"
         ],
         "title": "BacktestRunTradeResponse",
+        "type": "object"
+      },
+      "BacktestRunViewRefusal": {
+        "description": "Why a saved run's strategy view cannot be shown (#2639 D13).",
+        "properties": {
+          "code": {
+            "const": "STRATEGY_VIEW_NOT_REPLAYABLE",
+            "title": "Code"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "BacktestRunViewRefusal",
+        "type": "object"
+      },
+      "BacktestRunViewRefusalBody": {
+        "description": "The 409 body: FastAPI wraps an ``HTTPException`` detail as ``{\"detail\": ...}``.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/BacktestRunViewRefusal"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "BacktestRunViewRefusalBody",
         "type": "object"
       },
       "BarPayload": {
@@ -14404,76 +14424,6 @@
           "warmup_primed"
         ],
         "title": "EngineEvaluationWindowResponse",
-        "type": "object"
-      },
-      "EngineStrategyViewRequest": {
-        "description": "One backtest's strategy view (#2639 D13): its settings, its window and its warmup.\n\nThe window and warmup are NYSE session-open anchors, as on the engine\nchart: ``from_ms_utc`` opens the first evaluated session, ``to_ms_utc``\nthe session after the last, ``warmup_from_ms_utc`` the run's warmup start\nwhen it read history before its window.",
-        "properties": {
-          "adjusted": {
-            "default": true,
-            "title": "Adjusted",
-            "type": "boolean"
-          },
-          "from_ms_utc": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "From Ms Utc",
-            "type": "integer"
-          },
-          "parameters": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/JsonValue"
-            },
-            "title": "Parameters",
-            "type": "object"
-          },
-          "session": {
-            "default": "regular",
-            "enum": [
-              "regular",
-              "extended"
-            ],
-            "title": "Session",
-            "type": "string"
-          },
-          "strategy_name": {
-            "minLength": 1,
-            "title": "Strategy Name",
-            "type": "string"
-          },
-          "symbol": {
-            "maxLength": 20,
-            "minLength": 1,
-            "title": "Symbol",
-            "type": "string"
-          },
-          "to_ms_utc": {
-            "maximum": 253402300799999.0,
-            "minimum": 0.0,
-            "title": "To Ms Utc",
-            "type": "integer"
-          },
-          "warmup_from_ms_utc": {
-            "anyOf": [
-              {
-                "maximum": 253402300799999.0,
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Warmup From Ms Utc"
-          }
-        },
-        "required": [
-          "strategy_name",
-          "symbol",
-          "from_ms_utc",
-          "to_ms_utc"
-        ],
-        "title": "EngineStrategyViewRequest",
         "type": "object"
       },
       "EngineTradeResponse": {
@@ -60611,48 +60561,6 @@
         ]
       }
     },
-    "/api/engine/strategy-view": {
-      "post": {
-        "description": "A backtest's strategy view: its own decision candles, values, checks and default gate (#2639).",
-        "operationId": "get_engine_strategy_view_api_engine_strategy_view_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EngineStrategyViewRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StrategyViewResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Engine Strategy View",
-        "tags": [
-          "engine"
-        ]
-      }
-    },
     "/api/golden-fixtures": {
       "get": {
         "description": "Return the golden fixture catalog with the most recent validation status.",
@@ -61841,6 +61749,59 @@
           }
         },
         "summary": "Update Backtest Run Notes",
+        "tags": [
+          "research-backtest-runs"
+        ]
+      }
+    },
+    "/api/research/backtest-runs/{run_id}/strategy-view": {
+      "get": {
+        "description": "The run's strategy view, replayed from its own record; 409 says why when it cannot be replayed exactly.",
+        "operationId": "get_backtest_run_strategy_view_api_research_backtest_runs__run_id__strategy_view_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyViewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestRunViewRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Backtest Run Strategy View",
         "tags": [
           "research-backtest-runs"
         ]

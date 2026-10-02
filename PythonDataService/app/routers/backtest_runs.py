@@ -2,7 +2,8 @@
 
 ``GET /`` serves the run-history table (newest first, optionally one
 engine's), ``GET /{id}`` the run report with its newest five hundred trades
-and parity verdicts, and ``PATCH /{id}/notes`` the researcher's notes.
+and parity verdicts, ``GET /{id}/strategy-view`` the run's own decision
+candles (#2639 D13), and ``PATCH /{id}/notes`` the researcher's notes.
 These replace the .NET ``backtestRuns`` /
 ``backtestRun`` GraphQL queries, the ``updateBacktestRunNotes`` mutation and
 the ``/api/studies`` REST surface; the Relay connection is not reproduced
@@ -10,6 +11,8 @@ because the history table requests one fixed page and never pages.
 """
 
 from __future__ import annotations
+
+import asyncio
 
 from fastapi import APIRouter, HTTPException, Query, status
 
@@ -21,7 +24,11 @@ from app.schemas.backtest_runs import (
     BacktestRunNotesRequest,
     BacktestRunNotesResponse,
     BacktestRunSummaryResponse,
+    BacktestRunViewRefusalBody,
 )
+from app.schemas.strategy_view import StrategyViewResponse
+from app.services.backtest_run_strategy_view import build_backtest_run_strategy_view
+from app.services.engine_backtest_service import SavedRunNotReplayable
 
 router = APIRouter()
 
@@ -53,6 +60,25 @@ async def get_backtest_run(run_id: int) -> BacktestRunDetailResponse:
     if run is None:
         raise _not_found(run_id)
     return BacktestRunDetailResponse.model_validate(run)
+
+
+@router.get(
+    "/{run_id}/strategy-view",
+    response_model=StrategyViewResponse,
+    responses={status.HTTP_409_CONFLICT: {"model": BacktestRunViewRefusalBody}},
+)
+async def get_backtest_run_strategy_view(run_id: int) -> StrategyViewResponse:
+    """The run's strategy view, replayed from its own record; 409 says why when it cannot be replayed exactly."""
+    run = await with_connection(repo.get_run, run_id)
+    if run is None:
+        raise _not_found(run_id)
+    try:
+        return await asyncio.to_thread(build_backtest_run_strategy_view, run)
+    except SavedRunNotReplayable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "STRATEGY_VIEW_NOT_REPLAYABLE", "message": str(exc)},
+        ) from exc
 
 
 @router.patch("/{run_id}/notes", response_model=BacktestRunNotesResponse)

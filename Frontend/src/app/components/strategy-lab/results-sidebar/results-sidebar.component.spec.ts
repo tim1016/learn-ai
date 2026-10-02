@@ -74,7 +74,6 @@ function run(): BacktestRunDetail {
     notes: null,
     tradesTruncated: false,
     closingBarSkips: [],
-    warmupFromDate: null,
     parityVerdicts: [{
       id: 1,
       status: "diverged",

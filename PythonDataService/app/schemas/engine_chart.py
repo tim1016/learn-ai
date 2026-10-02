@@ -61,30 +61,3 @@ class EngineChartResponse(BaseModel):
     coverage: EngineChartCoverage
     indicator_specs: list[ResolvedChartIndicator]
     indicators: list[ChartIndicatorResult]
-
-
-class EngineStrategyViewRequest(BaseModel):
-    """One backtest's strategy view (#2639 D13): its settings, its window and its warmup.
-
-    The window and warmup are NYSE session-open anchors, as on the engine
-    chart: ``from_ms_utc`` opens the first evaluated session, ``to_ms_utc``
-    the session after the last, ``warmup_from_ms_utc`` the run's warmup start
-    when it read history before its window.
-    """
-
-    strategy_name: str = Field(..., min_length=1)
-    parameters: dict[str, JsonValue] = Field(default_factory=dict)
-    symbol: str = Field(..., min_length=1, max_length=20)
-    from_ms_utc: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS)
-    to_ms_utc: int = Field(..., ge=0, le=MAX_TIMESTAMP_MS)
-    warmup_from_ms_utc: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
-    adjusted: bool = True
-    session: Literal["regular", "extended"] = "regular"
-
-    @model_validator(mode="after")
-    def validate_window(self) -> EngineStrategyViewRequest:
-        if self.to_ms_utc <= self.from_ms_utc:
-            raise ValueError("to_ms_utc must be greater than from_ms_utc")
-        if self.warmup_from_ms_utc is not None and self.warmup_from_ms_utc > self.from_ms_utc:
-            raise ValueError("warmup_from_ms_utc must not be later than from_ms_utc")
-        return self

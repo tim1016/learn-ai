@@ -1,6 +1,6 @@
 /** #2639 D13: a backtest's strategy view in Strategy Lab, the same panel the
- * bot page shows a bot in, read from a replay of the run's own window and
- * warmup, with the run's price-and-trades chart one tab away. */
+ * bot page shows a bot in, read as a replay of the saved run, with the run's
+ * price-and-trades chart one tab away. */
 import { provideHttpClient } from "@angular/common/http";
 import { HttpTestingController, provideHttpClientTesting, type TestRequest } from "@angular/common/http/testing";
 import { Component, input } from "@angular/core";
@@ -9,7 +9,6 @@ import { render, screen, within } from "@testing-library/angular";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { LeanSidecarService } from "../../../services/lean-sidecar.service";
 import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
 import { fakeStrategyChartFactory } from "../../../testing/strategy-chart-fake";
 import { fakeStrategyViewDataPlane } from "../../../testing/strategy-view-data-plane-fakes";
@@ -34,64 +33,33 @@ class RunChartStub {
   readonly equityPoints = input<unknown[]>([]);
 }
 
-/** Each trading date's next session open, as the calendar answers it (arbitrary distinct instants). */
-const SESSION_OPENS: Record<string, number> = {
-  "2026-01-04": 1_767_623_400_000, // asked for the day before the window starts (2026-01-05)
-  "2026-01-06": 1_767_796_200_000, // asked for the window's last day
-  "2025-12-30": 1_767_105_000_000, // asked for the day before the warmup starts (2025-12-31)
-};
-
-const STRATEGY_VIEW_URL = "/api/engine/strategy-view";
-
 async function renderView(run: BacktestRunDetail) {
   const charts = fakeStrategyChartFactory(vi);
-  const nextTradingDayOpen = vi.fn(async (isoDate: string) => ({
-    next_trading_date: isoDate,
-    session_open_ms_utc: SESSION_OPENS[isoDate] ?? 0,
-  }));
   const rendered = await render(StrategyLabStrategyViewComponent, {
     inputs: { run },
     componentImports: [BotChartPanelComponent, RunChartStub],
     providers: [
       provideHttpClient(),
       provideHttpClientTesting(),
-      { provide: LeanSidecarService, useValue: { nextTradingDayOpen } },
       { provide: STRATEGY_CHART_FACTORY, useValue: charts.create },
       ...fakeStrategyViewDataPlane(vi).providers,
     ],
   });
-  return { ...rendered, http: TestBed.inject(HttpTestingController), nextTradingDayOpen };
+  return { ...rendered, http: TestBed.inject(HttpTestingController) };
 }
 
-/** Lets the calendar reads settle, then hands back the strategy-view request they led to. */
-async function strategyViewRequest(http: HttpTestingController): Promise<TestRequest> {
-  // `match` takes what it finds off the pending list, so it is kept here.
-  const found: TestRequest[] = [];
-  await vi.waitFor(() => {
-    found.push(...http.match((request) => request.url.endsWith(STRATEGY_VIEW_URL)));
-    expect(found).toHaveLength(1);
-  }, { timeout: 1000 });
-  return found[0];
+function strategyViewRequest(http: HttpTestingController, runId: number): TestRequest {
+  return http.expectOne((request) => request.url.endsWith(`/api/research/backtest-runs/${runId}/strategy-view`));
 }
 
 describe("StrategyLabStrategyViewComponent (#2639)", () => {
-  it("draws the run's strategy view from a replay of its own settings, window and warmup", async () => {
+  it("draws the saved run's own strategy view, with its price chart one tab away", async () => {
     const user = userEvent.setup();
-    const { http, fixture } = await renderView(makeRun({ warmupFromDate: 1_767_157_200_000 })); // 2025-12-31 ET midnight
+    const run = makeRun();
+    const { http, fixture } = await renderView(run);
 
-    const request = await strategyViewRequest(http);
-    expect(request.request.method).toBe("POST");
-    expect(request.request.body).toEqual({
-      strategy_name: "spy_ema_crossover",
-      parameters: { short: 5, long: 10, symbol: "SPY" },
-      symbol: "SPY",
-      adjusted: true,
-      session: "regular",
-      // The window opens at the first evaluated session and closes at the session after the last.
-      from_ms_utc: SESSION_OPENS["2026-01-04"],
-      to_ms_utc: SESSION_OPENS["2026-01-06"],
-      warmup_from_ms_utc: SESSION_OPENS["2025-12-30"],
-    });
+    const request = strategyViewRequest(http, run.id);
+    expect(request.request.method).toBe("GET");
     request.flush(fakeStrategyView());
     await fixture.whenStable();
 
@@ -103,37 +71,26 @@ describe("StrategyLabStrategyViewComponent (#2639)", () => {
     expect(screen.getByText("Run price chart")).toBeTruthy();
   });
 
-  it("asks for no warmup when the run read no history before its window", async () => {
-    const { http } = await renderView(makeRun({ warmupFromDate: null }));
-
-    const request = await strategyViewRequest(http);
-    expect(request.request.body.warmup_from_ms_utc).toBeNull();
-    request.flush(fakeStrategyView());
-  });
-
-  it("says why a run that recorded no data policy has no strategy view, and asks for nothing", async () => {
-    const { http } = await renderView(makeRun({ dataPolicy: null }));
-
-    const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText("This run’s strategy view is unavailable.")).toBeTruthy();
-    expect(within(alert).getByText("The run recorded no data policy, so its bars cannot be replayed.")).toBeTruthy();
-    http.expectNone((request) => request.url.endsWith(STRATEGY_VIEW_URL));
-  });
-
-  it("shows the engine's reason when the read is refused, and Retry reads again", async () => {
+  it("says why in the data plane's words when the run cannot be replayed exactly, and Retry reads again", async () => {
     const user = userEvent.setup();
-    const { http } = await renderView(makeRun());
+    const run = makeRun();
+    const { http } = await renderView(run);
 
-    (await strategyViewRequest(http)).flush(
-      { detail: "unknown strategy: spy_ema_crossover" },
-      { status: 400, statusText: "Bad Request" },
+    strategyViewRequest(http, run.id).flush(
+      {
+        detail: {
+          code: "STRATEGY_VIEW_NOT_REPLAYABLE",
+          message: "The strategy has changed since this run: it ran 1.0.0, and this build has 1.1.0.",
+        },
+      },
+      { status: 409, statusText: "Conflict" },
     );
     const alert = await screen.findByRole("alert");
-    expect(within(alert).getByText("This run’s strategy view could not be read.")).toBeTruthy();
-    expect(within(alert).getByText("unknown strategy: spy_ema_crossover")).toBeTruthy();
+    expect(within(alert).getByText("This run’s strategy view could not be shown.")).toBeTruthy();
+    expect(within(alert).getByText("The strategy has changed since this run: it ran 1.0.0, and this build has 1.1.0.")).toBeTruthy();
 
     await user.click(within(alert).getByRole("button", { name: "Retry strategy view" }));
-    (await strategyViewRequest(http)).flush(fakeStrategyView());
+    strategyViewRequest(http, run.id).flush(fakeStrategyView());
     expect(await screen.findByRole("group", { name: /decision candles for SPY/ })).toBeTruthy();
   });
 });

@@ -19,8 +19,6 @@ value is ``int64 ms UTC``; the run's start and end are date-anchored values
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
-from datetime import date
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -28,7 +26,7 @@ from pydantic.alias_generators import to_camel
 
 from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
 from app.research.backtest_runs.repository import Engine
-from app.utils.session_anchors import MAX_TIMESTAMP_MS, et_midnight_ms
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 RunSource = Literal["engine", "lean-sidecar"]
 
@@ -142,18 +140,6 @@ class BacktestRunDetailResponse(_RunResponse):
     closing_bar_skips: list[BacktestRunClosingBarSkipResponse] = _column(
         "evidence_provenance_json", "closingBarSkips"
     )
-    # Where the run's warmup began, ET midnight of that trading date like
-    # ``startDate``, when it read history before its window; ``None`` otherwise.
-    warmup_from_date: int | None = _column("execution_config_json", "warmupFromDate")
-
-    @field_validator("warmup_from_date", mode="before")
-    @classmethod
-    def _parse_warmup_from(cls, value: Any) -> Any:
-        if value is None:
-            return None
-        configuration = json.loads(value) if isinstance(value, str) else value
-        warmup = configuration.get("warmup_from_date") if isinstance(configuration, Mapping) else None
-        return None if warmup is None else et_midnight_ms(date.fromisoformat(warmup))
 
     @field_validator("equity_curve", "validation_analytics", mode="before")
     @classmethod
@@ -177,6 +163,19 @@ class BacktestRunDetailResponse(_RunResponse):
             else RunEvidenceProvenance.model_validate(value)
         )
         return [skip.model_dump() for skip in provenance.closing_bar_skips]
+
+
+class BacktestRunViewRefusal(BaseModel):
+    """Why a saved run's strategy view cannot be shown (#2639 D13)."""
+
+    code: Literal["STRATEGY_VIEW_NOT_REPLAYABLE"]
+    message: str
+
+
+class BacktestRunViewRefusalBody(BaseModel):
+    """The 409 body: FastAPI wraps an ``HTTPException`` detail as ``{"detail": ...}``."""
+
+    detail: BacktestRunViewRefusal
 
 
 class BacktestRunNotesRequest(BaseModel):

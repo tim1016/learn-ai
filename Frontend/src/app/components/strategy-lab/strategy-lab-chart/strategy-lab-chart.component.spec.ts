@@ -83,7 +83,6 @@ function makeRun(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail 
     trades: [],
     tradesTruncated: false,
     closingBarSkips: [],
-    warmupFromDate: null,
     metricDocumentation: [],
     notes: null,
     parityVerdicts: [],

@@ -83,7 +83,6 @@ function run(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
     trades: [],
     tradesTruncated: false,
     closingBarSkips: [],
-    warmupFromDate: null,
     metricDocumentation: [],
     notes: null,
     parityVerdicts: [],
@@ -151,7 +150,7 @@ const bypassAuxiliaryChartRequests: HttpInterceptorFn = (request, next) => {
   if (request.url.endsWith("/api/chart/indicators/supported")) {
     return of(new HttpResponse({ status: 200, body: { names: [] } }));
   }
-  if (request.url.endsWith("/api/engine/chart") || request.url.endsWith("/api/engine/strategy-view")) {
+  if (request.url.endsWith("/api/engine/chart") || request.url.endsWith("/strategy-view")) {
     return throwError(() => new HttpErrorResponse({ status: 503, url: request.url }));
   }
   return next(request);

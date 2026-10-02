@@ -4273,26 +4273,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/engine/strategy-view": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Get Engine Strategy View
-         * @description A backtest's strategy view: its own decision candles, values, checks and default gate (#2639).
-         */
-        post: operations["get_engine_strategy_view_api_engine_strategy_view_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/golden-fixtures": {
         parameters: {
             query?: never;
@@ -4832,6 +4812,26 @@ export interface paths {
         head?: never;
         /** Update Backtest Run Notes */
         patch: operations["update_backtest_run_notes_api_research_backtest_runs__run_id__notes_patch"];
+        trace?: never;
+    };
+    "/api/research/backtest-runs/{run_id}/strategy-view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Backtest Run Strategy View
+         * @description The run's strategy view, replayed from its own record; 409 says why when it cannot be replayed exactly.
+         */
+        get: operations["get_backtest_run_strategy_view_api_research_backtest_runs__run_id__strategy_view_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/research/golden-qualifications": {
@@ -7240,8 +7240,6 @@ export interface components {
             verdictSignal: string | null;
             /** Verdictversion */
             verdictVersion: number | null;
-            /** Warmupfromdate */
-            warmupFromDate: number | null;
             /** Winrate */
             winRate: number;
             /** Winningtrades */
@@ -7371,6 +7369,26 @@ export interface components {
             quantity: number;
             /** Signalreason */
             signalReason: string;
+        };
+        /**
+         * BacktestRunViewRefusal
+         * @description Why a saved run's strategy view cannot be shown (#2639 D13).
+         */
+        BacktestRunViewRefusal: {
+            /**
+             * Code
+             * @constant
+             */
+            code: "STRATEGY_VIEW_NOT_REPLAYABLE";
+            /** Message */
+            message: string;
+        };
+        /**
+         * BacktestRunViewRefusalBody
+         * @description The 409 body: FastAPI wraps an ``HTTPException`` detail as ``{"detail": ...}``.
+         */
+        BacktestRunViewRefusalBody: {
+            detail: components["schemas"]["BacktestRunViewRefusal"];
         };
         /**
          * BarPayload
@@ -11852,42 +11870,6 @@ export interface components {
             evaluation_start_ms: number;
             /** Warmup Primed */
             warmup_primed: boolean;
-        };
-        /**
-         * EngineStrategyViewRequest
-         * @description One backtest's strategy view (#2639 D13): its settings, its window and its warmup.
-         *
-         *     The window and warmup are NYSE session-open anchors, as on the engine
-         *     chart: ``from_ms_utc`` opens the first evaluated session, ``to_ms_utc``
-         *     the session after the last, ``warmup_from_ms_utc`` the run's warmup start
-         *     when it read history before its window.
-         */
-        EngineStrategyViewRequest: {
-            /**
-             * Adjusted
-             * @default true
-             */
-            adjusted?: boolean;
-            /** From Ms Utc */
-            from_ms_utc: number;
-            /** Parameters */
-            parameters?: {
-                [key: string]: components["schemas"]["JsonValue"];
-            };
-            /**
-             * Session
-             * @default regular
-             * @enum {string}
-             */
-            session?: "regular" | "extended";
-            /** Strategy Name */
-            strategy_name: string;
-            /** Symbol */
-            symbol: string;
-            /** To Ms Utc */
-            to_ms_utc: number;
-            /** Warmup From Ms Utc */
-            warmup_from_ms_utc?: number | null;
         };
         /** EngineTradeResponse */
         EngineTradeResponse: {
@@ -31383,39 +31365,6 @@ export interface operations {
             };
         };
     };
-    get_engine_strategy_view_api_engine_strategy_view_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EngineStrategyViewRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["StrategyViewResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_golden_fixtures_api_golden_fixtures_get: {
         parameters: {
             query?: never;
@@ -32151,6 +32100,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BacktestRunNotesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_backtest_run_strategy_view_api_research_backtest_runs__run_id__strategy_view_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyViewResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BacktestRunViewRefusalBody"];
                 };
             };
             /** @description Validation Error */
