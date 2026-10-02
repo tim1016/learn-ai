@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { etMidnightMs } from '../../shared/date/et-midnight';
-import { applyPlanEdit, draftFromDefaults, draftMonths, knobProblemKey, numberProblemKey, withServerDates, type PlanDraft } from './golden-search-plan-draft';
+import { applyPlanEdit, draftFromDefaults, draftFromProtocol, draftMonths, knobProblemKey, numberProblemKey, wireProtocol, withServerDates, type PlanDraft } from './golden-search-plan-draft';
 import { defaults, emaCapability, protocol } from './testing/fixtures';
 
 function draft(): PlanDraft {
-  return { protocol: protocol(), problems: new Map() };
+  return draftFromProtocol(protocol());
 }
 
 describe('applyPlanEdit', () => {
@@ -131,14 +131,59 @@ describe('applyPlanEdit', () => {
   });
 });
 
+describe('knobs-reset', () => {
+  it('restores the knob table, start and pair audits the plan began with, keeping every other edit', () => {
+    let edited = applyPlanEdit(draft(), { kind: 'knob-mode', name: 'fast_period', mode: 'fixed' }, emaCapability());
+    edited = applyPlanEdit(edited, { kind: 'knob-number', name: 'fast_period', field: 'fixed_value', raw: '7' }, emaCapability());
+    edited = applyPlanEdit(edited, { kind: 'knob-move', name: 'hold_bars', offset: -1 }, emaCapability());
+    edited = applyPlanEdit(edited, { kind: 'pair', pair: ['rsi_min', 'rsi_max'], included: false }, emaCapability());
+    edited = applyPlanEdit(edited, { kind: 'knob-number', name: 'gap', field: 'low', raw: '' }, emaCapability());
+    edited = applyPlanEdit(edited, { kind: 'number', field: 'budget_cap', raw: '' }, emaCapability());
+
+    const reset = applyPlanEdit(edited, { kind: 'knobs-reset' }, emaCapability());
+
+    expect(reset.protocol.knobs).toEqual(protocol().knobs);
+    expect(reset.protocol.seed).toEqual(protocol().seed);
+    expect(reset.protocol.pair_audits).toEqual(protocol().pair_audits);
+    expect([...reset.problems.keys()]).toEqual([numberProblemKey('budget_cap')]);
+  });
+});
+
+describe('wireProtocol', () => {
+  it('sends a knob searched from a value to itself held at that value, moving the start with it', () => {
+    const single = applyPlanEdit(applyPlanEdit(draft(), { kind: 'knob-number', name: 'fast_period', field: 'low', raw: '5' }, emaCapability()), { kind: 'knob-number', name: 'fast_period', field: 'high', raw: '5' }, emaCapability());
+
+    const sent = wireProtocol(single.protocol);
+
+    expect(sent.knobs.find((k) => k.name === 'fast_period')).toMatchObject({ mode: 'fixed', fixed_value: 5 });
+    expect(sent.seed?.['fast_period']).toBe(5);
+    // The draft still shows a searched range: only the plan the server receives holds the knob.
+    expect(single.protocol.knobs.find((k) => k.name === 'fast_period')?.mode).toBe('search');
+  });
+
+  it('sends a pair audit only while both its knobs vary, and keeps it chosen so it returns when they do', () => {
+    const held = applyPlanEdit(draft(), { kind: 'knob-mode', name: 'slow_period', mode: 'fixed' }, emaCapability());
+
+    expect(wireProtocol(held.protocol).pair_audits).toEqual([['rsi_min', 'rsi_max']]);
+    expect(held.protocol.pair_audits).toHaveLength(2);
+    const again = applyPlanEdit(held, { kind: 'knob-mode', name: 'slow_period', mode: 'search' }, emaCapability());
+    expect(wireProtocol(again.protocol).pair_audits).toEqual(protocol().pair_audits);
+  });
+
+  it('leaves a plan with nothing to change as it is', () => {
+    expect(wireProtocol(protocol())).toEqual(protocol());
+  });
+});
+
 describe('draftFromDefaults', () => {
   it('starts from the final-test length the server laid out, and keeps the fields that describe the plan out of it', () => {
-    const { draft: fresh, incumbentLabel } = draftFromDefaults(defaults({ final_months: 6 }));
+    const { draft: fresh, incumbentLabel, incumbentSentence } = draftFromDefaults(defaults({ final_months: 6 }));
 
     expect(fresh.finalMonths).toBe(6);
     expect(draftMonths(fresh)).toEqual({ final_months: 6, training_months: 6, test_months: 2 });
     expect(incumbentLabel).toBe('Registry validated settings');
-    expect(Object.keys(fresh.protocol).filter((key) => ['final_months', 'incumbent_label', 'exposure'].includes(key))).toEqual([]);
+    expect(incumbentSentence).toBe('Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars');
+    expect(Object.keys(fresh.protocol).filter((key) => ['final_months', 'incumbent_label', 'incumbent_sentence', 'exposure'].includes(key))).toEqual([]);
     expect(fresh.protocol).toEqual(protocol());
   });
 });

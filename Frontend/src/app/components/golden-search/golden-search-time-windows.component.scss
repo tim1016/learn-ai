@@ -1,0 +1,14 @@
+.timeline { display: grid; gap: var(--space-1); }
+.bar { display: flex; height: 2.1rem; border: 1px solid var(--border-light); border-radius: var(--radius); overflow: hidden; font-size: var(--fs-xs); }
+.bar__dev { position: relative; display: flex; align-items: center; padding-inline-start: var(--space-3); background: var(--accent-faint); color: var(--text-secondary); min-width: 0; white-space: nowrap; overflow: hidden; }
+.bar__fold { position: absolute; bottom: 0; height: 0.35rem; background: var(--accent); opacity: 0.7; border-inline-start: 1px solid var(--bg-surface); }
+.bar__final { flex: 1; display: flex; align-items: center; justify-content: center; gap: var(--space-1); background: var(--warn-soft); color: var(--warn); white-space: nowrap; min-width: 5.5rem; }
+.ticks { position: relative; display: flex; justify-content: space-between; height: 1.1rem; font-size: var(--fs-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.ticks__final { position: absolute; transform: translateX(-50%); }
+.exposure { display: flex; gap: var(--space-2); align-items: baseline; font-size: var(--fs-sm); border-radius: var(--radius); padding: var(--space-2) var(--space-3); background: var(--bg-elevated); }
+.exposure[data-state='not_opened'] i { color: var(--bull); }
+.exposure[data-state='previously_used'], .exposure[data-state='history_unknown'] { background: var(--warn-soft); }
+.exposure[data-state='previously_used'] i, .exposure[data-state='history_unknown'] i { color: var(--warn); }
+.dates { display: grid; gap: var(--space-3); }
+.dates > summary { color: var(--accent-text); font-size: var(--fs-sm); cursor: pointer; width: fit-content; }
+.dates[open] > summary { margin-bottom: var(--space-3); }

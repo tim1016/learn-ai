@@ -1,5 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -56,7 +56,7 @@ async function pickSpy(service: FakeService, view: Awaited<ReturnType<typeof ren
   pickSymbol(view.fixture, 'SPY');
   await waitFor(() => expect(screen.getByRole('table', { name: /knobs, in search order/i })).not.toBeNull());
   await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(1));
-  await waitFor(() => expect(screen.getByText(/the server accepts this plan/i)).not.toBeNull());
+  await waitFor(() => expect(screen.getByText(/plan is ready to lock/i)).not.toBeNull());
 }
 
 function lockButton(): HTMLButtonElement {
@@ -68,10 +68,12 @@ describe('GoldenSearchPlanFormComponent', () => {
     await renderForm(fakeService());
 
     const picker = screen.getByRole('combobox', { name: 'Strategy' }) as HTMLSelectElement;
-    expect(Array.from(picker.options).map((o) => o.value)).toEqual(['ema_crossover_signal']);
-    const list = screen.getByRole('list', { name: /cannot study yet/i });
-    expect(list.textContent).toContain('SMA Crossover');
-    expect(list.textContent).toContain('No Golden Search declaration has shipped');
+    const options = Array.from(picker.options);
+    expect(options.filter((o) => !o.disabled).map((o) => o.value)).toEqual(['ema_crossover_signal']);
+    const unavailable = options.filter((o) => o.disabled).map((o) => o.textContent ?? '');
+    expect(unavailable).toHaveLength(1);
+    expect(unavailable[0]).toContain('SMA Crossover');
+    expect(unavailable[0]).toContain('No Golden Search declaration has shipped');
   });
 
   it('loads the defaults for the strategy and instrument, then shows every knob, fixed control and constraint', async () => {
@@ -84,8 +86,9 @@ describe('GoldenSearchPlanFormComponent', () => {
     const table = screen.getByRole('table', { name: /knobs, in search order/i });
     for (const label of ['Crossover gap', 'RSI lower gate', 'Fast EMA length', 'Hold time', 'Crossover gap (bps)']) expect(table.textContent).toContain(label);
     expect(screen.getByRole('list', { name: 'Fixed controls' }).textContent).toContain('RSI length');
-    expect(screen.getByRole('list', { name: 'Constraints' }).textContent).toContain('fast EMA must be shorter');
+    expect(screen.getByRole('list', { name: 'Constraints' }).textContent).toContain('Fast EMA length < Slow EMA length');
     expect(screen.getByText(/registry validated settings/i)).not.toBeNull();
+    expect(screen.getByText('Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars')).not.toBeNull();
   });
 
   it('debounces a burst of edits into one preflight of the latest plan', async () => {
@@ -111,12 +114,12 @@ describe('GoldenSearchPlanFormComponent', () => {
     const slow = deferred<GoldenSearchPreflight>();
     service.preflight.mockImplementationOnce(() => slow.promise);
 
-    const ceiling = screen.getByLabelText(/maximum drawdown/i);
+    const ceiling = screen.getByLabelText(/max drawdown/i);
     fireEvent.input(ceiling, { target: { value: '15' } });
     await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
     fireEvent.input(ceiling, { target: { value: '25' } });
     await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(3));
-    await waitFor(() => expect(screen.getByText(/the server accepts this plan/i)).not.toBeNull());
+    await waitFor(() => expect(screen.getByText(/plan is ready to lock/i)).not.toBeNull());
 
     slow.resolve(preflightFixture({ refusals: [{ code: 'DRAWDOWN_CEILING_INVALID', field: 'policy', message: 'stale answer' }] }));
     await view.fixture.whenStable();
@@ -126,7 +129,7 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(service.preflight.mock.lastCall?.[0].policy.max_drawdown_ceiling).toBe(0.25);
   });
 
-  it('lists every refusal with its code and keeps Lock disabled', async () => {
+  it('lists every refusal in plain words and keeps Lock disabled', async () => {
     const service = fakeService();
     service.preflight.mockImplementation(async () =>
       preflightFixture({
@@ -141,7 +144,8 @@ describe('GoldenSearchPlanFormComponent', () => {
     pickSymbol(view.fixture, 'SPY');
 
     const refusals = await screen.findByRole('list', { name: /cannot be locked/i });
-    expect(refusals.textContent).toContain('Workload Limit');
+    expect(screen.getByText('2 problems to fix before locking')).not.toBeNull();
+    expect(refusals.textContent).not.toContain('WORKLOAD_LIMIT');
     expect(refusals.textContent).toContain('6,200 runs exceed the cap');
     expect(refusals.textContent).toContain('no whole fold');
     expect(lockButton().disabled).toBe(true);
@@ -152,10 +156,10 @@ describe('GoldenSearchPlanFormComponent', () => {
     const { view } = await renderForm(service);
     await pickSpy(service, view);
 
-    fireEvent.input(screen.getByLabelText(/backtest cap/i), { target: { value: '' } });
+    fireEvent.input(screen.getByLabelText(/run cap/i), { target: { value: '' } });
     await view.fixture.whenStable();
 
-    expect(screen.getByRole('list', { name: /values to fix/i }).textContent).toContain('Backtest cap');
+    expect(screen.getByRole('list', { name: /values to fix/i }).textContent).toContain('Run cap: Enter a number.');
     expect(screen.getByText(/some values cannot be read yet/i)).not.toBeNull();
     expect(lockButton().disabled).toBe(true);
     await new Promise((done) => setTimeout(done, 20));
@@ -168,7 +172,7 @@ describe('GoldenSearchPlanFormComponent', () => {
     await pickSpy(service, view);
 
     expect(screen.getByLabelText('Fast EMA length smallest step')).not.toBeNull();
-    fireEvent.change(screen.getByLabelText('Search or keep fixed: Crossover gap (bps)'), { target: { value: 'search' } });
+    fireEvent.click(screen.getByRole('switch', { name: 'Vary Crossover gap (bps)' }));
     await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole('radio', { name: /grid search/i }));
     await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(3));
@@ -205,6 +209,101 @@ describe('GoldenSearchPlanFormComponent', () => {
     await waitFor(() => expect(lockButton().disabled).toBe(false));
   });
 
+  it('holding a knob with Vary off sends it held at its starting value, and its pair audit waits until it varies again', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Vary Fast EMA length' }));
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
+
+    expect((screen.getByLabelText('Fast EMA length held value') as HTMLInputElement).value).toBe('5');
+    const sent = service.preflight.mock.lastCall?.[0];
+    expect(sent?.knobs.find((k) => k.name === 'fast_period')).toMatchObject({ mode: 'fixed', fixed_value: 5 });
+    expect(sent?.pair_audits).toEqual([['rsi_min', 'rsi_max']]);
+    expect(screen.getByText(/off while Fast EMA length is held/)).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Vary Fast EMA length' }));
+    await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(3));
+    expect(service.preflight.mock.lastCall?.[0].pair_audits).toEqual([['fast_period', 'slow_period'], ['rsi_min', 'rsi_max']]);
+  });
+
+  it('a range whose ends meet holds the knob at that value instead of being refused', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+
+    fireEvent.input(screen.getByLabelText('Fast EMA length low'), { target: { value: '5' } });
+    fireEvent.input(screen.getByLabelText('Fast EMA length high'), { target: { value: '5' } });
+    await waitFor(() => expect(service.preflight.mock.lastCall?.[0].knobs.find((k) => k.name === 'fast_period')?.mode).toBe('fixed'));
+
+    expect(service.preflight.mock.lastCall?.[0].knobs.find((k) => k.name === 'fast_period')?.fixed_value).toBe(5);
+    expect(screen.getByText('Same low and high: held at 5.')).not.toBeNull();
+    expect(screen.queryByLabelText('Fast EMA length smallest step')).toBeNull();
+    await waitFor(() => expect(lockButton().disabled).toBe(false));
+  });
+
+  it("shows each knob's golden value and the server's count of its settings", async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    const cells = (name: string): string[] => Array.from(screen.getByRole('rowheader', { name: new RegExp(name) }).closest('tr')?.querySelectorAll('td') ?? []).map((cell) => cell.textContent?.trim() ?? '');
+
+    // Order, Vary, Golden, Range, Step, Values.
+    expect(cells('Crossover gap price')[2]).toBe('0.2');
+    expect(cells('Crossover gap price')[5]).toBe('13');
+    expect(cells('Slow EMA length')[2]).toBe('10');
+    expect(cells('Slow EMA length')[5]).toBe('23');
+  });
+
+  it("shows a knob's refusal on its row, and the footer's link takes the trader to the field", async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    service.preflight.mockResolvedValueOnce(preflightFixture({ refusals: [{ code: 'RANGE_OUTSIDE_DOMAIN', field: 'knobs.slow_period', message: 'Slow EMA length: 8–41 leaves the legal domain 3–40 decision bars.' }] }));
+
+    fireEvent.input(screen.getByLabelText('Slow EMA length high'), { target: { value: '41' } });
+    const refusals = await screen.findByRole('list', { name: /cannot be locked/i });
+
+    const row = screen.getByRole('rowheader', { name: /Slow EMA length/ }).closest('tr')?.textContent ?? '';
+    expect(row).toContain('8–41 leaves the legal domain 3–40 decision bars.');
+    expect(screen.getByLabelText('Slow EMA length high').getAttribute('aria-invalid')).toBe('true');
+    fireEvent.click(within(refusals).getByRole('button', { name: /leaves the legal domain/ }));
+    expect(document.activeElement).toBe(screen.getByLabelText('Slow EMA length low'));
+    expect(lockButton().disabled).toBe(true);
+  });
+
+  it('a footer link to a folded field unfolds its section first', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    service.preflight.mockResolvedValueOnce(preflightFixture({ refusals: [{ code: 'WORKLOAD_LIMIT', field: 'budget_cap', message: 'At most 6,200 runs exceed the cap of 5,000.' }] }));
+
+    fireEvent.input(screen.getByLabelText(/max drawdown/i), { target: { value: '25' } });
+    const refusals = await screen.findByRole('list', { name: /cannot be locked/i });
+    const cap = screen.getByLabelText(/run cap/i);
+    expect(cap.closest('details')?.open).toBe(false);
+
+    fireEvent.click(within(refusals).getByRole('button', { name: /exceed the cap/ }));
+
+    expect(cap.closest('details')?.open).toBe(true);
+    expect(document.activeElement).toBe(cap);
+  });
+
+  it('Reset to defaults restores the knob table the plan started with', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    fireEvent.click(screen.getByRole('switch', { name: 'Vary Fast EMA length' }));
+    fireEvent.input(screen.getByLabelText('Hold time high'), { target: { value: '20' } });
+    await waitFor(() => expect(service.preflight.mock.lastCall?.[0].knobs.find((k) => k.name === 'hold_bars')?.high).toBe(20));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }));
+
+    await waitFor(() => expect(service.preflight.mock.lastCall?.[0].knobs).toEqual(defaults().knobs));
+    expect((screen.getByRole('switch', { name: 'Vary Fast EMA length' }) as HTMLInputElement).checked).toBe(true);
+  });
+
   it('locks the checked plan and reports its study; a retry after no answer reuses the idempotency key', async () => {
     const service = fakeService();
     service.createStudy.mockRejectedValueOnce(new Error('network down'));
@@ -227,7 +326,7 @@ describe('GoldenSearchPlanFormComponent', () => {
     const source = studyDetail('awaiting_validation');
     const { locked } = await renderForm(service, { reviseFrom: source });
 
-    await waitFor(() => expect(screen.getByText(/the server accepts this plan/i)).not.toBeNull());
+    await waitFor(() => expect(screen.getByText(/plan is ready to lock/i)).not.toBeNull());
     expect(service.defaults).not.toHaveBeenCalled();
     expect(screen.queryByRole('combobox', { name: 'Strategy' })).toBeNull();
     fireEvent.input(screen.getByLabelText('Hold time high'), { target: { value: '10' } });
@@ -250,13 +349,13 @@ describe('GoldenSearchPlanFormComponent', () => {
     const frozen = studyDetail('awaiting_validation');
     const source = { ...frozen, protocol: { ...frozen.protocol, incumbent: { source: 'qualification' as const, qualification_id: 'q-old-0001', params: { gap: 0.3, symbol: 'SPY' } } } };
     const { view } = await renderForm(service, { reviseFrom: source });
-    await waitFor(() => expect(screen.getByText(/the server accepts this plan/i)).not.toBeNull());
+    await waitFor(() => expect(screen.getByText(/plan is ready to lock/i)).not.toBeNull());
 
     view.fixture.componentRef.setInput('reviseFrom', null);
 
     await waitFor(() => expect(service.defaults).toHaveBeenCalledWith('ema_crossover_signal', 'SPY'));
     await waitFor(() => expect(service.preflight.mock.lastCall?.[0].incumbent.source).toBe('registry'));
-    expect(screen.getByText('New study')).not.toBeNull();
+    expect(screen.getByRole('combobox', { name: 'Strategy' })).not.toBeNull();
     expect(screen.getByRole('button', { name: 'Lock plan' })).not.toBeNull();
   });
 
@@ -375,7 +474,7 @@ describe('GoldenSearchPlanFormComponent', () => {
   it('a revised plan keeps its frozen dates: no month count is assumed, and a fold change is checked as it is', async () => {
     const service = fakeService();
     await renderForm(service, { reviseFrom: studyDetail('awaiting_validation') });
-    await waitFor(() => expect(screen.getByText(/the server accepts this plan/i)).not.toBeNull());
+    await waitFor(() => expect(screen.getByText(/plan is ready to lock/i)).not.toBeNull());
 
     expect((screen.getByLabelText('Final test (months)') as HTMLInputElement).value).toBe('');
     fireEvent.input(screen.getByLabelText('Training window (months)'), { target: { value: '9' } });
@@ -390,7 +489,7 @@ describe('GoldenSearchPlanFormComponent', () => {
     const { view } = await renderForm(service);
     await pickSpy(service, view);
     service.preflight.mockResolvedValueOnce(preflightFixture({ refusals: [{ code: 'WORKLOAD_LIMIT', field: 'budget_cap', message: 'Over the cap.' }] }));
-    fireEvent.input(screen.getByLabelText(/backtest cap/i), { target: { value: '100' } });
+    fireEvent.input(screen.getByLabelText(/run cap/i), { target: { value: '100' } });
     await screen.findByRole('list', { name: /cannot be locked/i });
 
     const results = await axe.run(view.container, { rules: { 'color-contrast': { enabled: false } } });

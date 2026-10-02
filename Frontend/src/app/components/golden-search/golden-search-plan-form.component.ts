@@ -1,18 +1,20 @@
-import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, output, signal, untracked } from '@angular/core';
-import { ButtonModule } from 'primeng/button';
+import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, ElementRef, inject, input, output, signal, untracked } from '@angular/core';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
 import { extractServerMessage } from '../broker/operation-error';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
 import type { GridSearchRefusal } from '../grid-search/grid-search.types';
+import { GoldenSearchCostControlsComponent } from './golden-search-cost-controls.component';
 import { incumbentLabel } from './golden-search-display';
 import { GoldenSearchKnobTableComponent } from './golden-search-knob-table.component';
-import { GoldenSearchMethodChoiceComponent } from './golden-search-method-choice.component';
-import { applyPlanEdit, draftFromDefaults, draftMonths, MONTH_FIELDS, withServerDates, type PlanDraft, type PlanEdit } from './golden-search-plan-draft';
-import { GoldenSearchPreflightPanelComponent } from './golden-search-preflight-panel.component';
+import { GoldenSearchMethodChoiceComponent, METHOD_HINTS } from './golden-search-method-choice.component';
+import { applyPlanEdit, draftFromDefaults, draftFromProtocol, draftMonths, MONTH_FIELDS, wireProtocol, withServerDates, type PlanDraft, type PlanEdit } from './golden-search-plan-draft';
+import { GoldenSearchPlanFooterComponent } from './golden-search-plan-footer.component';
+import { refusalProblems, unreadableProblems } from './golden-search-plan-problems';
 import { GoldenSearchProtocolControlsComponent } from './golden-search-protocol-controls.component';
 import { GoldenSearchRefinementControlsComponent } from './golden-search-refinement-controls.component';
+import { GoldenSearchTimeWindowsComponent } from './golden-search-time-windows.component';
 import { GoldenSearchRefusedError, GoldenSearchService, StageDispatchError, StudyConflictError } from './golden-search.service';
 import type { DefaultsMonths, GoldenSearchMethod, GoldenSearchPreflight, StrategyCapability, StudyDetail } from './golden-search.types';
 import { IdempotencyKeys } from './idempotency-keys';
@@ -22,32 +24,37 @@ import { IdempotencyKeys } from './idempotency-keys';
  * and an instrument, start from the server's defaults, edit the method,
  * knobs and protocol, and lock the plan into a study. Every edit is
  * preflighted (debounced); an answer for an edit that is no longer current is
- * dropped, so Lock always describes what the form shows. Changing the
+ * dropped, so Lock always describes what the form shows. The plan is sent as
+ * `wireProtocol` shapes it: a knob searched from a value to itself is held
+ * there, and a pair audit waits until both its knobs vary. Changing the
  * final-test or fold months asks `/defaults` to lay the dates out again (the
  * calendar authority stays in Python) and keeps every other edit; the plan
  * is not checked until the new dates arrive. With `reviseFrom` the form
- * starts from a study's frozen plan and locks a new linked study.
+ * starts from a study's frozen plan and locks a new linked study. The footer
+ * stays in view with the run bound, every problem linked to its field, and Lock.
  */
 @Component({
   selector: 'app-golden-search-plan-form',
   imports: [
     AssetIdentityComponent,
-    ButtonModule,
+    GoldenSearchCostControlsComponent,
     GoldenSearchKnobTableComponent,
     GoldenSearchMethodChoiceComponent,
-    GoldenSearchPreflightPanelComponent,
+    GoldenSearchPlanFooterComponent,
     GoldenSearchProtocolControlsComponent,
     GoldenSearchRefinementControlsComponent,
+    GoldenSearchTimeWindowsComponent,
     ReceiptLabelPipe,
     SymbolPickerComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-plan-form.component.html',
-  styleUrl: './golden-search-plan-form.component.scss',
+  styleUrls: ['./golden-search-plan-card.scss', './golden-search-plan-form.component.scss'],
 })
 export class GoldenSearchPlanFormComponent {
   private readonly service = inject(GoldenSearchService);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
   readonly capabilities = input.required<readonly StrategyCapability[]>();
   /** A study whose frozen plan this form revises into a new study. */
@@ -61,6 +68,8 @@ export class GoldenSearchPlanFormComponent {
   readonly symbol = signal('');
   readonly draft = signal<PlanDraft | null>(null);
   readonly incumbentLabel = signal<string | null>(null);
+  /** The incumbent's settings at a glance, from the server's defaults; null for a revised plan. */
+  readonly incumbentSentence = signal<string | null>(null);
   readonly loadingDefaults = signal(false);
   readonly defaultsError = signal<string | null>(null);
   readonly preflight = signal<GoldenSearchPreflight | null>(null);
@@ -86,6 +95,16 @@ export class GoldenSearchPlanFormComponent {
     const plan = this.preflight();
     return this.draft() !== null && plan !== null && plan.refusals.length === 0 && this.blocked() === null && !this.checking() && !this.locking();
   });
+  protected readonly methodHint = computed(() => METHOD_HINTS[this.draft()?.protocol.method ?? 'zoom']);
+  /** The server's refusals of the plan as checked; none while a newer edit is being checked. */
+  protected readonly refusals = computed(() => (this.checking() ? [] : (this.preflight()?.refusals ?? [])));
+  protected readonly knobValues = computed(() => {
+    const plan = this.checking() ? null : this.preflight();
+    return plan === null ? null : new Map(plan.knob_values.map((item) => [item.name, item.values]));
+  });
+  protected readonly unreadable = computed(() => unreadableProblems(this.draft()?.problems ?? new Map(), this.capability()));
+  protected readonly refusalList = computed(() => refusalProblems(this.refusals(), this.draft()?.protocol.knobs ?? []));
+  protected readonly lockMessage = computed(() => this.lockRefusal()?.message ?? this.lockError());
 
   /** Generation of the latest edit; a preflight that answers an older one is ignored. */
   private preflightGeneration = 0;
@@ -152,10 +171,24 @@ export class GoldenSearchPlanFormComponent {
     else this.scheduleCheck();
   }
 
+  resetKnobs(): void {
+    this.onEdit({ kind: 'knobs-reset' });
+  }
+
+  /** Brings the input a problem belongs to into view, unfolding its section, and focuses it. */
+  jumpTo(id: string): void {
+    const target = this.host.nativeElement.querySelector<HTMLElement>(`[id="${id}"]`);
+    if (target === null) return;
+    const folded = target.closest('details');
+    if (folded !== null) folded.open = true;
+    target.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    target.focus({ preventScroll: true });
+  }
+
   async lock(): Promise<void> {
     const draft = this.draft();
     if (draft === null || !this.canLock()) return;
-    const protocol = draft.protocol;
+    const protocol = wireProtocol(draft.protocol);
     const revise = this.reviseFrom();
     const key = this.keys.keyFor(JSON.stringify({ revise: revise?.id ?? null, protocol }));
     this.locking.set(true);
@@ -199,8 +232,9 @@ export class GoldenSearchPlanFormComponent {
     this.strategyKey.set(study.strategy_key);
     this.symbol.set(study.symbol);
     this.incumbentLabel.set(incumbentLabel(study.protocol.incumbent));
+    this.incumbentSentence.set(null);
     this.defaultsError.set(null);
-    this.draft.set({ protocol: study.protocol, problems: new Map() });
+    this.draft.set(draftFromProtocol(study.protocol));
     this.scheduleCheck();
   }
 
@@ -215,9 +249,10 @@ export class GoldenSearchPlanFormComponent {
     if (strategyKey === null || symbol === '') return;
     this.loadingDefaults.set(true);
     try {
-      const { draft, incumbentLabel } = draftFromDefaults(await this.service.defaults(strategyKey, symbol));
+      const { draft, incumbentLabel, incumbentSentence } = draftFromDefaults(await this.service.defaults(strategyKey, symbol));
       if (generation !== this.defaultsGeneration) return;
       this.incumbentLabel.set(incumbentLabel);
+      this.incumbentSentence.set(incumbentSentence);
       this.draft.set(draft);
       this.scheduleCheck();
     } catch (error) {
@@ -294,7 +329,7 @@ export class GoldenSearchPlanFormComponent {
     if (draft === null) return;
     const generation = this.preflightGeneration;
     try {
-      const plan = await this.service.preflight(draft.protocol);
+      const plan = await this.service.preflight(wireProtocol(draft.protocol));
       if (generation !== this.preflightGeneration) return;
       this.preflight.set(plan);
     } catch (error) {

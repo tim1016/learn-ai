@@ -1,0 +1,23 @@
+@let p = protocol();
+<details class="card">
+  <summary>
+    <h3>Capital, fills and costs</h3>
+    <span class="summary-line">{{ p.execution.initial_cash | currency: 'USD' : 'symbol' : '1.0-0' }} · {{ fillModeLabel() }} · {{ p.execution.commission_per_order | currency: 'USD' }} per order · {{ p.execution.slippage_per_share | currency: 'USD' : 'symbol' : '1.2-4' }} per share · {{ p.stress.length }} cost {{ p.stress.length === 1 ? 'stress' : 'stresses' }}</span>
+  </summary>
+  <div class="card__body">
+    <div class="fields fields--4">
+      <label class="field"><span>Starting capital ($)</span><input #cash pInputText type="number" min="0" step="1000" [id]="inputId('initial_cash')" [value]="p.execution.initial_cash" [attr.aria-invalid]="numberInvalid('initial_cash')" (input)="onNumber('initial_cash', cash.value)" /></label>
+      <label class="field"><span>Fill assumption</span>
+        <select [id]="fillModeId" (change)="onFillMode($event)" aria-label="Fill assumption">
+          @for (option of fillModes; track option.value) { <option [value]="option.value" [selected]="option.value === p.execution.fill_mode">{{ option.label }}</option> }
+        </select>
+      </label>
+      <label class="field"><span>Flat fee per order ($)</span><input #commission pInputText type="number" min="0" step="0.01" [id]="inputId('commission_per_order')" [value]="p.execution.commission_per_order" [attr.aria-invalid]="numberInvalid('commission_per_order')" (input)="onNumber('commission_per_order', commission.value)" /></label>
+      <label class="field"><span>Slippage per share ($)</span><input #slippage pInputText type="number" min="0" step="0.01" [id]="inputId('slippage_per_share')" [value]="p.execution.slippage_per_share" [attr.aria-invalid]="numberInvalid('slippage_per_share')" (input)="onNumber('slippage_per_share', slippage.value)" /></label>
+    </div>
+    @if (p.stress.length > 0) {
+      <p class="hint">Cost stresses: @for (scenario of p.stress; track scenario.key; let last = $last) { {{ scenario.label }}{{ last ? '.' : ' · ' }} }</p>
+    }
+    <p class="hint">Flat costs, not a historical broker fee schedule. Live data comes from IBKR; Alpaca handles orders.</p>
+  </div>
+</details>

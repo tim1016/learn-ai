@@ -1,64 +1,83 @@
-<section class="plan" aria-labelledby="gs-plan-title">
-  <header class="plan__header">
-    <p class="eyebrow">{{ revising() ? 'Revise as a new study' : 'New study' }}</p>
-    <h2 id="gs-plan-title">Give the study rules before results</h2>
-    <p class="muted">{{ revising() ? 'These controls prepare a new protocol revision. Completed evidence keeps its original settings.' : 'Which knobs may change, what would make you reject a candidate, and how much work it may take — all fixed before any result.' }}</p>
-    @if (reviseFrom(); as source) {
-      <p class="notice" role="note">Starting from study {{ source.id.slice(0, 8) }}'s frozen plan. Locking creates a new linked study; the original study and its evidence stay as they are.</p>
-    }
-  </header>
-
-  <div class="subject">
-    @if (revising()) {
-      <p class="subject__fixed"><strong>{{ capability()?.display_name ?? (strategyKey() ?? '' | receiptLabel) }}</strong> · <app-asset-identity [symbol]="symbol()" size="sm" /></p>
-    } @else {
-      <label class="field"><span>Strategy</span>
-        <select (change)="onStrategyEvent($event)" aria-label="Strategy">
-          @for (option of available(); track option.strategy_key) {
-            <option [value]="option.strategy_key" [selected]="option.strategy_key === strategyKey()">{{ option.display_name }}</option>
-          }
-        </select>
-      </label>
-      <div class="field"><app-symbol-picker appearance="field" label="Instrument" [symbol]="symbol()" (symbolChange)="setSymbol($event)" /></div>
-    }
-  </div>
-
-  @if (!revising()) {
-    @if (unavailable().length > 0) {
-      <ul class="unavailable" aria-label="Strategies Golden Search cannot study yet">
-        @for (option of unavailable(); track option.strategy_key) { <li><strong>{{ option.display_name }}</strong> — {{ option.reason }}</li> }
-      </ul>
-    }
-    @if (available().length === 0) { <p class="muted">No strategy has a Golden Search declaration yet.</p> }
+<div class="plan">
+  @if (reviseFrom(); as source) {
+    <p class="notice" role="note">Revising study {{ source.id.slice(0, 8) }} as a new study: these controls start from its frozen plan. Locking creates a new linked study; the original study and its evidence keep their settings.</p>
   }
+
+  <section class="card" aria-label="Strategy, instrument and starting point">
+    <div class="setup">
+      @if (revising()) {
+        <div class="field"><span>Strategy</span><strong class="setup__fixed">{{ capability()?.display_name ?? (strategyKey() ?? '' | receiptLabel) }}</strong></div>
+        <div class="field"><span>Instrument</span><app-asset-identity [symbol]="symbol()" size="sm" /></div>
+      } @else {
+        <label class="field"><span>Strategy</span>
+          <select (change)="onStrategyEvent($event)" aria-label="Strategy">
+            @for (option of available(); track option.strategy_key) {
+              <option [value]="option.strategy_key" [selected]="option.strategy_key === strategyKey()">{{ option.display_name }}</option>
+            }
+            @for (option of unavailable(); track option.strategy_key) {
+              <option [value]="option.strategy_key" disabled>{{ option.display_name }} — {{ option.reason }}</option>
+            }
+          </select>
+        </label>
+        <div class="field"><app-symbol-picker appearance="field" label="Instrument" [symbol]="symbol()" (symbolChange)="setSymbol($event)" /></div>
+      }
+      @if (draft() !== null && incumbentLabel(); as label) {
+        <div class="field start">
+          <span>Start and benchmark · {{ label }}</span>
+          @if (incumbentSentence(); as sentence) { <strong class="start__sentence">{{ sentence }}</strong> }
+          <small>Frozen when you lock the plan.</small>
+        </div>
+      }
+    </div>
+    @if (!revising() && available().length === 0) { <p class="hint">No strategy has a Golden Search declaration yet.</p> }
+  </section>
 
   @if (defaultsError(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
 
   @if (draft(); as d) {
-    <app-golden-search-method-choice [method]="d.protocol.method" (methodChange)="onMethod($event)" />
-    @if (incumbentLabel(); as label) {
-      <p class="muted">Starting point and benchmark: <strong>{{ label }}</strong>, frozen when you lock.</p>
-    }
-    <section class="panel" aria-labelledby="gs-knobs-title">
-      <h3 id="gs-knobs-title">Choose what the search is allowed to change</h3>
-      <app-golden-search-knob-table [knobs]="d.protocol.knobs" [capability]="capability()" [method]="d.protocol.method" [problems]="d.problems" [start]="d.protocol.seed ?? d.protocol.incumbent.params" (edit)="onEdit($event)" />
-      <app-golden-search-refinement-controls [protocol]="d.protocol" [capability]="capability()" [problems]="d.problems" (edit)="onEdit($event)" />
-    </section>
-    <app-golden-search-protocol-controls [protocol]="d.protocol" [capability]="capability()" [problems]="d.problems" [finalMonths]="d.finalMonths" (edit)="onEdit($event)" />
-    <footer class="plan__footer">
-      <app-golden-search-preflight-panel [preflight]="preflight()" [checking]="checking()" [error]="preflightError()" [blocked]="blocked()" [method]="d.protocol.method" />
-      <div class="lock">
-        @if (lockRefusal(); as refusal) { <p class="refusal" role="alert"><strong>{{ refusal.code | receiptLabel }}</strong> — {{ refusal.message }}</p> }
-        @if (lockError(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
-        <p class="muted">The final test stays sealed through every development step.</p>
-        <button pButton type="button" [disabled]="!canLock()" (click)="lock()">
-          <i class="pi pi-lock" aria-hidden="true"></i><span>{{ revising() ? 'Lock as a new study' : 'Lock plan' }}</span>
-        </button>
+    <section class="card" aria-labelledby="gs-knobs-title">
+      <div class="card__head">
+        <div>
+          <h3 id="gs-knobs-title">What to search</h3>
+          <p class="hint">{{ methodHint() }}</p>
+        </div>
+        <div class="head-actions">
+          <app-golden-search-method-choice [method]="d.protocol.method" (methodChange)="onMethod($event)" />
+          <button type="button" class="link" (click)="resetKnobs()">Reset to defaults</button>
+        </div>
       </div>
-    </footer>
+      <app-golden-search-knob-table
+        [knobs]="d.protocol.knobs"
+        [capability]="capability()"
+        [method]="d.protocol.method"
+        [problems]="d.problems"
+        [refusals]="refusals()"
+        [values]="knobValues()"
+        [start]="d.protocol.seed ?? d.protocol.incumbent.params"
+        [golden]="d.protocol.incumbent.params"
+        (edit)="onEdit($event)"
+      />
+    </section>
+    <app-golden-search-protocol-controls [protocol]="d.protocol" [problems]="d.problems" (edit)="onEdit($event)" />
+    <app-golden-search-time-windows [protocol]="d.protocol" [finalMonths]="d.finalMonths" [preflight]="checking() ? null : preflight()" [problems]="d.problems" (edit)="onEdit($event)" />
+    <app-golden-search-refinement-controls [protocol]="d.protocol" [capability]="capability()" [problems]="d.problems" (edit)="onEdit($event)" />
+    <app-golden-search-cost-controls [protocol]="d.protocol" [problems]="d.problems" (edit)="onEdit($event)" />
+    <app-golden-search-plan-footer
+      [preflight]="preflight()"
+      [checking]="checking()"
+      [error]="preflightError()"
+      [blocked]="blocked()"
+      [unreadable]="unreadable()"
+      [refusals]="refusalList()"
+      [lockMessage]="lockMessage()"
+      [canLock]="canLock()"
+      [revising]="revising()"
+      (lock)="lock()"
+      (jump)="jumpTo($event)"
+    />
   } @else if (loadingDefaults()) {
-    <p class="muted" role="status">Loading the study defaults…</p>
+    <p class="hint" role="status">Loading the study defaults…</p>
   } @else if (!revising() && symbol() === '' && available().length > 0) {
-    <p class="muted">Pick an instrument to load the study defaults.</p>
+    <p class="hint">Pick an instrument to load the study defaults.</p>
   }
-</section>
+</div>

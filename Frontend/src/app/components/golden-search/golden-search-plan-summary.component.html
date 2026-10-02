@@ -10,7 +10,7 @@
     }
   </header>
 
-  <app-golden-search-knob-table [knobs]="p.knobs" [capability]="capability()" [method]="p.method" [readonly]="true" />
+  <app-golden-search-knob-table [knobs]="p.knobs" [capability]="capability()" [method]="p.method" [golden]="p.incumbent.params" [readonly]="true" />
 
   <dl class="facts">
     <div><dt>Primary objective</dt><dd>{{ p.policy.objective | receiptLabel }}</dd></div>

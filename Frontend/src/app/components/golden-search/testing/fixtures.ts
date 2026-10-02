@@ -123,6 +123,7 @@ export function defaults(overrides: Partial<GoldenSearchDefaults> = {}): GoldenS
     ...protocol(),
     seed: { ...INCUMBENT_PARAMS },
     incumbent_label: 'Registry validated settings',
+    incumbent_sentence: 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars',
     exposure: exposure(),
     final_months: 3,
     ...overrides,
@@ -136,6 +137,15 @@ export function exposure(overrides: Partial<ExposureView> = {}): ExposureView {
 export function preflight(overrides: Partial<GoldenSearchPreflight> = {}): GoldenSearchPreflight {
   return {
     refusals: [],
+    knob_values: [
+      { name: 'gap', values: 13 },
+      { name: 'rsi_min', values: 31 },
+      { name: 'rsi_max', values: 31 },
+      { name: 'fast_period', values: 10 },
+      { name: 'slow_period', values: 23 },
+      { name: 'hold_bars', values: 11 },
+      { name: 'gap_bps', values: 1 },
+    ],
     estimate: {
       stages: [
         { stage: 'search', label: 'Development search', max_evaluations: 205 },

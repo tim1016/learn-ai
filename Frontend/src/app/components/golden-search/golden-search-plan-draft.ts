@@ -48,6 +48,7 @@ export type PlanEdit =
   | { readonly kind: 'knob-mode'; readonly name: string; readonly mode: KnobMode }
   | { readonly kind: 'knob-number'; readonly name: string; readonly field: KnobNumberField; readonly raw: string }
   | { readonly kind: 'knob-move'; readonly name: string; readonly offset: -1 | 1 }
+  | { readonly kind: 'knobs-reset' }
   | { readonly kind: 'objective'; readonly objective: RankingMeasure }
   | { readonly kind: 'fill-mode'; readonly fillMode: FillModeName }
   | { readonly kind: 'number'; readonly field: ProtocolNumberField; readonly raw: string }
@@ -55,10 +56,14 @@ export type PlanEdit =
   | { readonly kind: 'flag'; readonly field: ProtocolFlag; readonly value: boolean }
   | { readonly kind: 'pair'; readonly pair: KnobPair; readonly included: boolean };
 
+/** The knob table as the plan started: what "Reset to defaults" restores. */
+export type KnobOrigin = Pick<ProtocolRequest, 'knobs' | 'seed' | 'pair_audits'>;
+
 export interface PlanDraft {
   readonly protocol: ProtocolRequest;
   /** Inputs that could not be read, keyed by `problemKey`; while any exist the plan is not preflighted. */
   readonly problems: ReadonlyMap<string, string>;
+  readonly origin: KnobOrigin;
   /**
    * The final test's length in months, from which the server lays the dates
    * out. Absent when the dates did not come from a month count (a revised
@@ -67,15 +72,43 @@ export interface PlanDraft {
   readonly finalMonths?: number;
 }
 
+/** A draft of `protocol` as it stands, with nothing unreadable; its knob table is what a reset restores. */
+export function draftFromProtocol(protocol: ProtocolRequest, finalMonths?: number): PlanDraft {
+  const origin: KnobOrigin = { knobs: protocol.knobs, seed: protocol.seed, pair_audits: protocol.pair_audits };
+  return finalMonths === undefined ? { protocol, problems: new Map(), origin } : { protocol, problems: new Map(), origin, finalMonths };
+}
+
 /**
  * A fresh draft from `GET /defaults`, with the final test's length as the
- * server laid it out. The incumbent's name, the exposure and the month count
- * describe the plan but are not part of it: the server refuses them in a
- * plan, so they never reach the protocol.
+ * server laid it out. The incumbent's name and settings, the exposure and the
+ * month count describe the plan but are not part of it: the server refuses
+ * them in a plan, so they never reach the protocol.
  */
-export function draftFromDefaults(defaults: GoldenSearchDefaults): { readonly draft: PlanDraft; readonly incumbentLabel: string } {
-  const { incumbent_label, exposure: _exposure, final_months, ...protocol } = defaults;
-  return { draft: { protocol, problems: new Map(), finalMonths: final_months }, incumbentLabel: incumbent_label };
+export function draftFromDefaults(defaults: GoldenSearchDefaults): { readonly draft: PlanDraft; readonly incumbentLabel: string; readonly incumbentSentence: string } {
+  const { incumbent_label, incumbent_sentence, exposure: _exposure, final_months, ...protocol } = defaults;
+  return { draft: draftFromProtocol(protocol, final_months), incumbentLabel: incumbent_label, incumbentSentence: incumbent_sentence };
+}
+
+/** A searched knob whose range holds more than one value; a knob searched from a value to itself is held there. */
+export function isVaried(knob: KnobPlan): boolean {
+  return knob.mode === 'search' && knob.low !== knob.high;
+}
+
+/**
+ * The plan as the server receives it. A knob searched from a value to itself
+ * is sent held at that value (the server refuses an empty range, and holding
+ * is what it means), and a pair audit is sent only while both its knobs vary
+ * — the draft keeps the pair, so it returns when they do.
+ */
+export function wireProtocol(protocol: ProtocolRequest): ProtocolRequest {
+  let wired: ProtocolRequest = protocol;
+  for (const knob of protocol.knobs) {
+    if (knob.mode !== 'search' || isVaried(knob)) continue;
+    wired = withFixedSeed(patchKnob(wired, knob.name, (plan) => ({ ...plan, mode: 'fixed', fixed_value: plan.low })), knob.name);
+  }
+  const varied = new Set(wired.knobs.filter(isVaried).map((knob) => knob.name));
+  const pairs = wired.pair_audits.filter(([left, right]) => varied.has(left) && varied.has(right));
+  return pairs.length === wired.pair_audits.length ? wired : { ...wired, pair_audits: pairs };
 }
 
 /** Month counts that, once changed, have the server lay the development and final-test dates out again. */
@@ -212,6 +245,11 @@ export function applyPlanEdit(draft: PlanDraft, edit: PlanEdit, capability: Stra
     }
     case 'knob-move':
       return { ...draft, protocol: moveKnob(protocol, edit.name, edit.offset), problems };
+    case 'knobs-reset': {
+      const { knobs, seed, pair_audits } = draft.origin;
+      const kept = new Map([...problems].filter(([key]) => !key.startsWith('knob:')));
+      return { ...draft, protocol: { ...protocol, knobs, seed, pair_audits }, problems: kept };
+    }
     case 'objective':
       return { ...draft, protocol: { ...protocol, policy: { ...protocol.policy, objective: edit.objective } }, problems };
     case 'fill-mode':

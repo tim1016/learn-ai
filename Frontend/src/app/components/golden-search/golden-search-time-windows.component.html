@@ -1,0 +1,51 @@
+@let p = protocol();
+<section class="card" aria-labelledby="gs-windows-title">
+  <div class="card__head">
+    <div>
+      <h3 id="gs-windows-title">Time windows</h3>
+      <p class="hint">The final test stays sealed through every development step; its dates are fixed when you lock the plan.</p>
+    </div>
+  </div>
+  <div class="fields">
+    <label class="field"><span>Training window (months)</span><input #training pInputText type="number" min="1" step="1" [id]="numberId('training_months')" [value]="p.training_months" [attr.aria-invalid]="numberInvalid('training_months')" (input)="onNumber('training_months', training.value)" /></label>
+    <label class="field"><span>Test window (months)</span><input #testing pInputText type="number" min="1" step="1" [id]="numberId('test_months')" [value]="p.test_months" [attr.aria-invalid]="numberInvalid('test_months')" (input)="onNumber('test_months', testing.value)" /></label>
+    <label class="field"><span>Final test (months)</span><input #finalMonthsInput pInputText type="number" min="1" step="1" placeholder="as dated" [id]="numberId('final_months')" [value]="finalMonths() ?? ''" [attr.aria-invalid]="numberInvalid('final_months')" (input)="onNumber('final_months', finalMonthsInput.value)" /></label>
+  </div>
+
+  @if (timeline(); as line) {
+    <div class="timeline" role="img" aria-label="Development, its test-over-time folds, then the sealed final test">
+      <div class="bar">
+        <div class="bar__dev" [style.width.%]="line.finalAt">
+          <span>Development · {{ preflight()?.folds?.length ?? 0 }} test-over-time folds</span>
+          @for (fold of line.folds; track fold.key) { <span class="bar__fold" [style.left.%]="fold.left" [style.width.%]="fold.width"></span> }
+        </div>
+        <div class="bar__final"><i class="pi pi-lock" aria-hidden="true"></i> Final test</div>
+      </div>
+      <div class="ticks">
+        <span><app-timestamp-display [value]="p.development_start_ms" mode="date-et" /></span>
+        <span class="ticks__final" [style.left.%]="line.finalAt"><app-timestamp-display [value]="p.final_start_ms" mode="date-et" /></span>
+        <span><app-timestamp-display [value]="p.final_end_ms - 1" mode="date-et" /></span>
+      </div>
+    </div>
+  }
+
+  @if (preflight()?.run_up; as runUp) {
+    <p class="hint">Every run warms up on the same {{ runUp.run_up_sessions }} {{ runUp.run_up_sessions === 1 ? 'session' : 'sessions' }} before its window (the slowest setting needs {{ runUp.required_samples }} bars).</p>
+  }
+  @if (preflight()?.exposure; as exposure) {
+    <p class="exposure" [attr.data-state]="exposure.state">
+      <i class="pi" [class.pi-check-circle]="exposure.state === 'not_opened'" [class.pi-exclamation-triangle]="exposure.state !== 'not_opened'" aria-hidden="true"></i>
+      <span><strong>Final-test dates: {{ exposureLabels[exposure.state] }}.</strong> {{ exposure.explanation }} {{ exposureClaims[exposure.state] }}</span>
+    </p>
+  }
+
+  <details class="dates">
+    <summary>Edit dates (ET)</summary>
+    <div class="fields">
+      <label class="field"><span>Development from</span><input #devStart pInputText type="date" [id]="dateId('development_start')" [value]="dates().development_start" [attr.aria-invalid]="dateInvalid('development_start')" (input)="onDate('development_start', devStart.value)" /></label>
+      <label class="field"><span>Final test from (development ends the day before)</span><input #finalStart pInputText type="date" [id]="dateId('final_start')" [value]="dates().final_start" [attr.aria-invalid]="dateInvalid('final_start')" (input)="onDate('final_start', finalStart.value)" /></label>
+      <label class="field"><span>Final test through</span><input #finalEnd pInputText type="date" [id]="dateId('final_end')" [value]="dates().final_end" [attr.aria-invalid]="dateInvalid('final_end')" (input)="onDate('final_end', finalEnd.value)" /></label>
+    </div>
+    <p class="hint">Dates typed here replace the month count. The final-test dates cannot be extended after a result is seen.</p>
+  </details>
+</section>

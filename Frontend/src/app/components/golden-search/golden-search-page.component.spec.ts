@@ -37,7 +37,7 @@ describe('GoldenSearchPageComponent', () => {
   it('starts a revision from the named study’s frozen plan', async () => {
     const { service } = await renderPage({ revise: 'study-0001-aaaa' });
 
-    expect(await screen.findByText('Revise as a new study')).not.toBeNull();
+    expect(await screen.findByText(/Revising study study-00 as a new study/)).not.toBeNull();
     expect(screen.getByRole('button', { name: /lock as a new study/i })).not.toBeNull();
     expect(service.get).toHaveBeenCalledWith('study-0001-aaaa');
     expect(service.defaults).not.toHaveBeenCalled();
