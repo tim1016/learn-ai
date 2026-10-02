@@ -1,4 +1,5 @@
-import { render } from '@testing-library/angular';
+import { render, screen } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -210,6 +211,41 @@ describe('StrategyChartComponent (#2639)', () => {
     expect(markers.setMarkers).toHaveBeenLastCalledWith([
       expect.objectContaining({ time: barCloseMs(3) / 1000, shape: 'arrowUp', text: 'Enter' }),
     ]);
+  });
+
+  it('lets the keyboard step through the candles and open one’s checks', async () => {
+    const user = userEvent.setup();
+    const mock = fakeStrategyChart(vi);
+    const clicks: StrategyCandleClick[] = [];
+    const selections: number[] = [];
+    const { fixture } = await render(StrategyChartComponent, {
+      inputs: { view: fakeStrategyView(), gateId: 'g_rule' },
+      on: {
+        candleClicked: (click: StrategyCandleClick) => clicks.push(click),
+        candleSelected: (barCloseMs: number) => selections.push(barCloseMs),
+      },
+      providers: [{ provide: STRATEGY_CHART_FACTORY, useValue: () => mock.chart }],
+    });
+    const select = async (key: string) => {
+      await user.keyboard(key);
+      fixture.componentRef.setInput('selectedBarCloseMs', selections.at(-1) ?? null);
+      await fixture.whenStable();
+    };
+
+    screen.getByRole('group', { name: /decision candles for SPY/ }).focus();
+    // With nothing selected, an arrow starts from the newest candle.
+    await select('{ArrowRight}');
+    await select('{ArrowLeft}');
+    await select('{Home}');
+    await select('{ArrowLeft}');
+    await select('{End}');
+    expect(selections).toEqual([barCloseMs(3), barCloseMs(2), barCloseMs(0), barCloseMs(0), barCloseMs(3)]);
+
+    await select('{ArrowLeft}');
+    await user.keyboard('{Enter}');
+    // Placed where the candle is drawn: its close's coordinates inside the chart.
+    expect(clicks).toEqual([{ barCloseMs: barCloseMs(2), clientX: 120, clientY: 40 }]);
+    expect(mock.timeScale.timeToCoordinate).toHaveBeenLastCalledWith(toChartTime(barCloseMs(2)));
   });
 
   it('reports a click on a candle by its bar close', async () => {

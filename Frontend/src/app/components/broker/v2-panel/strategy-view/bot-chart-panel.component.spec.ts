@@ -188,7 +188,7 @@ describe('BotChartPanelComponent (#2639)', () => {
     expect(within(screen.getByRole('tabpanel', { name: 'Strategy · 15m' })).getByRole('status').textContent).toContain(
       'No decision bars yet. The first appears when the bot’s first 15m bar closes.',
     );
-    expect(screen.queryByRole('img', { name: /decision candles/ })).toBeNull();
+    expect(screen.queryByRole('group', { name: /decision candles/ })).toBeNull();
   });
 
   it('shows a failed read in the backend’s words, with one Retry', async () => {

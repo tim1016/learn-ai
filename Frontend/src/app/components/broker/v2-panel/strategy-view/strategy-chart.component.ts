@@ -79,14 +79,28 @@ function minuteOf(ms: number): string {
  * pane or on panes after the strategy's. The before-start shade, the run's
  * start and end lines and the selected candle's band are one overlay
  * primitive per pane. Clicking a candle reports it; the host owns selection.
+ *
+ * The chart takes focus: the arrow keys (and Home/End) move the selected
+ * candle, and Enter or Space opens its checks as a click would.
  */
 @Component({
   selector: 'app-strategy-chart',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `<div #chartContainer class="strategy-chart" role="img" [attr.aria-label]="ariaLabel()"></div>`,
+  template: `
+    <div
+      #chartContainer
+      class="strategy-chart"
+      role="group"
+      aria-roledescription="chart"
+      tabindex="0"
+      [attr.aria-label]="ariaLabel()"
+      (keydown)="onKeydown($event)"
+    ></div>
+  `,
   styles: `
     :host { display: block; min-height: 0; }
     .strategy-chart { width: 100%; height: 100%; min-height: 22rem; cursor: pointer; }
+    .strategy-chart:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
   `,
 })
 export class StrategyChartComponent implements AfterViewInit {
@@ -98,6 +112,8 @@ export class StrategyChartComponent implements AfterViewInit {
   readonly indicatorPlans = input<readonly IndicatorSeriesPlan[]>([]);
 
   readonly candleClicked = output<StrategyCandleClick>();
+  /** A candle chosen from the keyboard, by its bar close. */
+  readonly candleSelected = output<number>();
 
   private readonly chartContainer = viewChild.required<ElementRef<HTMLDivElement>>('chartContainer');
   private readonly destroyRef = inject(DestroyRef);
@@ -105,7 +121,8 @@ export class StrategyChartComponent implements AfterViewInit {
 
   protected readonly ariaLabel = computed(() => {
     const view = this.view();
-    return `${view.strategy_name} decision candles for ${view.symbol}. Click a candle for its checks.`;
+    return `${view.strategy_name} decision candles for ${view.symbol}. `
+      + 'Click a candle for its checks, or use the arrow keys and Enter.';
   });
 
   private readonly linePlans = computed(() => strategyLinePlans(this.view().declaration, this.view().candles));
@@ -326,6 +343,43 @@ export class StrategyChartComponent implements AfterViewInit {
     const state = this.overlayState();
     this.priceOverlay?.update(state);
     for (const overlay of this.paneOverlays) overlay.update(state);
+  }
+
+  /** Arrow keys and Home/End move the selected candle; Enter or Space opens it. */
+  protected onKeydown(event: KeyboardEvent): void {
+    const candles = this.view().candles;
+    if (candles.length === 0) return;
+    const last = candles.length - 1;
+    const current = candles.findIndex((candle) => candle.bar_close_ms === this.selectedBarCloseMs());
+    let next: number;
+    switch (event.key) {
+      case 'ArrowLeft': next = current < 0 ? last : Math.max(0, current - 1); break;
+      case 'ArrowRight': next = current < 0 ? last : Math.min(last, current + 1); break;
+      case 'Home': next = 0; break;
+      case 'End': next = last; break;
+      case 'Enter':
+      case ' ':
+        event.preventDefault();
+        this.openCandle(current < 0 ? last : current);
+        return;
+      default:
+        return;
+    }
+    event.preventDefault();
+    this.candleSelected.emit(candles[next].bar_close_ms);
+  }
+
+  /** Reports candle `index` as a click at its place on the chart. */
+  private openCandle(index: number): void {
+    const candle = this.view().candles[index];
+    const bounds = this.chartContainer().nativeElement.getBoundingClientRect();
+    const x = this.chart?.timeScale().timeToCoordinate(toChartTime(candle.bar_close_ms)) ?? null;
+    const y = this.candles?.priceToCoordinate(candle.close) ?? null;
+    this.candleClicked.emit({
+      barCloseMs: candle.bar_close_ms,
+      clientX: bounds.left + (x ?? bounds.width / 2),
+      clientY: bounds.top + (y ?? bounds.height / 2),
+    });
   }
 
   private onChartClick(param: MouseEventParams<Time>): void {

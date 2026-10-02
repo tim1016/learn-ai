@@ -34,7 +34,7 @@
       <li>
         <span class="swatch" aria-hidden="true" [style.background]="colors.upDark" [style.border-color]="colors.upDarkEdge"></span>
         <span class="swatch" aria-hidden="true" [style.background]="colors.downDark" [style.border-color]="colors.downDarkEdge"></span>
-        gate fails
+        gate fails or no result
       </li>
       @for (line of legendLines(); track line.key) {
         <li><span class="line-swatch" aria-hidden="true" [style.background]="line.color"></span>{{ line.label }}</li>
@@ -54,6 +54,7 @@
       [selectedBarCloseMs]="selectedBarCloseMs()"
       [indicatorPlans]="indicatorPlans()"
       (candleClicked)="onCandleClicked($event)"
+      (candleSelected)="selectedBarCloseMs.set($event)"
     />
     @if (openCandle(); as open) {
       <app-strategy-candle-popover

@@ -238,8 +238,9 @@ export function resolveActiveGate(
     ?? null;
 }
 
-/** Bars shown before the run's first decision when the chart opens (a
- * regular session at the 15-minute decision bars every strategy uses today). */
+/** Bars shown before the run's first decision when the chart opens: a fixed
+ * count that stays readable at any decision timeframe (a session at 15-minute
+ * bars; a session at 1-minute bars would pack 390 candles in). */
 const OPENING_CONTEXT_BARS = 26;
 /** Empty slots kept right of the last candle, so the run's end line and its label stay on screen. */
 const OPENING_RIGHT_PAD_BARS = 3;
