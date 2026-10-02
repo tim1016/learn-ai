@@ -282,7 +282,7 @@ function makeService(historyChart: ReturnType<typeof vi.fn>) {
 
 /** The chart panel opens on the strategy view (#2639); the tape is one tab away. */
 async function showTape(fixture: { whenStable(): Promise<unknown>; detectChanges(): void }): Promise<void> {
-  await userEvent.setup().click(screen.getByRole('tab', { name: 'Tape · 1m' }));
+  await userEvent.setup().click(screen.getByRole('tab', { name: /^Tape · / }));
   await fixture.whenStable();
   fixture.detectChanges();
 }

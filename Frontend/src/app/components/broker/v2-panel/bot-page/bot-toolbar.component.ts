@@ -51,6 +51,58 @@ const AVAILABILITY_WORDS: Readonly<Record<ToolbarActionView['availability'], str
 
 const LABELS_KEY = 'bot-page.toolbar.labels.v1';
 
+/** The custody actions a panel without `bot_page` still offers, in the toolbar's order and groups. */
+const LEGACY_GROUPS: Readonly<Partial<Record<ToolbarActionId, ToolbarGroupKey>>> = {
+  stop_bot_decisions: 'bot',
+  prepare_safe_flatten: 'bot',
+  reconcile_now: 'fix',
+  cancel_verified_working_orders: 'fix',
+  discharge_attributed_residue: 'fix',
+  recover_exact_execution_evidence: 'fix',
+  resolve_execution_coverage: 'fix',
+  open_custody_timeline: 'inspect',
+};
+
+function isToolbarActionId(actionId: string): actionId is ToolbarActionId {
+  return actionId in ICONS;
+}
+
+/**
+ * The toolbar for a panel from a data plane that predates `bot_page` (a
+ * rolling deploy): the panel's own custody actions with their own labels
+ * and reasons, its primary, Change end and Deploy again. Nothing the old
+ * page offered goes missing while the producer catches up.
+ */
+function legacyToolbar(panel: BotPanelView): ToolbarActionView[] {
+  const entries: ToolbarActionView[] = [];
+  for (const action of panel.actions) {
+    const group = isToolbarActionId(action.action_id) ? LEGACY_GROUPS[action.action_id] : undefined;
+    if (group === undefined || !isToolbarActionId(action.action_id)) continue;
+    entries.push({
+      action_id: action.action_id,
+      label: action.label,
+      group,
+      availability: action.enabled ? 'available' : 'blocked',
+      reason: action.explanation,
+      tone: action.action_id === 'stop_bot_decisions' || action.action_id === 'prepare_safe_flatten' ? 'danger' : 'neutral',
+      primary: action.action_id === panel.primary_action,
+    });
+  }
+  if (panel.end?.editable) {
+    entries.push({
+      action_id: 'change_end', label: 'Change end', group: 'bot', availability: 'available',
+      reason: panel.end.explanation, tone: 'neutral', primary: false,
+    });
+  }
+  if (!panel.health.running) {
+    entries.push({
+      action_id: 'deploy_again', label: 'Deploy again', group: 'bot', availability: 'available',
+      reason: 'Review a fresh deployment of this bot.', tone: 'neutral', primary: false,
+    });
+  }
+  return entries;
+}
+
 function storedLabels(): boolean {
   try {
     return globalThis.localStorage?.getItem(LABELS_KEY) === 'on';
@@ -99,7 +151,7 @@ export class BotToolbarComponent {
   protected readonly noMoves = (): boolean => false;
   protected readonly availabilityWords = AVAILABILITY_WORDS;
 
-  protected readonly entries = computed(() => this.panel().bot_page?.toolbar ?? []);
+  protected readonly entries = computed(() => this.panel().bot_page?.toolbar ?? legacyToolbar(this.panel()));
   protected readonly groups = computed((): readonly ToolbarGroup[] =>
     (['bot', 'fix', 'inspect'] as const)
       .map((key) => ({

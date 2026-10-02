@@ -22,9 +22,8 @@ export interface StrategyRunContext {
   readonly scheduledEndAtMs: number | null;
   readonly fills: readonly ChartFillMarker[];
   readonly workingOrders: readonly WorkingOrder[];
+  /** Market-data continuity, including the partial first minute a mid-minute join omits. */
   readonly feedEvents: readonly FeedEvent[];
-  /** The live stream joined mid-minute: that partial first minute was skipped. */
-  readonly skippedMinute: { readonly startMs: number; readonly endMs: number } | null;
 }
 
 export type LaneKey = 'decisions' | 'orders' | 'market' | 'bot';
@@ -108,7 +107,7 @@ function orderLane(context: StrategyRunContext): ChartLane {
 }
 
 function marketLane(context: StrategyRunContext): ChartLane {
-  const events = context.feedEvents.map((event): LaneMark => {
+  const marks = context.feedEvents.map((event): LaneMark => {
     const span = event.window_start_ms !== null && event.window_end_ms !== null;
     const trouble = event.kind !== 'recovered';
     const duration = event.duration_label === null ? '' : ` · ${event.duration_label}`;
@@ -121,14 +120,7 @@ function marketLane(context: StrategyRunContext): ChartLane {
       label: `${minuteOf(event.occurred_at_ms)} · ${event.label}${duration}`,
     };
   });
-  const skipped = context.skippedMinute;
-  if (skipped !== null) {
-    events.unshift({
-      key: 'skipped-minute', atMs: skipped.startMs, endMs: skipped.endMs, glyph: 'span', tone: 'muted',
-      label: `${minuteOf(skipped.startMs)} · Partial first minute skipped`,
-    });
-  }
-  return { key: 'market', title: 'Market data', marks: events };
+  return { key: 'market', title: 'Market data', marks };
 }
 
 function botLane(view: StrategyViewResponse, context: StrategyRunContext): ChartLane {
@@ -164,9 +156,10 @@ function botLane(view: StrategyViewResponse, context: StrategyRunContext): Chart
 /**
  * The four lanes under the strategy chart (#2794 R4), on the chart's clock:
  * the bot's decisions and before-start evaluations, its fills and working
- * orders, market-data continuity (gaps, recoveries, the skipped partial
- * first minute) and the run's start, end and next decision. Every word that
- * is not a time comes from the backend or its receipt labels.
+ * orders, market-data continuity (gaps -- the partial first minute a
+ * mid-minute join omits among them -- and recoveries) and the run's start,
+ * end and next decision. Every word that is not a time comes from the
+ * backend or its receipt labels.
  */
 export function chartLanes(view: StrategyViewResponse, context: StrategyRunContext): readonly ChartLane[] {
   return [decisionLane(view), orderLane(context), marketLane(context), botLane(view, context)];

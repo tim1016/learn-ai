@@ -44,10 +44,11 @@
 .health__value { color: var(--text-secondary); font-size: var(--fs-xs); text-align: right; }
 
 .health__note {
-  grid-column: 2 / -1;
   color: var(--text-subtle);
   font-size: var(--fs-xs);
 }
+
+.health__line > .health__note { grid-column: 2 / -1; }
 
 .health__market {
   display: grid;
