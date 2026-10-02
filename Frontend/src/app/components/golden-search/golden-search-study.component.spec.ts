@@ -186,6 +186,27 @@ describe('GoldenSearchStudyComponent', () => {
     expect(screen.queryByRole('button', { name: /start the search/i })).toBeNull();
   });
 
+  it("a command answer that lands after moving to another study leaves that study's page alone", async () => {
+    const other = studyDetail('awaiting_validation', { id: 'study-0002-bbbb' });
+    const service = fakeService(studyDetail('locked'));
+    let answerFirst: (outcome: CommandOutcome) => void = () => undefined;
+    service.command.mockImplementationOnce(() => new Promise<CommandOutcome>((resolve) => (answerFirst = resolve)));
+    const view = await renderStudy(service);
+
+    fireEvent.click(screen.getByRole('button', { name: /start the search/i }));
+    service.get.mockResolvedValue(other);
+    view.fixture.componentRef.setInput('studyId', other.id);
+    await screen.findByRole('heading', { name: 'All-period search' });
+    answerFirst({ study: studyDetail('search_running', { revision: 4 }), jobId: 'job-1' });
+    await view.fixture.whenStable();
+
+    expect(screen.queryByRole('heading', { name: /the search is running/i })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'All-period search' })).not.toBeNull();
+    service.command.mockResolvedValueOnce({ study: studyDetail('validation_running', { id: other.id, revision: 4 }), jobId: 'job-2' });
+    fireEvent.click(within(guidance(/check whether the search procedure holds up/i)).getByRole('button', { name: /test over time/i }));
+    await waitFor(() => expect(service.command.mock.calls.at(-1)?.[0]).toBe(other.id));
+  });
+
   it('a command answer older than the revision on screen is dropped', async () => {
     const service = fakeService(studyDetail('locked'));
     let answerCommand: (outcome: CommandOutcome) => void = () => undefined;

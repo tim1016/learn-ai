@@ -137,6 +137,8 @@ export class GoldenSearchStudyComponent {
   private readonly keys = new IdempotencyKeys();
   /** Generation of the latest load; a poll that resolves late must not restore stale state. */
   private loadGeneration = 0;
+  /** Which study the page shows; an answer about an earlier one must not reach this one. */
+  private viewGeneration = 0;
   private stateStep: StudyStep | null = null;
   private awaitingClaimPolls = 0;
 
@@ -144,6 +146,9 @@ export class GoldenSearchStudyComponent {
     effect(() => {
       const id = this.studyId();
       untracked(() => {
+        this.viewGeneration += 1;
+        this.busy.set(false);
+        this.clearFeedback();
         this.detail.set(null);
         this.refreshNotice.set(null);
         this.announcement.set('');
@@ -193,18 +198,21 @@ export class GoldenSearchStudyComponent {
 
   async hide(): Promise<void> {
     const id = this.studyId();
+    const view = this.viewGeneration;
     this.busy.set(true);
     this.clearFeedback();
     try {
       await this.service.hide(id);
+      if (view !== this.viewGeneration) return;
       this.poller.stop();
       this.hidden.emit(id);
     } catch (error) {
+      if (view !== this.viewGeneration) return;
       if (error instanceof GoldenSearchRefusedError) this.actionRefusal.set(error.refusal);
       else if (error instanceof StudyConflictError) this.actionMessage.set(error.message);
       else this.actionMessage.set(extractServerMessage(error, 'The study could not be hidden. Try again.'));
     } finally {
-      this.busy.set(false);
+      if (view === this.viewGeneration) this.busy.set(false);
     }
   }
 
@@ -222,19 +230,23 @@ export class GoldenSearchStudyComponent {
     const detail = this.detail();
     if (detail === null || this.busy()) return false;
     const request: StudyCommandRequest = { ...command, expected_revision: detail.revision, idempotency_key: this.keys.keyFor(JSON.stringify([detail.id, detail.revision, command])) };
+    const view = this.viewGeneration;
     this.busy.set(true);
     this.clearFeedback();
     try {
       const outcome = await this.service.command(detail.id, request);
       this.keys.settle();
+      // The page moved to another study while this one's command was in flight: its answer is not this page's.
+      if (view !== this.viewGeneration) return false;
       if (outcome.jobId !== null) this.awaitingClaimPolls = AWAIT_CLAIM_POLLS;
       this.applyAnswer(outcome.study);
       return true;
     } catch (error) {
+      if (view !== this.viewGeneration) return false;
       this.onCommandFailure(error);
       return error instanceof StageDispatchError;
     } finally {
-      this.busy.set(false);
+      if (view === this.viewGeneration) this.busy.set(false);
     }
   }
 
@@ -274,6 +286,7 @@ export class GoldenSearchStudyComponent {
 
   /** Shows a study; moves to the step holding its decision whenever that step changes. An answer older than the one shown is dropped. */
   private apply(detail: StudyDetail): void {
+    if (detail.id !== this.studyId()) return;
     const previous = this.detail();
     if (previous !== null && previous.id === detail.id && detail.revision < previous.revision) {
       this.schedulePoll(previous);

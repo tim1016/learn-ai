@@ -61,6 +61,19 @@ describe('applyPlanEdit', () => {
     expect(grid.protocol.knobs).toEqual(searched.protocol.knobs);
   });
 
+  it('moves the seed with a fixed knob, so the plan never contradicts where its searches start', () => {
+    const base = draft();
+    const edited = applyPlanEdit(base, { kind: 'knob-number', name: 'gap_bps', field: 'fixed_value', raw: '2' }, emaCapability());
+
+    expect(edited.protocol.knobs.find((k) => k.name === 'gap_bps')?.fixed_value).toBe(2);
+    expect(edited.protocol.seed?.['gap_bps']).toBe(2);
+
+    const searched = applyPlanEdit(base, { kind: 'knob-number', name: 'gap', field: 'fixed_value', raw: '0.5' }, emaCapability());
+    expect(searched.protocol.seed?.['gap']).toBe(base.protocol.seed?.['gap']);  // a searched knob's fixed value is not its start
+    const fixed = applyPlanEdit(searched, { kind: 'knob-mode', name: 'gap', mode: 'fixed' }, emaCapability());
+    expect(fixed.protocol.seed?.['gap']).toBe(0.5);
+  });
+
   it('keeps a step the trader set when a knob is held fixed and searched again', () => {
     const edited = applyPlanEdit(draft(), { kind: 'knob-number', name: 'gap', field: 'step', raw: '0.1' }, emaCapability());
     const fixed = applyPlanEdit(edited, { kind: 'knob-mode', name: 'gap', mode: 'fixed' }, emaCapability());

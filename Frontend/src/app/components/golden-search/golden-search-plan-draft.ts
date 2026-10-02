@@ -127,6 +127,17 @@ function patchKnob(protocol: ProtocolRequest, name: string, patch: (knob: KnobPl
   return { ...protocol, knobs: protocol.knobs.map((knob) => (knob.name === name ? patch(knob) : knob)) };
 }
 
+/**
+ * A fixed knob holds one value, and the searches start from the seed, so the
+ * two must agree: the server refuses a seed that contradicts a fixed knob
+ * (`SEED_CONFLICTS_FIXED`), and the form has no separate seed control.
+ */
+function withFixedSeed(protocol: ProtocolRequest, name: string): ProtocolRequest {
+  const knob = protocol.knobs.find((candidate) => candidate.name === name);
+  if (knob === undefined || knob.mode !== 'fixed' || !protocol.seed) return protocol;
+  return { ...protocol, seed: { ...protocol.seed, [name]: knob.fixed_value } };
+}
+
 /** Every searched knob needs its smallest step (under Zoom and Grid alike); the declaration's default step is the starting suggestion. */
 function withSteps(protocol: ProtocolRequest, capability: StrategyCapability | null): ProtocolRequest {
   const steps = new Map((capability?.knobs ?? []).map((knob) => [knob.name, knob.default_step]));
@@ -188,13 +199,16 @@ export function applyPlanEdit(draft: PlanDraft, edit: PlanEdit, capability: Stra
   switch (edit.kind) {
     case 'method':
       return { ...draft, protocol: { ...protocol, method: edit.method }, problems };
-    case 'knob-mode':
-      return { ...draft, protocol: withSteps(patchKnob(protocol, edit.name, (knob) => ({ ...knob, mode: edit.mode })), capability), problems };
+    case 'knob-mode': {
+      const moded = withSteps(patchKnob(protocol, edit.name, (knob) => ({ ...knob, mode: edit.mode })), capability);
+      return { ...draft, protocol: withFixedSeed(moded, edit.name), problems };
+    }
     case 'knob-number': {
       const key = knobProblemKey(edit.name, edit.field);
       const value = readNumber(edit.raw);
       if (value === null) return { ...draft, protocol, problems: withProblem(problems, key, 'Enter a number.') };
-      return { ...draft, protocol: patchKnob(protocol, edit.name, (knob) => ({ ...knob, [edit.field]: value })), problems: withProblem(problems, key, null) };
+      const patched = patchKnob(protocol, edit.name, (knob) => ({ ...knob, [edit.field]: value }));
+      return { ...draft, protocol: withFixedSeed(patched, edit.name), problems: withProblem(problems, key, null) };
     }
     case 'knob-move':
       return { ...draft, protocol: moveKnob(protocol, edit.name, edit.offset), problems };
