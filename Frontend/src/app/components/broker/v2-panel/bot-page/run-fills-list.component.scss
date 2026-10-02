@@ -4,14 +4,14 @@
   display: block;
 }
 
-.trades-today {
+.run-fills {
   background: var(--surface-card, #1f2937);
   border-radius: 0.5rem;
   border: 1px solid var(--surface-border, #374151);
   overflow: hidden;
 }
 
-.trades-header {
+.run-fills-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -21,7 +21,7 @@
   border-bottom: 1px solid var(--surface-border, #374151);
 }
 
-.trades-title {
+.run-fills-title {
   @include eyebrow-heading;
   margin: 0;
 }
@@ -56,7 +56,7 @@
   &:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 }
 
-.no-trades {
+.no-fills {
   padding: 1.25rem 0.75rem;
   color: var(--text-color-secondary, #9ca3af);
   font-size: 0.85rem;

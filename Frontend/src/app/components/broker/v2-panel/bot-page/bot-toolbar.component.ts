@@ -10,7 +10,7 @@ import type {
   PanelActionTrigger,
   ToolbarActionView,
 } from '../lib/broker-v2-panel.types';
-import { PanelActionButtonComponent, type PanelActionTone } from '../panel-action-button/panel-action-button.component';
+import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
 
 type ToolbarGroupKey = ToolbarActionView['group'];
 type ToolbarActionId = ToolbarActionView['action_id'];
@@ -95,6 +95,8 @@ export class BotToolbarComponent {
   protected readonly labels = signal(storedLabels());
   protected readonly allActionsOpen = signal(false);
   protected readonly icons = ICONS;
+  /** A blocker's cure is a toolbar button of its own (Check against Alpaca, Sell), never a second one beside it. */
+  protected readonly noMoves = (): boolean => false;
   protected readonly availabilityWords = AVAILABILITY_WORDS;
 
   protected readonly entries = computed(() => this.panel().bot_page?.toolbar ?? []);
@@ -120,8 +122,15 @@ export class BotToolbarComponent {
     return this.labels() || entry.primary || ALWAYS_LABELLED.has(entry.action_id);
   }
 
-  protected tone(entry: ToolbarActionView): PanelActionTone {
-    return entry.primary ? 'primary' : entry.tone;
+  protected opensHostPanel(entry: ToolbarActionView): boolean {
+    return entry.action_id === 'change_end' || entry.action_id === 'build_proof';
+  }
+
+  /** Where Deploy again or Manual order goes; any other entry has no page of its own. */
+  protected linkFor(entry: ToolbarActionView): AccountWorkspaceLink | ManualOrderTicketNavigation | null {
+    if (entry.action_id === 'deploy_again') return this.deployAgain();
+    if (entry.action_id === 'manual_order') return this.manualOrder();
+    return null;
   }
 
   /** Change end and Build proof open the host's panels. */

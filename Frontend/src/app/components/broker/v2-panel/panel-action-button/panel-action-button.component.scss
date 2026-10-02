@@ -36,6 +36,23 @@
   color: var(--bear);
 }
 
+// #2794: the bot page's primary is filled in its tone; a filled Stop stays red.
+.panel-action__button--filled {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.panel-action__button--filled.panel-action__button--danger {
+  border-color: var(--bear);
+  background: var(--bear);
+}
+
+.panel-action__button--filled.panel-action__button--warning {
+  border-color: var(--warn);
+  background: var(--warn);
+}
+
 // The primary action button stays natively focusable even when blocked, so
 // its `aria-describedby` blocker explanation is reachable by keyboard and
 // screen-reader users — it is styled disabled via `aria-disabled`, not the
