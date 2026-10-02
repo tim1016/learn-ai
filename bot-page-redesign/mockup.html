@@ -1,0 +1,1123 @@
+<title>Bot Page Redesign</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: the app's own dark chrome, then one bot banner (summary + action toolbar),
+   then a no-scroll board on a 12-column grid (6·3·3 and alternatives). */
+:root {
+  color-scheme: dark;
+  --canvas: #0b0e14;
+  --surface: #131722;
+  --elevated: #1b1f2e;
+  --hover: #242938;
+  --sunken: #070a11;
+  --line: #1e222d;
+  --line-2: #2a2e39;
+  --line-3: #363a45;
+  --fg: #f0f3fa;
+  --fg-2: #b2b5be;
+  --fg-3: #9598a1;
+  --fg-4: #6b6f7a;
+  --accent: #2962ff;
+  --accent-text: #7aa9ff;
+  --accent-faint: rgba(41, 98, 255, 0.08);
+  --accent-soft: rgba(41, 98, 255, 0.16);
+  --bull: #26a69a;
+  --bull-soft: rgba(38, 166, 154, 0.15);
+  --bear: #ef5350;
+  --bear-soft: rgba(239, 83, 80, 0.14);
+  --warn: #ff9800;
+  --warn-soft: rgba(255, 152, 0, 0.14);
+  --ema-fast: #f2ad3d;
+  --ema-slow: #4d8dff;
+  --rsi: #a78bfa;
+  /* Dark Bright Gate: hue = candle direction, shade = gate result */
+  --up-bright: #22c2a8;
+  --up-dark: #123f3a;
+  --up-dark-edge: #1f6b61;
+  --down-bright: #f4534f;
+  --down-dark: #4f1f1f;
+  --down-dark-edge: #8c3532;
+  --proto-bg: #f0f3fa;
+  --proto-fg: #0b0e14;
+  --proto-line: #c9ccd4;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --fs-xxs: 0.65rem;
+  --fs-xs: 0.72rem;
+  --fs-sm: 0.8rem;
+  --fs-base: 0.875rem;
+  --fs-md: 0.95rem;
+  --fs-lg: 1.1rem;
+  --r: 6px;
+}
+html, body { height: 100%; }
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--fg);
+  font: var(--fs-base)/1.4 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+.mono, .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+
+.app { height: 100%; display: flex; flex-direction: column; min-width: 0; }
+
+/* ── App chrome (unchanged app-wide, compressed) ───────────────────── */
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 8px 16px; border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #121620, var(--canvas));
+}
+.topbar nav { display: flex; gap: 14px; flex-wrap: wrap; font-size: var(--fs-xs); color: var(--fg-3); flex: 1; min-width: 0; }
+.topbar nav b { color: var(--accent-text); font-weight: 600; }
+.logo {
+  font: 800 0.85rem/1 var(--font-sans); letter-spacing: 0.12em; color: #f2ad3d;
+  padding: 6px 12px; border: 1px solid #5a3b14; border-radius: 6px; background: #1a1209;
+}
+.pills { display: flex; gap: 6px; flex: 1; justify-content: flex-end; }
+.pill { font-size: var(--fs-xs); font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line-3); }
+.pill--live { border-color: var(--bear); color: #ffb4b2; }
+.pill--live::before { content: "●"; color: var(--warn); margin-right: 5px; }
+.pill--att { border-color: #8a5a12; background: #3a2508; color: #ffcf8a; }
+.pill--paper { border-color: #2a7f8a; color: #9fe3ec; }
+
+.acct {
+  display: flex; align-items: center; gap: 12px 20px; flex-wrap: wrap;
+  padding: 8px 16px; border-bottom: 1px solid var(--line-2);
+  background: linear-gradient(180deg, #1a1218 0%, var(--surface) 100%);
+  border-top: 2px solid #7a2a2a;
+}
+.acct__name { font-weight: 700; font-size: var(--fs-md); }
+.chip-live { font: 600 var(--fs-xxs)/1 var(--font-mono); text-transform: uppercase; letter-spacing: 0.05em; padding: 5px 9px; border-radius: 999px; background: var(--bear); color: #fff; }
+.tabs { display: flex; gap: 4px; }
+.tabs a { color: var(--fg-3); text-decoration: none; font-size: var(--fs-sm); padding: 4px 9px; border-radius: 4px; }
+.tabs a.on { color: var(--fg); background: var(--hover); }
+.acct__money { display: flex; gap: 18px; margin-left: auto; }
+.acct__money div { display: grid; }
+.acct__money span { font-size: var(--fs-xxs); color: var(--fg-4); text-transform: uppercase; letter-spacing: 0.05em; }
+.acct__money b { font: 500 var(--fs-sm) var(--font-mono); }
+.btn-ghost { border: 1px solid var(--line-3); background: transparent; border-radius: 5px; padding: 5px 11px; font-size: var(--fs-sm); color: var(--fg-2); cursor: pointer; }
+
+/* ── Bot banner: summary row + toolbar row ─────────────────────────── */
+.botbar { padding: 10px 16px 0; display: grid; gap: 8px; }
+.botbar__row { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; min-width: 0; }
+.crumb { color: var(--fg-3); text-decoration: none; font-size: var(--fs-sm); }
+.crumb:hover { color: var(--fg); }
+.botname { font: 600 var(--fs-lg)/1.2 var(--font-mono); margin: 0; letter-spacing: -0.01em; }
+.botmeta { color: var(--fg-3); font-size: var(--fs-sm); }
+.botmeta b { color: var(--fg); font-weight: 600; }
+.status { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); font-weight: 600; padding: 3px 10px; border-radius: 999px; }
+.status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.status--running { color: var(--bull); background: var(--bull-soft); }
+.status--running::before { animation: pulse 1.6s ease-in-out infinite; }
+.status--finished { color: var(--fg-2); background: var(--hover); }
+.status--holding { color: var(--warn); background: var(--warn-soft); }
+@keyframes pulse { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .status--running::before { animation: none; } }
+.summary { color: var(--fg-2); font-size: var(--fs-base); margin: 0; flex: 1 1 360px; min-width: 0; }
+.summary b { color: var(--fg); font-weight: 600; }
+.figs { display: flex; gap: 16px; margin-left: auto; }
+.fig { display: grid; justify-items: end; }
+.fig span { font-size: var(--fs-xxs); color: var(--fg-4); text-transform: uppercase; letter-spacing: 0.05em; }
+.fig b { font: 600 var(--fs-md) var(--font-mono); }
+.up { color: var(--bull); } .down { color: var(--bear); }
+
+.toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 0 10px; border-bottom: 1px solid var(--line-2); }
+.tgroup { display: flex; align-items: center; gap: 4px; padding-right: 8px; margin-right: 4px; border-right: 1px solid var(--line-2); }
+.tgroup:last-of-type { border-right: 0; }
+.tgroup__name { font-size: var(--fs-xxs); color: var(--fg-4); text-transform: uppercase; letter-spacing: 0.06em; margin-right: 2px; }
+.tb {
+  position: relative; display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; min-width: 32px; padding: 0 8px; justify-content: center;
+  border-radius: 6px; border: 1px solid var(--line-3); background: var(--elevated);
+  color: var(--fg-2); cursor: pointer; font-size: var(--fs-sm);
+}
+.tb:hover { background: var(--hover); color: var(--fg); }
+.tb svg { width: 16px; height: 16px; stroke-width: 2; }
+.tb__label { display: none; white-space: nowrap; }
+.tb--primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tb--primary:hover { background: #1e53e5; color: #fff; }
+.tb--danger { color: #ffb4b2; border-color: #5a2a2c; }
+.tb--danger:hover { background: var(--bear-soft); }
+.tb--primary .tb__label, .tb--danger.tb--keylabel .tb__label, body.labels .tb__label { display: inline; }
+.tb[data-tip]:hover::after, .tb[data-tip]:focus-visible::after {
+  content: attr(data-tip); position: absolute; top: calc(100% + 6px); left: 0; z-index: 30;
+  width: max-content; max-width: 260px; white-space: normal; text-align: left;
+  background: var(--sunken); color: var(--fg-2); border: 1px solid var(--line-3);
+  border-radius: 5px; padding: 6px 8px; font-size: var(--fs-xs); font-weight: 400; line-height: 1.35;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5); pointer-events: none;
+}
+.toolbar__fresh { margin-left: auto; font-size: var(--fs-xs); color: var(--fg-4); display: flex; align-items: center; gap: 6px; }
+.toolbar__fresh i { width: 6px; height: 6px; border-radius: 50%; background: var(--bull); display: inline-block; }
+.example-flag { font-size: var(--fs-xs); color: var(--warn); border: 1px dashed #6b4a14; border-radius: 4px; padding: 2px 8px; }
+
+/* ── Board ─────────────────────────────────────────────────────────── */
+.board { flex: 1; min-height: 0; padding: 12px 16px 64px; }
+.grid { display: grid; gap: 12px; height: 100%; min-height: 0; }
+.gridA { grid-template-columns: 6fr 3fr 3fr; grid-template-rows: minmax(0, 1.75fr) minmax(0, 1fr); }
+.gridB { grid-template-columns: 6fr 3fr 3fr; grid-template-rows: minmax(0, 1fr); }
+.gridC { grid-template-columns: 9fr 3fr; grid-template-rows: minmax(0, 1fr); }
+.stack { display: grid; gap: 12px; min-height: 0; }
+.stack--3 { grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr); }
+
+.panel { background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.panel__head { display: flex; align-items: baseline; gap: 8px; padding: 9px 12px 7px; border-bottom: 1px solid var(--line); }
+.panel__title { font-size: var(--fs-xs); font-weight: 600; color: var(--fg-2); text-transform: uppercase; letter-spacing: 0.06em; margin: 0; }
+.panel__sub { font-size: var(--fs-xs); color: var(--fg-4); margin-left: auto; text-align: right; }
+.panel__body { padding: 10px 12px; overflow: auto; min-height: 0; flex: 1; display: grid; align-content: start; gap: 10px; }
+.panel--chart .panel__body { padding: 0; overflow: hidden; display: block; }
+.chart-host { width: 100%; height: 100%; min-height: 170px; position: relative; }
+.chart-host svg { display: block; }
+
+.hero { display: grid; gap: 2px; }
+.hero b { font: 600 1.35rem/1.15 var(--font-mono); }
+.hero span { font-size: var(--fs-sm); color: var(--fg-3); }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 16px; margin: 0; font-size: var(--fs-sm); }
+.kv dt { white-space: nowrap; }
+.kv dt { color: var(--fg-3); }
+.kv dd { margin: 0; text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.kv .sep { grid-column: 1 / -1; border-top: 1px solid var(--line); margin: 2px 0; }
+.note { font-size: var(--fs-xs); color: var(--fg-4); margin: 0; }
+.sect { font-size: var(--fs-xxs); color: var(--fg-4); text-transform: uppercase; letter-spacing: 0.06em; margin: 2px 0 0; }
+
+.dlist { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.dlist li { display: grid; grid-template-columns: 44px 1fr; gap: 2px 10px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: var(--fs-sm); }
+.dlist li:last-child { border-bottom: 0; }
+.dlist time { font-family: var(--font-mono); color: var(--fg-3); font-size: var(--fs-xs); padding-top: 1px; }
+.dlist .what { font-weight: 600; }
+.dlist .why { grid-column: 2; color: var(--fg-3); font-size: var(--fs-xs); }
+.dlist li.next { color: var(--fg-4); }
+.dlist li.next .what { font-weight: 400; }
+.tag { font-size: var(--fs-xxs); font-weight: 600; padding: 1px 6px; border-radius: 3px; margin-left: 6px; vertical-align: 1px; }
+.tag--none { background: var(--hover); color: var(--fg-3); }
+.tag--buy { background: var(--bull-soft); color: var(--bull); }
+.tag--ex { background: var(--warn-soft); color: var(--warn); }
+
+.health { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.health li { display: grid; grid-template-columns: 10px 1fr auto; gap: 2px 8px; align-items: baseline; font-size: var(--fs-sm); }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--fg-4); }
+.dot--ok { background: var(--bull); } .dot--bad { background: var(--bear); } .dot--warn { background: var(--warn); } .dot--off { background: var(--line-3); }
+.health .val { color: var(--fg-2); font-size: var(--fs-xs); text-align: right; }
+.health .why { grid-column: 2 / -1; color: var(--fg-4); font-size: var(--fs-xs); }
+.health a { color: var(--accent-text); text-decoration: none; }
+
+.hash { display: grid; grid-template-columns: 1fr auto auto; gap: 4px 8px; align-items: center; font-size: var(--fs-xs); }
+.hash dt { color: var(--fg-3); }
+.hash dd { margin: 0; font-family: var(--font-mono); color: var(--fg-2); }
+.copy { border: 0; background: transparent; color: var(--fg-4); cursor: pointer; padding: 2px; display: inline-flex; }
+.copy:hover { color: var(--fg); }
+.copy svg { width: 13px; height: 13px; }
+.proven { color: var(--bull); font-weight: 600; }
+.strategy { font-size: var(--fs-sm); color: var(--fg-2); margin: 0; }
+
+.path { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; }
+.path span { font-size: var(--fs-xxs); text-align: center; padding: 5px 2px; border-radius: 3px; background: var(--hover); color: var(--fg-4); }
+.path span.done { background: var(--bull-soft); color: var(--bull); }
+.path span.wait { background: var(--warn-soft); color: var(--warn); }
+.orders { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); }
+.orders li { display: flex; justify-content: space-between; gap: 10px; }
+.orders .m { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-2); }
+.cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 20px; }
+.cols2 > div { display: grid; gap: 6px; align-content: start; min-width: 0; }
+
+.feed { list-style: none; margin: 0; padding: 0; position: relative; }
+.feed::before { content: ""; position: absolute; left: 51px; top: 6px; bottom: 6px; width: 1px; background: var(--line-2); }
+.feed li { display: grid; grid-template-columns: 44px 16px 1fr; gap: 0 6px; padding: 5px 0; font-size: var(--fs-sm); position: relative; }
+.feed time { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-3); padding-top: 1px; }
+.feed .mk { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--fg-4); background: var(--surface); margin: 4px 0 0 1px; z-index: 1; }
+.feed .mk--life { border-color: var(--accent-text); }
+.feed .mk--dec { border-color: var(--fg-3); }
+.feed .mk--buy { border-color: var(--bull); background: var(--bull); }
+.feed .mk--data { border-color: var(--warn); }
+.feed .mk--money { border-color: var(--bull); }
+.feed .why { grid-column: 3; color: var(--fg-4); font-size: var(--fs-xs); }
+.feed li.next { color: var(--fg-4); }
+
+.itabs { display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.itabs button { border: 0; background: transparent; color: var(--fg-3); padding: 6px 9px; font-size: var(--fs-sm); cursor: pointer; border-bottom: 2px solid transparent; }
+.itabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+
+.svg-t { font: 10px var(--font-mono); fill: var(--fg-4); }
+.svg-t2 { font: 10px var(--font-sans); fill: var(--fg-3); }
+.svg-tb { font: 600 10px var(--font-sans); fill: var(--fg-2); }
+
+/* Popovers, toast, prototype bar, notes */
+.pop {
+  position: fixed; z-index: 40; width: min(440px, calc(100vw - 32px)); max-height: min(70vh, 560px); overflow: auto;
+  background: var(--elevated); border: 1px solid var(--line-3); border-radius: 8px; box-shadow: 0 12px 32px rgba(0,0,0,0.55); padding: 12px;
+}
+.pop h3 { margin: 0 0 8px; font-size: var(--fs-md); }
+.alist { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.alist li { display: grid; grid-template-columns: 22px 1fr auto; gap: 1px 8px; padding: 6px 4px; border-radius: 4px; font-size: var(--fs-sm); }
+.alist li svg { width: 15px; height: 15px; margin-top: 2px; color: var(--fg-3); }
+.alist .st { font-size: var(--fs-xxs); font-weight: 600; padding: 2px 6px; border-radius: 3px; align-self: start; }
+.alist .st--on { background: var(--bull-soft); color: var(--bull); }
+.alist .st--off { background: var(--hover); color: var(--fg-4); }
+.alist .r { grid-column: 2 / -1; color: var(--fg-4); font-size: var(--fs-xs); }
+.alist .sys { font-family: var(--font-mono); font-size: var(--fs-xxs); color: var(--fg-4); opacity: 0.8; }
+.toast {
+  position: fixed; left: 50%; bottom: 70px; transform: translateX(-50%); z-index: 50;
+  background: var(--sunken); border: 1px solid var(--line-3); color: var(--fg-2); padding: 8px 14px; border-radius: 6px; font-size: var(--fs-sm);
+  max-width: calc(100vw - 32px);
+}
+.proto {
+  position: fixed; left: 0; right: 0; margin: 0 auto; width: max-content; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 45;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center;
+  background: var(--proto-bg); color: var(--proto-fg); border-radius: 999px; padding: 5px 8px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.6); font-size: var(--fs-sm); max-width: calc(100vw - 24px);
+}
+.proto button { border: 0; background: transparent; color: var(--proto-fg); cursor: pointer; border-radius: 999px; padding: 4px 10px; font-weight: 500; }
+.proto button:hover { background: #dfe3ea; }
+.proto button[aria-pressed="true"] { background: var(--proto-fg); color: var(--proto-bg); }
+.proto .vlabel { font-weight: 700; padding: 0 4px; min-width: 132px; text-align: center; }
+.proto .divider { width: 1px; height: 18px; background: var(--proto-line); }
+.notes {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 60; width: min(440px, 100vw); overflow: auto;
+  background: var(--elevated); border-left: 1px solid var(--line-3); box-shadow: -12px 0 32px rgba(0,0,0,0.5); padding: 18px 20px 80px;
+}
+.notes h2 { font-size: var(--fs-lg); margin: 0 0 4px; }
+.notes h3 { font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-3); margin: 18px 0 6px; }
+.notes ol, .notes ul { padding-left: 18px; margin: 0; display: grid; gap: 7px; font-size: var(--fs-sm); color: var(--fg-2); }
+.notes b { color: var(--fg); }
+.notes table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+.notes td { padding: 4px 6px; border-bottom: 1px solid var(--line-2); vertical-align: top; color: var(--fg-2); }
+.notes td:first-child { font-family: var(--font-mono); color: var(--fg-4); }
+.notes .x { float: right; }
+
+/* Strategy view (#2639) */
+.chart-head { flex-wrap: wrap; align-items: center; row-gap: 6px; }
+.seg { display: inline-flex; border: 1px solid var(--line-3); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; background: transparent; color: var(--fg-3); padding: 3px 9px; font-size: var(--fs-xs); cursor: pointer; }
+.seg button[aria-selected="true"] { background: var(--hover); color: var(--fg); }
+.chipbtn { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-3); background: var(--elevated); color: var(--fg-2); border-radius: 6px; padding: 3px 7px; font-size: var(--fs-xs); cursor: pointer; }
+.chipbtn:hover { background: var(--hover); color: var(--fg); }
+.chipbtn svg { width: 13px; height: 13px; }
+.chipbtn small { color: var(--accent-text); font-size: var(--fs-xxs); }
+.legend { display: flex; flex-wrap: wrap; gap: 3px 14px; padding: 5px 12px; font-size: var(--fs-xs); color: var(--fg-3); border-bottom: 1px solid var(--line); align-items: center; }
+.legend .sw { display: inline-block; width: 8px; height: 11px; border-radius: 1px; vertical-align: -1px; margin-right: 2px; }
+.legend .ln { display: inline-block; width: 14px; height: 2px; vertical-align: 3px; margin-right: 4px; }
+.legend .hint { margin-left: auto; color: var(--fg-4); }
+.legend .src { color: var(--fg-4); }
+@media (max-width: 1500px) { .legend .hint { display: none; } }
+.ck { display: inline-flex; gap: 3px; font: 500 var(--fs-xxs)/1.6 var(--font-mono); padding: 0 5px; border-radius: 3px; white-space: nowrap; }
+.ck--ok { background: var(--bull-soft); color: var(--bull); }
+.ck--no { background: var(--bear-soft); color: #ff8a87; }
+.cks { display: flex; flex-wrap: wrap; gap: 4px; grid-column: 2; }
+.dlist li.drow { cursor: pointer; border-radius: 3px; }
+.dlist li.drow:hover { background: var(--elevated); }
+.dlist li.sel { background: var(--accent-faint); box-shadow: inset 2px 0 0 var(--accent-text); }
+.dlist li.before .what { color: var(--fg-3); font-weight: 500; }
+.dlist li.startline { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 0; font-size: var(--fs-xxs); color: var(--accent-text); text-transform: uppercase; letter-spacing: 0.06em; }
+.dlist li.startline::before, .dlist li.startline::after { content: ""; flex: 1; border-top: 1px solid var(--accent-text); opacity: 0.4; }
+.checks { grid-column: 2; width: 100%; border-collapse: collapse; font-size: var(--fs-xs); margin-top: 4px; }
+.checks td { padding: 2px 8px 2px 0; color: var(--fg-2); white-space: nowrap; }
+.checks td:nth-child(2) { font-family: var(--font-mono); color: var(--fg-3); }
+.checks td:nth-child(3) { color: var(--fg-4); }
+.checks td:last-child { text-align: right; padding-right: 0; }
+.vals { grid-column: 2; font: var(--fs-xxs)/1.5 var(--font-mono); color: var(--fg-4); margin: 2px 0 0; }
+.ok { color: var(--bull); } .no { color: #ff8a87; }
+.gl { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.gl button { width: 100%; display: grid; grid-template-columns: 16px 1fr auto; gap: 2px 8px; text-align: left; background: transparent; border: 0; border-radius: 5px; padding: 7px 6px; cursor: pointer; color: var(--fg); }
+.gl button:hover { background: var(--hover); }
+.gl .radio { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--fg-4); margin-top: 3px; box-sizing: border-box; }
+.gl button[aria-checked="true"] .radio { border-color: var(--accent-text); background: radial-gradient(var(--accent-text) 40%, transparent 46%); }
+.gl .own { font-size: var(--fs-xxs); padding: 1px 6px; border-radius: 3px; background: var(--hover); color: var(--fg-3); align-self: start; }
+.gl .own--strategy { background: var(--accent-soft); color: var(--accent-text); }
+.gl code { grid-column: 2 / -1; font: var(--fs-xs) var(--font-mono); color: var(--fg-3); }
+.editor { display: grid; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line-3); }
+.editor input, .editor select, .search { box-sizing: border-box; background: var(--sunken); border: 1px solid var(--line-3); color: var(--fg); border-radius: 5px; padding: 6px 8px; font: var(--fs-sm) var(--font-mono); min-width: 0; }
+.search { width: 100%; margin-top: 4px; font-family: var(--font-sans); }
+.editor .row { display: flex; gap: 6px; align-items: center; }
+.vars { display: flex; flex-wrap: wrap; gap: 4px; }
+.vars span { font: var(--fs-xxs)/1.6 var(--font-mono); padding: 1px 6px; border-radius: 3px; background: var(--hover); color: var(--fg-2); }
+.vars span.cc { color: var(--warn); }
+.btn-primary { background: var(--accent); color: #fff; border: 0; border-radius: 5px; padding: 6px 12px; font-size: var(--fs-sm); cursor: pointer; white-space: nowrap; }
+.il { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 1px; }
+.il li { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 5px 6px; border-radius: 4px; font-size: var(--fs-sm); }
+.il li button { all: unset; cursor: pointer; flex: 1; }
+.il li:hover { background: var(--hover); }
+.il .tagc { font-size: var(--fs-xxs); color: var(--warn); }
+.il .lock { font-size: var(--fs-xxs); color: var(--accent-text); }
+.x-sub { font-size: var(--fs-xxs); color: var(--fg-4); text-transform: uppercase; letter-spacing: 0.06em; margin: 10px 0 2px; }
+.btn-ghost svg { width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; }
+
+@media (max-width: 1100px) {
+  html, body { height: auto; }
+  .app { height: auto; }
+  .gridA, .gridB, .gridC { grid-template-columns: 1fr 1fr; grid-template-rows: auto; height: auto; }
+  .gridA > :first-child, .gridB > :first-child, .gridC > :first-child { grid-column: 1 / -1; }
+  .chart-host { height: 360px; }
+  .panel__body { max-height: 420px; }
+  .topbar nav { display: none; }
+}
+@media (max-width: 680px) {
+  .gridA, .gridB, .gridC { grid-template-columns: minmax(0, 1fr); }
+  .acct__money { margin-left: 0; flex-wrap: wrap; }
+  .figs { margin-left: 0; }
+  .chart-host { height: 300px; }
+  .proto .vlabel { min-width: 0; }
+}
+</style>
+
+<div class="app">
+  <header class="topbar">
+    <nav aria-label="App"><span>Stocks</span><span>Options</span><span>Research</span><b>Alpaca</b><span>Strategy Tools</span><span>Documentation</span></nav>
+    <span class="logo">BOTASUR</span>
+    <div class="pills"><span class="pill pill--live">Live</span><span class="pill pill--att">! 1</span><span class="pill pill--paper">Paper</span></div>
+  </header>
+
+  <section class="acct" aria-label="Account">
+    <span class="acct__name">Alpaca-Live1</span>
+    <span class="chip-live">Live · real money</span>
+    <nav class="tabs" aria-label="Account"><a class="on" href="#">Home</a><a href="#">Activity</a><a href="#">History</a><a href="#">Settings</a></nav>
+    <div class="acct__money">
+      <div><span>Free to deploy</span><b>$1,000.00</b></div>
+      <div><span>Cash</span><b>$1,000.00</b></div>
+      <div><span>Equity</span><b>$1,000.00</b></div>
+      <div><span>Today</span><b>$0.00</b></div>
+    </div>
+    <button class="btn-ghost" type="button">Deploy a bot</button>
+  </section>
+
+  <section class="botbar" id="botbar" aria-label="This bot"></section>
+  <main class="board" id="board"></main>
+</div>
+
+<div class="proto" role="toolbar" aria-label="Mockup controls">
+  <button type="button" id="prev" aria-label="Previous layout">‹</button>
+  <span class="vlabel" id="vlabel"></span>
+  <button type="button" id="next" aria-label="Next layout">›</button>
+  <span class="divider"></span>
+  <button type="button" data-state="running">Running</button>
+  <button type="button" data-state="finished">Finished</button>
+  <button type="button" data-state="holding">Ended holding</button>
+  <span class="divider"></span>
+  <button type="button" id="labels" aria-pressed="false">Labels</button>
+  <button type="button" id="notesBtn" aria-pressed="false">Notes</button>
+</div>
+
+<aside class="notes" id="notes" hidden aria-label="Design notes"></aside>
+<div class="pop" id="pop" hidden></div>
+<div class="toast" id="toast" hidden role="status"></div>
+
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<script>
+const DATA = {"bars":[[1790791200000,767.695,767.7,767.32,767.3399],[1790791260000,767.322,767.4295,767.145,767.265],[1790791320000,767.28,767.3,767.22,767.27],[1790791380000,767.27,767.3599,767.2,767.25],[1790791440000,767.27,767.37,767.2,767.3],[1790791500000,767.31,767.3795,767.16,767.17],[1790791560000,767.17,767.17,766.86,766.91],[1790791620000,766.92,767.06,766.85,767.0],[1790791680000,767.0,767.125,766.86,767.11],[1790791740000,767.11,767.21,766.98,767.19],[1790791800000,767.19,767.24,767.085,767.23],[1790791860000,767.21,767.465,767.21,767.35],[1790791920000,767.37,767.54,767.34,767.47],[1790791980000,767.48,767.48,767.2,767.31],[1790792040000,767.32,767.43,767.27,767.335],[1790792100000,767.33,767.38,767.19,767.28],[1790792160000,767.26,767.36,767.19,767.19],[1790792220000,767.18,767.24,767.07,767.08],[1790792280000,767.07,767.15,766.99,767.13],[1790792340000,767.11,767.17,766.95,766.99],[1790792400000,766.99,767.06,766.84,766.89],[1790792460000,766.88,766.88,766.63,766.68],[1790792520000,766.71,766.78,766.67,766.74],[1790792580000,766.74,766.77,766.65,766.71],[1790792640000,766.71,766.72,766.59,766.59],[1790792700000,766.59,766.665,766.36,766.38],[1790792760000,766.37,766.56,766.31,766.5141],[1790792820000,766.52,766.62,766.5,766.54],[1790792880000,766.54,766.76,766.54,766.72],[1790792940000,766.72,766.82,766.65,766.76],[1790793000000,766.75,766.84,766.66,766.709],[1790793060000,766.7,766.73,766.41,766.41],[1790793120000,766.41,766.41,766.31,766.38],[1790793180000,766.375,766.41,766.12,766.22],[1790793240000,766.22,766.26,766.1012,766.24],[1790793300000,766.245,766.28,766.1948,766.22],[1790793360000,766.22,766.46,766.15,766.35],[1790793420000,766.34,766.5089,766.31,766.48],[1790793480000,766.475,766.6,766.38,766.6],[1790793540000,766.6,766.87,766.54,766.79],[1790793600000,766.79,766.85,766.71,766.73],[1790793660000,766.72,766.8,766.695,766.76],[1790793720000,766.76,766.93,766.74,766.88],[1790793780000,766.8979,766.97,766.77,766.87],[1790793840000,766.865,766.87,766.8,766.8469],[1790793900000,766.86,766.89,766.58,766.62],[1790793960000,766.615,766.735,766.59,766.685],[1790794020000,766.665,766.74,766.58,766.59],[1790794080000,766.5899,766.595,766.27,766.31],[1790794140000,766.3,766.36,766.15,766.27],[1790794200000,766.28,766.42,766.2754,766.34],[1790794260000,766.325,766.39,766.16,766.16],[1790794320000,766.165,766.25,766.15,766.23],[1790794380000,766.21,766.28,766.03,766.0555],[1790794440000,766.04,766.26,766.01,766.2099],[1790794500000,766.19,766.2795,766.16,766.22],[1790794560000,766.21,766.37,766.17,766.27],[1790794620000,766.24,766.395,766.21,766.395],[1790794680000,766.395,766.63,766.2912,766.545],[1790794740000,766.54,766.63,766.45,766.46],[1790794800000,766.48,766.62,766.46,766.585],[1790794860000,766.585,766.755,766.48,766.74],[1790794920000,766.74,766.81,766.69,766.785],[1790794980000,766.79,766.83,766.64,766.76],[1790795040000,766.775,766.81,766.705,766.76],[1790795100000,766.77,766.77,766.64,766.7],[1790795160000,766.7,766.78,766.65,766.66],[1790795220000,766.675,766.79,766.63,766.72],[1790795280000,766.71,766.85,766.7,766.755],[1790795340000,766.755,766.8,766.64,766.8],[1790795400000,766.81,766.81,766.55,766.6795],[1790795460000,766.66,766.75,766.54,766.54],[1790795520000,766.545,766.61,766.52,766.61],[1790795580000,766.59,766.64,766.54,766.61],[1790795640000,766.61,766.88,766.6,766.83],[1790795700000,766.8,766.83,766.58,766.62],[1790795760000,766.635,766.68,766.51,766.57],[1790795820000,766.56,766.62,766.5,766.58],[1790795880000,766.575,766.66,766.46,766.63],[1790795940000,766.64,766.77,766.61,766.67],[1790796000000,766.67,766.68,766.47,766.57],[1790796060000,766.57,766.66,766.5,766.5],[1790796120000,766.51,766.57,766.47,766.56],[1790796180000,766.55,766.55,766.24,766.27],[1790796240000,766.2699,766.41,766.25,766.32],[1790796300000,766.32,766.5,766.3,766.3],[1790796360000,766.31,766.39,766.305,766.36],[1790796420000,766.34,766.42,766.27,766.34],[1790796480000,766.34,766.41,766.24,766.36],[1790796540000,766.36,766.39,766.28,766.34],[1790796600000,766.34,766.435,766.25,766.37],[1790796660000,766.37,766.39,766.22,766.27],[1790796720000,766.285,766.32,766.15,766.15],[1790796780000,766.16,766.19,766.05,766.18],[1790796840000,766.19,766.275,766.14,766.16],[1790796900000,766.16,766.44,766.15,766.38],[1790796960000,766.36,766.37,766.13,766.13],[1790797020000,766.121,766.195,765.76,765.86],[1790797080000,765.8736,766.0,765.74,765.755],[1790797140000,765.755,766.11,765.73,765.98],[1790797200000,765.96,766.08,765.88,765.98],[1790797260000,765.98,766.005,765.73,765.76],[1790797320000,765.76,765.85,765.55,765.59],[1790797380000,765.59,765.73,765.52,765.68],[1790797440000,765.7,765.87,765.69,765.75],[1790797500000,765.75,765.85,765.53,765.61],[1790797560000,765.6,765.67,765.54,765.57],[1790797620000,765.56,765.63,765.36,765.4275],[1790797680000,765.42,765.75,765.3,765.56],[1790797740000,765.56,765.6,765.29,765.32],[1790797800000,765.31,765.31,764.49,764.53],[1790797860000,764.545,764.59,764.24,764.55],[1790797920000,764.53,765.01,764.495,764.7],[1790797980000,764.69,764.95,764.67,764.7],[1790798040000,764.6999,764.9,763.78,763.84],[1790798100000,763.82,763.89,763.53,763.89],[1790798160000,763.9,764.04,763.69,763.925],[1790798220000,763.92,764.03,763.79,763.88],[1790798280000,763.88,763.93,763.39,763.74],[1790798340000,763.75,764.06,762.66165,762.8060999999999]],"sig":[[1790791200000,767.7,767.6744,767.7503,55.0],[1790792100000,767.34,767.5613,767.6748,52.1],[1790793000000,766.76,767.2942,767.5085,47.9],[1790793900000,766.85,767.1451,767.3882,48.6],[1790794800000,766.46,766.9167,767.2194,45.8],[1790795700000,766.83,766.8878,767.1486,48.8],[1790796600000,766.34,766.7052,767.0016,45.2],[1790797500000,765.75,766.3868,766.774,41.2],[1790798400000,762.81,765.1932,766.0526,27.9]],"strat":[[1790775900000,766.45,767.29,766.0,766.66,765.0682,764.5923,63.95,0],[1790776800000,766.68,767.98,766.07,767.97,766.0355,765.2065,69.29,0],[1790777700000,767.95,769.15,767.95,768.15,766.7403,765.7416,69.95,0],[1790778600000,768.16,769.1,767.47,767.87,767.1169,766.1286,67.52,0],[1790779500000,767.87,768.41,767.25,767.65,767.2946,766.4052,65.6,0],[1790780400000,767.64,769.41,767.5754,768.528275,767.7058,766.7912,69.36,0],[1790781300000,768.52,768.68,767.75,768.21,767.8739,767.0492,66.52,0],[1790782200000,768.18,768.94,767.9,768.7501,768.166,767.3585,68.85,0],[1790783100000,768.77,769.02,767.88,767.99,768.1073,767.4733,62.28,0],[1790784000000,768.0,769.245,767.89,768.71,768.3082,767.6981,65.63,0],[1790784900000,768.73,769.1,768.48,769.0,768.5388,767.9348,66.9,0],[1790785800000,768.99,769.04,768.04,768.07,768.3825,767.9594,59.31,0],[1790786700000,768.07,768.5,767.68,768.35,768.3717,768.0304,60.75,0],[1790787600000,768.365,768.365,767.71,768.27,768.3378,768.074,60.1,0],[1790788500000,768.245,768.47,767.6,767.6992,768.1249,768.0058,55.5,0],[1790789400000,767.69,767.69,766.26,767.0,767.75,767.823,50.4,0],[1790790300000,766.99,767.72,766.97,767.485,767.6616,767.7615,53.58,0],[1790791200000,767.5,767.97,767.2,767.7,767.6744,767.7503,54.96,0],[1790792100000,767.695,767.7,766.85,767.335,767.5613,767.6748,52.13,0],[1790793000000,767.33,767.38,766.31,766.76,767.2942,767.5085,47.94,0],[1790793900000,766.75,766.97,766.1012,766.8469,767.1451,767.3882,48.61,0],[1790794800000,766.86,766.89,766.01,766.46,766.9167,767.2194,45.78,0],[1790795700000,766.48,766.88,766.46,766.83,766.8878,767.1486,48.85,0],[1790796600000,766.8,766.83,766.24,766.34,766.7052,767.0016,45.2,0],[1790797500000,766.34,766.44,765.52,765.75,766.3868,766.774,41.2,0],[1790798400000,765.75,765.85,762.66165,762.8060999999999,765.1932,766.0526,27.94,0]]};
+
+// ── Time (instants rendered in the owner's zone, Central) ─────────────
+const TZ = 'America/Chicago';
+const fmt = (ms, o) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, hourCycle: 'h23', ...o }).format(ms);
+const hm = ms => fmt(ms, { hour: '2-digit', minute: '2-digit' });
+const hms = ms => fmt(ms, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const MIN = 60000;
+const T = {
+  sessStart: 1790775000000,           // Sep 30 08:30 CT
+  sessEnd: 1790798400000,             // Sep 30 15:00 CT
+  winStart: 1790791200000,            // 13:00 CT (tape window)
+  winEnd: 1790798400000,              // 15:00 CT
+  registered: 1790793012000,
+  runStart: 1790793012817,            // 13:30:12 CT
+  launched: 1790793013000,
+  partial: 1790793065371,             // 13:31:05 CT, partial first minute skipped
+  manualAt: 1790794330000,            // 13:52:10 CT, the made-up manual buy
+  stopped: 1790798344000,             // 14:59:04 CT
+  runEnd: 1790798345369,              // 14:59:05 CT
+  schedEnd: 1790798340000,            // 14:59:00 CT
+  holdSince: 1790829927964,           // Sep 30 23:45 CT
+  now: 1790796005000,                 // running example: 14:20:05 CT
+  formingFrom: 1790795700000,         // 14:15 CT
+  formingClose: 1790796600000,        // 14:30 CT
+};
+const usd = v => (v < 0 ? '−' : '') + '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const signed = v => (v > 0 ? '+' : '') + usd(v);
+const sgn = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(2);
+
+// ── Actions: plain names; the system name stays visible to operators ──
+const ACTIONS = {
+  stop:     { icon: 'square', label: 'Stop', tip: 'Stop new decisions. Any shares stay held.', tone: 'danger', group: 'Bot', sys: 'stop_bot_decisions' },
+  sell:     { icon: 'banknote', label: 'Sell 1 SPY', tip: 'Review a sale of the shares this bot holds, then send it. Two steps: the plan, then the order.', tone: 'danger', group: 'Bot', sys: 'prepare_safe_flatten → execute_safe_flatten' },
+  end:      { icon: 'clock', label: 'Change end', tip: 'Change when the bot stops and whether it sells or keeps its shares.', group: 'Bot', sys: 'bot end' },
+  again:    { icon: 'rotate-ccw', label: 'Deploy again', tip: 'Open Deploy filled in from this bot.', tone: 'primary', group: 'Bot', sys: 'deploy?from=' },
+  clear:    { icon: 'archive', label: 'Clear from Home', tip: 'Move this finished bot off Home. Its records stay in History.', group: 'Bot', sys: 'archive' },
+  manual:   { icon: 'pencil-line', label: 'Manual order', tip: 'Place an order by hand on this bot’s symbol.', group: 'Bot', sys: 'manual order' },
+  check:    { icon: 'scale', label: 'Check against Alpaca', tip: 'Compare what the Clerk recorded with a fresh read of the Alpaca account.', group: 'Fix', sys: 'reconcile_now' },
+  cancel:   { icon: 'circle-x', label: 'Cancel open orders', tip: 'Cancel this bot’s working orders that both the Clerk and Alpaca can identify.', tone: 'danger', group: 'Fix', sys: 'cancel_verified_working_orders' },
+  writeoff: { icon: 'eraser', label: 'Write off missing shares', tip: 'The Clerk thinks this bot holds shares Alpaca does not. After re-reading Alpaca, remove them from the bot’s books.', tone: 'danger', group: 'Fix', sys: 'discharge_attributed_residue' },
+  recover:  { icon: 'file-search', label: 'Recover a missing fill', tip: 'Fetch a fill Alpaca kept that the Clerk is missing, and attach it to the open conflict.', group: 'Fix', sys: 'recover_exact_execution_evidence' },
+  exact:    { icon: 'replace', label: 'Use the exact fill', tip: 'Swap an estimated fill total for the exact fill once they match.', group: 'Fix', sys: 'resolve_execution_coverage' },
+  timeline: { icon: 'history', label: 'Custody timeline', tip: 'Every recorded step for this bot, in order. Read-only.', group: 'Inspect', sys: 'open_custody_timeline' },
+  proof:    { icon: 'fingerprint', label: 'Build proof', tip: 'The program build, seal and hashes this run used.', group: 'Inspect', sys: 'program_build' },
+  all:      { icon: 'list-checks', label: 'All actions', tip: 'Every action, and why the others are not offered right now.', group: 'Inspect', sys: '' },
+};
+
+// ── Strategy view: the bot's 15-min decision bars, values and checks (#2639) ──
+// In the build these come from the bot's own records (D1) and a Python gate evaluator.
+const S = DATA.strat.map(([ts, o, h, l, c, e5, e10, rsi, fresh]) => ({ ts, o, h, l, c, e5, e10, rsi, fresh: !!fresh }));
+const SETTINGS = { gap: 0.20, rsi_min: 50, rsi_max: 70 };
+const GATES = [
+  { id: 'rule', name: 'RSI in 50–70', owner: 'strategy', expr: 'rsi_min ≤ RSI14 ≤ rsi_max', test: r => r.rsi >= SETTINGS.rsi_min && r.rsi <= SETTINGS.rsi_max },
+  { id: 'gap', name: 'EMA gap clears the minimum', owner: 'mine', expr: 'EMA5 − EMA10 − gap > 0', test: r => r.e5 - r.e10 - SETTINGS.gap > 0 },
+  { id: 'above', name: 'Close above EMA 10', owner: 'mine', expr: 'close − EMA10 > 0', test: r => r.c - r.e10 > 0 },
+];
+const CATALOG = ['VWAP', 'EMA 20', 'SMA 50', 'Bollinger Bands (20, 2)', 'ATR 14', 'MACD (12, 26, 9)', 'Stochastic (14, 3)', 'OBV'];
+const gate = () => GATES.find(g => g.id === state.gate) || GATES[0];
+const center = r => r.ts - 7.5 * MIN;
+
+function checks(r) {
+  const gap = r.e5 - r.e10;
+  return [
+    { k: 'Fresh cross', chip: 'cross', val: r.fresh ? 'yes' : gap > 0 ? 'no, above' : 'no, below', rule: 'needs cross up', ok: r.fresh },
+    { k: 'Gap', chip: `gap ${sgn(gap)}`, val: sgn(gap), rule: `needs ≥ ${SETTINGS.gap.toFixed(2)}`, ok: gap >= SETTINGS.gap },
+    { k: 'RSI', chip: `RSI ${r.rsi.toFixed(1)}`, val: r.rsi.toFixed(1), rule: `needs ${SETTINGS.rsi_min}–${SETTINGS.rsi_max}`, ok: r.rsi >= SETTINGS.rsi_min && r.rsi <= SETTINGS.rsi_max },
+  ];
+}
+const chips = r => `<span class="cks">${checks(r).map(c => `<span class="ck ck--${c.ok ? 'ok' : 'no'}">${c.ok ? '✓' : '✗'} ${c.chip}</span>`).join('')}</span>`;
+const checksTable = r => `<table class="checks">${checks(r).map(c => `<tr><td>${c.k}</td><td>${c.val}</td><td>${c.rule}</td><td class="${c.ok ? 'ok' : 'no'}">${c.ok ? '✓' : '✗'}</td></tr>`).join('')}</table>
+  <p class="vals">EMA 5 ${r.e5.toFixed(2)} · EMA 10 ${r.e10.toFixed(2)} · RSI ${r.rsi.toFixed(1)} · bot’s own values</p>`;
+const phaseOf = r => r.ts < T.runStart ? 'Before start · not acted on' : r.ts > T.runEnd ? 'After end · not acted on' : 'No action';
+
+function decisionRows(st) {
+  const lim = st === 'running' ? T.now : Infinity;
+  return S.filter(r => r.ts <= lim && r.ts > T.runStart - 15 * MIN && r.ts <= T.runEnd)
+    .map(r => ({ ...r, before: r.ts < T.runStart }));
+}
+const barAt = ts => DATA.bars.find(b => b[0] === ts);
+const lastBarBefore = ts => DATA.bars.filter(b => b[0] + MIN <= ts).at(-1);
+const HOLD = (() => {
+  const fill = barAt(1790794320000)[1];
+  const last = DATA.bars.at(-1)[4];
+  return { fill, last, pnl: +(last - fill).toFixed(2) };
+})();
+
+// ── One model per bot state ───────────────────────────────────────────
+function model(st) {
+  const ds = decisionRows(st);
+  const n = ds.filter(d => !d.before).length;
+  const common = {
+    decisions: ds,
+    proof: [
+      ['Running build', '665544777aade204ce983acb1e28e53a99db2e3156e0e60492d57a0c1497c5a6'],
+      ['Qualification receipt', '9cfeaffc5a82cccd41d5d452f6c8496d61a2b664283198a71bf8ff04c17d8521'],
+      ['Configuration', 'bc6cdc8ac1c50546a46eb2591d5c4cb71dd44d8d1c7d668aa88cf6324ac66c8e'],
+      ['Signal', '020fc2403fdaed6af7341441d7b664dc3f97ab3b37dd0142fda109295798d65f'],
+      ['Validation snapshot', '5f8b2a9a27c8235ae3d662372f99e668061acfef26157647792738c3d6effad4'],
+      ['Run', '819ce4c267a04747b48ed4d0c605cf8b'],
+    ],
+  };
+  if (st === 'running') {
+    const last = lastBarBefore(T.now)[4];
+    return { ...common, st,
+      status: ['running', 'Running'],
+      summary: `Started <b>13:30</b> · ends <b>14:59 CT</b> (39 min left) · ${n} decisions, no trades yet · flat`,
+      figs: [['SPY', last.toFixed(2)], ['Open P&L', '—'], ['Held', 'None']],
+      fresh: `IBKR live · updated ${hms(T.now)}`,
+      now: T.now,
+      actions: ['stop', 'end', 'manual', '|', 'check', '|', 'timeline', 'proof', 'all'],
+      off: { sell: 'Holds no shares.', again: 'Still running.', clear: 'Still running.', cancel: 'No open orders.', writeoff: 'Nothing is recorded as missing.', recover: 'No fill conflict is open.', exact: 'No fill conflict is open.' },
+      money: { hero: [usd(800), 'set aside · all of it free to buy'], rows: [['Set aside', usd(800)], ['In shares', usd(0)], ['In open orders', usd(0)], ['Realized P&L', usd(0)], ['Fees', usd(0)]] },
+      fills: [], working: [], path: null,
+      audit: [[T.registered, 'Registered for custody'], [T.registered, 'Budget committed · $800'], [T.launched, 'Launched']],
+      healthRun: null,
+      healthNow: [
+        ['ok', 'IBKR market data', 'Live', `Last bar ${hms(T.now - 5000)} · on time`],
+        ['ok', 'Alpaca orders', 'Connected', ''],
+        ['ok', 'Account', 'No hold', 'New orders allowed'],
+        ['warn', 'Last check against Alpaca', 'Sep 24', '1 unexplained order · <a href="#">review</a>'],
+      ],
+      end: 'At 14:59 CT (15:59 ET), sell at market',
+    };
+  }
+  if (st === 'finished') {
+    return { ...common, st,
+      status: ['finished', 'Finished'],
+      summary: `Ran <b>Wed Sep 30, 13:30–14:59 CT</b> · ended on schedule · ${n} decisions, no trades · <b>$800 back</b> to the account`,
+      figs: [['P&L', usd(0)], ['Held', 'None']],
+      fresh: null, now: null,
+      actions: ['again', 'clear', '|', 'check', '|', 'timeline', 'proof', 'all'],
+      off: { stop: 'Already stopped.', sell: 'Holds no shares.', end: 'Already ended.', manual: 'The bot has ended. Use a manual order from the account.', cancel: 'No open orders.', writeoff: 'Nothing is recorded as missing.', recover: 'No fill conflict is open.', exact: 'No fill conflict is open.' },
+      money: { hero: [usd(800), 'returned to the account'], rows: [['Set aside', usd(800)], ['Realized P&L', usd(0)], ['Fees', usd(0)], ['Still held', 'None']] },
+      fills: [], working: [], path: null,
+      audit: [[T.registered, 'Registered for custody'], [T.registered, 'Budget committed · $800'], [T.launched, 'Launched'], [T.stopped, 'Stopped at its scheduled end']],
+      healthRun: [
+        ['ok', 'IBKR market data', 'Continuous', 'No gaps · partial first minute (13:31) skipped'],
+        ['ok', 'Orders', 'None sent', ''],
+      ],
+      healthNow: [
+        ['bad', 'IBKR market data', 'Down', `Since Sep 30 ${hm(T.holdSince)} CT · new orders refused. No effect on this finished bot.`],
+        ['ok', 'Alpaca orders', 'Connected', ''],
+        ['warn', 'Last check against Alpaca', 'Sep 24', '1 unexplained order · <a href="#">review</a>'],
+      ],
+      end: 'At 14:59 CT (15:59 ET), sell at market · nothing to sell',
+    };
+  }
+  return { ...common, st,
+    status: ['holding', 'Ended holding'],
+    summary: `Ended <b>Wed Sep 30, 14:59 CT</b> still holding <b>1 SPY</b> from a manual buy · its end keeps shares · exit order goes in at <b>Thu 08:30 CT</b>`,
+    figs: [['Open P&L', signed(HOLD.pnl), HOLD.pnl < 0 ? 'down' : 'up'], ['Held', '1 SPY']],
+    fresh: null, now: null, example: true,
+    actions: ['sell', 'again', 'manual', '|', 'check', 'cancel', '|', 'timeline', 'proof', 'all'],
+    off: { stop: 'Already stopped.', end: 'Already ended.', clear: 'Still holds 1 SPY.', writeoff: 'Alpaca holds the share too.', recover: 'No fill conflict is open.', exact: 'No fill conflict is open.' },
+    money: { hero: ['1 SPY', `worth ${usd(HOLD.last)} at the close`], rows: [['Set aside', usd(800)], ['Bought at (manual)', usd(HOLD.fill)], ['Last price', usd(HOLD.last)], ['Open P&L', signed(HOLD.pnl)], ['Fees', usd(0)]] },
+    fills: [[T.manualAt, 'Buy 1 SPY · manual order', HOLD.fill]],
+    working: [['Sell 1 SPY · market', 'Waits for Thu 08:30 CT open']],
+    path: ['done', 'done', 'done', 'wait', '', ''],
+    audit: [[T.registered, 'Registered for custody'], [T.registered, 'Budget committed · $800'], [T.launched, 'Launched'], [T.manualAt, 'Manual buy · 1 SPY'], [T.stopped, 'Stopped at its scheduled end · kept shares']],
+    healthRun: [
+      ['ok', 'IBKR market data', 'Continuous', 'No gaps · partial first minute (13:31) skipped'],
+      ['ok', 'Orders', '1 filled, 1 waiting', ''],
+    ],
+    healthNow: [
+      ['bad', 'IBKR market data', 'Down', `Since Sep 30 ${hm(T.holdSince)} CT · new orders refused, so the exit can’t go out early.`],
+      ['ok', 'Alpaca orders', 'Connected', ''],
+      ['warn', 'Last check against Alpaca', 'Sep 24', '1 unexplained order · <a href="#">review</a>'],
+    ],
+    end: 'At 14:59 CT (15:59 ET), keep shares',
+  };
+}
+
+// ── Pieces shared by every layout ─────────────────────────────────────
+const icon = name => `<i data-lucide="${name}" aria-hidden="true"></i>`;
+function banner(m) {
+  const groups = [];
+  let cur = [];
+  for (const id of m.actions) { if (id === '|') { groups.push(cur); cur = []; } else cur.push(id); }
+  groups.push(cur);
+  const tb = groups.map(g => {
+    const name = ACTIONS[g[0]].group;
+    return `<div class="tgroup" role="group" aria-label="${name}"><span class="tgroup__name">${name}</span>${g.map(id => {
+      const a = ACTIONS[id];
+      const tone = a.tone ? ` tb--${a.tone}` : '';
+      const key = id === 'stop' || id === 'sell' ? ' tb--keylabel' : '';
+      return `<button type="button" class="tb${tone}${key}" data-act="${id}" data-tip="${a.tip}" aria-label="${a.label}">${icon(a.icon)}<span class="tb__label">${a.label}</span></button>`;
+    }).join('')}</div>`;
+  }).join('');
+  const figs = m.figs.map(([k, v, cls]) => `<div class="fig"><span>${k}</span><b class="${cls || ''}">${v}</b></div>`).join('');
+  return `
+    <div class="botbar__row">
+      <a class="crumb" href="#">← Home</a>
+      <h1 class="botname">spy-ema-20260930-1430</h1>
+      <span class="botmeta">EMA crossover · <b>SPY</b> · 1 share</span>
+      <span class="status status--${m.status[0]}">${m.status[1]}</span>
+      ${m.example ? '<span class="example-flag">Example: made-up manual buy</span>' : ''}
+      <div class="figs">${figs}</div>
+    </div>
+    <div class="botbar__row"><p class="summary">${m.summary}</p></div>
+    <div class="toolbar" role="toolbar" aria-label="Actions for this bot">${tb}
+      ${m.fresh ? `<span class="toolbar__fresh"><i></i>${m.fresh}</span>` : ''}
+    </div>`;
+}
+
+const panel = (title, sub, body, cls = '') =>
+  `<section class="panel ${cls}"><header class="panel__head"><h2 class="panel__title">${title}</h2>${sub ? `<span class="panel__sub">${sub}</span>` : ''}</header><div class="panel__body">${body}</div></section>`;
+
+function chartPanel(m, lanes) {
+  const strat = state.view === 'strategy';
+  const g = gate();
+  const src = strat ? 'Bot’s decision bars' : m.now ? 'IBKR live' : 'Polygon · loaded for this run';
+  const legend = strat
+    ? `<span class="src">${src} ·</span><span><i class="sw" style="background:var(--up-bright)"></i><i class="sw" style="background:var(--down-bright)"></i> gate holds</span>
+       <span><i class="sw" style="background:var(--up-dark);box-shadow:inset 0 0 0 1px var(--up-dark-edge)"></i><i class="sw" style="background:var(--down-dark);box-shadow:inset 0 0 0 1px var(--down-dark-edge)"></i> gate fails</span>
+       <span><i class="ln" style="background:var(--ema-fast)"></i>EMA 5</span>
+       <span><i class="ln" style="background:var(--ema-slow)"></i>EMA 10</span>
+       <span><i class="ln" style="background:var(--rsi)"></i>RSI 14</span>
+       <span>○ decision</span>
+       <span class="hint">Click a candle for its checks</span>`
+    : `<span class="src">${src} ·</span><span><i class="sw" style="background:var(--bull)"></i><i class="sw" style="background:var(--bear)"></i> 1-min candles</span>
+       <span>○ decision</span>${m.fills.length ? '<span class="ok">▲ fill</span>' : ''}
+       <span class="hint">The tape stays plain: no indicators</span>`;
+  return `<section class="panel panel--chart">
+    <header class="panel__head chart-head">
+      <h2 class="panel__title">SPY</h2>
+      <div class="seg" role="tablist" aria-label="Chart view">
+        <button type="button" role="tab" data-view="strategy" aria-selected="${strat}">Strategy · 15m</button>
+        <button type="button" role="tab" data-view="tape" aria-selected="${!strat}">Tape · 1m</button>
+      </div>
+      ${strat ? `<button type="button" class="chipbtn" data-pop="gate" aria-haspopup="true">${icon('contrast')}Gate: ${g.name} <small>${g.owner === 'strategy' ? 'strategy' : 'mine'}</small>${icon('chevron-down')}</button>
+        <button type="button" class="chipbtn" data-pop="ind" aria-haspopup="true">${icon('plus')}Indicators</button>` : ''}
+    </header>
+    <div class="legend">${legend}</div>
+    <div class="panel__body"><div class="chart-host" data-lanes="${lanes ? 1 : 0}"></div></div>
+  </section>`;
+}
+
+function moneyBody(m) {
+  return `<div class="hero"><b>${m.money.hero[0]}</b><span>${m.money.hero[1]}</span></div>
+    <dl class="kv">${m.money.rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>`;
+}
+
+function decisionsBody(m) {
+  const rows = [];
+  let started = false;
+  for (const r of m.decisions) {
+    if (!r.before && !started) { rows.push(`<li class="startline">Bot started ${hm(T.runStart)}</li>`); started = true; }
+    const open = state.open.includes(r.ts), sel = state.sel === r.ts;
+    rows.push(`<li class="drow${r.before ? ' before' : ''}${sel ? ' sel' : ''}" data-dts="${r.ts}" aria-expanded="${open}"><time>${hm(r.ts)}</time><span class="what">${r.before ? 'Before start · not acted on' : 'No action'}</span>${chips(r)}${open ? checksTable(r) : ''}</li>`);
+  }
+  if (m.st === 'running') rows.push(`<li class="next"><time>14:30</time><span class="what">Next decision</span><span class="why">When the 14:30 bar closes</span></li>`);
+  const fills = m.fills.length
+    ? `<ul class="orders">${m.fills.map(([t, w, p]) => `<li><span>${w}</span><span class="m">${usd(p)} · ${hms(t)}</span></li>`).join('')}</ul>`
+    : `<p class="note">No fills in this run.</p>`;
+  return `<ul class="dlist">${rows.join('')}</ul><p class="sect">Fills · Wed Sep 30</p>${fills}`;
+}
+
+function healthBody(m) {
+  const li = r => `<li><span class="dot dot--${r[0]}"></span><span>${r[1]}</span><span class="val">${r[2]}</span>${r[3] ? `<span class="why">${r[3]}</span>` : ''}</li>`;
+  const run = m.healthRun ? `<p class="sect">During this run</p><ul class="health">${m.healthRun.map(li).join('')}</ul>` : '';
+  return `${run}<p class="sect">${m.st === 'running' ? 'Right now' : 'Account right now'}</p><ul class="health">${m.healthNow.map(li).join('')}</ul>`;
+}
+
+function proofRows(m) {
+  return `<dl class="hash">${m.proof.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd><button type="button" class="copy" data-copy="${v}" aria-label="Copy ${k}">${icon('copy')}</button>`).join('')}</dl>`;
+}
+function setupBody(m) {
+  return `<p class="strategy">Buys 1 SPY when EMA 5 crosses above EMA 10 on 15-min bars by at least $0.20 with RSI between 50 and 70. Sells 75 min later.</p>
+    <dl class="kv">
+      <dt>Budget</dt><dd>${usd(800)}</dd>
+      <dt>End</dt><dd style="font-family:var(--font-sans)">${m.end}</dd>
+      <dt>Exit allowance</dt><dd>2 bps</dd>
+      <dt>Band · spread cap</dt><dd>1× · 2 bps</dd>
+      <dt>Build</dt><dd class="proven" style="font-family:var(--font-sans)">Proven at start</dd>
+    </dl>
+    <div><button type="button" class="btn-ghost" data-act="proof">${icon('fingerprint')}Build proof and hashes</button></div>`;
+}
+
+function ordersBody(m) {
+  const working = m.working.length
+    ? `<ul class="orders">${m.working.map(([w, s]) => `<li><span>${w}</span><span class="m">${s}</span></li>`).join('')}</ul>`
+    : `<p class="note">No working orders.</p>`;
+  const path = m.path
+    ? `<p class="sect">Exit order path</p><div class="path">${['Signal', 'Intent', 'Submit gate', 'Broker ack', 'Fill', 'Reconciled'].map((s, i) => `<span class="${m.path[i]}">${s}</span>`).join('')}</div>`
+    : '';
+  const audit = `<ul class="dlist">${m.audit.map(([t, w]) => `<li><time>${hm(t)}</time><span>${w}</span></li>`).join('')}</ul>`;
+  return `<div class="cols2"><div><p class="sect">Working orders</p>${working}${path}</div><div><p class="sect">Audit trail</p>${audit}</div></div>`;
+}
+
+function feedBody(m) {
+  const ev = [];
+  for (const d of m.decisions) ev.push([d.ts, 'dec', d.before ? 'Last bar before start · not acted on' : 'No action', chips(d)]);
+  ev.push([T.registered, 'life', 'Deployed', '$800 set aside']);
+  ev.push([T.launched, 'life', 'Started', '']);
+  ev.push([T.partial, 'data', 'Joined market data mid-minute', 'Skipped the partial 13:31 minute']);
+  for (const [t, w, p] of m.fills) ev.push([t, 'buy', `Filled: ${w}`, `at ${usd(p)}`]);
+  if (m.st === 'finished') { ev.push([T.stopped, 'life', 'Stopped at its scheduled end', 'Nothing to sell']); ev.push([T.runEnd, 'money', '$800 back to the account', '']); }
+  if (m.st === 'holding') ev.push([T.stopped, 'life', 'Stopped at its scheduled end', 'Kept 1 SPY; exit order queued for Thu 08:30 CT']);
+  ev.sort((a, b) => a[0] - b[0]);
+  const rows = ev.map(([t, k, w, why]) => `<li><time>${hm(t)}</time><span class="mk mk--${k}"></span><span>${w}</span>${why ? `<span class="why">${why}</span>` : ''}</li>`);
+  if (m.st === 'running') rows.push(`<li class="next"><time>14:30</time><span class="mk"></span><span>Next decision</span></li><li class="next"><time>14:59</time><span class="mk"></span><span>Scheduled end · sell at market</span></li>`);
+  return `<ul class="feed">${rows.join('')}</ul>`;
+}
+
+// ── Layouts ───────────────────────────────────────────────────────────
+const VARIANTS = [
+  { key: 'A', name: 'Grid 6·3·3 + lanes', render: m => `<div class="grid gridA">
+      ${chartPanel(m, true)}
+      ${panel('Money', m.st === 'finished' ? 'settled' : '', moneyBody(m))}
+      ${panel('Decisions', 'every 15 min', decisionsBody(m))}
+      ${panel('Orders', m.working.length ? `${m.working.length} working` : 'none working', ordersBody(m))}
+      ${panel('Health', '', healthBody(m))}
+      ${panel('Setup', 'fixed at deploy', setupBody(m))}
+    </div>` },
+  { key: 'B', name: 'Timeline', render: m => `<div class="grid gridB">
+      ${chartPanel(m, true)}
+      ${panel('What happened', m.st === 'running' ? 'so far' : 'Wed Sep 30', feedBody(m))}
+      <div class="stack stack--3">
+        ${panel('Money', '', moneyBody(m))}
+        ${panel('Health', '', healthBody(m))}
+        ${panel('Setup', '', setupBody(m))}
+      </div>
+    </div>` },
+  { key: 'C', name: 'Chart + inspector', render: m => `<div class="grid gridC">
+      ${chartPanel(m, true)}
+      <section class="panel">
+        <div class="itabs" role="tablist" aria-label="Inspector">
+          ${['Money', 'Decisions', 'Orders', 'Health', 'Setup'].map(t => `<button type="button" role="tab" data-itab="${t}" aria-selected="${t === state.itab}">${t}</button>`).join('')}
+        </div>
+        <div class="panel__body">${{ Money: moneyBody, Decisions: decisionsBody, Orders: ordersBody, Health: healthBody, Setup: setupBody }[state.itab](m)}</div>
+      </section>
+    </div>` },
+];
+
+// ── Chart drawing ─────────────────────────────────────────────────────
+function drawLanes(s, X, m, y0, laneH, left, plotW, lim) {
+  const rEnd = Math.min(T.runEnd, lim);
+  ['Decisions', 'Orders', 'Market data', 'Bot'].forEach((name, i) => {
+    const y = y0 + i * laneH, cy = y + laneH / 2;
+    s.push(`<line x1="${left}" x2="${left + plotW}" y1="${y + laneH}" y2="${y + laneH}" stroke="var(--line)"/>`);
+    s.push(`<text class="svg-t2" x="${left + 2}" y="${cy + 3}">${name}</text>`);
+    if (name === 'Decisions') {
+      for (const d of m.decisions.filter(d => !d.before)) s.push(`<circle cx="${X(d.ts)}" cy="${cy}" r="3.5" fill="none" stroke="var(--fg-2)" stroke-width="1.4"><title>${hm(d.ts)} No action</title></circle>`);
+      if (m.now) s.push(`<circle cx="${X(T.formingClose)}" cy="${cy}" r="3.5" fill="none" stroke="var(--fg-4)" stroke-dasharray="2 2"><title>Next decision 14:30</title></circle>`);
+    }
+    if (name === 'Orders') {
+      for (const [t] of m.fills) s.push(`<path d="M${X(t)} ${cy - 5} l5 9 h-10 z" fill="var(--bull)"><title>Manual buy filled ${hms(t)}</title></path>`);
+      if (m.working.length) s.push(`<rect x="${X(T.runEnd) - 5}" y="${cy - 5}" width="10" height="10" fill="none" stroke="var(--warn)" stroke-width="1.5" transform="rotate(45 ${X(T.runEnd)} ${cy})"><title>Exit order waiting for the open</title></rect>`);
+      if (!m.fills.length && !m.working.length) s.push(`<text class="svg-t" x="${X(T.runStart) + 6}" y="${cy + 3}">none</text>`);
+    }
+    if (name === 'Market data') {
+      s.push(`<rect x="${X(T.runStart)}" y="${cy - 3}" width="${Math.max(0, X(rEnd) - X(T.runStart))}" height="6" rx="3" fill="var(--bull)" fill-opacity="0.55"><title>IBKR continuous during this run</title></rect>`);
+      s.push(`<rect x="${X(T.partial) - 1.5}" y="${cy - 6}" width="3" height="12" fill="var(--warn)"><title>13:31 partial first minute skipped</title></rect>`);
+    }
+    if (name === 'Bot') {
+      s.push(`<path d="M${X(T.runStart)} ${cy - 5} l8 5 l-8 5 z" fill="var(--accent-text)"><title>Started ${hms(T.runStart)}</title></path>`);
+      s.push(m.now
+        ? `<rect x="${X(T.schedEnd) - 5}" y="${cy - 5}" width="10" height="10" fill="none" stroke="var(--accent-text)" stroke-dasharray="2 2"><title>Scheduled end ${hm(T.schedEnd)}</title></rect>`
+        : `<rect x="${X(T.runEnd) - 5}" y="${cy - 5}" width="10" height="10" fill="var(--accent-text)"><title>Stopped ${hms(T.runEnd)}</title></rect>`);
+    }
+  });
+}
+
+function priceTag(s, x, y, w, v, col) {
+  s.push(`<rect x="${x}" y="${y - 8}" width="${w}" height="16" rx="2" fill="${col}"/>`);
+  s.push(`<text x="${x + 5}" y="${y + 3.5}" style="font:600 10px var(--font-mono);fill:#04120f">${v.toFixed(2)}</text>`);
+}
+
+function strategySVG(w, h, m, withLanes) {
+  const nL = withLanes ? 4 : 0, laneH = 16, axisH = 18, top = 6, right = 54, left = 8, gp = 10;
+  const lanesH = nL ? nL * laneH + 6 : 0;
+  const avail = Math.max(150, h - top - axisH - lanesH - gp);
+  const priceH = Math.round(avail * 0.7), rsiH = avail - priceH;
+  const plotW = Math.max(120, w - left - right);
+  const X = t => left + (t - T.sessStart) / (T.sessEnd - T.sessStart) * plotW;
+  const slot = plotW / S.length, cw = Math.max(2, slot * 0.62);
+  const lim = m.now ?? Infinity;
+  const rows = S.filter(r => r.ts <= lim);
+  let lo = Math.min(...S.map(r => Math.min(r.l, r.e5, r.e10)));
+  let hi = Math.max(...S.map(r => Math.max(r.h, r.e5, r.e10)));
+  const pad = (hi - lo) * 0.06; lo -= pad; hi += pad;
+  const Y = p => top + (hi - p) / (hi - lo) * priceH;
+  const rTop = top + priceH + gp, bottom = rTop + rsiH, full = bottom + lanesH;
+  const R = v => rTop + (80 - Math.max(20, Math.min(80, v))) / 60 * rsiH;
+  const g = gate();
+  const s = [];
+  // before start / after end
+  const xs = X(T.runStart);
+  s.push(`<rect x="${left}" y="${top}" width="${xs - left}" height="${bottom - top}" fill="var(--sunken)" fill-opacity="0.5"/>`);
+  s.push(`<text class="svg-t2" x="${left + 4}" y="${top + 12}">Before start · not acted on</text>`);
+  if (!m.now) s.push(`<rect x="${X(T.runEnd)}" y="${top}" width="${left + plotW - X(T.runEnd)}" height="${bottom - top}" fill="var(--sunken)" fill-opacity="0.5"/>`);
+  // price grid + axis
+  for (let p = Math.ceil(lo); p <= hi; p += 1) {
+    s.push(`<line x1="${left}" x2="${left + plotW}" y1="${Y(p)}" y2="${Y(p)}" stroke="var(--line)"/>`);
+    s.push(`<text class="svg-t" x="${left + plotW + 6}" y="${Y(p) + 3}">${p}</text>`);
+  }
+  for (let t = T.sessStart + 30 * MIN; t <= T.sessEnd; t += 60 * MIN) {
+    s.push(`<line x1="${X(t)}" x2="${X(t)}" y1="${top}" y2="${full}" stroke="var(--line)"/>`);
+    s.push(`<text class="svg-t" x="${X(t)}" y="${full + 13}" text-anchor="${t === T.sessEnd ? 'end' : 'middle'}">${hm(t)}</text>`);
+  }
+  // RSI pane with the strategy's band
+  s.push(`<rect x="${left}" y="${R(70)}" width="${plotW}" height="${R(50) - R(70)}" fill="var(--rsi)" fill-opacity="0.07"/>`);
+  for (const v of [70, 50]) {
+    s.push(`<line x1="${left}" x2="${left + plotW}" y1="${R(v)}" y2="${R(v)}" stroke="var(--rsi)" stroke-opacity="0.45" stroke-dasharray="3 3"/>`);
+    s.push(`<text class="svg-t" x="${left + plotW + 6}" y="${R(v) + 3}">${v}</text>`);
+  }
+  s.push(`<line x1="${left}" x2="${left + plotW}" y1="${rTop - gp / 2}" y2="${rTop - gp / 2}" stroke="var(--line-2)"/>`);
+  s.push(`<text class="svg-t2" x="${left + 4}" y="${rTop + 10}">RSI 14 · band ${SETTINGS.rsi_min}–${SETTINGS.rsi_max}</text>`);
+  s.push(`<polyline fill="none" stroke="var(--rsi)" stroke-width="1.5" points="${rows.map(r => `${X(center(r))},${R(r.rsi)}`).join(' ')}"/>`);
+  // candles shaded by the Dark Bright Gate
+  for (const r of rows) {
+    const cx = X(center(r)), up = r.c >= r.o, on = g.test(r);
+    const fill = up ? (on ? 'var(--up-bright)' : 'var(--up-dark)') : (on ? 'var(--down-bright)' : 'var(--down-dark)');
+    const edge = up ? (on ? 'var(--up-bright)' : 'var(--up-dark-edge)') : (on ? 'var(--down-bright)' : 'var(--down-dark-edge)');
+    const y1 = Y(Math.max(r.o, r.c)), y2 = Y(Math.min(r.o, r.c));
+    const sel = state.sel === r.ts;
+    s.push(`<g class="cndl" data-ts="${r.ts}" style="cursor:pointer">
+      <rect x="${cx - slot / 2}" y="${top}" width="${slot}" height="${bottom - top}" fill="${sel ? 'var(--accent-faint)' : 'transparent'}" ${sel ? 'stroke="var(--accent-text)" stroke-opacity="0.5"' : ''}/>
+      <line x1="${cx}" x2="${cx}" y1="${Y(r.h)}" y2="${Y(r.l)}" stroke="${edge}"/>
+      <rect x="${cx - cw / 2}" y="${y1}" width="${cw}" height="${Math.max(1.5, y2 - y1)}" fill="${fill}" stroke="${edge}"/>
+      <title>${hm(r.ts)} bar · ${phaseOf(r)} · gate ${on ? 'holds' : 'fails'}</title></g>`);
+  }
+  // forming candle while running
+  if (m.now) {
+    const fb = DATA.bars.filter(b => b[0] >= T.formingFrom && b[0] < m.now);
+    const o = fb[0][1], c = fb.at(-1)[4], hh = Math.max(...fb.map(b => b[2])), l = Math.min(...fb.map(b => b[3]));
+    const cx = X(T.formingClose - 7.5 * MIN);
+    s.push(`<line x1="${cx}" x2="${cx}" y1="${Y(hh)}" y2="${Y(l)}" stroke="var(--fg-3)" stroke-dasharray="2 2"/>`);
+    s.push(`<rect x="${cx - cw / 2}" y="${Y(Math.max(o, c))}" width="${cw}" height="${Math.max(1.5, Math.abs(Y(o) - Y(c)))}" fill="none" stroke="var(--fg-3)" stroke-dasharray="2 2"><title>14:30 bar, still forming</title></rect>`);
+    s.push(`<text class="svg-t2" x="${cx}" y="${Y(hh) - 6}" text-anchor="middle">forming</text>`);
+  }
+  // strategy lines from the bot's own values
+  const pl = (k, col) => `<polyline fill="none" stroke="${col}" stroke-width="1.6" stroke-linejoin="round" points="${rows.map(r => `${X(center(r))},${Y(r[k])}`).join(' ')}"/>`;
+  s.push(pl('e5', 'var(--ema-fast)'), pl('e10', 'var(--ema-slow)'));
+  // decisions and fills
+  for (const d of m.decisions.filter(d => !d.before)) s.push(`<circle cx="${X(center(d))}" cy="${Y(d.h) - 8}" r="3.5" fill="var(--surface)" stroke="var(--fg-2)" stroke-width="1.5" pointer-events="none"/>`);
+  for (const [t, , p] of m.fills) s.push(`<path d="M${X(t)} ${Y(p) + 2} l5 8 h-10 z" fill="var(--bull)" stroke="var(--canvas)" pointer-events="none"><title>Manual buy ${usd(p)}</title></path>`);
+  // run boundaries
+  s.push(`<line x1="${xs}" x2="${xs}" y1="${top}" y2="${full}" stroke="var(--accent-text)" stroke-width="1.5"/>`);
+  s.push(`<text class="svg-tb" x="${xs + 4}" y="${top + 12}" style="fill:var(--accent-text)">Bot started ${hm(T.runStart)}</text>`);
+  const xe = X(T.runEnd);
+  s.push(`<line x1="${xe}" x2="${xe}" y1="${top}" y2="${full}" stroke="var(--accent-text)" stroke-opacity="0.7" stroke-dasharray="${m.now ? '6 4' : '3 3'}"/>`);
+  s.push(`<text class="svg-t2" x="${xe - 4}" y="${top + 25}" text-anchor="end">${m.now ? 'Ends' : 'Ended'} ${hm(T.schedEnd)}</text>`);
+  if (m.now) {
+    s.push(`<line x1="${X(m.now)}" x2="${X(m.now)}" y1="${top}" y2="${full}" stroke="var(--fg-2)" stroke-dasharray="3 3"/>`);
+    s.push(`<text class="svg-tb" x="${X(m.now) + 4}" y="${bottom - 4}">now ${hm(m.now)}</text>`);
+  }
+  const lastC = m.now ? lastBarBefore(m.now)[4] : rows.at(-1).c;
+  priceTag(s, left + plotW + 1, Y(lastC), right - 2, lastC, 'var(--bull)');
+  if (nL) drawLanes(s, X, m, bottom + 6, laneH, left, plotW, lim);
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Strategy view: 15-minute decision candles shaded by the ${g.name} gate, with EMA 5, EMA 10 and RSI">${s.join('')}</svg>`;
+}
+
+function tapeSVG(w, h, m, withLanes) {
+  const nL = withLanes ? 4 : 0, laneH = 16, axisH = 18, top = 6, right = 54, left = 8;
+  const lanesH = nL ? nL * laneH + 6 : 0;
+  const plotH = Math.max(80, h - top - axisH - lanesH - 4);
+  const plotW = Math.max(120, w - left - right);
+  const X = t => left + (t - T.winStart) / (T.winEnd - T.winStart) * plotW;
+  const lim = m.now ?? Infinity;
+  const all = DATA.bars;
+  let lo = Math.min(...all.map(b => b[3])), hi = Math.max(...all.map(b => b[2]));
+  const pad = (hi - lo) * 0.06; lo -= pad; hi += pad;
+  const Y = p => top + (hi - p) / (hi - lo) * plotH;
+  const full = top + plotH + lanesH;
+  const s = [];
+  const rEnd = Math.min(T.runEnd, lim);
+  s.push(`<rect x="${X(T.runStart)}" y="${top}" width="${X(rEnd) - X(T.runStart)}" height="${plotH}" fill="var(--accent-faint)"/>`);
+  for (let p = Math.ceil(lo); p <= hi; p += 1) {
+    s.push(`<line x1="${left}" x2="${left + plotW}" y1="${Y(p)}" y2="${Y(p)}" stroke="var(--line)"/>`);
+    s.push(`<text class="svg-t" x="${left + plotW + 6}" y="${Y(p) + 3}">${p}</text>`);
+  }
+  for (let t = T.winStart; t <= T.winEnd; t += 15 * MIN) {
+    s.push(`<line x1="${X(t)}" x2="${X(t)}" y1="${top}" y2="${full}" stroke="var(--line)"/>`);
+    s.push(`<text class="svg-t" x="${X(t)}" y="${full + 13}" text-anchor="${t === T.winStart ? 'start' : t === T.winEnd ? 'end' : 'middle'}">${hm(t)}</text>`);
+  }
+  const cw = Math.max(1, plotW / all.length * 0.62);
+  const vis = all.filter(b => b[0] < lim);
+  for (const [ts, o, hh, l, c] of vis) {
+    const x = X(ts + MIN / 2), col = c >= o ? 'var(--bull)' : 'var(--bear)';
+    s.push(`<line x1="${x}" x2="${x}" y1="${Y(hh)}" y2="${Y(l)}" stroke="${col}"/>`);
+    s.push(`<rect x="${x - cw / 2}" y="${Y(Math.max(o, c))}" width="${cw}" height="${Math.max(1, Y(Math.min(o, c)) - Y(Math.max(o, c)))}" fill="${col}"/>`);
+  }
+  for (const d of m.decisions.filter(d => !d.before)) s.push(`<circle cx="${X(d.ts)}" cy="${Y(d.c)}" r="4" fill="var(--surface)" stroke="var(--fg-2)" stroke-width="1.5"><title>${hm(d.ts)} No action</title></circle>`);
+  for (const [t, , p] of m.fills) s.push(`<path d="M${X(t)} ${Y(p) + 3} l5 8 h-10 z" fill="var(--bull)" stroke="var(--canvas)"><title>Manual buy ${usd(p)}</title></path>`);
+  s.push(`<line x1="${X(T.runStart)}" x2="${X(T.runStart)}" y1="${top}" y2="${full}" stroke="var(--accent-text)" stroke-width="1.5"/>`);
+  s.push(`<text class="svg-tb" x="${X(T.runStart) + 4}" y="${top + 12}" style="fill:var(--accent-text)">Bot started ${hm(T.runStart)}</text>`);
+  s.push(`<line x1="${X(T.runEnd)}" x2="${X(T.runEnd)}" y1="${top}" y2="${full}" stroke="var(--accent-text)" stroke-opacity="0.7" stroke-dasharray="${m.now ? '6 4' : '3 3'}"/>`);
+  s.push(`<text class="svg-t2" x="${X(T.runEnd) - 4}" y="${top + 12}" text-anchor="end">${m.now ? 'Ends' : 'Ended'} ${hm(T.schedEnd)}</text>`);
+  if (m.now) {
+    s.push(`<line x1="${X(m.now)}" x2="${X(m.now)}" y1="${top}" y2="${full}" stroke="var(--fg-2)" stroke-dasharray="3 3"/>`);
+    s.push(`<text class="svg-tb" x="${X(m.now) + 4}" y="${top + plotH - 4}">now ${hm(m.now)}</text>`);
+  }
+  if (vis.length) priceTag(s, left + plotW + 1, Y(vis.at(-1)[4]), right - 2, vis.at(-1)[4], 'var(--bull)');
+  if (nL) drawLanes(s, X, m, top + plotH + 6, laneH, left, plotW, lim);
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img" aria-label="SPY one-minute candles for this run">${s.join('')}</svg>`;
+}
+
+// ── Popovers ──────────────────────────────────────────────────────────
+function explainHTML(r) {
+  const g = gate(), on = g.test(r);
+  return `<h3>${hm(r.ts)} bar · ${phaseOf(r)}</h3>
+    <p class="vals" style="margin:-4px 0 6px">O ${r.o.toFixed(2)} · H ${r.h.toFixed(2)} · L ${r.l.toFixed(2)} · C ${r.c.toFixed(2)}</p>
+    ${checksTable(r)}
+    <p class="note" style="margin-top:8px">Gate “${g.name}”: <b class="${on ? 'ok' : 'no'}">${on ? 'holds, bright candle' : 'fails, dark candle'}</b></p>`;
+}
+function gateHTML(withEditor) {
+  return `<h3>Dark Bright Gate</h3>
+    <p class="note" style="margin:-4px 0 8px">Shades the strategy candles: bright where the gate holds, dark where it fails. One gate at a time. Gates only shade; they never trade.</p>
+    <ul class="gl" role="menu">${GATES.map(g => `<li><button type="button" role="menuitemradio" aria-checked="${g.id === state.gate}" data-gate="${g.id}"><span class="radio"></span><span>${g.name}</span><span class="own${g.owner === 'strategy' ? ' own--strategy' : ''}">${g.owner === 'strategy' ? 'strategy’s rule' : 'mine'}</span><code>${g.expr}</code></button></li>`).join('')}</ul>
+    ${withEditor ? `<div class="editor">
+      <label class="note" for="gexpr">One linear expression, tested against zero</label>
+      <div class="row"><input id="gexpr" value="EMA5 − EMA10 − gap" style="flex:1"><select id="gsign" aria-label="Test"><option>&gt; 0</option><option>&lt; 0</option></select></div>
+      <div class="vars"><span>EMA5</span><span>EMA10</span><span>RSI14</span><span>open</span><span>close</span><span>volume</span><span>gap</span><span>rsi_min</span><span>rsi_max</span><span class="cc">VWAP · chart-computed</span><span class="cc">EMA20 · chart-computed</span></div>
+      <p class="note">The bot’s own values win over chart-computed ones. Settings like <code>gap</code> follow each bot’s deployed value.</p>
+      <div class="row"><input id="gname" placeholder="Name this gate" style="flex:1;font-family:var(--font-sans)"><button type="button" class="btn-primary" data-savegate>Save on strategy</button></div>
+    </div>` : `<button type="button" class="btn-ghost" data-newgate style="margin-top:8px">+ New gate</button>`}`;
+}
+function indHTML() {
+  return `<h3>Indicators</h3>
+    <p class="x-sub">Strategy’s own · bot’s values</p>
+    <ul class="il"><li><span>EMA 5</span><span class="lock">always on</span></li><li><span>EMA 10</span><span class="lock">always on</span></li><li><span>RSI 14 · 50–70 band</span><span class="lock">always on</span></li></ul>
+    <p class="x-sub">More · computed by the chart on the 15-min candles</p>
+    <input class="search" id="indq" type="search" placeholder="Search indicators" autocomplete="off" aria-label="Search indicators">
+    <ul class="il" id="indlist">${CATALOG.map(n => `<li data-name="${n.toLowerCase()}"><button type="button" data-addind="${n}">${n}</button><span class="tagc">chart-computed</span></li>`).join('')}</ul>`;
+}
+function allActionsHTML(m) {
+  const on = new Set(m.actions.filter(a => a !== '|'));
+  return `<h3>All actions for this bot</h3><ul class="alist">${Object.keys(ACTIONS).filter(id => id !== 'all').map(id => {
+    const a = ACTIONS[id], avail = on.has(id);
+    return `<li>${icon(a.icon)}<span>${a.label} <span class="sys">${a.sys}</span></span><span class="st ${avail ? 'st--on' : 'st--off'}">${avail ? 'Available' : 'Not needed'}</span><span class="r">${avail ? a.tip : (m.off[id] || a.tip)}</span></li>`;
+  }).join('')}</ul>`;
+}
+
+// ── State, render, wiring ─────────────────────────────────────────────
+const state = { v: 0, st: 'finished', itab: 'Decisions', view: 'strategy', gate: 'rule', sel: null, open: [] };
+try { Object.assign(state, JSON.parse(localStorage.getItem('botmock2') || '{}')); } catch (e) { /* storage unavailable: defaults */ }
+const save = () => { try { localStorage.setItem('botmock2', JSON.stringify(state)); } catch (e) { /* storage unavailable */ } };
+
+const ro = new ResizeObserver(entries => { for (const e of entries) drawChart(e.target); });
+function drawChart(host) {
+  const r = host.getBoundingClientRect();
+  if (r.width < 10 || r.height < 10) return;
+  const draw = state.view === 'strategy' ? strategySVG : tapeSVG;
+  host.innerHTML = draw(Math.floor(r.width), Math.floor(r.height), model(state.st), host.dataset.lanes === '1');
+}
+
+function render() {
+  const m = model(state.st);
+  const v = VARIANTS[state.v];
+  document.getElementById('botbar').innerHTML = banner(m);
+  document.getElementById('board').innerHTML = v.render(m);
+  document.getElementById('vlabel').textContent = `${v.key} · ${v.name}`;
+  document.querySelectorAll('.proto [data-state]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.state === state.st)));
+  ro.disconnect();
+  document.querySelectorAll('.chart-host').forEach(h => { drawChart(h); ro.observe(h); });
+  if (window.lucide) window.lucide.createIcons();
+  else document.body.classList.add('labels');
+  save();
+}
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, 3200);
+}
+function place(p, x, y) {
+  p.style.top = `${Math.max(16, Math.min(y, window.innerHeight - p.offsetHeight - 16))}px`;
+  p.style.left = `${Math.max(16, Math.min(x, window.innerWidth - p.offsetWidth - 16))}px`;
+}
+function openPop(anchor, html) {
+  const p = document.getElementById('pop');
+  p.innerHTML = html; p.hidden = false;
+  const r = anchor.getBoundingClientRect();
+  place(p, r.left, r.bottom + 8);
+  if (window.lucide) window.lucide.createIcons();
+}
+function openPopAt(x, y, html) {
+  const p = document.getElementById('pop');
+  p.innerHTML = html; p.hidden = false;
+  place(p, x + 14, y - 20);
+}
+
+const ACT_TOASTS = {
+  stop: 'Opens a confirm: “Stop new decisions? Shares stay held.”',
+  sell: 'Opens the sale ticket: step 1 shows the plan, step 2 sends it.',
+  end: 'Opens the end editor.',
+  again: 'Opens Deploy, filled in from this bot.',
+  clear: 'Moves this bot off Home. Records stay in History.',
+  manual: 'Opens a manual order on SPY.',
+  check: 'Runs a fresh comparison with Alpaca and shows the result here.',
+  cancel: 'Opens a confirm listing the 1 open order it would cancel.',
+  timeline: 'Opens the custody timeline (read-only).',
+};
+
+document.addEventListener('click', e => {
+  const pop = document.getElementById('pop');
+  const t = e.target;
+  const act = t.closest('[data-act]');
+  if (act) {
+    const id = act.dataset.act, m = model(state.st);
+    if (id === 'all') return openPop(act, allActionsHTML(m));
+    if (id === 'proof') return openPop(act, `<h3>Build proof <span class="proven" style="font-size:var(--fs-sm)">· proven at start</span></h3><p class="note" style="margin-bottom:8px">The program this run used matches its qualification receipt. Checked Sep 30 ${hms(T.runStart)} CT.</p>${proofRows(m)}`);
+    pop.hidden = true;
+    return toast(`Mockup: ${ACT_TOASTS[id] || ACTIONS[id].label}`);
+  }
+  const cp = t.closest('[data-copy]');
+  if (cp) {
+    const v = cp.dataset.copy;
+    Promise.resolve().then(() => navigator.clipboard.writeText(v)).then(() => toast('Copied'), () => toast(v));
+    return;
+  }
+  const pb = t.closest('[data-pop]');
+  if (pb) return openPop(pb, pb.dataset.pop === 'gate' ? gateHTML(false) : indHTML());
+  const gb = t.closest('[data-gate]');
+  if (gb) { state.gate = gb.dataset.gate; pop.hidden = true; render(); return; }
+  if (t.closest('[data-newgate]')) { pop.innerHTML = gateHTML(true); return; }
+  if (t.closest('[data-savegate]')) { pop.hidden = true; return toast('Mockup: saves the gate on EMA Crossover Signal, for every bot that runs it and Strategy Lab.'); }
+  const ai = t.closest('[data-addind]');
+  if (ai) { pop.hidden = true; return toast(`Mockup: adds ${ai.dataset.addind} to the strategy view, marked chart-computed.`); }
+  const vb = t.closest('[data-view]');
+  if (vb) { state.view = vb.dataset.view; pop.hidden = true; return render(); }
+  const cn = t.closest('.cndl');
+  if (cn) {
+    state.sel = +cn.dataset.ts;
+    render();
+    return openPopAt(e.clientX, e.clientY, explainHTML(S.find(r => r.ts === state.sel)));
+  }
+  const dr = t.closest('[data-dts]');
+  if (dr) {
+    const ts = +dr.dataset.dts;
+    state.open = state.open.includes(ts) ? state.open.filter(x => x !== ts) : [...state.open, ts];
+    state.sel = ts; pop.hidden = true;
+    return render();
+  }
+  const it = t.closest('[data-itab]');
+  if (it) { state.itab = it.dataset.itab; return render(); }
+  const sb = t.closest('.proto [data-state]');
+  if (sb) { state.st = sb.dataset.state; state.sel = null; pop.hidden = true; return render(); }
+  if (!pop.hidden && !t.closest('#pop')) pop.hidden = true;
+});
+document.addEventListener('input', e => {
+  if (e.target.id !== 'indq') return;
+  const q = e.target.value.trim().toLowerCase();
+  document.querySelectorAll('#indlist li').forEach(li => { li.hidden = !li.dataset.name.includes(q); });
+});
+const step = d => { state.v = (state.v + d + VARIANTS.length) % VARIANTS.length; document.getElementById('pop').hidden = true; render(); };
+document.getElementById('prev').addEventListener('click', () => step(-1));
+document.getElementById('next').addEventListener('click', () => step(1));
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { document.getElementById('pop').hidden = true; document.getElementById('notes').hidden = true; document.getElementById('notesBtn').setAttribute('aria-pressed', 'false'); return; }
+  if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (e.key === 'ArrowLeft') step(-1);
+  if (e.key === 'ArrowRight') step(1);
+});
+document.getElementById('labels').addEventListener('click', e => {
+  const on = document.body.classList.toggle('labels');
+  e.currentTarget.setAttribute('aria-pressed', String(on));
+});
+document.getElementById('notesBtn').addEventListener('click', e => {
+  const n = document.getElementById('notes');
+  n.hidden = !n.hidden;
+  e.currentTarget.setAttribute('aria-pressed', String(!n.hidden));
+});
+
+document.getElementById('notes').innerHTML = `
+  <button type="button" class="btn-ghost x" onclick="document.getElementById('notes').hidden=true;document.getElementById('notesBtn').setAttribute('aria-pressed','false')">Close</button>
+  <h2>What changed</h2>
+  <p class="note">Bot spy-ema-20260930-1430. Running and Finished use its real Sep 30 data. “Ended holding” adds one made-up manual buy; every decision and check stays real.</p>
+  <h3>Header</h3>
+  <ol>
+    <li><b>LIVE appears once.</b> The top bar picker and the account strip keep it. The bot banner drops its LIVE chip, “Mission blocked” and the ticking “Updated”.</li>
+    <li><b>One status, owned by the bot.</b> Running, Finished or Ended holding. Account problems (market data down, the Sep 24 unexplained order) move to Health under “Account right now”.</li>
+    <li><b>One-line summary.</b> When, how it ended, decisions, trades, money. Written by the backend so the page never guesses.</li>
+    <li><b>Toolbar shows what you can do now.</b> Grouped Bot · Fix · Inspect. Everything else is under All actions with the reason, so seven red BLOCKED rows become “Not needed”.</li>
+  </ol>
+  <h3>Strategy view (PRD #2639)</h3>
+  <ol>
+    <li><b>The chart opens on the strategy’s own 15-min decision candles</b> (D5). Tape · 1m stays plain, with no indicators.</li>
+    <li><b>Dark Bright Gate shading</b> (D4): green or red for direction, bright where the gate holds, dark where it fails. The default gate is the code’s rule, RSI in 50–70, at this bot’s deployed settings (D7, D11).</li>
+    <li><b>Warmup bars sit before the “Bot started” line</b>, marked not acted on (D6). The 13:30 bar shows in the decision list above the start line.</li>
+    <li><b>Every decision shows its checks</b> as ✓/✗ chips: fresh cross, gap, RSI (D2). Click a row for thresholds and values; click a candle for the same checks.</li>
+    <li><b>Gate picker:</b> the strategy’s rule first, then your saved gates; “+ New gate” opens the linear editor with variables and settings by name (D8–D10).</li>
+    <li><b>Indicators:</b> the strategy’s own are always on; the catalogue sits below with search, marked chart-computed (D12).</li>
+    <li><i>Mockup caveat: values here are computed from Polygon bars and gates in the browser. The build shows the bot’s recorded values (D1) and Python-authored gate results.</i></li>
+  </ol>
+  <h3>Board</h3>
+  <ol>
+    <li><b>Dates, not “today”.</b> Fills and decisions carry the run’s date. Times are CT within the run’s day.</li>
+    <li><b>Health splits “during this run” from “account right now”</b>, so a dead feed tonight doesn’t make yesterday’s clean run look broken.</li>
+    <li><b>Diagnostics stay, smaller.</b> Setup shows “Build proven”; the hashes live under Build proof with copy buttons. The order path appears only when there is an order.</li>
+    <li><b>Removed as repeats:</b> the Bot health table, the Runs block (continuity was shown twice), “Released at stop” (same as Balance), “Deploy a bot to see pipeline activity”.</li>
+  </ol>
+  <h3>Plain names</h3>
+  <table>
+    <tr><td>reconcile_now</td><td>Check against Alpaca</td></tr>
+    <tr><td>prepare/execute_safe_flatten</td><td>Sell 1 SPY (one button, two-step ticket)</td></tr>
+    <tr><td>discharge_attributed_residue</td><td>Write off missing shares</td></tr>
+    <tr><td>cancel_verified_working_orders</td><td>Cancel open orders</td></tr>
+    <tr><td>recover_exact_execution_evidence</td><td>Recover a missing fill</td></tr>
+    <tr><td>resolve_execution_coverage</td><td>Use the exact fill</td></tr>
+    <tr><td>stop_bot_decisions</td><td>Stop</td></tr>
+    <tr><td>open_custody_timeline</td><td>Custody timeline (Inspect group)</td></tr>
+  </table>
+  <h3>Layouts</h3>
+  <ul>
+    <li><b>A · Grid 6·3·3 + lanes — chosen 2026-10-01.</b> Two rows of panels, everything visible at once, with B’s event lanes under the chart.</li>
+    <li><b>B · Timeline</b>: lanes under the chart on the same clock, and one “What happened” feed replaces decisions, fills and the audit trail.</li>
+    <li><b>C · Chart + inspector</b>: the biggest chart, with details one tab away.</li>
+  </ul>`;
+
+render();
+</script>
