@@ -196,6 +196,15 @@ def test_a_draft_is_judged_but_a_broken_draft_is_refused(candles: list[GateCandl
         )
 
 
+def test_a_sum_too_large_to_judge_is_no_result_never_a_dark_candle(candles: list[GateCandle]) -> None:
+    # Each term is finite, but their sum overflows: a NaN would compare false and read as "fails".
+    huge = _saved("(EMA5 - close) * 1" + "0" * 308)
+
+    results, _, _ = evaluate_gates(_ema_view(), [huge], candles, symbol="SPY")
+
+    assert set(results[huge.gate_id]) == {None}
+
+
 def test_a_saved_gate_that_no_longer_resolves_is_reported_not_raised(candles: list[GateCandle]) -> None:
     stale = _saved("EMA5 - FOO")
 
@@ -218,10 +227,13 @@ def test_names_that_read_the_same_number_are_one_term() -> None:
     assert compiled("EMA20 + ema20") == [(2.0, "EMA20")]
     with pytest.raises(GateExpressionError, match="cancel out"):
         compiled("EMA5 - ema5")
+    # Merging can overflow what parsing alone kept finite.
+    with pytest.raises(GateExpressionError, match="too large to judge"):
+        compiled("(EMA5 + ema5) * 1" + "0" * 308)
 
 
 def test_the_gate_catalogue_offers_only_one_line_indicators_with_no_setting_or_a_length() -> None:
-    offered = {indicator.variable for indicator in gate_catalogue()}
+    offered = {entry.variable for entry in gate_catalogue()}
 
     assert {"EMA10", "SMA20", "RSI14", "VWAP", "OBV"} <= offered
     assert not offered & {"AROON25", "STOCHRSI14", "FISHER9", "ADX14"}

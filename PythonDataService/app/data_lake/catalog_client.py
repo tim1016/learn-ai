@@ -710,6 +710,7 @@ class ArtifactClaimState:
     status: str
     attempt_count: int
     last_error: str | None
+    data_contract_hash: str | None
 
 
 async def select_minute_bar_claim_state(identity: ArtifactIdentity) -> ArtifactClaimState | None:
@@ -721,7 +722,7 @@ async def select_minute_bar_claim_state(identity: ArtifactIdentity) -> ArtifactC
     expected in practice — rows are never deleted).
     """
     query = """
-        SELECT "Id", "Status", "AttemptCount", "LastError"
+        SELECT "Id", "Status", "AttemptCount", "LastError", "DataContractHash"
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = 'time_series_bars'
            AND "Resolution" = 'minute'
@@ -751,6 +752,7 @@ async def select_minute_bar_claim_state(identity: ArtifactIdentity) -> ArtifactC
         status=row["Status"],
         attempt_count=row["AttemptCount"],
         last_error=row["LastError"],
+        data_contract_hash=row["DataContractHash"],
     )
 
 
@@ -774,7 +776,7 @@ async def select_metadata_claim_state(
     """
     root_id = _resolve_data_root_id(data_root_id)
     query = """
-        SELECT "Id", "Status", "AttemptCount", "LastError"
+        SELECT "Id", "Status", "AttemptCount", "LastError", "DataContractHash"
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = 'metadata'
            AND "DataContractHash" = $1
@@ -789,6 +791,7 @@ async def select_metadata_claim_state(
         status=row["Status"],
         attempt_count=row["AttemptCount"],
         last_error=row["LastError"],
+        data_contract_hash=row["DataContractHash"],
     )
 
 
@@ -803,7 +806,7 @@ async def select_corp_action_claim_state(identity: ArtifactIdentity) -> Artifact
     uncovered window, the symbol could never be studied again.
     """
     query = """
-        SELECT "Id", "Status", "AttemptCount", "LastError"
+        SELECT "Id", "Status", "AttemptCount", "LastError", "DataContractHash"
           FROM "DataLakeArtifacts"
          WHERE "ArtifactKind" = $1
            AND "Market" = $2
@@ -829,6 +832,7 @@ async def select_corp_action_claim_state(identity: ArtifactIdentity) -> Artifact
         status=row["Status"],
         attempt_count=row["AttemptCount"],
         last_error=row["LastError"],
+        data_contract_hash=row["DataContractHash"],
     )
 
 
@@ -1116,6 +1120,7 @@ async def steal_or_retry_minute_bar(
     max_retries: int,
     *,
     bypass_retry_ceiling: bool = False,
+    fresh_budget_for_contract: str | None = None,
 ) -> int | None:
     """Reclaim an artifact whose lease expired, retry a failed artifact, OR
     reactivate a staled one.
@@ -1171,6 +1176,16 @@ async def steal_or_retry_minute_bar(
     Default ``False`` preserves this function's existing behaviour for every
     other caller (minute bars and factor files) unchanged.
 
+    ``fresh_budget_for_contract`` scopes a retry budget to the data contract
+    it was spent under. A ``'failed'`` row recorded under a different
+    contract than the one given is retried whatever its count, its count
+    restarts at 1, and it takes the given contract — so later failures
+    under the new recipe spend a normal budget, and under one contract the
+    lift cannot repeat.
+    Without it a day that exhausted its budget under a recipe a fix has
+    since replaced (fractional volume rejected as corrupt) stayed terminal
+    after the fix.
+
     Returns the new fencing generation (issue #1888; always
     ``> INITIAL_LEASE_GENERATION`` since this always increments) when the
     row was reclaimed under the new worker; None when no eligible row exists
@@ -1189,12 +1204,24 @@ async def steal_or_retry_minute_bar(
                "LeaseOwner" = $2,
                "LeaseExpiresAtMs" = $3,
                "LeaseGeneration" = "LeaseGeneration" + 1,
-               "AttemptCount" = "AttemptCount" + 1,
+               "AttemptCount" = CASE
+                   WHEN "Status" = 'failed' AND "DataContractHash" IS DISTINCT FROM $7::text AND $7::text IS NOT NULL
+                   THEN 1
+                   ELSE "AttemptCount" + 1
+               END,
+               "DataContractHash" = CASE
+                   WHEN "Status" = 'failed' AND $7::text IS NOT NULL THEN $7::text
+                   ELSE "DataContractHash"
+               END,
                "LastError" = NULL
          WHERE "Id" = $1
            AND (
                   ("Status" = 'fetching' AND "LeaseExpiresAtMs" < $4)
-               OR ("Status" = 'failed' AND ("AttemptCount" < $5 OR $6))
+               OR ("Status" = 'failed' AND (
+                      "AttemptCount" < $5
+                   OR $6
+                   OR ($7::text IS NOT NULL AND "DataContractHash" IS DISTINCT FROM $7::text)
+                  ))
                OR ("Status" = 'stale')
            )
         RETURNING "LeaseGeneration";
@@ -1208,6 +1235,7 @@ async def steal_or_retry_minute_bar(
             now_ms,
             max_retries,
             bypass_retry_ceiling,
+            fresh_budget_for_contract,
         )
 
 
@@ -1244,6 +1272,7 @@ async def reclaim_after_lost_claim(
     lease_ttl_ms: int,
     max_retries: int,
     retry_ceiling_exempt_errors: frozenset[str] = frozenset(),
+    data_contract_hash: str | None = None,
 ) -> ReclaimedLease | ReclaimRefused:
     """Reclaim a row this caller's ``claim_*`` insert lost to, or say why not.
 
@@ -1266,6 +1295,10 @@ async def reclaim_after_lost_claim(
     retried no matter the attempt count (the metadata bootstrap's
     ``launcher_unreachable``, #1889): the ceiling is lifted for the steal and
     never reported as exhausted.
+
+    ``data_contract_hash`` is the contract this caller will fetch under; a
+    budget spent under another contract does not count against it (see
+    :func:`steal_or_retry_minute_bar`'s ``fresh_budget_for_contract``).
     """
     state = await read_claim_state()
     if state is not None:
@@ -1275,6 +1308,7 @@ async def reclaim_after_lost_claim(
             lease_ttl_ms=lease_ttl_ms,
             max_retries=max_retries,
             bypass_retry_ceiling=state.last_error in retry_ceiling_exempt_errors,
+            fresh_budget_for_contract=data_contract_hash,
         )
         if generation is not None:
             return ReclaimedLease(artifact_id=state.id, lease_generation=generation)
@@ -1284,6 +1318,7 @@ async def reclaim_after_lost_claim(
         and state.status == "failed"
         and state.attempt_count >= max_retries
         and state.last_error not in retry_ceiling_exempt_errors
+        and (data_contract_hash is None or state.data_contract_hash == data_contract_hash)
     ):
         return ReclaimRefused(
             reason="fetch_timeout",

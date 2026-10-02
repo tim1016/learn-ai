@@ -80,6 +80,7 @@ from app.data_lake.polygon_fetcher import (
     PolygonRateLimitedError,
     PolygonUnknownSymbolError,
     fetch_minute_trade_aggregates,
+    volume_may_be_fractional,
 )
 from app.data_lake.polygon_ticker_events import fetch_ticker_events
 from app.data_lake.sessions import trading_sessions_for
@@ -233,13 +234,32 @@ async def _publish_under_lease(
     return file_sha, None
 
 
-def _minute_trade_dch(price_adjustment_mode: PriceAdjustmentMode, adjustment_version: str | None = None) -> str:
+def _minute_trade_dch(
+    price_adjustment_mode: PriceAdjustmentMode,
+    adjustment_version: str | None = None,
+    *,
+    trading_date: date,
+) -> str:
+    """Minute-trade contract hash for one session.
+
+    A session whose vendor volume may be fractional
+    (:func:`volume_may_be_fractional`) also records that its volume is stored
+    exactly: such a day captured earlier may hold whole shares rounded down,
+    so the changed hash re-fetches it — byte-identical when nothing was lost.
+    Any other session's bytes are identical under either recipe, so its
+    hash — and every cache hit on it — is left alone.
+    """
     return _dch(
         provider="polygon",
         provider_params={
             **_DCH_MINUTE_TRADE_PARAMS,
             "adjusted": _polygon_adjusted_flag(price_adjustment_mode),
             **({"corporate_action_version": adjustment_version} if adjustment_version else {}),
+            **(
+                {"volume": "exact"}
+                if volume_may_be_fractional(trading_date, adjusted=_polygon_adjusted_flag(price_adjustment_mode))
+                else {}
+            ),
         },
         price_adjustment_mode=price_adjustment_mode,
         session_policy="full",
@@ -476,9 +496,15 @@ def _minute_trade_cache_matches(row: ArtifactRecord, dch: str, lake_root: Path, 
     contract hash differs only to record that it was imported. Reusing it is
     what the import is for (#1839), and #2454's version pinning was never to
     touch raw data (#2660). An adjusted import records no corporate-action
-    version, so it still rebuilds.
+    version, so it still rebuilds. An imported raw day whose vendor volume
+    may be fractional was written as whole shares, so it rebuilds too.
     """
-    if version is None and row.data_contract_hash == import_minute_trade_dch(adjusted=False):
+    if (
+        version is None
+        and row.data_contract_hash == import_minute_trade_dch(adjusted=False)
+        and row.trading_date is not None
+        and not volume_may_be_fractional(row.trading_date, adjusted=False)
+    ):
         return True
     return _cache_matches(row, dch, lake_root, version)
 
@@ -579,7 +605,9 @@ async def _process_minute_trade_artifact(
         data_type="trade",
     ).relative_path()
     file_path = str(rel_path)
-    dch = _minute_trade_dch(spec.price_adjustment_mode, adjustment_version)
+    dch = _minute_trade_dch(
+        spec.price_adjustment_mode, adjustment_version, trading_date=identity.trading_date,  # type: ignore[arg-type]
+    )
 
     artifact_id = await catalog_client.claim_minute_bar(
         identity=identity,
@@ -638,6 +666,7 @@ async def _process_minute_trade_artifact(
                 worker_id=_WORKER_ID,
                 lease_ttl_ms=_LEASE_TTL_MS,
                 max_retries=_MAX_CLAIM_RETRIES,
+                data_contract_hash=dch,
             )
             if isinstance(reclaim, catalog_client.ReclaimRefused):
                 return (
@@ -760,7 +789,8 @@ async def _process_minute_trade_artifact(
 
     # Validate the vendor response BEFORE anything is published (#2451): a
     # corrupt stream (duplicate/non-monotonic timestamps, wrong-day bars,
-    # non-positive or non-finite prices, OHLC violations, negative volume)
+    # non-positive or non-finite prices, OHLC violations, negative or
+    # non-finite volume)
     # fails the capture naming the offending bars. Nothing is repaired,
     # deduplicated or dropped — the writer stores time-of-day only, so the
     # lake cannot detect this after publication.
@@ -1948,7 +1978,13 @@ async def _ensure_data(spec: DataRunSpec, snapshots: dict[str, CorporateActionSn
             include_previously_published=True,
         )
         extra = [minute_bar_identity(spec, symbol=symbol, trading_date=row.trading_date, data_type="trade") for row in captured
-                 if not _cache_matches(row, _minute_trade_dch(spec.price_adjustment_mode, snapshot.version), lake_root, snapshot.version)]
+                 if row.trading_date is not None
+                 and not _cache_matches(
+                     row,
+                     _minute_trade_dch(spec.price_adjustment_mode, snapshot.version, trading_date=row.trading_date),
+                     lake_root,
+                     snapshot.version,
+                 )]
         required = [identity for identity in extra if identity not in required] + required
 
     # -----------------------------------------------------------------------

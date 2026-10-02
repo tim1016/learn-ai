@@ -103,10 +103,15 @@ export class BotChartPanelComponent {
     return view === null ? 'Strategy' : `Strategy · ${decisionTimeframeLabel(view.decision_timeframe_ms)}`;
   });
 
-  /** The viewer's pick for this strategy, reset when the strategy changes. */
-  private readonly chosenGateId = linkedSignal({
+  /** The viewer's pick for this strategy, reset when the strategy changes. A
+   * re-read of the same strategy reruns the computation too, and keeps the
+   * pick: storage may be blocked, so it is not re-read from there. */
+  private readonly chosenGateId = linkedSignal<string | null, string | null>({
     source: () => this.view()?.strategy_key ?? null,
-    computation: (strategyKey: string | null) => (strategyKey === null ? null : readGatePreference(strategyKey)),
+    computation: (strategyKey, previous) => {
+      if (previous !== undefined && previous.source === strategyKey) return previous.value;
+      return strategyKey === null ? null : readGatePreference(strategyKey);
+    },
   });
 
   /** A previewed draft shades the chart until the editor closes. */

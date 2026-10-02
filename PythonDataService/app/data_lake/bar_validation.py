@@ -23,6 +23,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
@@ -47,7 +48,7 @@ class _ValidatableBar(Protocol):
     high: float
     low: float
     close: float
-    volume: int | float
+    volume: Decimal | int
 
 
 def assert_publishable_minute_bars(
@@ -66,9 +67,10 @@ def assert_publishable_minute_bars(
        ET date are legitimate; the lake stores the full session);
     3. finite, positive open/high/low/close;
     4. ``low <= open, close`` and ``high >= open, close``;
-    5. non-negative, integral volume — the fetcher preserves the vendor's
-       raw number, so a fractional ``v`` is corruption, not something to
-       truncate silently (#2527 review).
+    5. finite, non-negative volume. A fractional volume is real data:
+       since 2026-02-23 the SIPs report fractional shares, so Polygon's
+       ``v`` carries up to six decimals. The lake stores it exactly
+       (``lean_writer.format_volume``).
 
     Nothing is repaired, deduplicated or dropped: a pass that finds any
     violation raises :class:`CorruptVendorBarsError` naming up to
@@ -149,10 +151,10 @@ def _assert_contract(bars: Sequence[_ValidatableBar], *, symbol: str, trading_da
             problems.append(f"high {bar.high} < open {bar.open}")
         if bar.high < bar.close:
             problems.append(f"high {bar.high} < close {bar.close}")
-        if bar.volume < 0:
+        if not math.isfinite(bar.volume):
+            problems.append(f"volume={bar.volume} is not finite")
+        elif bar.volume < 0:
             problems.append(f"volume={bar.volume} is negative")
-        elif not isinstance(bar.volume, int) and not float(bar.volume).is_integer():
-            problems.append(f"volume={bar.volume} is not an integer")
         if problems:
             violations.append(
                 f"bar[{index}] t_ms={bar.t_ms} ({bar_et.isoformat()}): " + "; ".join(problems)

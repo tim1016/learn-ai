@@ -46,13 +46,17 @@
           (input)="catalogueQuery.set(textOf($event))"
         />
       }
-      <div class="gate-editor__chips">
-        @for (chip of group.chips; track chip.name) {
-          <button type="button" class="gate-editor__chip" [title]="chip.hint" (click)="insert(chip.name)">{{ chip.name }}</button>
-        } @empty {
-          <span class="gate-editor__none">No match.</span>
-        }
-      </div>
+      @if (group.unavailable; as reason) {
+        <p class="gate-editor__none">{{ reason }}</p>
+      } @else {
+        <div class="gate-editor__chips">
+          @for (chip of group.chips; track chip.name) {
+            <button type="button" class="gate-editor__chip" [title]="chip.hint" (click)="insert(chip.name)">{{ chip.name }}</button>
+          } @empty {
+            <span class="gate-editor__none">No match.</span>
+          }
+        </div>
+      }
     </section>
   }
 

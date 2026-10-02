@@ -142,6 +142,24 @@ describe('BotChartPanelComponent (#2639)', () => {
     expect(screen.getByRole('button', { name: /^Gate: Foo over close/ })).toBeTruthy();
   });
 
+  it('keeps the viewer’s gate through a re-read of the same strategy, even when this browser stores nothing', async () => {
+    const user = userEvent.setup();
+    const blocked = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage is blocked.', 'SecurityError');
+    });
+    try {
+      const { fixture } = await renderPanel();
+      await user.click(screen.getByRole('radio', { name: /Foo over close/ }));
+
+      fixture.componentInstance.view.set(fakeStrategyView({ notices: ['A newer read.'] }));
+      await fixture.whenStable();
+
+      expect(screen.getByRole('button', { name: /^Gate: Foo over close Mine/ })).toBeTruthy();
+    } finally {
+      blocked.mockRestore();
+    }
+  });
+
   it('falls back to the strategy’s default gate when the remembered one no longer exists', async () => {
     localStorage.setItem('broker-v2.strategy-view.gate.v1:foo_cross', 'g_deleted');
     await renderPanel();

@@ -1,4 +1,4 @@
-import { computed, effect, inject, resource, signal, type Signal } from '@angular/core';
+import { computed, inject, resource, signal, type Signal } from '@angular/core';
 
 import type {
   CustomGate,
@@ -6,6 +6,7 @@ import type {
   GateCatalogueEntry,
   StrategyViewResponse,
 } from '../lib/broker-v2-panel.types';
+import { settledRead } from './settled-read';
 import { StrategyGatesService } from './strategy-gates.service';
 import {
   DRAFT_GATE_ID,
@@ -20,8 +21,8 @@ export interface StrategyGatesState {
   /** The read view with the saved gates (and a previewed draft) folded in. */
   readonly view: Signal<StrategyViewResponse | null>;
   readonly saved: Signal<readonly CustomGate[]>;
-  /** The catalogue indicators a gate can read, as the data plane offers them. */
-  readonly catalogue: Signal<readonly GateCatalogueEntry[]>;
+  /** The catalogue indicators a gate can read, as the data plane offers them; `null` when it could not list them. */
+  readonly catalogue: Signal<readonly GateCatalogueEntry[] | null>;
   /** The draft being previewed, once the data plane has judged it. */
   readonly previewing: Signal<boolean>;
   /** Why the data plane refused the draft, in its words. */
@@ -34,8 +35,16 @@ export interface StrategyGatesState {
   remove(gateId: string): Promise<void>;
 }
 
+/** A previewed draft and the data plane's answer, or its reason for refusing it. */
 interface JudgedDraft {
   readonly draft: CustomGateInput;
+  readonly evaluation: GateEvaluation | null;
+  readonly refusal: string | null;
+}
+
+interface JudgedSaved {
+  /** Each judged gate's version, so an answer for a since-edited gate is not shown for its new expression. */
+  readonly versions: ReadonlyMap<string, number>;
   readonly evaluation: GateEvaluation;
 }
 
@@ -68,9 +77,12 @@ export function strategyGatesState(source: Signal<StrategyViewResponse | null>):
       const gates = saved();
       return view === null || gates.length === 0 ? undefined : { view, gates };
     },
-    loader: async ({ params }): Promise<GateEvaluation> => ({
-      closes: params.view.candles.map((candle) => candle.bar_close_ms),
-      response: await api.evaluate(params.view.strategy_key, gateEvaluationRequest(params.view)),
+    loader: async ({ params }): Promise<JudgedSaved> => ({
+      versions: new Map(params.gates.map((gate) => [gate.gate_id, gate.updated_at_ms])),
+      evaluation: {
+        closes: params.view.candles.map((candle) => candle.bar_close_ms),
+        response: await api.evaluate(params.view.strategy_key, gateEvaluationRequest(params.view)),
+      },
     }),
   });
 
@@ -81,44 +93,53 @@ export function strategyGatesState(source: Signal<StrategyViewResponse | null>):
       const pending = draft();
       return view === null || pending === null ? undefined : { view, draft: pending };
     },
+    // A refusal is an answer about this draft, kept with it rather than thrown,
+    // so it is never shown against a newer draft still being judged.
     loader: async ({ params }): Promise<JudgedDraft> => {
-      const response = await api.evaluate(params.view.strategy_key, gateEvaluationRequest(params.view, params.draft));
-      return {
-        draft: params.draft,
-        evaluation: {
-          closes: params.view.candles.map((candle) => candle.bar_close_ms),
-          // The draft's own column: the saved gates keep the answer judged for them.
-          response: { ...response, results: { [DRAFT_GATE_ID]: response.results[DRAFT_GATE_ID] ?? [] } },
-        },
-      };
+      try {
+        const response = await api.evaluate(params.view.strategy_key, gateEvaluationRequest(params.view, params.draft));
+        return {
+          draft: params.draft,
+          refusal: null,
+          evaluation: {
+            closes: params.view.candles.map((candle) => candle.bar_close_ms),
+            // The draft's own column: the saved gates keep the answer judged for them.
+            response: { ...response, results: { [DRAFT_GATE_ID]: response.results[DRAFT_GATE_ID] ?? [] } },
+          },
+        };
+      } catch (error) {
+        return {
+          draft: params.draft,
+          evaluation: null,
+          refusal: gateRefusalMessage(error, 'The data plane could not judge this gate.'),
+        };
+      }
     },
   });
 
-  // The last settled answers, kept while a newer read is judged: a resource
-  // clears its value when its params change.
-  const lastSaved = signal<GateEvaluation | null>(null);
-  const lastDraft = signal<JudgedDraft | null>(null);
-  effect(() => {
-    const status = savedJudged.status();
-    if (status === 'resolved' || status === 'local') lastSaved.set(savedJudged.value() ?? null);
-    else if (status === 'error' || status === 'idle') lastSaved.set(null);
-  });
-  effect(() => {
-    const status = draftJudged.status();
-    if (status === 'resolved' || status === 'local') lastDraft.set(draftJudged.value() ?? null);
-    else if (status === 'error' || status === 'idle') lastDraft.set(null);
-  });
+  // The last settled answers (and refusals), kept while a newer read is judged.
+  const savedSettled = settledRead(savedJudged);
+  const draftSettled = settledRead(draftJudged);
 
-  /** The previewed draft's answer, only while it is still the draft shown. */
+  /** The saved gates' answer, for the gates as they are now: an edited gate waits for its own. */
+  const savedEvaluation = computed((): GateEvaluation | null => {
+    const judged = savedSettled().value;
+    if (judged === null) return null;
+    const current = new Map(saved().map((gate) => [gate.gate_id, gate.updated_at_ms]));
+    const results = Object.fromEntries(
+      Object.entries(judged.evaluation.response.results).filter(
+        ([gateId]) => current.get(gateId) !== undefined && current.get(gateId) === judged.versions.get(gateId),
+      ),
+    );
+    return { ...judged.evaluation, response: { ...judged.evaluation.response, results } };
+  });
+  /** The previewed draft's answer or refusal, only while it is still the draft shown. */
   const shownDraft = computed(() => {
-    const judged = lastDraft();
+    const judged = draftSettled().value;
     return judged !== null && judged.draft === draft() ? judged : null;
   });
-  const previewing = computed(() => shownDraft() !== null);
-  const draftRefusal = computed(() => {
-    const error = draftJudged.error();
-    return error === undefined ? null : gateRefusalMessage(error, 'The data plane could not judge this gate.');
-  });
+  const previewing = computed(() => (shownDraft()?.evaluation ?? null) !== null);
+  const draftRefusal = computed(() => shownDraft()?.refusal ?? null);
 
   const view = computed((): StrategyViewResponse | null => {
     const read = source();
@@ -133,16 +154,19 @@ export function strategyGatesState(source: Signal<StrategyViewResponse | null>):
       notices.push(`Saved gates could not be judged: ${gateRefusalMessage(judgeError, 'the data plane did not answer.')}`);
     }
     const judged = shownDraft();
-    const evaluations = [lastSaved(), judged?.evaluation ?? null].filter(
+    const evaluations = [savedEvaluation(), judged?.evaluation ?? null].filter(
       (evaluation): evaluation is GateEvaluation => evaluation !== null,
     );
-    return withCustomGates(read, saved(), evaluations, judged?.draft ?? null, notices);
+    return withCustomGates(read, saved(), evaluations, previewing() ? draft() : null, notices);
   });
 
   return {
     view,
     saved,
-    catalogue: computed(() => (catalogueRead.hasValue() ? catalogueRead.value().indicators : [])),
+    catalogue: computed(() => {
+      if (catalogueRead.error() !== undefined) return null;
+      return catalogueRead.hasValue() ? catalogueRead.value().indicators : [];
+    }),
     previewing,
     draftRefusal,
     preview: (pending) => draft.set({ ...pending }),

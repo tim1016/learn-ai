@@ -36,7 +36,7 @@ class EngineChartBar(BaseModel):
     h: float
     l: float
     c: float
-    v: int
+    v: float
 
 
 class EngineChartCoverage(BaseModel):

@@ -6,7 +6,7 @@ import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
 import { render, screen, waitFor, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
-import { of } from 'rxjs';
+import { NEVER, of } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeStrategyChartFactory, type FakeSeries } from '../../../../testing/strategy-chart-fake';
@@ -158,6 +158,38 @@ describe('BotChartPanelComponent — custom gates and catalogue indicators (#263
     await waitFor(() => expect(candleColors()).toEqual([upBright, downBright, upBright, downBright]));
   });
 
+  it('never shows one draft’s answer for a newer draft still being judged', async () => {
+    const user = userEvent.setup();
+    await renderPanel();
+    const editor = await writeDraft(user, 'First', '- close');
+    dataPlane.gates.evaluate.mockResolvedValue({ results: { draft: [true, true, true, true] }, chart_computed: [], notices: [] });
+    await user.click(within(editor).getByRole('button', { name: 'Preview on chart' }));
+    expect(await screen.findByRole('button', { name: /^Gate: Preview · First/ })).toBeTruthy();
+
+    let answer: (response: GateEvaluationResponse) => void = () => undefined;
+    dataPlane.gates.evaluate.mockReturnValue(new Promise<GateEvaluationResponse>((resolve) => { answer = resolve; }));
+    await user.type(within(editor).getByLabelText('Name'), ' again');
+    await user.click(within(editor).getByRole('button', { name: 'Preview on chart' }));
+
+    // The first draft's bright candles are not passed off as the second's.
+    expect(screen.queryByRole('button', { name: /^Gate: Preview/ })).toBeNull();
+    expect(candleColors()).toEqual([upBright, downDark, upDark, downBright]);
+
+    answer({ results: { draft: [false, false, false, false] }, chart_computed: [], notices: [] });
+    expect(await screen.findByRole('button', { name: /^Gate: Preview · First again/ })).toBeTruthy();
+    expect(candleColors()).toEqual([upDark, downDark, upDark, downDark]);
+  });
+
+  it('says so in the editor when the data plane cannot list its catalogue', async () => {
+    const user = userEvent.setup();
+    dataPlane.gates.catalogue.mockRejectedValue(new HttpErrorResponse({ status: 503 }));
+    await renderPanel();
+    const editor = await writeDraft(user, 'Any', '- close');
+
+    const catalogue = within(editor).getByRole('region', { name: 'Catalogue' });
+    expect(catalogue.textContent).toContain('The data plane did not list its catalogue.');
+  });
+
   it('saves a gate on the strategy and shades by it from then on', async () => {
     const user = userEvent.setup();
     const gate = fakeCustomGate({ label: 'Foo falling', sign: 'lt' });
@@ -227,7 +259,7 @@ describe('BotChartPanelComponent — custom gates and catalogue indicators (#263
 
   it('says so beside the chart when the saved gates cannot be loaded, and still draws the strategy’s rule', async () => {
     dataPlane.gates.list.mockRejectedValue(
-      new HttpErrorResponse({ status: 503, error: { detail: { code: 'STRATEGY_VIEW_UNAVAILABLE', message: 'The gate store could not be read.' } } }),
+      new HttpErrorResponse({ status: 503, error: { detail: { code: 'GATE_STORE_UNAVAILABLE', message: 'The gate store could not be read.' } } }),
     );
     await renderPanel();
 
@@ -272,6 +304,46 @@ describe('BotChartPanelComponent — custom gates and catalogue indicators (#263
 
     await user.click(within(indicators).getByRole('button', { name: 'Remove VWAP' }));
     expect(charts.current().chart.removeSeries).toHaveBeenCalledWith(computedLine);
+  });
+
+  it('keeps catalogue lines drawn through a re-read, and drops a removed one at once', async () => {
+    const user = userEvent.setup();
+    const line = (id: string, value: number) => ({
+      id, color: '#e0c050', panel: 'main', type: 'line',
+      data: [{ t: barCloseMs(2), value }, { t: barCloseMs(3), value: value + 1 }],
+    });
+    dataPlane.indicators.calculateBars.mockImplementation((_symbol: string, _bars: unknown, entries: { name: string }[]) =>
+      of({ symbol: 'SPY', indicators: entries.map((entry) => line(entry.name, entry.name === 'vwap' ? 500 : 9_000)) }));
+    const { fixture } = await renderPanel();
+    const indicators = screen.getByRole('dialog', { name: 'Indicators' });
+    for (const name of ['vwap', 'obv']) {
+      const search = within(indicators).getByRole('combobox', { name: 'Search indicators' });
+      await user.clear(search);
+      await user.type(search, name);
+      const row = within(indicators).getAllByRole('option', { hidden: true }).find((option) => option.dataset['name'] === name);
+      if (row === undefined) throw new Error(`The catalogue lists no ${name}.`);
+      await user.click(within(row).getByRole('button', { name: 'Add', hidden: true }));
+    }
+    const drawnValues = () => charts.current().series
+      .filter((series: FakeSeries) => series.type === 'LineSeries' && series.options['lineWidth'] === 1)
+      .slice(-2)
+      .map((series: FakeSeries) => series.setData.mock.calls.at(-1)?.[0]?.[0]?.value);
+    expect(drawnValues()).toEqual([500, 9_000]);
+
+    // A newer read that is still computing keeps the lines drawn.
+    dataPlane.indicators.calculateBars.mockReturnValue(NEVER);
+    fixture.componentInstance.view.set(fakeStrategyView({ notices: ['A newer read.'] }));
+    await screen.findByText('A newer read.');
+    expect(drawnValues()).toEqual([500, 9_000]);
+
+    // Removing one while the newer read computes drops only its line.
+    const removedBefore = charts.current().chart.removeSeries.mock.calls.length;
+    await user.click(within(indicators).getByRole('button', { name: 'Remove VWAP' }));
+    expect(charts.current().chart.removeSeries.mock.calls.length).toBeGreaterThan(removedBefore);
+    const remaining = charts.current().series
+      .filter((series: FakeSeries) => series.type === 'LineSeries' && series.options['lineWidth'] === 1)
+      .at(-1);
+    expect(remaining?.setData.mock.calls.at(-1)?.[0]?.[0]?.value).toBe(9_000);
   });
 
   it('passes AXE with the gate editor open', async () => {

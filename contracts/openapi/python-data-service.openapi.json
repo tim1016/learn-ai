@@ -12317,7 +12317,7 @@
           },
           "volume": {
             "title": "Volume",
-            "type": "integer"
+            "type": "number"
           }
         },
         "required": [
@@ -14144,7 +14144,7 @@
           },
           "v": {
             "title": "V",
-            "type": "integer"
+            "type": "number"
           }
         },
         "required": [

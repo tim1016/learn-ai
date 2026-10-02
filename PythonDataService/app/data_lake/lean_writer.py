@@ -10,12 +10,13 @@ LEAN minute-trade zip layout (path constructed by app.data_lake.path_policy):
       └── <yyyymmdd>_<sym_lower>_minute_trade.csv
            no header; columns:
              ms_since_midnight_et, open*10000, high*10000, low*10000,
-             close*10000, volume
+             close*10000, volume (shares, exact — see format_volume)
 """
 
 from __future__ import annotations
 
 import io
+import re
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,6 +25,11 @@ from decimal import ROUND_HALF_UP, Decimal
 # LEAN's price scale factor: prices on disk are multiplied by 10_000.
 _PRICE_SCALE = Decimal(10_000)
 _QUANT = Decimal(1)  # round to integer after scaling
+
+# What format_volume writes: whole shares, or plain notation with no trailing
+# zero. parse_volume reads nothing else, so an exponent, sign or padding
+# (which LEAN's GetDecimal misreads) is refused, as int() refused it before.
+_VOLUME_COLUMN = re.compile(r"(0|[1-9][0-9]*)(\.[0-9]*[1-9])?")
 
 # ZIP archive epoch — pinned so two runs with identical inputs produce
 # byte-identical zips. ZipFile default is "now", which would break the
@@ -52,7 +58,7 @@ class MinuteTradeBar:
     high: Decimal
     low: Decimal
     close: Decimal
-    volume: int
+    volume: Decimal
 
 
 def to_deci_cent(price: Decimal) -> int:
@@ -105,6 +111,42 @@ def to_deci_cent(price: Decimal) -> int:
     return int((price * _PRICE_SCALE).quantize(_QUANT, rounding=ROUND_HALF_UP))
 
 
+def format_volume(volume: Decimal | int) -> str:
+    """Encode a volume as the on-disk volume column: shares, exact.
+
+    Since 2026-02-23 the SIPs report fractional shares, so a volume may carry
+    up to six decimals. LEAN parses the column as a decimal
+    (``TradeBar.ParseEquity`` in ``Common/Data/Market/TradeBar.cs``), so a
+    fractional value stays LEAN-readable. A whole volume writes with no
+    decimal point — byte-identical to every file written before fractional
+    volume existed — and a fractional one in plain notation with trailing
+    zeros stripped, so equal volumes always encode to equal bytes
+    (``Decimal("1.0")`` and ``1`` both write ``1``).
+
+    Canonical for this repo: every lake and policy-store writer encodes
+    through it, and :func:`parse_volume` is its inverse. A float is refused —
+    its binary expansion is not the vendor's number.
+    """
+    if isinstance(volume, float) or not isinstance(volume, Decimal | int):
+        raise TypeError(f"volume encoding needs a Decimal or int, got {type(volume).__name__}")
+    exact = Decimal(volume)
+    if not exact.is_finite() or exact < 0:
+        raise ValueError(f"volume encoding refuses {volume}: not finite and non-negative")
+    if exact == exact.to_integral_value():
+        return str(int(exact))
+    return format(exact.normalize(), "f")
+
+
+def parse_volume(text: str) -> Decimal:
+    """Decode an on-disk volume column — the inverse of :func:`format_volume`.
+
+    Accepts exactly what :func:`format_volume` writes.
+    """
+    if _VOLUME_COLUMN.fullmatch(text) is None:
+        raise ValueError(f"volume {text!r} is not a whole or plain decimal share count")
+    return Decimal(text)
+
+
 def _ms_since_midnight_et(bar_start_et: datetime) -> int:
     """ms from midnight in the bar's tz (the bar_start_et is expected ET-aware)."""
     midnight = bar_start_et.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -132,7 +174,7 @@ def build_minute_trade_zip_bytes(
                 str(to_deci_cent(bar.high)),
                 str(to_deci_cent(bar.low)),
                 str(to_deci_cent(bar.close)),
-                str(bar.volume),
+                format_volume(bar.volume),
             )
         )
         for bar in bars
