@@ -19,15 +19,16 @@ function fakeService(): FakeService {
 }
 
 async function renderStep(study: StudyDetail = studyDetail('awaiting_candidate'), service: FakeService = fakeService()) {
+  const charts = fakeCharts();
   const view = await render(GoldenSearchCompareStepComponent, {
     inputs: { study, capability: emaCapability() },
-    providers: [{ provide: GoldenSearchService, useValue: service }, ...fakeCharts().providers],
+    providers: [{ provide: GoldenSearchService, useValue: service }, ...charts.providers],
   });
   const commands: StudyCommand[] = [];
   const steps: StudyStep[] = [];
   view.fixture.componentInstance.studyCommand.subscribe((command) => commands.push(command));
   view.fixture.componentInstance.goTo.subscribe((step) => steps.push(step));
-  return { view, commands, steps, service };
+  return { view, commands, steps, service, charts: charts.charts };
 }
 
 function candidateRow(name: RegExp): HTMLElement {
@@ -206,7 +207,7 @@ describe('GoldenSearchCompareStepComponent', () => {
   });
 
   it('reads every candidate’s detail run once and draws their equity and fall from peak, with a table alternative', async () => {
-    const { service } = await renderStep();
+    const { view, service, charts } = await renderStep();
 
     const chart = await screen.findByRole('img', {
       name: /development cumulative return and fall from peak\. ends at all-period fit \+8\.7%, recent fit \+11\.6%, current settings \+5\.2%/i,
@@ -223,6 +224,12 @@ describe('GoldenSearchCompareStepComponent', () => {
     fireEvent.click(evidenceTab('By month'));
     fireEvent.click(evidenceTab('Trades'));
     expect(service.candidate).toHaveBeenCalledTimes(3);
+
+    // A study poll brings a new study object with the same runs: nothing is read or redrawn again.
+    view.fixture.componentRef.setInput('study', { ...studyDetail('awaiting_candidate') });
+    await view.fixture.whenStable();
+    expect(service.candidate).toHaveBeenCalledTimes(3);
+    expect(charts[0].options).toHaveLength(1);
   });
 
   it('About this chart opens the guide beside the chart, at that chart’s section', async () => {

@@ -42,7 +42,8 @@ interface SeriesRef {
  * point positions the highlight; the tooltip shows the server's values there.
  */
 export function highlightActions(option: ChartOption, target: HighlightTarget | null, featured: string | null): ChartAction[] {
-  const clear: ChartAction[] = [{ type: 'downplay' }, { type: 'hideTip' }];
+  // hideTip leaves a shown point's axis pointer drawn; a pointer 'leave' clears it.
+  const clear: ChartAction[] = [{ type: 'downplay' }, { type: 'hideTip' }, { type: 'updateAxisPointer', currTrigger: 'leave' }];
   if (target === null) return clear;
   const group = seriesRefs(option).filter((series) => series.id.startsWith(`${target.group}:`));
   if (group.length === 0) return clear;

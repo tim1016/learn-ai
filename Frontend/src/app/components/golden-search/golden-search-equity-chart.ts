@@ -98,7 +98,7 @@ function option(aligned: readonly AlignedLine[], dates: readonly string[], featu
       const color = theme.candidates[line.key];
       const isFeatured = line.key === featured;
       const lineStyle = { color, width: isFeatured ? 2.5 : 1.5, type: line.key === 'incumbent' ? ('dashed' as const) : ('solid' as const) };
-      const common = { type: 'line' as const, name: line.label, showSymbol: false, connectNulls: false, z: isFeatured ? 3 : 2, lineStyle, itemStyle: { color }, emphasis: { focus: 'series' as const } };
+      const common = { type: 'line' as const, name: line.label, showSymbol: false, connectNulls: false, z: isFeatured ? 3 : 2, lineStyle, itemStyle: { color }, emphasis: { focus: 'series' as const, blurScope: 'global' as const, lineStyle: { width: 'bolder' as const } } };
       return [
         { ...common, id: `equity:${line.key}`, xAxisIndex: 0, yAxisIndex: 0, data: plotted(returns), endLabel: { show: true, color, fontSize: 11, formatter: () => signedPercentText(lastValue(returns)) } },
         {

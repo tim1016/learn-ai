@@ -1,8 +1,8 @@
 import { InjectionToken } from '@angular/core';
+import type { TooltipComponentOption } from 'echarts/components';
 
 import { themeColor } from '../../../shared/charts/theme-color';
 import type { CandidateKey } from '../golden-search.types';
-import type { ChartOption } from './golden-search-echarts';
 
 /** The app's tokens as the colours a chart draws with, read from the element the chart sits in. */
 export interface ChartTheme {
@@ -39,7 +39,7 @@ export const GOLDEN_SEARCH_CHART_THEME = new InjectionToken<(element: HTMLElemen
 });
 
 /** The tooltip box every Golden Search chart shares; each chart supplies its own trigger and formatter. */
-export function tooltipFrame(theme: ChartTheme): NonNullable<ChartOption['tooltip']> {
+export function tooltipFrame(theme: ChartTheme): TooltipComponentOption {
   return {
     confine: true,
     backgroundColor: theme.tooltipBackground,

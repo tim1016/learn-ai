@@ -32,6 +32,8 @@ class PanelHost {
 }
 
 const STEPS = CHART_GUIDES['equity-and-fall'].steps;
+/** Every step first clears the last one: emphasis, tooltip and axis pointer. */
+const CLEAR = [{ type: 'downplay' }, { type: 'hideTip' }, { type: 'updateAxisPointer', currTrigger: 'leave' }];
 
 async function openWalkthrough(): Promise<{ chart: FakeChart; callout: HTMLElement; walk: HTMLElement }> {
   const fake = fakeCharts();
@@ -58,20 +60,20 @@ describe('GoldenSearchWalkthroughComponent in a chart panel', () => {
     expect(callout.textContent).toContain(STEPS[0].text);
     // The right-edge labels: the featured line's last session, tooltip open on every candidate there.
     await waitFor(() =>
-      expect(lastStep(chart)).toEqual([{ type: 'downplay' }, { type: 'hideTip' }, { type: 'highlight', seriesIndex: [0, 1] }, { type: 'showTip', seriesIndex: 1, dataIndex: 3 }]),
+      expect(lastStep(chart)).toEqual([...CLEAR, { type: 'highlight', seriesIndex: [0, 1] }, { type: 'showTip', seriesIndex: 1, dataIndex: 3 }]),
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(callout.textContent).toContain(STEPS[1].text);
-    expect(lastStep(chart)).toEqual([{ type: 'downplay' }, { type: 'hideTip' }, { type: 'highlight', seriesIndex: [0, 1] }]);
+    expect(lastStep(chart)).toEqual([...CLEAR, { type: 'highlight', seriesIndex: [0, 1] }]);
 
     fireEvent.keyDown(callout, { key: 'ArrowRight' });
     expect(callout.textContent).toContain('Step 3 of 5');
-    expect(lastStep(chart)).toEqual([{ type: 'downplay' }, { type: 'hideTip' }, { type: 'highlight', seriesIndex: [2, 3] }]);
+    expect(lastStep(chart)).toEqual([...CLEAR, { type: 'highlight', seriesIndex: [2, 3] }]);
 
     fireEvent.keyDown(callout, { key: 'ArrowRight' });
     // The featured line's deepest close-to-close fall.
-    expect(lastStep(chart)).toEqual([{ type: 'downplay' }, { type: 'hideTip' }, { type: 'highlight', seriesIndex: [2, 3] }, { type: 'showTip', seriesIndex: 3, dataIndex: 1 }]);
+    expect(lastStep(chart)).toEqual([...CLEAR, { type: 'highlight', seriesIndex: [2, 3] }, { type: 'showTip', seriesIndex: 3, dataIndex: 1 }]);
 
     fireEvent.keyDown(callout, { key: 'ArrowLeft' });
     expect(callout.textContent).toContain('Step 3 of 5');
@@ -83,7 +85,7 @@ describe('GoldenSearchWalkthroughComponent in a chart panel', () => {
     fireEvent.keyDown(callout, { key: 'Escape' });
 
     expect(screen.queryByRole('group', { name: /walkthrough/i })).toBeNull();
-    expect(chart.actions.slice(-2)).toEqual([{ type: 'downplay' }, { type: 'hideTip' }]);
+    expect(chart.actions.slice(-CLEAR.length)).toEqual(CLEAR);
     expect(document.activeElement).toBe(walk);
   });
 

@@ -4,7 +4,7 @@ p { margin: 0; }
 .canvas { width: 100%; }
 .failed { color: var(--bear-text); font-size: var(--fs-xs); }
 .link { all: unset; justify-self: start; color: var(--accent-text); font-size: var(--fs-xs); cursor: pointer; }
-.link:focus-visible, .table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.frame:focus-visible, .link:focus-visible, .table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .table-wrap { max-height: 20rem; overflow: auto; border: 1px solid var(--border-light); border-radius: var(--radius-sm); }
 table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
 caption { text-align: left; padding: var(--space-2); color: var(--text-secondary); }

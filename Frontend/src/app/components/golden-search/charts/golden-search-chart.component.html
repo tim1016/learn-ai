@@ -1,5 +1,5 @@
 @let s = spec();
-<div class="frame" role="img" [attr.aria-label]="s.label + '. ' + s.summary">
+<div class="frame" role="img" tabindex="0" [attr.aria-label]="s.label + '. ' + s.summary">
   <div #canvas class="canvas" [style.height.px]="height()" [style.min-width.px]="minWidth()"></div>
 </div>
 @if (failure(); as message) { <p class="failed" role="alert">{{ message }}</p> }

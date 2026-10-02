@@ -1,4 +1,4 @@
-import { afterNextRender, ChangeDetectionStrategy, Component, DestroyRef, effect, ElementRef, inject, input, signal, viewChild } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, DestroyRef, effect, ElementRef, inject, input, signal, untracked, viewChild } from '@angular/core';
 
 import { highlightActions, type ChartSpec, type HighlightTarget } from './golden-search-chart-spec';
 import { GOLDEN_SEARCH_CHART_THEME } from './golden-search-chart-theme';
@@ -33,6 +33,8 @@ export class GoldenSearchChartComponent {
   private readonly canvas = viewChild.required<ElementRef<HTMLDivElement>>('canvas');
   private readonly chart = signal<ChartInstance | null>(null);
   private drawn: ChartOption | null = null;
+  /** The walkthrough step's target, kept so a draw that lands later (or a redraw) shows it too. */
+  private target: HighlightTarget | null = null;
   private observer: ResizeObserver | null = null;
   private destroyed = false;
 
@@ -44,7 +46,8 @@ export class GoldenSearchChartComponent {
     effect(() => {
       const chart = this.chart();
       const spec = this.spec();
-      if (chart !== null) this.draw(chart, spec);
+      // Only the chart and the spec trigger a draw, not signals a spec's option happens to read.
+      if (chart !== null) untracked(() => this.draw(chart, spec));
     });
     inject(DestroyRef).onDestroy(() => {
       this.destroyed = true;
@@ -55,9 +58,9 @@ export class GoldenSearchChartComponent {
 
   /** Lights up a walkthrough step's target; null clears the last one. */
   highlight(target: HighlightTarget | null): void {
+    this.target = target;
     const chart = this.chart();
-    if (chart === null || this.drawn === null) return;
-    for (const action of highlightActions(this.drawn, target, this.spec().featured)) chart.dispatch(action);
+    if (chart !== null && this.drawn !== null) this.showTarget(chart, this.drawn);
   }
 
   protected toggleTable(): void {
@@ -85,9 +88,14 @@ export class GoldenSearchChartComponent {
       chart.draw(drawn);
       this.drawn = drawn;
       this.failure.set(null);
+      if (this.target !== null) this.showTarget(chart, drawn);
     } catch (error: unknown) {
       this.fail(error);
     }
+  }
+
+  private showTarget(chart: ChartInstance, drawn: ChartOption): void {
+    for (const action of highlightActions(drawn, this.target, this.spec().featured)) chart.dispatch(action);
   }
 
   /** A chart that cannot draw says so and opens its table, which holds every value. */
