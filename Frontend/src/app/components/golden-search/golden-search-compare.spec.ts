@@ -79,6 +79,8 @@ describe('rowSummary', () => {
     const merged = rowSummary(rows[0], summaries);
 
     expect(rows[0].key).toBe('incumbent');
+    // The neighbor row the summary took from the fit links to the fit's audit, not the incumbent's empty one.
+    expect(rows[0].neighborSource.key).toBe('all_period');
     expect(merged?.map((item) => `${item.key}:${item.text}`)).toEqual([
       'development_activity:dev',
       'recent_activity:recent short',
