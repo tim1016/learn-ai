@@ -38,7 +38,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     SafeFlattenPlan,
     SafeFlattenPlanLeg,
 )
-from app.broker.alpaca.clerk.sqlite.reads import TERMINAL_BROKER_STATES, WORKING_BROKER_STATES
+from app.broker.alpaca.clerk.sqlite.reads import WORKING_BROKER_STATES
 from app.broker.alpaca.clerk.sqlite.uncertainty_policies import (
     reason_policy,
     residue_discharge_role,
@@ -590,12 +590,9 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
                 (order.order_ref, order.broker_order_id, order.broker_state, order.updated_at_ms)
                 for order in orders
             ],
-            # Needed while any order may still fill, verified or not: an order
-            # the broker has not acknowledged, or one held or pending replace.
-            needed=any(
-                (order.broker_state or "").lower() not in TERMINAL_BROKER_STATES
-                for order in ctx.current_orders
-            ),
+            # Needed while any order may still fill, verified or not: one the
+            # broker has not acknowledged, or one held or pending replace.
+            needed=any(order.may_fill for order in ctx.current_orders),
         )
     if action_id == "prepare_safe_flatten":
         return _safe_flatten_decision(ctx)
@@ -856,9 +853,9 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
         available=available,
         reason_code=reason_code,
         reason=reason,
-        # Nothing to write off with nothing held, no stranded exit, or a broker
-        # that holds the shares too.
-        needed=bool(positions) and reason_code not in ("NO_STRANDED_EXIT_EPISODE", "BROKER_AGREES_WITH_CUSTODY"),
+        # Nothing to write off with nothing held, no stranded exit naming the
+        # bot (whatever its scope), or a broker that holds the shares too.
+        needed=bool(positions) and bool(episodes) and reason_code != "BROKER_AGREES_WITH_CUSTODY",
         freshness="not_required",
         evidence=evidence,
         next_step=next_step,

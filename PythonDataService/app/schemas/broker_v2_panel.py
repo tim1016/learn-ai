@@ -726,7 +726,8 @@ class BotPanelView(BaseModel):
     # panel is not projected from a SQLite authority.
     bot_page: BotPageView | None = None
     # The latest run's newest fills (at most ``RUN_FILL_LIMIT``), oldest
-    # first, labelled with the run's date
+    # first, as chart markers: the page is one bot's, on its one symbol, so a
+    # marker carries no symbol or authority stamp. Labelled with the run's date
     # (``bot_page.summary.facts.started_at_ms``), never "today" (#2794 R8).
     # ``None`` exactly when ``bot_page`` is.
     run_fills: list[ChartFillMarker] | None = None

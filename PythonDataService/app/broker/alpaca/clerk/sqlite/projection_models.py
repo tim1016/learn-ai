@@ -67,6 +67,9 @@ class ProjectedOrder:
     limit_price: float | None = None
     time_in_force: str | None = None
     filled_quantity: float | None = None
+    # Whether the order may still fill: ``order_projection.ORDER_OPEN_SQL``, the
+    # one definition, read with the order.
+    may_fill: bool = True
 
 
 @dataclass(frozen=True)

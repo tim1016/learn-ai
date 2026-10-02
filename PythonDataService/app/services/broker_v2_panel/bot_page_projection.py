@@ -25,6 +25,7 @@ from decimal import Decimal
 
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import dollars
+from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_page import (
     BotHealthGroupsView,
     BotOwnStatusView,
@@ -60,7 +61,7 @@ class RunFacts:
     started_at_ms: int | None
     # When the run's own terminal outcome was recorded, and its kind; ``None`` while it runs.
     ended_at_ms: int | None
-    ending_kind: str | None
+    ending_kind: BotDutyOutcomeKind | None
     decision_count: int
     # Orders whose fills landed since the run started.
     trade_count: int
@@ -77,14 +78,12 @@ def run_facts(
     *,
     run_fills: Sequence[FillRecord],
     counts: tuple[int, int],
-    budget: Mapping[str, object] | None,
+    budget: Mapping[str, int | None] | None,
     exit_in_progress: bool,
 ) -> RunFacts:
     """The run's facts from its record, its fills, its counts and the bot's budget row."""
     terminal = None if run is None else run.terminal_outcome
     decisions, orders = counts
-    committed = None if budget is None else budget.get("committed_cents")
-    released = None if budget is None else budget.get("released_cents")
     return RunFacts(
         run_id=None if run is None else run.run_id,
         started_at_ms=None if run is None else run.started_at_ms,
@@ -93,8 +92,8 @@ def run_facts(
         decision_count=decisions,
         trade_count=len({fill.order_ref for fill in run_fills}),
         orders_sent=orders,
-        committed_cents=committed if isinstance(committed, int) else None,
-        released_cents=released if isinstance(released, int) else None,
+        committed_cents=None if budget is None else budget["committed_cents"],
+        released_cents=None if budget is None else budget["released_cents"],
         exit_in_progress=exit_in_progress,
     )
 
@@ -137,7 +136,7 @@ def bot_own_status(
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 
-_ENDING_BY_OUTCOME: dict[str, RunEnding] = {
+_ENDING_BY_OUTCOME: dict[BotDutyOutcomeKind, RunEnding] = {
     "STOPPED": "stopped",
     "HALTED": "halted",
     "CRASHED": "crashed",
@@ -168,7 +167,7 @@ def run_ending(panel: BotPanelView, run: RunFacts) -> RunEnding:
         return "ended"
     if run.ending_kind == "STOPPED" and panel.end is not None and panel.end.status == "ended":
         return "on_schedule"
-    return _ENDING_BY_OUTCOME.get(run.ending_kind, "ended")
+    return _ENDING_BY_OUTCOME[run.ending_kind]
 
 
 def _quantity_words(quantity: float) -> str:

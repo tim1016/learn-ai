@@ -167,13 +167,6 @@ WORKING_BROKER_STATES: frozenset[str] = frozenset(
     {"new", "accepted", "pending_new", "partially_filled", "pending_cancel"}
 )
 
-#: Alpaca order states in which the broker has finished an order: nothing more
-#: can fill. Any other state -- including none, an order captured but not yet
-#: acknowledged -- may still fill.
-TERMINAL_BROKER_STATES: frozenset[str] = frozenset(
-    {"filled", "canceled", "expired", "rejected", "replaced", "done_for_day"}
-)
-
 #: Alpaca order states in which an owned ENTRY can still fill, so an ENTRY in
 #: one of them outliving its run must be cancelled. The operator's
 #: ``cancel_verified_working_orders`` and the reconciliation sweep's

@@ -23,7 +23,7 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
-from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import (
@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_account_hold, raise_uncertainty
+from app.broker.contract.errors import BrokerOrderRejected
 from app.broker.contract.models import BrokerAccountSnapshot, BrokerOrderLeg
 from app.broker.contract.registry import (
     get_broker_registry,
@@ -1783,6 +1784,23 @@ async def test_an_order_that_can_still_fill_keeps_cancel_needed_though_blocked(a
     cancel = next(entry for entry in body["bot_page"]["toolbar"] if entry["action_id"] == "cancel_verified_working_orders")
     assert cancel["availability"] == "blocked"
     assert cancel["reason"] == "No working order has both a durable Clerk reference and broker identity."
+
+
+async def test_an_order_the_broker_refused_leaves_nothing_to_cancel(api) -> None:
+    """A refused order has ended: Cancel is not needed, however long ago it was refused."""
+    app, repo = api
+    refused = await submit_enter(
+        repo, account_id=ACCT, strategy_instance_id=SID, decision_id="dec-1", lifecycle_run_id=_run_id(SID),
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+        trade=_FakeTradePort(submit_error=BrokerOrderRejected("insufficient buying power")),
+    )
+    assert refused.order_ref is not None
+
+    async with _client(app) as client:
+        body = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()
+
+    cancel = next(entry for entry in body["bot_page"]["toolbar"] if entry["action_id"] == "cancel_verified_working_orders")
+    assert (cancel["availability"], cancel["reason"]) == ("not_needed", "This bot has no open orders.")
 
 
 async def test_an_account_hold_never_turns_a_finished_bot_red(api) -> None:
