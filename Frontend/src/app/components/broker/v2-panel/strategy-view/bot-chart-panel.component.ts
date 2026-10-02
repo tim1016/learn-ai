@@ -38,8 +38,8 @@ let nextChartPanelId = 0;
  * tape, and shares candle selection two-way with whatever lists the same
  * decisions. The panel owns the tab, the gate the viewer picked (remembered
  * per strategy in this browser) and the header chips. Both tabs keep their
- * content once created, so zoom, scroll and an open popover survive a trip
- * to the other tab; the tape is created the first time its tab opens.
+ * content once created, so each chart's zoom and scroll survive a trip to
+ * the other tab; the tape is created the first time its tab opens.
  */
 @Component({
   selector: 'app-bot-chart-panel',

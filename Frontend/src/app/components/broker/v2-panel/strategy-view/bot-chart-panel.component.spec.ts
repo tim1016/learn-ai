@@ -34,7 +34,8 @@ function candleColors(): string[] {
 }
 
 const minute = (ms: number) => formatTimestampDisplay(ms, { mode: 'local', granularity: 'minute' });
-const chartTime = (ms: number) => formatTimestampDisplay(ms, { mode: 'local', granularity: 'chart' });
+/** A bar's date and minute, as the candle popover titles it: warmup bars come from earlier days. */
+const barTitle = (ms: number) => `${formatTimestampDisplay(ms, { mode: 'local', granularity: 'date' })} ${minute(ms)}`;
 const providers = [{ provide: STRATEGY_CHART_FACTORY, useValue: charts.create }];
 
 @Component({
@@ -102,8 +103,9 @@ describe('BotChartPanelComponent (#2639)', () => {
     expect(screen.queryByRole('button', { name: /^Gate:/ })).toBeNull();
 
     await user.click(strategyTab);
-    // Kept, out of sight, so the tape's own state survives the trip.
+    // Both kept, out of sight, so each chart's own state survives the trip.
     expect(screen.getByText('Tape stand-in', { ignore: false })).toBeTruthy();
+    expect(charts.created).toHaveLength(1);
     expect(screen.getByRole('button', { name: /^Gate:/ })).toBeTruthy();
   });
 
@@ -160,7 +162,7 @@ describe('BotChartPanelComponent (#2639)', () => {
     await renderPanel();
 
     charts.current().click(barCloseMs(2) / 1000);
-    await screen.findByRole('dialog', { name: `${chartTime(barCloseMs(2))} bar · No Action` });
+    await screen.findByRole('dialog', { name: `${barTitle(barCloseMs(2))} bar · No Action` });
 
     const popover = screen.getByRole('dialog', { name: /bar · No Action/ });
     expect(within(popover).getByText('O 499 · H 503 · L 498 · C 500')).toBeTruthy();
@@ -168,7 +170,7 @@ describe('BotChartPanelComponent (#2639)', () => {
     expect(within(popover).getByText(/Gate “Bar 3 in 20–80”:/).textContent).toContain('no result');
 
     charts.current().click(barCloseMs(1) / 1000);
-    const before = await screen.findByRole('dialog', { name: `${chartTime(barCloseMs(1))} bar · ${BEFORE_START_TEXT}` });
+    const before = await screen.findByRole('dialog', { name: `${barTitle(barCloseMs(1))} bar · ${BEFORE_START_TEXT}` });
     expect(within(before).getByText(/Gate “Bar 3 in 20–80”:/).textContent).toContain('fails, dark candle');
   });
 
