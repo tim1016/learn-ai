@@ -15,7 +15,7 @@ from app.research.golden_search.declarations import declaration_for
 from app.research.golden_search.evaluator import StudyEvaluator
 from app.research.golden_search.exam_rules import judge_exam
 from app.research.golden_search.models import StudyRow
-from app.research.golden_search.planning import protocol_from_request
+from app.research.golden_search.planning import protocol_from_request, review_plan
 from app.research.golden_search.procedure_history import fold_windows
 from app.research.golden_search.protocol import GoldenSearchProtocol
 from app.research.golden_search.selection import ineligibility
@@ -92,6 +92,17 @@ def test_a_plan_has_a_frequency_or_fixed_floors_never_both() -> None:
     assert ("POLICY_INVALID", "expected_trades_per_year") in codes(frequency_plan_request("SPY", 0))
     legacy_without_floors = plan_request("SPY", exam_min_trades=None)
     assert ("POLICY_INVALID", "exam_min_trades") in codes(legacy_without_floors)
+    # The calendar's last year is partial, so it has no annual denominator: refused, never a crash.
+    terminal = frequency_plan_request(
+        "SPY",
+        development_start_ms=et_midnight_ms(date(2261, 1, 1)),
+        development_end_ms=et_midnight_ms(date(2262, 1, 1)),
+        final_start_ms=et_midnight_ms(date(2262, 1, 1)),
+        final_end_ms=et_midnight_ms(date(2262, 3, 1)),
+    )
+    assert ("INTERVALS_INVALID", "final_end_ms") in codes(terminal)
+    preflight = review_plan(protocol_from_request(terminal), roots=[])
+    assert preflight.activity is None and ("INTERVALS_INVALID", "final_end_ms") in {(item.code, item.field) for item in preflight.refusals}
 
 
 def test_the_receipt_freezes_the_rate_and_yearly_counts_against_later_edits_and_calendar_updates(monkeypatch: pytest.MonkeyPatch) -> None:
