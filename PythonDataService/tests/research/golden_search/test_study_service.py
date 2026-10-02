@@ -286,10 +286,11 @@ async def test_a_run_whose_job_never_started_is_authorized_again_and_the_lost_to
     assert (await service.get_row(lost.study.id)).state == "awaiting_candidate"
 
 
-async def test_a_lock_key_cannot_collide_with_the_run_it_starts(driver: Driver, symbol: str) -> None:
-    # The run's key is derived from the lock key in its own namespace, so no caller key can equal it.
-    outcome = await driver.lock_and_run(symbol, key="run-research-at-lock")
-    assert outcome.dispatch is not None and outcome.study.run_to_compare
+def test_the_run_a_lock_starts_is_keyed_apart_from_every_lock_key() -> None:
+    # Lock keys are global, so this is checked on the derivation rather than by locking a fixed key twice.
+    for key in ("run-research-at-lock", "k-1", "x" * 200):
+        derived = service._run_at_lock_key(key)
+        assert derived != key and derived.startswith("run-research:") and derived == service._run_at_lock_key(key)
 
 
 async def test_a_cancel_that_lands_before_the_search_closes_leaves_the_study_paused(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
