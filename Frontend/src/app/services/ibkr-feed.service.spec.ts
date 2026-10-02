@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ClerkStatus } from '../api/alpaca.types';
 import { provideFleetDirectory, testLane } from '../fleet/fleet-directory-testing';
+import { FleetDirectoryService } from '../fleet/fleet-directory.service';
 import { BrokersService } from './brokers.service';
 import { IbkrFeedService, laneFeedState } from './ibkr-feed.service';
 
@@ -54,6 +55,54 @@ describe('laneFeedState', () => {
 });
 
 describe('IbkrFeedService', () => {
+  it('waits for the roster on a cold boot instead of reading no lanes', async () => {
+    let loaded = false;
+    TestBed.configureTestingModule({
+      providers: [
+        {
+          provide: FleetDirectoryService,
+          useValue: {
+            ensureLoaded: async () => { loaded = true; },
+            lanesOf: () => (loaded ? [testLane({ clerk_id: 'clrk_paper' })] : []),
+          },
+        },
+        { provide: BrokersService, useValue: { getClerkStatuses: () => [Promise.resolve(status({ channel_healths: [LOST] }))] } },
+      ],
+    });
+    const service = TestBed.inject(IbkrFeedService);
+
+    await service.refresh();
+
+    expect(service.stateByClerkId().get('clrk_paper')?.kind).toBe('disconnected');
+  });
+
+  it('publishes a fast lane’s outage while a slow lane is still reading', async () => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideFleetDirectory({
+          observed_at_ms: 1_790_000_000_000,
+          clerks: [testLane({ clerk_id: 'clrk_paper' }), testLane({ clerk_id: 'clrk_live' })],
+        }),
+        {
+          provide: BrokersService,
+          useValue: {
+            getClerkStatuses: () => [
+              Promise.resolve(status({ channel_healths: [LOST] })),
+              new Promise<ClerkStatus>(() => undefined),
+            ],
+          },
+        },
+      ],
+    });
+    const service = TestBed.inject(IbkrFeedService);
+
+    void service.refresh();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(service.stateByClerkId().get('clrk_paper')?.kind).toBe('disconnected');
+    expect(service.stateByClerkId().has('clrk_live')).toBe(false);
+  });
+
   it('keeps each lane’s own answer, and a failed read is unknown, never connected', async () => {
     TestBed.configureTestingModule({
       providers: [

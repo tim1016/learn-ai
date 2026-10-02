@@ -63,16 +63,38 @@ export class IbkrFeedService {
     this.runTick();
   }
 
-  /** One read of every lane. A lane whose read fails is `unknown`, never connected. */
+  /** One read of every lane, each published as it settles so a slow lane
+   * never hides a fast lane's outage. A failed read is `unknown`, never
+   * connected. */
   async refresh(): Promise<void> {
+    try {
+      // Joins the shell's in-flight roster load on a cold boot, so the first
+      // tick reads the lanes instead of an empty roster 15 s too early.
+      await this.directory.ensureLoaded();
+    } catch {
+      // Handled where it belongs: FleetDirectoryService owns this error and
+      // the shell's lane badge renders an unresolved roster loudly. This
+      // tick reads whatever lanes the directory last knew.
+    }
     const lanes = this.directory.lanesOf('alpaca');
+    const known = new Set(lanes.map((lane) => lane.clerk_id));
+    this._stateByClerkId.update(
+      (current) => new Map([...current].filter(([clerkId]) => known.has(clerkId))),
+    );
     const reads = this.brokers.getClerkStatuses(
       lanes.map((lane) => resourceTarget(lane.broker, lane.clerk_id)),
     );
-    const states = await Promise.all(
-      reads.map((read) => read.then(laneFeedState, (): LaneFeedState => ({ kind: 'unknown' }))),
+    await Promise.all(
+      lanes.map((lane, index) =>
+        reads[index]
+          .then(laneFeedState, (): LaneFeedState => ({ kind: 'unknown' }))
+          .then((state) => this.setState(lane.clerk_id, state)),
+      ),
     );
-    this._stateByClerkId.set(new Map(lanes.map((lane, index) => [lane.clerk_id, states[index]])));
+  }
+
+  private setState(clerkId: string, state: LaneFeedState): void {
+    this._stateByClerkId.update((current) => new Map(current).set(clerkId, state));
   }
 
   private runTick(): void {

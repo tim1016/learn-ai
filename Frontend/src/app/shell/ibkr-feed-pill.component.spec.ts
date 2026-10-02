@@ -1,5 +1,5 @@
 import { signal } from '@angular/core';
-import { render, screen } from '@testing-library/angular';
+import { fireEvent, render, screen } from '@testing-library/angular';
 import axe from 'axe-core';
 import { describe, expect, it } from 'vitest';
 
@@ -21,6 +21,10 @@ async function renderPill(states: Record<string, LaneFeedState>, lanes: LaneDesc
   });
 }
 
+function pillButton(): HTMLElement {
+  return screen.getByRole('button');
+}
+
 describe('IbkrFeedPillComponent', () => {
   it('shows nothing while every lane’s feed is connected', async () => {
     const { container } = await renderPill({ clrk_paper: { kind: 'connected' }, clrk_live: { kind: 'connected' } });
@@ -28,37 +32,50 @@ describe('IbkrFeedPillComponent', () => {
     expect(container.textContent?.trim()).toBe('');
   });
 
-  it('names the outage, the lanes it blocks, and the one fix when IB Gateway is logged out', async () => {
+  it('opens the lanes, their reasons and the one fix when IB Gateway is logged out', async () => {
     const { container } = await renderPill({ clrk_paper: DOWN, clrk_live: DOWN });
+    expect(screen.getByRole('status').textContent?.trim()).toBe('IBKR down');
 
-    const pill = screen.getByRole('status');
-    expect(pill.textContent?.trim()).toBe('IBKR down');
-    const detail = pill.getAttribute('aria-label') ?? '';
-    expect(detail).toContain('IBKR market data is disconnected on Paper and Live (IBKR connection lost), since ');
-    expect(detail).toContain('Log in to IB Gateway.');
-    expect(pill.getAttribute('title')).toBe(detail);
+    await fireEvent.click(pillButton());
+
+    const detail = container.querySelector('#ibkr-feed-detail')?.textContent ?? '';
+    expect(detail).toMatch(/^IBKR market data is disconnected on Paper \(IBKR connection lost, since .+\) and Live \(IBKR connection lost, since .+\)\. Log in to IB Gateway\./);
+    expect(pillButton().getAttribute('aria-expanded')).toBe('true');
+    expect(pillButton().getAttribute('title')).toBe(detail);
     expect((await axe.run(container)).violations).toEqual([]);
   });
 
-  it('names only the lane that is down, without a start time it does not have', async () => {
-    await renderPill({ clrk_paper: { kind: 'connected' }, clrk_live: { ...DOWN, sinceMs: null } });
+  it('keeps each lane’s own reason, and no start time it does not have', async () => {
+    await renderPill({
+      clrk_paper: { kind: 'disconnected', reason: 'IBKR connection lost', sinceMs: null },
+      clrk_live: { kind: 'disconnected', reason: 'Client id already in use', sinceMs: null },
+    });
 
-    const detail = screen.getByRole('status').getAttribute('aria-label') ?? '';
-    expect(detail).toContain('disconnected on Live (IBKR connection lost). Log in');
-    expect(detail).not.toContain('since');
+    expect(pillButton().getAttribute('title')).toContain(
+      'disconnected on Paper (IBKR connection lost) and Live (Client id already in use). Log in',
+    );
+  });
+
+  it('closes its detail on Escape', async () => {
+    const { container } = await renderPill({ clrk_paper: DOWN, clrk_live: { kind: 'connected' } });
+    await fireEvent.click(pillButton());
+
+    await fireEvent.keyDown(pillButton(), { key: 'Escape' });
+
+    expect(container.querySelector('#ibkr-feed-detail')).toBeNull();
+    expect(pillButton().getAttribute('aria-expanded')).toBe('false');
   });
 
   it('says a lane it could not read is unknown rather than staying silent', async () => {
     await renderPill({ clrk_paper: { kind: 'connected' }, clrk_live: { kind: 'unknown' } });
 
-    const pill = screen.getByRole('status');
-    expect(pill.textContent?.trim()).toBe('IBKR unknown');
-    expect(pill.getAttribute('aria-label')).toBe('IBKR market-data status could not be read for Live.');
+    expect(pillButton().textContent?.trim()).toBe('IBKR unknown');
+    expect(pillButton().getAttribute('title')).toBe('IBKR market-data status could not be read for Live.');
   });
 
   it('lets an outage outrank an unread lane', async () => {
     await renderPill({ clrk_paper: DOWN, clrk_live: { kind: 'unknown' } });
 
-    expect(screen.getByRole('status').textContent?.trim()).toBe('IBKR down');
+    expect(pillButton().textContent?.trim()).toBe('IBKR down');
   });
 });

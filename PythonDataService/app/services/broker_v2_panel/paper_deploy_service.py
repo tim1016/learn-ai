@@ -531,9 +531,9 @@ _HOLD_RECOVERY: dict[str, str] = {
     ),
 }
 _UNNAMED_HOLD_RECOVERY = "Open this account's attention bell in the top bar to see the hold, then refresh this page."
-_IBKR_DISCONNECTED_RECOVERY = (
+_IBKR_LOGIN = (
     "Log in to IB Gateway: the Clerks read IBKR market data through it. The hold lifts by itself "
-    "within a minute of the feed reconnecting; then refresh this page."
+    "within a minute of the feed reconnecting"
 )
 _CHANNELS_RECOVERY = "Restore both Clerk channels and refresh the deployment check."
 
@@ -545,10 +545,19 @@ def _ibkr_disconnected(channels: list[ChannelHealth], evaluation: ChannelHealthE
     )
 
 
+def _ibkr_only_down(channels: list[ChannelHealth], evaluation: ChannelHealthEvaluation) -> bool:
+    """IB Gateway is the whole problem: logging in to it is the one fix."""
+    return _ibkr_disconnected(channels, evaluation) and evaluation.failing == {"market_data"}
+
+
 def _channel_recovery(channels: list[ChannelHealth], evaluation: ChannelHealthEvaluation) -> str | None:
     if evaluation.ready:
         return None
-    return _IBKR_DISCONNECTED_RECOVERY if _ibkr_disconnected(channels, evaluation) else _CHANNELS_RECOVERY
+    if _ibkr_only_down(channels, evaluation):
+        return f"{_IBKR_LOGIN}; then refresh this page."
+    if _ibkr_disconnected(channels, evaluation):
+        return f"{_IBKR_LOGIN}. The execution channel is down too: restore it, then refresh this page."
+    return _CHANNELS_RECOVERY
 
 
 def _hold_recovery(
@@ -594,7 +603,7 @@ def _readiness_checks(
     channels = clerk_status.channel_healths or []
     channel_evaluation = _channel_evaluation(clerk_status, now_ms, symbol=symbol)
     channel_ready = channel_evaluation.ready
-    ibkr_down = _ibkr_disconnected(channels, channel_evaluation)
+    ibkr_only_down = _ibkr_only_down(channels, channel_evaluation)
     failing = channel_evaluation.failing
     channel_summary = (
         ", ".join(
@@ -749,7 +758,7 @@ def _readiness_checks(
                 "Market-data and execution channels are healthy."
                 if channel_ready
                 else "Deployment is blocked: IBKR market data is disconnected."
-                if ibkr_down
+                if ibkr_only_down
                 else "Deployment is blocked until Clerk channels are installed and healthy."
             ),
             explanation=f"Current channel observations: {channel_summary}.",

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport
 
 from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus, HoldState
@@ -28,6 +29,7 @@ def _install_clerk_status(
     hold: HoldState,
     market_data_connected: bool = True,
     market_data_reason: str = "",
+    execution_connected: bool = True,
 ) -> None:
     async def clerk_status(*, symbol: str | None = None) -> ClerkStatus:
         observed_at_ms = now_ms_utc()
@@ -45,14 +47,20 @@ def _install_clerk_status(
                     reason=market_data_reason,
                     observed_at_ms=observed_at_ms,
                 ),
-                ChannelHealth(stream="execution", healthy=True, connected=True, observed_at_ms=observed_at_ms),
+                ChannelHealth(
+                    stream="execution",
+                    healthy=execution_connected,
+                    connected=execution_connected,
+                    reason="" if execution_connected else "Alpaca trade_updates websocket is disconnected.",
+                    observed_at_ms=observed_at_ms,
+                ),
             ],
         )
 
     monkeypatch.setattr(panel_deploy, "clerk_status", clerk_status)
 
 
-async def _deploy_view(fast_app, **params: str) -> dict:
+async def _deploy_view(fast_app: FastAPI, **params: str) -> dict:
     async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
         resp = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/deploy", params=params)
     assert resp.status_code == 200
@@ -87,6 +95,27 @@ async def test_a_logged_out_gateway_names_ib_gateway_on_both_blockers(
     assert "Log in to IB Gateway" in channels["recovery"]
     assert channels["headline"] == "Deployment is blocked: IBKR market data is disconnected."
     assert "Operator panel" not in str(body)
+
+
+@pytest.mark.asyncio
+async def test_a_second_broken_channel_keeps_its_own_fix(deploy_app, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Logging in to IB Gateway cannot restore Alpaca's execution stream, so the page names both."""
+    fast_app, _registry = deploy_app
+    _install_clerk_status(
+        monkeypatch,
+        hold=_STREAM_HOLD,
+        market_data_connected=False,
+        market_data_reason="IBKR connection lost",
+        execution_connected=False,
+    )
+
+    body = await _deploy_view(fast_app)
+
+    for gate_id in ("clerk.exposure_hold", "clerk.channel_health"):
+        recovery = _check(body, gate_id)["recovery"]
+        assert "Log in to IB Gateway" in recovery
+        assert "The execution channel is down too" in recovery
+    assert _check(body, "clerk.channel_health")["headline"] != "Deployment is blocked: IBKR market data is disconnected."
 
 
 @pytest.mark.asyncio
