@@ -260,7 +260,12 @@ def _lifecycle_needs_attention(status: BotStatusView) -> bool:
     eye even though the rollup's decision heuristic knows nothing about it.
     """
     outcome = status.duty_outcome
-    return outcome is not None and outcome.kind in UNCLEAN_DUTY_OUTCOMES
+    return outcome is not None and duty_outcome_needs_attention(outcome.kind)
+
+
+def duty_outcome_needs_attention(kind: str) -> bool:
+    """An unclean end to a run: the one test Home's row and the bot page's status share."""
+    return kind in UNCLEAN_DUTY_OUTCOMES
 
 
 def status_explanation_for(status: BotStatusView, rollup: CatalogEconomicRollup) -> str:

@@ -8,7 +8,9 @@ Pure functions over an adapted ``BotPanelView`` and the run's facts:
 - the one-line run summary (R1), from a versioned template, so the same facts
   always give the same line;
 - the toolbar's actions (R2, R6), each available, blocked with its reason, or
-  not needed -- today both of the last two read as a red BLOCKED;
+  not needed -- today both of the last two read as a red BLOCKED. Whether an
+  action is needed at all is the recovery policy's word
+  (``PanelAction.needed``), decided where it writes the reason;
 - health in two groups (R9): what happened during this run, and the account
   right now.
 
@@ -17,12 +19,13 @@ Times in prose are ET, as every backend-written line is (``app.utils.et_words``)
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
+from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import dollars
-from app.broker.alpaca.clerk.sqlite.recovery_policy import NOTHING_TO_DO_REASON_CODES
-from app.schemas.bot_lifecycle import UNCLEAN_DUTY_OUTCOMES
+from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_page import (
     BotHealthGroupsView,
     BotOwnStatusView,
@@ -39,11 +42,15 @@ from app.schemas.bot_page import (
     ToolbarGroup,
     ToolbarTone,
 )
+from app.schemas.broker_bots import BotRunView
 from app.schemas.broker_v2_panel import BotPanelView, ChannelHealthView, PanelAction
-from app.utils.et_words import et_clock_words
+from app.services.broker_v2_panel.catalog_projection_service import duty_outcome_needs_attention
+from app.utils.et_words import et_clock_words, et_day_words_in_year
 from app.utils.session_anchors import et_date_at_ms
 
 SUMMARY_TEMPLATE_VERSION = 1
+# The bot page lists a run's newest fills; a longer run still counts every trade.
+RUN_FILL_LIMIT = 50
 
 
 @dataclass(frozen=True)
@@ -52,10 +59,11 @@ class RunFacts:
 
     run_id: str | None
     started_at_ms: int | None
-    # When the run's terminal outcome was recorded; ``None`` while it runs.
+    # When the run's own terminal outcome was recorded, and its kind; ``None`` while it runs.
     ended_at_ms: int | None
+    ending_kind: BotDutyOutcomeKind | None
     decision_count: int
-    # Orders whose fills landed in the run.
+    # Orders whose fills landed since the run started.
     trade_count: int
     orders_sent: int
     # The bot's budget, and what its Stop released, in cents (``None`` when unrecorded).
@@ -63,6 +71,31 @@ class RunFacts:
     released_cents: int | None
     # A sale the Clerk is still working for this bot (#2504).
     exit_in_progress: bool
+
+
+def run_facts(
+    run: BotRunView | None,
+    *,
+    run_fills: Sequence[FillRecord],
+    counts: tuple[int, int],
+    budget: Mapping[str, int | None] | None,
+    exit_in_progress: bool,
+) -> RunFacts:
+    """The run's facts from its record, its fills, its counts and the bot's budget row."""
+    terminal = None if run is None else run.terminal_outcome
+    decisions, orders = counts
+    return RunFacts(
+        run_id=None if run is None else run.run_id,
+        started_at_ms=None if run is None else run.started_at_ms,
+        ended_at_ms=None if terminal is None else terminal.recorded_at_ms,
+        ending_kind=None if terminal is None else terminal.kind,
+        decision_count=decisions,
+        trade_count=len({fill.order_ref for fill in run_fills}),
+        orders_sent=orders,
+        committed_cents=None if budget is None else budget["committed_cents"],
+        released_cents=None if budget is None else budget["released_cents"],
+        exit_in_progress=exit_in_progress,
+    )
 
 
 # ── Status ───────────────────────────────────────────────────────────────────
@@ -73,12 +106,13 @@ def bot_own_status(
 ) -> BotOwnStatusView:
     """The bot's own status: needs attention, running, ended holding or finished.
 
-    Only this bot's own trouble asks for attention -- an unclean end to its
-    run, fills it cannot yet prove, a hold or uncertainty on its own custody --
-    the same trouble that flags its row on Home.
+    Only this bot's own trouble asks for attention: an unclean end to its run
+    (the test its Home row uses too), fills it cannot yet prove, a hold or
+    uncertainty on its own custody. Home's row also flags account-wide trouble;
+    this page shows that in the account health group instead.
     """
     outcome = panel.health.duty_outcome
-    if outcome is not None and outcome.kind in UNCLEAN_DUTY_OUTCOMES:
+    if outcome is not None and duty_outcome_needs_attention(outcome.kind):
         return BotOwnStatusView(state="needs_attention", label="Needs attention", reason=outcome.explanation)
     if not execution_coverage_complete:
         return BotOwnStatusView(
@@ -102,7 +136,7 @@ def bot_own_status(
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 
-_ENDING_BY_OUTCOME: dict[str, RunEnding] = {
+_ENDING_BY_OUTCOME: dict[BotDutyOutcomeKind, RunEnding] = {
     "STOPPED": "stopped",
     "HALTED": "halted",
     "CRASHED": "crashed",
@@ -112,6 +146,7 @@ _ENDING_BY_OUTCOME: dict[str, RunEnding] = {
 }
 
 _ENDING_WORDS: dict[RunEnding, str] = {
+    "ended": "ended",
     "on_schedule": "ended on schedule",
     "stopped": "stopped",
     "halted": "halted",
@@ -123,17 +158,16 @@ _ENDING_WORDS: dict[RunEnding, str] = {
 
 
 def run_ending(panel: BotPanelView, run: RunFacts) -> RunEnding:
-    """How the latest run ended, from its terminal outcome and whether its end was carried out."""
+    """How the latest run ended, from its own terminal outcome and whether its end was carried out."""
     if run.started_at_ms is None:
         return "not_started"
     if panel.health.running:
         return "running"
-    outcome = panel.health.duty_outcome
-    if outcome is None or outcome.run_id not in (None, run.run_id):
-        return "stopped"
-    if outcome.kind == "STOPPED" and panel.end is not None and panel.end.status == "ended":
+    if run.ending_kind is None:
+        return "ended"
+    if run.ending_kind == "STOPPED" and panel.end is not None and panel.end.status == "ended":
         return "on_schedule"
-    return _ENDING_BY_OUTCOME.get(outcome.kind, "stopped")
+    return _ENDING_BY_OUTCOME[run.ending_kind]
 
 
 def _quantity_words(quantity: float) -> str:
@@ -175,22 +209,17 @@ def _count_words(count: int, noun: str) -> str:
     return f"1 {noun}" if count == 1 else f"{count} {noun}s"
 
 
-def _day_words(instant_ms: int, current_year: int) -> str:
-    day = et_date_at_ms(instant_ms)
-    year = "" if day.year == current_year else f" {day.year}"
-    return f"{day:%a %b} {day.day}{year}"
-
-
 def _span_words(facts: RunSummaryFacts) -> str:
     """``Wed Sep 30, 14:30–15:59 ET``, naming the end's day only when it differs."""
     assert facts.started_at_ms is not None
-    start = f"{_day_words(facts.started_at_ms, facts.current_year)}, {et_clock_words(facts.started_at_ms)}"
+    start_day = et_day_words_in_year(facts.started_at_ms, current_year=facts.current_year)
+    start = f"{start_day}, {et_clock_words(facts.started_at_ms)}"
     if facts.ended_at_ms is None:
         return f"{start} ET"
     if et_date_at_ms(facts.ended_at_ms) == et_date_at_ms(facts.started_at_ms):
         return f"{start}–{et_clock_words(facts.ended_at_ms)} ET"
-    end = f"{_day_words(facts.ended_at_ms, facts.current_year)}, {et_clock_words(facts.ended_at_ms)}"
-    return f"{start} ET – {end} ET"
+    end_day = et_day_words_in_year(facts.ended_at_ms, current_year=facts.current_year)
+    return f"{start} ET – {end_day}, {et_clock_words(facts.ended_at_ms)} ET"
 
 
 def _money_words(facts: RunSummaryFacts) -> str | None:
@@ -242,31 +271,49 @@ class _CustodyEntry:
     tone: ToolbarTone
     # What it does, shown while it is available.
     does: str
+    # Why there is nothing for it to do, in the bot page's words.
+    not_needed: str
 
 
 # The custody actions in the order the toolbar shows them, with their plain
 # names (R6). Sell is ``prepare_safe_flatten``: its ticket's second step is
 # ``execute_safe_flatten``, so execute has no button of its own.
 _CUSTODY_ENTRIES: dict[str, _CustodyEntry] = {
-    "stop_bot_decisions": _CustodyEntry("Stop", "bot", "danger", "Stop this bot's decisions now."),
-    "prepare_safe_flatten": _CustodyEntry(
-        "Sell", "bot", "danger", "Review a plan to sell what this bot holds, then send it."
+    "stop_bot_decisions": _CustodyEntry(
+        "Stop", "bot", "danger", "Stop this bot's decisions now.", "This bot is not running."
     ),
-    "reconcile_now": _CustodyEntry("Check against Alpaca", "fix", "neutral", "Compare this account with Alpaca now."),
+    "prepare_safe_flatten": _CustodyEntry(
+        "Sell", "bot", "danger", "Review a plan to sell what this bot holds, then send it.", "This bot holds no shares."
+    ),
+    "reconcile_now": _CustodyEntry(
+        "Check against Alpaca", "fix", "neutral", "Compare this account with Alpaca now.", "Nothing to check."
+    ),
     "cancel_verified_working_orders": _CustodyEntry(
-        "Cancel open orders", "fix", "danger", "Cancel this bot's open orders at Alpaca."
+        "Cancel open orders", "fix", "danger", "Cancel this bot's open orders at Alpaca.", "This bot has no open orders."
     ),
     "discharge_attributed_residue": _CustodyEntry(
-        "Write off missing shares", "fix", "danger", "Write off shares the Clerk holds but Alpaca does not."
+        "Write off missing shares",
+        "fix",
+        "danger",
+        "Write off shares the Clerk holds but Alpaca does not.",
+        "No shares are missing.",
     ),
     "recover_exact_execution_evidence": _CustodyEntry(
-        "Recover a missing fill", "fix", "warning", "Read a missing fill back from Alpaca's records."
+        "Recover a missing fill",
+        "fix",
+        "warning",
+        "Read a missing fill back from Alpaca's records.",
+        "No fill is missing.",
     ),
     "resolve_execution_coverage": _CustodyEntry(
-        "Use the exact fill", "fix", "warning", "Settle a fill the Clerk recorded two ways on the exact one."
+        "Use the exact fill",
+        "fix",
+        "warning",
+        "Settle a fill the Clerk recorded two ways on the exact one.",
+        "No fill is recorded two ways.",
     ),
     "open_custody_timeline": _CustodyEntry(
-        "Custody timeline", "inspect", "neutral", "Open this bot's custody timeline."
+        "Custody timeline", "inspect", "neutral", "Open this bot's custody timeline.", "Nothing to show."
     ),
 }
 
@@ -281,16 +328,18 @@ def _sell_label(panel: BotPanelView) -> str:
 def _custody_entry(action: PanelAction, panel: BotPanelView) -> ToolbarActionView:
     entry = _CUSTODY_ENTRIES[action.action_id]
     label = _sell_label(panel) if action.action_id == "prepare_safe_flatten" else entry.label
+    # A running bot always needs its Stop, whatever the Clerk's run state says mid-stop.
+    needed = action.needed or (action.action_id == "stop_bot_decisions" and panel.health.running)
     availability: ToolbarAvailability
     if action.enabled:
         availability, reason = "available", entry.does
+    elif not needed:
+        availability, reason = "not_needed", entry.not_needed
     else:
-        blocker = action.blockers[0] if action.blockers else None
-        reason = blocker.headline if blocker is not None else action.explanation
-        nothing_to_do = blocker is not None and blocker.condition.id in NOTHING_TO_DO_REASON_CODES
-        availability = "not_needed" if nothing_to_do else "blocked"
+        availability = "blocked"
+        reason = action.blockers[0].headline if action.blockers else action.explanation
     return ToolbarActionView(
-        action_id=action.action_id,  # type: ignore[arg-type]  # a custody id is a toolbar id
+        action_id=action.action_id,
         label=label,
         group=entry.group,
         availability=availability,
@@ -314,11 +363,13 @@ def _entry(
 
 def _change_end_entry(panel: BotPanelView) -> ToolbarActionView:
     end = panel.end
-    if end is not None and end.editable:
+    if end is None:
+        return _entry("change_end", "Change end", "bot", "not_needed", "This bot has no end to change.")
+    if end.editable:
         return _entry("change_end", "Change end", "bot", "available", "Change when this bot ends and what it does then.")
-    if end is not None and end.status == "ending":
-        return _entry("change_end", "Change end", "bot", "blocked", "This bot's end has come; the Clerk is carrying it out.")
-    return _entry("change_end", "Change end", "bot", "not_needed", "This bot has stopped, so it has no end to change.")
+    # An end that has come is being carried out: needed, and waiting on the Clerk.
+    availability: ToolbarAvailability = "blocked" if end.status == "ending" else "not_needed"
+    return _entry("change_end", "Change end", "bot", availability, end.edit_refusal or end.explanation)
 
 
 def _deploy_again_entry(panel: BotPanelView) -> ToolbarActionView:
@@ -342,20 +393,28 @@ def _clear_entry(panel: BotPanelView) -> ToolbarActionView:
 def _manual_order_entry(panel: BotPanelView) -> ToolbarActionView:
     if panel.mode == "dry_run":
         return _entry(
-            "manual_order", "Manual order", "bot", "not_needed", "A Dry Run trades simulated cash, so it has no orders to place."
+            "manual_order",
+            "Manual order",
+            "bot",
+            "not_needed",
+            "A Dry Run trades simulated cash, so it has no orders to place.",
         )
     if panel.status == "cleared":
         return _entry("manual_order", "Manual order", "bot", "not_needed", "A cleared bot's page is read-only.")
-    return _entry("manual_order", "Manual order", "bot", "available", f"Place an order for {panel.symbol} on this account.")
+    return _entry(
+        "manual_order", "Manual order", "bot", "available", f"Place an order for {panel.symbol} on this account."
+    )
 
 
 def _build_proof_entry(panel: BotPanelView) -> ToolbarActionView:
     if panel.program_build.state == "NOT_APPLICABLE":
-        return _entry("build_proof", "Build proof", "inspect", "not_needed", "This strategy has no sealed program to prove.")
+        return _entry(
+            "build_proof", "Build proof", "inspect", "not_needed", "This strategy has no sealed program to prove."
+        )
     return _entry("build_proof", "Build proof", "inspect", "available", "Show this run's build proof and its hashes.")
 
 
-def toolbar_actions(panel: BotPanelView) -> list[ToolbarActionView]:
+def toolbar_actions(panel: BotPanelView, *, status: BotOwnStatusView) -> list[ToolbarActionView]:
     """Every action the bot page offers, in toolbar order, with one marked primary.
 
     The primary is the backend's ``primary_action`` (ADR 0026's Button Rule);
@@ -382,10 +441,10 @@ def toolbar_actions(panel: BotPanelView) -> list[ToolbarActionView]:
         *custody_entry("open_custody_timeline"),
         _build_proof_entry(panel),
     ]
-    primary = panel.primary_action
+    primary: str | None = panel.primary_action
     if primary == "execute_safe_flatten":
         primary = "prepare_safe_flatten"
-    if primary is None and not panel.health.running and not panel.exposure:
+    if primary is None and status.state == "finished":
         primary = "deploy_again"
     return [
         entry.model_copy(update={"primary": True})
@@ -413,40 +472,25 @@ _NO_EFFECT_ON_STOPPED = "No effect on this stopped bot."
 
 def _run_lines(panel: BotPanelView, run: RunFacts) -> list[HealthLineView]:
     feed = panel.feed_continuity
-    lines = [
+    late = panel.health.running and panel.health.decision_stale
+    return [
         HealthLineView(
             key="feed",
             label=f"{feed.provider_label} feed",
             state=_FEED_STATES[feed.state],
             value=feed.state_label,
             note=feed.explanation,
-        )
+        ),
+        HealthLineView(
+            key="decisions",
+            label="Decisions",
+            state="attention" if late else "ok",
+            value=_count_words(run.decision_count, "decision"),
+            note="No decision has come on time." if late else None,
+            at_ms=panel.health.last_decision_at_ms,
+        ),
+        HealthLineView(key="orders", label="Orders sent", state="ok", value=_count_words(run.orders_sent, "order")),
     ]
-    if panel.health.running and panel.health.decision_stale:
-        lines.append(
-            HealthLineView(
-                key="decisions",
-                label="Decisions",
-                state="attention",
-                value=_count_words(run.decision_count, "decision"),
-                note="No decision has come on time.",
-                at_ms=panel.health.last_decision_at_ms,
-            )
-        )
-    else:
-        lines.append(
-            HealthLineView(
-                key="decisions",
-                label="Decisions",
-                state="ok",
-                value=_count_words(run.decision_count, "decision"),
-                at_ms=panel.health.last_decision_at_ms,
-            )
-        )
-    lines.append(
-        HealthLineView(key="orders", label="Orders sent", state="ok", value=_count_words(run.orders_sent, "order"))
-    )
-    return lines
 
 
 def _channel_line(channel: ChannelHealthView, *, running: bool) -> HealthLineView:
@@ -465,17 +509,25 @@ def _account_lines(panel: BotPanelView) -> list[HealthLineView]:
     clerk = panel.clerk
     running = panel.health.running
     lines = [_channel_line(channel, running=running) for channel in clerk.channels]
+    # A hold or freeze stops new orders: a problem for a running bot, a fact to know for a stopped one.
+    held_state: HealthLineState = "problem" if running else "attention"
     if clerk.freeze_active:
         lines.append(
             HealthLineView(
-                key="holds", label="Holds", state="problem", value=clerk.freeze_label,
-                note=clerk.freeze_explanation, at_ms=clerk.freeze_observed_at_ms,
+                key="holds",
+                label="Holds",
+                state=held_state,
+                value=clerk.freeze_label,
+                note=clerk.freeze_explanation if running else _NO_EFFECT_ON_STOPPED,
+                at_ms=clerk.freeze_observed_at_ms,
             )
         )
     elif clerk.hold_active:
         lines.append(
             HealthLineView(
-                key="holds", label="Holds", state="problem" if running else "attention",
+                key="holds",
+                label="Holds",
+                state=held_state,
                 value=clerk.hold_reason_label,
                 note=clerk.hold_reason_explanation if running else _NO_EFFECT_ON_STOPPED,
                 at_ms=clerk.hold_since_ms,
@@ -510,25 +562,28 @@ def bot_page_view(
     now_ms: int,
 ) -> BotPageView:
     """Everything the bot page leads with, from the adapted panel and its run's facts."""
+    status = bot_own_status(
+        panel,
+        bot_owns_custody_problem=bot_owns_custody_problem,
+        execution_coverage_complete=execution_coverage_complete,
+    )
     return BotPageView(
-        status=bot_own_status(
-            panel,
-            bot_owns_custody_problem=bot_owns_custody_problem,
-            execution_coverage_complete=execution_coverage_complete,
-        ),
+        status=status,
         summary=run_summary(panel, run, now_ms=now_ms),
-        toolbar=toolbar_actions(panel),
+        toolbar=toolbar_actions(panel, status=status),
         health=health_groups(panel, run),
     )
 
 
 __all__ = [
+    "RUN_FILL_LIMIT",
     "SUMMARY_TEMPLATE_VERSION",
     "RunFacts",
     "bot_own_status",
     "bot_page_view",
     "health_groups",
     "run_ending",
+    "run_facts",
     "run_summary",
     "run_summary_facts",
     "run_summary_text",

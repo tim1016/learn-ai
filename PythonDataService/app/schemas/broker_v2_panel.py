@@ -140,6 +140,10 @@ class PanelAction(BaseModel):
     # route these into Clerk timeline filters but never derives a recovery
     # capability from them.
     evidence_refs: list[str] = Field(default_factory=list)
+    # False when the action has nothing to do now, rather than being needed
+    # and gated: the bot page shows it as "Not needed", not as a blocker
+    # (#2794). Decided by the recovery policy where it writes the reason.
+    needed: bool = True
 
 
 BotGroup = Literal["running", "holding", "finished", "dry_run"]
@@ -721,10 +725,12 @@ class BotPanelView(BaseModel):
     # summary line, the toolbar and health in two groups. ``None`` where the
     # panel is not projected from a SQLite authority.
     bot_page: BotPageView | None = None
-    # The latest run's fills, oldest first, labelled with the run's date
+    # The latest run's newest fills (at most ``RUN_FILL_LIMIT``), oldest
+    # first, as chart markers: the page is one bot's, on its one symbol, so a
+    # marker carries no symbol or authority stamp. Labelled with the run's date
     # (``bot_page.summary.facts.started_at_ms``), never "today" (#2794 R8).
     # ``None`` exactly when ``bot_page`` is.
-    run_fills: list[RecentFillView] | None = None
+    run_fills: list[ChartFillMarker] | None = None
 
     @model_validator(mode="after")
     def _open_pnl_is_authored_with_its_figure(self) -> BotPanelView:

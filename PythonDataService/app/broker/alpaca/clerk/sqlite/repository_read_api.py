@@ -420,16 +420,14 @@ class ClerkSqliteRepositoryReadApi:
         self: ClerkSqliteRepository,
         *,
         strategy_instance_id: str,
-        from_ms: int,
-        to_ms: int,
+        since_ms: int,
     ) -> tuple[int, int]:
-        """The decisions one bot recorded and the orders it sent in ``[from_ms, to_ms)``."""
+        """The decisions one bot recorded and the orders it sent since ``since_ms``."""
         with self._write_lock:
             return reads.run_activity_counts(
                 self._conn,
                 strategy_instance_id=strategy_instance_id,
-                from_ms=from_ms,
-                to_ms=to_ms,
+                since_ms=since_ms,
             )
 
     def external_order(

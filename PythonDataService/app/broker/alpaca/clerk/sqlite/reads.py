@@ -311,20 +311,18 @@ def run_activity_counts(
     conn: sqlite3.Connection,
     *,
     strategy_instance_id: str,
-    from_ms: int,
-    to_ms: int,
+    since_ms: int,
 ) -> tuple[int, int]:
-    """The decisions one bot recorded and the orders it sent in ``[from_ms, to_ms)``."""
+    """The decisions one bot recorded and the orders it sent since ``since_ms``."""
     decisions = conn.execute(
-        "SELECT COUNT(*) FROM decision_receipts "
-        "WHERE strategy_instance_id = ? AND observed_at_ms >= ? AND observed_at_ms < ?",
-        (strategy_instance_id, from_ms, to_ms),
+        "SELECT COUNT(*) FROM decision_receipts WHERE strategy_instance_id = ? AND observed_at_ms >= ?",
+        (strategy_instance_id, since_ms),
     ).fetchone()[0]
     orders = conn.execute(
         "SELECT COUNT(*) FROM orders o "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        "WHERE e.strategy_instance_id = ? AND o.submitted_at_ms >= ? AND o.submitted_at_ms < ?",
-        (strategy_instance_id, from_ms, to_ms),
+        "WHERE e.strategy_instance_id = ? AND o.submitted_at_ms >= ?",
+        (strategy_instance_id, since_ms),
     ).fetchone()[0]
     return int(decisions), int(orders)
 

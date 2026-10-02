@@ -175,8 +175,8 @@ class EconomicSnapshot:
 class SessionEconomicProjection:
     """One revision-bound economic snapshot and its complete session markers.
 
-    ``run_fills`` are the fills inside the run window the caller asked for
-    (the bot page's run, #2794), oldest first; empty when it asked for none.
+    ``run_fills`` are the fills since the run the caller named started (the
+    bot page's run, #2794), oldest first; empty when it named none.
     """
 
     snapshot: EconomicSnapshot

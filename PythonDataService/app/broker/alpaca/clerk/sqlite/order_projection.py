@@ -168,7 +168,8 @@ def read_orders_by_operation(
     rows = conn.execute(
         "SELECT owner.effect_operation_id AS owner_effect_operation_id, o.order_ref, "
         "o.client_order_id, o.broker_order_id, o.role, o.broker_state, o.submitted_at_ms, "
-        "o.updated_at_ms FROM orders o JOIN ("
+        f"o.updated_at_ms, {ORDER_OPEN_SQL} AS may_fill FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id JOIN ("
         "SELECT effect_operation_id, order_ref FROM operation_order_links "
         f"WHERE effect_operation_id IN ({placeholders}) UNION "
         "SELECT effect_operation_id, order_ref FROM orders "
@@ -194,6 +195,7 @@ def read_orders_by_operation(
                 broker_state=row["broker_state"],
                 submitted_at_ms=row["submitted_at_ms"],
                 updated_at_ms=row["updated_at_ms"],
+                may_fill=bool(row["may_fill"]),
                 symbol=detail.symbol,
                 side=detail.side,
                 quantity=detail.quantity,
@@ -217,7 +219,7 @@ def read_current_orders(
         where, params = "WHERE e.strategy_instance_id = ?", (strategy_instance_id,)
     rows = conn.execute(
         "SELECT o.order_ref, o.client_order_id, o.broker_order_id, o.role, "
-        "o.broker_state, o.submitted_at_ms, o.updated_at_ms FROM orders o "
+        f"o.broker_state, o.submitted_at_ms, o.updated_at_ms, {ORDER_OPEN_SQL} AS may_fill FROM orders o "
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
         f"{where} ORDER BY o.updated_at_ms ASC, o.order_ref ASC",
         params,
@@ -263,10 +265,13 @@ def _projected_orders(
 ) -> tuple[ProjectedOrder, ...]:
     """Each ``orders`` row joined with its immutable leg and effective fills."""
     details = read_order_details(conn, tuple(row["order_ref"] for row in rows))
-    return tuple(
-        ProjectedOrder(**dict(row), **asdict(details[row["order_ref"]]))
-        for row in rows
-    )
+    projected = []
+    for row in rows:
+        values = dict(row)
+        if "may_fill" in values:
+            values["may_fill"] = bool(values["may_fill"])
+        projected.append(ProjectedOrder(**values, **asdict(details[row["order_ref"]])))
+    return tuple(projected)
 
 
 def _order_leg_from_facts(

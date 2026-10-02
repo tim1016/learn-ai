@@ -582,6 +582,7 @@ def _panel_action(
         revision=revision,
         concurrency_token=capability.concurrency_token,
         evidence_refs=[evidence.reference for evidence in capability.evidence],
+        needed=capability.needed,
     )
 
 
@@ -792,17 +793,15 @@ def _is_working(order: ProjectedOrder) -> bool:
     return order.broker_order_id is not None and (order.broker_state or "").lower() in _WORKING_BROKER_STATES
 
 
-_TERMINAL_BROKER_STATES = frozenset({"filled", "canceled", "expired", "rejected", "replaced", "done_for_day"})
-
-
 def _may_still_fill(order: ProjectedOrder) -> bool:
-    """Any order the broker has not finished, including one it has not yet acknowledged.
+    """Any order that has not ended, including one the broker has not yet acknowledged.
 
     Wider than the working-order list on purpose: ``held``, ``pending_replace``,
     ``accepted_for_bidding`` and an order captured but not yet acknowledged can
-    all still fill into a position the refused run will not manage.
+    all still fill into a position the refused run will not manage. The one
+    definition (``order_projection.ORDER_OPEN_SQL``) is read with the order.
     """
-    return (order.broker_state or "").lower() not in _TERMINAL_BROKER_STATES
+    return order.may_fill
 
 
 def _with_terminal_exposure_notices(panel: BotPanelView, projection: ClerkProjection) -> BotHealthCard:

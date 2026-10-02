@@ -67,6 +67,9 @@ class ProjectedOrder:
     limit_price: float | None = None
     time_in_force: str | None = None
     filled_quantity: float | None = None
+    # Whether the order may still fill: ``order_projection.ORDER_OPEN_SQL``, the
+    # one definition, read with the order.
+    may_fill: bool = True
 
 
 @dataclass(frozen=True)
@@ -230,6 +233,11 @@ class RecoveryCapability:
     execution_ref: str | None
     mutation: bool
     primary: bool
+    # False when the action has nothing to do now -- no run to stop, nothing
+    # held to sell or write off, no order that can still fill, no fill to
+    # settle -- rather than being needed and gated. Decided where the policy
+    # writes the reason (#2794).
+    needed: bool = True
 
 
 @dataclass(frozen=True)

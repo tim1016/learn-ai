@@ -4459,6 +4459,17 @@
             ],
             "title": "Default End At Ms"
           },
+          "edit_refusal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Refusal"
+          },
           "editable": {
             "title": "Editable",
             "type": "boolean"
@@ -5329,7 +5340,7 @@
             "anyOf": [
               {
                 "items": {
-                  "$ref": "#/components/schemas/RecentFillView"
+                  "$ref": "#/components/schemas/ChartFillMarker"
                 },
                 "type": "array"
               },
@@ -30644,6 +30655,11 @@
             "title": "Label",
             "type": "string"
           },
+          "needed": {
+            "default": true,
+            "title": "Needed",
+            "type": "boolean"
+          },
           "revision": {
             "title": "Revision",
             "type": "integer"
@@ -35969,6 +35985,7 @@
             "enum": [
               "not_started",
               "running",
+              "ended",
               "on_schedule",
               "stopped",
               "halted",

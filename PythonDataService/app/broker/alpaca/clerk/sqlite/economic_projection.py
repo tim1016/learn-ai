@@ -605,7 +605,7 @@ class SqliteEconomicProjectionReader:
         session_window: SessionWindow | None,
         marks: Mapping[str, MarketMark] | None = None,
         recent_fill_limit: int = DEFAULT_RECENT_FILL_LIMIT,
-        run_window: tuple[int, int] | None = None,
+        run_started_at_ms: int | None = None,
     ) -> SessionEconomicProjection | None:
         """Return a chart-safe fill set and economics from one SQLite revision.
 
@@ -613,8 +613,8 @@ class SqliteEconomicProjectionReader:
         denotes a non-NYSE date and returns verified zero session metrics.
         Callers use ``snapshot`` for panel economics and ``session_fills`` for
         chart markers; no JSONL-derived fill source may be combined with this
-        result. ``run_window`` (``[from_ms, to_ms)``) also returns the fills
-        inside it, from the same revision.
+        result. ``run_started_at_ms`` also returns the fills since that run
+        started, from the same revision.
         """
         recent_fill_limit = _bounded_limit(recent_fill_limit)
         with self._read_transaction():
@@ -623,7 +623,7 @@ class SqliteEconomicProjectionReader:
                 session_window=session_window,
                 marks=marks,
                 recent_fill_limit=recent_fill_limit,
-                run_window=run_window,
+                run_started_at_ms=run_started_at_ms,
             )
 
     def _project_bot_session_economics(
@@ -633,7 +633,7 @@ class SqliteEconomicProjectionReader:
         session_window: SessionWindow | None,
         marks: Mapping[str, MarketMark] | None,
         recent_fill_limit: int,
-        run_window: tuple[int, int] | None = None,
+        run_started_at_ms: int | None = None,
     ) -> SessionEconomicProjection | None:
         """Project one bot while the caller holds this reader's read transaction."""
         meta = self._verified_meta()
@@ -715,8 +715,8 @@ class SqliteEconomicProjectionReader:
         )
         run_fills = (
             ()
-            if run_window is None
-            else tuple(record for record in records if run_window[0] <= record.filled_at_ms < run_window[1])
+            if run_started_at_ms is None
+            else tuple(record for record in records if record.filled_at_ms >= run_started_at_ms)
         )
         return SessionEconomicProjection(snapshot=snapshot, session_fills=session_fills, run_fills=run_fills)
 

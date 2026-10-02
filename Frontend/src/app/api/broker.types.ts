@@ -7799,6 +7799,8 @@ export interface components {
         BotEndView: {
             /** Default End At Ms */
             default_end_at_ms: number | null;
+            /** Edit Refusal */
+            edit_refusal?: string | null;
             /** Editable */
             editable: boolean;
             /**
@@ -8086,7 +8088,7 @@ export interface components {
             /** Revision */
             revision: number;
             /** Run Fills */
-            run_fills?: components["schemas"]["RecentFillView"][] | null;
+            run_fills?: components["schemas"]["ChartFillMarker"][] | null;
             sealed_program: components["schemas"]["SealedBotProgram"] | null;
             startup_join?: components["schemas"]["StartupJoinView"] | null;
             /**
@@ -18167,6 +18169,11 @@ export interface components {
             explanation: string;
             /** Label */
             label: string;
+            /**
+             * Needed
+             * @default true
+             */
+            needed?: boolean;
             /** Revision */
             revision: number;
         };
@@ -20219,7 +20226,7 @@ export interface components {
              * Ending
              * @enum {string}
              */
-            ending: "not_started" | "running" | "on_schedule" | "stopped" | "halted" | "crashed" | "failed_to_start" | "exited_unverified" | "retired";
+            ending: "not_started" | "running" | "ended" | "on_schedule" | "stopped" | "halted" | "crashed" | "failed_to_start" | "exited_unverified" | "retired";
             /** Exit Queued */
             exit_queued: boolean;
             /** Held */

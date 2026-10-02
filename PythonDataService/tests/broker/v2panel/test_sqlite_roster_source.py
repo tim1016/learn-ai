@@ -856,7 +856,7 @@ async def test_panel_evidence_retries_status_revision_race_with_verified_zero_ec
             strategy_instance_id: str,
             *,
             session_window: SessionWindow | None,
-            run_window: tuple[int, int] | None = None,
+            run_started_at_ms: int | None = None,
         ) -> SessionEconomicProjection:
             assert strategy_instance_id == "active-spy"
             assert session_window is None
@@ -1292,7 +1292,7 @@ async def test_panel_evidence_raises_bot_not_found_for_an_absent_projection(
             _strategy_instance_id: str,
             *,
             session_window: SessionWindow | None,
-            run_window: tuple[int, int] | None = None,
+            run_started_at_ms: int | None = None,
         ) -> None:
             return None
 
