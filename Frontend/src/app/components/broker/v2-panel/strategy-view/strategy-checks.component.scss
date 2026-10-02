@@ -1,0 +1,48 @@
+@use '../../../../styles/visually-hidden' as *;
+
+:host { display: block; }
+
+.checks {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+
+  th, td {
+    padding: 0.125rem var(--space-2) 0.125rem 0;
+    color: var(--text-secondary);
+    font-weight: var(--fw-regular);
+    text-align: left;
+    vertical-align: baseline;
+  }
+
+  // Values and thresholds wrap in a narrow column so the verdict stays in view.
+  th, .checks__verdict { white-space: nowrap; }
+}
+
+.checks__observed { font-family: var(--font-mono); color: var(--text-subtle); }
+.checks__needs { color: var(--text-subtle); }
+
+.checks__verdict {
+  padding-right: 0;
+  text-align: right;
+  color: var(--bear);
+
+  &--passed { color: var(--bull); }
+}
+
+// A rule that could not act on this bar (an exit rule while flat): quieter,
+// still at AA contrast, its verdict no longer red or green.
+.checks__row--idle {
+  th, td, .checks__verdict { color: var(--text-subtle); }
+  th { font-style: italic; }
+}
+
+.checks__sr { @include visually-hidden; }
+
+.checks__values {
+  margin: var(--space-1) 0 0;
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  line-height: 1.5;
+}

@@ -123,6 +123,7 @@ $container-lg: 1400px;
   --bull-soft:      rgba(38, 166, 154, 0.15);
   --bear:           #{$bear};
   --bear-soft:      rgba(239, 83, 80, 0.15);
+  --bear-text:      #ff8a87;  // bear text that keeps AA contrast on --bear-soft
   --warn:           #{$warn};
   --warn-soft:      rgba(255, 152, 0, 0.15);
   --info:           #{$info};

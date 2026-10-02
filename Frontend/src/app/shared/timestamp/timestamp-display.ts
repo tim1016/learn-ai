@@ -1,5 +1,7 @@
 export type TimestampDisplayMode = 'local' | 'et' | 'date-et' | 'date-utc';
-export type TimestampGranularity = 'date' | 'time' | 'datetime' | 'chart';
+/** `minute` is `HH:MM` — for a value that lives on a minute boundary (a
+ * decision bar's close), where seconds would only add noise. */
+export type TimestampGranularity = 'date' | 'time' | 'minute' | 'datetime' | 'chart';
 
 export interface TimestampDisplayOptions {
   mode?: TimestampDisplayMode;
@@ -73,6 +75,9 @@ function joinParts(parts: WallClockParts, granularity: TimestampGranularity): st
   }
   if (granularity === 'time') {
     return `${parts.hour}:${parts.minute}:${parts.second}`;
+  }
+  if (granularity === 'minute') {
+    return `${parts.hour}:${parts.minute}`;
   }
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 }

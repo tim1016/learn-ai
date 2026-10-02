@@ -1,4 +1,5 @@
 @use '../../../../../styles/eyebrow-heading' as *;
+@use '../../../../../styles/visually-hidden' as *;
 
 :host {
   display: block;
@@ -26,34 +27,84 @@
   margin: 0;
 }
 
-.recent-decisions__table {
-  width: 100%;
-  table-layout: fixed;
-  border-collapse: collapse;
+.decisions {
+  margin: 0;
+  padding: var(--space-1) 0;
+  list-style: none;
   color: var(--text-primary);
   font-size: var(--fs-xs);
-
-  th {
-    padding: 0.375rem 0.625rem;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
-    font-size: var(--fs-xxs);
-    font-weight: var(--fw-semibold);
-    text-align: left;
-  }
-
-  td {
-    padding: 0.5rem 0.625rem;
-    border-bottom: 1px solid var(--border-light);
-    vertical-align: middle;
-  }
-
-  tr:last-child td { border-bottom: 0; }
-  tr:hover td { background: var(--bg-hover); }
 }
 
-.recent-decisions__authority {
+.decisions__start {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0.75rem;
+  color: var(--accent-text);
+  font-size: var(--fs-xxs);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+
+  &::before,
+  &::after {
+    content: '';
+    flex: 1;
+    border-top: 1px solid var(--accent-text);
+    opacity: 0.4;
+  }
+}
+
+// Time in a narrow first column; everything about the decision lines up in the second.
+$time-column: 3.25rem;
+
+.decision {
+  padding: 0.375rem 0.75rem 0.5rem;
+  border-bottom: 1px solid var(--border-light);
+
+  &:last-child { border-bottom: 0; }
+
+  > :not(.decision__head) { margin-left: calc(#{$time-column} + var(--space-2)); }
+}
+
+.decision--selected {
+  background: var(--accent-faint);
+  box-shadow: inset 2px 0 0 var(--accent-text);
+}
+
+.decision__head {
+  display: grid;
+  grid-template-columns: $time-column 1fr;
+  align-items: baseline;
+  column-gap: var(--space-2);
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+
+  &:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+}
+
+.decision__time {
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+}
+
+.decision__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+}
+
+.decision__what { font-weight: var(--fw-semi); }
+.decision--before-start .decision__what { color: var(--text-subtle); font-weight: var(--fw-medium); }
+.decision__reason { color: var(--text-subtle); }
+
+.decision__authority {
   padding: 0.125rem 0.375rem;
   border-radius: 0.25rem;
   background: var(--bg-elevated);
@@ -62,6 +113,41 @@
   font-weight: var(--fw-semibold);
   text-transform: uppercase;
   letter-spacing: 0.02em;
+}
+
+.decision__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chip {
+  display: inline-flex;
+  gap: 3px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--bear-soft);
+  color: var(--bear-text);
+  font: var(--fw-medium) var(--fs-xxs) / 1.6 var(--font-mono);
+  white-space: nowrap;
+
+  &--passed { background: var(--bull-soft); color: var(--bull); }
+  // A rule that could not act on this bar: present, but not part of its verdict.
+  &--idle { background: var(--bg-elevated); color: var(--text-subtle); }
+}
+
+.chip__sr { @include visually-hidden; }
+
+.decision__detail { margin-top: var(--space-1); }
+
+.decision__unrecorded {
+  margin: var(--space-1) 0 0;
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+  font-style: italic;
 }
 
 .recent-decisions__empty {

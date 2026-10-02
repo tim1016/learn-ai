@@ -1,0 +1,24 @@
+@let bar = candle();
+<div #panel class="candle-popover" popover role="dialog" [attr.aria-labelledby]="titleId" (toggle)="onToggle($event)">
+  <header>
+    <h3 [id]="titleId">
+      <app-timestamp-display [value]="bar.bar_close_ms" mode="local" granularity="date" /> <app-timestamp-display [value]="bar.bar_close_ms" mode="local" granularity="minute" /> bar
+      @if (bar.phase_text) {
+        · {{ bar.phase_text }}
+      } @else if (bar.outcome) {
+        · {{ bar.outcome | receiptLabel }}
+      }
+    </h3>
+    <button type="button" class="candle-popover__close" (click)="close()">Close</button>
+  </header>
+  <p class="candle-popover__ohlc">O {{ bar.open }} · H {{ bar.high }} · L {{ bar.low }} · C {{ bar.close }}</p>
+  <app-strategy-checks [explanation]="bar.explanation" />
+  @if (gate(); as active) {
+    <p class="candle-popover__gate">
+      Gate “{{ active.label }}”:
+      <strong [class.candle-popover__gate--holds]="gateResult() === true" [class.candle-popover__gate--fails]="gateResult() === false">
+        {{ gateText() }}
+      </strong>
+    </p>
+  }
+</div>

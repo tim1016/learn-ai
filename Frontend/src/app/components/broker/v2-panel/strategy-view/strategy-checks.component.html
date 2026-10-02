@@ -1,0 +1,22 @@
+@if (checks().length > 0) {
+  <table class="checks" aria-label="Checks">
+    <tbody>
+      @for (check of checks(); track check.check_id) {
+        <tr [class.checks__row--idle]="!check.applies">
+          <th scope="row">{{ check.label }}</th>
+          <td class="checks__observed">{{ check.observed_text }}</td>
+          <td class="checks__needs">
+            @if (check.needs) { needs {{ check.needs }} }
+          </td>
+          <td class="checks__verdict" [class.checks__verdict--passed]="check.passed">
+            <span aria-hidden="true">{{ check.passed ? '✓' : '✗' }}</span>
+            <span class="checks__sr">{{ check.passed ? 'passed' : 'failed' }}</span>
+          </td>
+        </tr>
+      }
+    </tbody>
+  </table>
+}
+@if (values()) {
+  <p class="checks__values">{{ values() }} · bot’s own values</p>
+}
