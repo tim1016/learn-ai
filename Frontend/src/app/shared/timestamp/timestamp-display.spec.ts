@@ -49,6 +49,14 @@ describe('formatTimestampDisplay', () => {
     })).toBe('2026-01-01 00:00:00');
   });
 
+  it('formats a minute-boundary instant as hours and minutes only', () => {
+    expect(formatTimestampDisplay(EXPIRY_ANCHOR_MS, {
+      mode: 'local',
+      granularity: 'minute',
+      localTimeZone: 'America/Chicago',
+    })).toBe('15:00');
+  });
+
   it('returns the fallback for absent values', () => {
     expect(formatTimestampDisplay(null, { mode: 'et' })).toBe('—');
   });

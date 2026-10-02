@@ -32,6 +32,7 @@ import {
   type FleetDirectoryDouble,
 } from '../../../../fleet/fleet-directory-testing';
 import { LANE_FENCE_REFRESH_FAILED_MESSAGE } from '../../../../fleet/lane-fence';
+import { fakeStrategyView } from '../../../../testing/strategy-view-fixtures';
 
 const messageService = { add: vi.fn() };
 const chartMocks = vi.hoisted(() => {
@@ -545,6 +546,8 @@ const mockService = {
   getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot()),
   liveStreamUrl: vi.fn().mockReturnValue('/api/test/live-stream'),
   getCurrentRun: vi.fn().mockResolvedValue(makeRun()),
+  // No decision bars yet: the strategy tab's calm empty state, no chart.
+  getStrategyView: vi.fn().mockResolvedValue(fakeStrategyView({ candles: [] })),
   getHistoryChart: vi.fn().mockResolvedValue({
     strategy_instance_id: 'sid-001',
     symbol: 'QQQ',
@@ -629,6 +632,14 @@ function openDisclosure(label: string): void {
   if (details === null) throw new Error(`Expected ${label} disclosure.`);
   details.open = true;
   fireEvent(details, new Event('toggle'));
+}
+
+/** The chart panel opens on the strategy view (#2639); the market tape is one
+ * tab away and is only created when that tab first opens. */
+async function showTape(fixture: ComponentFixture<BotPanelShellComponent>): Promise<void> {
+  fireEvent.click(screen.getByRole('tab', { name: 'Tape' }));
+  await fixture.whenStable();
+  fixture.detectChanges();
 }
 
 /** The current-run poll's interval on a virtual clock, so a test lets one poll
@@ -789,6 +800,7 @@ describe('BotPanelShellComponent', () => {
         { exact: false },
       )).toBeTruthy();
       expect(fixture.nativeElement.classList.contains('is-stale')).toBe(true);
+      await showTape(fixture);
       expect(screen.getByRole('article', { name: 'Market tape for QQQ' })).toBeTruthy();
       expect(screen.getByRole('button', { name: 'Reconcile now' })).toBeTruthy();
 
@@ -848,6 +860,7 @@ describe('BotPanelShellComponent', () => {
       });
       await fixture.whenStable();
       fixture.detectChanges();
+      await showTape(fixture);
 
       const notice = screen.getByRole('alert', { name: 'Chart feed stalled' });
       expect(within(notice).getByText('Do not read the chart as current.')).toBeTruthy();
@@ -870,6 +883,8 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     // The loaded panel drives the chart's instrument context.
+    expect(screen.getByRole('tab', { name: 'Strategy · 15m', selected: true })).toBeTruthy();
+    await showTape(fixture);
     expect(screen.getByRole('article', { name: 'Market tape for QQQ' })).toBeTruthy();
     expect(mockService.getLiveSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1009,7 +1024,7 @@ describe('BotPanelShellComponent', () => {
     expect(
       fixture.nativeElement.querySelector('app-typed-halt-confirm app-asset-identity')?.textContent,
     ).toContain('QQQ');
-    expect(screen.getByRole('dialog').textContent).toContain('DUM284968');
+    expect(screen.getByRole('dialog', { name: 'Confirm exact execution recovery' }).textContent).toContain('DUM284968');
 
     fireEvent.input(screen.getByTestId('typed-halt-confirm-input'), {
       target: { value: 'RECOVER' },
@@ -1676,6 +1691,7 @@ describe('BotPanelShellComponent', () => {
     });
     await fixture.whenStable();
     fixture.detectChanges();
+    await showTape(fixture);
 
     const tape = screen.getByRole('article', { name: 'Market tape for QQQ' });
     expect(within(tape).getByText('$512.34')).toBeTruthy();
