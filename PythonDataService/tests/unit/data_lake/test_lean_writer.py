@@ -15,9 +15,13 @@ from datetime import datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.data_lake.lean_writer import (
     MinuteTradeBar,
     build_minute_trade_zip_bytes,
+    format_volume,
+    parse_volume,
     to_deci_cent,
 )
 
@@ -82,3 +86,39 @@ def test_symbol_is_lowercased_in_csv_name():
     payload = build_minute_trade_zip_bytes("QQQ", "20240520", bars)
     with zipfile.ZipFile(io.BytesIO(payload)) as zf:
         assert zf.namelist() == ["20240520_qqq_minute_trade.csv"]
+
+
+@pytest.mark.parametrize(
+    ("volume", "encoded"),
+    [
+        (1234, "1234"),
+        (Decimal("34307.0"), "34307"),
+        (Decimal("1E+3"), "1000"),
+        (Decimal("9238.22128"), "9238.22128"),
+        (Decimal("5244.999999"), "5244.999999"),
+        (Decimal("0.500"), "0.5"),
+        (Decimal("50484685.50995"), "50484685.50995"),
+    ],
+)
+def test_format_volume_writes_exact_shares_one_way(volume: Decimal | int, encoded: str):
+    """Whole volumes keep the bytes every pre-fractional file has; a
+    fractional one keeps every vendor digit; equal values encode equally."""
+    assert format_volume(volume) == encoded
+    assert parse_volume(encoded) == volume
+
+
+@pytest.mark.parametrize("volume", [Decimal("-1"), Decimal("NaN"), Decimal("Infinity")])
+def test_format_volume_refuses_negative_and_non_finite(volume: Decimal):
+    with pytest.raises(ValueError):
+        format_volume(volume)
+
+
+def test_format_volume_refuses_a_float():
+    with pytest.raises(TypeError):
+        format_volume(9238.22128)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("text", ["", "abc", "-1", "NaN", "Infinity", "1E+3", "+5", " 5", "1.50", "007"])
+def test_parse_volume_reads_only_what_format_volume_writes(text: str):
+    with pytest.raises(ValueError):
+        parse_volume(text)

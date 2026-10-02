@@ -108,10 +108,9 @@ def test_stored_bars_validate_through_the_same_contract() -> None:
         )
 
 
-def test_stored_fractional_volume_cannot_exist_but_raw_vendor_volume_can() -> None:
-    """A fractional volume survives the fetcher now (raw number); the vendor
-    stream's contract rejects it."""
-    with pytest.raises(CorruptVendorBarsError, match=r"volume=1\.5 is not an integer"):
-        assert_publishable_minute_bars(
-            [_pb(0, volume=1.5)], symbol="SPY", trading_date=TRADING_DAY
-        )
+def test_validator_rejects_non_finite_volume() -> None:
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(CorruptVendorBarsError, match="is not finite"):
+            assert_publishable_minute_bars(
+                [_pb(0, volume=bad)], symbol="SPY", trading_date=TRADING_DAY
+            )

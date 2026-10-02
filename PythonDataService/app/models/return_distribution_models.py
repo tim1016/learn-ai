@@ -121,7 +121,7 @@ class DayReturnsModel(BaseModel):
     morning_pct: float | None
     afternoon_pct: float | None
     after_hours_pct: float | None
-    volume: int
+    volume: float
     bin_indices: dict[str, int | None]
 
 
@@ -216,7 +216,7 @@ class ReturnDistributionResponse(BaseModel):
                     morning_pct=d.morning_pct,
                     afternoon_pct=d.afternoon_pct,
                     after_hours_pct=d.after_hours_pct,
-                    volume=d.volume,
+                    volume=float(d.volume),
                     bin_indices=dict(zip(RETURN_KINDS, d.bin_indices, strict=True)),
                 )
                 for d in result.days

@@ -44,7 +44,7 @@ import pandas as pd
 
 from app.data_lake.adjustment_versions import verify_adjusted_payload
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
-from app.data_lake.lean_writer import MinuteTradeBar, to_deci_cent
+from app.data_lake.lean_writer import MinuteTradeBar, format_volume, parse_volume, to_deci_cent
 from app.data_lake.types import ArtifactRecord
 from app.lean_sidecar.trading_calendar import regular_session_mask_ms_utc
 
@@ -69,7 +69,7 @@ class DailyAggregate:
     high: Decimal
     low: Decimal
     close: Decimal
-    volume: int
+    volume: Decimal
 
 
 def aggregate_minute_to_daily(
@@ -174,7 +174,7 @@ def build_daily_zip_bytes(
             f"{to_deci_cent(a.high)},"
             f"{to_deci_cent(a.low)},"
             f"{to_deci_cent(a.close)},"
-            f"{a.volume}"
+            f"{format_volume(a.volume)}"
         )
         for a in aggregates
     ]
@@ -226,7 +226,7 @@ def read_minute_trade_bars(file_path: str, lake_root: Path) -> list[MinuteTradeB
         high_dc = int(parts[2])
         low_dc = int(parts[3])
         close_dc = int(parts[4])
-        volume = int(parts[5])
+        volume = parse_volume(parts[5])
 
         # Reconstruct bar_start_et from ms_since_midnight and the trading date.
         hours = ms_since_midnight // 3_600_000
