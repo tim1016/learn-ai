@@ -13,8 +13,24 @@
       </select>
     </label>
     <label class="field"><span>Max drawdown (% of peak equity)</span><input #ceiling pInputText type="number" min="0" max="100" step="0.5" [id]="inputId('drawdown_percent')" [value]="drawdownPercent()" [attr.aria-invalid]="numberInvalid('drawdown_percent')" (input)="onNumber('drawdown_percent', ceiling.value)" /></label>
-    <label class="field"><span>Min completed trades</span><input #minTrades pInputText type="number" min="1" step="1" [id]="inputId('min_trades')" [value]="p.policy.min_trades" [attr.aria-invalid]="numberInvalid('min_trades')" (input)="onNumber('min_trades', minTrades.value)" /></label>
+    @if (frequencyBased()) {
+      <label class="field"><span id="gs-frequency-label">Expected trade frequency</span><input #frequency pInputText type="number" min="1" step="1" [id]="inputId('expected_trades_per_year')" [value]="p.expected_trades_per_year" [attr.aria-invalid]="numberInvalid('expected_trades_per_year')" aria-labelledby="gs-frequency-label" aria-describedby="gs-frequency-hint gs-frequency-unit" (input)="onNumber('expected_trades_per_year', frequency.value)" /><small id="gs-frequency-unit">Completed trades per trading year</small></label>
+    } @else {
+      <label class="field"><span>Min completed trades</span><input #minTrades pInputText type="number" min="1" step="1" [id]="inputId('min_trades')" [value]="p.policy.min_trades" [attr.aria-invalid]="numberInvalid('min_trades')" (input)="onNumber('min_trades', minTrades.value)" /></label>
+    }
   </div>
   <label class="check"><input type="checkbox" [checked]="p.policy.require_positive_net" (change)="onFlag('require_positive_net', $event)" /><span>Require a positive net result</span></label>
-  <p class="hint">{{ p.policy.min_trades }} trades is a starting policy, not a guarantee of statistical confidence; a sparse final test can end as “not enough evidence.”</p>
+  @if (frequencyBased()) {
+    <p class="hint" id="gs-frequency-hint">Minimum trades adapt to each window's exchange trading days. This is an activity requirement, not a guarantee of statistical confidence.</p>
+    @if (preflight()?.activity; as activity) {
+      <app-golden-search-activity [activity]="activity" />
+    } @else {
+      <p class="hint" role="status">Window minimums will appear when the plan passes preflight.</p>
+    }
+  } @else {
+    <p class="hint">This revised plan keeps its original fixed trade floors.</p>
+    @if (defaultRate(); as rate) {
+      <button pButton type="button" size="small" severity="secondary" [outlined]="true" class="frequency-switch" (click)="onNumber('expected_trades_per_year', '' + rate)">Use expected trade frequency ({{ rate }} per year)</button>
+    }
+  }
 </section>

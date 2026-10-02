@@ -43,7 +43,7 @@ from app.research.golden_search.declarations import (
     to_decimal,
     violates,
 )
-from app.research.golden_search.protocol import GoldenSearchProtocol, KnobPlan, grid_size
+from app.research.golden_search.protocol import GoldenSearchProtocol, KnobPlan, SelectionPolicy, grid_size
 from app.research.golden_search.selection import Candidate, best
 from app.research.golden_search.zoom import (
     BudgetExhausted,
@@ -83,8 +83,13 @@ def run_grid(
     seed: Mapping[str, Any],
     evaluate: EvaluateBatch,
     canonicalize: Canonicalize | None = None,
+    policy: SelectionPolicy | None = None,
 ) -> ProcedureResult:
-    """Evaluate every valid combination of the planned grid and pick the canonical winner."""
+    """Evaluate every valid combination of the planned grid and pick the canonical winner.
+
+    ``policy`` is the evaluated window's selection policy, its trade floor
+    resolved (``activity.TradeFloors``); it defaults to the protocol's own.
+    """
     build = canonicalize or canonicalizer(declaration.strategy_key, protocol.symbol)
     evaluator = PointEvaluator(strategy_key=declaration.strategy_key, evaluate=evaluate)
     names = [plan.name for plan in protocol.knobs]
@@ -118,7 +123,7 @@ def run_grid(
     except BudgetExhausted:
         stop = "budget"
 
-    winner = best(candidates, protocol.policy)
+    winner = best(candidates, policy or protocol.policy)
     if winner is None:
         seed_point = build(knob_scalars(declaration, base))
         seed_hash = point_hash(declaration.strategy_key, seed_point)

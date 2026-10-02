@@ -9,7 +9,7 @@ import { REFUSAL_INPUTS, refusalTarget } from './golden-search-plan-problems';
 import { GoldenSearchService, type CommandOutcome } from './golden-search.service';
 import { etMidnightMs } from '../../shared/date/et-midnight';
 import type { CreateStudyRequest, DefaultsMonths, GoldenSearchDefaults, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyCommandRequest, StudyDetail } from './golden-search.types';
-import { defaults, emaCapability, INCUMBENT_PARAMS, preflight as preflightFixture, studyDetail, unavailableCapability } from './testing/fixtures';
+import { defaults, emaCapability, frequencyProtocol, INCUMBENT_PARAMS, preflight as preflightFixture, studyDetail, unavailableCapability } from './testing/fixtures';
 
 /** The defaults laid out for a four-month final test: the development range ends where the final test starts. */
 function fourMonthDefaults(): GoldenSearchDefaults {
@@ -65,6 +65,32 @@ function lockButton(): HTMLButtonElement {
 }
 
 describe('GoldenSearchPlanFormComponent', () => {
+  it('shows editable expected trade frequency and locks the selected annual policy with the server preview', async () => {
+    const service = fakeService();
+    const { policy, exam_min_trades, expected_trades_per_year } = frequencyProtocol();
+    service.defaults.mockResolvedValue(defaults({ policy, exam_min_trades, expected_trades_per_year }));
+    service.preflight.mockImplementation(async (protocol) => preflightFixture({
+      activity: {
+        expected_trades_per_year: protocol.expected_trades_per_year ?? 50,
+        windows: [{ key: 'development', label: 'Development', start_ms: protocol.development_start_ms, end_ms: protocol.development_end_ms, trading_sessions: 501, minimum_trades: protocol.expected_trades_per_year === 100 ? 200 : 100, years: [] }],
+      },
+    }));
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    const frequency = screen.getByRole('spinbutton', { name: 'Expected trade frequency' });
+    expect((frequency as HTMLInputElement).value).toBe('50');
+    expect(screen.getByText('At least 100 trades')).not.toBeNull();
+    expect(screen.queryByLabelText('Min completed trades')).toBeNull();
+    expect(screen.queryByLabelText('Min final-test trades')).toBeNull();
+
+    fireEvent.input(frequency, { target: { value: '100' } });
+    await waitFor(() => expect(screen.getByText('At least 200 trades')).not.toBeNull());
+    await waitFor(() => expect(lockButton().disabled).toBe(false));
+    fireEvent.click(lockButton());
+    await waitFor(() => expect(service.createStudy).toHaveBeenCalledTimes(1));
+    expect(service.createStudy.mock.lastCall?.[0].protocol.expected_trades_per_year).toBe(100);
+  });
+
   it('offers only declared strategies and names why the others cannot be studied yet', async () => {
     await renderForm(fakeService());
 
@@ -75,6 +101,23 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(unavailable).toHaveLength(1);
     expect(unavailable[0]).toContain('SMA Crossover');
     expect(unavailable[0]).toContain('No Golden Search declaration has shipped');
+  });
+
+  it('clears obsolete floor errors when a revised plan adopts expected trade frequency', async () => {
+    const service = fakeService();
+    await renderForm(service, { reviseFrom: studyDetail('awaiting_validation') });
+    await waitFor(() => expect(screen.getByText(/plan is ready to lock/i)).not.toBeNull());
+
+    fireEvent.input(screen.getByLabelText('Min completed trades'), { target: { value: '0' } });
+    fireEvent.input(screen.getByLabelText('Min final-test trades'), { target: { value: '1.5' } });
+    await waitFor(() => expect(lockButton().disabled).toBe(true));
+    fireEvent.click(screen.getByRole('button', { name: 'Use expected trade frequency (50 per year)' }));
+
+    await waitFor(() => expect(lockButton().disabled).toBe(false));
+    expect((screen.getByRole('spinbutton', { name: 'Expected trade frequency' }) as HTMLInputElement).value).toBe('50');
+    expect(screen.queryByLabelText('Min completed trades')).toBeNull();
+    expect(screen.queryByLabelText('Min final-test trades')).toBeNull();
+    expect(service.preflight.mock.lastCall?.[0]).toMatchObject({ expected_trades_per_year: 50, policy: { min_trades: null }, exam_min_trades: null });
   });
 
   it('loads the defaults for the strategy and instrument, then shows every knob, fixed control and constraint', async () => {
@@ -261,12 +304,17 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(cell('Slow EMA length', 'Values')).toBe('23');
   });
 
-  it('every field the server can refuse links to an input the form renders', async () => {
+  // A plan shows either its expected trade frequency or its two fixed floors, so the hidden fields are never refused.
+  it.each([
+    { plan: 'a fixed-floor plan', policy: undefined, hidden: ['expected_trades_per_year'] },
+    { plan: 'a frequency plan', policy: frequencyProtocol(), hidden: ['policy.min_trades', 'exam_min_trades'] },
+  ])('every field the server can refuse links to an input the form renders, for $plan', async ({ policy, hidden }) => {
     const service = fakeService();
+    if (policy) service.defaults.mockResolvedValue(defaults({ policy: policy.policy, exam_min_trades: policy.exam_min_trades, expected_trades_per_year: policy.expected_trades_per_year }));
     const { view } = await renderForm(service);
     await pickSpy(service, view);
     const knobs = defaults().knobs;
-    const fields = [...Object.keys(REFUSAL_INPUTS), ...knobs.flatMap((knob) => [`knobs.${knob.name}`, `seed.${knob.name}`, ...(knob.mode === 'search' ? [`knobs.${knob.name}.step`] : [])])];
+    const fields = [...Object.keys(REFUSAL_INPUTS).filter((field) => !hidden.includes(field)), ...knobs.flatMap((knob) => [`knobs.${knob.name}`, `seed.${knob.name}`, ...(knob.mode === 'search' ? [`knobs.${knob.name}.step`] : [])])];
 
     const missing = fields.filter((field) => {
       const target = refusalTarget(field, knobs);

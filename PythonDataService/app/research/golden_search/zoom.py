@@ -313,10 +313,11 @@ class _ZoomRun:
         seed: Mapping[str, Any],
         evaluate: EvaluateBatch,
         build: Canonicalize,
+        policy: SelectionPolicy,
     ) -> None:
         self.declaration = declaration
         self.protocol = protocol
-        self.policy = protocol.policy
+        self.policy = policy
         self.settings = protocol.zoom
         self.build = build
         self.evaluator = PointEvaluator(strategy_key=declaration.strategy_key, evaluate=evaluate)
@@ -448,8 +449,12 @@ def run_zoom(
     seed: Mapping[str, Any],
     evaluate: EvaluateBatch,
     canonicalize: Canonicalize | None = None,
+    policy: SelectionPolicy | None = None,
 ) -> ProcedureResult:
     """Run the Zoom procedure from ``seed``; ``canonicalize`` defaults to the registered model's canonical point.
+
+    ``policy`` is the evaluated window's selection policy, its trade floor
+    resolved (``activity.TradeFloors``); it defaults to the protocol's own.
 
     Every knob starts at the seed's value (an omitted one at its declared
     default); fixed knobs keep it, which is why a locked plan's seed must
@@ -457,4 +462,4 @@ def run_zoom(
     a declared constraint.
     """
     build = canonicalize or canonicalizer(declaration.strategy_key, protocol.symbol)
-    return _ZoomRun(declaration, protocol, seed, evaluate, build).run()
+    return _ZoomRun(declaration, protocol, seed, evaluate, build, policy or protocol.policy).run()

@@ -111,6 +111,34 @@ The active default decides only what Deploy *offers*: "Use qualified configurati
 
 Admission and the Deploy view run in clerk lanes over the read-only `fleet_lake_catalog` role. That role gains SELECT on three tables: `research_golden_qualifications`, `research_golden_qualification_events` and `research_golden_defaults`. The data plane applies the research schema at startup, so a clerk never meets an unapplied version. The coordinator re-runs `deploy/fleet/sql/provision-fleet-lake-catalog-role.sql` after this migration (that script's own instruction).
 
+### 9. Expected trade frequency scales with the selected duration
+
+Owner decision, 2026-10-01, specified in [#2811](https://github.com/tim1016/learn-ai/issues/2811):
+new Golden Search plans default to **50 completed trades per trading year**,
+labelled **Expected trade frequency**, editable by the user before locking the
+plan. This supersedes the proposed half-trade per trading-day default. It is a
+minimum activity requirement; it does not claim statistical confidence or
+prescribe when individual trades occur. A plan carries either this rate or the
+two fixed floors (selection and final test), never both.
+
+For each evaluation window, Python computes
+`ceil(expected_trades_per_year * sum(selected_sessions_y / scheduled_sessions_y))`.
+The canonical exchange calendar supplies both counts, with weekends and
+holidays excluded and early closes counted once. Sum across calendar years
+before rounding up. A training window, the full development period, the recent
+fit and the final interval each use their own duration. The walk-forward
+verdict uses all scheduled forward-test windows, including failed folds, for
+its aggregate activity floor, so a failure never lowers the requirement;
+failures still leave holes in the evidence, and any failed fold already makes
+the verdict "could not be judged".
+
+Preflight shows the window minima. Lock freezes the annual frequency, the
+per-year session counts and each window's minimum in the receipt. Evaluation
+and read models consume that receipt. Historical protocols without this field
+retain their separate fixed selection and final-test floors and unchanged
+protocol hashes. Revising starts a new study; it never changes recorded rules
+or reclassifies historical evidence.
+
 ## Consequences
 
 - An owner-approved tuple for one stock is deployable in Paper or Live without a code edit, a qualification script or a restart. Other stocks keep the registry point.

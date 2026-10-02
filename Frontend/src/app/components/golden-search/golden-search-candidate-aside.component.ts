@@ -1,12 +1,12 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-import { percentInputValue } from './golden-search-display';
-import type { EvidenceCandidate, SelectionPolicy, StudyScope } from './golden-search.types';
+import { percentInputValue, studyTradeFloor, usesTradeFrequency } from './golden-search-display';
+import type { EvidenceCandidate, StudyDetail } from './golden-search.types';
 
 /**
  * What choosing this candidate implies (#2696): the server's guidance for the
  * candidate's situation beside the frozen rules it will be judged by — the
- * loss ceiling, the sample floor, whether the final test is still locked —
+ * loss ceiling, the development period's trade floor, whether the final test is still locked —
  * and the honest note that no luck adjustment can be estimated.
  */
 @Component({
@@ -17,8 +17,9 @@ import type { EvidenceCandidate, SelectionPolicy, StudyScope } from './golden-se
 })
 export class GoldenSearchCandidateAsideComponent {
   readonly candidate = input.required<EvidenceCandidate>();
-  readonly policy = input.required<SelectionPolicy>();
-  readonly finalState = input.required<StudyScope['final_state']>();
+  readonly study = input.required<StudyDetail>();
 
-  protected readonly ceiling = computed(() => `${percentInputValue(this.policy().max_drawdown_ceiling)}%`);
+  protected readonly ceiling = computed(() => `${percentInputValue(this.study().protocol.policy.max_drawdown_ceiling)}%`);
+  protected readonly frequencyBased = computed(() => usesTradeFrequency(this.study().protocol));
+  protected readonly floor = computed(() => studyTradeFloor(this.study(), 'development'));
 }

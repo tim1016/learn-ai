@@ -13276,6 +13276,39 @@ export interface components {
             /** Reviewed By */
             reviewed_by: string;
         };
+        /** GoldenSearchActivity */
+        GoldenSearchActivity: {
+            /** Expected Trades Per Year */
+            expected_trades_per_year: number;
+            /** Windows */
+            windows: components["schemas"]["GoldenSearchActivityWindow"][];
+        };
+        /** GoldenSearchActivityWindow */
+        GoldenSearchActivityWindow: {
+            /** End Ms */
+            end_ms: number;
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Minimum Trades */
+            minimum_trades: number;
+            /** Start Ms */
+            start_ms: number;
+            /** Trading Sessions */
+            trading_sessions: number;
+            /** Years */
+            years: components["schemas"]["GoldenSearchActivityYear"][];
+        };
+        /** GoldenSearchActivityYear */
+        GoldenSearchActivityYear: {
+            /** Selected Sessions */
+            selected_sessions: number;
+            /** Year */
+            year: number;
+            /** Year Sessions */
+            year_sessions: number;
+        };
         /** GoldenSearchCandidateDetail */
         GoldenSearchCandidateDetail: {
             /**
@@ -13301,6 +13334,11 @@ export interface components {
             available: boolean;
             /** Constraints */
             constraints: components["schemas"]["GoldenSearchConstraint"][];
+            /**
+             * Default Expected Trades Per Year
+             * @description The expected trade frequency a new plan starts with, in completed trades per trading year.
+             */
+            default_expected_trades_per_year: number;
             /** Default Pair Audits */
             default_pair_audits: [
                 string,
@@ -13446,8 +13484,10 @@ export interface components {
             /** Development Start Ms */
             development_start_ms: number;
             /** Exam Min Trades */
-            exam_min_trades: number;
+            exam_min_trades: number | null;
             execution: components["schemas"]["GoldenSearchExecution"];
+            /** Expected Trades Per Year */
+            expected_trades_per_year?: number | null;
             exposure: components["schemas"]["GoldenSearchExposure"];
             /** Final End Ms */
             final_end_ms: number;
@@ -14056,6 +14096,7 @@ export interface components {
          * @description A plan's review: refusals are data in a 200, never a 400.
          */
         GoldenSearchPreflight: {
+            activity?: components["schemas"]["GoldenSearchActivity"] | null;
             estimate: components["schemas"]["GoldenSearchEstimate"] | null;
             exposure: components["schemas"]["GoldenSearchExposure"] | null;
             /** Folds */
@@ -14125,8 +14166,10 @@ export interface components {
             /** Development Start Ms */
             development_start_ms: number;
             /** Exam Min Trades */
-            exam_min_trades: number;
+            exam_min_trades: number | null;
             execution: components["schemas"]["GoldenSearchExecution"];
+            /** Expected Trades Per Year */
+            expected_trades_per_year?: number | null;
             /** Final End Ms */
             final_end_ms: number;
             /** Final Start Ms */
@@ -14188,10 +14231,16 @@ export interface components {
             developmentStartMs: number;
             /**
              * Exammintrades
+             * @description A fixed final-test floor; null on a plan with an expected trade frequency.
              * @default 30
              */
-            examMinTrades?: number;
+            examMinTrades?: number | null;
             execution?: components["schemas"]["GoldenSearchExecutionRequest"];
+            /**
+             * Expectedtradesperyear
+             * @description Completed trades per trading year; each window's minimum scales with its trading sessions. Null keeps the fixed floors.
+             */
+            expectedTradesPerYear?: number | null;
             /** Finalendms */
             finalEndMs: number;
             /** Finalstartms */
@@ -14405,7 +14454,7 @@ export interface components {
             /** Max Drawdown Ceiling */
             max_drawdown_ceiling: number;
             /** Min Trades */
-            min_trades: number;
+            min_trades: number | null;
             /**
              * Objective
              * @enum {string}
@@ -14424,9 +14473,10 @@ export interface components {
             maxDrawdownCeiling?: number;
             /**
              * Mintrades
+             * @description A fixed floor; null on a plan with an expected trade frequency.
              * @default 30
              */
-            minTrades?: number;
+            minTrades?: number | null;
             /**
              * Objective
              * @default sharpe_ratio
@@ -14494,6 +14544,7 @@ export interface components {
             action_refusals: {
                 [key: string]: string;
             };
+            activity?: components["schemas"]["GoldenSearchActivity"] | null;
             /** Budget Cap */
             budget_cap: number;
             /** Cache Hits */

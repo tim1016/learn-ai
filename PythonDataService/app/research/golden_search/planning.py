@@ -50,6 +50,7 @@ from app.engine.data.availability import MissingSessionsError, check_availabilit
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc, session_start_for_bar_count
+from app.research.golden_search.activity import DEFAULT_EXPECTED_TRADES_PER_YEAR, activity_plan
 from app.research.golden_search.budget import ProtocolReview, estimate, review_protocol
 from app.research.golden_search.declarations import (
     SearchDeclaration,
@@ -71,6 +72,7 @@ from app.research.golden_search.protocol import (
     IncumbentRef,
     KnobPlan,
     ProtocolRefusal,
+    SelectionPolicy,
     canonical_json,
     knob_value_counts,
     recent_window_ms,
@@ -299,6 +301,8 @@ class PlanReview:
     review: ProtocolReview | None
     refusals: tuple[ProtocolRefusal, ...]
     run_up: StudyRunUp | None
+    # Each window's trade floor (``activity.activity_plan``); the lock freezes this same value.
+    activity: dict[str, Any] | None = None
 
     @property
     def lockable(self) -> bool:
@@ -320,17 +324,29 @@ def review_plan(protocol: GoldenSearchProtocol, *, roots: Sequence[Path] | None 
     refusals = (*review.refusals, *_qualified_seed_refusals(protocol))
     if refusals:
         return PlanReview(protocol=protocol, review=review, refusals=refusals, run_up=None)
+    activity = activity_plan(protocol)
+    if activity is not None:
+        empty = tuple(
+            ProtocolRefusal(
+                code="NO_TRADING_DAYS",
+                field="final_end_ms" if window["key"] == "final" else "development_end_ms",
+                message=f"{window['label']} contains no exchange trading days; select a tradable window.",
+            )
+            for window in activity["windows"] if window["trading_sessions"] == 0
+        )
+        if empty:
+            return PlanReview(protocol=protocol, review=review, refusals=empty, run_up=None)
     resolved = list(roots) if roots is not None else sweep_roots()
     try:
         run_up = plan_study_run_up(protocol, declaration, roots=resolved)
     except GoldenSearchRefusal as exc:
-        return PlanReview(protocol=protocol, review=review, refusals=(_as_refusal(exc),), run_up=None)
+        return PlanReview(protocol=protocol, review=review, refusals=(_as_refusal(exc),), run_up=None, activity=activity)
     if check_data:
         availability = check_availability(resolved, protocol.symbol, run_up.data_start, et_date_at_ms(protocol.final_end_ms - 1))
         if not availability.is_complete:
             refusal = _refusal(data_missing_refusal(MissingSessionsError(availability)))
-            return PlanReview(protocol=protocol, review=review, refusals=(_as_refusal(refusal),), run_up=run_up)
-    return PlanReview(protocol=protocol, review=review, refusals=(), run_up=run_up)
+            return PlanReview(protocol=protocol, review=review, refusals=(_as_refusal(refusal),), run_up=run_up, activity=activity)
+    return PlanReview(protocol=protocol, review=review, refusals=(), run_up=run_up, activity=activity)
 
 
 def preflight_view(plan: PlanReview, exposure: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -352,6 +368,7 @@ def preflight_view(plan: PlanReview, exposure: Mapping[str, Any] | None) -> dict
             "run_up_sessions": plan.run_up.run_up_sessions,
             "data_start_ms": et_midnight_ms(plan.run_up.data_start),
         },
+        "activity": plan.activity,
     }
 
 
@@ -368,6 +385,8 @@ def build_receipt(plan: PlanReview, *, snapshot_dict: Mapping[str, Any], snapsho
     """The immutable record every evaluation, resume and proof is checked against."""
     protocol = plan.protocol
     assert plan.review is not None and plan.review.estimate is not None and plan.run_up is not None
+    # A frequency plan's floors are frozen here or never; a stage refuses a receipt without them.
+    assert (plan.activity is None) == (protocol.expected_trades_per_year is None)
     registration = _STRATEGY_REGISTRY[protocol.strategy_key]
     contract = registration.signal_program_contract
     program_version = contract.program_version if contract is not None else None
@@ -413,6 +432,7 @@ def build_receipt(plan: PlanReview, *, snapshot_dict: Mapping[str, Any], snapsho
         "context_digest": context_digest(context),
         "estimate": plan.review.estimate.as_dict(),
         "folds": [fold.as_dict() for fold in plan.review.folds],
+        "activity": plan.activity,
     }
 
 
@@ -616,6 +636,9 @@ def default_protocol(
             training_months=training_months,
             test_months=test_months,
             pair_audits=tuple(pair for pair in declaration.default_pair_audits if set(pair) <= searched),
+            policy=SelectionPolicy(min_trades=None),
+            exam_min_trades=None,
+            expected_trades_per_year=DEFAULT_EXPECTED_TRADES_PER_YEAR,
         )
 
     protocol = plan_with(folds)

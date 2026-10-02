@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { GoldenSearchStudyComponent } from './golden-search-study.component';
 import { GoldenSearchRefusedError, GoldenSearchService, StageDispatchError, StudyConflictError, type CommandOutcome } from './golden-search.service';
 import type { StudyCommandRequest, StudyDetail } from './golden-search.types';
-import { emaCapability, QUALIFICATION_FAILURE, studyDetail } from './testing/fixtures';
+import { emaCapability, frequencyProtocol, QUALIFICATION_FAILURE, studyDetail, tradeActivity } from './testing/fixtures';
 
 interface FakeService {
   get: ReturnType<typeof vi.fn<(id: string) => Promise<StudyDetail>>>;
@@ -329,6 +329,21 @@ describe('GoldenSearchStudyComponent', () => {
     expect(revise.getAttribute('href')).toBe('/golden-search?revise=study-0001-aaaa');
   });
 
+  it('Plan step: a frequency plan shows the floors its receipt froze for each window, and no fixed floors', async () => {
+    const service = fakeService(studyDetail('awaiting_validation', { protocol: frequencyProtocol(), activity: tradeActivity() }));
+    await renderStudy(service);
+
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Research steps' })).getByRole('button', { name: /plan/i }));
+
+    const activity = await screen.findByLabelText('Duration-based minimum trades');
+    expect(activity.textContent).toContain('Expected trade frequency: 50 completed trades per trading year');
+    expect(activity.textContent).toMatch(/Final test\s*At least 13 trades\s*61 trading days/);
+    expect(activity.textContent).toMatch(/All forward tests\s*At least 76 trades/);
+    expect(within(activity).getByText('Minimum trades for each training window')).not.toBeNull();
+    expect(screen.queryByText('Minimum completed trades')).toBeNull();
+    expect(screen.queryByText('Minimum final-test trades')).toBeNull();
+  });
+
   it('Hide asks once, then hides the study and reports it', async () => {
     const service = fakeService(studyDetail('awaiting_validation'));
     const view = await renderStudy(service);
@@ -420,7 +435,7 @@ describe('GoldenSearchStudyComponent', () => {
   });
 
   it('passes axe on the Plan, Search and Test over time steps', async () => {
-    const view = await renderStudy(fakeService(studyDetail('awaiting_candidate')));
+    const view = await renderStudy(fakeService(studyDetail('awaiting_candidate', { protocol: frequencyProtocol(), activity: tradeActivity() })));
     const nav = within(screen.getByRole('navigation', { name: 'Research steps' }));
 
     for (const step of [/plan/i, /search/i, /test over time/i]) {

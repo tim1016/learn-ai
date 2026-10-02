@@ -18335,6 +18335,103 @@
         "title": "GoldenReviewResponse",
         "type": "object"
       },
+      "GoldenSearchActivity": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_trades_per_year": {
+            "title": "Expected Trades Per Year",
+            "type": "integer"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchActivityWindow"
+            },
+            "title": "Windows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_trades_per_year",
+          "windows"
+        ],
+        "title": "GoldenSearchActivity",
+        "type": "object"
+      },
+      "GoldenSearchActivityWindow": {
+        "additionalProperties": false,
+        "properties": {
+          "end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "minimum_trades": {
+            "title": "Minimum Trades",
+            "type": "integer"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "trading_sessions": {
+            "title": "Trading Sessions",
+            "type": "integer"
+          },
+          "years": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchActivityYear"
+            },
+            "title": "Years",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "start_ms",
+          "end_ms",
+          "trading_sessions",
+          "minimum_trades",
+          "years"
+        ],
+        "title": "GoldenSearchActivityWindow",
+        "type": "object"
+      },
+      "GoldenSearchActivityYear": {
+        "additionalProperties": false,
+        "properties": {
+          "selected_sessions": {
+            "title": "Selected Sessions",
+            "type": "integer"
+          },
+          "year": {
+            "title": "Year",
+            "type": "integer"
+          },
+          "year_sessions": {
+            "title": "Year Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "year",
+          "selected_sessions",
+          "year_sessions"
+        ],
+        "title": "GoldenSearchActivityYear",
+        "type": "object"
+      },
       "GoldenSearchCandidateDetail": {
         "additionalProperties": false,
         "properties": {
@@ -18414,6 +18511,11 @@
             "title": "Constraints",
             "type": "array"
           },
+          "default_expected_trades_per_year": {
+            "description": "The expected trade frequency a new plan starts with, in completed trades per trading year.",
+            "title": "Default Expected Trades Per Year",
+            "type": "integer"
+          },
           "default_pair_audits": {
             "items": {
               "maxItems": 2,
@@ -18473,7 +18575,8 @@
           "knobs",
           "fixed",
           "constraints",
-          "default_pair_audits"
+          "default_pair_audits",
+          "default_expected_trades_per_year"
         ],
         "title": "GoldenSearchCapability",
         "type": "object"
@@ -18787,11 +18890,29 @@
             "type": "integer"
           },
           "exam_min_trades": {
-            "title": "Exam Min Trades",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exam Min Trades"
           },
           "execution": {
             "$ref": "#/components/schemas/GoldenSearchExecution"
+          },
+          "expected_trades_per_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Trades Per Year"
           },
           "exposure": {
             "$ref": "#/components/schemas/GoldenSearchExposure"
@@ -20539,6 +20660,16 @@
         "additionalProperties": false,
         "description": "A plan's review: refusals are data in a 200, never a 400.",
         "properties": {
+          "activity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchActivity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "estimate": {
             "anyOf": [
               {
@@ -20770,11 +20901,29 @@
             "type": "integer"
           },
           "exam_min_trades": {
-            "title": "Exam Min Trades",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exam Min Trades"
           },
           "execution": {
             "$ref": "#/components/schemas/GoldenSearchExecution"
+          },
+          "expected_trades_per_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Trades Per Year"
           },
           "final_end_ms": {
             "maximum": 253402300799999.0,
@@ -20944,12 +21093,32 @@
             "type": "integer"
           },
           "examMinTrades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "default": 30,
-            "title": "Exammintrades",
-            "type": "integer"
+            "description": "A fixed final-test floor; null on a plan with an expected trade frequency.",
+            "title": "Exammintrades"
           },
           "execution": {
             "$ref": "#/components/schemas/GoldenSearchExecutionRequest"
+          },
+          "expectedTradesPerYear": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Completed trades per trading year; each window's minimum scales with its trading sessions. Null keeps the fixed floors.",
+            "title": "Expectedtradesperyear"
           },
           "finalEndMs": {
             "maximum": 253402300799999.0,
@@ -21621,8 +21790,15 @@
             "type": "number"
           },
           "min_trades": {
-            "title": "Min Trades",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Trades"
           },
           "objective": {
             "enum": [
@@ -21657,9 +21833,17 @@
             "type": "number"
           },
           "minTrades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "default": 30,
-            "title": "Mintrades",
-            "type": "integer"
+            "description": "A fixed floor; null on a plan with an expected trade frequency.",
+            "title": "Mintrades"
           },
           "objective": {
             "default": "sharpe_ratio",
@@ -21838,6 +22022,16 @@
             },
             "title": "Action Refusals",
             "type": "object"
+          },
+          "activity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchActivity"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "budget_cap": {
             "title": "Budget Cap",

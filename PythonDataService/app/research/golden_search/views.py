@@ -19,6 +19,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.research.golden_search.actions import permitted
+from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, scalar
 from app.research.golden_search.evidence import CANDIDATE_LABELS, drawdown_series, monthly_results
 from app.research.golden_search.guidance import (
@@ -93,6 +94,7 @@ def study_detail(
         **study_summary(row, presented=presented),
         "protocol": dict(row.protocol),
         "receipt": receipt_summary(row),
+        "activity": row.receipt.get("activity"),
         "permitted_actions": permitted(dict(refusals)),
         "action_refusals": {command: reason for command, reason in refusals.items() if reason is not None},
         "guidance": study_guidance(
@@ -163,7 +165,7 @@ def results_view(row: StudyRow, protocol: GoldenSearchProtocol, declaration: Sea
         "validation": None if "validation" not in results else validation_view(results["validation"]),
         "evidence": None
         if "evidence" not in results or declaration is None
-        else evidence_view(results["evidence"], protocol, declaration, pair_maps=pair_maps),
+        else evidence_view(results["evidence"], protocol, declaration, pair_maps=pair_maps, receipt=row.receipt),
         "exam": None if "exam" not in results else exam_view(results["exam"]),
         "qualification": qualification_view(row),
     }
@@ -302,8 +304,9 @@ def evidence_view(
     declaration: SearchDeclaration,
     *,
     pair_maps: Sequence[Mapping[str, Any]],
+    receipt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    policy = protocol.policy
+    policy = TradeFloors(protocol, receipt or {}).policy((protocol.development_start_ms, protocol.development_end_ms))
     candidates = stored["candidates"]
     incumbent_hash = next((item["point_hash"] for item in candidates if item["key"] == "incumbent"), None)
     findings: dict[str, list[str]] = {}

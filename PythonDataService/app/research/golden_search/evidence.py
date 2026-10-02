@@ -335,7 +335,7 @@ def _candidate_findings(candidate: CandidateEvidence, policy: SelectionPolicy) -
         findings.append(
             Finding(
                 "TOO_FEW_TRADES",
-                f"The {label.lower()} made {candidate.metrics.total_trades} trades, fewer than your minimum of {policy.min_trades}.",
+                f"The {label.lower()} made {candidate.metrics.total_trades} trades, fewer than the development period's minimum of {policy.min_trades}.",
                 candidate.key,
             )
         )

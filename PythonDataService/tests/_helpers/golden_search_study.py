@@ -102,6 +102,13 @@ def plan_request(symbol: str, **overrides: Any) -> dict[str, Any]:
     return request
 
 
+def frequency_plan_request(symbol: str, rate: int = 50, **overrides: Any) -> dict[str, Any]:
+    """:func:`plan_request` under an expected trade frequency: the rate set, both fixed floors absent (ADR 0074)."""
+    request = plan_request(symbol, expected_trades_per_year=rate, exam_min_trades=None, **overrides)
+    request["policy"] = {**request["policy"], "min_trades": None}
+    return request
+
+
 Score = Callable[[Mapping[str, Any], tuple[int, int], str], float]
 
 
@@ -256,8 +263,10 @@ class Driver:
         self._keys += 1
         return f"k-{uuid.uuid4().hex[:8]}-{self._keys}"
 
-    async def lock(self, symbol: str, **overrides: Any) -> StudyRow:
-        return await service.lock_study(plan_request(symbol, **overrides), idempotency_key=self.key(), roots=self.roots, identity=clean_identity())
+    async def lock(self, symbol: str, *, rate: int | None = None, **overrides: Any) -> StudyRow:
+        """Lock :func:`plan_request`, or :func:`frequency_plan_request` at ``rate`` when one is given."""
+        request = plan_request(symbol, **overrides) if rate is None else frequency_plan_request(symbol, rate, **overrides)
+        return await service.lock_study(request, idempotency_key=self.key(), roots=self.roots, identity=clean_identity())
 
     async def command(self, row: StudyRow, command: str, payload: Mapping[str, Any] | None = None, **kwargs: Any) -> service.CommandOutcome:
         return await service.run_command(

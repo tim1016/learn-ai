@@ -42,6 +42,7 @@ from app.research.sweep.ranking import RANKING_MEASURES, RankingMeasure
 from app.research.walk_forward_study.folds import FoldPlan, FoldPlanError, add_months, plan_folds
 from app.schemas.grid_search import SYMBOL_PATTERN, FillModeName
 from app.utils.session_anchors import (
+    LAST_SCHEDULABLE_DATE,
     MAX_TIMESTAMP_MS,
     et_date_at_ms,
     et_midnight_ms,
@@ -78,7 +79,8 @@ class KnobPlan:
 @dataclass(frozen=True)
 class SelectionPolicy:
     objective: RankingMeasure = "sharpe_ratio"
-    min_trades: int = 30
+    # ``None`` on a plan with an expected trade frequency: each window's floor comes from its receipt (ADR 0074).
+    min_trades: int | None = 30
     # A fraction of peak equity, the engine's ``max_drawdown_pct`` unit.
     max_drawdown_ceiling: float = 0.20
     require_positive_net: bool = True
@@ -146,15 +148,17 @@ class GoldenSearchProtocol:
     neighbor_audit: bool = True
     stress: tuple[StressScenario, ...] = DEFAULT_STRESS
     execution: ExecutionAssumptions = field(default_factory=ExecutionAssumptions)
-    exam_min_trades: int = 30
+    exam_min_trades: int | None = 30
     budget_cap: int = MAX_BUDGET_CAP
+    # ADR 0074: a plan has either this or the two fixed floors above, never both. Absent on legacy plans.
+    expected_trades_per_year: int | None = None
 
     @property
     def search_knobs(self) -> tuple[KnobPlan, ...]:
         return tuple(plan for plan in self.knobs if plan.mode == "search")
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        body = {
             "strategy_key": self.strategy_key,
             "symbol": self.symbol,
             "method": self.method,
@@ -210,11 +214,14 @@ class GoldenSearchProtocol:
             "exam_min_trades": self.exam_min_trades,
             "budget_cap": self.budget_cap,
         }
+        if self.expected_trades_per_year is not None:
+            body["expected_trades_per_year"] = self.expected_trades_per_year
+        return body
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> GoldenSearchProtocol:
         """The inverse of :meth:`as_dict`; refuses a missing or unknown key at every level."""
-        body = _strict(data, GoldenSearchProtocol, "protocol")
+        body = _strict({"expected_trades_per_year": None, **data}, GoldenSearchProtocol, "protocol")
         incumbent = _strict(body["incumbent"], IncumbentRef, "incumbent")
         policy = _strict(body["policy"], SelectionPolicy, "policy")
         zoom = _strict(body["zoom"], ZoomSettings, "zoom")
@@ -232,7 +239,7 @@ class GoldenSearchProtocol:
             ),
             policy=SelectionPolicy(
                 objective=policy["objective"],
-                min_trades=int(policy["min_trades"]),
+                min_trades=_optional_int(policy["min_trades"]),
                 max_drawdown_ceiling=float(policy["max_drawdown_ceiling"]),
                 require_positive_net=bool(policy["require_positive_net"]),
             ),
@@ -253,8 +260,9 @@ class GoldenSearchProtocol:
                 slippage_per_share=float(execution["slippage_per_share"]),
                 initial_cash=float(execution["initial_cash"]),
             ),
-            exam_min_trades=int(body["exam_min_trades"]),
+            exam_min_trades=_optional_int(body["exam_min_trades"]),
             budget_cap=int(body["budget_cap"]),
+            expected_trades_per_year=body["expected_trades_per_year"],
         )
 
     def protocol_hash(self) -> str:
@@ -264,6 +272,10 @@ class GoldenSearchProtocol:
 def canonical_json(value: Any) -> str:
     """Sorted keys, compact separators, NaN refused — the bytes every Golden Search hash is taken over."""
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _optional_int(value: Any) -> int | None:
+    return None if value is None else int(value)
 
 
 def _strict(data: object, shape: type, what: str) -> Mapping[str, Any]:
@@ -598,15 +610,39 @@ def _validate_intervals(p: GoldenSearchProtocol, refusals: _Refusals) -> None:
             refusals.add("FOLDS_INVALID", "training_months", "The training and test lengths reach past the calendar; shorten them.")
 
 
+def _validate_trade_floors(p: GoldenSearchProtocol, refusals: _Refusals) -> None:
+    rate = p.expected_trades_per_year
+    if rate is not None:
+        if isinstance(rate, bool) or not isinstance(rate, int) or rate < 1:
+            refusals.add("POLICY_INVALID", "expected_trades_per_year", "Expected trade frequency must be a positive whole number of trades per year.")
+        if p.policy.min_trades is not None or p.exam_min_trades is not None:
+            refusals.add(
+                "POLICY_INVALID",
+                "expected_trades_per_year",
+                "A plan with an expected trade frequency takes each window's minimum from the calendar; it has no fixed trade floors.",
+            )
+        # Each year's floor divides by that whole year's sessions, which the calendar cannot count for its last, partial year.
+        if et_date_at_ms(p.final_end_ms - 1).year >= LAST_SCHEDULABLE_DATE.year:
+            refusals.add(
+                "INTERVALS_INVALID",
+                "final_end_ms",
+                f"An expected trade frequency needs every year's full calendar; end the plan before {LAST_SCHEDULABLE_DATE.year}.",
+            )
+        return
+    if p.policy.min_trades is None or p.policy.min_trades < 1:
+        refusals.add("POLICY_INVALID", "policy.min_trades", "The minimum trade count must be at least 1.")
+    if p.exam_min_trades is None or p.exam_min_trades < 1:
+        refusals.add("POLICY_INVALID", "exam_min_trades", "The final test's minimum trade count must be at least 1.")
+
+
 def _validate_policy(p: GoldenSearchProtocol, refusals: _Refusals) -> None:
+    _validate_trade_floors(p, refusals)
     if p.policy.objective not in RANKING_MEASURES:
         refusals.add(
             "OBJECTIVE_UNKNOWN",
             "policy.objective",
             f"Rank by one of {', '.join(RANKING_MEASURES)}, not {p.policy.objective!r}.",
         )
-    if p.policy.min_trades < 1:
-        refusals.add("POLICY_INVALID", "policy.min_trades", "The minimum trade count must be at least 1.")
     ceiling = p.policy.max_drawdown_ceiling
     if not (_finite(ceiling) and 0 < ceiling <= 1):
         refusals.add(
@@ -614,8 +650,6 @@ def _validate_policy(p: GoldenSearchProtocol, refusals: _Refusals) -> None:
             "policy.max_drawdown_ceiling",
             "The drawdown ceiling must be above 0% and at most 100% of peak equity.",
         )
-    if p.exam_min_trades < 1:
-        refusals.add("POLICY_INVALID", "exam_min_trades", "The final test's minimum trade count must be at least 1.")
     if not 1 <= p.budget_cap <= MAX_BUDGET_CAP:
         refusals.add("BUDGET_CAP_INVALID", "budget_cap", f"The evaluation budget must be between 1 and {MAX_BUDGET_CAP}.")
 

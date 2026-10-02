@@ -36,6 +36,7 @@ from app.research.golden_search.actions import (
     presented_status,
     unclaimed,
 )
+from app.research.golden_search.activity import DEFAULT_EXPECTED_TRADES_PER_YEAR
 from app.research.golden_search.declarations import declaration_for, point_hash, unavailable_reason
 from app.research.golden_search.exposure_rules import EXPOSURE_EXPLANATIONS, claim_for, exposure_state
 from app.research.golden_search.guidance import params_sentence, research_weakness
@@ -144,6 +145,7 @@ def capabilities() -> list[dict[str, Any]]:
                 if declaration is None
                 else [{"left": c.left, "op": c.op, "right": c.right, "message": c.message} for c in declaration.constraints],
                 "default_pair_audits": [] if declaration is None else [list(pair) for pair in declaration.default_pair_audits],
+                "default_expected_trades_per_year": DEFAULT_EXPECTED_TRADES_PER_YEAR,
             }
         )
     return rows

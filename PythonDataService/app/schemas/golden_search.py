@@ -74,7 +74,7 @@ class GoldenSearchKnobPlanRequest(_CamelTolerantModel):
 
 class GoldenSearchSelectionPolicyRequest(_CamelTolerantModel):
     objective: RankingMeasure = _POLICY.objective
-    min_trades: int = _POLICY.min_trades
+    min_trades: int | None = Field(_POLICY.min_trades, description="A fixed floor; null on a plan with an expected trade frequency.")
     max_drawdown_ceiling: float = Field(_POLICY.max_drawdown_ceiling, description="A fraction of peak equity, in (0, 1].")
     require_positive_net: bool = _POLICY.require_positive_net
 
@@ -133,8 +133,11 @@ class GoldenSearchProtocolRequest(_CamelTolerantModel):
     neighbor_audit: bool = True
     stress: list[GoldenSearchStressScenarioRequest] = Field(default_factory=_default_stress, max_length=16)
     execution: GoldenSearchExecutionRequest = Field(default_factory=GoldenSearchExecutionRequest)
-    exam_min_trades: int = 30
+    exam_min_trades: int | None = Field(30, description="A fixed final-test floor; null on a plan with an expected trade frequency.")
     budget_cap: int = MAX_BUDGET_CAP
+    expected_trades_per_year: int | None = Field(
+        None, description="Completed trades per trading year; each window's minimum scales with its trading sessions. Null keeps the fixed floors."
+    )
 
     @field_validator("symbol", mode="before")
     @classmethod
@@ -246,6 +249,7 @@ class GoldenSearchCapability(_Wire):
     fixed: list[GoldenSearchFixedControl]
     constraints: list[GoldenSearchConstraint]
     default_pair_audits: list[tuple[str, str]]
+    default_expected_trades_per_year: int = Field(description="The expected trade frequency a new plan starts with, in completed trades per trading year.")
 
 
 # The frozen plan as stored and echoed (snake_case only).
@@ -262,7 +266,7 @@ class GoldenSearchKnobPlan(_Wire):
 
 class GoldenSearchSelectionPolicy(_Wire):
     objective: RankingMeasure
-    min_trades: int
+    min_trades: int | None
     max_drawdown_ceiling: float
     require_positive_net: bool
 
@@ -314,8 +318,9 @@ class GoldenSearchProtocol(_Wire):
     neighbor_audit: bool
     stress: list[GoldenSearchStressScenario]
     execution: GoldenSearchExecution
-    exam_min_trades: int
+    exam_min_trades: int | None
     budget_cap: int
+    expected_trades_per_year: int | None = None
 
 
 class GoldenSearchExposure(_Wire):
@@ -377,6 +382,27 @@ class GoldenSearchKnobValues(_Wire):
     values: int | None = Field(description="Settings the knob can take: 1 when held, its range's size at its step when searched, null when that range is not valid.")
 
 
+class GoldenSearchActivityYear(_Wire):
+    year: int
+    selected_sessions: int
+    year_sessions: int
+
+
+class GoldenSearchActivityWindow(_Wire):
+    key: str
+    label: str
+    start_ms: InstantMs
+    end_ms: InstantMs
+    trading_sessions: int
+    minimum_trades: int
+    years: list[GoldenSearchActivityYear]
+
+
+class GoldenSearchActivity(_Wire):
+    expected_trades_per_year: int
+    windows: list[GoldenSearchActivityWindow]
+
+
 class GoldenSearchPreflight(_Wire):
     """A plan's review: refusals are data in a 200, never a 400."""
 
@@ -386,6 +412,7 @@ class GoldenSearchPreflight(_Wire):
     folds: list[GoldenSearchFold]
     exposure: GoldenSearchExposure | None
     run_up: GoldenSearchRunUp | None
+    activity: GoldenSearchActivity | None = None
 
 
 # Study summary and detail.
@@ -719,6 +746,7 @@ class GoldenSearchResults(_Wire):
 class GoldenSearchStudyDetail(GoldenSearchStudySummary):
     protocol: GoldenSearchProtocol
     receipt: GoldenSearchReceiptSummary
+    activity: GoldenSearchActivity | None = None
     permitted_actions: list[CommandName]
     action_refusals: dict[CommandName, str]
     guidance: GoldenSearchGuidance

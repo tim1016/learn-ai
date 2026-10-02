@@ -19,11 +19,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
 from app.jobs.progress import JobCancelled
 from app.research.golden_search import repository as repo
+from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.budget import EXAM_EVALUATIONS, PROOF_EVALUATIONS
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, point_hash
 from app.research.golden_search.evaluator import (
@@ -127,6 +129,11 @@ class StageContext:
     def final(self) -> Window:
         return (self.protocol.final_start_ms, self.protocol.final_end_ms)
 
+    @cached_property
+    def floors(self) -> TradeFloors:
+        # Resolved on first use, inside the stage run, so a refused receipt fails the stage with its reason.
+        return TradeFloors(self.protocol, self.row.receipt)
+
     def evaluator(self, *, allowed: Window, limit: int, total: int) -> StudyEvaluator:
         return StudyEvaluator(
             study_id=self.row.id,
@@ -217,7 +224,7 @@ def run_procedure(
     """The plan's method over one window from the protocol seed; records its path as trials."""
     counting = _Counting(lambda points: evaluator.evaluate(points, window=window, stage=step, fold_index=fold_index))
     run = run_zoom if ctx.protocol.method == "zoom" else run_grid
-    result = run(declaration=ctx.declaration, protocol=ctx.protocol, seed=ctx.protocol.seed, evaluate=counting)
+    result = run(declaration=ctx.declaration, protocol=ctx.protocol, seed=ctx.protocol.seed, evaluate=counting, policy=ctx.floors.policy(window))
     scored = run_sync(
         with_connection(
             repo.count_procedure_evaluations,
@@ -337,7 +344,7 @@ def _run_fold(ctx: StageContext, evaluator: StudyEvaluator, fold: FoldWindow) ->
     test: Window = (fold.test_start_ms, fold.test_end_ms)
     result, counts = run_procedure(ctx, evaluator, window=train, step="validation", fold_index=fold.fold_index)
     record = {**_fold_record(fold), "counts": counts, "stop_reason": result.stop_reason}
-    eligible = result.winner_metrics is not None and ineligibility(result.winner_metrics, ctx.protocol.policy) is None
+    eligible = result.winner_metrics is not None and ineligibility(result.winner_metrics, ctx.floors.policy(train)) is None
     train_metrics: Metrics | None = None
     test_metrics: Metrics | None = None
     if result.stop_reason == "budget":
@@ -391,7 +398,8 @@ def _validation(ctx: StageContext, evaluator: StudyEvaluator) -> Verdict:
         records[index], train, test = _run_fold(ctx, evaluator, fold)
         evidence.append(fold_evidence(fold.fold_index, train, test))
         ctx.write({"validation": {"folds": records, "verdict": None, "linked": [], "incumbent_linked": [], "incomplete": False}})
-    verdict = compute_verdict(evidence, min_trades=ctx.protocol.policy.min_trades)
+    forward_window = (folds[0].test_start_ms, folds[-1].test_end_ms)
+    verdict = compute_verdict(evidence, min_trades=ctx.floors.at(forward_window))
     ctx.write(
         {
             "validation": {
@@ -480,7 +488,7 @@ def _evidence(ctx: StageContext, evaluator: StudyEvaluator, verdict: Verdict) ->
                 "edge_hits": list(edges),
             }
         )
-    advice = recommendation(evidences, verdict, ctx.protocol.policy)
+    advice = recommendation(evidences, verdict, ctx.floors.policy(ctx.development))
     window = ctx.development
     ctx.write(
         {
@@ -530,8 +538,9 @@ def run_exam(ctx: StageContext) -> tuple[str, dict[str, Any]]:
         candidate,
         incumbent,
         policy=ctx.protocol.policy,
-        exam_min_trades=ctx.protocol.exam_min_trades,
+        exam_min_trades=ctx.floors.at(ctx.final, final=True),
         development_objective=None if development is None else objective_value(development, ctx.protocol.policy),
+        frequency_policy=ctx.floors.frequency_based,
     )
     exam.update(
         outcome=judgement.outcome,

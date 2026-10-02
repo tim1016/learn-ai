@@ -64,7 +64,7 @@
         (edit)="onEdit($event)"
       />
     </section>
-    <app-golden-search-protocol-controls [protocol]="d.protocol" [problems]="d.problems" (edit)="onEdit($event)" />
+    <app-golden-search-protocol-controls [protocol]="d.protocol" [preflight]="preflight()" [defaultRate]="capability()?.default_expected_trades_per_year ?? null" [problems]="d.problems" (edit)="onEdit($event)" />
     <app-golden-search-time-windows [protocol]="d.protocol" [finalMonths]="d.finalMonths" [finalSessionsCut]="d.finalSessionsCut" [preflight]="preflight()" [problems]="d.problems" (edit)="onEdit($event)" />
     <app-golden-search-refinement-controls [protocol]="d.protocol" [capability]="capability()" [problems]="d.problems" (edit)="onEdit($event)" />
     <app-golden-search-cost-controls [protocol]="d.protocol" [problems]="d.problems" (edit)="onEdit($event)" />

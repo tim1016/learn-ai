@@ -13,7 +13,9 @@ canonical sweep ranking key — objective descending, ``total_return_pct``
 descending, point hash ascending — so the winner is unique and independent
 of input order. One declared measure, never a blend of places: adding a
 dominated alternative can reverse a rank-blend choice, never this one
-(pinned by test).
+(pinned by test). ``min_trades`` is the evaluated window's floor: the plan's
+fixed floor, or the one its expected trade frequency froze for that window
+(``activity.py``, ADR 0074).
 Reference: ``app/research/sweep/ranking.py`` (PRD #1926 "Ranking contract"),
   extended with the frozen policy constraints of PRD #2696 "Weighted places".
 Canonical implementation: this file.
@@ -131,6 +133,8 @@ def ineligibility(metrics: Metrics, policy: SelectionPolicy) -> IneligibilityCod
         return "FAILED"
     if metrics.total_trades <= 0:
         return "NO_TRADES"
+    if policy.min_trades is None:
+        raise ValueError("This selection policy has no trade floor; resolve the window's floor from the study receipt first.")
     if metrics.total_trades < policy.min_trades:
         return "TOO_FEW_TRADES"
     if objective_value(metrics, policy) is None:
