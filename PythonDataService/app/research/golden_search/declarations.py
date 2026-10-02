@@ -298,17 +298,17 @@ def to_decimal(value: object) -> Decimal:
     return Decimal(str(value))
 
 
-def snap(knob: SearchKnob, value: Decimal) -> Decimal:
-    """``value`` rounded half-even to the knob's quantum, without clamping."""
-    steps = (value / knob.quantum).to_integral_value(rounding=ROUND_HALF_EVEN)
+def snap(knob: SearchKnob, value: Decimal, rounding: str = ROUND_HALF_EVEN) -> Decimal:
+    """``value`` rounded to the knob's quantum (half-even unless ``rounding`` says otherwise), without clamping."""
+    steps = (value / knob.quantum).to_integral_value(rounding=rounding)
     snapped = steps * knob.quantum
     # ``to_integral_value``, not ``quantize``: quantize raises past the context's 28 digits.
     return snapped.to_integral_value() if knob.kind == "integer" else snapped
 
 
-def quantize(knob: SearchKnob, value: Decimal) -> Decimal:
-    """``value`` rounded half-even to the knob's quantum, then clamped to its domain."""
-    return min(max(snap(knob, value), knob.domain_low), knob.domain_high)
+def quantize(knob: SearchKnob, value: Decimal, rounding: str = ROUND_HALF_EVEN) -> Decimal:
+    """``value`` rounded to the knob's quantum (half-even unless ``rounding`` says otherwise), then clamped to its domain."""
+    return min(max(snap(knob, value, rounding), knob.domain_low), knob.domain_high)
 
 
 def is_quantized(knob: SearchKnob, value: Decimal) -> bool:

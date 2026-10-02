@@ -14,7 +14,9 @@ from app.research.golden_search.declarations import declaration_for
 from app.research.golden_search.models import GoldenSearchRefusal
 from app.research.golden_search.planning import (
     UNKNOWN_HISTORY_MONTHS,
+    FinalInterval,
     _sessions_needed,
+    default_final_interval,
     default_protocol,
     preflight_view,
     prepare_lock,
@@ -159,6 +161,30 @@ def test_the_final_test_is_the_last_whole_months_before_the_current_month() -> N
     assert et_date_at_ms(first_of_month.final_end_ms) == date(2026, 10, 1)
 
 
+def test_a_lake_a_few_sessions_behind_ends_the_final_test_after_its_last_session() -> None:
+    # 2026-09-25 is a Friday: the final test ends with it rather than run into the three sessions the lake lacks.
+    assert _intervals(earliest_session=None, latest_session=date(2026, 9, 25))[2:] == (date(2026, 7, 1), date(2026, 9, 26))
+    assert default_final_interval(OCTOBER_15, 3, date(2026, 9, 25)).sessions_cut == 3
+    # The development interval and its folds do not move with the cut.
+    assert _intervals(earliest_session=None, latest_session=date(2026, 9, 25))[:2] == _intervals(earliest_session=None)[:2]
+
+
+def test_a_lake_further_behind_keeps_the_whole_months_for_the_availability_check_to_refuse() -> None:
+    # 2026-09-22 leaves six sessions (23rd–30th) unread: a backfill to name, not a shorter final test.
+    assert default_final_interval(OCTOBER_15, 3, date(2026, 9, 22)) == FinalInterval(date(2026, 7, 1), date(2026, 10, 1), 0)
+    assert default_final_interval(OCTOBER_15, 3, date(2026, 7, 1)).end == date(2026, 10, 1)
+    # A lake stopping before the final months start, or reaching the boundary, keeps them too.
+    assert default_final_interval(OCTOBER_15, 3, date(2026, 6, 30)).end == date(2026, 10, 1)
+    assert default_final_interval(OCTOBER_15, 3, date(2026, 10, 2)) == FinalInterval(date(2026, 7, 1), date(2026, 10, 1), 0)
+
+
+def test_a_month_ending_on_a_weekend_or_holiday_is_whole_when_the_lake_holds_its_last_session() -> None:
+    # October 2026 ends on a Saturday; its last session is Friday the 30th.
+    assert default_final_interval(et_midnight_ms(date(2026, 11, 15)), 3, date(2026, 10, 30)) == FinalInterval(date(2026, 8, 1), date(2026, 11, 1), 0)
+    # 2027-05-31 is Memorial Day; May's last session is Friday the 28th.
+    assert default_final_interval(et_midnight_ms(date(2027, 6, 10)), 3, date(2027, 5, 28)) == FinalInterval(date(2027, 3, 1), date(2027, 6, 1), 0)
+
+
 def test_unknown_lake_history_proposes_a_two_year_development_interval() -> None:
     start, end, final_start, _ = _intervals(earliest_session=None)
     assert UNKNOWN_HISTORY_MONTHS == 24 and (start, end) == (date(2024, 7, 1), date(2026, 7, 1)) and end == final_start
@@ -200,6 +226,52 @@ def test_a_qualified_incumbent_off_the_registry_on_a_fixed_knob_still_yields_a_l
     assert protocol.seed == registry.params
     assert next(plan for plan in protocol.knobs if plan.name == "gap_bps").fixed_value == 0.0
     assert review(protocol, _ema()).lockable
+
+
+def test_a_default_range_widens_to_hold_the_seed_and_the_incumbent() -> None:
+    registry = registry_incumbent(EMA, "SPY")
+    # The declared fast range is 3–12 and slow 8–30; this qualified incumbent sits outside both.
+    qualified = IncumbentRef(source="qualification", qualification_id="gq-2", params={**registry.params, "fast_period": 2, "slow_period": 34})
+    protocol = default_protocol(EMA, "SPY", qualified, now_ms=OCTOBER_15, earliest_session=None)
+    ranges = {plan.name: (plan.low, plan.high) for plan in protocol.knobs}
+
+    assert ranges["fast_period"] == (2.0, 12.0) and ranges["slow_period"] == (8.0, 34.0)
+    # Knobs whose start and benchmark already sit inside keep their declared range.
+    assert ranges["gap"] == (0.0, 0.6) and ranges["hold_bars"] == (2.0, 12.0)
+    assert review(protocol, _ema()).lockable
+
+
+def test_a_widened_range_stays_inside_the_domain_on_the_quantum() -> None:
+    # A qualification minted under an older declaration can sit off today's quantum or outside its domain.
+    registry = registry_incumbent(EMA, "SPY")
+    stale = IncumbentRef(
+        source="qualification", qualification_id="gq-3", params={**registry.params, "gap": 2.5, "rsi_min": 29.6, "rsi_max": 90.4}
+    )
+    protocol = default_protocol(EMA, "SPY", stale, now_ms=OCTOBER_15, earliest_session=None)
+    ranges = {plan.name: (plan.low, plan.high) for plan in protocol.knobs}
+
+    assert ranges["gap"] == (0.0, 2.0)
+    # Each end rounds outward, so the range still holds the benchmark: half-even would give 30 and 90.
+    assert ranges["rsi_min"] == (29.0, 60.0) and ranges["rsi_max"] == (60.0, 91.0)
+
+
+def test_the_preflight_counts_each_knobs_settings_exactly() -> None:
+    request = plan_request("SPY")
+    for knob in request["knobs"]:
+        if knob["name"] == "gap":
+            knob.update(mode="search", low=0.0, high=0.6, step=0.05)
+        if knob["name"] == "hold_bars":
+            knob.update(mode="fixed", fixed_value=5.0)
+        if knob["name"] == "rsi_min":
+            knob.update(mode="search", low=40.0, high=30.0, step=1.0)
+    counts = {item["name"]: item["values"] for item in preflight_view(review_plan(protocol_from_request(request), roots=[]), None)["knob_values"]}
+
+    # 0..0.6 at 0.05 is thirteen settings; float division would make it twelve.
+    assert counts["gap"] == 13
+    assert counts["hold_bars"] == 1
+    # An empty range has no count; the refusal names it.
+    assert counts["rsi_min"] is None
+    assert list(counts) == [knob["name"] for knob in request["knobs"]]
 
 
 def test_interval_lengths_below_one_month_are_refused() -> None:

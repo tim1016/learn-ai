@@ -769,7 +769,7 @@ async def test_defaults_offer_the_ready_default_qualification_as_the_incumbent(
     )
 
     ready = await service.defaults(
-        "ema_crossover_signal", symbol, earliest_session=_no_lake_history, running_digest=lambda contract: "a" * 64
+        "ema_crossover_signal", symbol, lake_coverage=_no_lake_history, running_digest=lambda contract: "a" * 64
     )
     assert ready["incumbent"] == {"source": "qualification", "qualification_id": f"q-{unique}", "params": point}
     assert ready["incumbent_label"].startswith("Golden configuration")
@@ -778,12 +778,12 @@ async def test_defaults_offer_the_ready_default_qualification_as_the_incumbent(
     registry = registry_incumbent("ema_crossover_signal", symbol).params
     assert ready["seed"] == registry != point
     assert ready["exposure"]["state"] in ("not_opened", "previously_used", "history_unknown")
-    plan = {key: value for key, value in ready.items() if key not in ("final_months", "incumbent_label", "exposure")}
+    plan = {key: value for key, value in ready.items() if key not in ("final_months", "final_sessions_cut", "incumbent_label", "incumbent_sentence", "exposure")}
     leaked = await service.preflight({**plan, "seed": point}, roots=driver.roots)
     assert [item["code"] for item in leaked["refusals"]] == ["SEED_IS_QUALIFIED"]
 
     stale = await service.defaults(
-        "ema_crossover_signal", symbol, earliest_session=_no_lake_history, running_digest=lambda contract: "b" * 64
+        "ema_crossover_signal", symbol, lake_coverage=_no_lake_history, running_digest=lambda contract: "b" * 64
     )
     assert stale["incumbent"]["source"] == "registry"
     assert stale["incumbent_label"] == "Registry validated point (the Golden Search default is not ready)"

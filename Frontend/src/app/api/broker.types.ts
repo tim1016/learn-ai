@@ -12999,11 +12999,21 @@ export interface components {
              * @description The final interval's length in whole months, as laid out.
              */
             final_months: number;
+            /**
+             * Final Sessions Cut
+             * @description Trailing scheduled sessions the final interval leaves out because the lake has not reached them yet; 0 for whole months.
+             */
+            final_sessions_cut: number;
             /** Final Start Ms */
             final_start_ms: number;
             incumbent: components["schemas"]["GoldenSearchIncumbent"];
             /** Incumbent Label */
             incumbent_label: string;
+            /**
+             * Incumbent Sentence
+             * @description The incumbent's settings at a glance, e.g. 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars'.
+             */
+            incumbent_sentence: string;
             /** Knobs */
             knobs: components["schemas"]["GoldenSearchKnobPlan"][];
             /**
@@ -13465,6 +13475,16 @@ export interface components {
             /** Unit */
             unit: string;
         };
+        /** GoldenSearchKnobValues */
+        GoldenSearchKnobValues: {
+            /** Name */
+            name: string;
+            /**
+             * Values
+             * @description Settings the knob can take: 1 when held, its range's size at its step when searched, null when that range is not valid.
+             */
+            values: number | null;
+        };
         /** GoldenSearchLinkedReturn */
         GoldenSearchLinkedReturn: {
             /** Fold Index */
@@ -13583,6 +13603,8 @@ export interface components {
             exposure: components["schemas"]["GoldenSearchExposure"] | null;
             /** Folds */
             folds: components["schemas"]["GoldenSearchFold"][];
+            /** Knob Values */
+            knob_values: components["schemas"]["GoldenSearchKnobValues"][];
             /** Refusals */
             refusals: components["schemas"]["GoldenSearchProtocolRefusal"][];
             run_up: components["schemas"]["GoldenSearchRunUp"] | null;

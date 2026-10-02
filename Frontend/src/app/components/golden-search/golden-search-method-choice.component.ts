@@ -5,26 +5,20 @@ import type { GoldenSearchMethod } from './golden-search.types';
 interface MethodOption {
   readonly id: GoldenSearchMethod;
   readonly title: string;
-  readonly question: string;
-  readonly limitation: string;
 }
 
 const METHODS: readonly MethodOption[] = [
-  {
-    id: 'zoom',
-    title: 'Zoom Search',
-    question: 'Refine one knob at a time, keeping a move only when it strictly improves the objective. Useful for many controls.',
-    limitation: 'Local and order-dependent: it can miss settings that only work when two knobs change together. It never claims a global best.',
-  },
-  {
-    id: 'grid',
-    title: 'Grid Search',
-    question: 'Try every listed combination. Best for small domains or a focused two-knob comparison.',
-    limitation: 'Tests only the listed values, and the work grows as their product. Keep it to a few searched knobs.',
-  },
+  { id: 'zoom', title: 'Zoom search' },
+  { id: 'grid', title: 'Grid search' },
 ];
 
-/** Zoom or Grid in plain language, each with its limitation (#2696). */
+/** What each method does, and what it cannot claim, in plain language. */
+export const METHOD_HINTS: Readonly<Record<GoldenSearchMethod, string>> = {
+  zoom: 'Zoom refines one knob at a time from the starting point, keeping a move only when it strictly improves the objective. It can miss settings that only work when two knobs change together, and never claims a global best.',
+  grid: 'Grid tries every combination of the listed values, so the work grows as the product of the Values column. Keep it to a few varied knobs.',
+};
+
+/** Zoom or Grid as one segmented choice (#2696); the plan form shows the chosen method's hint. */
 @Component({
   selector: 'app-golden-search-method-choice',
   changeDetection: ChangeDetectionStrategy.OnPush,

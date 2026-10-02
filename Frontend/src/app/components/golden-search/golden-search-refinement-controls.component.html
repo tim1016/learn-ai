@@ -1,22 +1,36 @@
 @let p = protocol();
-<details>
-  <summary>Search order and refinement controls</summary>
-  @if (p.method === 'zoom') {
-    <div class="fields">
-      <label class="field"><span>Points per round</span><input #points pInputText type="number" min="3" max="9" step="1" [value]="p.zoom.points" [attr.aria-invalid]="numberInvalid('zoom_points')" (input)="onNumber('zoom_points', points.value)" /></label>
-      <label class="field"><span>Refinement rounds</span><input #refinements pInputText type="number" min="0" max="4" step="1" [value]="p.zoom.refinements" [attr.aria-invalid]="numberInvalid('zoom_refinements')" (input)="onNumber('zoom_refinements', refinements.value)" /></label>
-      <label class="field"><span>Maximum passes</span><input #passes pInputText type="number" min="1" max="5" step="1" [value]="p.zoom.passes" [attr.aria-invalid]="numberInvalid('zoom_passes')" (input)="onNumber('zoom_passes', passes.value)" /></label>
+<details class="card">
+  <summary>
+    <h3>Advanced</h3>
+    <span class="summary-line">
+      @if (p.method === 'zoom') { {{ p.zoom.points }} points × {{ p.zoom.refinements }} refinements × {{ p.zoom.passes }} passes · }
+      {{ pairsSent() }} pair {{ pairsSent() === 1 ? 'audit' : 'audits' }}{{ p.neighbor_audit ? ' · neighbor audit' : '' }}{{ p.recent_window ? ' · recent-window candidate' : '' }} · cap {{ p.budget_cap | number }}
+    </span>
+  </summary>
+  <div class="card__body">
+    <div class="fields fields--4">
+      @if (p.method === 'zoom') {
+        <label class="field"><span>Points per round</span><input #points pInputText type="number" min="3" max="9" step="1" [id]="inputId('zoom_points')" [value]="p.zoom.points" [attr.aria-invalid]="numberInvalid('zoom_points')" (input)="onNumber('zoom_points', points.value)" /></label>
+        <label class="field"><span>Refinement rounds</span><input #refinements pInputText type="number" min="0" max="4" step="1" [id]="inputId('zoom_refinements')" [value]="p.zoom.refinements" [attr.aria-invalid]="numberInvalid('zoom_refinements')" (input)="onNumber('zoom_refinements', refinements.value)" /></label>
+        <label class="field"><span>Max passes</span><input #passes pInputText type="number" min="1" max="5" step="1" [id]="inputId('zoom_passes')" [value]="p.zoom.passes" [attr.aria-invalid]="numberInvalid('zoom_passes')" (input)="onNumber('zoom_passes', passes.value)" /></label>
+      }
+      <label class="field"><span>Run cap (at most 5,000)</span><input #cap pInputText type="number" min="1" max="5000" step="1" [id]="inputId('budget_cap')" [value]="p.budget_cap" [attr.aria-invalid]="numberInvalid('budget_cap')" (input)="onNumber('budget_cap', cap.value)" /></label>
     </div>
-  }
-  <fieldset class="audits">
-    <legend>Audits</legend>
-    @for (option of pairOptions(); track option.label) {
-      <label class="check"><input type="checkbox" [checked]="option.included" (change)="onPair(option.pair, $event)" /><span>Pair grid: {{ option.label }}</span></label>
-    }
-    <label class="check"><input type="checkbox" [checked]="p.neighbor_audit" (change)="onFlag('neighbor_audit', $event)" /><span>Neighbor audit (each searched knob one step either side)</span></label>
-  </fieldset>
-  <div class="fields">
-    <label class="field"><span>Backtest cap (at most 5,000)</span><input #cap pInputText type="number" min="1" max="5000" step="1" [value]="p.budget_cap" [attr.aria-invalid]="numberInvalid('budget_cap')" (input)="onNumber('budget_cap', cap.value)" /></label>
+    <fieldset class="audits" [id]="pairsId" tabindex="-1">
+      <legend>Audits</legend>
+      @for (option of pairOptions(); track option.label) {
+        <label class="check">
+          <input type="checkbox" [checked]="option.included && option.heldBy === null" [disabled]="option.heldBy !== null" (change)="onPair(option.pair, $event)" />
+          <span>Pair grid: {{ option.label }}</span>
+          @if (option.heldBy; as held) { <small>off while {{ held }} is held</small> }
+        </label>
+      }
+      <label class="check"><input type="checkbox" [checked]="p.neighbor_audit" (change)="onFlag('neighbor_audit', $event)" /><span>Neighbor audit (each searched knob one step either side)</span></label>
+      <label class="check"><input type="checkbox" [checked]="p.recent_window" (change)="onFlag('recent_window', $event)" /><span>Also fit a recent-window candidate on the last training months</span></label>
+    </fieldset>
+    <div class="fields fields--4">
+      <label class="field"><span>Min final-test trades</span><input #examTrades pInputText type="number" min="1" step="1" [id]="inputId('exam_min_trades')" [value]="p.exam_min_trades" [attr.aria-invalid]="numberInvalid('exam_min_trades')" (input)="onNumber('exam_min_trades', examTrades.value)" /></label>
+    </div>
+    <p class="hint">Pair audits count toward the run total. The search order is the knob table's order.</p>
   </div>
-  <p class="hint">Pair audits are counted in the workload. The search order is the knob table's order.</p>
 </details>

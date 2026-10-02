@@ -1,0 +1,86 @@
+<div class="spacer" [style.height.px]="reserved()" aria-hidden="true"></div>
+<section #panel class="footer" aria-labelledby="gs-plan-check-title">
+  <h3 id="gs-plan-check-title" class="sr-only">Plan check</h3>
+  @if (unreadable().length > 0) {
+    <ul class="problems" aria-label="Values to fix">
+      @for (problem of unreadable(); track problem.key) {
+        <li>@if (problem.target; as target) { <button type="button" class="problem-link" (click)="jump.emit(target)">{{ problem.text }}</button> } @else { {{ problem.text }} }</li>
+      }
+    </ul>
+  }
+  @if (refusals().length > 0) {
+    <ul class="problems" aria-label="Why this plan cannot be locked">
+      @for (problem of refusals(); track problem.key) {
+        <li>@if (problem.target; as target) { <button type="button" class="problem-link" (click)="jump.emit(target)">{{ problem.text }}</button> } @else { {{ problem.text }} }</li>
+      }
+    </ul>
+  }
+  @if (lockMessage(); as message) { <p class="problem" role="alert">{{ message }}</p> }
+
+  @if (detailsOpen() && preflight(); as plan) {
+    <div class="details" id="gs-plan-details">
+      @if (estimate(); as e) {
+        <div class="table-wrap" role="region" tabindex="0" aria-label="Workload by stage">
+          <table>
+            <caption>Workload upper bound — every engine run counts toward the cap</caption>
+            <thead><tr><th scope="col">Stage</th><th scope="col" class="num">At most</th></tr></thead>
+            <tbody>
+              @for (stage of e.stages; track stage.stage) { <tr><th scope="row">{{ stage.label }}</th><td class="num">{{ stage.max_evaluations | number }}</td></tr> }
+            </tbody>
+            <tfoot>
+              <tr><th scope="row">Total</th><td class="num"><strong>{{ e.total_max | number }}</strong> of {{ e.budget_cap | number }}</td></tr>
+              <tr><th scope="row">Reserved for the final test and proof</th><td class="num">{{ e.reserved_for_exam_and_proof | number }}</td></tr>
+            </tfoot>
+          </table>
+          <p class="muted">The running time is an estimate, not a guarantee; queue time is extra.</p>
+        </div>
+      }
+      @if (plan.folds.length > 0) {
+        <div class="table-wrap" role="region" tabindex="0" aria-label="Test-over-time folds">
+          <table>
+            <caption>Test-over-time folds</caption>
+            <thead><tr><th scope="col">Fold</th><th scope="col">Training</th><th scope="col">Test</th></tr></thead>
+            <tbody>
+              @for (fold of plan.folds; track fold.fold_index) {
+                <tr>
+                  <td>{{ fold.fold_index + 1 }}</td>
+                  <td><app-timestamp-display [value]="fold.train_start_ms" mode="date-et" /> → <app-timestamp-display [value]="fold.train_end_ms - 1" mode="date-et" /></td>
+                  <td><app-timestamp-display [value]="fold.test_start_ms" mode="date-et" /> → <app-timestamp-display [value]="fold.test_end_ms - 1" mode="date-et" /></td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </div>
+  }
+
+  <div class="bar">
+    <div class="totals" [class.totals--over]="overCap()">
+      @if (estimate(); as e) {
+        <strong>Up to {{ e.total_max | number }} runs</strong> <span class="muted">of {{ e.budget_cap | number }} · {{ duration() }}</span>
+      } @else {
+        <span class="muted">Runs are counted once the plan is checked</span>
+      }
+    </div>
+    <p class="status" aria-live="polite">
+      @if (checking()) {
+        <span role="status">Checking the plan…</span>
+      } @else if (error(); as message) {
+        <span class="bad">{{ message }}</span>
+      } @else if (blocked(); as message) {
+        <span>{{ message }}</span>
+      } @else if (ready()) {
+        <span class="ok"><i class="pi pi-check" aria-hidden="true"></i> Plan is ready to lock.</span><span class="status__more"> Locking freezes it; a later change becomes a new study.</span>
+      } @else if (refusals().length > 0) {
+        <span class="bad">{{ refusals().length }} {{ refusals().length === 1 ? 'problem' : 'problems' }} to fix before locking</span>
+      } @else {
+        <span>The plan is checked as you edit it.</span>
+      }
+    </p>
+    <button type="button" class="ghost" [disabled]="preflight() === null" [attr.aria-expanded]="detailsOpen()" [attr.aria-controls]="detailsOpen() ? 'gs-plan-details' : null" (click)="toggleDetails()">{{ detailsOpen() ? 'Hide details' : 'Show details' }}</button>
+    <button pButton type="button" [disabled]="!canLock()" (click)="lock.emit()">
+      <i class="pi pi-lock" aria-hidden="true"></i><span>{{ revising() ? 'Lock as a new study' : 'Lock plan' }}</span>
+    </button>
+  </div>
+</section>

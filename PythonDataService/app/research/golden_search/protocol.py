@@ -36,7 +36,7 @@ from app.research.golden_search.declarations import (
     to_decimal,
     violates,
 )
-from app.research.sweep.grid import LowHighStepRange, ParamRange, StrategyGridConfig
+from app.research.sweep.grid import LowHighStepRange, StrategyGridConfig
 from app.research.sweep.grid import grid_size as sweep_grid_size
 from app.research.sweep.ranking import RANKING_MEASURES, RankingMeasure
 from app.research.walk_forward_study.folds import FoldPlan, FoldPlanError, add_months, plan_folds
@@ -465,15 +465,32 @@ def _validate_step(plan: KnobPlan, knob: SearchKnob, low: Decimal, high: Decimal
 
 def grid_size(p: GoldenSearchProtocol) -> int | None:
     """The product of the searched axes' sizes, or ``None`` when an axis is not a valid low/high/step range."""
-    ranges: dict[str, ParamRange] = {}
-    for plan in p.search_knobs:
-        if plan.step is None:
-            return None
-        ranges[plan.name] = LowHighStepRange(low=plan.low, high=plan.high, step=plan.step)
-    try:
-        return sweep_grid_size([StrategyGridConfig(strategy_key=p.strategy_key, param_ranges=ranges)], [p.symbol])
-    except ValueError:
+    counts = knob_value_counts(p)
+    sizes = [counts[plan.name] for plan in p.search_knobs]
+    if any(size is None for size in sizes):
         return None
+    return math.prod(size for size in sizes if size is not None)
+
+
+def knob_value_counts(p: GoldenSearchProtocol) -> dict[str, int | None]:
+    """How many settings each knob can take: 1 when held, its range's size at its step when searched, ``None`` when that range is not valid.
+
+    A Grid plan's size is the product of the searched knobs' counts (:func:`grid_size`).
+    """
+    counts: dict[str, int | None] = {}
+    for plan in p.knobs:
+        if plan.mode != "search":
+            counts[plan.name] = 1
+            continue
+        if plan.step is None:
+            counts[plan.name] = None
+            continue
+        axis = {plan.name: LowHighStepRange(low=plan.low, high=plan.high, step=plan.step)}
+        try:
+            counts[plan.name] = sweep_grid_size([StrategyGridConfig(strategy_key=p.strategy_key, param_ranges=axis)], [p.symbol])
+        except ValueError:
+            counts[plan.name] = None
+    return counts
 
 
 def _validate_seed(p: GoldenSearchProtocol, declaration: SearchDeclaration, refusals: _Refusals) -> None:

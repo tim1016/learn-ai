@@ -1,79 +1,102 @@
 <div class="table-wrap" role="region" tabindex="0" aria-label="Knobs">
-  <table class="knobs">
-    <caption>Knobs, in search order <small>{{ stepHint() }}</small></caption>
+  <table class="knobs" [class.knobs--readonly]="readonly()">
+    <caption class="sr-only">Knobs, in search order</caption>
     <thead>
       <tr>
-        <th scope="col">Order</th><th scope="col">Control / unit</th><th scope="col">Search</th><th scope="col">From – to, or fixed value</th><th scope="col">Smallest step</th>
+        <th scope="col">Order</th>
+        <th scope="col">Vary</th>
+        <th scope="col">Knob</th>
+        <th scope="col" class="num">Golden</th>
+        <th scope="col">Range</th>
+        <th scope="col">Step</th>
+        @if (!readonly()) { <th scope="col" class="num">Values</th> }
       </tr>
     </thead>
     <tbody>
       @for (row of rows(); track row.plan.name; let i = $index) {
-        <tr [class.fixed-row]="row.plan.mode === 'fixed'">
+        <tr [class.held]="!row.searched">
           <td>
             <div class="order">
-              <span>{{ i + 1 }}</span>
+              <span class="order__n">{{ i + 1 }}</span>
               @if (!readonly()) {
                 <button type="button" class="icon" [disabled]="row.first" [attr.aria-label]="'Search ' + row.label + ' earlier'" (click)="move(row.plan.name, -1)"><i class="pi pi-arrow-up" aria-hidden="true"></i></button>
                 <button type="button" class="icon" [disabled]="row.last" [attr.aria-label]="'Search ' + row.label + ' later'" (click)="move(row.plan.name, 1)"><i class="pi pi-arrow-down" aria-hidden="true"></i></button>
               }
             </div>
           </td>
+          <td>
+            @if (readonly()) {
+              {{ row.searched ? 'Varied' : 'Held' }}
+            } @else {
+              <label class="switch">
+                <input type="checkbox" role="switch" [checked]="row.searched" [attr.aria-label]="'Vary ' + row.label" (change)="onVary(row.plan.name, $event)" />
+                <span aria-hidden="true"></span>
+              </label>
+            }
+          </td>
           <th scope="row">
             <div class="knob">
-              <span><strong>{{ row.label }}</strong> <code>{{ row.plan.name }}</code></span>
+              <span class="knob__name">{{ row.label }}
+                @if (row.knob?.warmup_dependent) { <span class="tag" title="Changes how many bars each run needs before it can trade">warmup</span> }
+                @if (row.knob?.note; as note) { <i class="pi pi-info-circle knob__note" [attr.title]="note" aria-hidden="true"></i><span class="sr-only">{{ note }}</span> }
+              </span>
               @if (row.knob; as k) {
-                <small>{{ k.unit }} · allowed {{ k.domain_low }} – {{ k.domain_high }} · step {{ k.quantum }}</small>
-                @if (k.warmup_dependent) { <small class="tag">Changes warmup</small> }
-                @if (!k.searchable_by_default) { <small>Kept fixed by default.</small> }
-                @if (k.note) { <small>{{ k.note }}</small> }
+                <span class="knob__unit" [attr.title]="row.plan.name">{{ k.unit }} · allowed {{ k.domain_low }}–{{ k.domain_high }}</span>
               }
             </div>
           </th>
-          <td>
-            @if (readonly()) {
-              {{ row.plan.mode === 'search' ? 'Search' : 'Keep fixed' }}
-            } @else {
-              <select [value]="row.plan.mode" [attr.aria-label]="'Search or keep fixed: ' + row.label" (change)="onMode(row.plan.name, $event)">
-                <option value="search" [selected]="row.plan.mode === 'search'">Search</option>
-                <option value="fixed" [selected]="row.plan.mode === 'fixed'">Keep fixed</option>
-              </select>
-            }
+          <td class="num golden">
+            {{ row.golden ?? '—' }}
+            @if (row.startsAt !== null) { <small>starts at {{ row.startsAt }}</small> }
           </td>
           <td>
             <div class="values">
-            @if (row.plan.mode === 'search') {
-              @if (readonly()) {
-                {{ row.plan.low }} – {{ row.plan.high }}
+              @if (row.searched) {
+                @if (readonly()) {
+                  {{ row.single ? 'Held at ' + row.plan.low : row.plan.low + ' – ' + row.plan.high }}
+                } @else {
+                  <div class="range">
+                    <input #low pInputText type="number" [id]="inputId(row.plan.name, 'low')" [step]="row.knob?.quantum ?? 'any'" [min]="row.knob?.domain_low ?? null" [max]="row.knob?.domain_high ?? null" [value]="row.plan.low" [attr.aria-label]="row.label + ' low'" [attr.aria-invalid]="problem(row.plan.name, 'low') !== null || row.rangeRefusals.length > 0" (input)="onNumber(row.plan.name, 'low', low.value)" />
+                    <span class="range__to">to</span>
+                    <input #high pInputText type="number" [id]="inputId(row.plan.name, 'high')" [step]="row.knob?.quantum ?? 'any'" [min]="row.knob?.domain_low ?? null" [max]="row.knob?.domain_high ?? null" [value]="row.plan.high" [attr.aria-label]="row.label + ' high'" [attr.aria-invalid]="problem(row.plan.name, 'high') !== null || row.rangeRefusals.length > 0" (input)="onNumber(row.plan.name, 'high', high.value)" />
+                  </div>
+                  @if (row.single) { <small>Same low and high: held at {{ row.plan.low }}.</small> }
+                }
+                @if (row.startOutside !== null) {
+                  <small class="start-note">Starting value {{ row.startOutside }} is outside this range. It stays the answer only if nothing in the range beats it.</small>
+                }
               } @else {
-                <label><span>Low</span><input #low pInputText type="number" [step]="row.knob?.quantum ?? 'any'" [min]="row.knob?.domain_low ?? null" [max]="row.knob?.domain_high ?? null" [value]="row.plan.low" [attr.aria-label]="row.label + ' low'" [attr.aria-invalid]="problem(row.plan.name, 'low') !== null" (input)="onNumber(row.plan.name, 'low', low.value)" /></label>
-                <label><span>High</span><input #high pInputText type="number" [step]="row.knob?.quantum ?? 'any'" [min]="row.knob?.domain_low ?? null" [max]="row.knob?.domain_high ?? null" [value]="row.plan.high" [attr.aria-label]="row.label + ' high'" [attr.aria-invalid]="problem(row.plan.name, 'high') !== null" (input)="onNumber(row.plan.name, 'high', high.value)" /></label>
+                @if (readonly()) {
+                  Held at {{ row.plan.fixed_value }}
+                } @else {
+                  <div class="range">
+                    <label class="range__held" [for]="inputId(row.plan.name, 'fixed_value')">Held at</label>
+                    <input #fixed pInputText type="number" [id]="inputId(row.plan.name, 'fixed_value')" [step]="row.knob?.quantum ?? 'any'" [min]="row.knob?.domain_low ?? null" [max]="row.knob?.domain_high ?? null" [value]="row.plan.fixed_value" [attr.aria-label]="row.label + ' held value'" [attr.aria-invalid]="problem(row.plan.name, 'fixed_value') !== null || row.rangeRefusals.length > 0" (input)="onNumber(row.plan.name, 'fixed_value', fixed.value)" />
+                  </div>
+                }
               }
-              @if (row.knob; as k) { <small>default {{ k.default_low }} – {{ k.default_high }}</small> }
-              @if (row.startOutside !== null) {
-                <small class="start-note">Starting value {{ row.startOutside }} is outside this range. It stays the answer only if nothing in the range beats it.</small>
+              @for (item of valueProblems(row.plan.name); track item.field) {
+                <small class="problem">{{ item.label }}: {{ item.message }}</small>
               }
-            } @else {
-              @if (readonly()) {
-                {{ row.plan.fixed_value }}
-              } @else {
-                <label><span>Fixed at</span><input #fixed pInputText type="number" [step]="row.knob?.quantum ?? 'any'" [min]="row.knob?.domain_low ?? null" [max]="row.knob?.domain_high ?? null" [value]="row.plan.fixed_value" [attr.aria-label]="row.label + ' fixed value'" [attr.aria-invalid]="problem(row.plan.name, 'fixed_value') !== null" (input)="onNumber(row.plan.name, 'fixed_value', fixed.value)" /></label>
-              }
-            }
-            @for (item of valueProblems(row.plan.name); track item.field) {
-              <small class="problem" role="alert">{{ item.label }}: {{ item.message }}</small>
-            }
+              @for (message of row.rangeRefusals; track message) { <small class="problem">{{ message }}</small> }
             </div>
           </td>
           <td>
-            @if (row.plan.mode === 'search') {
+            @if (row.searched && !row.single) {
               @if (readonly()) {
                 {{ row.plan.step ?? '—' }}
               } @else {
-                <input #step pInputText type="number" [step]="row.knob?.quantum ?? 'any'" min="0" [value]="row.plan.step ?? ''" [attr.aria-label]="row.label + ' smallest step'" [attr.aria-invalid]="problem(row.plan.name, 'step') !== null" (input)="onNumber(row.plan.name, 'step', step.value)" />
-                @if (problem(row.plan.name, 'step'); as message) { <small class="problem" role="alert">{{ message }}</small> }
+                <input #step pInputText type="number" class="step" [id]="inputId(row.plan.name, 'step')" [step]="row.knob?.quantum ?? 'any'" min="0" [value]="row.plan.step ?? ''" [attr.aria-label]="row.label + ' smallest step'" [attr.aria-invalid]="problem(row.plan.name, 'step') !== null || row.stepRefusals.length > 0" (input)="onNumber(row.plan.name, 'step', step.value)" />
+                @if (problem(row.plan.name, 'step'); as message) { <small class="problem">{{ message }}</small> }
+                @for (message of row.stepRefusals; track message) { <small class="problem">{{ message }}</small> }
               }
             } @else { <span class="muted">—</span> }
           </td>
+          @if (!readonly()) {
+            <td class="num muted">
+              @if (row.values === undefined) { <span aria-hidden="true">…</span><span class="sr-only">Not counted yet</span> } @else { {{ row.values ?? '—' }} }
+            </td>
+          }
         </tr>
       }
     </tbody>
@@ -81,18 +104,22 @@
 </div>
 
 @if (capability(); as cap) {
-  @if (cap.constraints.length > 0) {
-    <ul class="constraints" aria-label="Constraints">
-      @for (constraint of cap.constraints; track constraint.left + constraint.right) {
-        <li>{{ constraint.message }}</li>
-      }
-    </ul>
-  }
-  @if (cap.fixed.length > 0) {
-    <ul class="fixed-controls" aria-label="Fixed controls">
-      @for (control of cap.fixed; track control.label) {
-        <li><strong>{{ control.label }} {{ control.value }}</strong> · fixed <span class="muted">({{ control.reason }})</span></li>
-      }
-    </ul>
-  }
+  <div class="notes">
+    @if (rules().length > 0) {
+      <span class="notes__item"><span class="notes__label">Rules</span>
+        <ul class="inline" aria-label="Constraints">
+          @for (rule of rules(); track rule.key) { <li [attr.title]="rule.message">{{ rule.text }}</li> }
+        </ul>
+      </span>
+    }
+    @if (cap.fixed.length > 0) {
+      <span class="notes__item"><span class="notes__label">Fixed by the program</span>
+        <ul class="inline" aria-label="Fixed controls">
+          @for (control of cap.fixed; track control.label) { <li [attr.title]="control.reason">{{ control.label }} {{ control.value }}</li> }
+        </ul>
+      </span>
+    }
+    @if (!readonly()) { <span class="notes__item"><span class="notes__label">Step</span> {{ stepHint() }}</span> }
+    @if (hasWarmup()) { <span class="notes__item"><span class="notes__label">Warmup</span> knobs tagged warmup change how many bars each run needs first.</span> }
+  </div>
 }
