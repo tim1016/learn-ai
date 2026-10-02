@@ -19,6 +19,23 @@
         </li>
       }
     </ul>
+    @if ($first) {
+      @if (startupJoin(); as join) {
+        <app-startup-join-status class="health__join" [view]="join" />
+      }
+      @if (dutyOutcome(); as outcome) {
+        <div class="health__outcome">
+          <strong>{{ outcome.label }}</strong>
+          @if (outcome.explanation) {
+            <span class="health__note">{{ outcome.explanation }}</span>
+          }
+          @if (outcome.recorded_at_ms) {
+            <app-timestamp-display class="health__note" [value]="outcome.recorded_at_ms" mode="local" />
+          }
+          <app-exposure-notices [notices]="outcome.exposure_notices ?? []" />
+        </div>
+      }
+    }
   }
   @if (marketPulse(); as pulse) {
     <h4 class="health__group">Market right now</h4>

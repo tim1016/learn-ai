@@ -2,6 +2,7 @@
   <button
     type="button"
     [class]="'panel-action__button panel-action__button--' + tone()"
+    [class.panel-action__button--filled]="filled()"
     [attr.aria-disabled]="disabled()"
     [attr.aria-busy]="pending()"
     [attr.aria-label]="shownLabel()"

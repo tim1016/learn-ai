@@ -82,7 +82,7 @@ import { BotOrderRecordsComponent } from '../bot-page/bot-order-records.componen
 import { BotSetupComponent } from '../bot-page/bot-setup.component';
 import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-history.component';
 import { DeploymentBudgetComponent } from '../../deployment-budget/deployment-budget.component';
-import { TradesTodayListComponent } from '../bot-page/trades-today-list.component';
+import { RunFillsListComponent } from '../bot-page/run-fills-list.component';
 import { RecentDecisionsListComponent } from '../bot-page/recent-decisions-list/recent-decisions-list.component';
 import { BotDayChartComponent } from '../bot-page/bot-day-chart.component';
 import { BotEndCardComponent } from '../bot-page/bot-end-card.component';
@@ -174,24 +174,6 @@ const FLATTEN_STEP_ACTIONS: Readonly<Record<FlattenStepId, PanelAction['action_i
   sell: 'execute_safe_flatten',
 };
 
-/**
- * The bot page (PRD #2560 D2): one view, no lens.
- *
- * Top to bottom: the header with the backend's one primary action; the last
- * action's outcome, which takes the keyboard when it lands (story 48); for a
- * stopped bot that still holds shares, the warning with Flatten beside it
- * (stories 44–45); the chart panel — the strategy's own decision candles,
- * the market tape one tab away — beside "This bot's money"; fills and recent
- * decisions, which share the chart's candle selection; and the audit depth
- * folded under Details (story 47).
- *
- * ## Shell responsibilities
- * - Route parameter extraction (broker, clerk, account, sid).
- * - Data loading: the live panel snapshot, the current run, the delayed
- *   history chart, the strategy view (re-read on each new decision).
- * - Action execution, each command owned by the bot it was sent to (#2471),
- *   including the one-confirmation Flatten sequence (hurdle H30).
- */
 /** The padding, borders and margins between an element's bottom edge and the document's. */
 function spaceBelow(element: HTMLElement): number {
   let space = 0;
@@ -207,6 +189,25 @@ function spaceBelow(element: HTMLElement): number {
 /** How far either side of a finished run its tape reaches (the data plane allows 30 minutes). */
 const RUN_TAPE_PADDING_MS = 15 * 60_000;
 
+/**
+ * The bot page (PRD #2794): one screen, no scrolling at 1440×900.
+ *
+ * Top to bottom: the header with the bot's own status and the backend's
+ * one-line run summary; the toolbar of every action the owner can take now;
+ * the last action's outcome, which takes the keyboard when it lands; for a
+ * stopped bot that still holds shares, the warning with Flatten beside it;
+ * then the board -- the chart (the strategy's own decision candles, the
+ * market tape one tab away), this bot's money and its decisions on top, its
+ * orders, health and setup below -- each panel scrolling inside itself.
+ *
+ * ## Shell responsibilities
+ * - Route parameter extraction (broker, clerk, account, sid).
+ * - Data loading: the live panel snapshot, the current run, the delayed
+ *   history chart (a finished run's own window), the strategy view
+ *   (re-read on each new decision).
+ * - Action execution, each command owned by the bot it was sent to (#2471),
+ *   including the one-confirmation Flatten sequence (hurdle H30).
+ */
 @Component({
   selector: 'app-bot-panel-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -230,7 +231,7 @@ const RUN_TAPE_PADDING_MS = 15 * 60_000;
     RecentDecisionsListComponent,
     StrandedPositionWarningComponent,
     TimestampDisplayComponent,
-    TradesTodayListComponent,
+    RunFillsListComponent,
   ],
   templateUrl: './bot-panel-shell.component.html',
   styleUrl: './bot-panel-shell.component.scss',
@@ -287,10 +288,10 @@ export class BotPanelShellComponent {
     accountId: this.accountId(),
   }, this.sid()));
 
-  /** A Dry Run trades no account money and a cleared bot's page is read-only: neither opens a manual ticket. */
+  /** Where Manual order goes; whether the toolbar offers it is the backend's word (#2794 R2). */
   protected readonly manualOrderNavigation = computed(() => {
     const panel = this.panel();
-    if (panel === null || panel.mode === 'dry_run' || panel.status === 'cleared') return null;
+    if (panel === null) return null;
     return buildManualOrderTicketNavigation({
       broker: panel.broker,
       clerkId: this.clerkId(),
@@ -516,6 +517,8 @@ export class BotPanelShellComponent {
 
   /** The run's fills, under the run's date (#2794 R8). */
   protected readonly runFills = computed(() => this.panel()?.run_fills ?? []);
+  /** Every fill the run has; the panel sends only its newest. */
+  protected readonly runFillCount = computed(() => this.panel()?.bot_page?.summary.facts.trade_count ?? this.runFills().length);
   protected readonly runStartedAtMs = computed(() => this.panel()?.bot_page?.summary.facts.started_at_ms ?? null);
   protected readonly notFound = this.liveStore.notFound;
   protected readonly feedContinuity = computed(() => {
@@ -649,9 +652,11 @@ export class BotPanelShellComponent {
     afterRenderEffect((onCleanup) => {
       const board = this.boardView()?.nativeElement;
       if (board === undefined || typeof ResizeObserver === 'undefined') return;
+      const host = this.host.nativeElement;
       const fit = (): void => {
-        const top = board.getBoundingClientRect().top + window.scrollY;
-        this.host.nativeElement.style.setProperty('--bot-board-height', `${window.innerHeight - top - spaceBelow(board)}px`);
+        // Where the board starts with nothing scrolled: the window's scroll and the host's own.
+        const top = board.getBoundingClientRect().top + window.scrollY + host.scrollTop;
+        host.style.setProperty('--bot-board-height', `${window.innerHeight - top - spaceBelow(board)}px`);
       };
       // A frame later, so a fit never resizes what the observer is reporting on.
       let frame = 0;
@@ -660,10 +665,11 @@ export class BotPanelShellComponent {
         frame = requestAnimationFrame(fit);
       };
       const observer = new ResizeObserver(refit);
-      // The page around the board grows when a receipt or warning appears above it;
-      // above that, anything up to the body can push it down.
-      if (board.parentElement !== null) observer.observe(board.parentElement);
+      // Whatever pushes the board down -- a receipt, the holding warning, a stall
+      // notice that appears later -- grows an element around it or one above it,
+      // at some level up to the body.
       for (let node: Element | null = board.parentElement; node !== null && node !== document.body; node = node.parentElement) {
+        observer.observe(node);
         for (let above = node.previousElementSibling; above !== null; above = above.previousElementSibling) {
           observer.observe(above);
         }

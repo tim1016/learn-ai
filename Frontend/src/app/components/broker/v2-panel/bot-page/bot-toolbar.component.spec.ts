@@ -59,7 +59,7 @@ async function renderToolbar(panel: BotPanelView) {
 describe('BotToolbarComponent (#2794)', () => {
   afterEach(() => localStorage.clear());
 
-  it('groups the offered actions, fills the primary and keeps Stop named; not-needed ones stay out of the row', async () => {
+  it('groups the offered actions, fills the primary in its own tone and keeps Stop named; not-needed ones stay out', async () => {
     await renderToolbar(runningPanel());
 
     const toolbar = screen.getByRole('toolbar', { name: 'Actions for this bot' });
@@ -67,7 +67,9 @@ describe('BotToolbarComponent (#2794)', () => {
       .toEqual(['Bot', 'Fix', 'Inspect']);
     const stop = within(toolbar).getByRole('button', { name: 'Stop' });
     expect(stop.textContent?.trim()).toBe('Stop');
-    expect(stop.className).toContain('panel-action__button--primary');
+    // Thermo on #2794: the primary is filled, and a filled Stop stays a danger action.
+    expect(stop.className).toContain('panel-action__button--filled');
+    expect(stop.className).toContain('panel-action__button--danger');
     // An icon button keeps its name for screen readers and its reason as a tooltip.
     const check = within(toolbar).getByRole('button', { name: 'Check against Alpaca' });
     expect(check.textContent?.trim()).toBe('');

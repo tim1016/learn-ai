@@ -10,56 +10,47 @@
             [label]="entry.label"
             [icon]="icons[entry.action_id]"
             [showLabel]="showLabel(entry)"
-            [showMoves]="false"
+            [moveIsSupported]="noMoves"
             [hint]="entry.reason"
-            [tone]="tone(entry)"
+            [tone]="entry.tone"
+            [filled]="entry.primary === true"
             [pending]="pending()"
             (triggered)="actionRequested.emit($event)"
           />
+        } @else if (opensHostPanel(entry)) {
+          <!-- Change end and Build proof open the host's panels. -->
+          <button
+            type="button"
+            class="toolbar__button"
+            [attr.aria-label]="entry.label"
+            [attr.aria-disabled]="entry.availability !== 'available'"
+            [disabled]="pending()"
+            [title]="entry.reason"
+            (click)="open(entry)"
+          >
+            <i [class]="'pi ' + icons[entry.action_id]" aria-hidden="true"></i>
+            @if (showLabel(entry)) { {{ entry.label }} }
+          </button>
         } @else {
-          @switch (entry.action_id) {
-            @case ('deploy_again') {
-              @let again = deployAgain();
-              <a
-                class="toolbar__button"
-                [class.toolbar__button--primary]="entry.primary"
-                [routerLink]="again.commands"
-                [queryParams]="again.queryParams"
-                [attr.aria-label]="entry.label"
-                [title]="entry.reason"
-              >
-                <i [class]="'pi ' + icons[entry.action_id]" aria-hidden="true"></i>
-                @if (showLabel(entry)) { {{ entry.label }} }
-              </a>
-            }
-            @case ('manual_order') {
-              @if (manualOrder(); as manual) {
-                <a
-                  class="toolbar__button"
-                  [routerLink]="manual.commands"
-                  [queryParams]="manual.queryParams"
-                  [attr.aria-label]="entry.label"
-                  [title]="entry.reason"
-                >
-                  <i [class]="'pi ' + icons[entry.action_id]" aria-hidden="true"></i>
-                  @if (showLabel(entry)) { {{ entry.label }} }
-                </a>
-              }
-            }
-            @default {
-              <button
-                type="button"
-                class="toolbar__button"
-                [attr.aria-label]="entry.label"
-                [attr.aria-disabled]="entry.availability !== 'available'"
-                [disabled]="pending()"
-                [title]="entry.reason"
-                (click)="open(entry)"
-              >
-                <i [class]="'pi ' + icons[entry.action_id]" aria-hidden="true"></i>
-                @if (showLabel(entry)) { {{ entry.label }} }
-              </button>
-            }
+          <!-- Deploy again and Manual order go to their pages; a blocked one stays put and says why. -->
+          @let link = linkFor(entry);
+          @if (entry.availability === 'available' && link !== null) {
+            <a
+              class="toolbar__button"
+              [class.toolbar__button--primary]="entry.primary"
+              [routerLink]="link.commands"
+              [queryParams]="link.queryParams"
+              [attr.aria-label]="entry.label"
+              [title]="entry.reason"
+            >
+              <i [class]="'pi ' + icons[entry.action_id]" aria-hidden="true"></i>
+              @if (showLabel(entry)) { {{ entry.label }} }
+            </a>
+          } @else {
+            <button type="button" class="toolbar__button" aria-disabled="true" [attr.aria-label]="entry.label" [title]="entry.reason">
+              <i [class]="'pi ' + icons[entry.action_id]" aria-hidden="true"></i>
+              @if (showLabel(entry)) { {{ entry.label }} }
+            </button>
           }
         }
       }
