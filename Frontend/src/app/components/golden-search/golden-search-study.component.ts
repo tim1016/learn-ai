@@ -11,9 +11,10 @@ import type { GridSearchRefusal } from '../grid-search/grid-search.types';
 import { GoldenSearchCompareStepComponent } from './golden-search-compare-step.component';
 import { GoldenSearchDecisionStepComponent } from './golden-search-decision-step.component';
 import { GoldenSearchPlanSummaryComponent } from './golden-search-plan-summary.component';
+import { GoldenSearchProcessComponent, researchStage } from './golden-search-process.component';
 import { GoldenSearchScopeLineComponent } from './golden-search-scope-line.component';
 import { GoldenSearchSearchStepComponent } from './golden-search-search-step.component';
-import { primaryAction, STUDY_STEPS, stepForState, stepProgress, type PrimaryAction, type StepProgress, type StudyStep } from './golden-search-steps';
+import { primaryAction, singleStageAction, STUDY_STEPS, stepForState, stepProgress, type PrimaryAction, type StepProgress, type StudyStep } from './golden-search-steps';
 import { GoldenSearchStudyStripComponent } from './golden-search-study-strip.component';
 import { GoldenSearchTestStepComponent } from './golden-search-test-step.component';
 import { GoldenSearchRefusedError, GoldenSearchService, StageDispatchError, StudyConflictError } from './golden-search.service';
@@ -51,6 +52,7 @@ const PROGRESS_TEXT: Readonly<Record<StepProgress, string>> = {
     GoldenSearchCompareStepComponent,
     GoldenSearchDecisionStepComponent,
     GoldenSearchPlanSummaryComponent,
+    GoldenSearchProcessComponent,
     GoldenSearchScopeLineComponent,
     GoldenSearchSearchStepComponent,
     GoldenSearchStudyStripComponent,
@@ -98,6 +100,17 @@ export class GoldenSearchStudyComponent {
     const action = detail === null ? null : primaryAction(detail);
     return action?.kind === 'step' && action.step === this.selectedStep() ? null : action;
   });
+  /** Run only the next stage and pause after it: the quieter alternative to Run research. */
+  protected readonly secondary = computed<PrimaryAction | null>(() => {
+    const detail = this.detail();
+    return detail === null ? null : singleStageAction(detail);
+  });
+  protected readonly stage = computed(() => {
+    const detail = this.detail();
+    return detail === null ? null : researchStage(detail);
+  });
+  /** A command the server accepted whose job did not start; sending it again replays the same authorization. */
+  protected readonly undispatched = signal<StudyCommandRequest | null>(null);
   protected readonly canCancel = computed(() => this.permitted('cancel'));
   protected readonly canFinish = computed(() => this.permitted('finish'));
   protected readonly finishRefusal = computed(() => {
@@ -230,6 +243,18 @@ export class GoldenSearchStudyComponent {
     const detail = this.detail();
     if (detail === null || this.busy()) return false;
     const request: StudyCommandRequest = { ...command, expected_revision: detail.revision, idempotency_key: this.keys.keyFor(JSON.stringify([detail.id, detail.revision, command])) };
+    return this.send(detail, request);
+  }
+
+  /** Sends the accepted command whose job did not start once more; its idempotency key replays the same dispatch. */
+  async startAgain(): Promise<void> {
+    const detail = this.detail();
+    const request = this.undispatched();
+    if (detail === null || request === null || this.busy()) return;
+    await this.send(detail, request);
+  }
+
+  private async send(detail: StudyDetail, request: StudyCommandRequest): Promise<boolean> {
     const view = this.viewGeneration;
     this.busy.set(true);
     this.clearFeedback();
@@ -244,6 +269,7 @@ export class GoldenSearchStudyComponent {
     } catch (error) {
       if (view !== this.viewGeneration) return false;
       this.onCommandFailure(error);
+      if (error instanceof StageDispatchError) this.undispatched.set(request);
       return error instanceof StageDispatchError;
     } finally {
       if (view === this.viewGeneration) this.busy.set(false);
@@ -254,7 +280,7 @@ export class GoldenSearchStudyComponent {
     if (error instanceof StageDispatchError) {
       this.keys.settle();
       this.applyAnswer(error.study);
-      this.actionMessage.set('The stage was authorized but its job did not start. Use Finish to start it.');
+      this.actionMessage.set('The stage was authorized but its job did not start. Start it again: the retry reuses the same authorization.');
     } else if (error instanceof StudyConflictError) {
       this.keys.settle();
       if (error.current !== null) this.applyAnswer(error.current);
@@ -276,6 +302,7 @@ export class GoldenSearchStudyComponent {
   private clearFeedback(): void {
     this.actionMessage.set(null);
     this.actionRefusal.set(null);
+    this.undispatched.set(null);
   }
 
   /** Shows the study a command answered with; a load still in flight was read before it and must not replace it. */

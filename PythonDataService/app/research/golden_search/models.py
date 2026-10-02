@@ -31,7 +31,7 @@ StudyState = Literal[
 StageName = Literal["search", "validation", "exam", "qualification"]
 FenceStatus = Literal["idle", "queued", "running", "completed", "failed", "cancelled"]
 CommandName = Literal[
-    "continue", "select_candidate", "open_exam", "approve", "retain", "close", "cancel", "finish", "revise"
+    "continue", "run_research", "select_candidate", "open_exam", "approve", "retain", "close", "cancel", "finish", "revise"
 ]
 CandidateKey = Literal["incumbent", "all_period", "recent"]
 RetainKind = Literal["keep_current", "wait_for_fresh_data", "retain_exploration"]
@@ -39,7 +39,7 @@ RetainKind = Literal["keep_current", "wait_for_fresh_data", "retain_exploration"
 RefusalKind = Literal["invalid", "conflict", "not_found", "unavailable"]
 
 COMMANDS: tuple[CommandName, ...] = (
-    "continue", "select_candidate", "open_exam", "approve", "retain", "close", "cancel", "finish", "revise"
+    "continue", "run_research", "select_candidate", "open_exam", "approve", "retain", "close", "cancel", "finish", "revise"
 )
 RETAIN_KINDS: tuple[RetainKind, ...] = ("keep_current", "wait_for_fresh_data", "retain_exploration")
 CANDIDATE_KEYS: tuple[CandidateKey, ...] = ("incumbent", "all_period", "recent")
@@ -127,6 +127,8 @@ class StudyRow:
     incomplete: bool
     failure_reason: str | None
     hidden: bool
+    # Run research (ADR 0074 decision 1, #2811): Search hands on to Test over time and the study pauses at Compare.
+    run_to_compare: bool = False
 
 
 @dataclass(frozen=True, slots=True)

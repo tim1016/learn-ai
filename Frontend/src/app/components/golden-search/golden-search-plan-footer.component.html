@@ -71,7 +71,7 @@
       } @else if (blocked(); as message) {
         <span>{{ message }}</span>
       } @else if (ready()) {
-        <span class="ok"><i class="pi pi-check" aria-hidden="true"></i> Plan is ready to lock.</span><span class="status__more"> Locking freezes it; a later change becomes a new study.</span>
+        <span class="ok"><i class="pi pi-check" aria-hidden="true"></i> Plan is ready to lock.</span><span class="status__more" id="gs-run-research-scope"> Run research locks it, runs Search and Test over time on the server, and stops at Compare for you to choose. A later change becomes a new study.</span>
       } @else if (refusals().length > 0) {
         <span class="bad">{{ refusals().length }} {{ refusals().length === 1 ? 'problem' : 'problems' }} to fix before locking</span>
       } @else {
@@ -79,8 +79,11 @@
       }
     </p>
     <button type="button" class="ghost" [disabled]="preflight() === null" [attr.aria-expanded]="detailsOpen()" [attr.aria-controls]="detailsOpen() ? 'gs-plan-details' : null" (click)="toggleDetails()">{{ detailsOpen() ? 'Hide details' : 'Show details' }}</button>
-    <button pButton type="button" [disabled]="!canLock()" (click)="lock.emit()">
-      <i class="pi pi-lock" aria-hidden="true"></i><span>{{ revising() ? 'Lock as a new study' : 'Lock plan' }}</span>
+    <button pButton type="button" severity="secondary" [outlined]="true" [disabled]="!canLock()" (click)="lock.emit()">
+      <i class="pi pi-lock" aria-hidden="true"></i><span>{{ revising() ? 'Lock as a new study only' : 'Lock only' }}</span>
+    </button>
+    <button pButton type="button" [disabled]="!canLock()" aria-describedby="gs-run-research-scope" (click)="run.emit()">
+      <i class="pi pi-play" aria-hidden="true"></i><span>Run research</span>
     </button>
   </div>
 </section>

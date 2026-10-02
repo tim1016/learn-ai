@@ -82,7 +82,8 @@
       [ready]="ready()"
       [canLock]="canLock()"
       [revising]="revising()"
-      (lock)="lock()"
+      (lock)="lock(false)"
+      (run)="lock(true)"
       (jump)="jumpTo($event)"
     />
   } @else if (loadingDefaults()) {

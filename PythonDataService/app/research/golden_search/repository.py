@@ -42,7 +42,7 @@ _STUDY_COLUMNS = """
     stage_token, created_at_ms, updated_at_ms, finished_at_ms, protocol_json::text AS protocol_json,
     protocol_hash, receipt_json::text AS receipt_json, results_json::text AS results_json, candidate_key,
     exam_locked, decision_json::text AS decision_json, budget_cap, consumed_evaluations, cache_hits,
-    invalid_points, incomplete, failure_reason, hidden
+    invalid_points, incomplete, failure_reason, hidden, run_to_compare
 """
 _EVALUATION_COLUMNS = """
     study_id, evaluation_key, point_hash, point_json::text AS point_json, window_start_ms, window_end_ms,
@@ -64,6 +64,7 @@ _UPDATABLE_COLUMNS = frozenset(
         "incomplete",
         "finished_at_ms",
         "invalid_points",
+        "run_to_compare",
     }
 )
 
@@ -102,6 +103,7 @@ def _study(row: asyncpg.Record) -> StudyRow:
         incomplete=row["incomplete"],
         failure_reason=row["failure_reason"],
         hidden=row["hidden"],
+        run_to_compare=row["run_to_compare"],
     )
 
 
@@ -275,6 +277,28 @@ async def update_study_fenced(
     async with conn.transaction():
         await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
         return await update_study(conn, study_id, changes=changes, results_patch=results_patch, bump_revision=bump_revision)
+
+
+async def finish_or_advance(
+    conn: asyncpg.Connection,
+    study_id: str,
+    attempt: int,
+    *,
+    changes: Mapping[str, Any],
+    advance: Mapping[str, Any],
+) -> tuple[StudyRow, bool]:
+    """Close a stage under the attempt fence, applying ``advance`` too while the study still runs to Compare.
+
+    The intent is read under the same row lock as the write, so a Cancel that
+    cleared it first leaves the study paused, and a Cancel after it finds the
+    next stage bound to this job's cancel flag. Returns the row and whether it advanced.
+    """
+    async with conn.transaction():
+        await fence.lock_current_attempt(conn, table=STUDIES, record_id=study_id, attempt=attempt)
+        current = await lock_study(conn, study_id)
+        advanced = current is not None and current.run_to_compare
+        row = await update_study(conn, study_id, changes={**changes, **advance} if advanced else changes)
+        return row, advanced
 
 
 async def save_checkpoint(conn: asyncpg.Connection, study_id: str, attempt: int, checkpoint: Mapping[str, Any]) -> None:

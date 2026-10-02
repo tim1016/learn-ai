@@ -43,7 +43,44 @@ function currentStep(): string {
 }
 
 describe('GoldenSearchStudyComponent', () => {
-  it('locked: names the decision, offers Start the search, and sends continue against the revision on screen', async () => {
+  it('locked: Run research is the next action and sends run_research against the revision on screen', async () => {
+    const service = fakeService(studyDetail('locked'));
+    service.command.mockResolvedValueOnce({ study: studyDetail('search_running', { revision: 4, run_to_compare: true }), jobId: 'job-1' });
+    await renderStudy(service);
+
+    const process = screen.getByRole('list', { name: 'Research process' });
+    expect(process.querySelector('[aria-current="step"]')?.textContent).toContain('Research');
+    expect(within(process).getAllByRole('listitem')[0].textContent).toContain('(done)');
+    fireEvent.click(screen.getByRole('button', { name: 'Run research' }));
+
+    await waitFor(() => expect(service.command).toHaveBeenCalledTimes(1));
+    expect(service.command.mock.calls[0][1]).toMatchObject({ command: 'run_research', expected_revision: 3, payload: {} });
+  });
+
+  it('a stopped research run offers Resume research', async () => {
+    const service = fakeService(studyDetail('search_running', { presented_status: 'interrupted', run_to_compare: true, permitted_actions: ['run_research', 'finish', 'close', 'revise'] }));
+    await renderStudy(service);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume research' }));
+    await waitFor(() => expect(service.command.mock.calls[0]?.[1]).toMatchObject({ command: 'run_research' }));
+  });
+
+  it('a stage whose job did not start can be started again under the same authorization', async () => {
+    const service = fakeService(studyDetail('locked'));
+    const queued = studyDetail('search_running', { presented_status: 'queued', revision: 4 });
+    service.command.mockRejectedValueOnce(new StageDispatchError(queued, new Error('jobs down'))).mockResolvedValueOnce({ study: queued, jobId: 'job-2' });
+    await renderStudy(service);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run research' }));
+    expect(await screen.findByText(/its job did not start\. Start it again/)).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Start again' }));
+
+    await waitFor(() => expect(service.command).toHaveBeenCalledTimes(2));
+    expect(service.command.mock.calls[1][1]).toEqual(service.command.mock.calls[0][1]);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Start again' })).toBeNull());
+  });
+
+  it('locked: names the decision, offers Search only, and sends continue against the revision on screen', async () => {
     const service = fakeService(studyDetail('locked'));
     service.command.mockResolvedValueOnce({ study: studyDetail('search_running', { revision: 4 }), jobId: 'job-1' });
     await renderStudy(service);
@@ -52,7 +89,7 @@ describe('GoldenSearchStudyComponent', () => {
     expect(currentStep()).toMatch(/^2Search/);
     expect(screen.getByText(/the search has not started/i)).not.toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /start the search/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search only' }));
 
     await screen.findByRole('heading', { name: /the search is running/i });
     const [id, request] = service.command.mock.calls[0];
@@ -127,7 +164,7 @@ describe('GoldenSearchStudyComponent', () => {
     expect(currentStep()).toMatch(/Search/);
     expect(screen.getByRole('heading', { name: 'All-period search' })).not.toBeNull();
 
-    fireEvent.click(within(guidance(/check whether the search procedure holds up/i)).getByRole('button', { name: /test over time/i }));
+    fireEvent.click(within(guidance(/check whether the search procedure holds up/i)).getByRole('button', { name: 'Test over time only' }));
 
     await waitFor(() => expect(currentStep()).toMatch(/Test over time/));
     expect(service.command.mock.calls[0]?.[1]).toMatchObject({ command: 'continue' });
@@ -151,21 +188,10 @@ describe('GoldenSearchStudyComponent', () => {
     service.command.mockRejectedValueOnce(new StudyConflictError('STALE_REVISION', 'stale', studyDetail('awaiting_validation', { revision: 6 })));
     await renderStudy(service);
 
-    fireEvent.click(screen.getByRole('button', { name: /start the search/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search only' }));
 
     expect(await screen.findByText(/this study changed since it was shown/i)).not.toBeNull();
     expect(screen.getByRole('heading', { name: /check whether the search procedure holds up/i })).not.toBeNull();
-  });
-
-  it('a stage that was authorized but did not start points to Finish', async () => {
-    const service = fakeService(studyDetail('locked'));
-    service.command.mockRejectedValueOnce(new StageDispatchError(studyDetail('search_running', { presented_status: 'interrupted', permitted_actions: ['finish'] }), new Error('502')));
-    await renderStudy(service);
-
-    fireEvent.click(screen.getByRole('button', { name: /start the search/i }));
-
-    expect(await screen.findByText(/its job did not start\. use finish/i)).not.toBeNull();
-    expect(screen.getByRole('button', { name: /^finish$/i })).not.toBeNull();
   });
 
   it('a poll that was in flight when a command answered cannot roll the study back', async () => {
@@ -176,14 +202,14 @@ describe('GoldenSearchStudyComponent', () => {
     service.get.mockImplementationOnce(() => new Promise<StudyDetail>((resolve) => (answerPoll = resolve)));
     const poll = view.fixture.componentInstance.reload();
 
-    fireEvent.click(screen.getByRole('button', { name: /start the search/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search only' }));
     await screen.findByRole('heading', { name: /the search is running/i });
     answerPoll(studyDetail('locked'));
     await poll;
     await view.fixture.whenStable();
 
     expect(screen.getByRole('heading', { name: /the search is running/i })).not.toBeNull();
-    expect(screen.queryByRole('button', { name: /start the search/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Search only' })).toBeNull();
   });
 
   it("a command answer that lands after moving to another study leaves that study's page alone", async () => {
@@ -193,7 +219,7 @@ describe('GoldenSearchStudyComponent', () => {
     service.command.mockImplementationOnce(() => new Promise<CommandOutcome>((resolve) => (answerFirst = resolve)));
     const view = await renderStudy(service);
 
-    fireEvent.click(screen.getByRole('button', { name: /start the search/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search only' }));
     service.get.mockResolvedValue(other);
     view.fixture.componentRef.setInput('studyId', other.id);
     await screen.findByRole('heading', { name: 'All-period search' });
@@ -203,7 +229,7 @@ describe('GoldenSearchStudyComponent', () => {
     expect(screen.queryByRole('heading', { name: /the search is running/i })).toBeNull();
     expect(screen.getByRole('heading', { name: 'All-period search' })).not.toBeNull();
     service.command.mockResolvedValueOnce({ study: studyDetail('validation_running', { id: other.id, revision: 4 }), jobId: 'job-2' });
-    fireEvent.click(within(guidance(/check whether the search procedure holds up/i)).getByRole('button', { name: /test over time/i }));
+    fireEvent.click(within(guidance(/check whether the search procedure holds up/i)).getByRole('button', { name: 'Test over time only' }));
     await waitFor(() => expect(service.command.mock.calls.at(-1)?.[0]).toBe(other.id));
   });
 
@@ -212,7 +238,7 @@ describe('GoldenSearchStudyComponent', () => {
     let answerCommand: (outcome: CommandOutcome) => void = () => undefined;
     service.command.mockImplementationOnce(() => new Promise<CommandOutcome>((resolve) => (answerCommand = resolve)));
     const view = await renderStudy(service);
-    fireEvent.click(screen.getByRole('button', { name: /start the search/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search only' }));
     await waitFor(() => expect(service.command).toHaveBeenCalledOnce());
     service.get.mockResolvedValueOnce(studyDetail('awaiting_validation', { revision: 5 }));
     await view.fixture.componentInstance.reload();
@@ -220,7 +246,7 @@ describe('GoldenSearchStudyComponent', () => {
     answerCommand({ study: studyDetail('search_running', { revision: 4 }), jobId: null });
 
     // The command has answered once its busy state clears; the newer study is still the one shown.
-    await waitFor(() => expect((within(guidance(/check whether the search procedure holds up/i)).getByRole('button', { name: /test over time/i }) as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() => expect((within(guidance(/check whether the search procedure holds up/i)).getByRole('button', { name: 'Test over time only' }) as HTMLButtonElement).disabled).toBe(false));
   });
 
   it('a poll answering with a revision older than the one on screen is dropped', async () => {
@@ -266,7 +292,7 @@ describe('GoldenSearchStudyComponent', () => {
 
     await view.fixture.componentInstance.reload();
     service.command.mockRejectedValueOnce(new HttpErrorResponse({ status: 503, error: { detail: { message: 'The research store is not reachable.' } } }));
-    fireEvent.click(await screen.findByRole('button', { name: /start the search/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Search only' }));
 
     expect(await screen.findByText('The research store is not reachable.')).not.toBeNull();
   });
@@ -276,9 +302,9 @@ describe('GoldenSearchStudyComponent', () => {
     service.command.mockRejectedValueOnce(new Error('network down'));
     await renderStudy(service);
 
-    fireEvent.click(screen.getByRole('button', { name: /start the search/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search only' }));
     await screen.findByText(/the command got no answer/i);
-    fireEvent.click(screen.getByRole('button', { name: /start the search/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search only' }));
 
     await waitFor(() => expect(service.command).toHaveBeenCalledTimes(2));
     expect(service.command.mock.calls[1][1].idempotency_key).toBe(service.command.mock.calls[0][1].idempotency_key);

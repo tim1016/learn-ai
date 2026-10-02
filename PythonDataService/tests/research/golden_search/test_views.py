@@ -112,20 +112,23 @@ def test_the_exam_view_names_each_weakness_the_approval_acknowledges() -> None:
 # ── Permitted actions ────────────────────────────────────────────────────
 
 
-def test_an_authorized_stage_without_a_worker_reads_queued_and_can_only_be_cancelled() -> None:
+def test_an_authorized_stage_without_a_worker_reads_queued_and_can_be_cancelled_or_authorized_again() -> None:
     row = _row(state="search_running", status="queued", pending_stage="search", stage_token="t")
     presented = presented_status(row, live=False)
     refusals = action_refusals(row, presented=presented, resume_refusal=None)
-    assert presented == "queued" and permitted(refusals) == ["cancel"]
+    # Its dispatch may have been lost: Run research issues a fresh token (#2814 review).
+    assert presented == "queued" and permitted(refusals) == ["run_research", "cancel"]
+    exam = _row(state="exam_running", status="queued", pending_stage="exam", stage_token="t", exam_locked=True)
+    assert permitted(action_refusals(exam, presented="queued", resume_refusal=None)) == ["cancel"]
 
 
 def test_a_bound_stage_whose_worker_died_reads_interrupted_and_finish_follows_the_resume_rules() -> None:
     row = _row(state="validation_running", status="running", pending_stage="validation", job_id="j")
     presented = presented_status(row, live=False)
     assert presented == "interrupted"
-    assert permitted(action_refusals(row, presented=presented, resume_refusal=None)) == ["close", "finish", "revise"]
+    assert permitted(action_refusals(row, presented=presented, resume_refusal=None)) == ["run_research", "close", "finish", "revise"]
     blocked = action_refusals(row, presented=presented, resume_refusal="the engine or strategy code changed since launch")
-    assert blocked["finish"] == "the engine or strategy code changed since launch"
+    assert blocked["finish"] == blocked["run_research"] == "the engine or strategy code changed since launch"
     # Redis unreachable: never declared dead, so nothing that assumes the worker stopped is offered.
     assert permitted(action_refusals(row, presented=presented_status(row, live=None), resume_refusal=None)) == ["cancel"]
 

@@ -156,6 +156,9 @@ class GoldenSearchProtocolRequest(_CamelTolerantModel):
 class GoldenSearchCreateStudyRequest(_CamelTolerantModel):
     protocol: GoldenSearchProtocolRequest
     idempotency_key: str = Field(min_length=1, max_length=IDEMPOTENCY_KEY_MAX_LENGTH)
+    run_research: bool = Field(
+        False, description="Also start Search and run on through Test over time, pausing at Compare; the answer carries the dispatch."
+    )
 
 
 class GoldenSearchRevisePayload(_CamelTolerantModel):
@@ -451,6 +454,7 @@ class GoldenSearchStudySummary(_Wire):
     incomplete: bool
     failure_reason: str | None
     hidden: bool
+    run_to_compare: bool = Field(description="Run research is on: Search hands on to Test over time and the study pauses at Compare.")
     exposure_claim: Claim | None
     exam_outcome: ExamOutcome | None
     qualification_id: str | None

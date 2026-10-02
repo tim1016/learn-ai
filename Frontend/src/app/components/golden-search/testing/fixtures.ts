@@ -601,6 +601,7 @@ export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> =
     incomplete: false,
     failure_reason: state === 'qualification_failed' ? QUALIFICATION_FAILURE : null,
     hidden: false,
+    run_to_compare: false,
     exposure_claim: examOpened ? 'confirmatory' : null,
     exam_outcome: examJudged ? 'meets_rules' : null,
     qualification_id: state === 'approved' ? 'gq-0001-aaaa-bbbb' : null,
@@ -651,9 +652,9 @@ export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> =
 function permittedFor(state: StudyState): StudyDetail['permitted_actions'] {
   switch (state) {
     case 'locked':
-      return ['continue', 'revise', 'close'];
+      return ['continue', 'run_research', 'revise', 'close'];
     case 'awaiting_validation':
-      return ['continue', 'retain', 'revise', 'close'];
+      return ['continue', 'run_research', 'retain', 'revise', 'close'];
     case 'awaiting_candidate':
     case 'candidate_locked':
       return state === 'candidate_locked' ? ['select_candidate', 'open_exam', 'retain', 'revise', 'close'] : ['select_candidate', 'retain', 'revise', 'close'];

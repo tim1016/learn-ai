@@ -321,7 +321,7 @@ async def test_a_study_runs_from_lock_to_an_approved_golden_configuration_over_h
 ) -> None:
     study = await _lock(client, symbol)
     assert (study["state"], study["presented_status"], study["dispatch"]) == ("locked", "idle", None)
-    assert study["permitted_actions"] == ["continue", "close", "revise"]
+    assert study["permitted_actions"] == ["continue", "run_research", "close", "revise"]
 
     authorized = await _command(client, study, "continue")
     assert authorized.status_code == 200, authorized.text
@@ -361,6 +361,23 @@ async def test_a_study_runs_from_lock_to_an_approved_golden_configuration_over_h
     assert [row["id"] for row in listed.json()] == [study["id"]] and listed.json()[0]["qualification_id"] is not None
     # Every phase a stage reported has its label in the job vocabulary, in the order the stages ran.
     assert harness.phases == [phase.id for phase in JOB_PHASES["golden_search"]]
+
+
+async def test_run_research_locks_and_one_job_carries_the_study_to_compare_over_http(client: httpx.AsyncClient, harness: Harness, symbol: str) -> None:
+    key = _key()
+    body = {"protocol": plan_request(symbol), "idempotencyKey": key, "runResearch": True}
+    locked = await client.post(f"{BASE}/studies", json=body)
+    assert locked.status_code == 201, locked.text
+    study = locked.json()
+    assert study["run_to_compare"] and study["dispatch"] is not None and "cancel" in study["permitted_actions"]
+
+    retried = (await client.post(f"{BASE}/studies", json=body)).json()
+    assert retried["id"] == study["id"] and retried["dispatch"] == study["dispatch"]
+
+    await harness.run(await _start(client, study))
+    done = (await client.get(f"{BASE}/studies/{study['id']}")).json()
+    assert (done["state"], done["presented_status"]) == ("awaiting_candidate", "completed")
+    assert "select_candidate" in done["permitted_actions"] and done["results"]["evidence"] is not None
 
 
 async def test_a_stale_revision_is_a_409_carrying_the_study_as_it_now_stands(client: httpx.AsyncClient, harness: Harness, symbol: str) -> None:

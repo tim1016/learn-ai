@@ -25,6 +25,7 @@ from typing import Any
 
 from app.jobs.progress import JobCancelled
 from app.research.golden_search import repository as repo
+from app.research.golden_search.actions import authorize
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.budget import EXAM_EVALUATIONS, PROOF_EVALUATIONS
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, point_hash
@@ -712,7 +713,7 @@ def execute_stage(
     )
     logger.info("golden search stage started", extra={"action": "golden_search_stage_started", "study_id": study_id, "stage": stage, "attempt": attempt})
     try:
-        state = _run(ctx, stage, approval=approval, blob_store=blob_store)
+        state, next_token = _run(ctx, stage, approval=approval, blob_store=blob_store)
     except JobCancelled:
         _end_run(study_id, attempt, status="cancelled", reason=None)
         raise
@@ -726,10 +727,28 @@ def execute_stage(
         _end_run(study_id, attempt, status="failed", reason=f"{type(exc).__name__}: {exc}")
         raise
     logger.info("golden search stage finished", extra={"action": "golden_search_stage_finished", "study_id": study_id, "stage": stage, "state": state})
+    if next_token is not None:
+        # Run research (#2811): the same job claims the stage its search authorized, under one cancel flag and lease.
+        logger.info("golden search research advanced", extra={"action": "golden_search_research_advanced", "study_id": study_id, "from_stage": stage})
+        return execute_stage(
+            study_id,
+            stage_token=next_token,
+            job_id=job_id,
+            execute=execute,
+            approval=approval,
+            blob_store=blob_store,
+            roots=roots,
+            cancel_check=cancel_check,
+            on_phase=on_phase,
+            on_progress=on_progress,
+            on_log=on_log,
+            identity=identity,
+        )
     return StageOutcome(study_id=study_id, stage=stage, state=state)
 
 
-def _run(ctx: StageContext, stage: StageName, *, approval: ApprovalBinding | None, blob_store: Any | None) -> str:
+def _run(ctx: StageContext, stage: StageName, *, approval: ApprovalBinding | None, blob_store: Any | None) -> tuple[str, str | None]:
+    """Run ``stage`` and close it; the token of the stage it handed on to under Run research, else ``None``."""
     if ctx.row.state != STAGE_STATES[stage]:
         raise RuntimeError(f"study {ctx.row.id} is {ctx.row.state}, not in the {stage} stage")
     finished: dict[str, Any] = {
@@ -741,12 +760,21 @@ def _run(ctx: StageContext, stage: StageName, *, approval: ApprovalBinding | Non
     }
     if stage == "search":
         state = run_search(ctx)
-        _finish(ctx, {**finished, "state": state, "incomplete": _stage_incomplete(ctx.results, stage)}, {})
-        return state
+        incomplete = _stage_incomplete(ctx.results, stage)
+        changes = {**finished, "state": state, "incomplete": incomplete}
+        if incomplete:
+            # An unfinished search pauses Run research here, so the owner sees why before Test over time spends budget.
+            _finish(ctx, changes, {})
+            return state, None
+        advance, token = authorize("validation")
+        row, advanced = run_sync(
+            with_connection(repo.finish_or_advance, ctx.row.id, ctx.attempt, changes=changes, advance={**advance, "job_id": ctx.row.job_id})
+        )
+        return row.state, token if advanced else None
     if stage == "validation":
         state = run_validation(ctx)
         _finish(ctx, {**finished, "state": state, "incomplete": _stage_incomplete(ctx.results, stage)}, {})
-        return state
+        return state, None
     if stage == "exam":
         state, exam = run_exam(ctx)
         exposure = {
@@ -775,16 +803,16 @@ def _run(ctx: StageContext, stage: StageName, *, approval: ApprovalBinding | Non
                 exposure=exposure,
             )
         )
-        return state
+        return state, None
     state, qualification, reason = run_qualification(ctx, approval or default_approval(), blob_store)
     if state == "approved":
         current = run_sync(with_connection(repo.get_study, ctx.row.id))
         if current is None or current.state != "approved":
             # The publish committed without moving the study (an idempotent approval retry): move it now.
             _finish(ctx, _approved_changes(), {"qualification": qualification})
-        return state
+        return state, None
     _finish(ctx, {**finished, "state": state, "incomplete": False, "failure_reason": reason}, {"qualification": qualification})
-    return state
+    return state, None
 
 
 def _finish(ctx: StageContext, changes: Mapping[str, Any], results_patch: Mapping[str, Any]) -> None:

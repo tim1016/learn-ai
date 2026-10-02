@@ -116,8 +116,15 @@ async def preflight_plan(body: GoldenSearchProtocolRequest) -> GoldenSearchPrefl
 
 @router.post("/studies", status_code=status.HTTP_201_CREATED, response_model=GoldenSearchStudyDetail, responses=_REFUSALS)
 async def lock_study(body: GoldenSearchCreateStudyRequest) -> GoldenSearchStudyDetail:
-    """Lock a reviewed plan into a new study; the same key and plan return the study it already locked."""
+    """Lock a reviewed plan into a new study; the same key and plan return the study it already locked.
+
+    With ``run_research`` the study also starts Search and runs on to Compare;
+    the answer carries the dispatch the client starts through the jobs boundary.
+    """
     try:
+        if body.run_research:
+            outcome = await service.lock_and_run(body.protocol.as_plan(), idempotency_key=body.idempotency_key)
+            return await _detail(outcome.study, dispatch=outcome.dispatch)
         row = await service.lock_study(body.protocol.as_plan(), idempotency_key=body.idempotency_key)
     except GoldenSearchRefusal as exc:
         raise await _refused(exc) from exc

@@ -211,6 +211,7 @@ interface CommandEnvelope<C extends StudyCommandName, P> {
 
 export type StudyCommandRequest =
   | CommandEnvelope<'continue', Record<string, never>>
+  | CommandEnvelope<'run_research', Record<string, never>>
   | CommandEnvelope<'select_candidate', { candidate_key: CandidateKey }>
   | CommandEnvelope<'open_exam', { acknowledge_final_test: true }>
   | CommandEnvelope<
@@ -229,6 +230,8 @@ export type StudyCommand = { [C in StudyCommandRequest as C['command']]: Pick<C,
 export interface CreateStudyRequest {
   protocol: ProtocolRequest;
   idempotency_key: string;
+  /** Run research (#2811): also start Search and run on to Compare; the answer carries the dispatch. */
+  run_research?: boolean;
 }
 
 // ---------------------------------------------------------------- reads
