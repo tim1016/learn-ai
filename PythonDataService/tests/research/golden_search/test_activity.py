@@ -9,7 +9,7 @@ from typing import Any, cast
 
 import pytest
 
-from app.research.golden_search.activity import activity_plan, minimum_trades, window_activity
+from app.research.golden_search.activity import TradeFloors, activity_plan, window_activity
 from app.research.golden_search.budget import review_protocol
 from app.research.golden_search.declarations import declaration_for
 from app.research.golden_search.evaluator import StudyEvaluator
@@ -96,20 +96,19 @@ def test_a_plan_has_a_frequency_or_fixed_floors_never_both() -> None:
 
 def test_the_receipt_freezes_the_rate_and_yearly_counts_against_later_edits_and_calendar_updates(monkeypatch: pytest.MonkeyPatch) -> None:
     protocol = protocol_from_request(frequency_plan_request("SPY"))
-    frozen = activity_plan(protocol)
-    assert frozen is not None
-    window = frozen["windows"][0]
+    receipt = {"activity": activity_plan(protocol)}
+    window = receipt["activity"]["windows"][0]
+    span = (window["start_ms"], window["end_ms"])
     assert window["years"] == [{"year": 2025, "selected_sessions": 60, "year_sessions": 250}]
     assert window["minimum_trades"] == 12
-    changed = replace(protocol, expected_trades_per_year=100)
-    assert minimum_trades(changed, window["start_ms"], window["end_ms"]) == 24
     with pytest.raises(ValueError, match="does not match"):
-        minimum_trades(changed, window["start_ms"], window["end_ms"], frozen=frozen)
+        TradeFloors(replace(protocol, expected_trades_per_year=100), receipt)
+    # A later calendar would compute 13 for this window; the study keeps the 12 it froze.
     monkeypatch.setattr("app.research.golden_search.activity._year_sessions", lambda _year: 240)
-    assert minimum_trades(protocol, window["start_ms"], window["end_ms"], frozen=frozen) == 12
-    assert minimum_trades(protocol, window["start_ms"], window["end_ms"]) == 13
+    assert window_activity(50, *span)["minimum_trades"] == 13
+    assert TradeFloors(protocol, receipt).at(span) == 12
     with pytest.raises(ValueError, match="no activity policy"):
-        minimum_trades(protocol, *_window(date(2026, 1, 1), date(2026, 2, 1)), frozen=frozen)
+        TradeFloors(protocol, receipt).at(_window(date(2026, 1, 1), date(2026, 2, 1)))
 
 
 def test_the_forward_floor_covers_every_scheduled_fold_test() -> None:
@@ -131,8 +130,9 @@ def test_a_legacy_plan_keeps_its_hash_and_its_two_fixed_floors() -> None:
     assert legacy.protocol_hash() == LEGACY_PROTOCOL_HASH
     assert "expected_trades_per_year" not in legacy.as_dict()
     assert GoldenSearchProtocol.from_dict({**legacy.as_dict(), "expected_trades_per_year": None}).protocol_hash() == LEGACY_PROTOCOL_HASH
-    assert minimum_trades(legacy, legacy.final_start_ms, legacy.final_end_ms, final=True) == 7
-    assert minimum_trades(legacy, legacy.development_start_ms, legacy.development_end_ms) == 1
+    floors = TradeFloors(legacy, {})
+    assert floors.at((legacy.final_start_ms, legacy.final_end_ms), final=True) == 7
+    assert floors.at((legacy.development_start_ms, legacy.development_end_ms)) == 1
     assert activity_plan(legacy) is None
 
 
@@ -143,15 +143,20 @@ def test_an_unresolved_floor_never_reaches_selection() -> None:
 
 
 def test_stages_use_each_windows_floor_and_the_verdict_uses_all_forward_time(monkeypatch: pytest.MonkeyPatch) -> None:
-    protocol = protocol_from_request(frequency_plan_request("SPY"))
+    # Two folds whose windows are all distinct: training floors 9 and 8, one-month tests about 4 each, all forward time 8.
+    protocol = protocol_from_request(frequency_plan_request("SPY", training_months=2, development_start_ms=et_midnight_ms(date(2024, 12, 1))))
     declaration = declaration_for(protocol.strategy_key)
     assert declaration is not None
     row = cast(StudyRow, SimpleNamespace(id="frequency-study", receipt={"activity": activity_plan(protocol)}))
     ctx = StageContext(row, 0, protocol, declaration, FakeEngine(), [], lambda: None, lambda _: None, lambda *_: None, lambda _: None)
 
+    tests = {(fold.test_start_ms, fold.test_end_ms) for fold in fold_windows(protocol)}
+
     class Evaluator:
-        def evaluate(self, points: list[Any], **_kwargs: Any) -> list[Any]:
-            return [metrics(1.5, trades=5) for _ in points]
+        """9 trades on each training window, enough for both training floors; 3 on each test window."""
+
+        def evaluate(self, points: list[Any], *, window: tuple[int, int], **_kwargs: Any) -> list[Any]:
+            return [metrics(1.5, trades=3 if window in tests else 9) for _ in points]
 
     # Replace persistence only; the production Zoom, fold selection and verdict run.
     monkeypatch.setattr("app.research.golden_search.stages.with_connection", lambda *_args, **_kwargs: 0)
@@ -159,13 +164,15 @@ def test_stages_use_each_windows_floor_and_the_verdict_uses_all_forward_time(mon
     monkeypatch.setattr(StageContext, "trials", lambda *_args: None)
     monkeypatch.setattr(StageContext, "write", lambda self, patch: self.results.update(patch))
     verdict = _validation(ctx, cast(StudyEvaluator, Evaluator()))
-    # Each one-month training window needs 5 trades at 50 per year, so 5 qualifies there.
+    # Every fold qualifies on its own training floor, yet 6 forward trades miss the all-forward floor of 8
+    # (a per-fold test floor of about 4 would have passed them).
     assert all(fold["status"] == "completed" for fold in ctx.results["validation"]["folds"])
-    assert verdict.label == "still worked" and verdict.oos_trade_count == 10
-    assert ctx.policy(ctx.development).min_trades == 12
-    assert ineligibility(metrics(1.5, trades=5), ctx.policy(ctx.development)) == "TOO_FEW_TRADES"
+    assert (verdict.label, verdict.oos_trade_count) == ("too few trades", 6)
+    assert verdict.reason.endswith("below the minimum of 8")
+    assert ctx.floors.policy(ctx.development).min_trades == 17
+    assert ineligibility(metrics(1.5, trades=5), ctx.floors.policy(ctx.development)) == "TOO_FEW_TRADES"
 
-    floor = ctx.trade_floor(ctx.final, final=True)
+    floor = ctx.floors.at(ctx.final, final=True)
     assert floor == 5
     judgement = judge_exam(metrics(1.5, trades=4), metrics(1.0), policy=protocol.policy, exam_min_trades=floor, development_objective=1.5, frequency_policy=True)
     assert judgement.outcome == "not_enough_evidence"
@@ -180,4 +187,4 @@ def test_a_frequency_plan_without_its_receipt_refuses_instead_of_falling_back() 
     row = cast(StudyRow, SimpleNamespace(id="frequency-study", receipt={}))
     ctx = StageContext(row, 0, protocol, declaration, FakeEngine(), [], lambda: None, lambda _: None, lambda *_: None, lambda _: None)
     with pytest.raises(ValueError, match="missing its expected trade frequency"):
-        ctx.trade_floor(ctx.development)
+        ctx.floors.at(ctx.development)

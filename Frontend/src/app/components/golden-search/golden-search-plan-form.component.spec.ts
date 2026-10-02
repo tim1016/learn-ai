@@ -304,12 +304,17 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(cell('Slow EMA length', 'Values')).toBe('23');
   });
 
-  it('every field the server can refuse links to an input the form renders', async () => {
+  // A plan shows either its expected trade frequency or its two fixed floors, so the hidden fields are never refused.
+  it.each([
+    { plan: 'a fixed-floor plan', policy: undefined, hidden: ['expected_trades_per_year'] },
+    { plan: 'a frequency plan', policy: frequencyProtocol(), hidden: ['policy.min_trades', 'exam_min_trades'] },
+  ])('every field the server can refuse links to an input the form renders, for $plan', async ({ policy, hidden }) => {
     const service = fakeService();
+    if (policy) service.defaults.mockResolvedValue(defaults({ policy: policy.policy, exam_min_trades: policy.exam_min_trades, expected_trades_per_year: policy.expected_trades_per_year }));
     const { view } = await renderForm(service);
     await pickSpy(service, view);
     const knobs = defaults().knobs;
-    const fields = [...Object.keys(REFUSAL_INPUTS).filter((field) => field !== 'expected_trades_per_year'), ...knobs.flatMap((knob) => [`knobs.${knob.name}`, `seed.${knob.name}`, ...(knob.mode === 'search' ? [`knobs.${knob.name}.step`] : [])])];
+    const fields = [...Object.keys(REFUSAL_INPUTS).filter((field) => !hidden.includes(field)), ...knobs.flatMap((knob) => [`knobs.${knob.name}`, `seed.${knob.name}`, ...(knob.mode === 'search' ? [`knobs.${knob.name}.step`] : [])])];
 
     const missing = fields.filter((field) => {
       const target = refusalTarget(field, knobs);

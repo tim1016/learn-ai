@@ -13334,6 +13334,11 @@ export interface components {
             available: boolean;
             /** Constraints */
             constraints: components["schemas"]["GoldenSearchConstraint"][];
+            /**
+             * Default Expected Trades Per Year
+             * @description The expected trade frequency a new plan starts with, in completed trades per trading year.
+             */
+            default_expected_trades_per_year: number;
             /** Default Pair Audits */
             default_pair_audits: [
                 string,

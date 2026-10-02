@@ -25,7 +25,7 @@
           <app-golden-search-evidence-tabs [studyId]="s.id" [rows]="rows()" [selected]="row" [pairMaps]="pairMaps()" [mapCenter]="mapCenter()"
             [mapCenterLabel]="mapCenterLabel()" [capability]="capability()" [scope]="s.scope" />
         </section>
-        <app-golden-search-candidate-aside [candidate]="row.candidate" [policy]="s.protocol.policy" [activity]="s.activity ?? null" [finalState]="s.scope.final_state" />
+        <app-golden-search-candidate-aside [candidate]="row.candidate" [study]="s" />
       </div>
     }
 

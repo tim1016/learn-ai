@@ -59,6 +59,7 @@ export function emaCapability(overrides: Partial<StrategyCapability> = {}): Stra
       ['fast_period', 'slow_period'],
       ['rsi_min', 'rsi_max'],
     ],
+    default_expected_trades_per_year: 50,
     ...overrides,
   };
 }
@@ -73,6 +74,7 @@ export function unavailableCapability(): StrategyCapability {
     fixed: [],
     constraints: [],
     default_pair_audits: [],
+    default_expected_trades_per_year: 50,
   };
 }
 

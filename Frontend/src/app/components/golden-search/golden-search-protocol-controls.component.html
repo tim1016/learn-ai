@@ -29,6 +29,8 @@
     }
   } @else {
     <p class="hint">This revised plan keeps its original fixed trade floors.</p>
-    <button pButton type="button" size="small" severity="secondary" [outlined]="true" class="frequency-switch" (click)="onNumber('expected_trades_per_year', '50')">Use expected trade frequency (50 per year)</button>
+    @if (defaultRate(); as rate) {
+      <button pButton type="button" size="small" severity="secondary" [outlined]="true" class="frequency-switch" (click)="onNumber('expected_trades_per_year', '' + rate)">Use expected trade frequency ({{ rate }} per year)</button>
+    }
   }
 </section>

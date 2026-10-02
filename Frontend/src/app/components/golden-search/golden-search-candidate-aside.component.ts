@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-import { percentInputValue } from './golden-search-display';
-import type { EvidenceCandidate, SelectionPolicy, StudyScope, TradeActivity } from './golden-search.types';
+import { percentInputValue, studyTradeFloor, usesTradeFrequency } from './golden-search-display';
+import type { EvidenceCandidate, StudyDetail } from './golden-search.types';
 
 /**
  * What choosing this candidate implies (#2696): the server's guidance for the
@@ -17,11 +17,9 @@ import type { EvidenceCandidate, SelectionPolicy, StudyScope, TradeActivity } fr
 })
 export class GoldenSearchCandidateAsideComponent {
   readonly candidate = input.required<EvidenceCandidate>();
-  readonly policy = input.required<SelectionPolicy>();
-  readonly finalState = input.required<StudyScope['final_state']>();
-  readonly activity = input<TradeActivity | null>(null);
+  readonly study = input.required<StudyDetail>();
 
-  protected readonly ceiling = computed(() => `${percentInputValue(this.policy().max_drawdown_ceiling)}%`);
-  /** The development period's floor: frozen by the plan's expected trade frequency, or its fixed floor. */
-  protected readonly floor = computed(() => this.activity()?.windows.find((window) => window.key === 'development')?.minimum_trades ?? this.policy().min_trades);
+  protected readonly ceiling = computed(() => `${percentInputValue(this.study().protocol.policy.max_drawdown_ceiling)}%`);
+  protected readonly frequencyBased = computed(() => usesTradeFrequency(this.study().protocol));
+  protected readonly floor = computed(() => studyTradeFloor(this.study(), 'development'));
 }

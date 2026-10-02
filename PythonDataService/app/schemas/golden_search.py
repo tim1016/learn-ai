@@ -249,6 +249,7 @@ class GoldenSearchCapability(_Wire):
     fixed: list[GoldenSearchFixedControl]
     constraints: list[GoldenSearchConstraint]
     default_pair_audits: list[tuple[str, str]]
+    default_expected_trades_per_year: int = Field(description="The expected trade frequency a new plan starts with, in completed trades per trading year.")
 
 
 # The frozen plan as stored and echoed (snake_case only).

@@ -128,7 +128,9 @@ holidays excluded and early closes counted once. Sum across calendar years
 before rounding up. A training window, the full development period, the recent
 fit and the final interval each use their own duration. The walk-forward
 verdict uses all scheduled forward-test windows, including failed folds, for
-its aggregate activity floor; failures still leave holes in the evidence.
+its aggregate activity floor, so a failure never lowers the requirement;
+failures still leave holes in the evidence, and any failed fold already makes
+the verdict "could not be judged".
 
 Preflight shows the window minima. Lock freezes the annual frequency, the
 per-year session counts and each window's minimum in the receipt. Evaluation

@@ -435,7 +435,7 @@ describe('GoldenSearchStudyComponent', () => {
   });
 
   it('passes axe on the Plan, Search and Test over time steps', async () => {
-    const view = await renderStudy(fakeService(studyDetail('awaiting_candidate')));
+    const view = await renderStudy(fakeService(studyDetail('awaiting_candidate', { protocol: frequencyProtocol(), activity: tradeActivity() })));
     const nav = within(screen.getByRole('navigation', { name: 'Research steps' }));
 
     for (const step of [/plan/i, /search/i, /test over time/i]) {

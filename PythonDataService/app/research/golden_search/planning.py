@@ -301,6 +301,8 @@ class PlanReview:
     review: ProtocolReview | None
     refusals: tuple[ProtocolRefusal, ...]
     run_up: StudyRunUp | None
+    # Each window's trade floor (``activity.activity_plan``); the lock freezes this same value.
+    activity: dict[str, Any] | None = None
 
     @property
     def lockable(self) -> bool:
@@ -338,13 +340,13 @@ def review_plan(protocol: GoldenSearchProtocol, *, roots: Sequence[Path] | None 
     try:
         run_up = plan_study_run_up(protocol, declaration, roots=resolved)
     except GoldenSearchRefusal as exc:
-        return PlanReview(protocol=protocol, review=review, refusals=(_as_refusal(exc),), run_up=None)
+        return PlanReview(protocol=protocol, review=review, refusals=(_as_refusal(exc),), run_up=None, activity=activity)
     if check_data:
         availability = check_availability(resolved, protocol.symbol, run_up.data_start, et_date_at_ms(protocol.final_end_ms - 1))
         if not availability.is_complete:
             refusal = _refusal(data_missing_refusal(MissingSessionsError(availability)))
-            return PlanReview(protocol=protocol, review=review, refusals=(_as_refusal(refusal),), run_up=run_up)
-    return PlanReview(protocol=protocol, review=review, refusals=(), run_up=run_up)
+            return PlanReview(protocol=protocol, review=review, refusals=(_as_refusal(refusal),), run_up=run_up, activity=activity)
+    return PlanReview(protocol=protocol, review=review, refusals=(), run_up=run_up, activity=activity)
 
 
 def preflight_view(plan: PlanReview, exposure: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -366,7 +368,7 @@ def preflight_view(plan: PlanReview, exposure: Mapping[str, Any] | None) -> dict
             "run_up_sessions": plan.run_up.run_up_sessions,
             "data_start_ms": et_midnight_ms(plan.run_up.data_start),
         },
-        "activity": activity_plan(plan.protocol) if review is not None and not review.refusals else None,
+        "activity": plan.activity,
     }
 
 
@@ -428,7 +430,7 @@ def build_receipt(plan: PlanReview, *, snapshot_dict: Mapping[str, Any], snapsho
         "context_digest": context_digest(context),
         "estimate": plan.review.estimate.as_dict(),
         "folds": [fold.as_dict() for fold in plan.review.folds],
-        "activity": activity_plan(protocol),
+        "activity": plan.activity,
     }
 
 

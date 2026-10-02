@@ -18511,6 +18511,11 @@
             "title": "Constraints",
             "type": "array"
           },
+          "default_expected_trades_per_year": {
+            "description": "The expected trade frequency a new plan starts with, in completed trades per trading year.",
+            "title": "Default Expected Trades Per Year",
+            "type": "integer"
+          },
           "default_pair_audits": {
             "items": {
               "maxItems": 2,
@@ -18570,7 +18575,8 @@
           "knobs",
           "fixed",
           "constraints",
-          "default_pair_audits"
+          "default_pair_audits",
+          "default_expected_trades_per_year"
         ],
         "title": "GoldenSearchCapability",
         "type": "object"

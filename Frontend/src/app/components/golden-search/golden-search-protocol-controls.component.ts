@@ -12,8 +12,9 @@ import type { GoldenSearchPreflight, ProtocolRequest, RankingMeasure } from './g
 
 /**
  * How to judge a candidate (#2696), frozen at lock: the objective that ranks
- * candidates, and the drawdown ceiling, trade floor and positive-net rule
- * that reject one whatever its score. Every value is a starting policy; the
+ * candidates, and the drawdown ceiling, trade floor (an expected trade
+ * frequency, or a legacy plan's fixed floor) and positive-net rule that
+ * reject one whatever its score. Every value is a starting policy; the
  * server preflight judges the plan.
  */
 @Component({
@@ -26,6 +27,8 @@ import type { GoldenSearchPreflight, ProtocolRequest, RankingMeasure } from './g
 export class GoldenSearchProtocolControlsComponent {
   readonly protocol = input.required<ProtocolRequest>();
   readonly preflight = input<GoldenSearchPreflight | null>(null);
+  /** The rate a legacy plan adopts when switched to an expected trade frequency (the server's default). */
+  readonly defaultRate = input<number | null>(null);
   readonly problems = input<ReadonlyMap<string, string>>(new Map());
   readonly edit = output<PlanEdit>();
 

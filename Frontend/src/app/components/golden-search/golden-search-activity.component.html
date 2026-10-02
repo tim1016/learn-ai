@@ -1,4 +1,4 @@
-<div class="activity" aria-label="Duration-based minimum trades">
+<section class="activity" aria-label="Duration-based minimum trades">
   <p><strong>Expected trade frequency: {{ activity().expected_trades_per_year }} completed trades per trading year</strong></p>
   <dl>
     @for (window of windows(); track window.key) {
@@ -14,4 +14,4 @@
     </dl>
   </details>
   <p class="hint">Weekends and exchange holidays are excluded; early closes count as one trading day. Each year's calendar sets the annual denominator, and fractional trades round up.</p>
-</div>
+</section>
