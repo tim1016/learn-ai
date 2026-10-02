@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
+from decimal import Decimal
 
 import httpx
 
@@ -30,6 +31,14 @@ POLYGON_HISTORY_YEARS = 5
 #: covers that exclusion; the second keeps a window composed just before an
 #: ET midnight inside the entitlement when the worker issues the call.
 _HISTORY_FLOOR_MARGIN_DAYS = 2
+
+#: The first session whose aggregate ``v`` carries fractional shares: the SIPs
+#: began reporting fractional quantities on 2026-02-23. Probed 2026-10-01 on
+#: SPY: every session through 2026-02-20 has whole-share volume, 2026-02-23
+#: has fractional. Lake days on or after it that were captured before the lake
+#: stored exact volume hold whole shares rounded down; their data contract
+#: (``ensure_data._minute_trade_dch``) no longer matches, so they re-fetch.
+FRACTIONAL_VOLUME_START = date(2026, 2, 23)
 
 
 def polygon_history_floor(today: date) -> date:
@@ -81,11 +90,10 @@ class PolygonBar:
     """One minute bar from Polygon /v2/aggs.
 
     t_ms is the bar's start time in UTC ms (Polygon's `t` field). Prices are
-    raw floats from the JSON. Volume keeps the vendor's raw number — int
-    when the JSON carried an int, float when it carried a fraction — so the
-    lake's publication gate can reject a fractional ``v`` instead of
-    silently truncating it (#2527 review); validated captures always pass
-    it on as an int.
+    raw floats from the JSON. Volume is the vendor's exact number as a
+    Decimal, parsed straight from the JSON text: since 2026-02-23 the SIPs
+    report fractional shares, so ``v`` carries up to six decimals
+    (SPY 2026-09-21 04:00 ET: ``9238.22128``).
     """
 
     t_ms: int
@@ -93,7 +101,7 @@ class PolygonBar:
     high: float
     low: float
     close: float
-    volume: int | float
+    volume: Decimal
     vwap: float
     n: int  # number of trades aggregated
 
@@ -163,7 +171,9 @@ async def fetch_aggregate_bars(
             except httpx.RequestError as exc:
                 raise PolygonFetchError(f"Polygon transport error for {symbol}: {exc}", status_code=None) from exc
             _raise_for_status(resp, symbol)
-            payload = resp.json()
+            # Floats parse as Decimal so a fractional volume keeps the vendor's
+            # exact digits; prices and vwap are converted back to float below.
+            payload = resp.json(parse_float=Decimal)
             _raise_for_payload_status(payload, symbol, resp.status_code)
             for r in payload.get("results") or []:
                 out.append(
@@ -173,10 +183,10 @@ async def fetch_aggregate_bars(
                         high=float(r["h"]),
                         low=float(r["l"]),
                         close=float(r["c"]),
-                        # Raw number preserved: a fractional volume is vendor
-                        # corruption the lake's publication gate must see,
-                        # not silently truncate (#2527 review).
-                        volume=r["v"],
+                        # Exact vendor number, fractional shares included;
+                        # the lake's publication gate still sees a negative
+                        # or non-finite ``v`` (#2527 review).
+                        volume=Decimal(r["v"]),
                         vwap=float(r.get("vw", 0.0)),
                         n=int(r.get("n", 0)),
                     )

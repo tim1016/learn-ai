@@ -73,6 +73,7 @@ from app.data_lake.path_policy import (
 )
 from app.data_lake.polygon_corp_actions import DividendEvent, SplitEvent, fetch_dividends, fetch_splits
 from app.data_lake.polygon_fetcher import (
+    FRACTIONAL_VOLUME_START,
     PolygonAuthError,
     PolygonBar,
     PolygonEntitlementError,
@@ -233,13 +234,27 @@ async def _publish_under_lease(
     return file_sha, None
 
 
-def _minute_trade_dch(price_adjustment_mode: PriceAdjustmentMode, adjustment_version: str | None = None) -> str:
+def _minute_trade_dch(
+    price_adjustment_mode: PriceAdjustmentMode,
+    adjustment_version: str | None = None,
+    *,
+    trading_date: date,
+) -> str:
+    """Minute-trade contract hash for one session.
+
+    A session on or after :data:`FRACTIONAL_VOLUME_START` also records that
+    its volume is stored exactly: those days captured earlier hold whole
+    shares rounded down, so the changed hash re-fetches them. An earlier
+    session's bytes are identical under either recipe, so its hash — and
+    every cache hit on it — is left alone.
+    """
     return _dch(
         provider="polygon",
         provider_params={
             **_DCH_MINUTE_TRADE_PARAMS,
             "adjusted": _polygon_adjusted_flag(price_adjustment_mode),
             **({"corporate_action_version": adjustment_version} if adjustment_version else {}),
+            **({"volume": "exact"} if trading_date >= FRACTIONAL_VOLUME_START else {}),
         },
         price_adjustment_mode=price_adjustment_mode,
         session_policy="full",
@@ -476,9 +491,15 @@ def _minute_trade_cache_matches(row: ArtifactRecord, dch: str, lake_root: Path, 
     contract hash differs only to record that it was imported. Reusing it is
     what the import is for (#1839), and #2454's version pinning was never to
     touch raw data (#2660). An adjusted import records no corporate-action
-    version, so it still rebuilds.
+    version, so it still rebuilds. An imported day on or after
+    :data:`FRACTIONAL_VOLUME_START` holds whole-share volume, so it rebuilds too.
     """
-    if version is None and row.data_contract_hash == import_minute_trade_dch(adjusted=False):
+    if (
+        version is None
+        and row.data_contract_hash == import_minute_trade_dch(adjusted=False)
+        and row.trading_date is not None
+        and row.trading_date < FRACTIONAL_VOLUME_START
+    ):
         return True
     return _cache_matches(row, dch, lake_root, version)
 
@@ -579,7 +600,9 @@ async def _process_minute_trade_artifact(
         data_type="trade",
     ).relative_path()
     file_path = str(rel_path)
-    dch = _minute_trade_dch(spec.price_adjustment_mode, adjustment_version)
+    dch = _minute_trade_dch(
+        spec.price_adjustment_mode, adjustment_version, trading_date=identity.trading_date,  # type: ignore[arg-type]
+    )
 
     artifact_id = await catalog_client.claim_minute_bar(
         identity=identity,
@@ -760,7 +783,8 @@ async def _process_minute_trade_artifact(
 
     # Validate the vendor response BEFORE anything is published (#2451): a
     # corrupt stream (duplicate/non-monotonic timestamps, wrong-day bars,
-    # non-positive or non-finite prices, OHLC violations, negative volume)
+    # non-positive or non-finite prices, OHLC violations, negative or
+    # non-finite volume)
     # fails the capture naming the offending bars. Nothing is repaired,
     # deduplicated or dropped — the writer stores time-of-day only, so the
     # lake cannot detect this after publication.
@@ -1948,7 +1972,13 @@ async def _ensure_data(spec: DataRunSpec, snapshots: dict[str, CorporateActionSn
             include_previously_published=True,
         )
         extra = [minute_bar_identity(spec, symbol=symbol, trading_date=row.trading_date, data_type="trade") for row in captured
-                 if not _cache_matches(row, _minute_trade_dch(spec.price_adjustment_mode, snapshot.version), lake_root, snapshot.version)]
+                 if row.trading_date is not None
+                 and not _cache_matches(
+                     row,
+                     _minute_trade_dch(spec.price_adjustment_mode, snapshot.version, trading_date=row.trading_date),
+                     lake_root,
+                     snapshot.version,
+                 )]
         required = [identity for identity in extra if identity not in required] + required
 
     # -----------------------------------------------------------------------

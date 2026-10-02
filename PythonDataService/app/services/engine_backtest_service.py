@@ -767,7 +767,7 @@ def _lean_parity_statistics(*, result: BacktestResult, trades: list[LoggedTrade]
                     "high": float(b.high),
                     "low": float(b.low),
                     "close": float(b.close),
-                    "volume": int(b.volume),
+                    "volume": float(b.volume),
                 }
                 for b in result.bars
             ]
@@ -1244,5 +1244,5 @@ def _serialize_chart_bar(b: TradeBar) -> dict[str, Any]:
         "h": float(b.high),
         "l": float(b.low),
         "c": float(b.close),
-        "v": int(b.volume),
+        "v": float(b.volume),
     }

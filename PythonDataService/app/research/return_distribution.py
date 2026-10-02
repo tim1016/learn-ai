@@ -130,7 +130,7 @@ class DayAnchors:
     noon_boundary_close: Decimal | None
     rth_close: Decimal | None
     last_close: Decimal
-    volume: int
+    volume: Decimal
     has_pre_market: bool
     has_after_hours: bool
 
@@ -161,7 +161,7 @@ class DailyReturns:
     morning_pct: float | None
     afternoon_pct: float | None
     after_hours_pct: float | None
-    volume: int
+    volume: Decimal
     bin_indices: tuple[int | None, ...] | None = None
 
 

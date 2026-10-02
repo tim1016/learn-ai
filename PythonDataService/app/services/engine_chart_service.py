@@ -67,7 +67,7 @@ def build_engine_chart(request: EngineChartRequest) -> EngineChartResponse:
             h=float(bar.high),
             l=float(bar.low),
             c=float(bar.close),
-            v=int(bar.volume),
+            v=float(bar.volume),
         )
         for bar in consolidated.bars
     ]

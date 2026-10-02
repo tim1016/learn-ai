@@ -596,6 +596,30 @@ def test_factor_file_dch_follows_the_captured_source_set():
     assert _factor_file_dch(narrow, "raw") == _factor_file_dch(list(reversed(narrow)), "raw")
 
 
+def test_minute_trade_dch_changes_only_from_the_first_fractional_volume_session():
+    """Lake days from 2026-02-23 on were captured as whole shares rounded
+    down, so their contract changes and they re-fetch with exact volume.
+    An earlier session keeps the hash it had before the lake stored exact
+    volume (pinned from master at d96f9ff4) — its bytes are the same either
+    way, and a changed hash would re-fetch the whole lake."""
+    from app.data_lake.ensure_data import _minute_trade_dch
+
+    before, first_fractional = date(2026, 2, 20), date(2026, 2, 23)
+
+    assert _minute_trade_dch("raw", trading_date=before) == (
+        "ecb730a3a866a21a7c00019337396e8c8b298b4d5edf0ded1699ae07b1364c16"
+    )
+    assert _minute_trade_dch("polygon_split_adjusted", "v1", trading_date=before) == (
+        "37370efbac98a6968e69c9dd4588431d0e50c25b2f209e33e27f34e9cdc44ce7"
+    )
+    assert _minute_trade_dch("raw", trading_date=first_fractional) != _minute_trade_dch(
+        "raw", trading_date=before
+    )
+    assert _minute_trade_dch("polygon_split_adjusted", "v1", trading_date=first_fractional) != (
+        _minute_trade_dch("polygon_split_adjusted", "v1", trading_date=before)
+    )
+
+
 # ---------------------------------------------------------------------------
 # #2452 review: one unpriceable session costs one span, not the symbol's file
 # ---------------------------------------------------------------------------

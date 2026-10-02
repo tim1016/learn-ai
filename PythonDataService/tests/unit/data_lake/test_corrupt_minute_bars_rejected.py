@@ -8,6 +8,8 @@ the corrupt bytes.
 
 from __future__ import annotations
 
+import io
+import zipfile
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -213,15 +215,27 @@ def test_reader_parses_well_formed_rows_as_before() -> None:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_a_fractional_volume_fails_the_capture_not_truncates(fake_catalog: FakeCatalog, tmp_lake) -> None:
-    """A vendor ``v: 1.5`` used to be truncated to 1 by the fetcher's int()
-    cast and published; the raw number is preserved and the contract rejects
-    it (#2527 review)."""
-    bars = [_bar(i) for i in range(5)]
-    raw = [{**b, "v": 1.5} for b in bars]
-    await _assert_corrupt_capture_failed(
-        _payload(raw), fake_catalog, tmp_lake, "volume=1.5 is not an integer"
-    )
+async def test_fractional_share_volume_publishes_exactly(fake_catalog: FakeCatalog, tmp_lake) -> None:
+    """Since 2026-02-23 Polygon's ``v`` carries fractional shares (SPY
+    2026-09-21 04:00 ET: ``9238.22128``). That is real volume, not
+    corruption: the capture publishes it to the last vendor digit, and a
+    whole volume still writes without a decimal point."""
+    vendor_volumes = [9238.22128, 5244.999999, 0.5, 1000, 34307.0]
+    mock_launcher()
+    _mock_polygon_with(_payload([_bar(i, v=v) for i, v in enumerate(vendor_volumes)]))
+
+    result = await _capture_one_day()
+
+    assert result.overall_status == "complete", result.failures
+    [zip_path] = _minute_zips(tmp_lake)
+    payload = zip_path.read_bytes()
+    with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+        rows = zf.read(zf.namelist()[0]).decode().splitlines()
+    assert [row.split(",")[5] for row in rows] == ["9238.22128", "5244.999999", "0.5", "1000", "34307"]
+    stored = LeanMinuteDataReader("/nonexistent-lake-root").parse_day_zip(payload, "SPY", TRADING_DAY)
+    assert [bar.volume for bar in stored] == [
+        Decimal("9238.22128"), Decimal("5244.999999"), Decimal("0.5"), Decimal("1000"), Decimal("34307"),
+    ]
 
 
 @respx.mock
@@ -275,7 +289,7 @@ async def test_a_legacy_corrupt_cache_hit_is_revalidated_and_rebuilt(
         identity=identity,
         worker_id="legacy-writer",
         lease_ttl_ms=60_000,
-        data_contract_hash=_minute_trade_dch(spec.price_adjustment_mode),
+        data_contract_hash=_minute_trade_dch(spec.price_adjustment_mode, trading_date=TRADING_DAY),
         file_path=f"equity/usa/minute/spy/{TRADING_DAY:%Y%m%d}_trade.zip",
     )
     assert artifact_id is not None

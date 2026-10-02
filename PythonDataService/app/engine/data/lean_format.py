@@ -42,7 +42,7 @@ from zoneinfo import ZoneInfo
 
 from app.data_lake.adjustment_versions import AdjustmentVersionGuard
 from app.data_lake.admission import LakeAdmissionError, read_committed_bytes
-from app.data_lake.lean_writer import to_deci_cent
+from app.data_lake.lean_writer import format_volume, parse_volume, to_deci_cent
 from app.engine.data.path_safety import ensure_within_root
 from app.engine.data.trade_bar import TradeBar
 from app.utils.timestamps import datetime_at_ms, to_ms_utc
@@ -186,7 +186,7 @@ def _parse_csv_bytes(
                 high=Decimal(h) / PRICE_SCALE,
                 low=Decimal(l) / PRICE_SCALE,
                 close=Decimal(c) / PRICE_SCALE,
-                volume=int(v),
+                volume=parse_volume(v),
             )
         )
     return bars
@@ -396,7 +396,7 @@ def _parse_daily_csv_bytes(
                 high=Decimal(h) / PRICE_SCALE,
                 low=Decimal(l) / PRICE_SCALE,
                 close=Decimal(c) / PRICE_SCALE,
-                volume=int(v),
+                volume=parse_volume(v),
             )
         )
     return bars
@@ -573,7 +573,7 @@ def write_lean_daily_zip(
             f"{to_deci_cent(bar.high)},"
             f"{to_deci_cent(bar.low)},"
             f"{to_deci_cent(bar.close)},"
-            f"{bar.volume}"
+            f"{format_volume(bar.volume)}"
         )
 
     buf = io.BytesIO()
@@ -676,7 +676,7 @@ def write_lean_day_zip(
             f"{to_deci_cent(bar.high)},"
             f"{to_deci_cent(bar.low)},"
             f"{to_deci_cent(bar.close)},"
-            f"{bar.volume}"
+            f"{format_volume(bar.volume)}"
         )
     buf = io.BytesIO()
     _write_deterministic_csv_zip(buf, csv_name, "\n".join(lines))
