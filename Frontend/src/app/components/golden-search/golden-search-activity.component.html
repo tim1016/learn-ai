@@ -1,0 +1,17 @@
+<div class="activity" aria-label="Duration-based minimum trades">
+  <p><strong>Expected trade frequency: {{ activity().expected_trades_per_year }} completed trades per trading year</strong></p>
+  <dl>
+    @for (window of windows(); track window.key) {
+      <div><dt>{{ window.label }}</dt><dd><strong>At least {{ window.minimum_trades }} trades</strong><span>{{ window.trading_sessions }} trading days</span></dd></div>
+    }
+  </dl>
+  <details>
+    <summary>Minimum trades for each training window</summary>
+    <dl>
+      @for (window of training(); track window.key) {
+        <div><dt>{{ window.label }}</dt><dd><strong>At least {{ window.minimum_trades }} trades</strong><span>{{ window.trading_sessions }} trading days</span></dd></div>
+      }
+    </dl>
+  </details>
+  <p class="hint">Weekends and exchange holidays are excluded; early closes count as one trading day. Each year's calendar sets the annual denominator, and fractional trades round up.</p>
+</div>

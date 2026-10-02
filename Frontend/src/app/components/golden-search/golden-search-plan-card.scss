@@ -12,6 +12,7 @@ p { margin: 0; }
 .field input, .field select { min-width: 0; width: 100%; }
 .check { display: flex; gap: var(--space-2); align-items: center; font-size: var(--fs-sm); }
 .check small { color: var(--text-muted); }
+.frequency-switch { justify-self: start; }
 input[aria-invalid='true'], select[aria-invalid='true'] { outline: 1px solid var(--bear); }
 .audits { display: grid; gap: var(--space-2); border: 0; margin: 0; padding: 0; min-width: 0; }
 .audits legend { font-size: var(--fs-sm); color: var(--text-secondary); padding: 0; margin-bottom: var(--space-1); }

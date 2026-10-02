@@ -50,6 +50,7 @@ from app.engine.data.availability import MissingSessionsError, check_availabilit
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.lean_sidecar.trading_calendar import expected_sessions, session_open_ms_utc, session_start_for_bar_count
+from app.research.golden_search.activity import DEFAULT_EXPECTED_TRADES_PER_YEAR, activity_plan
 from app.research.golden_search.budget import ProtocolReview, estimate, review_protocol
 from app.research.golden_search.declarations import (
     SearchDeclaration,
@@ -71,6 +72,7 @@ from app.research.golden_search.protocol import (
     IncumbentRef,
     KnobPlan,
     ProtocolRefusal,
+    SelectionPolicy,
     canonical_json,
     knob_value_counts,
     recent_window_ms,
@@ -320,6 +322,18 @@ def review_plan(protocol: GoldenSearchProtocol, *, roots: Sequence[Path] | None 
     refusals = (*review.refusals, *_qualified_seed_refusals(protocol))
     if refusals:
         return PlanReview(protocol=protocol, review=review, refusals=refusals, run_up=None)
+    activity = activity_plan(protocol)
+    if activity is not None:
+        empty = tuple(
+            ProtocolRefusal(
+                code="NO_TRADING_DAYS",
+                field="final_end_ms" if window["key"] == "final" else "development_end_ms",
+                message=f"{window['label']} contains no exchange trading days; select a tradable window.",
+            )
+            for window in activity["windows"] if window["trading_sessions"] == 0
+        )
+        if empty:
+            return PlanReview(protocol=protocol, review=review, refusals=empty, run_up=None)
     resolved = list(roots) if roots is not None else sweep_roots()
     try:
         run_up = plan_study_run_up(protocol, declaration, roots=resolved)
@@ -352,6 +366,7 @@ def preflight_view(plan: PlanReview, exposure: Mapping[str, Any] | None) -> dict
             "run_up_sessions": plan.run_up.run_up_sessions,
             "data_start_ms": et_midnight_ms(plan.run_up.data_start),
         },
+        "activity": activity_plan(plan.protocol) if review is not None and not review.refusals else None,
     }
 
 
@@ -413,6 +428,7 @@ def build_receipt(plan: PlanReview, *, snapshot_dict: Mapping[str, Any], snapsho
         "context_digest": context_digest(context),
         "estimate": plan.review.estimate.as_dict(),
         "folds": [fold.as_dict() for fold in plan.review.folds],
+        "activity": activity_plan(protocol),
     }
 
 
@@ -616,6 +632,9 @@ def default_protocol(
             training_months=training_months,
             test_months=test_months,
             pair_audits=tuple(pair for pair in declaration.default_pair_audits if set(pair) <= searched),
+            policy=SelectionPolicy(min_trades=None),
+            exam_min_trades=None,
+            expected_trades_per_year=DEFAULT_EXPECTED_TRADES_PER_YEAR,
         )
 
     protocol = plan_with(folds)

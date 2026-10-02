@@ -6,7 +6,7 @@ import { GoldenSearchCompareStepComponent } from './golden-search-compare-step.c
 import type { StudyStep } from './golden-search-steps';
 import { GoldenSearchService } from './golden-search.service';
 import type { CandidateDetail, CandidateKey, StudyCommand, StudyDetail } from './golden-search.types';
-import { candidateDetail, emaCapability, evidenceCandidate, evidenceView, studyDetail } from './testing/fixtures';
+import { candidateDetail, emaCapability, evidenceCandidate, evidenceView, frequencyProtocol, studyDetail, tradeActivity } from './testing/fixtures';
 
 interface FakeService {
   candidate: ReturnType<typeof vi.fn<(id: string, key: CandidateKey) => Promise<CandidateDetail>>>;
@@ -157,6 +157,14 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(screen.getByText(/final test is recorded separately\. its development results remain in-sample/i)).not.toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Review final decision' }));
     expect(steps).toEqual(['decision']);
+  });
+
+  it("names a frequency plan's development floor from its receipt, not a fixed sample floor", async () => {
+    await renderStep(studyDetail('awaiting_candidate', { protocol: frequencyProtocol(), activity: tradeActivity() }));
+
+    const aside = screen.getByRole('complementary');
+    expect(aside.textContent).toMatch(/Development activity floor\s*101 trades/);
+    expect(aside.textContent).not.toContain('Sample floor');
   });
 
   it('shows what choosing the candidate implies beside the frozen rules', async () => {

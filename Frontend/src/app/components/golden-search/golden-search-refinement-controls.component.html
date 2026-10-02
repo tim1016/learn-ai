@@ -28,9 +28,11 @@
       <label class="check"><input type="checkbox" [checked]="p.neighbor_audit" (change)="onFlag('neighbor_audit', $event)" /><span>Neighbor audit (each searched knob one step either side)</span></label>
       <label class="check"><input type="checkbox" [checked]="p.recent_window" (change)="onFlag('recent_window', $event)" /><span>Also fit a recent-window candidate on the last training months</span></label>
     </fieldset>
+    @if (!frequencyBased()) {
     <div class="fields fields--4">
       <label class="field"><span>Min final-test trades</span><input #examTrades pInputText type="number" min="1" step="1" [id]="inputId('exam_min_trades')" [value]="p.exam_min_trades" [attr.aria-invalid]="numberInvalid('exam_min_trades')" (input)="onNumber('exam_min_trades', examTrades.value)" /></label>
     </div>
+    }
     <p class="hint">Pair audits count toward the run total. The search order is the knob table's order.</p>
   </div>
 </details>

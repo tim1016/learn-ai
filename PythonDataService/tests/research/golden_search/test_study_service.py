@@ -70,6 +70,21 @@ def driver(lake: Path, monkeypatch: pytest.MonkeyPatch, conn: asyncpg.Connection
     return Driver(roots=[lake])
 
 
+async def test_configured_frequency_survives_lock_selection_views_and_final_test(driver: Driver, symbol: str) -> None:
+    row = await driver.to_candidate(symbol, rate=100)
+    detail = await driver.detail(row)
+    assert detail["activity"] == row.receipt["activity"]
+    windows = {window["key"]: window for window in detail["activity"]["windows"]}
+    assert windows["development"]["minimum_trades"] == 24
+    assert windows["final"]["minimum_trades"] == 9
+    assert all(fold["status"] == "completed" for fold in detail["results"]["validation"]["folds"])
+    row = await driver.advance(row, "select_candidate", {"candidate_key": "all_period"})
+    row = await driver.advance(row, "open_exam", {"acknowledge_final_test": True})
+    check = next(item for item in row.results["exam"]["checks"] if item["code"] == "SAMPLE_FLOOR")
+    assert check["label"] == "Expected trade frequency"
+    assert "minimum is 9" in check["detail"]
+
+
 async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
     row = await driver.lock(symbol)
     detail = await driver.detail(row)

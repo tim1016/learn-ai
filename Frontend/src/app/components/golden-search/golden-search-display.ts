@@ -12,6 +12,11 @@ export interface PointEntry {
   readonly value: PointValue;
 }
 
+/** Whether a plan takes each window's trade floor from its expected trade frequency (ADR 0074) instead of two fixed floors. */
+export function usesTradeFrequency(protocol: { readonly expected_trades_per_year?: number | null }): boolean {
+  return protocol.expected_trades_per_year != null;
+}
+
 /** Operator copy for each exposure state; the server's explanation follows it. */
 export const EXPOSURE_LABELS: Readonly<Record<ExposureState, string>> = {
   not_opened: 'Not opened in recorded research',

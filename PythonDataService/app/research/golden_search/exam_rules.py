@@ -17,7 +17,10 @@ Retention ``= exam objective / development objective`` when both are finite
 and the development objective is positive, else ``None``; it is descriptive
 only and never a check (a selection-inflated denominator over a short, noisy
 numerator establishes nothing on its own).
-Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Open one final test".
+``exam_min_trades`` is the final interval's floor: the plan's fixed final-test
+floor, or the one its expected trade frequency froze for that interval.
+Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Open one final test";
+  ADR 0074 decision 9 for the frequency floor, whose calendar calculation activity.py owns.
 Canonical implementation: this file.
 Validated against: tests/research/golden_search/test_exam_rules.py.
 """
@@ -75,9 +78,11 @@ def _drawdown_within(candidate: Metrics, ceiling: float) -> ExamCheck:
     return ExamCheck("DRAWDOWN_WITHIN", label, "pass" if drawdown <= ceiling else "fail", detail)
 
 
-def _sample_floor(candidate: Metrics, exam_min_trades: int) -> ExamCheck:
-    label = "Enough completed trades"
+def _sample_floor(candidate: Metrics, exam_min_trades: int, *, frequency_policy: bool = False) -> ExamCheck:
+    label = "Expected trade frequency" if frequency_policy else "Enough completed trades"
     detail = f"{candidate.total_trades} trades; the minimum is {exam_min_trades}."
+    if frequency_policy:
+        detail += " This activity requirement does not establish statistical confidence."
     return ExamCheck("SAMPLE_FLOOR", label, "pass" if candidate.total_trades >= exam_min_trades else "fail", detail)
 
 
@@ -113,6 +118,7 @@ def judge_exam(
     policy: SelectionPolicy,
     exam_min_trades: int,
     development_objective: float | None,
+    frequency_policy: bool = False,
 ) -> ExamJudgement:
     """Apply the frozen final-test rules to the candidate's and the incumbent's final-interval runs.
 
@@ -124,7 +130,7 @@ def judge_exam(
         rules = (
             *((("NET_POSITIVE", "Positive net result after stated costs"),) if policy.require_positive_net else ()),
             ("DRAWDOWN_WITHIN", "Worst drawdown within your ceiling"),
-            ("SAMPLE_FLOOR", "Enough completed trades"),
+            ("SAMPLE_FLOOR", "Expected trade frequency" if frequency_policy else "Enough completed trades"),
             ("BEATS_INCUMBENT", "At least as good as the current settings"),
         )
         return ExamJudgement("could_not_evaluate", tuple(ExamCheck(code, label, "not_available", detail) for code, label in rules), None)
@@ -132,7 +138,7 @@ def judge_exam(
     checks = (
         *((_net_positive(candidate),) if policy.require_positive_net else ()),
         _drawdown_within(candidate, policy.max_drawdown_ceiling),
-        _sample_floor(candidate, exam_min_trades),
+        _sample_floor(candidate, exam_min_trades, frequency_policy=frequency_policy),
         _beats_incumbent(candidate_objective, incumbent, policy),
     )
     kept = retention(candidate_objective, development_objective)

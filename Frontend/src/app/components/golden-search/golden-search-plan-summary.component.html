@@ -14,7 +14,9 @@
 
   <dl class="facts">
     <div><dt>Primary objective</dt><dd>{{ p.policy.objective | receiptLabel }}</dd></div>
-    <div><dt>Minimum completed trades</dt><dd>{{ p.policy.min_trades }}</dd></div>
+    @if (!frequencyBased()) {
+      <div><dt>Minimum completed trades</dt><dd>{{ p.policy.min_trades }}</dd></div>
+    }
     <div><dt>Maximum drawdown</dt><dd>{{ p.policy.max_drawdown_ceiling | percent: '1.0-2' }} of peak equity</dd></div>
     <div><dt>Positive net result</dt><dd>{{ p.policy.require_positive_net ? 'Required' : 'Not required' }}</dd></div>
     <div><dt>Fill assumption</dt><dd>{{ fillMode() }}</dd></div>
@@ -28,10 +30,16 @@
     }
     <div><dt>Audits</dt><dd>{{ pairs().length > 0 ? 'Pair grids: ' + pairs().join(', ') : 'No pair grids' }}{{ p.neighbor_audit ? ' · neighbor audit' : '' }}</dd></div>
     <div><dt>Stress</dt><dd>@for (scenario of p.stress; track scenario.key) { <span class="item">{{ scenario.label }}</span> } @empty { None }</dd></div>
-    <div><dt>Minimum final-test trades</dt><dd>at least {{ p.exam_min_trades }} trades</dd></div>
+    @if (!frequencyBased()) {
+      <div><dt>Minimum final-test trades</dt><dd>at least {{ p.exam_min_trades }} trades</dd></div>
+    }
     <div><dt>Backtest cap</dt><dd>{{ p.budget_cap | number }}</dd></div>
     <div><dt>Starting point and benchmark</dt><dd>{{ incumbent() }}</dd></div>
   </dl>
+
+  @if (s.activity; as activity) {
+    <app-golden-search-activity [activity]="activity" />
+  }
 
   <dl class="facts receipt" aria-label="Study receipt">
     <div><dt>Data from</dt><dd><app-timestamp-display [value]="s.receipt.data_start_ms" mode="date-et" /> · {{ s.receipt.run_up_sessions }} warmup sessions per window</dd></div>

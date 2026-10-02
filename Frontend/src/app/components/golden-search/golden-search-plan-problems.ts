@@ -17,6 +17,7 @@ export interface PlanProblem {
 
 export const NUMBER_FIELD_LABELS: Readonly<Record<ProtocolNumberField, string>> = {
   min_trades: 'Min completed trades',
+  expected_trades_per_year: 'Expected trade frequency',
   drawdown_percent: 'Max drawdown',
   commission_per_order: 'Flat fee per order',
   slippage_per_share: 'Slippage per share',
@@ -62,6 +63,7 @@ export const PAIR_AUDITS_INPUT_ID = 'gs-plan-pair-audits';
 /** The input each refusal field the server names belongs to; knob fields are resolved per knob. */
 export const REFUSAL_INPUTS: Readonly<Record<string, string>> = {
   'policy.min_trades': numberInputId('min_trades'),
+  expected_trades_per_year: numberInputId('expected_trades_per_year'),
   'policy.max_drawdown_ceiling': numberInputId('drawdown_percent'),
   exam_min_trades: numberInputId('exam_min_trades'),
   budget_cap: numberInputId('budget_cap'),

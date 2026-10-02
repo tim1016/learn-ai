@@ -3,7 +3,7 @@ import { ButtonModule } from 'primeng/button';
 
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
-import { EXPOSURE_PREVIEW_LABELS, percentInputValue } from './golden-search-display';
+import { EXPOSURE_PREVIEW_LABELS, percentInputValue, usesTradeFrequency } from './golden-search-display';
 import type { StudyStep } from './golden-search-steps';
 import type { EvidenceCandidate, StudyCommand, StudyDetail } from './golden-search.types';
 
@@ -32,6 +32,12 @@ export class GoldenSearchLockboxComponent {
   readonly acknowledged = signal(false);
 
   protected readonly ceiling = computed(() => `${percentInputValue(this.study().protocol.policy.max_drawdown_ceiling)}%`);
+  protected readonly tradeFloor = computed(() => {
+    const study = this.study();
+    return usesTradeFrequency(study.protocol)
+      ? study.activity?.windows.find((window) => window.key === 'final')?.minimum_trades
+      : (study.protocol.exam_min_trades ?? undefined);
+  });
   /** The exposure opening would record, when the server previewed it. */
   protected readonly exposure = computed(() => {
     const preview = this.study().exposure_preview;

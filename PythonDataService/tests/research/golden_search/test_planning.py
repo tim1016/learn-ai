@@ -28,7 +28,13 @@ from app.research.golden_search.planning import (
 from app.research.golden_search.protocol import IncumbentRef, KnobPlan
 from app.research.sweep.warmup import probe_warmup_samples
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
-from tests._helpers.golden_search_study import DEVELOPMENT, plan_request, seed_lake, unique_symbol
+from tests._helpers.golden_search_study import (
+    DEVELOPMENT,
+    frequency_plan_request,
+    plan_request,
+    seed_lake,
+    unique_symbol,
+)
 
 EMA = "ema_crossover_signal"
 OCTOBER_15 = et_midnight_ms(date(2026, 10, 15)) + 15 * 3_600_000
@@ -147,6 +153,29 @@ def test_a_strategy_without_a_declaration_is_named_unavailable() -> None:
 
 
 # ── Default intervals ────────────────────────────────────────────────────
+
+
+def test_new_plans_default_to_50_per_year_and_lock_the_user_frequency_with_the_preview(tmp_path: Path) -> None:
+    defaults = default_protocol(EMA, "SPY", registry_incumbent(EMA, "SPY"), now_ms=OCTOBER_15, earliest_session=None)
+    assert (defaults.expected_trades_per_year, defaults.policy.min_trades, defaults.exam_min_trades) == (50, None, None)
+    assert not review(defaults, _ema()).refusals
+    symbol = unique_symbol()
+    seed_lake(tmp_path, symbol)
+    protocol = protocol_from_request(frequency_plan_request(symbol, 100))
+    preview = preflight_view(review_plan(protocol, roots=[tmp_path]), None)["activity"]
+    locked = prepare_lock(protocol, idempotency_key="frequency-policy", roots=[tmp_path])
+    assert locked.receipt["activity"] == preview
+    assert preview["expected_trades_per_year"] == 100
+    assert preview["windows"][0]["minimum_trades"] == 24
+
+
+def test_frequency_plan_refuses_a_final_window_without_trading_days() -> None:
+    protocol = protocol_from_request(frequency_plan_request("SPY"))
+    boundary = et_midnight_ms(date(2024, 6, 1))
+    protocol = replace(protocol, development_start_ms=et_midnight_ms(date(2024, 1, 1)), development_end_ms=boundary, final_start_ms=boundary, final_end_ms=et_midnight_ms(date(2024, 6, 3)))
+    plan = review_plan(protocol, roots=[])
+    assert not plan.lockable
+    assert [(item.code, item.field) for item in plan.refusals] == [("NO_TRADING_DAYS", "final_end_ms")]
 
 
 def _intervals(**kwargs: object) -> tuple[date, date, date, date]:

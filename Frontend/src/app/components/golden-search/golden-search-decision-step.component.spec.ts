@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { GoldenSearchDecisionStepComponent } from './golden-search-decision-step.component';
 import type { StudyStep } from './golden-search-steps';
 import type { ExamView, StudyCommand, StudyDetail } from './golden-search.types';
-import { emaCapability, examView, exposure, protocol, studyDetail } from './testing/fixtures';
+import { emaCapability, examView, exposure, frequencyProtocol, protocol, studyDetail, tradeActivity } from './testing/fixtures';
 
 async function renderStep(study: StudyDetail) {
   const view = await render(GoldenSearchDecisionStepComponent, {
@@ -39,6 +39,12 @@ async function noAxeViolations(container: Element): Promise<void> {
 }
 
 describe('GoldenSearchDecisionStepComponent — before the final test', () => {
+  it('judges a frequency plan by the floor its receipt froze for the final interval', async () => {
+    await renderStep(studyDetail('candidate_locked', { protocol: frequencyProtocol(), activity: tradeActivity() }));
+
+    expect(screen.getByRole('region', { name: /is still sealed/i }).textContent).toMatch(/Worst drawdown \/ activity\s*≤ 20% \/ ≥ 13 trades/);
+  });
+
   it('shows what one look consumes and the rules it is judged by, and opens only after the acknowledgement', async () => {
     const { commands, steps, view } = await renderStep(studyDetail('candidate_locked'));
 

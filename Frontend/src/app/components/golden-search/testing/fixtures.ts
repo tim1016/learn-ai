@@ -23,6 +23,7 @@ import type {
   StudyDetail,
   StudyProgress,
   StudyState,
+  TradeActivity,
   ValidationView,
 } from '../golden-search.types';
 
@@ -114,6 +115,34 @@ export function protocol(overrides: Partial<ProtocolRequest> = {}): ProtocolRequ
     execution: { fill_mode: 'decision_minute_open', commission_per_order: 0, slippage_per_share: 0, initial_cash: 100000 },
     exam_min_trades: 30,
     budget_cap: 5000,
+    ...overrides,
+  };
+}
+
+/** A plan under an expected trade frequency: the rate set and both fixed floors absent (ADR 0074). */
+export function frequencyProtocol(overrides: Partial<ProtocolRequest> = {}): ProtocolRequest {
+  const base = protocol();
+  return protocol({ policy: { ...base.policy, min_trades: null }, exam_min_trades: null, expected_trades_per_year: 50, ...overrides });
+}
+
+type ActivityWindow = TradeActivity['windows'][number];
+
+function activityWindow(key: string, label: string, startIso: string, endIso: string, sessions: number, minimum: number): ActivityWindow {
+  return { key, label, start_ms: etMidnightMs(startIso), end_ms: etMidnightMs(endIso), trading_sessions: sessions, minimum_trades: minimum, years: [] };
+}
+
+/** The window floors a 50-per-year plan over the fixture's intervals freezes at lock. */
+export function tradeActivity(overrides: Partial<TradeActivity> = {}): TradeActivity {
+  return {
+    expected_trades_per_year: 50,
+    windows: [
+      activityWindow('development', 'Development', '2024-01-01', '2026-01-01', 502, 101),
+      activityWindow('recent', 'Recent fit', '2025-07-01', '2026-01-01', 128, 26),
+      activityWindow('final', 'Final test', '2026-01-01', '2026-04-01', 61, 13),
+      activityWindow('training_0', 'Fold 1 training', '2024-01-01', '2024-07-01', 124, 25),
+      activityWindow('training_1', 'Fold 2 training', '2024-03-01', '2024-09-01', 128, 26),
+      activityWindow('forward', 'All forward tests', '2024-07-01', '2026-01-01', 378, 76),
+    ],
     ...overrides,
   };
 }

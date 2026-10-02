@@ -7,6 +7,7 @@
 
 import { etDayEndMs, etMidnightMs } from '../../shared/date/et-midnight';
 import type { FillModeName } from '../../models/fill-mode';
+import { usesTradeFrequency } from './golden-search-display';
 import type { DefaultsMonths, GoldenSearchDefaults, GoldenSearchMethod, KnobMode, KnobPair, KnobPlan, ProtocolRequest, RankingMeasure, StrategyCapability } from './golden-search.types';
 
 const KNOB_NUMBER_FIELDS = ['low', 'high', 'fixed_value', 'step'] as const;
@@ -15,6 +16,7 @@ export type KnobNumberField = (typeof KNOB_NUMBER_FIELDS)[number];
 const PROTOCOL_NUMBER_FIELDS = [
   'final_months',
   'min_trades',
+  'expected_trades_per_year',
   'drawdown_percent',
   'commission_per_order',
   'slippage_per_share',
@@ -33,6 +35,7 @@ export type ProtocolNumberField = (typeof PROTOCOL_NUMBER_FIELDS)[number];
 const WHOLE_NUMBER_FIELDS: ReadonlySet<ProtocolNumberField> = new Set([
   'final_months',
   'min_trades',
+  'expected_trades_per_year',
   'training_months',
   'test_months',
   'zoom_points',
@@ -256,6 +259,7 @@ function setNumber(protocol: ProtocolRequest, field: Exclude<ProtocolNumberField
     case 'test_months':
     case 'exam_min_trades':
     case 'budget_cap':
+    case 'expected_trades_per_year':
       return { ...protocol, [field]: value };
   }
 }
@@ -310,6 +314,12 @@ export function applyPlanEdit(draft: PlanDraft, edit: PlanEdit, capability: Stra
         // The cut belonged to the old count; the server's new dates bring their own.
         const { finalSessionsCut: _cut, ...rest } = draft;
         return { ...rest, finalMonths: value, problems: withProblem(problems, key, null) };
+      }
+      if (edit.field === 'expected_trades_per_year' && !usesTradeFrequency(protocol)) {
+        // Adopting a frequency drops both fixed floors and their now-hidden problems (ADR 0074).
+        const annual = { ...protocol, policy: { ...protocol.policy, min_trades: null }, exam_min_trades: null };
+        const readable = withProblem(withProblem(withProblem(problems, key, null), numberProblemKey('min_trades'), null), numberProblemKey('exam_min_trades'), null);
+        return { ...draft, protocol: setNumber(annual, edit.field, value), problems: readable };
       }
       return { ...draft, protocol: setNumber(protocol, edit.field, value), problems: withProblem(problems, key, null) };
     }

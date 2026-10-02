@@ -14,7 +14,7 @@
     <dl class="rules">
       <div><dt>Selected settings</dt><dd><strong>{{ c?.label ?? '—' }}</strong>@if (c) { <small>{{ c.params_sentence }}</small> }</dd></div>
       <div><dt>Profit after stated costs</dt><dd>Must be positive</dd></div>
-      <div><dt>Worst drawdown / activity</dt><dd>≤ {{ ceiling() }} / ≥ {{ s.protocol.exam_min_trades }} trades</dd></div>
+      <div><dt>Worst drawdown / activity</dt><dd>≤ {{ ceiling() }} / {{ tradeFloor() === undefined ? 'Minimum unavailable' : '≥ ' + tradeFloor() + ' trades' }}</dd></div>
       <div><dt>Incumbent comparison</dt><dd>At least the incumbent's {{ s.protocol.policy.objective | receiptLabel }}, within the risk limits</dd></div>
       <div><dt>Recorded exposure</dt><dd>{{ exposure()?.label ?? 'Checked when you open the test' }}</dd></div>
     </dl>

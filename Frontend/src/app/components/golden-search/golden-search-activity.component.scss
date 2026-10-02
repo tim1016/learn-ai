@@ -1,0 +1,13 @@
+:host { display: block; min-width: 0; }
+.activity { display: grid; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border-light); border-radius: var(--radius); background: var(--bg-elevated); }
+p, dl { margin: 0; }
+p, dt, summary { font-size: var(--fs-sm); }
+dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+dl > div, dd { display: grid; gap: var(--space-1); }
+dd { margin: 0; font-size: var(--fs-sm); }
+dt, dd span, .hint { color: var(--text-secondary); }
+details { display: grid; gap: var(--space-3); }
+details[open] dl { margin-top: var(--space-3); }
+summary { cursor: pointer; }
+summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+@media (max-width: 480px) { dl { grid-template-columns: 1fr; } }

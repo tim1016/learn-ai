@@ -65,6 +65,7 @@ export type ProtocolRequest = Omit<Schemas['GoldenSearchProtocol'], 'seed' | 'in
 };
 
 export type ProtocolRefusal = Schemas['GoldenSearchProtocolRefusal'];
+export type TradeActivity = Schemas['GoldenSearchActivity'];
 
 // ---------------------------------------------------------------- exposure, defaults, preflight
 

@@ -2,6 +2,7 @@ import { DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 import { InputText } from 'primeng/inputtext';
 
+import { usesTradeFrequency } from './golden-search-display';
 import { isVaried, numberProblemKey, wireProtocol, type PlanEdit, type ProtocolFlag, type ProtocolNumberField } from './golden-search-plan-draft';
 import { numberInputId, PAIR_AUDITS_INPUT_ID } from './golden-search-plan-problems';
 import type { KnobPair, ProtocolRequest, StrategyCapability } from './golden-search.types';
@@ -17,8 +18,8 @@ interface PairOption {
 /**
  * The plan's advanced controls (#2696), folded away by default: Zoom's
  * points, rounds and passes, the pair and neighbor audits, the recent-window
- * candidate, the final test's trade floor and the backtest cap the whole plan
- * must fit. A pair audit needs both its knobs to vary; while one is held the
+ * candidate, a legacy plan's fixed final-test trade floor and the backtest cap
+ * the whole plan must fit. A pair audit needs both its knobs to vary; while one is held the
  * pair stays chosen but is not sent, and it returns when the knob varies again.
  */
 @Component({
@@ -35,6 +36,7 @@ export class GoldenSearchRefinementControlsComponent {
   readonly edit = output<PlanEdit>();
 
   protected readonly inputId = numberInputId;
+  protected readonly frequencyBased = computed(() => usesTradeFrequency(this.protocol()));
   protected readonly pairsId = PAIR_AUDITS_INPUT_ID;
 
   protected readonly pairOptions = computed<PairOption[]>(() => {
