@@ -2,7 +2,7 @@
 
 Throwaway research branch. Never merged.
 
-Clickable mockup and screenshots for the bot page redesign PRD. It depends on
+Clickable mockup and screenshots for the bot page redesign PRD, #2794. It depends on
 #2639 (strategy view and Dark Bright Gate) and replaces #2639's frontend
 presentation.
 
