@@ -761,10 +761,33 @@ class GoldenSearchResults(_Wire):
     qualification: GoldenSearchQualificationView | None
 
 
+class GoldenSearchSummaryLink(_Wire):
+    kind: Literal["tab", "step"]
+    target: str = Field(description="An evidence tab of the Compare step (trades, neighbors, stress, months) or a study step (search, test, decision).")
+
+
+class GoldenSearchSummaryRow(_Wire):
+    """One kind of evidence for a candidate; a result the study did not record is ``missing``, never ``meets``."""
+
+    key: str
+    label: str
+    status: Literal["meets", "concern", "missing"]
+    text: str
+    link: GoldenSearchSummaryLink
+
+
+class GoldenSearchDecisionSummary(_Wire):
+    candidate_key: CandidateKey
+    rows: list[GoldenSearchSummaryRow]
+
+
 class GoldenSearchStudyDetail(GoldenSearchStudySummary):
     protocol: GoldenSearchProtocol
     receipt: GoldenSearchReceiptSummary
     activity: GoldenSearchActivity | None = None
+    decision_summaries: list[GoldenSearchDecisionSummary] = Field(
+        description="What the research supports for each Compare candidate (#2811); empty before the evidence exists."
+    )
     permitted_actions: list[CommandName]
     action_refusals: dict[CommandName, str]
     guidance: GoldenSearchGuidance

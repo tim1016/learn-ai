@@ -13482,6 +13482,16 @@ export interface components {
             /** Note */
             note: string;
         };
+        /** GoldenSearchDecisionSummary */
+        GoldenSearchDecisionSummary: {
+            /**
+             * Candidate Key
+             * @enum {string}
+             */
+            candidate_key: "incumbent" | "all_period" | "recent";
+            /** Rows */
+            rows: components["schemas"]["GoldenSearchSummaryRow"][];
+        };
         /**
          * GoldenSearchDefaults
          * @description A complete starting plan with server-computed intervals, the incumbent's name and the final interval's exposure.
@@ -14585,6 +14595,11 @@ export interface components {
             /** Created At Ms */
             created_at_ms: number;
             decision: components["schemas"]["GoldenSearchDecision"] | null;
+            /**
+             * Decision Summaries
+             * @description What the research supports for each Compare candidate (#2811); empty before the evidence exists.
+             */
+            decision_summaries: components["schemas"]["GoldenSearchDecisionSummary"][];
             dispatch: components["schemas"]["GoldenSearchDispatch"] | null;
             /** Exam Locked */
             exam_locked: boolean;
@@ -14706,6 +14721,19 @@ export interface components {
             /** Updated At Ms */
             updated_at_ms: number;
         };
+        /** GoldenSearchSummaryLink */
+        GoldenSearchSummaryLink: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "tab" | "step";
+            /**
+             * Target
+             * @description An evidence tab of the Compare step (trades, neighbors, stress, months) or a study step (search, test, decision).
+             */
+            target: string;
+        };
         /** GoldenSearchSummaryPills */
         GoldenSearchSummaryPills: {
             /** Judged */
@@ -14714,6 +14742,24 @@ export interface components {
             median_retention: number | null;
             /** Test Trades */
             test_trades: number;
+        };
+        /**
+         * GoldenSearchSummaryRow
+         * @description One kind of evidence for a candidate; a result the study did not record is ``missing``, never ``meets``.
+         */
+        GoldenSearchSummaryRow: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            link: components["schemas"]["GoldenSearchSummaryLink"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "meets" | "concern" | "missing";
+            /** Text */
+            text: string;
         };
         /** GoldenSearchTrade */
         GoldenSearchTrade: {

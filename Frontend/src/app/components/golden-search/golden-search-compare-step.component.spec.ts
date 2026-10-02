@@ -6,7 +6,7 @@ import { GoldenSearchCompareStepComponent } from './golden-search-compare-step.c
 import type { StudyStep } from './golden-search-steps';
 import { GoldenSearchService } from './golden-search.service';
 import type { CandidateDetail, CandidateKey, StudyCommand, StudyDetail } from './golden-search.types';
-import { candidateDetail, emaCapability, evidenceCandidate, evidenceView, frequencyProtocol, studyDetail, tradeActivity } from './testing/fixtures';
+import { candidateDetail, decisionSummary, emaCapability, evidenceCandidate, evidenceView, frequencyProtocol, studyDetail, tradeActivity } from './testing/fixtures';
 
 interface FakeService {
   candidate: ReturnType<typeof vi.fn<(id: string, key: CandidateKey) => Promise<CandidateDetail>>>;
@@ -70,6 +70,32 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(screen.getByText('Selected: All-period fit.').parentElement?.textContent).toContain(
       'Selected: All-period fit. Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars. Normalized gap fixed at 0 bps.',
     );
+  });
+
+  it("shows the selected candidate's decision summary, each status in words, and follows its links to the evidence", async () => {
+    const { steps } = await renderStep();
+
+    const summary = screen.getByRole('region', { name: 'What the research supports' });
+    const items = within(summary).getAllByRole('listitem').map((item) => item.textContent?.replace(/\s+/g, ' ').trim() ?? '');
+    expect(items[0]).toMatch(/^Meets\s*Development activity\s*42 trades/);
+    expect(items.find((item) => item.includes('Concentration'))).toMatch(/^Missing\s*Concentration\s*Not measured/);
+    expect(items.find((item) => item.includes('Neighbor sensitivity'))).toMatch(/^Concern/);
+
+    fireEvent.click(within(summary).getByRole('button', { name: 'See the evidence for Neighbor sensitivity' }));
+    expect(evidenceTab('Neighborhood').getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(within(summary).getByRole('button', { name: 'See the evidence for Test over time' }));
+    expect(steps).toEqual(['test']);
+  });
+
+  it('a picked candidate shows its own summary', async () => {
+    const recentRows = [{ key: 'recent_activity', label: 'Recent activity', status: 'concern' as const, text: 'No setting met the recent window minimum.', link: { kind: 'step' as const, target: 'search' } }];
+    const study = studyDetail('awaiting_candidate');
+    await renderStep({ ...study, decision_summaries: [decisionSummary('all_period'), decisionSummary('recent', recentRows), decisionSummary('incumbent')] });
+
+    fireEvent.click(screen.getByRole('button', { name: /recent fit/i }));
+    const summary = screen.getByRole('region', { name: 'What the research supports' });
+    expect(summary.textContent).toContain('No setting met the recent window minimum.');
+    expect(summary.textContent).not.toContain('Development activity');
   });
 
   it('picking a candidate changes the selection, its guidance, and what Review final-test lock sends', async () => {

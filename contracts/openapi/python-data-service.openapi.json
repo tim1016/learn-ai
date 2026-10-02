@@ -18880,6 +18880,33 @@
         "title": "GoldenSearchDecision",
         "type": "object"
       },
+      "GoldenSearchDecisionSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_key": {
+            "enum": [
+              "incumbent",
+              "all_period",
+              "recent"
+            ],
+            "title": "Candidate Key",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchSummaryRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "candidate_key",
+          "rows"
+        ],
+        "title": "GoldenSearchDecisionSummary",
+        "type": "object"
+      },
       "GoldenSearchDefaults": {
         "additionalProperties": false,
         "description": "A complete starting plan with server-computed intervals, the incumbent's name and the final interval's exposure.",
@@ -22136,6 +22163,14 @@
               }
             ]
           },
+          "decision_summaries": {
+            "description": "What the research supports for each Compare candidate (#2811); empty before the evidence exists.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchDecisionSummary"
+            },
+            "title": "Decision Summaries",
+            "type": "array"
+          },
           "dispatch": {
             "anyOf": [
               {
@@ -22379,6 +22414,7 @@
           "qualification_id",
           "protocol",
           "receipt",
+          "decision_summaries",
           "permitted_actions",
           "action_refusals",
           "guidance",
@@ -22591,6 +22627,30 @@
         "title": "GoldenSearchStudySummary",
         "type": "object"
       },
+      "GoldenSearchSummaryLink": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "tab",
+              "step"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "target": {
+            "description": "An evidence tab of the Compare step (trades, neighbors, stress, months) or a study step (search, test, decision).",
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "target"
+        ],
+        "title": "GoldenSearchSummaryLink",
+        "type": "object"
+      },
       "GoldenSearchSummaryPills": {
         "additionalProperties": false,
         "properties": {
@@ -22620,6 +22680,45 @@
           "median_retention"
         ],
         "title": "GoldenSearchSummaryPills",
+        "type": "object"
+      },
+      "GoldenSearchSummaryRow": {
+        "additionalProperties": false,
+        "description": "One kind of evidence for a candidate; a result the study did not record is ``missing``, never ``meets``.",
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "link": {
+            "$ref": "#/components/schemas/GoldenSearchSummaryLink"
+          },
+          "status": {
+            "enum": [
+              "meets",
+              "concern",
+              "missing"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "status",
+          "text",
+          "link"
+        ],
+        "title": "GoldenSearchSummaryRow",
         "type": "object"
       },
       "GoldenSearchTrade": {
