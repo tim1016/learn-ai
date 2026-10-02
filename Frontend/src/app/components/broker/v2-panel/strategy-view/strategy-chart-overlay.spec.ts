@@ -65,6 +65,8 @@ describe('StrategyChartOverlay', () => {
       bars: BARS,
       shadeBeforeMs: 15 * MINUTE,
       shadeLabel: 'Before start · not acted on',
+      shadeAfterMs: null,
+      forming: null,
       lines: [
         { atMs: 15 * MINUTE, label: 'Bot started 13:30', emphasis: 'start' },
         { atMs: 75 * MINUTE, label: 'Ended 14:30', emphasis: 'end' },
@@ -94,6 +96,8 @@ describe('StrategyChartOverlay', () => {
       bars: BARS,
       shadeBeforeMs: 15 * MINUTE,
       shadeLabel: 'Before start · not acted on',
+      shadeAfterMs: null,
+      forming: null,
       lines: [{ atMs: 15 * MINUTE, label: 'Bot started 13:30', emphasis: 'start' }],
       highlightCloseMs: null,
     });
@@ -101,6 +105,33 @@ describe('StrategyChartOverlay', () => {
 
     expect(context.fillRect).toHaveBeenCalledWith(0, 0, 110, 300);
     expect(context.fillText.mock.calls.map(([text]) => text)).toEqual(['Bot started 13:30']);
+  });
+
+  it('shades after the run ended, and outlines a running bot’s forming bar beside its Now line (#2794)', () => {
+    const overlay = new StrategyChartOverlay(true);
+    overlay.attached({
+      chart: { timeScale: () => ({ logicalToCoordinate: wholeBarCoordinate }) },
+      requestUpdate: vi.fn(),
+    } as never);
+    overlay.update({
+      bars: BARS,
+      shadeBeforeMs: null,
+      shadeLabel: null,
+      shadeAfterMs: 75 * MINUTE,
+      // The bar after the last one (logical 2.5–3.5), five minutes in.
+      forming: { startMs: 75 * MINUTE, closeMs: 90 * MINUTE, label: 'Forming · decides 14:45' },
+      lines: [{ atMs: 80 * MINUTE, label: 'Now', emphasis: 'now' }],
+      highlightCloseMs: null,
+    });
+    const context = drawn(overlay);
+
+    // After the last bar's close (x 150) to the right edge.
+    expect(context.fillRect).toHaveBeenCalledWith(150, 0, 650, 300);
+    expect(context.strokeRect).toHaveBeenCalledWith(150.5, 0.5, 19, 299);
+    expect(context.fillText).toHaveBeenCalledWith('Forming · decides 14:45', 146, 296);
+    const [nowX] = context.lineTo.mock.calls[0];
+    expect(nowX).toBeCloseTo(150 + 20 / 3, 9);
+    expect(context.fillText).toHaveBeenCalledWith('Now', nowX - 4, 38);
   });
 
   it('repeats the shade and lines on a lower pane without the labels', () => {
@@ -113,6 +144,8 @@ describe('StrategyChartOverlay', () => {
       bars: BARS,
       shadeBeforeMs: 15 * MINUTE,
       shadeLabel: 'Before start · not acted on',
+      shadeAfterMs: null,
+      forming: null,
       lines: [{ atMs: 15 * MINUTE, label: 'Bot started 13:30', emphasis: 'start' }],
       highlightCloseMs: null,
     });

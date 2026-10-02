@@ -11,6 +11,7 @@ import {
 import type { TradingIndicatorChip } from '../../../../shared/trading-chart';
 import type { IndicatorSeriesPlan } from '../dual-pane-chart/dual-pane-chart-indicators';
 import type { StrategyViewGateView, StrategyViewResponse } from '../lib/broker-v2-panel.types';
+import type { StrategyRunContext } from './chart-lanes';
 import type { PopoverAnchor } from './popover-placement';
 import { StrategyCandlePopoverComponent } from './strategy-candle-popover.component';
 import { StrategyChartComponent, type StrategyCandleClick } from './strategy-chart.component';
@@ -47,6 +48,8 @@ export class StrategyViewComponent {
   /** Catalogue lines the chart computed from these candles, and their legend chips. */
   readonly indicatorPlans = input<readonly IndicatorSeriesPlan[]>([]);
   readonly chartComputed = input<readonly TradingIndicatorChip[]>([]);
+  /** The bot page's run facts for the chart's lanes, Now line and forming bar. */
+  readonly runContext = input<StrategyRunContext | null>(null);
 
   readonly retry = output();
 

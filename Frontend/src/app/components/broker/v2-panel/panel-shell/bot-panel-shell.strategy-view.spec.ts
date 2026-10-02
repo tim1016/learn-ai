@@ -170,6 +170,28 @@ describe('BotPanelShellComponent — strategy view (#2639)', () => {
     expect(getStrategyView).toHaveBeenCalledTimes(2);
   });
 
+  it('puts the run’s fills on the strategy chart’s orders lane, on the candles’ clock (#2794)', async () => {
+    const getStrategyView = vi.fn(() => Promise.resolve(fakeStrategyView()));
+    const fixture = await renderPage(getStrategyView);
+    const filledAtMs = barCloseMs(3) + 5_000;
+    const withFill = snapshot(2);
+
+    StubEventSource.latest?.emit('snapshot', JSON.stringify({
+      ...withFill,
+      panel: {
+        ...withFill.panel,
+        run_fills: [{ filled_at_ms: filledAtMs, side: 'buy', quantity: 1, price: 501, order_ref: 'o-1', event_key: 'e-1' }],
+      },
+    }));
+    await settle(fixture);
+
+    const lanes = screen.getByRole('group', { name: 'The run’s events on the chart’s clock' });
+    const minute = formatTimestampDisplay(filledAtMs, { mode: 'local', granularity: 'minute' });
+    expect(within(within(lanes).getByRole('list', { name: 'Orders' })).getByRole('listitem', {
+      name: `${minute} · Bought 1 @ 501`,
+    })).toBeTruthy();
+  });
+
   it('keeps a failed read to the chart panel, in the backend’s words, and retries on request', async () => {
     const user = userEvent.setup();
     const getStrategyView = vi.fn().mockRejectedValueOnce(new HttpErrorResponse({

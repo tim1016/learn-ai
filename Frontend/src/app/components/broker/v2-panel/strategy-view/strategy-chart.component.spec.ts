@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/angular';
+import { render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,6 +13,7 @@ import {
 import { fakeStrategyChart, type FakeSeries } from '../../../../testing/strategy-chart-fake';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import type { StrategyViewResponse } from '../lib/broker-v2-panel.types';
+import type { StrategyRunContext } from './chart-lanes';
 import type { StrategyChartOverlay } from './strategy-chart-overlay';
 import { STRATEGY_CHART_FACTORY, StrategyChartComponent, type StrategyCandleClick } from './strategy-chart.component';
 import { GATE_CANDLE_COLORS, toChartTime } from './strategy-view-model';
@@ -262,5 +263,86 @@ describe('StrategyChartComponent (#2639)', () => {
     click(undefined, { point: { x: 900, y: 12 } });
 
     expect(clicks).toEqual([{ barCloseMs: barCloseMs(2), clientX: 300, clientY: 200 }]);
+  });
+});
+
+describe('StrategyChartComponent with the bot page’s run facts (#2794)', () => {
+  const minute = (ms: number) => formatTimestampDisplay(ms, { mode: 'local', granularity: 'minute' });
+
+  function runContext(overrides: Partial<StrategyRunContext> = {}): StrategyRunContext {
+    return { nowMs: null, scheduledEndAtMs: null, fills: [], workingOrders: [], feedEvents: [], skippedMinute: null, ...overrides };
+  }
+
+  async function renderWithContext(view: StrategyViewResponse, context: StrategyRunContext | null, width = 800) {
+    const mock = fakeStrategyChart(vi, width);
+    const rendered = await render(StrategyChartComponent, {
+      inputs: { view, gateId: 'g_rule', runContext: context },
+      providers: [{ provide: STRATEGY_CHART_FACTORY, useValue: () => mock.chart }],
+    });
+    // Like the library: bar i is centred on x 100 + 20i.
+    mock.timeScale.logicalToCoordinate.mockImplementation((logical: number) => 100 + logical * 20);
+    mock.timeScale.resize(width);
+    await rendered.fixture.whenStable();
+    const overlay = mock.candles().attachPrimitive.mock.calls[0][0] as StrategyChartOverlay;
+    return { ...rendered, ...mock, overlay };
+  }
+
+  it('draws a running bot’s Now line and forming bar, and an end due inside that bar', async () => {
+    const nowMs = barCloseMs(3) + 4 * 60_000;
+    const formingClose = barCloseMs(3) + 15 * 60_000;
+    const { overlay } = await renderWithContext(
+      fakeStrategyView(),
+      runContext({ nowMs, scheduledEndAtMs: formingClose - 60_000 }),
+    );
+
+    const state = overlay.current();
+    expect(state.forming).toEqual({
+      startMs: barCloseMs(3), closeMs: formingClose, label: `Forming · decides ${minute(formingClose)}`,
+    });
+    expect(state.lines.slice(1)).toEqual([
+      { atMs: formingClose - 60_000, label: `Ends ${minute(formingClose - 60_000)}`, emphasis: 'end' },
+      { atMs: nowMs, label: 'Now', emphasis: 'now' },
+    ]);
+    expect(state.shadeAfterMs).toBeNull();
+  });
+
+  it('shades the market after a stopped run, with no Now line or forming bar', async () => {
+    const { overlay } = await renderWithContext(
+      fakeStrategyView({ run_stopped_at_ms: STRATEGY_RUN_STOPPED_AT_MS }),
+      runContext(),
+    );
+
+    expect(overlay.current().shadeAfterMs).toBe(STRATEGY_RUN_STOPPED_AT_MS);
+    expect(overlay.current().forming).toBeNull();
+    expect(overlay.current().lines.map(({ emphasis }) => emphasis)).toEqual(['start', 'end']);
+  });
+
+  it('places each lane’s marks on the candles’ clock', async () => {
+    await renderWithContext(fakeStrategyView(), runContext({
+      fills: [{ filled_at_ms: barCloseMs(3), side: 'buy', quantity: 1, price: 501, order_ref: 'o-1', event_key: 'e-1' }],
+    }));
+
+    const lanes = screen.getByRole('group', { name: 'The run’s events on the chart’s clock' });
+    const decisions = within(lanes).getByRole('list', { name: 'Decisions' });
+    const enter = within(decisions).getByRole('listitem', { name: `${minute(barCloseMs(3))} · Enter` });
+    // Bar 3 closes on its candle's right edge: logical 3.5, x 170.
+    expect(enter.style.left).toBe('170px');
+    const fill = within(screen.getByRole('list', { name: 'Orders' })).getByRole('listitem');
+    expect(fill.style.left).toBe('170px');
+    expect(fill.getAttribute('title')).toBe(`${minute(barCloseMs(3))} · Bought 1 @ 501`);
+  });
+
+  it('keeps a mark scrolled off the chart for screen readers, without placing it', async () => {
+    await renderWithContext(fakeStrategyView(), runContext(), 150);
+
+    const enter = screen.getByRole('listitem', { name: `${minute(barCloseMs(3))} · Enter` });
+    expect(enter.className).toContain('strategy-lanes__mark--off');
+    expect(enter.style.left).toBe('');
+  });
+
+  it('draws no lanes without the bot page’s run facts, as in the Strategy Lab', async () => {
+    await renderWithContext(fakeStrategyView(), null);
+
+    expect(screen.queryByRole('group', { name: 'The run’s events on the chart’s clock' })).toBeNull();
   });
 });

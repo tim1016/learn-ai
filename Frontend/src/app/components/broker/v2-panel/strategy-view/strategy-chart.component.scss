@@ -1,0 +1,79 @@
+:host { display: flex; flex-direction: column; position: relative; min-height: 0; }
+
+.strategy-chart__announcement,
+.strategy-lanes__mark--off {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+// The canvas yields before the lanes do: the board's cell sets the height.
+.strategy-chart { flex: 1 1 auto; width: 100%; min-height: 6rem; cursor: pointer; }
+.strategy-chart:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+
+// #2794 R4: four lanes on the candles' clock; each title sits in the price
+// scale's gutter, so a mark at the left edge never hides it.
+.strategy-lanes {
+  display: grid;
+  flex: none;
+  gap: 1px;
+  padding: 2px 0 4px;
+  border-top: 1px solid var(--border);
+}
+
+.strategy-lanes__row {
+  position: relative;
+  height: 0.75rem;
+  background: color-mix(in srgb, var(--bg-hover) 35%, transparent);
+}
+
+.strategy-lanes__title {
+  position: absolute;
+  right: var(--space-1);
+  top: 0;
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+  line-height: 0.75rem;
+  white-space: nowrap;
+}
+
+.strategy-lanes__mark {
+  position: absolute;
+  top: 0;
+  height: 0.75rem;
+  font-size: 0.5625rem;
+  line-height: 0.75rem;
+  transform: translateX(-50%);
+  color: var(--text-secondary);
+
+  &::before { display: block; text-align: center; }
+
+  &[data-glyph='up']::before { content: '▲'; }
+  &[data-glyph='down']::before { content: '▼'; }
+  &[data-glyph='dot']::before { content: '●'; font-size: 0.5rem; }
+  &[data-glyph='ring']::before { content: '○'; }
+  &[data-glyph='tick']::before { content: '│'; }
+  &[data-glyph='dashed']::before { content: '┆'; }
+
+  &[data-glyph='span'] {
+    transform: none;
+    top: 0.125rem;
+    height: 0.5rem;
+    border-radius: 2px;
+    background: currentColor;
+    opacity: 0.55;
+  }
+
+  &[data-tone='bull'] { color: var(--bull); }
+  &[data-tone='bear'] { color: var(--bear); }
+  &[data-tone='neutral'] { color: var(--text-secondary); }
+  &[data-tone='muted'] { color: var(--text-subtle); }
+  &[data-tone='warn'] { color: var(--warn); }
+  &[data-tone='accent'] { color: var(--accent-text); }
+}

@@ -88,6 +88,7 @@ import { BotDayChartComponent } from '../bot-page/bot-day-chart.component';
 import { BotEndCardComponent } from '../bot-page/bot-end-card.component';
 import { StrandedPositionWarningComponent } from '../bot-page/stranded-position-warning.component';
 import { BotChartPanelComponent } from '../strategy-view/bot-chart-panel.component';
+import type { StrategyRunContext } from '../strategy-view/chart-lanes';
 import type { StrategyViewFailure } from '../strategy-view/strategy-view-model';
 import {
   flattenUnderway,
@@ -520,6 +521,24 @@ export class BotPanelShellComponent {
   protected readonly feedContinuity = computed(() => {
     const panel = this.panel();
     return panel === null ? FEED_CONTINUITY_NOT_RECORDED : feedContinuityFor(panel);
+  });
+  /** What the strategy chart's lanes, Now line and forming bar read (#2794 R4). */
+  protected readonly runContext = computed((): StrategyRunContext | null => {
+    const panel = this.panel();
+    if (panel === null) return null;
+    const join = panel.startup_join ?? null;
+    const joinedAt = join?.joined_minute_start_ms ?? null;
+    const liveFrom = join?.live_from_ms ?? null;
+    return {
+      nowMs: panel.health.running ? panel.updated_at_ms : null,
+      scheduledEndAtMs: panel.bot_page?.summary.facts.scheduled_end_at_ms ?? null,
+      fills: panel.run_fills ?? [],
+      workingOrders: panel.working_orders,
+      feedEvents: this.feedContinuity().events,
+      skippedMinute: joinedAt !== null && liveFrom !== null && liveFrom > joinedAt
+        ? { startMs: joinedAt, endMs: liveFrom }
+        : null,
+    };
   });
 
   /** The decision bar the owner selected, by its close: one selection the

@@ -49,6 +49,8 @@ export interface FakeStrategyChart {
     readonly getVisibleLogicalRange: Mock<() => { from: number; to: number } | null>;
     readonly subscribeSizeChange: Mock;
     readonly unsubscribeSizeChange: Mock;
+    readonly subscribeVisibleLogicalRangeChange: Mock;
+    readonly unsubscribeVisibleLogicalRangeChange: Mock;
     /** The library measuring its auto-sized canvas, a frame after creation. */
     readonly resize: (width: number) => void;
   };
@@ -73,6 +75,8 @@ export function fakeStrategyChart(vi: VitestUtils, initialWidth = 800): FakeStra
     getVisibleLogicalRange: vi.fn((): { from: number; to: number } | null => ({ from: 0, to: 3 })),
     subscribeSizeChange: vi.fn(),
     unsubscribeSizeChange: vi.fn(),
+    subscribeVisibleLogicalRangeChange: vi.fn(),
+    unsubscribeVisibleLogicalRangeChange: vi.fn(),
     resize: (next) => {
       width = next;
       for (const [handler] of timeScale.subscribeSizeChange.mock.calls) handler(next, 300);

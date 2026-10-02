@@ -33,8 +33,12 @@ import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-d
 import { formatChartCrosshairTime } from '../dual-pane-chart/dual-pane-chart.component';
 import type { IndicatorSeriesPlan } from '../dual-pane-chart/dual-pane-chart-indicators';
 import type { StrategyViewResponse } from '../lib/broker-v2-panel.types';
+import { chartLanes, formingBar, type ChartLane, type LaneMark, type StrategyRunContext } from './chart-lanes';
 import {
   StrategyChartOverlay,
+  coordinateOfLogical,
+  logicalIndexAt,
+  type OverlayBar,
   type OverlayLine,
   type StrategyChartOverlayState,
 } from './strategy-chart-overlay';
@@ -76,6 +80,16 @@ function barOf(ms: number): string {
   return `${formatTimestampDisplay(ms, { mode: 'local', granularity: 'date' })} ${minuteOf(ms)}`;
 }
 
+/** A lane mark where the chart draws it: `null` while it is off the visible bars. */
+interface PlacedMark extends LaneMark {
+  readonly left: number | null;
+  readonly width: number | null;
+}
+
+interface PlacedLane extends Omit<ChartLane, 'marks'> {
+  readonly marks: readonly PlacedMark[];
+}
+
 /**
  * The bot's own decision candles on a lightweight-charts canvas (#2639).
  *
@@ -84,9 +98,12 @@ function barOf(ms: number): string {
  * with a pane is a line from the bot's recorded values; a band draws two
  * dashed levels on its pane. Catalogue indicators the viewer adds are drawn
  * thinner, from the chart's own computation on these candles, on the price
- * pane or on panes after the strategy's. The before-start shade, the run's
- * start and end lines and the selected candle's band are one overlay
- * primitive per pane. Clicking a candle reports it; the host owns selection.
+ * pane or on panes after the strategy's. The before-start and after-end
+ * shades, the run's start and end lines, a running bot's Now line and
+ * forming bar, and the selected candle's band are one overlay primitive per
+ * pane. On the bot page, lanes under the chart place the run's decisions,
+ * orders, market data and the bot's own events on the candles' clock
+ * (#2794). Clicking a candle reports it; the host owns selection.
  *
  * The chart takes focus: the arrow keys (and Home/End) move the selected
  * candle, and Enter or Space opens its checks as a click would.
@@ -94,27 +111,8 @@ function barOf(ms: number): string {
 @Component({
   selector: 'app-strategy-chart',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `
-    <div
-      #chartContainer
-      class="strategy-chart"
-      role="group"
-      aria-roledescription="chart"
-      tabindex="0"
-      [attr.aria-label]="ariaLabel()"
-      (keydown)="onKeydown($event)"
-    ></div>
-    <p class="strategy-chart__announcement" aria-live="polite">{{ announcement() }}</p>
-  `,
-  styles: `
-    :host { display: block; position: relative; min-height: 0; }
-    .strategy-chart__announcement {
-      position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
-      overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
-    }
-    .strategy-chart { width: 100%; height: 100%; min-height: 10rem; cursor: pointer; }
-    .strategy-chart:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
-  `,
+  templateUrl: './strategy-chart.component.html',
+  styleUrl: './strategy-chart.component.scss',
 })
 export class StrategyChartComponent implements AfterViewInit {
   readonly view = input.required<StrategyViewResponse>();
@@ -123,6 +121,8 @@ export class StrategyChartComponent implements AfterViewInit {
   readonly selectedBarCloseMs = input<number | null>(null);
   /** Chart-computed catalogue lines, placed at each candle's close. */
   readonly indicatorPlans = input<readonly IndicatorSeriesPlan[]>([]);
+  /** The bot page's run facts: lanes, the Now line and the forming bar. `null` draws none. */
+  readonly runContext = input<StrategyRunContext | null>(null);
 
   readonly candleClicked = output<StrategyCandleClick>();
   /** A candle chosen from the keyboard, by its bar close. */
@@ -142,25 +142,70 @@ export class StrategyChartComponent implements AfterViewInit {
 
   private readonly linePlans = computed(() => strategyLinePlans(this.view().declaration, this.view().candles));
 
+  private readonly bars = computed((): readonly OverlayBar[] =>
+    this.view().candles.map((candle) => ({ startMs: candle.bar_start_ms, closeMs: candle.bar_close_ms })));
+
+  private readonly forming = computed(() => formingBar(this.view(), this.runContext()?.nowMs ?? null));
+
   private readonly overlayState = computed((): StrategyChartOverlayState => {
     const view = this.view();
     const lines: OverlayLine[] = [];
     const startedAtMs = view.run_started_at_ms ?? null;
     const stoppedAtMs = view.run_stopped_at_ms ?? null;
+    const forming = this.forming();
+    const nowMs = this.runContext()?.nowMs ?? null;
+    const endsAtMs = this.runContext()?.scheduledEndAtMs ?? null;
     if (startedAtMs !== null) {
       lines.push({ atMs: startedAtMs, label: `Bot started ${minuteOf(startedAtMs)}`, emphasis: 'start' });
     }
     if (stoppedAtMs !== null) {
       lines.push({ atMs: stoppedAtMs, label: `Ended ${minuteOf(stoppedAtMs)}`, emphasis: 'end' });
+    } else if (forming !== null && endsAtMs !== null && endsAtMs <= forming.closeMs) {
+      // An end further out has no bar to sit beside yet; the Bot lane names it.
+      lines.push({ atMs: endsAtMs, label: `Ends ${minuteOf(endsAtMs)}`, emphasis: 'end' });
     }
+    if (forming !== null && nowMs !== null) lines.push({ atMs: nowMs, label: 'Now', emphasis: 'now' });
     const beforeStart = view.candles.filter((candle) => candle.phase === 'before_start');
     return {
-      bars: view.candles.map((candle) => ({ startMs: candle.bar_start_ms, closeMs: candle.bar_close_ms })),
+      bars: this.bars(),
       shadeBeforeMs: beforeStart.length > 0 ? startedAtMs : null,
       shadeLabel: beforeStart.at(-1)?.phase_text ?? null,
+      shadeAfterMs: stoppedAtMs,
+      forming: forming === null ? null : { ...forming, label: `Forming · decides ${minuteOf(forming.closeMs)}` },
       lines,
       highlightCloseMs: this.selectedBarCloseMs(),
     };
+  });
+
+  /** Bumped when the visible bars or the chart's width change: lane marks move with the candles. */
+  private readonly geometry = signal(0);
+  protected readonly plotWidth = signal(0);
+
+  protected readonly lanes = computed((): readonly PlacedLane[] => {
+    const context = this.runContext();
+    if (context === null) return [];
+    this.geometry();
+    const bars = this.bars();
+    const timeScale = this.chart?.timeScale();
+    const width = this.plotWidth();
+    const xAt = (ms: number): number | null => {
+      const logical = logicalIndexAt(bars, ms);
+      return logical === null || timeScale === undefined ? null : coordinateOfLogical(timeScale, logical);
+    };
+    return chartLanes(this.view(), context).map((lane) => ({
+      ...lane,
+      marks: lane.marks.map((mark): PlacedMark => {
+        const left = xAt(mark.atMs);
+        if (mark.endMs === null) {
+          const shown = left !== null && left >= 0 && left <= width;
+          return { ...mark, left: shown ? left : null, width: null };
+        }
+        const right = xAt(mark.endMs);
+        if (left === null || right === null || right < 0 || left > width) return { ...mark, left: null, width: null };
+        const from = Math.max(0, left);
+        return { ...mark, left: from, width: Math.max(2, Math.min(width, right) - from) };
+      }),
+    }));
   });
 
   private chart: IChartApi | null = null;
@@ -223,9 +268,15 @@ export class StrategyChartComponent implements AfterViewInit {
     chart.subscribeClick(onClick);
     // An auto-sized chart learns its width a frame after it is created; a fit
     // before then packs every bar into the right edge.
-    const onSizeChange = () => this.fitIfPending();
+    const onSizeChange = () => {
+      this.fitIfPending();
+      this.measure();
+    };
+    const onRangeChange = () => this.measure();
     chart.timeScale().subscribeSizeChange(onSizeChange);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onRangeChange);
     this.destroyRef.onDestroy(() => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRangeChange);
       chart.timeScale().unsubscribeSizeChange(onSizeChange);
       chart.unsubscribeClick(onClick);
       chart.remove();
@@ -241,6 +292,12 @@ export class StrategyChartComponent implements AfterViewInit {
     this.renderLines();
     this.renderComputed(this.indicatorPlans());
     this.renderOverlays();
+    this.measure();
+  }
+
+  private measure(): void {
+    this.plotWidth.set(this.chart?.timeScale().width() ?? 0);
+    this.geometry.update((tick) => tick + 1);
   }
 
   private renderCandles(): void {

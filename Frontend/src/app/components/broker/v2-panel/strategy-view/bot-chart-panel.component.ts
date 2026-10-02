@@ -15,6 +15,7 @@ import {
 
 import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
 import type { CustomGateInput, StrategyViewResponse } from '../lib/broker-v2-panel.types';
+import type { StrategyRunContext } from './chart-lanes';
 import { strategyCatalogueIndicators } from './strategy-catalogue-indicators';
 import { StrategyGatePickerComponent } from './strategy-gate-picker.component';
 import { readGatePreference, writeGatePreference } from './strategy-gate-preference';
@@ -71,6 +72,8 @@ export class BotChartPanelComponent {
   /** The second tab's name: the bot page's market tape, or Strategy Lab's price-and-trades chart. */
   readonly tapeLabel = input('Tape');
   readonly selectedBarCloseMs = model<number | null>(null);
+  /** The bot page's run facts for the strategy chart's lanes, Now line and forming bar (#2794). */
+  readonly runContext = input<StrategyRunContext | null>(null);
 
   readonly retry = output();
 
