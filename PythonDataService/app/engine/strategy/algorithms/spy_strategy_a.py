@@ -31,7 +31,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.macd import MovingAverageConvergenceDivergence
 from app.engine.strategy.algorithms._rsi_range_base import RsiRangeStrategy
-from app.engine.strategy.decision_explanation import CheckRole, ExplainedCheck
+from app.engine.strategy.decision_explanation import CheckRole, Comparison, ExplainedCheck
 
 
 class SpyStrategyAAlgorithm(RsiRangeStrategy):
@@ -102,6 +102,7 @@ class SpyStrategyAAlgorithm(RsiRangeStrategy):
             ExplainedCheck(
                 check_id="ema_gap",
                 role=CheckRole.ENTRY,
+                comparison=Comparison.GT,
                 passed=gap is not None and gap > self.ema_gap_threshold,
                 observed=gap,
                 threshold=self.ema_gap_threshold,
@@ -109,6 +110,7 @@ class SpyStrategyAAlgorithm(RsiRangeStrategy):
             ExplainedCheck(
                 check_id="macd_positive",
                 role=CheckRole.ENTRY,
+                comparison=Comparison.GT,
                 passed=macd_line is not None and macd_line > Decimal(0),
                 observed=macd_line,
                 threshold=Decimal(0),

@@ -28,18 +28,35 @@ class CheckRole(StrEnum):
     EXIT = "exit"
 
 
+class Comparison(StrEnum):
+    """How a rule judged its observed value, stated beside the comparison itself.
+
+    ``BAND`` is inclusive at both ends; ``STATE`` is a rule that is not a
+    comparison (its observed value is a state token such as ``"crossed_up"``).
+    """
+
+    GE = "ge"
+    GT = "gt"
+    LE = "le"
+    LT = "lt"
+    BAND = "band"
+    STATE = "state"
+
+
 @dataclass(frozen=True)
 class ExplainedCheck:
     """One rule as the decision applied it on one bar.
 
     ``observed`` is the number the rule compared, or a short state token for
-    a rule that is not a comparison (``"crossed_up"``). ``threshold`` is the
-    bound the strategy used -- already resolved from its deployed settings --
-    or an inclusive ``(low, high)`` band; ``None`` for a state rule.
+    a ``STATE`` rule. ``threshold`` is the bound the strategy used -- already
+    resolved from its deployed settings -- or an inclusive ``(low, high)``
+    band; ``None`` for a ``STATE`` rule. ``comparison`` is the operator the
+    code applied, so wording derived from it can never claim another one.
     """
 
     check_id: str
     role: CheckRole
+    comparison: Comparison
     passed: bool
     observed: Decimal | int | str | None
     threshold: Decimal | int | tuple[Decimal, Decimal] | None = None
@@ -53,21 +70,13 @@ class DecisionExplanation:
     arrived: its entry rules decide only while flat and its exit rules only
     while holding. A strategy still reports the rules that did not apply on a
     bar when it computes them anyway, so a rule-based gate can shade every
-    candle; ``holding`` is what tells a reader which side acted.
+    candle; ``holding`` is what tells a reader which side acted. Entry rules
+    are joined by AND, exit rules by OR.
     """
 
     values: dict[str, Decimal | None]
     checks: tuple[ExplainedCheck, ...] = field(default_factory=tuple)
     holding: bool = False
 
-    def entry_checks_pass(self) -> bool:
-        """Whether every reported entry rule passed: entry rules are joined by AND."""
-        entry = [check for check in self.checks if check.role is CheckRole.ENTRY]
-        return bool(entry) and all(check.passed for check in entry)
 
-    def exit_check_fires(self) -> bool:
-        """Whether any reported exit rule passed: exit rules are joined by OR."""
-        return any(check.passed for check in self.checks if check.role is CheckRole.EXIT)
-
-
-__all__ = ["CheckRole", "DecisionExplanation", "ExplainedCheck"]
+__all__ = ["CheckRole", "Comparison", "DecisionExplanation", "ExplainedCheck"]

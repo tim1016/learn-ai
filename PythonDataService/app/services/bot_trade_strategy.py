@@ -49,7 +49,7 @@ from app.marketdata.feed import (
     MarketDataBar,
     MarketDataFeed,
 )
-from app.schemas.decision_explanation import DecisionExplanationRecord, explanation_record
+from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
 from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, replay_warmup_bars
@@ -616,7 +616,7 @@ async def _warm_up_signal_strategy(
         # this bucket came from a registered Signal Program, so its crash-window
         # decision content stays content-verifiable rather than digest-less.
         trace=candidate_stage.trace,
-        explanation=explanation_record(candidate_stage.bar, candidate_stage.decision),
+        explanation=DecisionExplanationRecord.from_decision(candidate_stage.bar, candidate_stage.decision),
     )
 
 
@@ -702,7 +702,7 @@ def _evaluation_from_active_stage(
         ),
         evaluation_mode=stage.trace.evaluation_mode,
         trace=stage.trace,
-        explanation=explanation_record(stage.bar, stage.decision),
+        explanation=DecisionExplanationRecord.from_decision(stage.bar, stage.decision),
     )
 
 

@@ -30,7 +30,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import LoggedTrade, Strategy
-from app.engine.strategy.decision_explanation import CheckRole, DecisionExplanation, ExplainedCheck
+from app.engine.strategy.decision_explanation import CheckRole, Comparison, DecisionExplanation, ExplainedCheck
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.utils.timestamps import display_time
@@ -189,6 +189,7 @@ class RsiMeanReversionAlgorithm(Strategy):
         oversold_check = ExplainedCheck(
             check_id="rsi_below_oversold",
             role=CheckRole.ENTRY,
+            comparison=Comparison.LT,
             passed=rsi_val < self._oversold,
             observed=rsi_val,
             threshold=self._oversold,
@@ -196,6 +197,7 @@ class RsiMeanReversionAlgorithm(Strategy):
         overbought_check = ExplainedCheck(
             check_id="rsi_above_overbought",
             role=CheckRole.EXIT,
+            comparison=Comparison.GT,
             passed=rsi_val > self._overbought,
             observed=rsi_val,
             threshold=self._overbought,

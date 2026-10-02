@@ -621,16 +621,34 @@ class SourceBarLedger:
                 raise
 
     def before_start_evaluations(self, *, run_id: str) -> list[DecisionExplanationRecord]:
-        """The run's before-start evaluations in bar order; none for a pre-#2639 file."""
+        """The run's before-start evaluations in bar order; none for a pre-#2639 file.
+
+        Display evidence: a row this build cannot read (one a newer build
+        wrote) is logged and left out rather than failing the whole read.
+        """
         with self._lock:
             if not self._has_table("source_run_before_start_evaluations"):
                 return []
             rows = self._conn.execute(
-                "SELECT explanation_json FROM source_run_before_start_evaluations "
+                "SELECT bar_close_ms, explanation_json FROM source_run_before_start_evaluations "
                 "WHERE run_id = ? ORDER BY bar_close_ms ASC",
                 (run_id,),
             ).fetchall()
-        return [DecisionExplanationRecord.model_validate_json(row["explanation_json"]) for row in rows]
+        records: list[DecisionExplanationRecord] = []
+        for row in rows:
+            try:
+                records.append(DecisionExplanationRecord.model_validate_json(row["explanation_json"]))
+            except ValueError as exc:
+                logger.warning(
+                    "A before-start evaluation could not be read",
+                    extra={
+                        "action": "before_start_evaluation_unreadable",
+                        "run_id": run_id,
+                        "bar_close_ms": row["bar_close_ms"],
+                        "reason": str(exc),
+                    },
+                )
+        return records
 
     def record_startup_opened(self, *, run_id: str, at_ms: int) -> None:
         """Record that a run subscribed and is preparing, keep-first (#2410)."""

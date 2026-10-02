@@ -31,7 +31,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.indicators.macd import MovingAverageConvergenceDivergence
 from app.engine.indicators.supertrend import Supertrend
 from app.engine.strategy.algorithms._rsi_range_base import RsiRangeStrategy
-from app.engine.strategy.decision_explanation import CheckRole, ExplainedCheck
+from app.engine.strategy.decision_explanation import CheckRole, Comparison, ExplainedCheck
 
 
 class SpyStrategyBAlgorithm(RsiRangeStrategy):
@@ -96,12 +96,14 @@ class SpyStrategyBAlgorithm(RsiRangeStrategy):
             ExplainedCheck(
                 check_id="supertrend_long",
                 role=CheckRole.ENTRY,
+                comparison=Comparison.STATE,
                 passed=trend_long,
                 observed="long" if trend_long else "short",
             ),
             ExplainedCheck(
                 check_id="adx_entry",
                 role=CheckRole.ENTRY,
+                comparison=Comparison.GT,
                 passed=adx_val is not None and adx_val > self.adx_entry_threshold,
                 observed=adx_val,
                 threshold=self.adx_entry_threshold,
@@ -109,6 +111,7 @@ class SpyStrategyBAlgorithm(RsiRangeStrategy):
             ExplainedCheck(
                 check_id="macd_positive",
                 role=CheckRole.ENTRY,
+                comparison=Comparison.GT,
                 passed=macd_val is not None and macd_val > Decimal(0),
                 observed=macd_val,
                 threshold=Decimal(0),

@@ -32946,6 +32946,8 @@
           "decision_bar_close_ms": {
             "anyOf": [
               {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
                 "type": "integer"
               },
               {

@@ -17,7 +17,7 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
 )
 from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.schemas.strategy_view import StrategyViewCandle, StrategyViewResponse
-from app.services.broker_v2_panel.panel_data_source import _selected_panel_authority, read_run_ledger
+from app.services.broker_v2_panel.panel_data_source import read_run_ledger, selected_panel_authority
 from app.services.broker_v2_panel.panel_errors import PanelUnavailableError
 from app.services.broker_v2_panel.sqlite_panel_source import (
     SqlitePanelDecisionUnavailable,
@@ -30,7 +30,7 @@ BEFORE_START_TEXT = "Before start · not acted on"
 
 async def get_strategy_view(broker: str, account_id: str, sid: str) -> StrategyViewResponse:
     """Everything the bot's strategy view draws, for its current (or latest) run."""
-    async with _selected_panel_authority(broker, account_id, sid) as (_resolved, _registry, binding, facade):
+    async with selected_panel_authority(broker, account_id, sid) as (_resolved, _registry, binding, facade):
         if facade is None:
             raise PanelUnavailableError(
                 "This bot's Clerk is unavailable.",
@@ -41,7 +41,7 @@ async def get_strategy_view(broker: str, account_id: str, sid: str) -> StrategyV
                 binding.strategy_key, binding.strategy_params, symbol=binding.symbol
             )
         except StrategyViewUnavailableError as exc:
-            raise PanelUnavailableError("This bot's strategy has no strategy view.", detail=str(exc)) from exc
+            raise PanelUnavailableError("This bot's strategy view is unavailable.", detail=str(exc)) from exc
         try:
             receipts = read_sqlite_decision_receipts(broker, sid, limit=MAX_DECISION_RECEIPT_READ, facade=facade)
         except SqlitePanelDecisionUnavailable as exc:
@@ -80,32 +80,57 @@ def build_strategy_view(
 
     ``run_ids`` are the spellings a receipt's facts use for this run: the
     runner's lifecycle id and the Clerk's ``<sid>:<lifecycle>``. A bar this
-    run decided is drawn from its receipt even when warmup also evaluated it
-    (a re-entered run replays bars it already decided).
+    run decided is never drawn as before-start, whether or not its receipt
+    recorded values: a re-entered run's warmup replays bars it already
+    decided, and a bar that closed after the run started was not warmup.
     """
-    decided: dict[int, DecisionReceipt] = {}
-    unexplained = 0
+    decided_closes: set[int] = set()
+    candles: list[StrategyViewCandle] = []
+    unexplained = unshown = 0
     for receipt in receipts:
         if receipt.run_id not in run_ids or receipt.outcome == QUARANTINE_OUTCOME:
             continue
-        if receipt.explanation is None:
-            unexplained += 1
+        if receipt.decision_bar_close_ms is not None:
+            decided_closes.add(receipt.decision_bar_close_ms)
+        record = receipt.explanation
+        if record is None:
+            if receipt.explanation_unreadable:
+                unshown += 1
+            else:
+                unexplained += 1
             continue
-        decided[receipt.explanation.bar.end_ms] = receipt
-    candles = [_decision_candle(view, receipt) for receipt in decided.values()]
-    candles.extend(
-        _before_start_candle(view, record) for record in before_start or () if record.bar.end_ms not in decided
-    )
-    candles.sort(key=lambda candle: candle.bar_close_ms)
-    notices: list[str] = []
-    if before_start is None:
-        notices.append("Bars from before the bot started are unavailable for this run.")
-    if unexplained:
-        noun, verb = ("decision", "was") if unexplained == 1 else ("decisions", "were")
-        notices.append(
-            f"{unexplained} {noun} in this run {verb} recorded before decisions saved their values: "
-            "values not recorded."
+        decided_closes.add(record.bar.end_ms)
+        rendered = view.render_or_none(record)
+        if rendered is None:
+            unshown += 1
+            continue
+        candles.append(
+            StrategyViewCandle(
+                **_bar_fields(record),
+                phase="decision",
+                outcome=receipt.outcome,
+                reason_code=receipt.reason_code,
+                decision_seq=receipt.seq,
+                explanation=rendered,
+                gates=view.gate_results(record),
+            )
         )
+    for record in before_start or ():
+        close_ms = record.bar.end_ms
+        if close_ms in decided_closes or (run_started_at_ms is not None and close_ms > run_started_at_ms):
+            continue
+        rendered = view.render_or_none(record)
+        if rendered is not None:
+            candles.append(
+                StrategyViewCandle(
+                    **_bar_fields(record),
+                    phase="before_start",
+                    phase_text=BEFORE_START_TEXT,
+                    explanation=rendered,
+                    gates=view.gate_results(record),
+                )
+            )
+    candles.sort(key=lambda candle: candle.bar_close_ms)
     return StrategyViewResponse(
         strategy_key=view.strategy_key,
         strategy_name=view.registration.display_name,
@@ -117,32 +142,26 @@ def build_strategy_view(
         declaration=view.declaration(),
         candles=candles,
         unexplained_decision_count=unexplained,
-        notices=notices,
+        notices=_notices(before_start, unexplained=unexplained, unshown=unshown),
     )
 
 
-def _decision_candle(view: ResolvedStrategyView, receipt: DecisionReceipt) -> StrategyViewCandle:
-    record = receipt.explanation
-    assert record is not None
-    return StrategyViewCandle(
-        **_bar_fields(record),
-        phase="decision",
-        outcome=receipt.outcome,
-        reason_code=receipt.reason_code,
-        decision_seq=receipt.seq,
-        explanation=view.render(record),
-        gates=view.gate_results(record),
-    )
-
-
-def _before_start_candle(view: ResolvedStrategyView, record: DecisionExplanationRecord) -> StrategyViewCandle:
-    return StrategyViewCandle(
-        **_bar_fields(record),
-        phase="before_start",
-        phase_text=BEFORE_START_TEXT,
-        explanation=view.render(record),
-        gates=view.gate_results(record),
-    )
+def _notices(before_start: Sequence[DecisionExplanationRecord] | None, *, unexplained: int, unshown: int) -> list[str]:
+    notices: list[str] = []
+    if before_start is None:
+        notices.append("Bars from before the bot started are unavailable for this run.")
+    elif not before_start:
+        notices.append("This run saved no bars from before it started.")
+    if unexplained:
+        noun, verb = ("decision", "was") if unexplained == 1 else ("decisions", "were")
+        notices.append(
+            f"{unexplained} {noun} in this run {verb} recorded before decisions saved their values: "
+            "values not recorded."
+        )
+    if unshown:
+        noun = "decision's values" if unshown == 1 else "decisions' values"
+        notices.append(f"{unshown} {noun} could not be shown by this build.")
+    return notices
 
 
 def _bar_fields(record: DecisionExplanationRecord) -> dict[str, float | int]:

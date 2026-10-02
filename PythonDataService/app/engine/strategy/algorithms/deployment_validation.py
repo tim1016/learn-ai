@@ -34,7 +34,7 @@ from decimal import Decimal
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.strategy.base import LoggedTrade, Strategy
-from app.engine.strategy.decision_explanation import CheckRole, DecisionExplanation, ExplainedCheck
+from app.engine.strategy.decision_explanation import CheckRole, Comparison, DecisionExplanation, ExplainedCheck
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
@@ -199,18 +199,20 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         window_check = ExplainedCheck(
             check_id="in_window",
             role=CheckRole.ENTRY,
+            comparison=Comparison.STATE,
             passed=window_state == "inside",
             observed=window_state,
         )
         session_end_check = ExplainedCheck(
             check_id="session_end",
             role=CheckRole.EXIT,
+            comparison=Comparison.STATE,
             passed=reached_session_end,
             observed="reached" if reached_session_end else "not_reached",
         )
         held_checks = (session_end_check,) if prior_in_position else ()
 
-        if bar.end_ms >= self._stop_and_flatten_ms:
+        if session_end_check.passed:
             self._stopped_for_day = True
             self._green_streak = 0
             # Reading only ``prior_in_position`` is complete, not a
@@ -245,7 +247,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
                 ),
             )
 
-        if self._stopped_for_day or bar.end_ms < self._detection_start_ms:
+        if not window_check.passed:
             self._green_streak = 0
             return SignalDecision(
                 intent=None,
@@ -268,11 +270,12 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             countdown_check = ExplainedCheck(
                 check_id="exit_countdown",
                 role=CheckRole.EXIT,
+                comparison=Comparison.LE,
                 passed=next_countdown <= 0,
                 observed=next_countdown,
                 threshold=0,
             )
-            if next_countdown <= 0:
+            if countdown_check.passed:
                 intent = SignalIntent(kind=SignalIntentKind.EXIT, bar_close_ms=bar.end_ms, intended_price=bar.close)
                 bar_signal = "EXIT"
             else:
@@ -311,6 +314,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         streak_check = ExplainedCheck(
             check_id="green_streak",
             role=CheckRole.ENTRY,
+            comparison=Comparison.GE,
             passed=candidate_streak >= 2,
             observed=candidate_streak,
             threshold=2,

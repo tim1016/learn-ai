@@ -62,7 +62,7 @@ from app.engine.framework.insight import Insight, InsightDirection
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import LoggedTrade, Strategy
-from app.engine.strategy.decision_explanation import CheckRole, DecisionExplanation, ExplainedCheck
+from app.engine.strategy.decision_explanation import CheckRole, Comparison, DecisionExplanation, ExplainedCheck
 from app.engine.strategy.normalized_gap import difference_bps
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import SignalDecision, SignalProgram
@@ -160,24 +160,26 @@ class EmaCrossoverSignalAlgorithm(Strategy):
 
         The gap passes when ``EMA(fast) - EMA(slow) >= gap``; the normalized
         floor is reported (and applied) only when it is set. Its basis-point
-        value is computed whenever EMA(slow) is non-zero, so the owner sees it
-        on a bar the absolute floor already failed; a zero EMA(slow) still
-        raises exactly where it always did -- once the absolute floor passes.
+        value is computed on every ready bar, so the owner sees it on a bar the
+        absolute floor already failed. EMA(slow) averages positive prices, so
+        it is never zero; a zero one would fail the floor rather than divide.
         """
         spread = ema_fast - ema_slow
         absolute = ExplainedCheck(
             check_id="gap",
             role=CheckRole.ENTRY,
+            comparison=Comparison.GE,
             passed=spread >= self._gap,
             observed=spread,
             threshold=self._gap,
         )
         if self._gap_bps <= 0:
             return (absolute,)
-        spread_bps = difference_bps(ema_fast, ema_slow) if absolute.passed or ema_slow != 0 else None
+        spread_bps = None if ema_slow == 0 else difference_bps(ema_fast, ema_slow)
         normalized = ExplainedCheck(
             check_id="gap_bps",
             role=CheckRole.ENTRY,
+            comparison=Comparison.GE,
             passed=spread_bps is not None and spread_bps >= self._gap_bps,
             observed=spread_bps,
             threshold=self._gap_bps,
@@ -451,6 +453,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
             ExplainedCheck(
                 check_id="fresh_cross",
                 role=CheckRole.ENTRY,
+                comparison=Comparison.STATE,
                 passed=crossover_state == "crossed_up",
                 observed=crossover_state,
             ),
@@ -458,6 +461,7 @@ class EmaCrossoverSignalAlgorithm(Strategy):
             ExplainedCheck(
                 check_id="rsi_band",
                 role=CheckRole.ENTRY,
+                comparison=Comparison.BAND,
                 passed=rsi_lower <= rsi_val <= rsi_upper,
                 observed=rsi_val,
                 threshold=(rsi_lower, rsi_upper),
@@ -467,16 +471,16 @@ class EmaCrossoverSignalAlgorithm(Strategy):
 
         if self._in_position:
             next_countdown = self._bars_until_exit - 1
-            exit_checks = (
-                ExplainedCheck(
-                    check_id="exit_countdown",
-                    role=CheckRole.EXIT,
-                    passed=next_countdown <= 0,
-                    observed=next_countdown,
-                    threshold=0,
-                ),
+            countdown = ExplainedCheck(
+                check_id="exit_countdown",
+                role=CheckRole.EXIT,
+                comparison=Comparison.LE,
+                passed=next_countdown <= 0,
+                observed=next_countdown,
+                threshold=0,
             )
-            if next_countdown <= 0:
+            exit_checks = (countdown,)
+            if countdown.passed:
                 # Preserve the last eligible countdown until a stage commits.
                 # A discarded exit therefore re-evaluates only from a later
                 # bar; it never leaks a paused candidate through Continue.

@@ -16,7 +16,7 @@ from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSign
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import SignalDecision
-from app.schemas.decision_explanation import DecisionExplanationRecord, explanation_record
+from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.services.broker_v2_panel.strategy_view_source import BEFORE_START_TEXT, build_strategy_view
 from app.services.strategy_view import ResolvedStrategyView, StrategyViewUnavailableError
 from scripts.fixture_generators.ema_decision_explanation_2026_09_29 import replay
@@ -41,7 +41,7 @@ def test_the_2026_09_29_bar_is_worded_for_the_owner() -> None:
 
     assert [(c.label, c.observed_text, c.needs, c.passed) for c in rendered.checks] == [
         ("Fresh cross", "yes", "a cross up", True),
-        ("Gap", "0.03", "≥ 0.20", False),
+        ("Gap", "+0.03", "≥ 0.20", False),
         ("RSI", "47.3", "in 50–70", False),
     ]
     assert [c.chip for c in rendered.checks] == ["cross", "gap +0.03", "RSI 47.3"]
@@ -105,7 +105,7 @@ def _ema_decision_at_rsi(rsi: str) -> tuple[TradeBar, SignalDecision]:
 @pytest.mark.parametrize(("rsi", "bright"), [("50", True), ("70", True), ("49.99", False), ("70.01", False)])
 def test_a_bar_exactly_on_the_rsi_edge_is_shaded_the_way_the_bot_judged_it(rsi: str, bright: bool) -> None:
     bar, decision = _ema_decision_at_rsi(rsi)
-    record = explanation_record(bar, decision)
+    record = DecisionExplanationRecord.from_decision(bar, decision)
     assert record is not None
 
     assert _ema_view().gate_results(record) == {"rsi_band": bright}
@@ -122,53 +122,16 @@ def test_every_strategy_words_every_decision_it_makes(program_key: str) -> None:
     assert declaration.default_gate_id == registration.strategy_view.default_gate.gate_id  # type: ignore[union-attr]
 
     minutes = json.loads((EXP_001.parent / "input.json").read_text(encoding="utf-8"))["minutes"]
-    staged = _replay_program(program_key, minutes, contract.validated_settings)
+    staged = replay(minutes, program_key=program_key, settings=contract.validated_settings)
     assert staged
     gate_seen: set[bool | None] = set()
     for bar, decision in staged:
-        record = explanation_record(bar, decision)
+        record = DecisionExplanationRecord.from_decision(bar, decision)
         assert record is not None
         rendered = view.render(record)
         assert all(check.label and check.chip and check.observed_text for check in rendered.checks)
         gate_seen.update(view.gate_results(record).values())
     assert {True, False} <= gate_seen
-
-
-def _replay_program(program_key: str, minutes: list[dict], settings: dict) -> list[tuple[TradeBar, SignalDecision]]:
-    if program_key == "ema_crossover_signal":
-        return replay(minutes)
-    from datetime import date
-
-    from app.engine.engine import BacktestEngine, pin_strategy_window
-    from app.services.spec_strategy_runner import InMemoryDataReader as Reader
-
-    registration = _STRATEGY_REGISTRY[program_key]
-    strategy = registration.build(registration.param_schema(**{**settings, "symbol": "SPY"}))
-    staged: list[tuple[TradeBar, SignalDecision]] = []
-    evaluate = strategy.evaluate_signal_bar  # type: ignore[attr-defined]
-
-    def recording_evaluate(bar: TradeBar) -> SignalDecision:
-        decision = evaluate(bar)
-        staged.append((bar, decision))
-        return decision
-
-    strategy.evaluate_signal_bar = recording_evaluate  # type: ignore[attr-defined]
-    pin_strategy_window(strategy, date(2026, 9, 23), date(2026, 9, 29))
-    bars = [
-        TradeBar(
-            symbol="SPY",
-            start_ms=row["start_ms"],
-            end_ms=row["end_ms"],
-            open=Decimal(row["open"]),
-            high=Decimal(row["high"]),
-            low=Decimal(row["low"]),
-            close=Decimal(row["close"]),
-            volume=int(row["volume"]),
-        )
-        for row in minutes
-    ]
-    BacktestEngine.for_decision_identity(Reader(bars)).run(strategy)
-    return staged
 
 
 def test_a_held_bar_marks_its_entry_rules_as_not_applying() -> None:
@@ -250,3 +213,79 @@ def test_a_missing_ledger_says_warmup_bars_are_unavailable() -> None:
 
     assert response.candles == []
     assert response.notices == ["Bars from before the bot started are unavailable for this run."]
+
+
+def test_a_bar_the_run_decided_is_never_drawn_as_before_start() -> None:
+    """A re-entered run's warmup re-evaluates bars it already decided, some before values were saved."""
+    at_1430, at_1445 = _exp001_records()
+    later = at_1445.model_copy(
+        update={"bar": at_1445.bar.model_copy(update={"start_ms": 1_790_707_500_000, "end_ms": 1_790_708_400_000})}
+    )
+    decided_without_values = _receipt(1, None).model_copy(update={"decision_bar_close_ms": at_1445.bar.end_ms})
+
+    response = build_strategy_view(
+        _ema_view(),
+        symbol="SPY",
+        run_id="run-1",
+        run_ids=frozenset({"run-1"}),
+        # Started between the 14:30 close and the 14:45 close.
+        run_started_at_ms=at_1430.bar.end_ms + 120_000,
+        run_stopped_at_ms=None,
+        before_start=[at_1430, at_1445, later],
+        receipts=[decided_without_values],
+    )
+
+    assert [(c.bar_close_ms, c.phase) for c in response.candles] == [(at_1430.bar.end_ms, "before_start")]
+    assert response.unexplained_decision_count == 1
+
+
+def test_a_row_this_build_cannot_word_is_left_out_and_said_so() -> None:
+    at_1430, _ = _exp001_records()
+    unwordable = at_1430.model_copy(
+        update={
+            "checks": [at_1430.checks[1].model_copy(update={"comparison": "gt", "threshold": None, "observed": "x"})]
+        }
+    )
+
+    response = build_strategy_view(
+        _ema_view(),
+        symbol="SPY",
+        run_id="run-1",
+        run_ids=frozenset({"run-1"}),
+        run_started_at_ms=None,
+        run_stopped_at_ms=None,
+        before_start=[],
+        receipts=[_receipt(1, unwordable)],
+    )
+
+    assert response.candles == []
+    assert response.notices == [
+        "This run saved no bars from before it started.",
+        "1 decision's values could not be shown by this build.",
+    ]
+
+
+def test_saved_settings_that_no_longer_validate_mean_no_view() -> None:
+    with pytest.raises(StrategyViewUnavailableError, match="no longer fit"):
+        ResolvedStrategyView.for_settings("ema_crossover_signal", {"rsi_min": "not a number"}, symbol="SPY")
+
+
+def test_the_normalized_gap_floor_is_reported_and_applied_when_set() -> None:
+    strategy = EmaCrossoverSignalAlgorithm(symbol="SPY", gap=Decimal("0.10"), gap_bps=Decimal("40"))
+    strategy.ctx = StrategyContext(portfolio=Portfolio(initial_cash=Decimal("100000")))
+    strategy.initialize()
+    strategy._ema10 = _ReadyIndicator(Decimal("100.00"))  # type: ignore[assignment]
+    strategy._ema5 = _ReadyIndicator(Decimal("100.30"))  # type: ignore[assignment]
+    strategy._rsi14 = _ReadyIndicator(Decimal("60"))  # type: ignore[assignment]
+    bar, _ = _ema_decision_at_rsi("60")
+
+    decision = strategy.evaluate_signal_bar(bar)
+
+    record = DecisionExplanationRecord.from_decision(bar, decision)
+    assert record is not None
+    gap_bps = next(check for check in record.checks if check.check_id == "gap_bps")
+    # 0.30 over 100.00 is 30 bps, short of the 40 bps floor: no entry.
+    assert (gap_bps.passed, gap_bps.observed, gap_bps.comparison) == (False, 30.0, "ge")
+    assert decision.intent is None
+    rendered = _ema_view(gap=0.1, gap_bps=40).render(record)
+    assert next(c for c in rendered.checks if c.check_id == "gap_bps").needs == "≥ 40 bps"

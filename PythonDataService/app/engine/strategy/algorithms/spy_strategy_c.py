@@ -29,7 +29,7 @@ from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.algorithms._rsi_range_base import RsiRangeStrategy
-from app.engine.strategy.decision_explanation import CheckRole, ExplainedCheck
+from app.engine.strategy.decision_explanation import CheckRole, Comparison, ExplainedCheck
 
 
 class SpyStrategyCAlgorithm(RsiRangeStrategy):
@@ -64,14 +64,15 @@ class SpyStrategyCAlgorithm(RsiRangeStrategy):
             ExplainedCheck(
                 check_id="adx_entry",
                 role=CheckRole.ENTRY,
-                # The original gate refused a missing previous value as well.
-                passed=previous is not None and current is not None and current > self.adx_entry_threshold,
+                comparison=Comparison.GT,
+                passed=current is not None and current > self.adx_entry_threshold,
                 observed=current,
                 threshold=self.adx_entry_threshold,
             ),
             ExplainedCheck(
                 check_id="adx_rising",
                 role=CheckRole.ENTRY,
+                comparison=Comparison.GT,
                 passed=current is not None and previous is not None and current > previous,
                 observed=rise,
                 threshold=0,

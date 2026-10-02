@@ -13,9 +13,12 @@ bot judged it).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+
+from pydantic import ValidationError
 
 from app.engine.strategy.params import StrategyParamsBase, decision_timeframe_ms_for
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration
@@ -30,6 +33,8 @@ from app.schemas.strategy_view import (
     StrategyViewGateView,
     StrategyViewValueSpec,
 )
+
+logger = logging.getLogger(__name__)
 
 _NOT_AVAILABLE = "not available"
 
@@ -57,7 +62,12 @@ class ResolvedStrategyView:
             raise StrategyViewUnavailableError(f"Strategy '{strategy_key}' is not registered in this build.")
         if registration.strategy_view is None:
             raise StrategyViewUnavailableError(f"Strategy '{strategy_key}' declares no strategy view.")
-        params = registration.param_schema(**{**(strategy_params or {}), "symbol": symbol})
+        try:
+            params = registration.param_schema(**{**(strategy_params or {}), "symbol": symbol})
+        except ValidationError as exc:
+            raise StrategyViewUnavailableError(
+                f"This bot's saved settings no longer fit strategy '{strategy_key}': {exc.error_count()} invalid."
+            ) from exc
         return cls(strategy_key=strategy_key, registration=registration, view=registration.strategy_view, params=params)
 
     @property
@@ -100,8 +110,29 @@ class ResolvedStrategyView:
             holding=record.holding,
             signal=record.signal,
             values=[self._value_view(value, record.values.get(value.key), settings) for value in self.view.values],
-            checks=[self._check_view(check, record.holding, settings) for check in record.checks],
+            checks=[self._check_view(check, record.holding) for check in record.checks],
         )
+
+    def render_or_none(self, record: DecisionExplanationRecord) -> DecisionExplanationView | None:
+        """``render``, or ``None`` with a warning when this build cannot word the row.
+
+        A stored row outlives the build that wrote it, and presentation may
+        change freely (#2639 D14), so one row this build cannot word must
+        never take a page down with it.
+        """
+        try:
+            return self.render(record)
+        except (KeyError, ValueError, TypeError, IndexError) as exc:
+            logger.warning(
+                "A recorded decision explanation could not be worded",
+                extra={
+                    "action": "strategy_view_explanation_unrenderable",
+                    "strategy_key": self.strategy_key,
+                    "bar_close_ms": record.bar.end_ms,
+                    "reason": repr(exc),
+                },
+            )
+            return None
 
     def gate_results(self, record: DecisionExplanationRecord) -> dict[str, bool | None]:
         """Whether each gate held on this bar; ``None`` when the bar recorded no such rule."""
@@ -136,43 +167,36 @@ class ResolvedStrategyView:
             text=_NOT_AVAILABLE if recorded is None else f"{recorded:.{value.decimals}f}",
         )
 
-    def _check_view(
-        self, record: ExplainedCheckRecord, holding: bool, settings: Mapping[str, Any]
-    ) -> ExplainedCheckView:
-        wording: ViewCheck | None = self.view.check(record.check_id)
-        applies = (record.role == "entry") != holding
-        if wording is None:
-            # The view-pin test keeps every emitted check declared; a row
-            # written by an older build may still name one this build dropped.
-            return ExplainedCheckView(
-                check_id=record.check_id,
-                role=record.role,
-                label=record.check_id,
-                chip=record.check_id,
-                observed_text=_NOT_AVAILABLE if record.observed is None else str(record.observed),
-                needs="",
-                passed=record.passed,
-                applies=applies,
-            )
-        fields = {**settings, **_threshold_fields(record.threshold), "observed": record.observed}
-        if isinstance(record.observed, str):
-            observed_text = wording.states.get(record.observed, record.observed)
-            chip = wording.chip.format(**fields)
-        elif record.observed is None:
-            observed_text = _NOT_AVAILABLE
-            chip = wording.label
+    def _check_view(self, record: ExplainedCheckRecord, holding: bool) -> ExplainedCheckView:
+        """Word one rule from its record: the operator and bound are the decision's own."""
+        wording: ViewCheck = self.view.check(record.check_id) or ViewCheck(
+            # The view-pin test keeps every emitted check declared; a row an
+            # older build wrote may still name one this build dropped.
+            check_id=record.check_id,
+            label=record.check_id,
+            chip=record.check_id,
+        )
+        if record.comparison == "state":
+            token = str(record.observed)
+            observed_text = wording.states.get(token, token)
+            needs = wording.needs
+            chip = wording.chip
         else:
-            observed_text = wording.observed.format(**fields)
-            chip = wording.chip.format(**fields)
+            needs = _needs(record.comparison, record.threshold, wording)
+            if record.observed is None:
+                observed_text, chip = _NOT_AVAILABLE, wording.chip
+            else:
+                observed_text = _observed(record.observed, wording)
+                chip = f"{wording.chip} {observed_text}"
         return ExplainedCheckView(
             check_id=record.check_id,
             role=record.role,
             label=wording.label,
             chip=chip,
             observed_text=observed_text,
-            needs=wording.needs.format(**fields),
+            needs=needs,
             passed=record.passed,
-            applies=applies,
+            applies=(record.role == "entry") != holding,
         )
 
     def _number(self, value: int | float | ChartParamRef) -> float:
@@ -180,10 +204,29 @@ class ResolvedStrategyView:
         return float(resolved)
 
 
-def _threshold_fields(threshold: int | float | list[float] | None) -> dict[str, Any]:
+_OPERATOR_TEXT = {"ge": "≥", "gt": ">", "le": "≤", "lt": "<"}
+
+
+def _observed(value: int | float | str, wording: ViewCheck) -> str:
+    """The observed number at the check's precision, signed when the check is a spread."""
+    number = float(value)
+    sign = "+" if wording.signed else ""
+    return f"{number:{sign}.{wording.decimals}f}{wording.unit}"
+
+
+def _bound(value: float, wording: ViewCheck) -> str:
+    """A threshold as the owner set it: whole numbers stay whole (50, not 50.0)."""
+    return f"{int(value)}" if float(value).is_integer() else f"{value:.{wording.decimals}f}"
+
+
+def _needs(comparison: str, threshold: int | float | list[float] | None, wording: ViewCheck) -> str:
+    """What passing requires, derived from the recorded operator and bound."""
+    if threshold is None:
+        return ""
     if isinstance(threshold, list):
-        return {"low": threshold[0], "high": threshold[1], "threshold": threshold}
-    return {"threshold": threshold}
+        low, high = threshold
+        return f"in {_bound(low, wording)}–{_bound(high, wording)}{wording.unit}"
+    return f"{_OPERATOR_TEXT[comparison]} {_bound(threshold, wording)}{wording.unit}"
 
 
 __all__ = ["ResolvedStrategyView", "StrategyViewUnavailableError"]

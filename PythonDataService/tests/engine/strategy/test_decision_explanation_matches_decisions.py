@@ -14,11 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.engine import BacktestEngine
+from app.engine.strategy.decision_explanation import CheckRole, DecisionExplanation
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntentKind
 from app.engine.strategy.signal_program import SignalDecision
-from app.services.spec_strategy_runner import InMemoryDataReader
 from scripts.generate_signal_program_trace_corpus import (
     _DEFAULT_CELLS_ROOT,
     _CellManifest,
@@ -26,6 +25,7 @@ from scripts.generate_signal_program_trace_corpus import (
     _minute_bars,
     _select_cells,
 )
+from tests.fixtures.golden_support.strategy_replay import staged_decisions
 
 PROGRAM_KEYS = sorted(key for key, reg in _STRATEGY_REGISTRY.items() if reg.signal_program_factory is not None)
 
@@ -42,18 +42,19 @@ def _replayed_decisions(program_key: str, cell: _CellManifest) -> list[SignalDec
     contract = registration.signal_program_contract
     assert contract is not None
     strategy = registration.build(registration.param_schema(**{**contract.validated_settings, "symbol": cell.ticker}))
-    decisions: list[SignalDecision] = []
-    evaluate = strategy.evaluate_signal_bar  # type: ignore[attr-defined]
-
-    def recording_evaluate(bar):  # type: ignore[no-untyped-def]
-        decision = evaluate(bar)
-        decisions.append(decision)
-        return decision
-
-    strategy.evaluate_signal_bar = recording_evaluate  # type: ignore[attr-defined]
     minute_bars = _minute_bars(Path(_DEFAULT_CELLS_ROOT) / cell.cell_id, cell.ticker)
-    BacktestEngine.for_decision_identity(InMemoryDataReader(minute_bars)).run(strategy)
-    return decisions
+    return [decision for _bar, decision in staged_decisions(strategy, minute_bars)]
+
+
+def _entry_checks_pass(explanation: DecisionExplanation) -> bool:
+    """Entry rules are joined by AND."""
+    entry = [check for check in explanation.checks if check.role is CheckRole.ENTRY]
+    return bool(entry) and all(check.passed for check in entry)
+
+
+def _exit_check_fires(explanation: DecisionExplanation) -> bool:
+    """Exit rules are joined by OR."""
+    return any(check.passed for check in explanation.checks if check.role is CheckRole.EXIT)
 
 
 def _assert_checks_match_decisions(program_key: str, decisions: list[SignalDecision]) -> None:
@@ -72,10 +73,10 @@ def _assert_checks_match_decisions(program_key: str, decisions: list[SignalDecis
             assert kind is None
             continue
         if explanation.holding:
-            assert (kind is SignalIntentKind.EXIT) == explanation.exit_check_fires()
+            assert (kind is SignalIntentKind.EXIT) == _exit_check_fires(explanation)
             exits += kind is SignalIntentKind.EXIT
         else:
-            assert (kind is SignalIntentKind.ENTER) == explanation.entry_checks_pass()
+            assert (kind is SignalIntentKind.ENTER) == _entry_checks_pass(explanation)
             entries += kind is SignalIntentKind.ENTER
     assert entries > 0 and exits > 0, "the replay exercised both an entry and an exit"
 

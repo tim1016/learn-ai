@@ -26,6 +26,7 @@
         {
           "check_id": "fresh_cross",
           "role": "entry",
+          "comparison": "state",
           "passed": true,
           "observed": "crossed_up",
           "threshold": null
@@ -33,6 +34,7 @@
         {
           "check_id": "gap",
           "role": "entry",
+          "comparison": "ge",
           "passed": false,
           "observed": 0.02618550305818874,
           "threshold": 0.2
@@ -40,6 +42,7 @@
         {
           "check_id": "rsi_band",
           "role": "entry",
+          "comparison": "band",
           "passed": false,
           "observed": 47.25604678886895,
           "threshold": [
@@ -71,6 +74,7 @@
         {
           "check_id": "fresh_cross",
           "role": "entry",
+          "comparison": "state",
           "passed": false,
           "observed": "already_above",
           "threshold": null
@@ -78,6 +82,7 @@
         {
           "check_id": "gap",
           "role": "entry",
+          "comparison": "ge",
           "passed": true,
           "observed": 0.23132383074717608,
           "threshold": 0.2
@@ -85,6 +90,7 @@
         {
           "check_id": "rsi_band",
           "role": "entry",
+          "comparison": "band",
           "passed": true,
           "observed": 53.286520828736336,
           "threshold": [

@@ -1627,8 +1627,12 @@ def _dv_explanation(end_ms: int) -> dict:
         signal="HOLD",
         values={},
         checks=[
-            ExplainedCheckRecord(check_id="in_window", role="entry", passed=True, observed="inside"),
-            ExplainedCheckRecord(check_id="green_streak", role="entry", passed=False, observed=1, threshold=2),
+            ExplainedCheckRecord(
+                check_id="in_window", role="entry", comparison="state", passed=True, observed="inside"
+            ),
+            ExplainedCheckRecord(
+                check_id="green_streak", role="entry", comparison="ge", passed=False, observed=1, threshold=2
+            ),
         ],
     ).model_dump(mode="json")
 
@@ -1691,3 +1695,26 @@ async def test_panel_decision_rows_explain_themselves(api) -> None:
     assert [chip["chip"] for chip in newest["explanation"]["checks"]] == ["window", "green 1"]
     # "values not recorded": a row from before decisions saved them.
     assert older["explanation"] is None
+
+
+async def test_saved_settings_that_no_longer_validate_never_take_the_panel_down(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2639: the panel is the operator's control surface; the strategy view is a display add-on."""
+    app, repo = api
+    _append_no_action(repo, _T0 + 60_000, explanation=_dv_explanation(_T0 + 60_000))
+    registry = get_bot_task_registry()
+    binding_for_control = registry.binding_for_control  # type: ignore[union-attr]
+
+    def stale_binding(broker: str, sid: str) -> SimpleNamespace:
+        return SimpleNamespace(**{**vars(binding_for_control(broker, sid)), "strategy_params": {"trade_symbol": 7}})
+
+    monkeypatch.setattr(registry, "binding_for_control", stale_binding)
+
+    async with _client(app) as client:
+        panel = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")
+        view = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/strategy-view")
+
+    assert panel.status_code == 200, panel.text
+    assert panel.json()["recent_decisions"][0]["explanation"] is None
+    assert view.status_code == 503, view.text

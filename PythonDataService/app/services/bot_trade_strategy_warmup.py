@@ -26,7 +26,7 @@ from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import EvaluationMode, EvaluationStage, Settlement
 from app.marketdata.feed import MarketDataBar, MarketDataFeed
-from app.schemas.decision_explanation import DecisionExplanationRecord, explanation_record
+from app.schemas.decision_explanation import DecisionExplanationRecord
 
 if TYPE_CHECKING:
     from app.services.bot_runner import BrokerBotBinding
@@ -159,7 +159,7 @@ async def replay_warmup_bars(
         runtime.replay_closed_bar(context, market_bar, mode=EvaluationMode.DECIDE)
         stage = runtime.active_stage()
         if stage is not None:
-            record = explanation_record(stage.bar, stage.decision)
+            record = DecisionExplanationRecord.from_decision(stage.bar, stage.decision)
             if record is not None:
                 before_start.append(record)
             known_outcome = captured.get(stage.trace.evaluation_id)

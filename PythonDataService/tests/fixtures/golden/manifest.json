@@ -1784,11 +1784,11 @@
           "justification": "Initial fixture for #2639's decision explanation",
           "content_sha256": {
             "input.json": "6e6717dd189c1500f3a6a896515f6fdda29d26659d973238fa1455b16d72bbbb",
-            "output.json": "697e73a29f4dd6ef7502bdf531b6c0ab1814dbffa3b401fea516a9f2abcf4754"
+            "output.json": "6dc9c9a8222faccc43f5b93871b8b1055e4f19c7255b36c7fd8d1a8b15a493ff"
           },
           "file_sha256": {
             "input.json": "cd1c48b7ec8fe0e6802b7eea992e9e6900d672dd49cb7cb80a68bd7c71fafc5c",
-            "output.json": "9c13ae8707ba4cd3887085df7cf4c32f277afdd0d2ab94f7b6edc14a038ffd1b",
+            "output.json": "17adfc45131851f1b952376eb7db93eb155c2c6ac7cc6226f034b16f4bb775aa",
             "attribution.md": "5e1ee59aaa58b1cc00134f004b0b2715fc9fd12962c478da1fecd0a8235fb5d7"
           }
         }

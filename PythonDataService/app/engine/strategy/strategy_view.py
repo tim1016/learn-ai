@@ -7,10 +7,9 @@ and checks exist is the strategy's code (``decision_explanation``); this
 module only names them, places them and says how to word them, so colours and
 panes can change without touching a sealed source.
 
-Templates are ``str.format`` strings. A value label, variable and gate label
-are formatted with the bot's deployed settings (``{fast_period}``); a check's
-wording is formatted with what the decision recorded (``{observed}``,
-``{threshold}``, ``{low}``/``{high}`` for a band).
+Value labels, variables and gate labels are ``str.format`` templates over the
+bot's deployed settings (``{fast_period}``). A check's operator and threshold
+are never worded here: they come from what the decision recorded.
 """
 
 from __future__ import annotations
@@ -59,16 +58,21 @@ class ViewValue:
 class ViewCheck:
     """How one recorded rule is worded.
 
-    ``states`` words a rule whose observed value is a state token rather
-    than a number; ``observed`` formats a numeric one.
+    The operator and threshold are never written here: they come from the
+    decision's own record (``ExplainedCheck.comparison``/``threshold``), so the
+    words cannot claim a comparison the code did not make. This only names
+    the rule, sets its precision and, for a ``STATE`` rule, words its states
+    and what passing requires.
     """
 
     check_id: str
     label: str
     chip: str
-    needs: str
-    observed: str = "{observed:.2f}"
+    decimals: int = 2
+    signed: bool = False
+    unit: str = ""
     states: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    needs: str = ""
 
 
 @dataclass(frozen=True, slots=True)

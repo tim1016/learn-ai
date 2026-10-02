@@ -541,7 +541,7 @@ class RecentDecisionView(BaseModel):
     # the strategy view, and what the bot saw on it, worded by the backend.
     # ``explanation`` is ``None`` on a row written before decisions recorded
     # their values ("values not recorded").
-    decision_bar_close_ms: int | None = None
+    decision_bar_close_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     explanation: DecisionExplanationView | None = None
 
     @model_validator(mode="after")

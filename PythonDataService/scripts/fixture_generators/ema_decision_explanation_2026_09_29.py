@@ -21,17 +21,20 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
-from datetime import date
+import sys
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from app.engine.data.trade_bar import TradeBar
-from app.engine.engine import BacktestEngine, pin_strategy_window
-from app.engine.strategy.registry import _STRATEGY_REGISTRY
-from app.engine.strategy.signal_program import SignalDecision
-from app.schemas.decision_explanation import explanation_record
-from app.services.spec_strategy_runner import InMemoryDataReader
+_FIXTURES = Path(__file__).resolve().parents[2] / "tests" / "fixtures"
+sys.path.insert(0, str(_FIXTURES))
+
+from golden_support.strategy_replay import staged_decisions  # noqa: E402
+
+from app.engine.data.trade_bar import TradeBar  # noqa: E402
+from app.engine.strategy.registry import _STRATEGY_REGISTRY  # noqa: E402
+from app.engine.strategy.signal_program import SignalDecision  # noqa: E402
+from app.schemas.decision_explanation import DecisionExplanationRecord  # noqa: E402
 
 FIXTURE_DIR = Path(__file__).resolve().parents[2] / ("tests/fixtures/golden/strategy-explanation/EXP-001/v1")
 SYMBOL = "SPY"
@@ -57,20 +60,9 @@ def read_ledger_rth_minutes(ledger: Path) -> list[dict[str, Any]]:
     ]
 
 
-def replay(minutes: list[dict[str, Any]]) -> list[tuple[TradeBar, SignalDecision]]:
-    """Every (decision bar, decision) the canonical EMA program stages over ``minutes``."""
-    registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
-    strategy = registration.build(registration.param_schema(symbol=SYMBOL))
-    staged: list[tuple[TradeBar, SignalDecision]] = []
-    evaluate = strategy.evaluate_signal_bar  # type: ignore[attr-defined]
-
-    def recording_evaluate(bar: TradeBar) -> SignalDecision:
-        decision = evaluate(bar)
-        staged.append((bar, decision))
-        return decision
-
-    strategy.evaluate_signal_bar = recording_evaluate  # type: ignore[attr-defined]
-    bars = [
+def minute_bars(minutes: list[dict[str, Any]]) -> list[TradeBar]:
+    """The fixture's minutes as engine bars, prices exactly as retained."""
+    return [
         TradeBar(
             symbol=SYMBOL,
             start_ms=row["start_ms"],
@@ -83,10 +75,18 @@ def replay(minutes: list[dict[str, Any]]) -> list[tuple[TradeBar, SignalDecision
         )
         for row in minutes
     ]
-    # The strategy's built-in window is the LEAN fixture's; replay this one.
-    pin_strategy_window(strategy, date(2026, 9, 23), date(2026, 9, 29))
-    BacktestEngine.for_decision_identity(InMemoryDataReader(bars)).run(strategy)
-    return staged
+
+
+def replay(
+    minutes: list[dict[str, Any]],
+    *,
+    program_key: str = "ema_crossover_signal",
+    settings: dict[str, Any] | None = None,
+) -> list[tuple[TradeBar, SignalDecision]]:
+    """Every (decision bar, decision) a registered program stages over ``minutes``."""
+    registration = _STRATEGY_REGISTRY[program_key]
+    strategy = registration.build(registration.param_schema(**{**(settings or {}), "symbol": SYMBOL}))
+    return staged_decisions(strategy, minute_bars(minutes))
 
 
 def expected_explanations(minutes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -94,7 +94,7 @@ def expected_explanations(minutes: list[dict[str, Any]]) -> list[dict[str, Any]]
     output = []
     for close_ms in DECISION_CLOSES_MS:
         bar, decision = by_close[close_ms]
-        record = explanation_record(bar, decision)
+        record = DecisionExplanationRecord.from_decision(bar, decision)
         assert record is not None
         output.append(record.model_dump(mode="json"))
     return output

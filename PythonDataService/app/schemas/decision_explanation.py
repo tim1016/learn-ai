@@ -23,6 +23,7 @@ from app.engine.strategy.signal_program import SignalDecision
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 DecisionSignal = Literal["ENTER", "EXIT", "HOLD"]
+CheckComparison = Literal["ge", "gt", "le", "lt", "band", "state"]
 
 
 class DecisionBarRecord(BaseModel):
@@ -40,12 +41,13 @@ class DecisionBarRecord(BaseModel):
 
 
 class ExplainedCheckRecord(BaseModel):
-    """One rule as the bot applied it: threshold, observed value, pass/fail."""
+    """One rule as the bot applied it: operator, threshold, observed value, pass/fail."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     check_id: str = Field(min_length=1)
     role: Literal["entry", "exit"]
+    comparison: CheckComparison
     passed: bool
     # A number the rule compared, or a short state token ("crossed_up").
     observed: int | float | str | None
@@ -65,6 +67,33 @@ class DecisionExplanationRecord(BaseModel):
     values: dict[str, float | None]
     checks: list[ExplainedCheckRecord] = Field(default_factory=list)
 
+    @classmethod
+    def from_decision(cls, bar: TradeBar, decision: SignalDecision) -> DecisionExplanationRecord | None:
+        """Freeze one staged decision's explanation, or ``None`` when it reported none."""
+        explanation: DecisionExplanation | None = decision.explanation
+        if explanation is None:
+            return None
+        return cls(
+            bar=DecisionBarRecord(
+                start_ms=bar.start_ms,
+                end_ms=bar.end_ms,
+                open=float(bar.open),
+                high=float(bar.high),
+                low=float(bar.low),
+                close=float(bar.close),
+                volume=float(bar.volume),
+            ),
+            ready=decision.ready,
+            holding=explanation.holding,
+            signal="HOLD" if decision.intent is None else decision.intent.kind.value,
+            values={key: _float(value) for key, value in explanation.values.items()},
+            checks=[_check_record(check) for check in explanation.checks],
+        )
+
+
+def _float(value: Decimal | None) -> float | None:
+    return None if value is None else float(value)
+
 
 def _number(value: Decimal | int | None) -> int | float | None:
     if value is None or isinstance(value, int):
@@ -77,32 +106,10 @@ def _check_record(check: ExplainedCheck) -> ExplainedCheckRecord:
     return ExplainedCheckRecord(
         check_id=check.check_id,
         role=check.role.value,
+        comparison=check.comparison.value,
         passed=check.passed,
         observed=check.observed if isinstance(check.observed, str) else _number(check.observed),
         threshold=([float(threshold[0]), float(threshold[1])] if isinstance(threshold, tuple) else _number(threshold)),
-    )
-
-
-def explanation_record(bar: TradeBar, decision: SignalDecision) -> DecisionExplanationRecord | None:
-    """Freeze one staged decision's explanation, or ``None`` when it reported none."""
-    explanation: DecisionExplanation | None = decision.explanation
-    if explanation is None:
-        return None
-    return DecisionExplanationRecord(
-        bar=DecisionBarRecord(
-            start_ms=bar.start_ms,
-            end_ms=bar.end_ms,
-            open=float(bar.open),
-            high=float(bar.high),
-            low=float(bar.low),
-            close=float(bar.close),
-            volume=float(bar.volume),
-        ),
-        ready=decision.ready,
-        holding=explanation.holding,
-        signal=decision.signal_facts["decision"],  # type: ignore[arg-type]
-        values={key: _number(value) for key, value in explanation.values.items()},  # type: ignore[misc]
-        checks=[_check_record(check) for check in explanation.checks],
     )
 
 
@@ -111,5 +118,4 @@ __all__ = [
     "DecisionExplanationRecord",
     "DecisionSignal",
     "ExplainedCheckRecord",
-    "explanation_record",
 ]

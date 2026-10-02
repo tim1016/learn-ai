@@ -156,7 +156,7 @@ async def _panel_authority_for_binding(
 
 
 @asynccontextmanager
-async def _selected_panel_authority(
+async def selected_panel_authority(
     broker: str, account_id: str, sid: str,
 ) -> AsyncIterator[tuple[str, BotTaskRegistry, BrokerBotBinding, SqliteAlpacaClerkFacade | None]]:
     """Authorize the route account, then hold the bot's one custody selection open.
@@ -220,16 +220,27 @@ def _program_build_for_display(
 def _explanation_renderer(binding: BrokerBotBinding) -> ExplanationRenderer | None:
     """Word this bot's recorded decisions with its strategy view and deployed settings (#2639).
 
-    ``None`` -- rows render without wording -- only for a strategy this build
-    no longer registers or that declares no view.
+    ``None`` -- rows render without wording -- for a strategy this build no
+    longer registers, declares no view, or whose saved settings no longer
+    validate. The panel is the operator's control surface; a display add-on
+    must never take it down.
     """
     try:
         view = ResolvedStrategyView.for_settings(
             binding.strategy_key, binding.strategy_params, symbol=binding.symbol
         )
-    except StrategyViewUnavailableError:
+    except StrategyViewUnavailableError as exc:
+        logger.warning(
+            "Bot decision rows are shown without their explanations",
+            extra={
+                "action": "panel_explanations_unavailable",
+                "strategy_instance_id": binding.strategy_instance_id,
+                "strategy_key": binding.strategy_key,
+                "reason": str(exc),
+            },
+        )
         return None
-    return view.render
+    return view.render_or_none
 
 
 @dataclass(frozen=True)
@@ -552,7 +563,7 @@ async def _get_panel_with_entries(
 ) -> tuple[BotPanelView, list[OrderJournalEntry], tuple[FillRecord, ...] | None]:
     """Build one SQLite-backed panel and return its exact chart fill set."""
     captured_now_ms = now_ms if now_ms is not None else now_ms_utc()
-    async with _selected_panel_authority(broker, account_id, sid) as (resolved, registry, binding, facade):
+    async with selected_panel_authority(broker, account_id, sid) as (resolved, registry, binding, facade):
         return await _get_panel_with_entries_from_authority(
             broker,
             account_id,
@@ -884,7 +895,7 @@ async def _run_action_under_live_authority(
     panel and the action now share one selection, held open across both, so
     a Dry Run recovers inside its simulator and never reaches Alpaca.
     """
-    async with _selected_panel_authority(broker, account_id, sid) as (resolved, registry, binding, facade):
+    async with selected_panel_authority(broker, account_id, sid) as (resolved, registry, binding, facade):
         panel, _entries, _session_fills = await _get_panel_with_entries_from_authority(
             broker, account_id, sid, resolved=resolved, captured_now_ms=now_ms_utc(),
             registry=registry, binding=binding, facade=facade,

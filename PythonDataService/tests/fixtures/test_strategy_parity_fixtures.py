@@ -2,7 +2,7 @@
 
 Runs Strategy A/B/C fresh through ``BacktestEngine`` against the fixture's
 pinned bar series and diffs the resulting public ``trade_log`` — not the
-private ``_entry_extra_gate_passes`` gate ``app/engine/tests/test_strategies_abc.py``
+private ``_entry_extra_checks`` gates ``app/engine/tests/test_strategies_abc.py``
 drives — against the committed pre-port trade log, bit-exact
 (``atol=0, rtol=0`` per the manifest). This is the S3 intent port's
 refactor-neutrality receipt: a failure here means the port changed a trade,

@@ -36,7 +36,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.sma import SimpleMovingAverage
 from app.engine.strategy.base import LoggedTrade, Strategy
-from app.engine.strategy.decision_explanation import CheckRole, DecisionExplanation, ExplainedCheck
+from app.engine.strategy.decision_explanation import CheckRole, Comparison, DecisionExplanation, ExplainedCheck
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.utils.timestamps import display_time
@@ -209,6 +209,7 @@ class SmaCrossoverAlgorithm(Strategy):
         above_check = ExplainedCheck(
             check_id="short_above_long",
             role=CheckRole.ENTRY,
+            comparison=Comparison.GT,
             passed=current_above,
             observed=spread,
             threshold=0,
@@ -216,6 +217,7 @@ class SmaCrossoverAlgorithm(Strategy):
         exit_check = ExplainedCheck(
             check_id="short_not_above_long",
             role=CheckRole.EXIT,
+            comparison=Comparison.LE,
             passed=not current_above,
             observed=spread,
             threshold=0,
@@ -228,7 +230,11 @@ class SmaCrossoverAlgorithm(Strategy):
             # whatever historical state happens to sit there.
             self._prev_short_above_long = current_above
             seeding = ExplainedCheck(
-                check_id="was_not_above", role=CheckRole.ENTRY, passed=False, observed="seeding"
+                check_id="was_not_above",
+                role=CheckRole.ENTRY,
+                comparison=Comparison.STATE,
+                passed=False,
+                observed="seeding",
             )
             return SignalDecision(
                 intent=None,
@@ -237,16 +243,16 @@ class SmaCrossoverAlgorithm(Strategy):
                 signal_facts={"decision": "HOLD", "timeframe": timeframe},
                 reason_evidence={"sma_short": str(short_val), "sma_long": str(long_val)},
                 action_plan_request=None,
+                # The seed bar decides nothing, so it reports no exit rule.
                 explanation=DecisionExplanation(
-                    values=values,
-                    checks=(above_check, seeding, *((exit_check,) if prior_in_position else ())),
-                    holding=prior_in_position,
+                    values=values, checks=(above_check, seeding), holding=prior_in_position
                 ),
             )
 
         was_not_above = ExplainedCheck(
             check_id="was_not_above",
             role=CheckRole.ENTRY,
+            comparison=Comparison.STATE,
             passed=not self._prev_short_above_long,
             observed="was_above" if self._prev_short_above_long else "was_not_above",
         )

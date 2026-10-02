@@ -32,7 +32,7 @@ Subclasses override the small extension surface:
     _init_extra_indicators()
     _extra_indicators_ready() -> bool
     _update_extra_indicators(bar)
-    _entry_extra_gate_passes(bar) -> bool
+    _entry_extra_checks(bar) -> tuple[ExplainedCheck, ...]  (joined by AND)
     _indicator_snapshot(bar) -> dict[str, Decimal]
     _extra_signal_program_settings() -> dict[str, str]
 """
@@ -48,7 +48,7 @@ from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.adx import AverageDirectionalIndex
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import LoggedTrade, Strategy
-from app.engine.strategy.decision_explanation import CheckRole, DecisionExplanation, ExplainedCheck
+from app.engine.strategy.decision_explanation import CheckRole, Comparison, DecisionExplanation, ExplainedCheck
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.utils.timestamps import display_time
@@ -186,6 +186,7 @@ class RsiRangeStrategy(Strategy):
             exit_check = ExplainedCheck(
                 check_id="adx_exit",
                 role=CheckRole.EXIT,
+                comparison=Comparison.LT,
                 passed=below_exit,
                 observed=adx_val,
                 threshold=self.adx_exit_threshold,
@@ -218,8 +219,9 @@ class RsiRangeStrategy(Strategy):
             )
 
         # --- RSI range filter + strategy-specific gates.
-        rsi_in_range = entry_checks[0].passed
-        extra_gate_passes = all(check.passed for check in entry_checks[1:])
+        rsi_band, *extra_checks = entry_checks
+        rsi_in_range = rsi_band.passed
+        extra_gate_passes = all(check.passed for check in extra_checks)
         intent = (
             SignalIntent(kind=SignalIntentKind.ENTER, bar_close_ms=bar.end_ms, intended_price=bar.close)
             if rsi_in_range and extra_gate_passes
@@ -249,6 +251,7 @@ class RsiRangeStrategy(Strategy):
         rsi_band = ExplainedCheck(
             check_id="rsi_band",
             role=CheckRole.ENTRY,
+            comparison=Comparison.BAND,
             passed=self.rsi_low_gate <= rsi_val <= self.rsi_high_gate,
             observed=rsi_val,
             threshold=(self.rsi_low_gate, self.rsi_high_gate),
@@ -371,9 +374,6 @@ class RsiRangeStrategy(Strategy):
     def _entry_extra_checks(self, bar: TradeBar) -> tuple[ExplainedCheck, ...]:
         """The strategy-specific entry gates, one check each, joined by AND."""
         return ()
-
-    def _entry_extra_gate_passes(self, bar: TradeBar) -> bool:
-        return all(check.passed for check in self._entry_extra_checks(bar))
 
     def _indicator_snapshot(self, bar: TradeBar) -> dict[str, Decimal]:
         assert self._rsi is not None

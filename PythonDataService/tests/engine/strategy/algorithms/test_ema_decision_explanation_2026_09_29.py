@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from app.schemas.decision_explanation import explanation_record
+from app.schemas.decision_explanation import DecisionExplanationRecord
 from scripts.fixture_generators.ema_decision_explanation_2026_09_29 import DECISION_CLOSES_MS, replay
 
 FIXTURE_DIR = Path(__file__).resolve().parents[3] / "fixtures/golden/strategy-explanation/EXP-001/v1"
@@ -28,7 +28,7 @@ def test_ema_explanations_match_the_2026_09_29_fixture() -> None:
 
     for close_ms, want in zip(DECISION_CLOSES_MS, expected, strict=True):
         bar, decision = by_close[close_ms]
-        got = explanation_record(bar, decision)
+        got = DecisionExplanationRecord.from_decision(bar, decision)
         assert got is not None
         assert got.bar.model_dump() == want["bar"]
         assert (got.ready, got.holding, got.signal) == (want["ready"], want["holding"], want["signal"])

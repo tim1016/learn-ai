@@ -447,33 +447,10 @@ def _ema_parameter_schema_version_for(params: StrategyParamsBase) -> str:
 # Dark Bright Gate. A value/variable/gate label is formatted with the bot's
 # deployed settings; a check's wording with what the decision recorded.
 
-_RSI_BAND_CHECK = ViewCheck(
-    check_id="rsi_band",
-    label="RSI",
-    chip="RSI {observed:.1f}",
-    needs="in {low:g}–{high:g}",
-    observed="{observed:.1f}",
-)
-_ADX_EXIT_CHECK = ViewCheck(
-    check_id="adx_exit",
-    label="ADX exit",
-    chip="ADX {observed:.1f}",
-    needs="< {threshold:g}",
-    observed="{observed:.1f}",
-)
-_MACD_POSITIVE_CHECK = ViewCheck(
-    check_id="macd_positive",
-    label="MACD",
-    chip="MACD {observed:+.2f}",
-    needs="> 0",
-)
-_DECISION_COUNTDOWN_CHECK = ViewCheck(
-    check_id="exit_countdown",
-    label="Exit",
-    chip="exit in {observed}",
-    needs="at 0 bars left",
-    observed="{observed} bars left",
-)
+_RSI_BAND_CHECK = ViewCheck(check_id="rsi_band", label="RSI", chip="RSI", decimals=1)
+_ADX_EXIT_CHECK = ViewCheck(check_id="adx_exit", label="ADX exit", chip="ADX", decimals=1)
+_MACD_POSITIVE_CHECK = ViewCheck(check_id="macd_positive", label="MACD", chip="MACD", signed=True)
+_DECISION_COUNTDOWN_CHECK = ViewCheck(check_id="exit_countdown", label="Bars to exit", chip="exit in", decimals=0)
 
 _EMA_CROSSOVER_SIGNAL_VIEW = StrategyView(
     values=(
@@ -512,14 +489,8 @@ _EMA_CROSSOVER_SIGNAL_VIEW = StrategyView(
                 "relation_unknown": "no, EMAs only just ready",
             },
         ),
-        ViewCheck(check_id="gap", label="Gap", chip="gap {observed:+.2f}", needs="≥ {threshold:.2f}"),
-        ViewCheck(
-            check_id="gap_bps",
-            label="Gap (bps)",
-            chip="gap {observed:+.1f} bps",
-            needs="≥ {threshold:g} bps",
-            observed="{observed:.1f}",
-        ),
+        ViewCheck(check_id="gap", label="Gap", chip="gap", signed=True),
+        ViewCheck(check_id="gap_bps", label="Gap (bps)", chip="gap", decimals=1, signed=True, unit=" bps"),
         _RSI_BAND_CHECK,
         _DECISION_COUNTDOWN_CHECK,
     ),
@@ -547,12 +518,7 @@ _SMA_CROSSOVER_VIEW = StrategyView(
         ),
     ),
     checks=(
-        ViewCheck(
-            check_id="short_above_long",
-            label="Short above long",
-            chip="short {observed:+.2f}",
-            needs="SMA {short_window} > SMA {long_window}",
-        ),
+        ViewCheck(check_id="short_above_long", label="Short − long", chip="short−long", signed=True),
         ViewCheck(
             check_id="was_not_above",
             label="Fresh cross",
@@ -564,12 +530,7 @@ _SMA_CROSSOVER_VIEW = StrategyView(
                 "seeding": "no, first ready bar",
             },
         ),
-        ViewCheck(
-            check_id="short_not_above_long",
-            label="Short at or below long",
-            chip="exit {observed:+.2f}",
-            needs="SMA {short_window} ≤ SMA {long_window}",
-        ),
+        ViewCheck(check_id="short_not_above_long", label="Short − long (exit)", chip="exit", signed=True),
     ),
     default_gate=ViewGate(
         gate_id="short_above_long",
@@ -592,20 +553,8 @@ _RSI_MEAN_REVERSION_VIEW = StrategyView(
         ),
     ),
     checks=(
-        ViewCheck(
-            check_id="rsi_below_oversold",
-            label="RSI below oversold",
-            chip="RSI {observed:.1f}",
-            needs="< {threshold:g}",
-            observed="{observed:.1f}",
-        ),
-        ViewCheck(
-            check_id="rsi_above_overbought",
-            label="RSI above overbought",
-            chip="exit RSI {observed:.1f}",
-            needs="> {threshold:g}",
-            observed="{observed:.1f}",
-        ),
+        ViewCheck(check_id="rsi_below_oversold", label="RSI (entry)", chip="RSI", decimals=1),
+        ViewCheck(check_id="rsi_above_overbought", label="RSI (exit)", chip="exit RSI", decimals=1),
     ),
     default_gate=ViewGate(
         gate_id="rsi_below_oversold",
@@ -629,13 +578,7 @@ _DEPLOYMENT_VALIDATION_VIEW = StrategyView(
                 "after_window": "past close − 15 min",
             },
         ),
-        ViewCheck(
-            check_id="green_streak",
-            label="Green bars in a row",
-            chip="green {observed}",
-            needs="≥ {threshold}",
-            observed="{observed}",
-        ),
+        ViewCheck(check_id="green_streak", label="Green bars in a row", chip="green", decimals=0),
         ViewCheck(
             check_id="session_end",
             label="Session end",
@@ -690,13 +633,7 @@ _RSI_RANGE_GATE = ViewGate(
     expression="rsi_low_gate ≤ RSI ≤ rsi_high_gate",
     check_id="rsi_band",
 )
-_ADX_ENTRY_CHECK = ViewCheck(
-    check_id="adx_entry",
-    label="ADX",
-    chip="ADX {observed:.1f}",
-    needs="> {threshold:g}",
-    observed="{observed:.1f}",
-)
+_ADX_ENTRY_CHECK = ViewCheck(check_id="adx_entry", label="ADX", chip="ADX", decimals=1)
 
 _SPY_STRATEGY_A_VIEW = StrategyView(
     values=(
@@ -718,7 +655,7 @@ _SPY_STRATEGY_A_VIEW = StrategyView(
     ),
     checks=(
         _RSI_BAND_CHECK,
-        ViewCheck(check_id="ema_gap", label="EMA gap", chip="gap {observed:+.2f}", needs="> {threshold:g}"),
+        ViewCheck(check_id="ema_gap", label="EMA gap", chip="gap", signed=True),
         _MACD_POSITIVE_CHECK,
         _ADX_EXIT_CHECK,
     ),
@@ -768,13 +705,7 @@ _SPY_STRATEGY_C_VIEW = StrategyView(
     checks=(
         _RSI_BAND_CHECK,
         _ADX_ENTRY_CHECK,
-        ViewCheck(
-            check_id="adx_rising",
-            label="ADX rising",
-            chip="ADX {observed:+.1f}",
-            needs="> the bar before",
-            observed="{observed:+.1f}",
-        ),
+        ViewCheck(check_id="adx_rising", label="ADX rise", chip="ADX", decimals=1, signed=True),
         _ADX_EXIT_CHECK,
     ),
     default_gate=_RSI_RANGE_GATE,

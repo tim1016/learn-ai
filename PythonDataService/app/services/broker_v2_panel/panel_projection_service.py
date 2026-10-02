@@ -215,7 +215,8 @@ _TERMINAL_ORDER_EVENTS = frozenset({"fill", "canceled", "rejected", "expired"})
 
 # Words one recorded decision explanation for the owner: the bot's strategy
 # view bound to its deployed settings (``app.services.strategy_view``).
-ExplanationRenderer = Callable[[DecisionExplanationRecord], DecisionExplanationView]
+# ``None`` for a row the renderer cannot word ("values not shown").
+ExplanationRenderer = Callable[[DecisionExplanationRecord], DecisionExplanationView | None]
 
 
 def _working_orders(sid: str, entries: list[OrderJournalEntry]) -> list[WorkingOrderView]:

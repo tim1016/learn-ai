@@ -600,6 +600,7 @@ def _decision_receipt_from_resource(
         raise SqlitePanelDecisionUnavailable(
             f"SQLite decision receipt {resource.seq} facts must be an object."
         )
+    explanation = _facts_explanation(resource.seq, facts)
     try:
         # `decision_id` == `evaluation_id` (ADR 0043 decision 5), and the atomic
         # writer stamps both keys to that one value, so reading either is
@@ -617,7 +618,8 @@ def _decision_receipt_from_resource(
                 "order_ref": resource.order_ref or "",
                 "run_id": _facts_optional_str(facts, "run_id"),
                 "decision_bar_close_ms": facts.get("decision_bar_close_ms"),
-                "explanation": _facts_explanation(resource.seq, facts),
+                "explanation": explanation,
+                "explanation_unreadable": explanation is None and facts.get("explanation") is not None,
                 "decision_id": (
                     _facts_optional_str(facts, "decision_id")
                     or _facts_optional_str(facts, "evaluation_id")
