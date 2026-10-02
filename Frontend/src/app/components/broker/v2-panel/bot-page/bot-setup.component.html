@@ -42,15 +42,15 @@
       </div>
       <div><dt>Checked</dt><dd><app-timestamp-display [value]="build.verified_at_ms" mode="local" /></dd></div>
       @if (build.running_artifact_digest; as digest) {
-        <div><dt>Running build</dt><dd><code>{{ digest }}</code> <button type="button" class="setup__copy" aria-label="Copy running build hash" (click)="copy(digest)">Copy</button></dd></div>
+        <div><dt>Running build</dt><dd><code>{{ digest }}</code> <app-copy-button [text]="digest" ariaLabel="Copy running build hash" /></dd></div>
       }
       @if (build.qualification_receipt_hash; as receiptHash) {
-        <div><dt>Qualification receipt</dt><dd><code>{{ receiptHash }}</code> <button type="button" class="setup__copy" aria-label="Copy qualification receipt hash" (click)="copy(receiptHash)">Copy</button></dd></div>
+        <div><dt>Qualification receipt</dt><dd><code>{{ receiptHash }}</code> <app-copy-button [text]="receiptHash" ariaLabel="Copy qualification receipt hash" /></dd></div>
       }
       @if (bot.sealed_program; as seal) {
-        <div><dt>Configuration hash</dt><dd><code>{{ seal.bot_configuration_hash }}</code> <button type="button" class="setup__copy" aria-label="Copy configuration hash" (click)="copy(seal.bot_configuration_hash)">Copy</button></dd></div>
-        <div><dt>Signal hash</dt><dd><code>{{ seal.configured_signal_hash }}</code> <button type="button" class="setup__copy" aria-label="Copy signal hash" (click)="copy(seal.configured_signal_hash)">Copy</button></dd></div>
-        <div><dt>Validation snapshot</dt><dd><code>{{ seal.validation_snapshot_sha256 }}</code> <button type="button" class="setup__copy" aria-label="Copy validation snapshot hash" (click)="copy(seal.validation_snapshot_sha256)">Copy</button></dd></div>
+        <div><dt>Configuration hash</dt><dd><code>{{ seal.bot_configuration_hash }}</code> <app-copy-button [text]="seal.bot_configuration_hash" ariaLabel="Copy configuration hash" /></dd></div>
+        <div><dt>Signal hash</dt><dd><code>{{ seal.configured_signal_hash }}</code> <app-copy-button [text]="seal.configured_signal_hash" ariaLabel="Copy signal hash" /></dd></div>
+        <div><dt>Validation snapshot</dt><dd><code>{{ seal.validation_snapshot_sha256 }}</code> <app-copy-button [text]="seal.validation_snapshot_sha256" ariaLabel="Copy validation snapshot hash" /></dd></div>
       } @else {
         <div><dt>Seal</dt><dd>No sealed program was recorded for this bot.</dd></div>
       }

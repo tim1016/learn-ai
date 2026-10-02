@@ -148,6 +148,16 @@ describe('BotToolbarComponent (#2794)', () => {
     expect(actionRequested).not.toHaveBeenCalled();
   });
 
+  it('keeps the panel’s own controls when a data plane sends no bot_page yet (a rolling deploy)', async () => {
+    const panel = { ...runningPanel(), bot_page: null, primary_action: 'stop_bot_decisions' as const };
+    await renderToolbar(panel);
+
+    const stop = screen.getByRole('button', { name: fakeSqliteStopAction().label });
+    expect(stop.className).toContain('panel-action__button--filled');
+    expect(screen.getByRole('button', { name: 'Reconcile now' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cancel verified working orders' }).getAttribute('aria-disabled')).toBe('true');
+  });
+
   it('offers a finished bot’s Deploy again as its filled, named primary link', async () => {
     const panel = fakeBotPanelView({ health: { ...fakeBotPanelView().health, running: false } });
     await renderToolbar(panel);

@@ -96,7 +96,7 @@
             [loading]="strategyView.isLoading()"
             [failure]="strategyViewFailure()"
             [tape]="tape"
-            tapeLabel="Tape · 1m"
+            [tapeLabel]="panelData.health.running ? 'Tape · live' : 'Tape · 1m'"
             [(selectedBarCloseMs)]="selectedDecisionBarMs"
             (retry)="strategyView.reload()"
           />
@@ -110,6 +110,7 @@
               [histChartFailed]="histChartFailed()"
               [liveResolution]="liveResolution()"
               [historyTimeframe]="selectedHistoryTimeframe()"
+              [initialPane]="panelData.health.running ? 'live' : 'polygon'"
               (historyTimeframeChange)="onHistoryTimeframeChange($event)"
               (liveResolutionChange)="onLiveResolutionChange($event)"
               (historyRetry)="histChart.reload()"
