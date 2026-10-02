@@ -7775,6 +7775,16 @@ export interface components {
             strategy_instance_id: string;
         };
         /**
+         * BotHealthGroupsView
+         * @description Health in two groups: what happened during this run, and the account right now.
+         */
+        BotHealthGroupsView: {
+            /** Account */
+            account: components["schemas"]["HealthLineView"][];
+            /** Run */
+            run: components["schemas"]["HealthLineView"][];
+        };
+        /**
          * BotHistoryBot
          * @description One bot's line: identity, its runs, its trades and its money.
          *
@@ -7893,6 +7903,32 @@ export interface components {
             transaction_count: number;
         };
         /**
+         * BotOwnStatusView
+         * @description One status the bot owns, its label, and why when it needs attention.
+         */
+        BotOwnStatusView: {
+            /** Label */
+            label: string;
+            /** Reason */
+            reason: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "running" | "finished" | "ended_holding" | "needs_attention";
+        };
+        /**
+         * BotPageView
+         * @description What the bot page leads with: status, summary, toolbar and health.
+         */
+        BotPageView: {
+            health: components["schemas"]["BotHealthGroupsView"];
+            status: components["schemas"]["BotOwnStatusView"];
+            summary: components["schemas"]["RunSummaryView"];
+            /** Toolbar */
+            toolbar: components["schemas"]["ToolbarActionView"][];
+        };
+        /**
          * BotPanelLiveSnapshot
          * @description Versioned complete state document used by REST bootstrap and SSE.
          */
@@ -7917,6 +7953,7 @@ export interface components {
             account_id: string;
             /** Actions */
             actions: components["schemas"]["PanelAction"][];
+            bot_page?: components["schemas"]["BotPageView"] | null;
             /** Broker */
             broker: string;
             clerk: components["schemas"]["ClerkCard"];
@@ -7969,6 +8006,8 @@ export interface components {
             recent_fills: components["schemas"]["RecentFillView"][];
             /** Revision */
             revision: number;
+            /** Run Fills */
+            run_fills?: components["schemas"]["RecentFillView"][] | null;
             sealed_program: components["schemas"]["SealedBotProgram"] | null;
             startup_join?: components["schemas"]["StartupJoinView"] | null;
             /**
@@ -14859,6 +14898,37 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * HealthLineView
+         * @description One health fact: what it is, its state, a short value and the backend's note.
+         */
+        HealthLineView: {
+            /** At Ms */
+            at_ms?: number | null;
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Note */
+            note?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "ok" | "attention" | "problem" | "idle";
+            /** Value */
+            value: string;
+        };
+        /**
+         * HeldPositionFact
+         * @description Shares a bot still holds: the symbol, and the quantity as the owner reads it.
+         */
+        HeldPositionFact: {
+            /** Quantity */
+            quantity: string;
+            /** Symbol */
+            symbol: string;
+        };
         /** HistogramBinModel */
         HistogramBinModel: {
             /** Count */
@@ -19868,6 +19938,50 @@ export interface components {
             winning_trades: number;
         };
         /**
+         * RunSummaryFacts
+         * @description The run facts the summary line is written from; the same facts give the same line.
+         */
+        RunSummaryFacts: {
+            /** Current Year */
+            current_year: number;
+            /** Decision Count */
+            decision_count: number;
+            /** Ended At Ms */
+            ended_at_ms?: number | null;
+            /**
+             * Ending
+             * @enum {string}
+             */
+            ending: "not_started" | "running" | "on_schedule" | "stopped" | "halted" | "crashed" | "failed_to_start" | "exited_unverified" | "retired";
+            /** Exit Queued */
+            exit_queued: boolean;
+            /** Held */
+            held: components["schemas"]["HeldPositionFact"][];
+            /** Returned Usd */
+            returned_usd: string | null;
+            /** Run Id */
+            run_id: string | null;
+            /** Scheduled End At Ms */
+            scheduled_end_at_ms?: number | null;
+            /** Set Aside Usd */
+            set_aside_usd: string | null;
+            /** Started At Ms */
+            started_at_ms?: number | null;
+            /** Trade Count */
+            trade_count: number;
+        };
+        /**
+         * RunSummaryView
+         * @description The summary line, the facts it was written from and the template that wrote it.
+         */
+        RunSummaryView: {
+            facts: components["schemas"]["RunSummaryFacts"];
+            /** Template Version */
+            template_version: number;
+            /** Text */
+            text: string;
+        };
+        /**
          * RunTrade
          * @description Round-trip trade in wire/storage shape.
          *
@@ -22062,6 +22176,41 @@ export interface components {
             note: string;
             /** Rtol */
             rtol: number;
+        };
+        /**
+         * ToolbarActionView
+         * @description One action on the bot page: offered now, blocked with its reason, or not needed.
+         */
+        ToolbarActionView: {
+            /**
+             * Action Id
+             * @enum {string}
+             */
+            action_id: "stop_bot_decisions" | "prepare_safe_flatten" | "change_end" | "deploy_again" | "archive" | "manual_order" | "reconcile_now" | "cancel_verified_working_orders" | "discharge_attributed_residue" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "open_custody_timeline" | "build_proof";
+            /**
+             * Availability
+             * @enum {string}
+             */
+            availability: "available" | "blocked" | "not_needed";
+            /**
+             * Group
+             * @enum {string}
+             */
+            group: "bot" | "fix" | "inspect";
+            /** Label */
+            label: string;
+            /**
+             * Primary
+             * @default false
+             */
+            primary?: boolean;
+            /** Reason */
+            reason: string;
+            /**
+             * Tone
+             * @enum {string}
+             */
+            tone: "danger" | "warning" | "neutral";
         };
         /**
          * TopOfBookQuote

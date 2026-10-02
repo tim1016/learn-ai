@@ -1015,6 +1015,22 @@ def build_recovery_catalog(ctx: RecoveryPolicyContext) -> tuple[RecoveryCapabili
 # creates the property, not re-derived by each consumer against a literal.
 UNCONDITIONAL_RECOVERY_ACTION_IDS: frozenset[RecoveryActionId] = frozenset({"reconcile_now"})
 
+# The unavailable reasons that mean the action has nothing to do -- no run to
+# stop, no order to cancel, nothing held to sell or write off, no fill to
+# settle -- rather than that it is needed and gated. The bot page shows these
+# as "Not needed", never as a red blocker (#2794). Exported for the same
+# reason as above: the policy that authors the reason says what it means.
+NOTHING_TO_DO_REASON_CODES: frozenset[str] = frozenset(
+    {
+        "NO_ACTIVE_BOT_RUN",
+        "NO_VERIFIED_WORKING_ORDERS",
+        "NO_ATTRIBUTED_EXPOSURE",
+        "NO_STRANDED_EXIT_EPISODE",
+        "BROKER_AGREES_WITH_CUSTODY",
+        "NO_EXECUTION_COVERAGE_CONFLICT",
+    }
+)
+
 
 def _primary_action_id(capabilities: list[RecoveryCapability]) -> str | None:
     priority = (

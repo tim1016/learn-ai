@@ -42,6 +42,7 @@ from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.ibkr.config import live_artifacts_root
 from app.engine.live.identity import INSTANCE_ID_PATTERN
 from app.schemas.broker_bots import (
+    BotRunView,
     BotStatusView,
 )
 from app.schemas.broker_v2_panel import (
@@ -81,6 +82,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     execute_action,
 )
 from app.services.broker_v2_panel.bot_custody import binding_clerk_runtime, custody_facade
+from app.services.broker_v2_panel.bot_page_projection import RunFacts, bot_page_view
 from app.services.broker_v2_panel.catalog_projection_service import (
     SqliteCatalogProjectionUnavailable,
     custody_bot_status,
@@ -103,11 +105,15 @@ from app.services.broker_v2_panel.panel_scope import (
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     adapt_sqlite_panel,
+    exit_in_progress,
+    has_bot_scoped_custody_problem,
+    recent_fill_view,
 )
 from app.services.broker_v2_panel.sqlite_panel_source import (
     SqlitePanelBotNotFound,
     SqlitePanelDecisionUnavailable,
     SqlitePanelEconomicUnavailable,
+    SqlitePanelEvidence,
     execute_sqlite_panel_action,
     read_sqlite_catalog,
     read_sqlite_catalog_from_facade,
@@ -129,6 +135,7 @@ from app.services.sqlite_clerk_compat import (
     custody_account_id_for_route,
 )
 from app.services.strategy_view import ResolvedStrategyView, StrategyViewUnavailableError
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -430,6 +437,7 @@ async def _get_panel_with_entries_from_authority(
             detail="Restore the selected authority before projecting this bot's execution policy.",
         )
     authority_account_id = facade.account_id
+    run = _latest_run(registry, broker, sid)
     try:
         evidence = await read_sqlite_panel_evidence(
             broker,
@@ -437,6 +445,7 @@ async def _get_panel_with_entries_from_authority(
             sid,
             now_ms=captured_now_ms,
             facade=facade,
+            run_window=None if run is None else _run_window(run),
         )
     except SqlitePanelBotNotFound as exc:
         raise UnknownBotError(str(exc)) from exc
@@ -537,7 +546,70 @@ async def _get_panel_with_entries_from_authority(
         flatten_verdict=facade.flatten_send_verdict(),
 
     )
+    panel = _with_bot_page(panel, evidence, run=run, facade=facade, now_ms=captured_now_ms)
     return panel, entries, session_fills
+
+
+def _latest_run(registry: object, broker: str, sid: str) -> BotRunView | None:
+    """The bot's latest run, or ``None`` when it has never started one."""
+    try:
+        return registry.current_run(broker, sid)
+    except RunnerUnknownBotError:
+        return None
+
+
+def _run_window(run: BotRunView) -> tuple[int, int]:
+    """Everything since the run started: a stopped run's exit can fill after it ends."""
+    return run.started_at_ms, MAX_TIMESTAMP_MS + 1
+
+
+def _with_bot_page(
+    panel: BotPanelView,
+    evidence: SqlitePanelEvidence,
+    *,
+    run: BotRunView | None,
+    facade: SqliteAlpacaClerkFacade,
+    now_ms: int,
+) -> BotPanelView:
+    """Add what the bot page leads with, and its run's fills (#2794)."""
+    projection = evidence.projection
+    sid = panel.strategy_instance_id
+    run_fills = evidence.economics.run_fills
+    decisions, orders = (
+        (0, 0)
+        if run is None
+        else facade.repository.run_activity_counts(
+            strategy_instance_id=sid, from_ms=run.started_at_ms, to_ms=_run_window(run)[1]
+        )
+    )
+    budget = facade.repository.deployment_budget(sid)
+    terminal = None if run is None else run.terminal_outcome
+    facts = RunFacts(
+        run_id=None if run is None else run.run_id,
+        started_at_ms=None if run is None else run.started_at_ms,
+        ended_at_ms=None if terminal is None else terminal.recorded_at_ms,
+        decision_count=decisions,
+        trade_count=len({fill.order_ref for fill in run_fills}),
+        orders_sent=orders,
+        committed_cents=None if budget is None else budget["committed_cents"],
+        released_cents=None if budget is None else budget["released_cents"],
+        exit_in_progress=exit_in_progress(projection, sid),
+    )
+    return panel.model_copy(
+        update={
+            "bot_page": bot_page_view(
+                panel,
+                facts,
+                bot_owns_custody_problem=has_bot_scoped_custody_problem(projection),
+                execution_coverage_complete=evidence.economics.snapshot.execution_coverage == "complete",
+                now_ms=now_ms,
+            ),
+            "run_fills": [
+                recent_fill_view(fill, authority_account_id=projection.account_id, repository=facade.repository)
+                for fill in run_fills
+            ],
+        }
+    )
 
 
 def _status_in_binding_mode(status: BotStatusView, binding: BrokerBotBinding) -> BotStatusView:

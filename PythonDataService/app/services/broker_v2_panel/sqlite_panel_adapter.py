@@ -127,7 +127,7 @@ def adapt_sqlite_panel(
     ]
     checks = [_readiness_check(item, projection.generated_at_ms) for item in projection.recovery_actions]
     ready_count = sum(check.ready for check in checks)
-    recovery_cure = _recovery_cure(projection, bot_owns_problem=_has_bot_scoped_custody_problem(projection))
+    recovery_cure = _recovery_cure(projection, bot_owns_problem=has_bot_scoped_custody_problem(projection))
     exposure = {
         position.symbol: position.attributed_qty
         for position in projection.positions
@@ -172,7 +172,7 @@ def adapt_sqlite_panel(
                 []
                 if economics is None
                 else [
-                    _recent_fill_view(
+                    recent_fill_view(
                         fill,
                         authority_account_id=projection.account_id,
                         repository=repository,
@@ -217,7 +217,7 @@ def _lifecycle_actions(panel: BotPanelView, projection: ClerkProjection) -> list
     ]
 
 
-def _has_bot_scoped_custody_problem(projection: ClerkProjection) -> bool:
+def has_bot_scoped_custody_problem(projection: ClerkProjection) -> bool:
     """True when THIS bot -- not the account -- owns a custody problem.
 
     ``ClerkSqliteProjectionReader._holds`` and ``._uncertainties`` deliberately
@@ -289,7 +289,7 @@ def _catalog_row_action(
     so renaming one cannot leave a stale literal here silently re-surfacing the
     button.
     """
-    bot_owns_problem = _has_bot_scoped_custody_problem(projection)
+    bot_owns_problem = has_bot_scoped_custody_problem(projection)
     if not row_needs_attention and not bot_owns_problem:
         return None
     cure = _recovery_cure(projection, bot_owns_problem=bot_owns_problem)
@@ -837,7 +837,7 @@ def terminal_exposure_notices(
             closing = (
                 "The Clerk is still working this bot's exit order; Flatten becomes available "
                 "if that order ends without closing the position."
-                if _exit_in_progress(projection, sid)
+                if exit_in_progress(projection, sid)
                 else "Use Flatten to close this position."
             )
             notices.append(
@@ -863,7 +863,7 @@ def terminal_exposure_notices(
     }) for notice in notices]
 
 
-def _exit_in_progress(projection: ClerkProjection, sid: str) -> bool:
+def exit_in_progress(projection: ClerkProjection, sid: str) -> bool:
     """The Clerk keeps working an ended run's exit (#2504), so Flatten waits for it."""
     return any(
         operation.kind == "EXIT" and operation.state in NONTERMINAL_EFFECT_STATES
@@ -936,7 +936,7 @@ def _working_order_view(
     )
 
 
-def _recent_fill_view(
+def recent_fill_view(
     fill: FillRecord,
     *,
     authority_account_id: str,
@@ -1203,4 +1203,7 @@ __all__ = [
     "adapt_sqlite_catalog",
     "adapt_sqlite_panel",
     "build_sqlite_catalog",
+    "exit_in_progress",
+    "has_bot_scoped_custody_problem",
+    "recent_fill_view",
 ]

@@ -173,10 +173,15 @@ class EconomicSnapshot:
 
 @dataclass(frozen=True)
 class SessionEconomicProjection:
-    """One revision-bound economic snapshot and its complete session markers."""
+    """One revision-bound economic snapshot and its complete session markers.
+
+    ``run_fills`` are the fills inside the run window the caller asked for
+    (the bot page's run, #2794), oldest first; empty when it asked for none.
+    """
 
     snapshot: EconomicSnapshot
     session_fills: tuple[FillRecord, ...]
+    run_fills: tuple[FillRecord, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -51,6 +51,7 @@ from app.schemas.run_admission import RunAdmissionDecision
 from app.services import broker_account_snapshot, surface_hub
 from app.services.bot_end import bot_end_view
 from app.services.bot_runner import get_bot_task_registry, set_bot_task_registry
+from app.services.bot_runner_errors import UnknownBotError
 from app.services.broker_v2_panel import (
     live_projection,
     panel_chart_data_source,
@@ -65,6 +66,7 @@ from tests.broker.alpaca.clerk.sqlite.conftest import (
     _broker_position_fixture,
     _FakeReadPort,
     _FakeTradePort,
+    _hold_transition,
     _make_held_position,
 )
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
@@ -161,7 +163,11 @@ class _FakeRegistry:
 
     def status(self, broker: str, sid: str) -> BotStatusView:
         assert broker == "alpaca"
-        assert sid in self._sids, sid
+        if sid not in self._sids:
+            raise UnknownBotError(
+                f"No bot '{sid}' is bound to broker '{broker}'.",
+                detail="Deploy the bot first; bindings are broker-tagged.",
+            )
         return BotStatusView(
             strategy_instance_id=sid,
             strategy_key="deployment_validation",
@@ -212,6 +218,12 @@ class _FakeRegistry:
     def bindings_for_broker(self, broker: str) -> list:
         """No durable dry-run bindings — the catalog is the plain SQLite roster."""
         return []
+
+    def current_run(self, broker: str, sid: str) -> SimpleNamespace:
+        """The run each bot started at ``_T0``; a stopped one ended a minute later."""
+        self.status(broker, sid)
+        terminal = None if self._running else SimpleNamespace(recorded_at_ms=_T0 + 60_000)
+        return SimpleNamespace(run_id=_run_id(sid), started_at_ms=_T0, terminal_outcome=terminal)
 
     async def cancel_end(self, sid: str, *, lifecycle_run_id: str, updated_by: str) -> None:
         """The panel's Stop cancels the bot's end before its STOP commits (#2607); this fleet has no end."""
@@ -1718,3 +1730,85 @@ async def test_saved_settings_that_no_longer_validate_never_take_the_panel_down(
     assert panel.status_code == 200, panel.text
     assert panel.json()["recent_decisions"][0]["explanation"] is None
     assert view.status_code == 503, view.text
+
+
+# ── The bot page's lead (#2794) ──────────────────────────────────────────────
+
+
+async def test_a_running_bot_page_leads_with_its_own_status_summary_and_toolbar(api) -> None:
+    app, repo = api
+    _append_no_action(repo, _T0 + 60_000, explanation=None)
+    _append_no_action(repo, _T0 + 120_000, explanation=None)
+
+    async with _client(app) as client:
+        body = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()
+
+    page = body["bot_page"]
+    assert page["status"] == {"state": "running", "label": "Running", "reason": None}
+    assert page["summary"]["text"] == "Running since Tue Nov 14 2023, 17:13 ET · 2 decisions, no trades."
+    assert page["summary"]["template_version"] == 1
+    toolbar = {entry["action_id"]: entry for entry in page["toolbar"]}
+    assert (toolbar["stop_bot_decisions"]["availability"], toolbar["stop_bot_decisions"]["primary"]) == (
+        "available",
+        True,
+    )
+    # Nothing held: Sell is not needed, never a red blocker.
+    assert toolbar["prepare_safe_flatten"]["availability"] == "not_needed"
+    assert toolbar["prepare_safe_flatten"]["reason"] == "No attributed exposure requires a flatten plan."
+    assert toolbar["deploy_again"]["availability"] == "not_needed"
+    assert toolbar["reconcile_now"]["label"] == "Check against Alpaca"
+    assert [line["key"] for line in page["health"]["run"]] == ["feed", "decisions", "orders"]
+    assert body["run_fills"] == []
+
+
+async def test_an_account_hold_never_turns_a_finished_bot_red(api) -> None:
+    """An old unexplained order is the account's: it shows in account health, not on the bot."""
+    app, repo = api
+    submit_stop_run(repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id=_run_id(SID))
+    get_bot_task_registry()._running = False  # type: ignore[union-attr]
+    repo.append_transition(_hold_transition(reason_code="UNEXPLAINED_ORDER_HOLD"))
+
+    async with _client(app) as client:
+        body = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()
+
+    # The account-scoped verdict still says blocked; the bot's own status does not.
+    assert body["mission_verdict"]["state"] == "blocked"
+    page = body["bot_page"]
+    assert page["status"]["state"] == "finished"
+    holds = next(line for line in page["health"]["account"] if line["key"] == "holds")
+    assert (holds["state"], holds["value"], holds["note"]) == (
+        "attention",
+        "Unexplained-order hold",
+        "No effect on this stopped bot.",
+    )
+    toolbar = {entry["action_id"]: entry for entry in page["toolbar"]}
+    assert (toolbar["deploy_again"]["availability"], toolbar["deploy_again"]["primary"]) == ("available", True)
+    assert toolbar["stop_bot_decisions"]["availability"] == "not_needed"
+
+
+async def test_a_bot_that_ended_holding_says_so_and_lists_its_runs_fill(api) -> None:
+    app, repo = api
+    await _make_held_position(repo, account_id=ACCT, strategy_instance_id=SID, run_id=_run_id(SID), quantity=1.0)
+    submit_stop_run(repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id=_run_id(SID))
+    get_bot_task_registry()._running = False  # type: ignore[union-attr]
+
+    async with _client(app) as client:
+        body = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()
+
+    page = body["bot_page"]
+    assert page["status"]["state"] == "ended_holding"
+    assert page["summary"]["facts"]["held"] == [{"symbol": "SPY", "quantity": "1"}]
+    assert page["summary"]["facts"]["trade_count"] == 1
+    assert page["summary"]["text"].endswith("· no decisions, 1 trade · holds 1 SPY.")
+    sell = next(entry for entry in page["toolbar"] if entry["action_id"] == "prepare_safe_flatten")
+    assert sell["label"] == "Sell 1 SPY"
+    assert [(fill["symbol"], fill["side"], fill["quantity"]) for fill in body["run_fills"]] == [("SPY", "buy", 1.0)]
+
+
+async def test_an_unknown_bot_is_a_404_that_names_it(api) -> None:
+    app, _repo = api
+    async with _client(app) as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/bot-nobody/panel")
+
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"]["message"] == "No bot 'bot-nobody' is bound to broker 'alpaca'."

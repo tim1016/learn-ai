@@ -88,9 +88,9 @@ from app.services.broker_v2_panel.panel_projection_service import (
     select_primary_action,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
-    _recent_fill_view,
     adapt_sqlite_panel,
     build_sqlite_catalog,
+    recent_fill_view,
 )
 from app.services.source_bar_ledger import RetainedContinuityEvent, RetainedStartupJoin, SourceBarLedger
 from app.services.sqlite_clerk_compat import sqlite_clerk_status
@@ -250,7 +250,7 @@ def test_a_simulated_row_is_refused_when_its_namespace_names_the_other_world() -
 
 def test_sqlite_fill_adapter_stamps_a_shadow_authority_row_as_simulated() -> None:
     """A fill read from a shadow authority reaches the panel typed shadow."""
-    row = _recent_fill_view(
+    row = recent_fill_view(
         FillRecord(
             account_id="shadow:9LIVE0001",
             sid=SID,
