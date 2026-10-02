@@ -159,9 +159,10 @@ async def replay_warmup_bars(
         runtime.replay_closed_bar(context, market_bar, mode=EvaluationMode.DECIDE)
         stage = runtime.active_stage()
         if stage is not None:
-            record = DecisionExplanationRecord.from_decision(stage.bar, stage.decision)
-            if record is not None:
-                before_start.append(record)
+            if record_before_start is not None:
+                record = DecisionExplanationRecord.from_decision(stage.bar, stage.decision)
+                if record is not None:
+                    before_start.append(record)
             known_outcome = captured.get(stage.trace.evaluation_id)
             if known_outcome is not None:
                 runtime.settle(
