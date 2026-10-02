@@ -79,6 +79,7 @@ from app.routers import (
     snapshot,
     spec_strategy,
     strategy,
+    strategy_gates,
     strategy_validation,
     tickers,
     walk_forward,
@@ -1233,6 +1234,14 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])
     app.include_router(recency.router, prefix="/api/research/recency", tags=["research-recency"])
     app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs", tags=["research-backtest-runs"])
+    # Custom Dark Bright Gates (#2639): saved per strategy on the data plane,
+    # which also judges them; writes need the control secret.
+    app.include_router(
+        strategy_gates.router,
+        prefix="/api/strategy-gates",
+        tags=["strategy-gates"],
+        dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+    )
     app.include_router(
         golden_validation.router,
         prefix="/api/research/golden-validations",
