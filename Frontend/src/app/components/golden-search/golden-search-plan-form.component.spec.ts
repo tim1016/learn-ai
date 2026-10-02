@@ -353,7 +353,7 @@ describe('GoldenSearchPlanFormComponent', () => {
     const { view } = await renderForm(service);
     await pickSpy(service, view);
     const knobs = defaults().knobs;
-    const fields = [...Object.keys(REFUSAL_INPUTS).filter((field) => !hidden.includes(field)), ...knobs.flatMap((knob) => [`knobs.${knob.name}`, `seed.${knob.name}`, ...(knob.mode === 'search' ? [`knobs.${knob.name}.step`] : [])])];
+    const fields = [...Object.keys(REFUSAL_INPUTS).filter((field) => !hidden.includes(field)), ...knobs.flatMap((knob) => [`knobs.${knob.name}`, `seed.${knob.name}`, `knobs.${knob.name}.importance`, ...(knob.mode === 'search' ? [`knobs.${knob.name}.step`] : [])])];
 
     const missing = fields.filter((field) => {
       const target = refusalTarget(field, knobs);

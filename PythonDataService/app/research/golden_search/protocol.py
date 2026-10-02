@@ -319,17 +319,15 @@ def _knob_plan(item: Mapping[str, Any]) -> KnobPlan:
 def by_importance(knobs: Sequence[KnobPlan], declared: Sequence[str]) -> tuple[KnobPlan, ...]:
     """``knobs`` in search order: higher importance first, ties in the declaration's order (ADR 0074 decision 10).
 
-    A plan where any knob has no importance (a legacy plan) keeps its own order.
+    A plan where any knob lacks a whole-number importance (a legacy plan, or
+    one validation will refuse knob by knob) keeps its own order. Angular's
+    ``byImportance`` shows the same order; contracts/fixtures/golden-search-importance-order-v1.json pins both.
     """
-    if any(plan.importance is None for plan in knobs):
+    scores = {plan.name: plan.importance for plan in knobs}
+    if any(isinstance(score, bool) or not isinstance(score, int) for score in scores.values()):
         return tuple(knobs)
     rank = {name: index for index, name in enumerate(declared)}
-
-    def key(plan: KnobPlan) -> tuple[int, int]:
-        assert plan.importance is not None
-        return (-plan.importance, rank.get(plan.name, len(rank)))
-
-    return tuple(sorted(knobs, key=key))
+    return tuple(sorted(knobs, key=lambda plan: (-int(scores[plan.name] or 0), rank.get(plan.name, len(rank)))))
 
 
 def _stress(item: Mapping[str, Any]) -> StressScenario:

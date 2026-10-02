@@ -1,8 +1,8 @@
-import { afterNextRender, ChangeDetectionStrategy, Component, computed, inject, Injector, input, output } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, ElementRef, inject, Injector, input, output } from '@angular/core';
 import { InputText } from 'primeng/inputtext';
 
 import { fullPointEntries } from './golden-search-display';
-import { isVaried, knobProblemKey, type KnobNumberField, type PlanEdit } from './golden-search-plan-draft';
+import { isRanked, isVaried, knobProblemKey, type KnobNumberField, type PlanEdit } from './golden-search-plan-draft';
 import { importanceInputId, knobInputId, refusalKnob, withoutLabel } from './golden-search-plan-problems';
 import type { CapabilityKnob, GoldenSearchMethod, KnobPlan, Point, PointValue, ProtocolRefusal, StrategyCapability } from './golden-search.types';
 
@@ -71,9 +71,10 @@ export class GoldenSearchKnobTableComponent {
   protected readonly inputId = knobInputId;
   protected readonly importanceId = importanceInputId;
   private readonly injector = inject(Injector);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
   /** Whether the plan ranks its knobs by importance; a legacy plan has no importance column. */
-  protected readonly ranked = computed(() => this.knobs().every((plan) => plan.importance != null));
+  protected readonly ranked = computed(() => isRanked(this.knobs()));
   protected readonly scale = computed(() => {
     const scale = this.capability()?.importance;
     return scale === undefined ? [] : Array.from({ length: scale.high - scale.low + 1 }, (_, index) => scale.low + index);
@@ -103,7 +104,7 @@ export class GoldenSearchKnobTableComponent {
         startsAt: startValue !== undefined && goldenValue !== null && startValue !== goldenValue ? startValue : null,
         startOutside: outsideRange(plan, startValue),
         values: values === null ? undefined : (values.get(plan.name) ?? null),
-        rangeRefusals: (refused.get(plan.name)?.range ?? []).map((message) => withoutLabel(message, label)),
+        rangeRefusals: (refused.get(plan.name)?.value ?? []).map((message) => withoutLabel(message, label)),
         stepRefusals: (refused.get(plan.name)?.step ?? []).map((message) => withoutLabel(message, label)),
         importanceRefusals: (refused.get(plan.name)?.importance ?? []).map((message) => withoutLabel(message, label)),
       };
@@ -124,12 +125,12 @@ export class GoldenSearchKnobTableComponent {
   });
 
   private readonly refusalsByKnob = computed(() => {
-    const byKnob = new Map<string, { range: string[]; step: string[]; importance: string[] }>();
+    const byKnob = new Map<string, { value: string[]; step: string[]; importance: string[] }>();
     for (const refusal of this.refusals()) {
       const named = refusalKnob(refusal.field);
       if (named === null) continue;
-      const entry = byKnob.get(named.name) ?? { range: [], step: [], importance: [] };
-      (named.part === 'value' ? entry.range : entry[named.part]).push(refusal.message);
+      const entry = byKnob.get(named.name) ?? { value: [], step: [], importance: [] };
+      entry[named.part].push(refusal.message);
       byKnob.set(named.name, entry);
     }
     return byKnob;
@@ -160,6 +161,6 @@ export class GoldenSearchKnobTableComponent {
     if (!(event.target instanceof HTMLSelectElement)) return;
     this.edit.emit({ kind: 'knob-importance', name, importance: Number(event.target.value) });
     const id = importanceInputId(name);
-    afterNextRender(() => document.getElementById(id)?.focus(), { injector: this.injector });
+    afterNextRender(() => this.host.nativeElement.querySelector<HTMLSelectElement>(`[id="${id}"]`)?.focus(), { injector: this.injector });
   }
 }

@@ -1,0 +1,18 @@
+{
+  "description": "Golden Search search order (ADR 0074 decision 10): higher importance first, ties in the declared order. Python's protocol.by_importance and Angular's byImportance must both produce each case's order.",
+  "declared": ["gap", "rsi_min", "rsi_max", "fast_period", "slow_period", "hold_bars", "gap_bps"],
+  "cases": [
+    {
+      "scores": { "gap": 5, "rsi_min": 5, "rsi_max": 5, "fast_period": 5, "slow_period": 5, "hold_bars": 5, "gap_bps": 5 },
+      "order": ["gap", "rsi_min", "rsi_max", "fast_period", "slow_period", "hold_bars", "gap_bps"]
+    },
+    {
+      "scores": { "gap": 7, "rsi_min": 7, "rsi_max": 5, "fast_period": 5, "slow_period": 5, "hold_bars": 9, "gap_bps": 5 },
+      "order": ["hold_bars", "gap", "rsi_min", "rsi_max", "fast_period", "slow_period", "gap_bps"]
+    },
+    {
+      "scores": { "gap": 1, "rsi_min": 5, "rsi_max": 5, "fast_period": 5, "slow_period": 10, "hold_bars": 10, "gap_bps": 5 },
+      "order": ["slow_period", "hold_bars", "rsi_min", "rsi_max", "fast_period", "gap_bps", "gap"]
+    }
+  ]
+}

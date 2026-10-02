@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { etMidnightMs } from '../../shared/date/et-midnight';
-import { applyPlanEdit, draftFromDefaults, draftFromProtocol, draftMonths, knobProblemKey, numberProblemKey, wireProtocol, withImportance, withServerDates, type PlanDraft } from './golden-search-plan-draft';
+import { applyPlanEdit, byImportance, draftFromDefaults, draftFromProtocol, draftMonths, knobProblemKey, numberProblemKey, wireProtocol, withImportance, withServerDates, type PlanDraft } from './golden-search-plan-draft';
+import importanceOrder from '@repo-contracts/fixtures/golden-search-importance-order-v1.json';
 import { defaults, emaCapability, protocol } from './testing/fixtures';
 
 function draft(): PlanDraft {
@@ -94,13 +95,21 @@ describe('applyPlanEdit', () => {
     expect(lowered.protocol.knobs.at(-1)?.name).toBe('gap');
   });
 
-  it('ranks a revised legacy plan at the starting importance and leaves a ranked plan alone', () => {
+  it('shows the search order the server freezes for every pinned case', () => {
+    expect(emaCapability().knobs.map((knob) => knob.name)).toEqual(importanceOrder.declared);
+    for (const { scores, order } of importanceOrder.cases) {
+      const knobs = [...protocol().knobs].reverse().map((knob) => ({ ...knob, importance: scores[knob.name as keyof typeof scores] }));
+      expect(byImportance(knobs, emaCapability()).map((knob) => knob.name)).toEqual(order);
+    }
+  });
+
+  it('ranks a revised legacy plan at the starting importance and leaves a ranked plan in order', () => {
     const legacy = protocol({ knobs: [...protocol().knobs].reverse().map(({ importance: _importance, ...knob }) => knob) });
     const ranked = withImportance(legacy, emaCapability());
     expect(ranked.knobs.map((k) => k.importance)).toEqual(Array(7).fill(5));
     expect(ranked.knobs.map((k) => k.name)).toEqual(emaCapability().knobs.map((k) => k.name));
     const plan = protocol();
-    expect(withImportance(plan, emaCapability())).toBe(plan);
+    expect(withImportance(plan, emaCapability())).toEqual(plan);
   });
 
   it('adds and removes a pair audit without duplicating it', () => {

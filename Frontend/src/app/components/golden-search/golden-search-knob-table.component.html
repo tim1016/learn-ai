@@ -4,7 +4,7 @@
     <thead>
       <tr>
         <th scope="col">Order</th>
-        @if (ranked()) { <th scope="col">Importance</th> }
+        @if (ranked()) { <th scope="col">Importance <small class="muted">(10 = searched first)</small></th> }
         <th scope="col">Vary</th>
         <th scope="col">Knob</th>
         <th scope="col" class="num">Golden</th>
@@ -125,6 +125,7 @@
       </span>
     }
     @if (!readonly()) { <span class="notes__item"><span class="notes__label">Step</span> {{ stepHint() }}</span> }
+    @if (ranked() && method() === 'grid') { <span class="notes__item"><span class="notes__label">Importance</span> Grid tries every combination, so importance only orders this table.</span> }
     @if (hasWarmup()) { <span class="notes__item"><span class="notes__label">Warmup</span> knobs tagged warmup change how many bars each run needs first.</span> }
   </div>
 }
