@@ -1180,7 +1180,8 @@ async def steal_or_retry_minute_bar(
     it was spent under. A ``'failed'`` row recorded under a different
     contract than the one given is retried whatever its count, its count
     restarts at 1, and it takes the given contract — so later failures
-    under the new recipe spend a normal budget, and the lift cannot repeat.
+    under the new recipe spend a normal budget, and under one contract the
+    lift cannot repeat.
     Without it a day that exhausted its budget under a recipe a fix has
     since replaced (fractional volume rejected as corrupt) stayed terminal
     after the fix.
