@@ -44,7 +44,7 @@
 }
 
 // A run in flight must not let the previous run read as live evidence.
-.stage__evidence--stale > app-strategy-lab-chart {
+.stage__evidence--stale > app-strategy-lab-strategy-view {
   opacity: 0.42;
   filter: saturate(0.6);
 }
