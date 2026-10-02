@@ -21,8 +21,9 @@
  * fixture case below pins that it still fires.
  *
  * Scope: identifiers each component declares as a resource
- * (`readonly <name> = resource(` / `rxResource(` / `httpResource(`), not
- * every `.value()` call. Signals, form controls, and plain objects
+ * (`readonly <name> = resource(` / `rxResource(` / `httpResource(`, or
+ * `const <name> = …` inside an injection-context state function such as
+ * `strategy-view/strategy-gates-state.ts`), not every `.value()` call. Signals, form controls, and plain objects
  * legitimately expose a `.value()` member; scanning for those too would
  * false-positive on unrelated work and get this spec disabled the first time
  * it blocks an unrelated PR (PRD #2201 §8 FR-001). A template is checked
@@ -75,7 +76,7 @@ import { describe, expect, it } from 'vitest';
 
 const V2_PANEL_ROOT = __dirname;
 
-const RESOURCE_DECLARATION = /\breadonly\s+(\w+)\s*=\s*(?:rxResource|httpResource|resource)\b/g;
+const RESOURCE_DECLARATION = /\b(?:readonly|const)\s+(\w+)\s*=\s*(?:rxResource|httpResource|resource)\s*[<(]/g;
 
 /** Every `resource()`/`rxResource()`/`httpResource()` call site, regardless
  * of declaration shape. Used only to cross-check `RESOURCE_DECLARATION`'s
