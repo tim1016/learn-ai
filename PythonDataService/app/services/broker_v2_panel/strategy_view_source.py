@@ -140,6 +140,7 @@ def build_strategy_view(
         run_started_at_ms=run_started_at_ms,
         run_stopped_at_ms=run_stopped_at_ms,
         declaration=view.declaration(),
+        settings=view.scalar_settings,
         candles=candles,
         unexplained_decision_count=unexplained,
         notices=_notices(before_start, unexplained=unexplained, unshown=unshown),

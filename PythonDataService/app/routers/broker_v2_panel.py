@@ -96,6 +96,7 @@ from app.services.broker_v2_panel.action_execution_service import (
 )
 from app.services.broker_v2_panel.chart_projection_service import (
     ChartTimeframeError,
+    ChartWindowError,
     coerce_history_timeframe,
 )
 from app.services.broker_v2_panel.evidence_service import (
@@ -122,6 +123,7 @@ from app.services.surface_hub import (
     SurfaceHubRefreshFailure,
     SurfaceHubStall,
 )
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -890,6 +892,7 @@ async def _history_chart(
     account_id: str,
     sid: str,
     timeframe: str,
+    window: tuple[int, int] | None = None,
 ) -> ChartHistoryResponse:
     # The route signature already closes the enum at the schema boundary; this
     # coercion stays as the service-side guard for non-HTTP callers.
@@ -898,7 +901,9 @@ async def _history_chart(
     except ChartTimeframeError as exc:
         raise HTTPException(status_code=422, detail={"message": str(exc), "why": None}) from None
     try:
-        return await ds.get_history_chart(broker, account_id, sid, coerced)
+        return await ds.get_history_chart(broker, account_id, sid, coerced, window)
+    except ChartWindowError as exc:
+        raise HTTPException(status_code=422, detail={"message": str(exc), "why": None}) from None
     except panel_errors.PanelDataError as error:
         _raise_panel_error(error)
 
@@ -906,15 +911,23 @@ async def _history_chart(
 @router.get(
     "/{broker}/accounts/{account_id}/bots/{sid}/chart/history",
     response_model=ChartHistoryResponse,
-    summary="Polygon chart: bounded timeframe window (§8)",
+    summary="Polygon chart: bounded timeframe window (§8), or a window of the bot's latest run (#2794)",
 )
 async def get_history_chart_scoped(
     broker: str,
     account_id: str,
     sid: str,
     timeframe: ChartHistoryTimeframe = Query(...),
+    from_ms: int | None = Query(None, ge=0, le=MAX_TIMESTAMP_MS),
+    to_ms: int | None = Query(None, ge=0, le=MAX_TIMESTAMP_MS),
 ) -> ChartHistoryResponse:
-    return await _history_chart(broker, account_id, sid, timeframe)
+    """The newest bars for ``timeframe``; with ``from_ms`` and ``to_ms``, that window of the bot's latest run."""
+    if (from_ms is None) != (to_ms is None):
+        raise HTTPException(
+            status_code=422, detail={"message": "A run window needs both from_ms and to_ms.", "why": None}
+        )
+    window = None if from_ms is None or to_ms is None else (from_ms, to_ms)
+    return await _history_chart(broker, account_id, sid, timeframe, window)
 
 
 @router.get(

@@ -1,6 +1,7 @@
 import type { CandlestickData, SeriesMarker, UTCTimestamp } from 'lightweight-charts';
 
 import { formatReceiptLabel } from '../../../../shared/pipes/receipt-label.pipe';
+import type { ChartIndicatorRequestBar } from '../dual-pane-chart/dual-pane-chart-indicators';
 import {
   CHART_SERIES_COLOR_TOKENS,
   type ChartSeriesColorToken,
@@ -155,6 +156,23 @@ export function strategyLinePlans(
   return plans;
 }
 
+/** The decision candles as the chart-indicator service reads bars: each keyed by its close. */
+export function strategyIndicatorBars(candles: readonly StrategyViewCandle[]): ChartIndicatorRequestBar[] {
+  return candles.map((candle) => ({
+    t: candle.bar_close_ms,
+    o: candle.open,
+    h: candle.high,
+    l: candle.low,
+    c: candle.close,
+    v: candle.volume,
+  }));
+}
+
+/** Each decision candle's chart time, by the bar close a computed point carries. */
+export function strategyChartTimes(candles: readonly StrategyViewCandle[]): Map<number, UTCTimestamp> {
+  return new Map(candles.map((candle) => [candle.bar_close_ms, toChartTime(candle.bar_close_ms)]));
+}
+
 /** The literal colour a canvas draws a line token in. */
 export function lineColorHex(token: ChartSeriesColorToken): string {
   return CHART_SERIES_COLOR_TOKENS.get(token)?.hex ?? '#4d8dff';
@@ -220,8 +238,9 @@ export function resolveActiveGate(
     ?? null;
 }
 
-/** Bars shown before the run's first decision when the chart opens (a
- * regular session at the 15-minute decision bars every strategy uses today). */
+/** Bars shown before the run's first decision when the chart opens: a fixed
+ * count that stays readable at any decision timeframe (a session at 15-minute
+ * bars; a session at 1-minute bars would pack 390 candles in). */
 const OPENING_CONTEXT_BARS = 26;
 /** Empty slots kept right of the last candle, so the run's end line and its label stay on screen. */
 const OPENING_RIGHT_PAD_BARS = 3;
