@@ -108,8 +108,8 @@ describe('applyPlanEdit', () => {
     const ranked = withImportance(legacy, emaCapability());
     expect(ranked.knobs.map((k) => k.importance)).toEqual(Array(7).fill(5));
     expect(ranked.knobs.map((k) => k.name)).toEqual(emaCapability().knobs.map((k) => k.name));
-    const plan = protocol();
-    expect(withImportance(plan, emaCapability())).toEqual(plan);
+    const scored = protocol({ knobs: [...protocol().knobs].reverse() });
+    expect(withImportance(scored, emaCapability()).knobs.map((k) => k.name)).toEqual(emaCapability().knobs.map((k) => k.name));
   });
 
   it('adds and removes a pair audit without duplicating it', () => {

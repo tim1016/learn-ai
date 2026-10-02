@@ -242,7 +242,8 @@ export function isRanked(knobs: readonly KnobPlan[]): boolean {
  * freezes the same order; contracts/fixtures/golden-search-importance-order-v1.json pins both.
  */
 export function byImportance(knobs: readonly KnobPlan[], capability: StrategyCapability | null): KnobPlan[] {
-  if (!isRanked(knobs)) return [...knobs];
+  // The server sorts only whole-number scores too; anything else is refused knob by knob.
+  if (!knobs.every((knob) => Number.isInteger(knob.importance))) return [...knobs];
   const rank = new Map((capability?.knobs ?? []).map((knob, index) => [knob.name, index]));
   const position = (name: string): number => rank.get(name) ?? rank.size;
   return [...knobs].sort((a, b) => (b.importance ?? 0) - (a.importance ?? 0) || position(a.name) - position(b.name));

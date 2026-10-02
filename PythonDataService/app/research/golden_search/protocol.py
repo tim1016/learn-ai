@@ -27,7 +27,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Literal, get_args
+from typing import Any, Literal, cast, get_args
 
 from app.research.golden_search.declarations import (
     SearchDeclaration,
@@ -323,11 +323,10 @@ def by_importance(knobs: Sequence[KnobPlan], declared: Sequence[str]) -> tuple[K
     one validation will refuse knob by knob) keeps its own order. Angular's
     ``byImportance`` shows the same order; contracts/fixtures/golden-search-importance-order-v1.json pins both.
     """
-    scores = {plan.name: plan.importance for plan in knobs}
-    if any(isinstance(score, bool) or not isinstance(score, int) for score in scores.values()):
+    if any(isinstance(plan.importance, bool) or not isinstance(plan.importance, int) for plan in knobs):
         return tuple(knobs)
     rank = {name: index for index, name in enumerate(declared)}
-    return tuple(sorted(knobs, key=lambda plan: (-int(scores[plan.name] or 0), rank.get(plan.name, len(rank)))))
+    return tuple(sorted(knobs, key=lambda plan: (-cast(int, plan.importance), rank.get(plan.name, len(rank)))))
 
 
 def _stress(item: Mapping[str, Any]) -> StressScenario:
