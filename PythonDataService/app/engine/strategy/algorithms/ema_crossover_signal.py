@@ -27,9 +27,10 @@ Strategy rules:
     RSI(14), so that first ready bar cannot enter; at the 5/10 defaults the
     EMAs are ready five bars earlier and this never applies.
 
-Naming: ``_ema5``/``_ema10``, ``DecisionSnapshot.ema5``/``ema10`` and the
-trade log's ``"ema5"``/``"ema10"`` indicator keys keep the reference's names
-for byte-stable evidence, but hold the configured fast and slow EMA.
+Naming: ``_ema5``/``_ema10`` and the trade log's ``"ema5"``/``"ema10"``
+indicator keys keep the reference's names for byte-stable evidence, but hold
+the configured fast and slow EMA. The decision explanation (#2639) names them
+``ema_fast``/``ema_slow``, as the sealed signal series do.
 
 Trade logging:
   Trades are logged in ``on_order_event`` using actual fill prices and
@@ -60,7 +61,8 @@ from app.engine.execution.order import Direction, OrderEvent
 from app.engine.framework.insight import Insight, InsightDirection
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.rsi import RelativeStrengthIndex
-from app.engine.strategy.base import DecisionSnapshot, LoggedTrade, Strategy
+from app.engine.strategy.base import LoggedTrade, Strategy
+from app.engine.strategy.decision_explanation import CheckRole, DecisionExplanation, ExplainedCheck
 from app.engine.strategy.normalized_gap import difference_bps
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import SignalDecision, SignalProgram
@@ -134,7 +136,7 @@ def _decision_bar_count(name: str, value: int) -> int:
 class EmaCrossoverSignalAlgorithm(Strategy):
     """Generate EMA crossover decisions without selecting the traded asset."""
 
-    def _gap_is_sufficient(self, ema_fast: Decimal, ema_slow: Decimal) -> bool:
+    def _gap_checks(self, ema_fast: Decimal, ema_slow: Decimal) -> tuple[ExplainedCheck, ...]:
         """Apply both entry floors: absolute price gap and normalized gap.
 
         ``gap`` is the raw ``EMA(fast) - EMA(slow)`` dollar spread; ``gap_bps`` is
@@ -155,12 +157,32 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         (``app/research/recency/eligibility.py``), so expressing this as a
         categorical ``gap_mode`` would have silently dropped this strategy out
         of recency sweeps.
+
+        The gap passes when ``EMA(fast) - EMA(slow) >= gap``; the normalized
+        floor is reported (and applied) only when it is set. Its basis-point
+        value is computed whenever EMA(slow) is non-zero, so the owner sees it
+        on a bar the absolute floor already failed; a zero EMA(slow) still
+        raises exactly where it always did -- once the absolute floor passes.
         """
-        if ema_fast - ema_slow < self._gap:
-            return False
+        spread = ema_fast - ema_slow
+        absolute = ExplainedCheck(
+            check_id="gap",
+            role=CheckRole.ENTRY,
+            passed=spread >= self._gap,
+            observed=spread,
+            threshold=self._gap,
+        )
         if self._gap_bps <= 0:
-            return True
-        return difference_bps(ema_fast, ema_slow) >= self._gap_bps
+            return (absolute,)
+        spread_bps = difference_bps(ema_fast, ema_slow) if absolute.passed or ema_slow != 0 else None
+        normalized = ExplainedCheck(
+            check_id="gap_bps",
+            role=CheckRole.ENTRY,
+            passed=spread_bps is not None and spread_bps >= self._gap_bps,
+            observed=spread_bps,
+            threshold=self._gap_bps,
+        )
+        return (absolute, normalized)
 
     def _rsi_gate_bounds(self) -> tuple[Decimal, Decimal]:
         """Return the configured inclusive RSI entry band (default 50–70)."""
@@ -384,6 +406,14 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                     "rsi": "UNREADY",
                 },
                 action_plan_request=None,
+                explanation=DecisionExplanation(
+                    values={
+                        "ema_fast": self._ema5.current_value if self._ema5.is_ready else None,
+                        "ema_slow": self._ema10.current_value if self._ema10.is_ready else None,
+                        "rsi": self._rsi14.current_value if self._rsi14.is_ready else None,
+                    },
+                    holding=self._in_position,
+                ),
             )
 
         assert self._ema5.current_value is not None
@@ -404,8 +434,48 @@ class EmaCrossoverSignalAlgorithm(Strategy):
         bar_signal = "HOLD"
         intent: SignalIntent | None = None
 
+        # The entry rules, evaluated on every ready bar. Only a flat bar acts
+        # on them, but each is a pure reading of this bar's indicators, so a
+        # held bar still reports them for the owner (#2639): the RSI band is
+        # the strategy's default Dark Bright Gate and shades every candle.
+        if not current_above:
+            crossover_state = "not_above"
+        elif not relation_was_known:
+            crossover_state = "relation_unknown"
+        elif self._prev_ema5_above_ema10:
+            crossover_state = "already_above"
+        else:
+            crossover_state = "crossed_up"
+        rsi_lower, rsi_upper = self._rsi_gate_bounds()
+        entry_checks = (
+            ExplainedCheck(
+                check_id="fresh_cross",
+                role=CheckRole.ENTRY,
+                passed=crossover_state == "crossed_up",
+                observed=crossover_state,
+            ),
+            *self._gap_checks(ema5_val, ema10_val),
+            ExplainedCheck(
+                check_id="rsi_band",
+                role=CheckRole.ENTRY,
+                passed=rsi_lower <= rsi_val <= rsi_upper,
+                observed=rsi_val,
+                threshold=(rsi_lower, rsi_upper),
+            ),
+        )
+        exit_checks: tuple[ExplainedCheck, ...] = ()
+
         if self._in_position:
             next_countdown = self._bars_until_exit - 1
+            exit_checks = (
+                ExplainedCheck(
+                    check_id="exit_countdown",
+                    role=CheckRole.EXIT,
+                    passed=next_countdown <= 0,
+                    observed=next_countdown,
+                    threshold=0,
+                ),
+            )
             if next_countdown <= 0:
                 # Preserve the last eligible countdown until a stage commits.
                 # A discarded exit therefore re-evaluates only from a later
@@ -418,34 +488,17 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 bar_signal = "EXIT"
             else:
                 self._bars_until_exit = next_countdown
-        else:
-            # Entry check.
-            fresh_crossover = current_above and relation_was_known and not self._prev_ema5_above_ema10
-            gap_ok = self._gap_is_sufficient(ema5_val, ema10_val)
-            rsi_lower, rsi_upper = self._rsi_gate_bounds()
-            rsi_ok = rsi_lower <= rsi_val <= rsi_upper
-
-            if fresh_crossover and gap_ok and rsi_ok:
-                intent = SignalIntent(
-                    kind=SignalIntentKind.ENTER,
-                    bar_close_ms=bar.end_ms,
-                    intended_price=bar.close,
-                )
-                bar_signal = "ENTER"
+        elif all(check.passed for check in entry_checks):
+            # Entry: a fresh crossover, both gap floors and the RSI band.
+            intent = SignalIntent(
+                kind=SignalIntentKind.ENTER,
+                bar_close_ms=bar.end_ms,
+                intended_price=bar.close,
+            )
+            bar_signal = "ENTER"
 
         # Update the crossover state for the next bar.
         self._prev_ema5_above_ema10 = current_above
-
-        # Publish the per-bar decision snapshot (observation only; see
-        # DecisionSnapshot).
-        self.last_decision_snapshot = DecisionSnapshot(
-            bar_close_ms=bar.end_ms,
-            ema5=float(ema5_val),
-            ema10=float(ema10_val),
-            rsi=float(rsi_val),
-            signal=bar_signal,
-            intended_price=float(bar.close),
-        )
 
         # Emit to state.csv when output_dir is configured.  This block is
         # after the early-return warmup guard above, so rows are only written
@@ -489,6 +542,11 @@ class EmaCrossoverSignalAlgorithm(Strategy):
                 {"contract": "single_long_stock", "intent": intent.kind.value}
                 if intent is not None
                 else None
+            ),
+            explanation=DecisionExplanation(
+                values={"ema_fast": ema5_val, "ema_slow": ema10_val, "rsi": rsi_val},
+                checks=(*entry_checks, *exit_checks),
+                holding=prior_in_position,
             ),
         )
 

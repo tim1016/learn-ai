@@ -416,11 +416,9 @@ class DecisionColumnSpec(BaseModel):
 
     Each entry declares the column ``name``, its ``dtype``, whether it is
     ``nullable``, and a free-text ``semantic`` description. No app code
-    reads it; it stays because the sealed ``*.spec.json`` fixtures carry it.
-
-    ``name`` names an attribute the strategy publishes on its
-    ``DecisionSnapshot``. For the SPY EMA strategy these are ``ema5`` /
-    ``ema10`` / ``rsi``.
+    reads it; it stays because the sealed ``*.spec.json`` fixtures carry it
+    (their bytes are pinned by the strategy-validation manifest). A
+    strategy's per-bar values are its decision explanation now (#2639).
     """
 
     model_config = ConfigDict(extra="forbid")

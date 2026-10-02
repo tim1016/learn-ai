@@ -188,6 +188,12 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             CHECK(ready_at_ms IS NULL OR history_joined_at_ms IS NOT NULL),
             CHECK(refused_at_ms IS NULL OR ready_at_ms IS NULL)
         );
+        CREATE TABLE IF NOT EXISTS source_run_before_start_evaluations (
+            run_id TEXT NOT NULL,
+            bar_close_ms INTEGER NOT NULL CHECK(bar_close_ms BETWEEN 0 AND 253402300799999),
+            explanation_json TEXT NOT NULL,
+            PRIMARY KEY (run_id, bar_close_ms)
+        );
         CREATE TABLE IF NOT EXISTS source_evidence_journal (
             evidence_seq INTEGER PRIMARY KEY AUTOINCREMENT,
             run_id TEXT,

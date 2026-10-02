@@ -18,7 +18,7 @@ runtime/binding types this module duck-types against.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
@@ -26,6 +26,7 @@ from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import EvaluationMode, EvaluationStage, Settlement
 from app.marketdata.feed import MarketDataBar, MarketDataFeed
+from app.schemas.decision_explanation import DecisionExplanationRecord, explanation_record
 
 if TYPE_CHECKING:
     from app.services.bot_runner import BrokerBotBinding
@@ -89,6 +90,7 @@ async def replay_warmup_bars(
     binding: BrokerBotBinding,
     *,
     captured_decisions: Mapping[str, str] | None,
+    record_before_start: Callable[[Sequence[DecisionExplanationRecord]], None] | None = None,
 ) -> tuple[MarketDataBar, EvaluationStage] | None:
     """Replay recent closed bars so indicators are ready before live
     decisions begin (#1708 review finding 3), reapplying each bucket's own
@@ -136,12 +138,19 @@ async def replay_warmup_bars(
     at the end regardless -- a freshly (re)deployed run always starts flat.
     Reapplying known dispositions only makes the *replayed math* accurate;
     it does not resurrect exposure.
+
+    ``record_before_start`` receives every replayed bucket's explanation once
+    replay ends (#2639): these are the run's before-start evaluations, shown
+    behind the "bot started" line and never acted on. They are handed over
+    here rather than receipted -- a receipt is a decision this run took, and
+    FR-016 reads receipts as exactly that.
     """
     warmup_bars = await feed.recent_closed_bars(
         binding.symbol, use_rth=binding.use_rth, lookback_days=_warmup_lookback_days_for(binding)
     )
     captured = captured_decisions or {}
     uncaptured: tuple[MarketDataBar, EvaluationStage] | None = None
+    before_start: list[DecisionExplanationRecord] = []
     for market_bar in warmup_bars:
         # DECIDE, not OBSERVE_ONLY: OBSERVE_ONLY auto-discards
         # unconditionally inside `advance()` before this loop ever gets a
@@ -150,6 +159,9 @@ async def replay_warmup_bars(
         runtime.replay_closed_bar(context, market_bar, mode=EvaluationMode.DECIDE)
         stage = runtime.active_stage()
         if stage is not None:
+            record = explanation_record(stage.bar, stage.decision)
+            if record is not None:
+                before_start.append(record)
             known_outcome = captured.get(stage.trace.evaluation_id)
             if known_outcome is not None:
                 runtime.settle(
@@ -172,6 +184,8 @@ async def replay_warmup_bars(
         context.signal_intents.clear()
         context.consolidated_bars.clear()
     runtime.strategy.on_force_flat()
+    if record_before_start is not None and before_start:
+        record_before_start(before_start)
     return uncaptured
 
 

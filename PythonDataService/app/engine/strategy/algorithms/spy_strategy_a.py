@@ -31,6 +31,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.indicators.ema import ExponentialMovingAverage
 from app.engine.indicators.macd import MovingAverageConvergenceDivergence
 from app.engine.strategy.algorithms._rsi_range_base import RsiRangeStrategy
+from app.engine.strategy.decision_explanation import CheckRole, ExplainedCheck
 
 
 class SpyStrategyAAlgorithm(RsiRangeStrategy):
@@ -89,18 +90,30 @@ class SpyStrategyAAlgorithm(RsiRangeStrategy):
         assert self._macd is not None
         return self._ema_fast.is_ready and self._ema_slow.is_ready and self._macd.is_ready
 
-    def _entry_extra_gate_passes(self, bar: TradeBar) -> bool:
+    def _entry_extra_checks(self, bar: TradeBar) -> tuple[ExplainedCheck, ...]:
         assert self._ema_fast is not None
         assert self._ema_slow is not None
         assert self._macd is not None
         fast = self._ema_fast.current_value
         slow = self._ema_slow.current_value
         macd_line = self._macd.macd
-        if fast is None or slow is None or macd_line is None:
-            return False
-        gap_ok = (fast - slow) > self.ema_gap_threshold
-        macd_ok = macd_line > Decimal(0)
-        return gap_ok and macd_ok
+        gap = None if fast is None or slow is None else fast - slow
+        return (
+            ExplainedCheck(
+                check_id="ema_gap",
+                role=CheckRole.ENTRY,
+                passed=gap is not None and gap > self.ema_gap_threshold,
+                observed=gap,
+                threshold=self.ema_gap_threshold,
+            ),
+            ExplainedCheck(
+                check_id="macd_positive",
+                role=CheckRole.ENTRY,
+                passed=macd_line is not None and macd_line > Decimal(0),
+                observed=macd_line,
+                threshold=Decimal(0),
+            ),
+        )
 
     def _indicator_snapshot(self, bar: TradeBar) -> dict[str, Decimal]:
         snap = super()._indicator_snapshot(bar)

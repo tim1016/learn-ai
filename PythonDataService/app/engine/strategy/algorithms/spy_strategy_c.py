@@ -29,6 +29,7 @@ from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.algorithms._rsi_range_base import RsiRangeStrategy
+from app.engine.strategy.decision_explanation import CheckRole, ExplainedCheck
 
 
 class SpyStrategyCAlgorithm(RsiRangeStrategy):
@@ -54,13 +55,28 @@ class SpyStrategyCAlgorithm(RsiRangeStrategy):
         )
         self.adx_entry_threshold = Decimal(str(adx_entry_threshold))
 
-    def _entry_extra_gate_passes(self, bar: TradeBar) -> bool:
+    def _entry_extra_checks(self, bar: TradeBar) -> tuple[ExplainedCheck, ...]:
         assert self._adx is not None
         current = self._adx.current_value
         previous = self._adx.previous_value
-        if current is None or previous is None:
-            return False
-        return current > self.adx_entry_threshold and current > previous
+        rise = None if current is None or previous is None else current - previous
+        return (
+            ExplainedCheck(
+                check_id="adx_entry",
+                role=CheckRole.ENTRY,
+                # The original gate refused a missing previous value as well.
+                passed=previous is not None and current is not None and current > self.adx_entry_threshold,
+                observed=current,
+                threshold=self.adx_entry_threshold,
+            ),
+            ExplainedCheck(
+                check_id="adx_rising",
+                role=CheckRole.ENTRY,
+                passed=current is not None and previous is not None and current > previous,
+                observed=rise,
+                threshold=0,
+            ),
+        )
 
     def _indicator_snapshot(self, bar: TradeBar) -> dict[str, Decimal]:
         snap = super()._indicator_snapshot(bar)

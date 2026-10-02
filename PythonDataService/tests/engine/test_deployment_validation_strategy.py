@@ -129,12 +129,19 @@ def _run_signal_only(bars: list[TradeBar]) -> list[str]:
     strategy.initialize()
     portfolio.update_reference_price("SPY", Decimal("100"))
 
-    decisions = []
+    decisions: list[str] = []
+    evaluate = strategy.evaluate_signal_bar
+
+    def recording_evaluate(bar):
+        decision = evaluate(bar)
+        decisions.append(decision.signal_facts["decision"])
+        return decision
+
+    strategy.evaluate_signal_bar = recording_evaluate  # type: ignore[method-assign]
     for bar in bars:
         ctx.current_time_ms = bar.end_ms
         strategy.on_minute_bar(bar)
-        assert strategy.last_decision_snapshot is not None
-        decisions.append(strategy.last_decision_snapshot.signal)
+    assert len(decisions) == len(bars)
     return decisions
 
 

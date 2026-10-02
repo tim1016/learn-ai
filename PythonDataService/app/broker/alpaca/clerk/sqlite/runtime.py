@@ -1216,6 +1216,7 @@ class SqliteAlpacaClerkFacade:
                                 if decision_evidence.decision_lateness_ms is None
                                 else {"decision_lateness_ms": decision_evidence.decision_lateness_ms}
                             ),
+                            **_explanation_facts(decision_evidence),
                         }
                     ),
                 )
@@ -1886,9 +1887,17 @@ def _append_pre_custody_refusal(
                 "retention_class": "protected_refusal",
                 "trace_digest": evidence.trace_digest,
                 "decision_bar_close_ms": evidence.decision_bar_close_ms,
+                **_explanation_facts(evidence),
             }
         ),
     )
+
+
+def _explanation_facts(evidence: EffectDecisionEvidence) -> dict[str, object]:
+    """The decision explanation as a receipt fact, omitted when there is none (#2639)."""
+    if evidence.explanation is None:
+        return {}
+    return {"explanation": evidence.explanation.model_dump(mode="json")}
 
 
 def _market_enter_session_refusal(

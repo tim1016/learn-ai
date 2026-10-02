@@ -3,7 +3,7 @@
 Runs the LEAN sidecar in Polygon-source mode against a recorded
 fixture, then runs the in-process engine over the same staged LEAN
 zips via LeanMinuteDataReader. Asserts per-bar indicator state
-equivalence (state.csv == DecisionSnapshot stream) and trade-by-trade
+equivalence (state.csv == decision-explanation stream) and trade-by-trade
 equivalence.
 
 Skipped without ``LEAN_LAUNCHER_URL`` because LEAN must be reachable
@@ -34,16 +34,14 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import Direction, FillMode, OrderEvent
 from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
-from app.engine.strategy.base import DecisionSnapshot
 from tests._helpers.parity_fixture import PARITY_FIXTURE_NAME, parity_fixture_dir
 
 
 class _RecordingAlgorithm(EmaCrossoverSignalAlgorithm):
-    """Subclass that records per-bar decision snapshots AND per-trade entry quantities.
+    """Subclass that records per-bar decision explanations AND per-trade entry quantities.
 
-    Overrides ``_on_fifteen_minute_bar`` so the recording wrapper runs
-    after the parent handler (which sets ``last_decision_snapshot``)
-    and appends each snapshot to ``decision_rows``. Using a subclass
+    Overrides ``_on_fifteen_minute_bar`` so each ready bar's decision
+    explanation (#2639) is appended to ``decision_rows``. Using a subclass
     rather than monkey-patching the bound method means the consolidator
     captures the override at ``initialize()`` time -- the only path that
     actually works, because the consolidator holds a direct reference to
@@ -62,19 +60,23 @@ class _RecordingAlgorithm(EmaCrossoverSignalAlgorithm):
         self._entry_quantities: list[Decimal] = entry_quantities if entry_quantities is not None else []
 
     def _on_fifteen_minute_bar(self, bar: TradeBar) -> None:
-        super()._on_fifteen_minute_bar(bar)
-        snap: DecisionSnapshot | None = self.last_decision_snapshot
-        if snap is None:
+        decision = self.evaluate_signal_bar(bar)
+        if decision.intent is not None:
+            self.commit_signal_decision(bar, decision.intent)
+        if not decision.ready or decision.explanation is None:
             return
+        values = decision.explanation.values
+        ema_fast, ema_slow, rsi = values["ema_fast"], values["ema_slow"], values["rsi"]
+        assert ema_fast is not None and ema_slow is not None and rsi is not None
         self.decision_rows.append(
             {
-                "ts_ms_utc": snap.bar_close_ms,
-                "close": float(snap.intended_price),
-                "ema_fast": float(snap.ema5),
-                "ema_slow": float(snap.ema10),
-                "rsi": float(snap.rsi),
-                "cross_state": ("above" if snap.ema5 > snap.ema10 else "below" if snap.ema5 < snap.ema10 else "equal"),
-                "signal": snap.signal,
+                "ts_ms_utc": bar.end_ms,
+                "close": float(bar.close),
+                "ema_fast": float(ema_fast),
+                "ema_slow": float(ema_slow),
+                "rsi": float(rsi),
+                "cross_state": ("above" if ema_fast > ema_slow else "below" if ema_fast < ema_slow else "equal"),
+                "signal": decision.signal_facts["decision"],
             }
         )
 

@@ -37,6 +37,7 @@ from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.sma import SimpleMovingAverage
 from app.engine.strategy.base import LoggedTrade, Strategy
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
+from app.engine.strategy.decision_explanation import CheckRole, DecisionExplanation, ExplainedCheck
 from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.utils.timestamps import display_time
 
@@ -184,6 +185,13 @@ class SmaCrossoverAlgorithm(Strategy):
                 signal_facts={"decision": "HOLD", "timeframe": timeframe},
                 reason_evidence={"sma_short": "UNREADY", "sma_long": "UNREADY"},
                 action_plan_request=None,
+                explanation=DecisionExplanation(
+                    values={
+                        "sma_short": self._sma_short.current_value if self._sma_short.is_ready else None,
+                        "sma_long": self._sma_long.current_value if self._sma_long.is_ready else None,
+                    },
+                    holding=self._in_position,
+                ),
             )
 
         assert self._sma_short.current_value is not None
@@ -193,12 +201,35 @@ class SmaCrossoverAlgorithm(Strategy):
         long_val = self._sma_long.current_value
         current_above = short_val > long_val
         prior_in_position = self._in_position
+        # The rules every ready bar reports (#2639): entry is a fresh golden
+        # cross -- short above long now AND not above it on the bar before --
+        # and the exit is the level short <= long. "Short above long" is also
+        # the strategy's default Dark Bright Gate.
+        spread = short_val - long_val
+        above_check = ExplainedCheck(
+            check_id="short_above_long",
+            role=CheckRole.ENTRY,
+            passed=current_above,
+            observed=spread,
+            threshold=0,
+        )
+        exit_check = ExplainedCheck(
+            check_id="short_not_above_long",
+            role=CheckRole.EXIT,
+            passed=not current_above,
+            observed=spread,
+            threshold=0,
+        )
+        values: dict[str, Decimal | None] = {"sma_short": short_val, "sma_long": long_val}
 
         if self._prev_short_above_long is None:
             # First ready bar — seed the crossover state only, no trade, so
             # the first crossover we observe is a fresh one rather than
             # whatever historical state happens to sit there.
             self._prev_short_above_long = current_above
+            seeding = ExplainedCheck(
+                check_id="was_not_above", role=CheckRole.ENTRY, passed=False, observed="seeding"
+            )
             return SignalDecision(
                 intent=None,
                 ready=True,
@@ -206,9 +237,21 @@ class SmaCrossoverAlgorithm(Strategy):
                 signal_facts={"decision": "HOLD", "timeframe": timeframe},
                 reason_evidence={"sma_short": str(short_val), "sma_long": str(long_val)},
                 action_plan_request=None,
+                explanation=DecisionExplanation(
+                    values=values,
+                    checks=(above_check, seeding, *((exit_check,) if prior_in_position else ())),
+                    holding=prior_in_position,
+                ),
             )
 
-        fresh_golden_cross = current_above and not self._prev_short_above_long
+        was_not_above = ExplainedCheck(
+            check_id="was_not_above",
+            role=CheckRole.ENTRY,
+            passed=not self._prev_short_above_long,
+            observed="was_above" if self._prev_short_above_long else "was_not_above",
+        )
+        entry_checks = (above_check, was_not_above)
+        fresh_golden_cross = all(check.passed for check in entry_checks)
 
         bar_signal = "HOLD"
         intent: SignalIntent | None = None
@@ -225,7 +268,7 @@ class SmaCrossoverAlgorithm(Strategy):
             # level is false is the fresh death cross. They can diverge only
             # on a bar the edge form never reaches -- the refused-exit retry
             # this change exists to fix.
-            if not current_above:
+            if exit_check.passed:
                 intent = SignalIntent(kind=SignalIntentKind.EXIT, bar_close_ms=bar.end_ms, intended_price=bar.close)
                 bar_signal = "EXIT"
         else:
@@ -244,6 +287,11 @@ class SmaCrossoverAlgorithm(Strategy):
             reason_evidence={"sma_short": str(short_val), "sma_long": str(long_val)},
             action_plan_request=(
                 {"contract": "single_long_stock", "intent": intent.kind.value} if intent is not None else None
+            ),
+            explanation=DecisionExplanation(
+                values=values,
+                checks=(*entry_checks, *((exit_check,) if prior_in_position else ())),
+                holding=prior_in_position,
             ),
         )
 

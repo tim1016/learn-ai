@@ -71,6 +71,14 @@ from app.engine.strategy.programs.spy_strategy_c import (
     build_spy_strategy_c_signal_program,
 )
 from app.engine.strategy.signal_intent import SignalIntentKind
+from app.engine.strategy.strategy_view import (
+    ChartParamRef,
+    StrategyChartIndicator,
+    StrategyView,
+    ViewCheck,
+    ViewGate,
+    ViewValue,
+)
 from app.engine.strategy.signal_program import (
     SignalProgram,
     SignalSession,
@@ -82,21 +90,6 @@ from app.schemas.signal_program_seal import (
     SignalSeriesContract,
 )
 from app.schemas.strategy_validation import StrategyCategory
-
-
-@dataclass(frozen=True, slots=True)
-class ChartParamRef:
-    """Reference to one validated strategy parameter in a chart recipe."""
-
-    field: str
-
-
-@dataclass(frozen=True, slots=True)
-class StrategyChartIndicator:
-    """Declarative indicator recipe owned by the registered strategy."""
-
-    name: str
-    params: dict[str, int | float | ChartParamRef]
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,10 +290,12 @@ class StrategyRegistration:
     # ``symbol`` is excluded universally in ``parity_companion`` instead: every
     # twin reads it from the policy, so no registration has to say so.
     lean_data_policy_parameter_names: tuple[str, ...] = ()
-    # Evidence-chart recipe resolved from the same validated parameter model
-    # the strategy executes. Keeping this on the registration prevents the UI
-    # from guessing strategy semantics from parameter names.
-    chart_indicators: tuple[StrategyChartIndicator, ...] = ()
+    # The strategy view (#2639): the values the strategy records on every
+    # decision, the rules it checks and its default Dark Bright Gate, worded
+    # and placed once, here. Its catalogue twins are also the evidence-chart
+    # recipe, resolved from the same validated parameter model the strategy
+    # executes, so the UI never guesses strategy semantics from names.
+    strategy_view: StrategyView | None = None
     strategy_bars: StrategyBarCadence = StrategyBarCadence("minute", 1)
     # A Signal Program is optional because existing strategies may still use
     # the legacy event-handler lifecycle. When present, this is the one
@@ -444,6 +439,347 @@ def _ema_parameter_schema_version_for(params: StrategyParamsBase) -> str:
     if params.at_reference_lengths():
         return params.REFERENCE_PARAMETER_SCHEMA_VERSION
     return params.PARAMETER_SCHEMA_VERSION
+
+
+# ── Strategy views (#2639) ───────────────────────────────────────────────────
+# What each strategy shows of its decisions: the values it records, the rules
+# it checks (worded here; computed in its own evaluate step) and its default
+# Dark Bright Gate. A value/variable/gate label is formatted with the bot's
+# deployed settings; a check's wording with what the decision recorded.
+
+_RSI_BAND_CHECK = ViewCheck(
+    check_id="rsi_band",
+    label="RSI",
+    chip="RSI {observed:.1f}",
+    needs="in {low:g}–{high:g}",
+    observed="{observed:.1f}",
+)
+_ADX_EXIT_CHECK = ViewCheck(
+    check_id="adx_exit",
+    label="ADX exit",
+    chip="ADX {observed:.1f}",
+    needs="< {threshold:g}",
+    observed="{observed:.1f}",
+)
+_MACD_POSITIVE_CHECK = ViewCheck(
+    check_id="macd_positive",
+    label="MACD",
+    chip="MACD {observed:+.2f}",
+    needs="> 0",
+)
+_DECISION_COUNTDOWN_CHECK = ViewCheck(
+    check_id="exit_countdown",
+    label="Exit",
+    chip="exit in {observed}",
+    needs="at 0 bars left",
+    observed="{observed} bars left",
+)
+
+_EMA_CROSSOVER_SIGNAL_VIEW = StrategyView(
+    values=(
+        ViewValue(
+            key="ema_fast",
+            label="EMA {fast_period}",
+            variable="EMA{fast_period}",
+            catalogue=StrategyChartIndicator("ema", {"length": ChartParamRef("fast_period")}),
+        ),
+        ViewValue(
+            key="ema_slow",
+            label="EMA {slow_period}",
+            variable="EMA{slow_period}",
+            catalogue=StrategyChartIndicator("ema", {"length": ChartParamRef("slow_period")}),
+        ),
+        ViewValue(
+            key="rsi",
+            label="RSI 14",
+            variable="RSI14",
+            pane="rsi",
+            catalogue=StrategyChartIndicator("rsi", {"length": 14}),
+            band=(ChartParamRef("rsi_min"), ChartParamRef("rsi_max")),
+            decimals=1,
+        ),
+    ),
+    checks=(
+        ViewCheck(
+            check_id="fresh_cross",
+            label="Fresh cross",
+            chip="cross",
+            needs="a cross up",
+            states={
+                "crossed_up": "yes",
+                "already_above": "no, already above",
+                "not_above": "no, below",
+                "relation_unknown": "no, EMAs only just ready",
+            },
+        ),
+        ViewCheck(check_id="gap", label="Gap", chip="gap {observed:+.2f}", needs="≥ {threshold:.2f}"),
+        ViewCheck(
+            check_id="gap_bps",
+            label="Gap (bps)",
+            chip="gap {observed:+.1f} bps",
+            needs="≥ {threshold:g} bps",
+            observed="{observed:.1f}",
+        ),
+        _RSI_BAND_CHECK,
+        _DECISION_COUNTDOWN_CHECK,
+    ),
+    default_gate=ViewGate(
+        gate_id="rsi_band",
+        label="RSI in {rsi_min:g}–{rsi_max:g}",
+        expression="rsi_min ≤ RSI14 ≤ rsi_max",
+        check_id="rsi_band",
+    ),
+)
+
+_SMA_CROSSOVER_VIEW = StrategyView(
+    values=(
+        ViewValue(
+            key="sma_short",
+            label="SMA {short_window}",
+            variable="SMA{short_window}",
+            catalogue=StrategyChartIndicator("sma", {"length": ChartParamRef("short_window")}),
+        ),
+        ViewValue(
+            key="sma_long",
+            label="SMA {long_window}",
+            variable="SMA{long_window}",
+            catalogue=StrategyChartIndicator("sma", {"length": ChartParamRef("long_window")}),
+        ),
+    ),
+    checks=(
+        ViewCheck(
+            check_id="short_above_long",
+            label="Short above long",
+            chip="short {observed:+.2f}",
+            needs="SMA {short_window} > SMA {long_window}",
+        ),
+        ViewCheck(
+            check_id="was_not_above",
+            label="Fresh cross",
+            chip="cross",
+            needs="short not above long on the bar before",
+            states={
+                "was_not_above": "yes",
+                "was_above": "no, already above",
+                "seeding": "no, first ready bar",
+            },
+        ),
+        ViewCheck(
+            check_id="short_not_above_long",
+            label="Short at or below long",
+            chip="exit {observed:+.2f}",
+            needs="SMA {short_window} ≤ SMA {long_window}",
+        ),
+    ),
+    default_gate=ViewGate(
+        gate_id="short_above_long",
+        label="SMA {short_window} above SMA {long_window}",
+        expression="SMA(short) − SMA(long) > 0",
+        check_id="short_above_long",
+    ),
+)
+
+_RSI_MEAN_REVERSION_VIEW = StrategyView(
+    values=(
+        ViewValue(
+            key="rsi",
+            label="RSI {window}",
+            variable="RSI{window}",
+            pane="rsi",
+            catalogue=StrategyChartIndicator("rsi", {"length": ChartParamRef("window")}),
+            band=(ChartParamRef("oversold"), ChartParamRef("overbought")),
+            decimals=1,
+        ),
+    ),
+    checks=(
+        ViewCheck(
+            check_id="rsi_below_oversold",
+            label="RSI below oversold",
+            chip="RSI {observed:.1f}",
+            needs="< {threshold:g}",
+            observed="{observed:.1f}",
+        ),
+        ViewCheck(
+            check_id="rsi_above_overbought",
+            label="RSI above overbought",
+            chip="exit RSI {observed:.1f}",
+            needs="> {threshold:g}",
+            observed="{observed:.1f}",
+        ),
+    ),
+    default_gate=ViewGate(
+        gate_id="rsi_below_oversold",
+        label="RSI below {oversold:g}",
+        expression="RSI < oversold",
+        check_id="rsi_below_oversold",
+    ),
+)
+
+_DEPLOYMENT_VALIDATION_VIEW = StrategyView(
+    values=(),
+    checks=(
+        ViewCheck(
+            check_id="in_window",
+            label="Trading window",
+            chip="window",
+            needs="open + 15 min to close − 15 min",
+            states={
+                "inside": "inside",
+                "before_window": "before open + 15 min",
+                "after_window": "past close − 15 min",
+            },
+        ),
+        ViewCheck(
+            check_id="green_streak",
+            label="Green bars in a row",
+            chip="green {observed}",
+            needs="≥ {threshold}",
+            observed="{observed}",
+        ),
+        ViewCheck(
+            check_id="session_end",
+            label="Session end",
+            chip="session end",
+            needs="close − 15 min reached",
+            states={"reached": "reached", "not_reached": "not yet"},
+        ),
+        _DECISION_COUNTDOWN_CHECK,
+    ),
+    default_gate=ViewGate(
+        gate_id="in_window",
+        label="Inside its trading window",
+        expression="open + 15 min ≤ bar close < close − 15 min",
+        check_id="in_window",
+    ),
+)
+
+_RSI_RANGE_RSI_VALUE = ViewValue(
+    key="rsi",
+    label="RSI {rsi_period}",
+    variable="RSI{rsi_period}",
+    pane="rsi",
+    catalogue=StrategyChartIndicator("rsi", {"length": ChartParamRef("rsi_period")}),
+    band=(ChartParamRef("rsi_low_gate"), ChartParamRef("rsi_high_gate")),
+    decimals=1,
+)
+_RSI_RANGE_ADX_VALUE = ViewValue(
+    key="adx",
+    label="ADX {adx_period}",
+    variable="ADX{adx_period}",
+    pane="adx",
+    catalogue=StrategyChartIndicator("adx", {"length": ChartParamRef("adx_period")}),
+    decimals=1,
+)
+_RSI_RANGE_MACD_VALUE = ViewValue(
+    key="macd",
+    label="MACD {macd_fast}/{macd_slow}/{macd_signal}",
+    variable="MACD",
+    pane="macd",
+    catalogue=StrategyChartIndicator(
+        "macd",
+        {
+            "fast": ChartParamRef("macd_fast"),
+            "slow": ChartParamRef("macd_slow"),
+            "signal": ChartParamRef("macd_signal"),
+        },
+    ),
+)
+_RSI_RANGE_GATE = ViewGate(
+    gate_id="rsi_band",
+    label="RSI in {rsi_low_gate:g}–{rsi_high_gate:g}",
+    expression="rsi_low_gate ≤ RSI ≤ rsi_high_gate",
+    check_id="rsi_band",
+)
+_ADX_ENTRY_CHECK = ViewCheck(
+    check_id="adx_entry",
+    label="ADX",
+    chip="ADX {observed:.1f}",
+    needs="> {threshold:g}",
+    observed="{observed:.1f}",
+)
+
+_SPY_STRATEGY_A_VIEW = StrategyView(
+    values=(
+        ViewValue(
+            key="ema_fast",
+            label="EMA {ema_fast_period}",
+            variable="EMA{ema_fast_period}",
+            catalogue=StrategyChartIndicator("ema", {"length": ChartParamRef("ema_fast_period")}),
+        ),
+        ViewValue(
+            key="ema_slow",
+            label="EMA {ema_slow_period}",
+            variable="EMA{ema_slow_period}",
+            catalogue=StrategyChartIndicator("ema", {"length": ChartParamRef("ema_slow_period")}),
+        ),
+        _RSI_RANGE_MACD_VALUE,
+        _RSI_RANGE_RSI_VALUE,
+        _RSI_RANGE_ADX_VALUE,
+    ),
+    checks=(
+        _RSI_BAND_CHECK,
+        ViewCheck(check_id="ema_gap", label="EMA gap", chip="gap {observed:+.2f}", needs="> {threshold:g}"),
+        _MACD_POSITIVE_CHECK,
+        _ADX_EXIT_CHECK,
+    ),
+    default_gate=_RSI_RANGE_GATE,
+)
+
+_SPY_STRATEGY_B_VIEW = StrategyView(
+    values=(
+        ViewValue(
+            key="supertrend",
+            label="Supertrend {supertrend_atr_period}/{supertrend_multiplier:g}",
+            variable="SUPERTREND",
+            catalogue=StrategyChartIndicator(
+                "supertrend",
+                {
+                    "length": ChartParamRef("supertrend_atr_period"),
+                    "multiplier": ChartParamRef("supertrend_multiplier"),
+                },
+            ),
+        ),
+        _RSI_RANGE_MACD_VALUE,
+        _RSI_RANGE_RSI_VALUE,
+        _RSI_RANGE_ADX_VALUE,
+    ),
+    checks=(
+        _RSI_BAND_CHECK,
+        ViewCheck(
+            check_id="supertrend_long",
+            label="Supertrend",
+            chip="trend",
+            needs="long",
+            states={"long": "long", "short": "short"},
+        ),
+        _ADX_ENTRY_CHECK,
+        _MACD_POSITIVE_CHECK,
+        _ADX_EXIT_CHECK,
+    ),
+    default_gate=_RSI_RANGE_GATE,
+)
+
+_SPY_STRATEGY_C_VIEW = StrategyView(
+    values=(
+        _RSI_RANGE_RSI_VALUE,
+        _RSI_RANGE_ADX_VALUE,
+        ViewValue(key="adx_prev", label="ADX, bar before", variable="ADX_PREV", pane=None, decimals=1),
+    ),
+    checks=(
+        _RSI_BAND_CHECK,
+        _ADX_ENTRY_CHECK,
+        ViewCheck(
+            check_id="adx_rising",
+            label="ADX rising",
+            chip="ADX {observed:+.1f}",
+            needs="> the bar before",
+            observed="{observed:+.1f}",
+        ),
+        _ADX_EXIT_CHECK,
+    ),
+    default_gate=_RSI_RANGE_GATE,
+)
+
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
@@ -649,11 +985,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "15-minute label offset that is cosmetic, not a fill-time bug.",
         ],
         param_schema=EmaCrossoverSignalParams,
-        chart_indicators=(
-            StrategyChartIndicator("ema", {"length": ChartParamRef("fast_period")}),
-            StrategyChartIndicator("ema", {"length": ChartParamRef("slow_period")}),
-            StrategyChartIndicator("rsi", {"length": 14}),
-        ),
+        strategy_view=_EMA_CROSSOVER_SIGNAL_VIEW,
         strategy_bars=StrategyBarCadence("minute", 15),
         build=lambda p: build_ema_crossover_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_ema_crossover_signal_program,
@@ -821,10 +1153,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "backtests will often show only 1–4 trades.",
         ],
         param_schema=SmaCrossoverParams,
-        chart_indicators=(
-            StrategyChartIndicator("sma", {"length": ChartParamRef("short_window")}),
-            StrategyChartIndicator("sma", {"length": ChartParamRef("long_window")}),
-        ),
+        strategy_view=_SMA_CROSSOVER_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_sma_crossover_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_sma_crossover_signal_program,
@@ -977,7 +1306,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "(viewer-local-tz exports, bar-start vs bar-end labeling).",
         ],
         param_schema=RsiMeanReversionParams,
-        chart_indicators=(StrategyChartIndicator("rsi", {"length": ChartParamRef("window")}),),
+        strategy_view=_RSI_MEAN_REVERSION_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_rsi_mean_reversion_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_rsi_mean_reversion_signal_program,
@@ -1175,6 +1504,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ],
         lean_twin="deployment_validation",
         param_schema=DeploymentValidationParams,
+        strategy_view=_DEPLOYMENT_VALIDATION_VIEW,
         strategy_bars=StrategyBarCadence("minute", 1),
         hidden_params={"trade_symbol"},
         action_plan_contract="single_long_stock",
@@ -1375,20 +1705,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "No SL/TP — TV defaults. Worst-case drawdown per trade is unbounded until ADX drops below 15.",
         ],
         param_schema=RsiRangeStrategyAParams,
-        chart_indicators=(
-            StrategyChartIndicator("ema", {"length": ChartParamRef("ema_fast_period")}),
-            StrategyChartIndicator("ema", {"length": ChartParamRef("ema_slow_period")}),
-            StrategyChartIndicator(
-                "macd",
-                {
-                    "fast": ChartParamRef("macd_fast"),
-                    "slow": ChartParamRef("macd_slow"),
-                    "signal": ChartParamRef("macd_signal"),
-                },
-            ),
-            StrategyChartIndicator("rsi", {"length": ChartParamRef("rsi_period")}),
-            StrategyChartIndicator("adx", {"length": ChartParamRef("adx_period")}),
-        ),
+        strategy_view=_SPY_STRATEGY_A_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_spy_strategy_a_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_spy_strategy_a_signal_program,
@@ -1585,25 +1902,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "first possible trade.",
         ],
         param_schema=RsiRangeStrategyBParams,
-        chart_indicators=(
-            StrategyChartIndicator(
-                "supertrend",
-                {
-                    "length": ChartParamRef("supertrend_atr_period"),
-                    "multiplier": ChartParamRef("supertrend_multiplier"),
-                },
-            ),
-            StrategyChartIndicator(
-                "macd",
-                {
-                    "fast": ChartParamRef("macd_fast"),
-                    "slow": ChartParamRef("macd_slow"),
-                    "signal": ChartParamRef("macd_signal"),
-                },
-            ),
-            StrategyChartIndicator("rsi", {"length": ChartParamRef("rsi_period")}),
-            StrategyChartIndicator("adx", {"length": ChartParamRef("adx_period")}),
-        ),
+        strategy_view=_SPY_STRATEGY_B_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_spy_strategy_b_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_spy_strategy_b_signal_program,
@@ -1777,10 +2076,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "TV screenshot had C's exit rule cropped; we inherit A's.",
         ],
         param_schema=RsiRangeStrategyCParams,
-        chart_indicators=(
-            StrategyChartIndicator("rsi", {"length": ChartParamRef("rsi_period")}),
-            StrategyChartIndicator("adx", {"length": ChartParamRef("adx_period")}),
-        ),
+        strategy_view=_SPY_STRATEGY_C_VIEW,
         strategy_bars=StrategyBarCadence("minute", ChartParamRef("resolution_minutes")),
         build=lambda p: build_spy_strategy_c_signal_program(p).strategy,  # type: ignore[return-value]
         signal_program_factory=build_spy_strategy_c_signal_program,
