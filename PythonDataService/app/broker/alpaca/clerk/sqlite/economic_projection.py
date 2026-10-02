@@ -46,6 +46,7 @@ from app.broker.alpaca.clerk.fifo_pnl import (
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import ZERO, money_context
 from app.broker.alpaca.clerk.sqlite.custody_subjects import BOT_SUBJECT_PREFIX
+from app.broker.alpaca.clerk.sqlite.decision_receipts import MAX_DECISION_RECEIPTS_PER_STRATEGY
 from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
     AccountPnlAttribution,
     EconomicSnapshot,
@@ -59,6 +60,8 @@ from app.broker.alpaca.clerk.sqlite.economic_projection_models import (
     FillPage,
     FillWindowProjection,
     MarketMark,
+    RunActivity,
+    RunScope,
     SessionEconomicProjection,
 )
 from app.broker.alpaca.clerk.sqlite.models import ControlMetaSnapshot
@@ -605,6 +608,7 @@ class SqliteEconomicProjectionReader:
         session_window: SessionWindow | None,
         marks: Mapping[str, MarketMark] | None = None,
         recent_fill_limit: int = DEFAULT_RECENT_FILL_LIMIT,
+        run: RunScope | None = None,
     ) -> SessionEconomicProjection | None:
         """Return a chart-safe fill set and economics from one SQLite revision.
 
@@ -612,7 +616,8 @@ class SqliteEconomicProjectionReader:
         denotes a non-NYSE date and returns verified zero session metrics.
         Callers use ``snapshot`` for panel economics and ``session_fills`` for
         chart markers; no JSONL-derived fill source may be combined with this
-        result.
+        result. ``run`` also returns that run's fills and activity, from the
+        same revision.
         """
         recent_fill_limit = _bounded_limit(recent_fill_limit)
         with self._read_transaction():
@@ -621,6 +626,7 @@ class SqliteEconomicProjectionReader:
                 session_window=session_window,
                 marks=marks,
                 recent_fill_limit=recent_fill_limit,
+                run=run,
             )
 
     def _project_bot_session_economics(
@@ -630,6 +636,7 @@ class SqliteEconomicProjectionReader:
         session_window: SessionWindow | None,
         marks: Mapping[str, MarketMark] | None,
         recent_fill_limit: int,
+        run: RunScope | None = None,
     ) -> SessionEconomicProjection | None:
         """Project one bot while the caller holds this reader's read transaction."""
         meta = self._verified_meta()
@@ -709,7 +716,56 @@ class SqliteEconomicProjectionReader:
                 decision_activity_at_ms,
             ),
         )
-        return SessionEconomicProjection(snapshot=snapshot, session_fills=session_fills)
+        if run is None:
+            return SessionEconomicProjection(snapshot=snapshot, session_fills=session_fills)
+        run_orders = self._run_order_states(strategy_instance_id, run)
+        return SessionEconomicProjection(
+            snapshot=snapshot,
+            session_fills=session_fills,
+            run_fills=tuple(record for record in records if record.order_ref in run_orders),
+            run_activity=RunActivity(
+                *self._run_decisions(strategy_instance_id, since_ms=run.started_at_ms),
+                orders_sent=sum(state is not None for state in run_orders.values()),
+            ),
+        )
+
+    def _run_order_states(self, strategy_instance_id: str, run: RunScope) -> dict[str, str | None]:
+        """The run's orders and the broker's last reported state of each.
+
+        An order is the run's when its effect operation names the run
+        (``orders -> effect_operations.run_id``), as Bot history counts it;
+        work done for the bot after its run ended names none. The broker has
+        reported an order at all once it has a state: History's *sent*.
+        """
+        rows = self._conn.execute(
+            "SELECT o.order_ref, o.broker_state FROM orders o "
+            "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+            "JOIN runs r ON r.run_id = e.run_id "
+            "WHERE r.strategy_instance_id = ? AND r.lifecycle_run_id = ?",
+            (strategy_instance_id, run.lifecycle_run_id),
+        )
+        return {str(row["order_ref"]): row["broker_state"] for row in rows}
+
+    def _run_decisions(self, strategy_instance_id: str, *, since_ms: int) -> tuple[int, bool]:
+        """The decisions the bot recorded since ``since_ms``, and whether that count is a floor.
+
+        Decision receipts name no run, so a run's are those since it started.
+        Retention deletes ordinary receipts at or below the newest sequence
+        minus ``MAX_DECISION_RECEIPTS_PER_STRATEGY``; when the oldest receipt it
+        must keep is the run's own, earlier ones of the run may be gone.
+        """
+        decisions, newest = self._conn.execute(
+            "SELECT SUM(observed_at_ms >= ?), MAX(seq) FROM decision_receipts WHERE strategy_instance_id = ?",
+            (since_ms, strategy_instance_id),
+        ).fetchone()
+        cutoff = 0 if newest is None else int(newest) - MAX_DECISION_RECEIPTS_PER_STRATEGY
+        if cutoff < 1:
+            return int(decisions or 0), False
+        oldest_kept = self._conn.execute(
+            "SELECT observed_at_ms FROM decision_receipts WHERE strategy_instance_id = ? AND seq = ?",
+            (strategy_instance_id, cutoff + 1),
+        ).fetchone()
+        return int(decisions or 0), oldest_kept is None or int(oldest_kept[0]) >= since_ms
 
     def catalog_economic_rollup(
         self,
@@ -1436,6 +1492,8 @@ __all__ = [
     "FillWindowProjection",
     "InvalidEconomicCursor",
     "MarketMark",
+    "RunActivity",
+    "RunScope",
     "SessionEconomicProjection",
     "SqliteEconomicProjectionReader",
 ]

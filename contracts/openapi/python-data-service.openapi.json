@@ -4491,6 +4491,17 @@
             ],
             "title": "Default End At Ms"
           },
+          "edit_refusal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edit Refusal"
+          },
           "editable": {
             "title": "Editable",
             "type": "boolean"
@@ -4644,6 +4655,32 @@
           "last_bar_at_ms"
         ],
         "title": "BotHealthCard",
+        "type": "object"
+      },
+      "BotHealthGroupsView": {
+        "additionalProperties": false,
+        "description": "Health in two groups: what happened during this run, and the account right now.",
+        "properties": {
+          "account": {
+            "items": {
+              "$ref": "#/components/schemas/HealthLineView"
+            },
+            "title": "Account",
+            "type": "array"
+          },
+          "run": {
+            "items": {
+              "$ref": "#/components/schemas/HealthLineView"
+            },
+            "title": "Run",
+            "type": "array"
+          }
+        },
+        "required": [
+          "run",
+          "account"
+        ],
+        "title": "BotHealthGroupsView",
         "type": "object"
       },
       "BotHistoryBot": {
@@ -5004,6 +5041,74 @@
         "title": "BotHistoryRun",
         "type": "object"
       },
+      "BotOwnStatusView": {
+        "additionalProperties": false,
+        "description": "One status the bot owns, its label, and why when it needs attention.",
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "finished",
+              "ended_holding",
+              "needs_attention"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "label",
+          "reason"
+        ],
+        "title": "BotOwnStatusView",
+        "type": "object"
+      },
+      "BotPageView": {
+        "additionalProperties": false,
+        "description": "What the bot page leads with: status, summary, toolbar and health.",
+        "properties": {
+          "health": {
+            "$ref": "#/components/schemas/BotHealthGroupsView"
+          },
+          "status": {
+            "$ref": "#/components/schemas/BotOwnStatusView"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/RunSummaryView"
+          },
+          "toolbar": {
+            "items": {
+              "$ref": "#/components/schemas/ToolbarActionView"
+            },
+            "title": "Toolbar",
+            "type": "array"
+          }
+        },
+        "required": [
+          "status",
+          "summary",
+          "toolbar",
+          "health"
+        ],
+        "title": "BotPageView",
+        "type": "object"
+      },
       "BotPanelLiveSnapshot": {
         "description": "Versioned complete state document used by REST bootstrap and SSE.",
         "properties": {
@@ -5045,6 +5150,16 @@
             },
             "title": "Actions",
             "type": "array"
+          },
+          "bot_page": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BotPageView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "broker": {
             "title": "Broker",
@@ -5252,6 +5367,20 @@
           "revision": {
             "title": "Revision",
             "type": "integer"
+          },
+          "run_fills": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ChartFillMarker"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Fills"
           },
           "sealed_program": {
             "anyOf": [
@@ -23824,6 +23953,87 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HealthLineView": {
+        "additionalProperties": false,
+        "description": "One health fact: what it is, its state, a short value and the backend's note.",
+        "properties": {
+          "at_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At Ms"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "state": {
+            "enum": [
+              "ok",
+              "attention",
+              "problem",
+              "idle"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "state",
+          "value"
+        ],
+        "title": "HealthLineView",
+        "type": "object"
+      },
+      "HeldPositionFact": {
+        "additionalProperties": false,
+        "description": "Shares a bot still holds: the symbol, and the quantity as the owner reads it.",
+        "properties": {
+          "quantity": {
+            "title": "Quantity",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "quantity"
+        ],
+        "title": "HeldPositionFact",
+        "type": "object"
+      },
       "HistogramBinModel": {
         "properties": {
           "count": {
@@ -30477,6 +30687,11 @@
             "title": "Label",
             "type": "string"
           },
+          "needed": {
+            "default": true,
+            "title": "Needed",
+            "type": "boolean"
+          },
           "revision": {
             "title": "Revision",
             "type": "integer"
@@ -35769,6 +35984,174 @@
           "total_return_pct"
         ],
         "title": "RunMetrics",
+        "type": "object"
+      },
+      "RunSummaryFacts": {
+        "additionalProperties": false,
+        "description": "The run facts the summary line is written from; the same facts give the same line.",
+        "properties": {
+          "authored_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Authored At Ms",
+            "type": "integer"
+          },
+          "decision_count": {
+            "minimum": 0.0,
+            "title": "Decision Count",
+            "type": "integer"
+          },
+          "decision_count_is_floor": {
+            "default": false,
+            "title": "Decision Count Is Floor",
+            "type": "boolean"
+          },
+          "ended_at_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At Ms"
+          },
+          "ending": {
+            "enum": [
+              "not_started",
+              "running",
+              "ended",
+              "on_schedule",
+              "stopped",
+              "halted",
+              "crashed",
+              "failed_to_start",
+              "exited_unverified",
+              "retired",
+              "unreadable"
+            ],
+            "title": "Ending",
+            "type": "string"
+          },
+          "exit_queued": {
+            "title": "Exit Queued",
+            "type": "boolean"
+          },
+          "held": {
+            "items": {
+              "$ref": "#/components/schemas/HeldPositionFact"
+            },
+            "title": "Held",
+            "type": "array"
+          },
+          "returned_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Returned Usd"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "scheduled_end_at_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled End At Ms"
+          },
+          "set_aside_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set Aside Usd"
+          },
+          "started_at_ms": {
+            "anyOf": [
+              {
+                "format": "int64",
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At Ms"
+          },
+          "trade_count": {
+            "minimum": 0.0,
+            "title": "Trade Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id",
+          "ending",
+          "decision_count",
+          "trade_count",
+          "set_aside_usd",
+          "returned_usd",
+          "held",
+          "exit_queued",
+          "authored_at_ms"
+        ],
+        "title": "RunSummaryFacts",
+        "type": "object"
+      },
+      "RunSummaryView": {
+        "additionalProperties": false,
+        "description": "The summary line, the facts it was written from and the template that wrote it.",
+        "properties": {
+          "facts": {
+            "$ref": "#/components/schemas/RunSummaryFacts"
+          },
+          "template_version": {
+            "title": "Template Version",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "template_version",
+          "facts"
+        ],
+        "title": "RunSummaryView",
         "type": "object"
       },
       "RunTrade": {
@@ -41448,6 +41831,81 @@
           "note"
         ],
         "title": "ToleranceResponse",
+        "type": "object"
+      },
+      "ToolbarActionView": {
+        "additionalProperties": false,
+        "description": "One action on the bot page: offered now, blocked with its reason, or not needed.",
+        "properties": {
+          "action_id": {
+            "enum": [
+              "stop_bot_decisions",
+              "prepare_safe_flatten",
+              "change_end",
+              "deploy_again",
+              "archive",
+              "manual_order",
+              "reconcile_now",
+              "cancel_verified_working_orders",
+              "discharge_attributed_residue",
+              "recover_exact_execution_evidence",
+              "resolve_execution_coverage",
+              "open_custody_timeline",
+              "build_proof"
+            ],
+            "title": "Action Id",
+            "type": "string"
+          },
+          "availability": {
+            "enum": [
+              "available",
+              "blocked",
+              "not_needed"
+            ],
+            "title": "Availability",
+            "type": "string"
+          },
+          "group": {
+            "enum": [
+              "bot",
+              "fix",
+              "inspect"
+            ],
+            "title": "Group",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "primary": {
+            "default": false,
+            "title": "Primary",
+            "type": "boolean"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "tone": {
+            "enum": [
+              "danger",
+              "warning",
+              "neutral"
+            ],
+            "title": "Tone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action_id",
+          "label",
+          "group",
+          "availability",
+          "reason",
+          "tone"
+        ],
+        "title": "ToolbarActionView",
         "type": "object"
       },
       "TopOfBookQuote": {

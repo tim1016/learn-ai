@@ -121,6 +121,8 @@ class _Decision:
     next_step: str
     token_facts: object
     execution_ref: str | None = None
+    # False when there is nothing for the action to do (see ``RecoveryCapability.needed``).
+    needed: bool = True
 
 
 @dataclass(frozen=True)
@@ -550,6 +552,7 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
             ),
             token_facts=[(run.run_id, run.lifecycle_run_id, run.state) for run in active_runs],
             execution_ref=(active_runs[0].lifecycle_run_id if available else None),
+            needed=bool(active_runs),
         )
     if action_id == "cancel_verified_working_orders":
         orders = _working_orders(ctx)
@@ -587,6 +590,9 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
                 (order.order_ref, order.broker_order_id, order.broker_state, order.updated_at_ms)
                 for order in orders
             ],
+            # Needed while any order may still fill, verified or not: one the
+            # broker has not acknowledged, or one held or pending replace.
+            needed=any(order.may_fill for order in ctx.current_orders),
         )
     if action_id == "prepare_safe_flatten":
         return _safe_flatten_decision(ctx)
@@ -655,6 +661,7 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
         available=available,
         reason_code=reason_code,
         reason=reason,
+        needed=reason_code != "NO_ATTRIBUTED_EXPOSURE",
         freshness=reconciliation_evidence.freshness,
         evidence=(reconciliation_evidence,),
         next_step=(
@@ -846,6 +853,9 @@ def _residue_discharge_decision(ctx: RecoveryPolicyContext) -> _Decision:
         available=available,
         reason_code=reason_code,
         reason=reason,
+        # Nothing to write off with nothing held, no stranded exit naming the
+        # bot (whatever its scope), or a broker that holds the shares too.
+        needed=bool(positions) and bool(episodes) and reason_code != "BROKER_AGREES_WITH_CUSTODY",
         freshness="not_required",
         evidence=evidence,
         next_step=next_step,
@@ -892,9 +902,15 @@ def _historical_execution_recovery_decision(ctx: RecoveryPolicyContext) -> _Deci
     )
 
 
+# Coverage refusals that mean the action has nothing to do: no conflict, or a
+# missing fill whose exact evidence the Clerk already holds (resolve it instead).
+_COVERAGE_NOTHING_TO_DO = frozenset({"NO_EXECUTION_COVERAGE_CONFLICT", "EXACT_EVIDENCE_ALREADY_AVAILABLE"})
+
+
 def _coverage_decision(decision: ExecutionCoverageRecoveryDecision) -> _Decision:
     return _Decision(
         available=decision.available,
+        needed=decision.reason_code not in _COVERAGE_NOTHING_TO_DO,
         reason_code=decision.reason_code,
         reason=decision.reason,
         freshness=decision.freshness,
@@ -990,6 +1006,7 @@ def build_recovery_catalog(ctx: RecoveryPolicyContext) -> tuple[RecoveryCapabili
                 execution_ref=decision.execution_ref,
                 mutation=descriptor.mutation,
                 primary=False,
+                needed=decision.needed,
             )
         )
     primary_id = _primary_action_id(capabilities)

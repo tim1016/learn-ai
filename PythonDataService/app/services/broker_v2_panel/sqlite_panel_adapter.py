@@ -127,7 +127,7 @@ def adapt_sqlite_panel(
     ]
     checks = [_readiness_check(item, projection.generated_at_ms) for item in projection.recovery_actions]
     ready_count = sum(check.ready for check in checks)
-    recovery_cure = _recovery_cure(projection, bot_owns_problem=_has_bot_scoped_custody_problem(projection))
+    recovery_cure = _recovery_cure(projection, bot_owns_problem=has_bot_scoped_custody_problem(projection))
     exposure = {
         position.symbol: position.attributed_qty
         for position in projection.positions
@@ -172,7 +172,7 @@ def adapt_sqlite_panel(
                 []
                 if economics is None
                 else [
-                    _recent_fill_view(
+                    recent_fill_view(
                         fill,
                         authority_account_id=projection.account_id,
                         repository=repository,
@@ -217,7 +217,7 @@ def _lifecycle_actions(panel: BotPanelView, projection: ClerkProjection) -> list
     ]
 
 
-def _has_bot_scoped_custody_problem(projection: ClerkProjection) -> bool:
+def has_bot_scoped_custody_problem(projection: ClerkProjection) -> bool:
     """True when THIS bot -- not the account -- owns a custody problem.
 
     ``ClerkSqliteProjectionReader._holds`` and ``._uncertainties`` deliberately
@@ -289,7 +289,7 @@ def _catalog_row_action(
     so renaming one cannot leave a stale literal here silently re-surfacing the
     button.
     """
-    bot_owns_problem = _has_bot_scoped_custody_problem(projection)
+    bot_owns_problem = has_bot_scoped_custody_problem(projection)
     if not row_needs_attention and not bot_owns_problem:
         return None
     cure = _recovery_cure(projection, bot_owns_problem=bot_owns_problem)
@@ -582,6 +582,7 @@ def _panel_action(
         revision=revision,
         concurrency_token=capability.concurrency_token,
         evidence_refs=[evidence.reference for evidence in capability.evidence],
+        needed=capability.needed,
     )
 
 
@@ -792,17 +793,15 @@ def _is_working(order: ProjectedOrder) -> bool:
     return order.broker_order_id is not None and (order.broker_state or "").lower() in _WORKING_BROKER_STATES
 
 
-_TERMINAL_BROKER_STATES = frozenset({"filled", "canceled", "expired", "rejected", "replaced", "done_for_day"})
-
-
 def _may_still_fill(order: ProjectedOrder) -> bool:
-    """Any order the broker has not finished, including one it has not yet acknowledged.
+    """Any order that has not ended, including one the broker has not yet acknowledged.
 
     Wider than the working-order list on purpose: ``held``, ``pending_replace``,
     ``accepted_for_bidding`` and an order captured but not yet acknowledged can
-    all still fill into a position the refused run will not manage.
+    all still fill into a position the refused run will not manage. The one
+    definition (``order_projection.ORDER_OPEN_SQL``) is read with the order.
     """
-    return (order.broker_state or "").lower() not in _TERMINAL_BROKER_STATES
+    return order.may_fill
 
 
 def _with_terminal_exposure_notices(panel: BotPanelView, projection: ClerkProjection) -> BotHealthCard:
@@ -837,7 +836,7 @@ def terminal_exposure_notices(
             closing = (
                 "The Clerk is still working this bot's exit order; Flatten becomes available "
                 "if that order ends without closing the position."
-                if _exit_in_progress(projection, sid)
+                if exit_in_progress(projection, sid)
                 else "Use Flatten to close this position."
             )
             notices.append(
@@ -863,7 +862,7 @@ def terminal_exposure_notices(
     }) for notice in notices]
 
 
-def _exit_in_progress(projection: ClerkProjection, sid: str) -> bool:
+def exit_in_progress(projection: ClerkProjection, sid: str) -> bool:
     """The Clerk keeps working an ended run's exit (#2504), so Flatten waits for it."""
     return any(
         operation.kind == "EXIT" and operation.state in NONTERMINAL_EFFECT_STATES
@@ -936,7 +935,7 @@ def _working_order_view(
     )
 
 
-def _recent_fill_view(
+def recent_fill_view(
     fill: FillRecord,
     *,
     authority_account_id: str,
@@ -1203,4 +1202,7 @@ __all__ = [
     "adapt_sqlite_catalog",
     "adapt_sqlite_panel",
     "build_sqlite_catalog",
+    "exit_in_progress",
+    "has_bot_scoped_custody_problem",
+    "recent_fill_view",
 ]

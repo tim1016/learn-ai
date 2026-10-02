@@ -40,6 +40,7 @@ from app.schemas.account_authority import (
 from app.schemas.alpaca_clerk_sqlite import ExposureNoticeView, RecoveryStatusResponse
 from app.schemas.bot_end import BotEndView
 from app.schemas.bot_history import BotHistoryStatus
+from app.schemas.bot_page import BotPageView
 from app.schemas.exit_terms import ExitTerms
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 from app.schemas.run_admission import ProgramBuildAdmissionFact
@@ -139,6 +140,10 @@ class PanelAction(BaseModel):
     # route these into Clerk timeline filters but never derives a recovery
     # capability from them.
     evidence_refs: list[str] = Field(default_factory=list)
+    # False when the action has nothing to do now, rather than being needed
+    # and gated: the bot page shows it as "Not needed", not as a blocker
+    # (#2794). Decided by the recovery policy where it writes the reason.
+    needed: bool = True
 
 
 BotGroup = Literal["running", "holding", "finished", "dry_run"]
@@ -716,6 +721,16 @@ class BotPanelView(BaseModel):
     # Authored by ``panel_projection_service.open_pnl_fields``.
     open_pnl_usd: str | None
     open_pnl_direction: OpenPnlDirection | None
+    # What the bot page leads with (#2794): the bot's own status, its run's
+    # summary line, the toolbar and health in two groups. ``None`` where the
+    # panel is not projected from a SQLite authority.
+    bot_page: BotPageView | None = None
+    # The latest run's newest fills (at most ``RUN_FILL_LIMIT``), oldest
+    # first, as chart markers: the page is one bot's, on its one symbol, so a
+    # marker carries no symbol or authority stamp. Labelled with the run's date
+    # (``bot_page.summary.facts.started_at_ms``), never "today" (#2794 R8).
+    # ``None`` exactly when ``bot_page`` is.
+    run_fills: list[ChartFillMarker] | None = None
 
     @model_validator(mode="after")
     def _open_pnl_is_authored_with_its_figure(self) -> BotPanelView:

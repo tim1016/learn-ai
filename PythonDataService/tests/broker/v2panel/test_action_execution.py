@@ -730,6 +730,9 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
         def bot_end(self, _broker: str, _sid: str):
             return None
 
+        def current_run(self, _broker: str, _sid: str):
+            return SimpleNamespace(run_id="run-1", started_at_ms=0, terminal_outcome=None)
+
         def binding_for_control(self, _broker: str, sid: str):
             return SimpleNamespace(
                 strategy_instance_id=sid, run_id="run-1", symbol="SPY", use_rth=True,
@@ -789,6 +792,7 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
     monkeypatch.setattr(panel_data_source, "custody_bot_status", lambda *_args, **_kwargs: "running")
     monkeypatch.setattr(panel_data_source, "build_panel", lambda *_args, **_kwargs: SimpleNamespace())
     monkeypatch.setattr(panel_data_source, "adapt_sqlite_panel", lambda panel, *_args, **_kwargs: panel)
+    monkeypatch.setattr(panel_data_source, "_with_bot_page", lambda panel, *_args, **_kwargs: panel)
 
     try:
         await panel_data_source.get_panel("alpaca", "account-1", _SID)

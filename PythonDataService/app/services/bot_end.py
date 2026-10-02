@@ -176,7 +176,9 @@ def bot_end_view(
     unless its hours allow it no end (:func:`_hours_refusal`).
     """
     pending = None if recorded is None else recorded.pending()
-    editable = end_edit_refusal(pending, running=running, now_ms=now_ms) is None
+    refusal = end_edit_refusal(pending, running=running, now_ms=now_ms)
+    editable = refusal is None
+    edit_refusal = None if refusal is None else str(refusal)
     if recorded is None:
         offers_default = editable and _hours_refusal(use_rth=use_rth) is None
         return BotEndView(
@@ -187,7 +189,7 @@ def bot_end_view(
                 if running
                 else "This bot is stopped, so it has no end: a Stop cancels any end, and nothing is sold at it."
             ),
-            notice=notice, editable=editable,
+            notice=notice, editable=editable, edit_refusal=edit_refusal,
             default_end_at_ms=default_bot_end(now_ms).end_at_ms if offers_default else None,
         )
     if recorded.carried_out_at_ms is not None:
@@ -205,7 +207,7 @@ def bot_end_view(
             status, recorded.end_action, et_when_words(recorded.end_at_ms, now_ms=now_ms),
             dry_run=dry_run, running=running,
         ),
-        notice=notice, editable=editable, default_end_at_ms=None,
+        notice=notice, editable=editable, edit_refusal=edit_refusal, default_end_at_ms=None,
     )
 
 

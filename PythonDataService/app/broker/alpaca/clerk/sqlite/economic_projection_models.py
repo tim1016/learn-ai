@@ -172,11 +172,38 @@ class EconomicSnapshot:
 
 
 @dataclass(frozen=True)
+class RunScope:
+    """The run a bot-page read is about (#2794): the runner's run id and its start."""
+
+    lifecycle_run_id: str
+    started_at_ms: int
+
+
+@dataclass(frozen=True)
+class RunActivity:
+    """One run's decisions and the orders it sent."""
+
+    decisions: int
+    # The Clerk keeps a bot's newest ``MAX_DECISION_RECEIPTS_PER_STRATEGY``
+    # ordinary decision receipts; once that window starts inside the run, its
+    # earliest decisions may be gone and ``decisions`` is a floor.
+    decisions_is_floor: bool
+    orders_sent: int
+
+
+@dataclass(frozen=True)
 class SessionEconomicProjection:
-    """One revision-bound economic snapshot and its complete session markers."""
+    """One revision-bound economic snapshot and its complete session markers.
+
+    For the run the caller named (the bot page's run, #2794), ``run_fills``
+    are its fills, oldest first, and ``run_activity`` its decisions and
+    orders, from the same revision; empty when it named none.
+    """
 
     snapshot: EconomicSnapshot
     session_fills: tuple[FillRecord, ...]
+    run_fills: tuple[FillRecord, ...] = ()
+    run_activity: RunActivity | None = None
 
 
 @dataclass(frozen=True)
