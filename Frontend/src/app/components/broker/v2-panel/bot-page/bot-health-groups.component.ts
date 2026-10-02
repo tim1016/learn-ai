@@ -48,8 +48,10 @@ export class BotHealthGroupsComponent {
     return explanation !== null && !said.has(explanation) ? explanation : null;
   });
 
-  protected readonly groups = computed((): readonly { title: string; lines: readonly HealthLineView[] }[] => [
-    { title: 'During this run', lines: this.health().run },
-    { title: 'Account right now', lines: this.health().account },
-  ]);
+  protected readonly groups = computed(
+    (): readonly { key: 'run' | 'account'; title: string; lines: readonly HealthLineView[] }[] => [
+      { key: 'run', title: 'During this run', lines: this.health().run },
+      { key: 'account', title: 'Account right now', lines: this.health().account },
+    ],
+  );
 }

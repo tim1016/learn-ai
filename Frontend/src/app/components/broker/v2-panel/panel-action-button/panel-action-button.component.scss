@@ -43,14 +43,17 @@
   color: var(--text-on-accent);
 }
 
+// Dark text on red and amber, as the app's other filled warnings use: white is unreadable there.
 .panel-action__button--filled.panel-action__button--danger {
   border-color: var(--bear);
   background: var(--bear);
+  color: var(--bg-canvas);
 }
 
 .panel-action__button--filled.panel-action__button--warning {
   border-color: var(--warn);
   background: var(--warn);
+  color: var(--bg-canvas);
 }
 
 // The primary action button stays natively focusable even when blocked, so

@@ -1,6 +1,6 @@
 <section class="health" aria-labelledby="bot-health-title">
   <h3 id="bot-health-title" class="panel-title">Health</h3>
-  @for (group of groups(); track group.title) {
+  @for (group of groups(); track group.key) {
     <h4 class="health__group">{{ group.title }}</h4>
     <ul class="health__lines" [attr.aria-label]="group.title">
       @for (line of group.lines; track line.key) {
@@ -19,7 +19,7 @@
         </li>
       }
     </ul>
-    @if ($first) {
+    @if (group.key === 'run') {
       @if (startupJoin(); as join) {
         <app-startup-join-status class="health__join" [view]="join" />
       }
