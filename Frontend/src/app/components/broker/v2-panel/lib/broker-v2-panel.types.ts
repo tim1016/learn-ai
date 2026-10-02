@@ -146,6 +146,22 @@ export type ChartLiveResponse = components['schemas']['ChartLiveResponse'];
 export type ChartFeedView = components['schemas']['ChartFeedView'];
 export type ChartHistoryResponse = components['schemas']['ChartHistoryResponse'];
 
+// ── Strategy view (#2639) ────────────────────────────────────────────────────
+// The bot's own decision bars, values, checks and Dark Bright Gate results in
+// one read. Every label, chip and sentence is backend-authored; the browser
+// draws them and does no gate arithmetic.
+
+export type StrategyViewResponse = components['schemas']['StrategyViewResponse'];
+/** One decision bar, labelled by its close (`bar_close_ms`). */
+export type StrategyViewCandle = components['schemas']['StrategyViewCandle'];
+export type StrategyViewDeclarationView = components['schemas']['StrategyViewDeclarationView'];
+export type StrategyViewGateView = components['schemas']['StrategyViewGateView'];
+/** `pane` is `"price"` for an overlay, another id for its own pane, `null` for listed-only. */
+export type StrategyViewValueSpec = components['schemas']['StrategyViewValueSpec'];
+export type DecisionExplanationView = components['schemas']['DecisionExplanationView'];
+export type ExplainedCheckView = components['schemas']['ExplainedCheckView'];
+export type ExplainedValueView = components['schemas']['ExplainedValueView'];
+
 export type BotPanelLiveSnapshot = components['schemas']['BotPanelLiveSnapshot'];
 /** Why the live snapshot is withheld; `PRODUCER_STALLED` is the typed stale state (#2353). */
 export type LiveSnapshotUnavailableDetail = components['schemas']['LiveSnapshotUnavailableDetail'];

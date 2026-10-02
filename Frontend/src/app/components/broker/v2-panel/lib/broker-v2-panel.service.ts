@@ -35,6 +35,7 @@ import type {
   PanelActionResult,
   PanelProfile,
   PanelQuiesceActionId,
+  StrategyViewResponse,
 } from './broker-v2-panel.types';
 
 /** Keyed by the generated quiesce action union (the backend's
@@ -548,6 +549,14 @@ export class BrokerV2PanelService {
         operationUrl('bot_chart_history', { ...target, sid }),
         { params },
       ),
+    );
+  }
+
+  /** The bot's strategy view (#2639): its own decision candles, recorded
+   * values, worded checks and each gate's result, for its current run. */
+  getStrategyView(target: ResourceTarget, sid: string): Promise<StrategyViewResponse> {
+    return firstValueFrom(
+      this.http.get<StrategyViewResponse>(operationUrl('bot_strategy_view', { ...target, sid })),
     );
   }
 
