@@ -118,7 +118,7 @@ def test_format_volume_refuses_a_float():
         format_volume(9238.22128)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("text", ["", "abc", "-1", "NaN", "Infinity"])
-def test_parse_volume_refuses_a_malformed_column(text: str):
+@pytest.mark.parametrize("text", ["", "abc", "-1", "NaN", "Infinity", "1E+3", "+5", " 5", "1.50", "007"])
+def test_parse_volume_reads_only_what_format_volume_writes(text: str):
     with pytest.raises(ValueError):
         parse_volume(text)

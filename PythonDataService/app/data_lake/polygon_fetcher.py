@@ -32,13 +32,25 @@ POLYGON_HISTORY_YEARS = 5
 #: ET midnight inside the entitlement when the worker issues the call.
 _HISTORY_FLOOR_MARGIN_DAYS = 2
 
-#: The first session whose aggregate ``v`` carries fractional shares: the SIPs
-#: began reporting fractional quantities on 2026-02-23. Probed 2026-10-01 on
-#: SPY: every session through 2026-02-20 has whole-share volume, 2026-02-23
-#: has fractional. Lake days on or after it that were captured before the lake
-#: stored exact volume hold whole shares rounded down; their data contract
-#: (``ensure_data._minute_trade_dch``) no longer matches, so they re-fetch.
+#: The first session whose raw aggregate ``v`` carries fractional shares: the
+#: SIPs began reporting fractional quantities on 2026-02-23. Probed 2026-10-01
+#: on SPY: every session through 2026-02-20 has whole-share volume, 2026-02-23
+#: has fractional.
 FRACTIONAL_VOLUME_START = date(2026, 2, 23)
+
+
+def volume_may_be_fractional(trading_date: date, *, adjusted: bool) -> bool:
+    """Can Polygon's ``v`` for this session carry a fraction of a share?
+
+    Raw volume can from :data:`FRACTIONAL_VOLUME_START` on. Split-adjusted
+    volume can on any date: a reverse split divides the earlier sessions'
+    volume (probed 2026-10-01: SIRI 2024-09-06, before its 1-for-10 split,
+    raw ``v`` 36991, adjusted 3699.1). Lake days this answers ``True`` for
+    that were captured before the lake stored exact volume may hold whole
+    shares rounded down, so their data contract
+    (``ensure_data._minute_trade_dch``) re-fetches them.
+    """
+    return adjusted or trading_date >= FRACTIONAL_VOLUME_START
 
 
 def polygon_history_floor(today: date) -> date:

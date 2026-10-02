@@ -329,8 +329,8 @@ class TestClaimAndCompleteMetadataRowReclaimRace:
             sha256=hashlib.sha256(mh_path.read_bytes()).hexdigest(),
         )
 
-        stale_snapshot = ArtifactClaimState(id=42, status="failed", attempt_count=1, last_error="boom")
-        fresh_after_race = ArtifactClaimState(id=42, status="fetching", attempt_count=2, last_error=None)
+        stale_snapshot = ArtifactClaimState(id=42, status="failed", attempt_count=1, last_error="boom", data_contract_hash=None)
+        fresh_after_race = ArtifactClaimState(id=42, status="fetching", attempt_count=2, last_error=None, data_contract_hash=None)
         claim_state_calls = {"n": 0}
 
         async def fake_claim_metadata_artifact(**_kwargs):

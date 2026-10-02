@@ -204,6 +204,7 @@ class FakeCatalog:
             status=row["status"],
             attempt_count=row["attempt_count"],
             last_error=row["last_error"],
+            data_contract_hash=row["data_contract_hash"],
         )
 
     async def mark_metadata_artifacts_stale_for_path(
@@ -262,10 +263,12 @@ class FakeCatalog:
             status=row["status"],
             attempt_count=row["attempt_count"],
             last_error=row["last_error"],
+            data_contract_hash=row["data_contract_hash"],
         )
 
     async def steal_or_retry_minute_bar(
-        self, artifact_id, worker_id, lease_ttl_ms, max_retries, *, bypass_retry_ceiling: bool = False
+        self, artifact_id, worker_id, lease_ttl_ms, max_retries, *, bypass_retry_ceiling: bool = False,
+        fresh_budget_for_contract: str | None = None,
     ) -> int | None:
         row = self.rows[artifact_id]
         # The real WHERE clause's three arms: an expired lease, a failed row
@@ -278,9 +281,22 @@ class FakeCatalog:
         # eligible row" for exactly the launcher-outage case the flag exists
         # to keep retryable, which is the bug it would be there to catch.
         expired = row["status"] == "fetching" and row["lease_expires_at_ms"] < self._now_ms()
-        retryable = row["status"] == "failed" and (row["attempt_count"] < max_retries or bypass_retry_ceiling)
+        # ``fresh_budget_for_contract``: a budget spent under another
+        # contract does not count, mirroring the real UPDATE's CASE arms.
+        other_contract = (
+            row["status"] == "failed"
+            and fresh_budget_for_contract is not None
+            and row["data_contract_hash"] != fresh_budget_for_contract
+        )
+        retryable = row["status"] == "failed" and (
+            row["attempt_count"] < max_retries or bypass_retry_ceiling or other_contract
+        )
         if not (expired or retryable or row["status"] == "stale"):
             return None
+        if row["status"] == "failed" and fresh_budget_for_contract is not None:
+            row["data_contract_hash"] = fresh_budget_for_contract
+        if other_contract:
+            row["attempt_count"] = 0
         row["last_error"] = None
         return self._take_lease(row, worker_id, lease_ttl_ms)
 
@@ -387,6 +403,7 @@ class FakeCatalog:
             status=row["status"],
             attempt_count=row["attempt_count"],
             last_error=row["last_error"],
+            data_contract_hash=row["data_contract_hash"],
         )
 
     async def refresh_complete_artifact(

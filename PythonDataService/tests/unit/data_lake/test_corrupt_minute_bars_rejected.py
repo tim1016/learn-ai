@@ -240,6 +240,39 @@ async def test_fractional_share_volume_publishes_exactly(fake_catalog: FakeCatal
 
 @respx.mock
 @pytest.mark.asyncio
+async def test_a_day_that_spent_its_retries_rejecting_fractional_volume_captures_now(
+    fake_catalog: FakeCatalog, tmp_lake
+) -> None:
+    """Every capture from 2026-02-23 on failed ``validation_failed`` while the
+    gate rejected fractional volume; three of them spent the day's retry
+    budget. Under the fixed contract that budget does not count, so the day
+    captures instead of reporting ``fetch_timeout`` forever."""
+    day = date(2026, 9, 21)
+    spec = _build_engine_run_spec(symbol="SPY", start=day, end=day, requester="test")
+    identity = minute_bar_identity(spec, symbol="SPY", trading_date=day, data_type="trade")
+    master_contract = _minute_trade_dch(spec.price_adjustment_mode, trading_date=TRADING_DAY)
+    artifact_id = await fake_catalog.claim_minute_bar(
+        identity=identity, worker_id="w-master", lease_ttl_ms=60_000,
+        data_contract_hash=master_contract, file_path="equity/usa/minute/spy/20260921_trade.zip",
+    )
+    assert artifact_id is not None
+    assert await fake_catalog.fail_artifact(
+        artifact_id, "validation_failed", worker_id="w-master", lease_generation=catalog_client.INITIAL_LEASE_GENERATION
+    )
+    fake_catalog.rows[artifact_id]["attempt_count"] = 3
+    mock_launcher()
+    open_ms = session_windows_ms_utc(day, day)[0].open_ms_utc
+    polygon = _mock_polygon_with(_payload([_bar(t=open_ms, v=9238.22128)]))
+
+    result = await ensure_data(spec)
+
+    assert result.overall_status == "complete", result.failures
+    assert polygon.call_count == 1
+    assert fake_catalog.rows[artifact_id]["status"] == "complete"
+
+
+@respx.mock
+@pytest.mark.asyncio
 async def test_an_unrepresentable_timestamp_is_a_validation_failure(
     fake_catalog: FakeCatalog, tmp_lake
 ) -> None:

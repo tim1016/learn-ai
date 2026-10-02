@@ -16,14 +16,20 @@ LEAN minute-trade zip layout (path constructed by app.data_lake.path_policy):
 from __future__ import annotations
 
 import io
+import re
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal
 
 # LEAN's price scale factor: prices on disk are multiplied by 10_000.
 _PRICE_SCALE = Decimal(10_000)
 _QUANT = Decimal(1)  # round to integer after scaling
+
+# What format_volume writes: whole shares, or plain notation with no trailing
+# zero. parse_volume reads nothing else, so an exponent, sign or padding
+# (which LEAN's GetDecimal misreads) is refused, as int() refused it before.
+_VOLUME_COLUMN = re.compile(r"(0|[1-9][0-9]*)(\.[0-9]*[1-9])?")
 
 # ZIP archive epoch — pinned so two runs with identical inputs produce
 # byte-identical zips. ZipFile default is "now", which would break the
@@ -132,14 +138,13 @@ def format_volume(volume: Decimal | int) -> str:
 
 
 def parse_volume(text: str) -> Decimal:
-    """Decode an on-disk volume column — the inverse of :func:`format_volume`."""
-    try:
-        volume = Decimal(text)
-    except InvalidOperation as exc:
-        raise ValueError(f"volume {text!r} is not a decimal number") from exc
-    if not volume.is_finite() or volume < 0:
-        raise ValueError(f"volume {text!r} is not finite and non-negative")
-    return volume
+    """Decode an on-disk volume column — the inverse of :func:`format_volume`.
+
+    Accepts exactly what :func:`format_volume` writes.
+    """
+    if _VOLUME_COLUMN.fullmatch(text) is None:
+        raise ValueError(f"volume {text!r} is not a whole or plain decimal share count")
+    return Decimal(text)
 
 
 def _ms_since_midnight_et(bar_start_et: datetime) -> int:

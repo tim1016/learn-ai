@@ -73,7 +73,6 @@ from app.data_lake.path_policy import (
 )
 from app.data_lake.polygon_corp_actions import DividendEvent, SplitEvent, fetch_dividends, fetch_splits
 from app.data_lake.polygon_fetcher import (
-    FRACTIONAL_VOLUME_START,
     PolygonAuthError,
     PolygonBar,
     PolygonEntitlementError,
@@ -81,6 +80,7 @@ from app.data_lake.polygon_fetcher import (
     PolygonRateLimitedError,
     PolygonUnknownSymbolError,
     fetch_minute_trade_aggregates,
+    volume_may_be_fractional,
 )
 from app.data_lake.polygon_ticker_events import fetch_ticker_events
 from app.data_lake.sessions import trading_sessions_for
@@ -242,11 +242,12 @@ def _minute_trade_dch(
 ) -> str:
     """Minute-trade contract hash for one session.
 
-    A session on or after :data:`FRACTIONAL_VOLUME_START` also records that
-    its volume is stored exactly: those days captured earlier hold whole
-    shares rounded down, so the changed hash re-fetches them. An earlier
-    session's bytes are identical under either recipe, so its hash — and
-    every cache hit on it — is left alone.
+    A session whose vendor volume may be fractional
+    (:func:`volume_may_be_fractional`) also records that its volume is stored
+    exactly: such a day captured earlier may hold whole shares rounded down,
+    so the changed hash re-fetches it — byte-identical when nothing was lost.
+    Any other session's bytes are identical under either recipe, so its
+    hash — and every cache hit on it — is left alone.
     """
     return _dch(
         provider="polygon",
@@ -254,7 +255,11 @@ def _minute_trade_dch(
             **_DCH_MINUTE_TRADE_PARAMS,
             "adjusted": _polygon_adjusted_flag(price_adjustment_mode),
             **({"corporate_action_version": adjustment_version} if adjustment_version else {}),
-            **({"volume": "exact"} if trading_date >= FRACTIONAL_VOLUME_START else {}),
+            **(
+                {"volume": "exact"}
+                if volume_may_be_fractional(trading_date, adjusted=_polygon_adjusted_flag(price_adjustment_mode))
+                else {}
+            ),
         },
         price_adjustment_mode=price_adjustment_mode,
         session_policy="full",
@@ -491,14 +496,14 @@ def _minute_trade_cache_matches(row: ArtifactRecord, dch: str, lake_root: Path, 
     contract hash differs only to record that it was imported. Reusing it is
     what the import is for (#1839), and #2454's version pinning was never to
     touch raw data (#2660). An adjusted import records no corporate-action
-    version, so it still rebuilds. An imported day on or after
-    :data:`FRACTIONAL_VOLUME_START` holds whole-share volume, so it rebuilds too.
+    version, so it still rebuilds. An imported raw day whose vendor volume
+    may be fractional was written as whole shares, so it rebuilds too.
     """
     if (
         version is None
         and row.data_contract_hash == import_minute_trade_dch(adjusted=False)
         and row.trading_date is not None
-        and row.trading_date < FRACTIONAL_VOLUME_START
+        and not volume_may_be_fractional(row.trading_date, adjusted=False)
     ):
         return True
     return _cache_matches(row, dch, lake_root, version)
@@ -661,6 +666,7 @@ async def _process_minute_trade_artifact(
                 worker_id=_WORKER_ID,
                 lease_ttl_ms=_LEASE_TTL_MS,
                 max_retries=_MAX_CLAIM_RETRIES,
+                data_contract_hash=dch,
             )
             if isinstance(reclaim, catalog_client.ReclaimRefused):
                 return (

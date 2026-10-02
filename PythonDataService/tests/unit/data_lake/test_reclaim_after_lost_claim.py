@@ -241,6 +241,38 @@ async def _an_exempt_error_is_retried_past_the_ceiling(catalog: Catalog, kind: s
     assert outcome == ReclaimedLease(artifact_id=artifact_id, lease_generation=2)
 
 
+async def _a_budget_spent_under_another_contract_does_not_count(catalog: Catalog, kind: str) -> None:
+    """A day that spent its retries under a recipe a fix has since replaced
+    (fractional volume rejected as corrupt) is retried under the new one —
+    once: the row takes the new contract, so failures under it spend a
+    normal budget and the lift cannot repeat."""
+    identity = _identity(kind)
+    artifact_id = await _claim(identity, "w-orig")
+    await _fail(artifact_id, "w-orig")
+    await catalog.set_attempt_count(artifact_id, _MAX_RETRIES)
+    new_contract = "c" * 64
+
+    async def _reclaim_under_new_contract(worker_id: str) -> ReclaimedLease | ReclaimRefused:
+        return await catalog_client.reclaim_after_lost_claim(
+            _lookup(identity), worker_id=worker_id, lease_ttl_ms=_TTL_MS, max_retries=_MAX_RETRIES,
+            data_contract_hash=new_contract,
+        )
+
+    assert await _reclaim_under_new_contract("w-new") == ReclaimedLease(artifact_id=artifact_id, lease_generation=2)
+    assert await catalog.lease(artifact_id) == ("fetching", "w-new", 2, 1)
+    state = await _lookup(identity)()
+    assert state is not None and state.data_contract_hash == new_contract
+
+    await _fail(artifact_id, "w-new", generation=2)
+    await catalog.set_attempt_count(artifact_id, _MAX_RETRIES)
+
+    assert await _reclaim_under_new_contract("w-later") == ReclaimRefused(
+        reason="fetch_timeout",
+        detail=f"exhausted {_MAX_RETRIES} attempt(s); last error: provider_api_error",
+        attempt_count=_MAX_RETRIES,
+    )
+
+
 _SCENARIOS = pytest.mark.parametrize(
     "scenario",
     [
@@ -251,6 +283,7 @@ _SCENARIOS = pytest.mark.parametrize(
         _a_row_reclaimed_between_lookup_and_steal_is_contention,
         _a_row_that_is_not_there_is_contention,
         _an_exempt_error_is_retried_past_the_ceiling,
+        _a_budget_spent_under_another_contract_does_not_count,
     ],
     ids=lambda scenario: scenario.__name__.strip("_"),
 )

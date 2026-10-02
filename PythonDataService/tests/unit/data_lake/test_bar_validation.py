@@ -108,13 +108,6 @@ def test_stored_bars_validate_through_the_same_contract() -> None:
         )
 
 
-def test_validator_accepts_fractional_share_volume() -> None:
-    """Polygon reports fractional shares since 2026-02-23; that is real volume."""
-    assert_publishable_minute_bars(
-        [_pb(0, volume=9238.22128)], symbol="SPY", trading_date=TRADING_DAY
-    )
-
-
 def test_validator_rejects_non_finite_volume() -> None:
     for bad in (float("nan"), float("inf")):
         with pytest.raises(CorruptVendorBarsError, match="is not finite"):

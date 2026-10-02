@@ -186,7 +186,7 @@ def _parse_csv_bytes(
                 high=Decimal(h) / PRICE_SCALE,
                 low=Decimal(l) / PRICE_SCALE,
                 close=Decimal(c) / PRICE_SCALE,
-                volume=parse_volume(v),
+                volume=parse_volume(v),  # Decimal: TradeBar's int annotation lags, its file is sealed
             )
         )
     return bars
@@ -396,7 +396,7 @@ def _parse_daily_csv_bytes(
                 high=Decimal(h) / PRICE_SCALE,
                 low=Decimal(l) / PRICE_SCALE,
                 close=Decimal(c) / PRICE_SCALE,
-                volume=parse_volume(v),
+                volume=parse_volume(v),  # Decimal: TradeBar's int annotation lags, its file is sealed
             )
         )
     return bars
