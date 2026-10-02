@@ -11,7 +11,7 @@
  *   3. No changes needed to the host component or the service.
  */
 
-export type MarkdownDocId = 'methodology';
+export type MarkdownDocId = 'methodology' | 'golden-search-guide';
 
 export interface MarkdownDocDescriptor {
   /** Absolute app-relative URL of the `.md` asset. */
@@ -24,6 +24,8 @@ export interface MarkdownDocDescriptor {
   readonly fullPageRoute: string;
   /** Width of the drawer panel. Defaults to `'min(960px, 92vw)'`. */
   readonly width?: string;
+  /** Whether the drawer masks the page. Defaults to `true`; a guide read beside a live chart sets `false`. */
+  readonly modal?: boolean;
 }
 
 export const MARKDOWN_DOC_REGISTRY: Readonly<Record<MarkdownDocId, MarkdownDocDescriptor>> = {
@@ -33,5 +35,13 @@ export const MARKDOWN_DOC_REGISTRY: Readonly<Record<MarkdownDocId, MarkdownDocDe
     title: 'Indicator Reliability — Methodology',
     fullPageRoute: '/docs/indicator-reliability-methodology',
     width: 'min(960px, 92vw)',
+  },
+  'golden-search-guide': {
+    src: '/assets/docs/golden-search-guide.md',
+    eyebrow: 'Guide',
+    title: 'Reading the Golden Search charts',
+    fullPageRoute: '/docs/golden-search-guide',
+    width: 'min(560px, 92vw)',
+    modal: false,
   },
 };

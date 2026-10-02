@@ -107,6 +107,7 @@ export const APP_MENU: readonly AppMenuGroup[] = [
       { title: 'Pipeline Docs', route: '/data-quality-docs' },
       { title: 'Indicator Reliability', route: '/docs/indicator-reliability-methodology' },
       { title: 'Signal Engine', route: '/docs/signal-engine-methodology' },
+      { title: 'Golden Search Charts', route: '/docs/golden-search-guide' },
       { title: 'Legal Notices', route: '/legal/notices' },
     ],
   },

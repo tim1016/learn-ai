@@ -23,20 +23,10 @@
     @if (detailsError(); as message) {
       <div role="alert" class="failed">
         <p>{{ message }}</p>
-        <button type="button" class="link" (click)="retry()">Try again</button>
+        <button type="button" class="link" (click)="retry.emit()">Try again</button>
       </div>
-    } @else if (!details.hasValue()) {
+    } @else if (details() === null) {
       <p class="muted" role="status">Loading the candidates' detail runs…</p>
-    } @else if (active() === 'equity') {
-      <app-golden-search-return-lines [series]="equitySeries()" chartLabel="Development cumulative return" />
-      <p class="caption">All curves use data involved in selection. These are not the walk-forward procedure's test returns.</p>
-      <details>
-        <summary>Drawdown and assumptions</summary>
-        <dl class="rules">
-          @for (candidate of rows(); track candidate.key) { <div><dt>{{ candidate.candidate.label }} — largest fall from a peak</dt><dd>{{ candidate.worstFall }}</dd></div> }
-        </dl>
-        <p class="caption">${{ scope().capital | number: '1.0-0' }} starting capital · {{ scope().costs_sentence }}</p>
-      </details>
     } @else if (selectedRun(); as run) {
       @if (active() === 'months') {
         <app-golden-search-monthly [monthly]="run.monthly" [candidateLabel]="row.candidate.label" />

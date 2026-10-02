@@ -1,14 +1,18 @@
-import { ChangeDetectionStrategy, Component, computed, input, output, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, output, resource, signal, viewChild } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 
+import { extractServerMessage } from '../broker/operation-error';
+import { GoldenSearchGridComponent } from './charts/golden-search-grid.component';
 import { GoldenSearchCandidateAsideComponent } from './golden-search-candidate-aside.component';
 import { GoldenSearchCandidateTableComponent } from './golden-search-candidate-table.component';
 import { candidateRows, initialRowKey, rowKeyFor, rowSummary, selectedCaption, type CandidateRow } from './golden-search-compare';
 import { GoldenSearchDecisionSummaryComponent } from './golden-search-decision-summary.component';
+import { GoldenSearchEquityChartComponent } from './golden-search-equity-chart.component';
 import { EVIDENCE_TABS, GoldenSearchEvidenceTabsComponent, type EvidenceTab } from './golden-search-evidence-tabs.component';
 import { GoldenSearchRetainComponent, type RetainDecision } from './golden-search-retain.component';
 import { STUDY_STEPS, type StudyStep } from './golden-search-steps';
-import type { CandidateKey, StrategyCapability, StudyCommand, StudyDetail, SummaryLink } from './golden-search.types';
+import { GoldenSearchService } from './golden-search.service';
+import type { CandidateDetail, CandidateKey, StrategyCapability, StudyCommand, StudyDetail, SummaryLink } from './golden-search.types';
 
 /** The one forward action Compare offers for the selected candidate. */
 type CompareAction =
@@ -16,14 +20,19 @@ type CompareAction =
   | { readonly kind: 'step'; readonly label: string }
   | { readonly kind: 'none'; readonly label: string; readonly reason: string };
 
+interface DetailRequest {
+  readonly studyId: string;
+  readonly keys: readonly CandidateKey[];
+}
+
 const INCUMBENT_CAPTION = 'The incumbent is not a new candidate. Use “Keep current settings” to finish without consuming the test.';
 
 /**
  * The Compare step (#2696): the server's recommendation first, then every
  * candidate — the searches' fits and the frozen incumbent — on the same
- * development scope; the selected candidate's settings; its evidence (the
- * parameter landscape, equity, months, trades, neighborhood, stress) beside
- * what choosing it implies; and the two ways forward: keep the current
+ * development scope; every candidate's equity and fall from peak beside what
+ * choosing the selected one implies; its evidence (the parameter landscape,
+ * months, trades, neighborhood, stress); and the two ways forward: keep the current
  * settings, or lock the candidate for its one final test. Picking a row is a
  * local choice until "Review final-test lock" sends it.
  */
@@ -34,7 +43,9 @@ const INCUMBENT_CAPTION = 'The incumbent is not a new candidate. Use “Keep cur
     GoldenSearchCandidateAsideComponent,
     GoldenSearchCandidateTableComponent,
     GoldenSearchDecisionSummaryComponent,
+    GoldenSearchEquityChartComponent,
     GoldenSearchEvidenceTabsComponent,
+    GoldenSearchGridComponent,
     GoldenSearchRetainComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -42,6 +53,8 @@ const INCUMBENT_CAPTION = 'The incumbent is not a new candidate. Use “Keep cur
   styleUrl: './golden-search-compare-step.component.scss',
 })
 export class GoldenSearchCompareStepComponent {
+  private readonly service = inject(GoldenSearchService);
+
   readonly study = input.required<StudyDetail>();
   readonly capability = input<StrategyCapability | null>(null);
   readonly busy = input(false);
@@ -67,6 +80,28 @@ export class GoldenSearchCompareStepComponent {
     return row === null ? null : rowSummary(row, this.study().decision_summaries);
   });
   private readonly tabs = viewChild(GoldenSearchEvidenceTabsComponent);
+
+  /** Each row's development detail run, read once per study and candidate set, not on every poll. */
+  private readonly detailRequest = computed<DetailRequest | undefined>(
+    () => {
+      const keys = this.rows().map((row) => row.key);
+      return keys.length === 0 ? undefined : { studyId: this.study().id, keys };
+    },
+    { equal: (a, b) => a?.studyId === b?.studyId && a?.keys.join() === b?.keys.join() },
+  );
+  private readonly details = resource({
+    params: () => this.detailRequest(),
+    loader: async ({ params }) => {
+      const entries = await Promise.all(params.keys.map(async (key) => [key, await this.service.candidate(params.studyId, key)] as const));
+      return new Map<CandidateKey, CandidateDetail>(entries);
+    },
+  });
+  protected readonly detailMap = computed(() => (this.details.hasValue() ? this.details.value() : null));
+  protected readonly detailsError = computed(() => {
+    const error = this.details.error();
+    return error === undefined ? null : extractServerMessage(error, 'The candidates’ detail runs could not be loaded.');
+  });
+  protected readonly ceiling = computed(() => this.study().protocol.policy.max_drawdown_ceiling);
   protected readonly caption = computed(() => {
     const row = this.selectedRow();
     return row === null ? null : selectedCaption(row.candidate);
@@ -101,6 +136,10 @@ export class GoldenSearchCompareStepComponent {
   protected follow(link: SummaryLink): void {
     if (link.kind === 'tab' && isEvidenceTab(link.target)) this.tabs()?.open(link.target);
     else if (link.kind === 'step' && isStudyStep(link.target)) this.goTo.emit(link.target);
+  }
+
+  protected retryDetails(): void {
+    this.details.reload();
   }
 
   protected pick(key: CandidateKey): void {

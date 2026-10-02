@@ -38,7 +38,7 @@ import { MARKDOWN_DOC_REGISTRY } from './markdown-drawer.model';
         position="right"
         class="markdown-drawer"
         [showCloseIcon]="false"
-        [modal]="true"
+        [modal]="d.modal ?? true"
         [dismissible]="true"
         [style]="{ width: d.width ?? 'min(960px, 92vw)' }"
       >

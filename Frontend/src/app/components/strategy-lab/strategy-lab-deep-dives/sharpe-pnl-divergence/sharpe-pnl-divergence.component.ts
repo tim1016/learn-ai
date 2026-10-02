@@ -25,6 +25,7 @@ import {
 
 import type { SharpePnlDivergence } from '../../../lean-engine/engine-results/engine-validation-analytics.types';
 import { createAppChart } from '../../../../shared/charts/chart-utils';
+import { themeColor } from '../../../../shared/charts/theme-color';
 
 export const SHARPE_PNL_DIVERGENCE_CHART_FACTORY = new InjectionToken<typeof createAppChart>(
   'SHARPE_PNL_DIVERGENCE_CHART_FACTORY',
@@ -193,10 +194,4 @@ function resolveChartTheme(element: HTMLElement) {
     sharpe: themeColor(element, '--warn'),
     divergence: themeColor(element, '--bear-soft'),
   };
-}
-
-function themeColor(element: HTMLElement, token: string): string {
-  const color = getComputedStyle(element).getPropertyValue(token).trim();
-  if (color.length === 0) throw new Error(`Required theme token ${token} is not defined`);
-  return color;
 }

@@ -1,14 +1,9 @@
 :host { display: grid; gap: var(--space-3); min-width: 0; align-content: start; }
 p { margin: 0; }
-.muted, .caption { color: var(--text-secondary); font-size: var(--fs-xs); }
+.muted { color: var(--text-secondary); font-size: var(--fs-xs); }
 .tabs { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 .tabs button { border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); padding: var(--space-2) var(--space-3); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
 .tabs button[aria-pressed='true'] { background: var(--bg-elevated); color: var(--text-primary); }
 .tabs button:focus-visible, .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .failed { display: grid; gap: var(--space-1); color: var(--bear); font-size: var(--fs-sm); }
 .link { all: unset; justify-self: start; color: var(--accent-text); font-size: var(--fs-xs); cursor: pointer; }
-details summary { color: var(--accent-text); font-size: var(--fs-xs); cursor: pointer; }
-.rules { margin: var(--space-2) 0; }
-.rules div { display: flex; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) 0; border-bottom: 1px solid var(--border-light); font-size: var(--fs-xs); }
-dt { color: var(--text-secondary); }
-dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }

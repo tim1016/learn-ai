@@ -1,0 +1,14 @@
+:host { display: grid; gap: var(--space-2); min-width: 0; }
+p { margin: 0; }
+.frame { overflow-x: auto; min-width: 0; }
+.canvas { width: 100%; }
+.failed { color: var(--bear-text); font-size: var(--fs-xs); }
+.link { all: unset; justify-self: start; color: var(--accent-text); font-size: var(--fs-xs); cursor: pointer; }
+.frame:focus-visible, .link:focus-visible, .table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.table-wrap { max-height: 20rem; overflow: auto; border: 1px solid var(--border-light); border-radius: var(--radius-sm); }
+table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+caption { text-align: left; padding: var(--space-2); color: var(--text-secondary); }
+th, td { padding: var(--space-1) var(--space-2); border-top: 1px solid var(--border-light); text-align: left; white-space: nowrap; }
+thead th { position: sticky; top: 0; background: var(--bg-surface); color: var(--text-secondary); font-weight: var(--fw-medium); }
+th[scope='row'] { font-weight: var(--fw-regular); }
+.num { text-align: right; font-variant-numeric: tabular-nums; }

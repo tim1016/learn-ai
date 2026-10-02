@@ -445,7 +445,11 @@ export function candidateDetail(key: CandidateKey, overrides: Partial<CandidateD
         { ms: days[2], value: end },
       ],
       daily_equity: [],
-      drawdown: [],
+      drawdown: [
+        { ms: days[0], drawdown: 0 },
+        { ms: days[1], drawdown: -end / 4 },
+        { ms: days[2], drawdown: 0 },
+      ],
       monthly: [
         { month_start_ms: etMidnightMs('2025-11-01'), net_profit: 1100, return_fraction: 0.011, trades: 12 },
         { month_start_ms: etMidnightMs('2025-12-01'), net_profit: -700, return_fraction: -0.007, trades: 9 },
