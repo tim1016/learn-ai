@@ -54,8 +54,6 @@ export class BotEndCardComponent {
 
   private readonly editor = viewChild.required(BotEndPopoverComponent);
 
-  /** Change reads the fields from the end on screen, before they open: its
-   * own end, or the default end offered to a bot with none. */
   /** Open the end's fields, as the card's own Change does; nothing while a save or command is on its way. */
   openEditor(): void {
     if (this.busy() || !this.end().editable) return;
@@ -63,6 +61,8 @@ export class BotEndCardComponent {
     this.editor().show();
   }
 
+  /** Change reads the fields from the end on screen, before they open: its
+   * own end, or the default end offered to a bot with none. */
   protected prepare(): void {
     const end = this.end();
     this.fields.set(botEndFields({ end_at_ms: end.end_at_ms ?? end.default_end_at_ms, end_action: end.end_action }));

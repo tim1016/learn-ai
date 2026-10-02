@@ -139,11 +139,10 @@
               <strong>Observation only.</strong> This bot records decisions but does not place broker orders.
             </p>
           } @else {
-            <app-trades-today-list
-              heading="Fills this run"
+            <app-run-fills-list
               [fills]="runFills()"
-              [fillCount]="runFills().length"
-              [tradingDateMs]="runStartedAtMs()"
+              [fillCount]="runFillCount()"
+              [runStartedAtMs]="runStartedAtMs()"
             />
           }
         </div>
@@ -164,7 +163,12 @@
 
         <div class="bot-board__panel bot-board__health">
           @if (panelData.bot_page; as page) {
-            <app-bot-health-groups [health]="page.health" [marketPulse]="panelData.market_pulse" />
+            <app-bot-health-groups
+              [health]="page.health"
+              [marketPulse]="panelData.market_pulse"
+              [startupJoin]="panelData.startup_join ?? null"
+              [dutyOutcome]="stranded() ? null : (panelData.health.duty_outcome ?? null)"
+            />
           }
         </div>
 

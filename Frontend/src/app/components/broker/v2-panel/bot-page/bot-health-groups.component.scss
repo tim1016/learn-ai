@@ -58,3 +58,11 @@
 }
 
 .health__market--attention strong { color: var(--warn); }
+
+.health__join,
+.health__outcome {
+  display: grid;
+  gap: 0.125rem;
+  margin: var(--space-1) 0 var(--space-2);
+  font-size: var(--fs-xs);
+}

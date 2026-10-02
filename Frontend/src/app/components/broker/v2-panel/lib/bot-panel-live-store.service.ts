@@ -270,8 +270,14 @@ export class BotPanelLiveStore {
   private adoptFailure(error: unknown, fallback: string, updatesLiveness: boolean): void {
     const notFound = notFoundFromHttpError(error);
     if (notFound !== null) {
-      this.currentNotFound.set(notFound);
-      this.currentError.set(null);
+      // Only a page that never loaded becomes "not found"; a loaded one keeps
+      // its controls -- Stop, an open ticket -- and says what the read was told.
+      if (this.currentSnapshot() === null) {
+        this.currentNotFound.set(notFound);
+        this.currentError.set(null);
+      } else {
+        this.currentError.set(notFound);
+      }
       return;
     }
     const stall = stallFromHttpError(error);
