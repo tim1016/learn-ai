@@ -1,0 +1,12 @@
+:host { display: block; min-width: 0; }
+p { margin: 0; }
+.muted, .caption { color: var(--text-secondary); font-size: var(--fs-xs); }
+.legend { display: flex; flex-wrap: wrap; gap: var(--space-3); margin: 0; padding: 0; list-style: none; color: var(--text-secondary); font-size: var(--fs-xs); }
+.legend li { display: inline-flex; align-items: center; gap: var(--space-1); }
+.legend .selected { color: var(--text-primary); font-weight: var(--fw-semi); }
+.swatch { display: inline-block; width: 1rem; border-top: 2px solid var(--chart-series-blue); }
+.swatch[data-key='recent'] { border-top-color: var(--chart-series-amber); }
+.swatch[data-key='incumbent'] { border-top: 2px dashed var(--text-secondary); }
+.failed { display: grid; gap: var(--space-1); color: var(--bear-text); font-size: var(--fs-sm); }
+.link { all: unset; justify-self: start; color: var(--accent-text); font-size: var(--fs-xs); cursor: pointer; }
+.link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

@@ -1,0 +1,11 @@
+<div #callout class="callout" role="group" tabindex="-1" [attr.aria-label]="label()" (keydown)="onKey($event)">
+  <div aria-live="polite">
+    <p class="count">Step {{ index() + 1 }} of {{ steps().length }}</p>
+    <p class="text">{{ step().text }}</p>
+  </div>
+  <div class="nav">
+    <span class="hint">Arrow keys move · Esc exits</span>
+    <button type="button" class="ghost" [disabled]="isFirst()" (click)="back()">Back</button>
+    <button type="button" class="primary" (click)="forward()">{{ isLast() ? 'Done' : 'Next' }}</button>
+  </div>
+</div>

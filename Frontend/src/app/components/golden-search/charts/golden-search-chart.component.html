@@ -1,0 +1,20 @@
+@let s = spec();
+<div class="frame" role="img" [attr.aria-label]="s.label + '. ' + s.summary">
+  <div #canvas class="canvas" [style.height.px]="height()" [style.min-width.px]="minWidth()"></div>
+</div>
+@if (failure(); as message) { <p class="failed" role="alert">{{ message }}</p> }
+<button type="button" class="link" [attr.aria-expanded]="showTable()" (click)="toggleTable()">{{ showTable() ? 'Hide the table' : 'Show as table' }}</button>
+@if (showTable()) {
+  @let t = s.table;
+  <div class="table-wrap" role="region" tabindex="0" [attr.aria-label]="t.caption">
+    <table>
+      <caption>{{ t.caption }}</caption>
+      <thead><tr>@for (column of t.columns; track $index) { <th scope="col" [class.num]="!$first">{{ column }}</th> }</tr></thead>
+      <tbody>
+        @for (row of t.rows; track row.key) {
+          <tr>@for (cell of row.cells; track $index) { @if ($first) { <th scope="row">{{ cell }}</th> } @else { <td class="num">{{ cell }}</td> } }</tr>
+        }
+      </tbody>
+    </table>
+  </div>
+}

@@ -33,6 +33,7 @@ import type {
 import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
 import { TimestampDisplayPipe } from '../../../../shared/timestamp';
 import { createAppChart } from '../../../../shared/charts/chart-utils';
+import { themeColor } from '../../../../shared/charts/theme-color';
 import { WalkForwardParameterComparisonComponent } from '../walk-forward-parameter-comparison/walk-forward-parameter-comparison.component';
 
 /**
@@ -259,10 +260,4 @@ function resolveChartTheme(element: HTMLElement) {
     seriesFill: themeColor(element, '--accent-soft'),
     seriesFade: themeColor(element, '--accent-faint'),
   };
-}
-
-function themeColor(element: HTMLElement, token: string): string {
-  const color = getComputedStyle(element).getPropertyValue(token).trim();
-  if (color.length === 0) throw new Error(`Required theme token ${token} is not defined`);
-  return color;
 }

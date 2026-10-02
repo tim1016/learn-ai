@@ -1,11 +1,13 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
+import { fireEvent, render, screen, within } from '@testing-library/angular';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
+import { MarkdownDrawerService } from '../../shared/markdown-drawer/markdown-drawer.service';
 import { GoldenSearchCompareStepComponent } from './golden-search-compare-step.component';
 import type { StudyStep } from './golden-search-steps';
 import { GoldenSearchService } from './golden-search.service';
 import type { CandidateDetail, CandidateKey, StudyCommand, StudyDetail } from './golden-search.types';
+import { fakeCharts } from './testing/fake-charts';
 import { candidateDetail, decisionSummary, emaCapability, evidenceCandidate, evidenceView, frequencyProtocol, studyDetail, tradeActivity } from './testing/fixtures';
 
 interface FakeService {
@@ -19,7 +21,7 @@ function fakeService(): FakeService {
 async function renderStep(study: StudyDetail = studyDetail('awaiting_candidate'), service: FakeService = fakeService()) {
   const view = await render(GoldenSearchCompareStepComponent, {
     inputs: { study, capability: emaCapability() },
-    providers: [{ provide: GoldenSearchService, useValue: service }],
+    providers: [{ provide: GoldenSearchService, useValue: service }, ...fakeCharts().providers],
   });
   const commands: StudyCommand[] = [];
   const steps: StudyStep[] = [];
@@ -203,24 +205,35 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(aside.textContent).toMatch(/Luck adjustment\s*Not estimable/);
   });
 
-  it('Equity reads every candidate’s detail run once and draws their cumulative returns, with a table alternative', async () => {
+  it('reads every candidate’s detail run once and draws their equity and fall from peak, with a table alternative', async () => {
     const { service } = await renderStep();
 
-    expect(service.candidate).not.toHaveBeenCalled();
-    fireEvent.click(evidenceTab('Equity'));
-
-    const chart = await screen.findByRole('img', { name: /development cumulative return — ends at all-period fit \+8\.7%, recent fit \+11\.6%, current settings \+5\.2%/i });
+    const chart = await screen.findByRole('img', {
+      name: /development cumulative return and fall from peak\. ends at all-period fit \+8\.7%, recent fit \+11\.6%, current settings \+5\.2%/i,
+    });
     expect(chart).not.toBeNull();
     expect(service.candidate.mock.calls.map(([, key]) => key)).toEqual(['all_period', 'recent', 'incumbent']);
-    expect(screen.getByText(/these are not the walk-forward procedure's test returns/i)).not.toBeNull();
+    const panel = screen.getByRole('region', { name: 'Equity and fall from peak' });
+    expect(panel.textContent).toContain('not the walk-forward test returns');
 
-    fireEvent.click(screen.getByRole('button', { name: /show the daily values as a table/i }));
-    const table = screen.getByRole('table', { name: /development cumulative return by session/i });
-    expect(within(table).getAllByRole('row')[3].textContent).toMatch(/2025-12-31\s*\+8\.7%\s*\+11\.6%\s*\+5\.2%/);
+    fireEvent.click(within(panel).getByRole('button', { name: 'Show as table' }));
+    const table = within(panel).getByRole('table', { name: /fall from peak at each session close/i });
+    expect(within(table).getAllByRole('row')[2].textContent).toMatch(/2024-06-03\s*\+4\.4%\s*-2\.2%\s*\+5\.8%\s*-2\.9%\s*\+2\.6%\s*-1\.3%/);
 
     fireEvent.click(evidenceTab('By month'));
-    fireEvent.click(evidenceTab('Equity'));
+    fireEvent.click(evidenceTab('Trades'));
     expect(service.candidate).toHaveBeenCalledTimes(3);
+  });
+
+  it('About this chart opens the guide beside the chart, at that chart’s section', async () => {
+    const { view } = await renderStep();
+    const drawer = view.fixture.debugElement.injector.get(MarkdownDrawerService);
+
+    fireEvent.click(within(screen.getByRole('region', { name: 'Equity and fall from peak' })).getByRole('button', { name: /about this chart/i }));
+
+    expect(drawer.activeDocId()).toBe('golden-search-guide');
+    expect(drawer.anchor()).toBe('equity-and-fall');
+    expect(drawer.visible()).toBe(true);
   });
 
   it('By month and Trades show the selected candidate’s development months and decisions', async () => {
@@ -270,17 +283,20 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(within(trades).getAllByRole('row')[1].textContent).toContain('+$0.40');
   });
 
-  it('a detail read that fails says so and can be retried', async () => {
+  it('a detail read that fails says so in the equity panel and the tabs, and one retry restores both', async () => {
     const service = fakeService();
     service.candidate.mockRejectedValueOnce(new Error('down'));
     await renderStep(studyDetail('awaiting_candidate'), service);
 
+    const equity = screen.getByRole('region', { name: 'Equity and fall from peak' });
+    expect((await within(equity).findByRole('alert')).textContent).toContain('could not be loaded');
     fireEvent.click(evidenceTab('Trades'));
-    const alert = await screen.findByRole('alert');
+    const alert = within(screen.getByRole('region', { name: 'Candidate evidence' })).getByRole('alert');
     expect(alert.textContent).toContain('could not be loaded');
     fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }));
 
     expect(await screen.findByRole('table', { name: /development trades of all-period fit/i })).not.toBeNull();
+    expect(within(equity).queryByRole('alert')).toBeNull();
   });
 
   it('Neighborhood and Stress keep tested, invalid and center values apart with their actual metrics', async () => {
@@ -315,16 +331,16 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(screen.queryByRole('table')).toBeNull();
   });
 
-  it('passes axe on the map and on the equity view', async () => {
+  it('passes axe with the equity chart drawn and with its table open', async () => {
     const { view } = await renderStep();
     const check = async (): Promise<string[]> => {
       const results = await axe.run(view.container, { rules: { 'color-contrast': { enabled: false } } });
       return results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`);
     };
 
+    await screen.findByRole('img', { name: /development cumulative return and fall from peak/i });
     expect(await check()).toEqual([]);
-    fireEvent.click(evidenceTab('Equity'));
-    await waitFor(() => expect(screen.getByRole('img', { name: /development cumulative return/i })).not.toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Show as table' }));
     expect(await check()).toEqual([]);
   });
 });
