@@ -262,12 +262,12 @@ export function validationView(overrides: Partial<ValidationView> = {}): Validat
       retention_threshold: 0.5,
     },
     linked: [
-      { fold_index: 0, test_end_ms: first.test_end_ms, linked_return: 0.021 },
-      { fold_index: 1, test_end_ms: second.test_end_ms, linked_return: null },
+      { fold_index: 0, test_end_ms: first.test_end_ms, linked_return: 0.021, fold_missing: false },
+      { fold_index: 1, test_end_ms: second.test_end_ms, linked_return: null, fold_missing: true },
     ],
     incumbent_linked: [
-      { fold_index: 0, test_end_ms: first.test_end_ms, linked_return: 0.007 },
-      { fold_index: 1, test_end_ms: second.test_end_ms, linked_return: 0.002972 },
+      { fold_index: 0, test_end_ms: first.test_end_ms, linked_return: 0.007, fold_missing: false },
+      { fold_index: 1, test_end_ms: second.test_end_ms, linked_return: 0.002972, fold_missing: false },
     ],
     summary_pills: { judged: '1 of 2 folds judged', test_trades: 42, median_retention: null },
     explanation: 'Each fold searched only its own training months.',

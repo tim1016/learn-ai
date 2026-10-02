@@ -52,16 +52,13 @@ export class GoldenSearchTestStepComponent {
     const validation = this.study().results.validation;
     if (validation === null) return [];
     const benchmark = new Map(validation.incumbent_linked.map((point) => [point.fold_index, point.linked_return]));
-    const folds = new Map(validation.folds.map((fold) => [fold.fold_index, fold]));
-    return validation.linked.map((point) => {
-      const fold = folds.get(point.fold_index);
-      return {
-        ...point,
-        benchmark: benchmark.get(point.fold_index) ?? null,
-        linkedGap: fold?.test_metrics ? LINE_BROKEN_EARLIER : FOLD_MISSING,
-        benchmarkGap: fold?.incumbent_test_metrics ? LINE_BROKEN_EARLIER : FOLD_MISSING,
-      };
-    });
+    const incumbentMissing = new Map(validation.incumbent_linked.map((point) => [point.fold_index, point.fold_missing]));
+    return validation.linked.map((point) => ({
+      ...point,
+      benchmark: benchmark.get(point.fold_index) ?? null,
+      linkedGap: point.fold_missing ? FOLD_MISSING : LINE_BROKEN_EARLIER,
+      benchmarkGap: (incumbentMissing.get(point.fold_index) ?? true) ? FOLD_MISSING : LINE_BROKEN_EARLIER,
+    }));
   });
   protected readonly pending = computed(() =>
     this.study().state === 'validation_running'

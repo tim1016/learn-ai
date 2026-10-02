@@ -99,7 +99,7 @@ describe('GoldenSearchTestStepComponent', () => {
       { ...failed, fold_index: 0, test_end_ms: completed.test_end_ms },
       { ...completed, fold_index: 1, test_end_ms: failed.test_end_ms },
     ];
-    const linked = folds.map((fold) => ({ fold_index: fold.fold_index, test_end_ms: fold.test_end_ms, linked_return: null }));
+    const linked = folds.map((fold) => ({ fold_index: fold.fold_index, test_end_ms: fold.test_end_ms, linked_return: null, fold_missing: fold.status !== 'completed' }));
     await renderStep(withValidation({ ...base, folds, linked }));
 
     const rows = within(screen.getByRole('table', { name: /linked test-period return by fold/i })).getAllByRole('row');

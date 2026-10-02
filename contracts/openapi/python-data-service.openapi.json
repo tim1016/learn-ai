@@ -19363,6 +19363,11 @@
             "title": "Fold Index",
             "type": "integer"
           },
+          "fold_missing": {
+            "description": "This fold has no test return of its own (a null linked_return after it is the broken line).",
+            "title": "Fold Missing",
+            "type": "boolean"
+          },
           "linked_return": {
             "anyOf": [
               {
@@ -19385,7 +19390,8 @@
         "required": [
           "fold_index",
           "test_end_ms",
-          "linked_return"
+          "linked_return",
+          "fold_missing"
         ],
         "title": "GoldenSearchLinkedReturn",
         "type": "object"

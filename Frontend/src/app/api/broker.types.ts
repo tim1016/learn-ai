@@ -13470,6 +13470,11 @@ export interface components {
             /** Fold Index */
             fold_index: number;
             /**
+             * Fold Missing
+             * @description This fold has no test return of its own (a null linked_return after it is the broken line).
+             */
+            fold_missing: boolean;
+            /**
              * Linked Return
              * @description Growth of 1 linked across test folds, minus 1; null once a fold is missing.
              */

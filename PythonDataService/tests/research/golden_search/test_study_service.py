@@ -838,6 +838,8 @@ async def test_a_fold_without_an_eligible_training_winner_is_recorded_failed_nev
     assert second["status"] == "completed"
     assert validation["verdict"]["label"] == "could not be judged"
     assert validation["linked"][0]["linked_return"] is None and validation["linked"][1]["linked_return"] is None
+    # Only the first fold is missing; the second completed but sits after the break.
+    assert [point["fold_missing"] for point in validation["linked"]] == [True, False]
 
 
 async def test_keeping_the_current_settings_ends_the_study_without_opening_the_final_test(driver: Driver, symbol: str) -> None:

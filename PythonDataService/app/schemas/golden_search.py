@@ -568,6 +568,7 @@ class GoldenSearchLinkedReturn(_Wire):
     fold_index: int
     test_end_ms: InstantMs
     linked_return: float | None = Field(description="Growth of 1 linked across test folds, minus 1; null once a fold is missing.")
+    fold_missing: bool = Field(description="This fold has no test return of its own (a null linked_return after it is the broken line).")
 
 
 class GoldenSearchSummaryPills(_Wire):

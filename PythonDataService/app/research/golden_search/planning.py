@@ -521,7 +521,7 @@ def default_protocol(
     training_months: int = DEFAULT_TRAINING_MONTHS,
     test_months: int = DEFAULT_TEST_MONTHS,
 ) -> GoldenSearchProtocol:
-    """A complete starting plan: declared default ranges, the incumbent as seed, and server-computed intervals."""
+    """A complete starting plan: declared default ranges, the default seed, and server-computed intervals."""
     declaration = declaration_for(strategy_key)
     if declaration is None:
         reason = unavailable_reason(strategy_key) or "No Golden Search declaration exists for this strategy."
@@ -530,7 +530,9 @@ def default_protocol(
         raise GoldenSearchRefusal("Interval lengths must be at least one month.", code="INTERVALS_INVALID")
     final_end_day = _month_start(et_date_at_ms(now_ms))
     final_start_day = add_months(final_end_day, -final_months)
-    seed = knob_values(declaration, incumbent.params)
+    # Fixed knobs hold the seed's values, so the plan never contradicts where it starts.
+    start = default_seed(strategy_key, symbol, source=incumbent.source, params=incumbent.params)
+    seed = knob_values(declaration, start)
     knobs = tuple(
         KnobPlan(
             name=knob.name,
@@ -557,7 +559,7 @@ def default_protocol(
             symbol=symbol,
             method="zoom",
             knobs=knobs,
-            seed=default_seed(strategy_key, symbol, source=incumbent.source, params=incumbent.params),
+            seed=start,
             incumbent=incumbent,
             development_start_ms=et_midnight_ms(development_start),
             development_end_ms=et_midnight_ms(final_start_day),

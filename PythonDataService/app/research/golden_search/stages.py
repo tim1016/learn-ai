@@ -377,8 +377,8 @@ def _run_fold(ctx: StageContext, evaluator: StudyEvaluator, fold: FoldWindow) ->
 def _linked(folds: Sequence[Mapping[str, Any]], key: str) -> list[dict[str, Any]]:
     returns = [fold_return(Metrics.from_dict(fold[key]) if fold[key] is not None else None) for fold in folds]
     return [
-        {"fold_index": fold["fold_index"], "test_end_ms": fold["test_end_ms"], "linked_return": value}
-        for fold, value in zip(folds, link_fold_returns(returns), strict=True)
+        {"fold_index": fold["fold_index"], "test_end_ms": fold["test_end_ms"], "linked_return": value, "fold_missing": own is None}
+        for fold, own, value in zip(folds, returns, link_fold_returns(returns), strict=True)
     ]
 
 

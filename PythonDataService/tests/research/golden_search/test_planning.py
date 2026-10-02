@@ -23,7 +23,7 @@ from app.research.golden_search.planning import (
     review_plan,
     slowest_requirement,
 )
-from app.research.golden_search.protocol import KnobPlan
+from app.research.golden_search.protocol import IncumbentRef, KnobPlan
 from app.research.sweep.warmup import probe_warmup_samples
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from tests._helpers.golden_search_study import DEVELOPMENT, plan_request, seed_lake, unique_symbol
@@ -188,6 +188,17 @@ def test_the_default_plan_searches_the_declared_ranges_from_the_incumbent() -> N
     assert protocol.seed == incumbent.params == {"symbol": "SPY", "gap": 0.2, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0}
     assert [plan.name for plan in protocol.search_knobs] == ["gap", "rsi_min", "rsi_max", "fast_period", "slow_period", "hold_bars"]
     assert protocol.pair_audits == (("fast_period", "slow_period"), ("rsi_min", "rsi_max"))
+    assert review(protocol, _ema()).lockable
+
+
+def test_a_qualified_incumbent_off_the_registry_on_a_fixed_knob_still_yields_a_lockable_default_plan() -> None:
+    registry = registry_incumbent(EMA, "SPY")
+    qualified = IncumbentRef(source="qualification", qualification_id="gq-1", params={**registry.params, "gap": 0.35, "gap_bps": 1.5})
+    protocol = default_protocol(EMA, "SPY", qualified, now_ms=OCTOBER_15, earliest_session=None)
+
+    # The folds start from the registry point, and the fixed knobs agree with that start.
+    assert protocol.seed == registry.params
+    assert next(plan for plan in protocol.knobs if plan.name == "gap_bps").fixed_value == 0.0
     assert review(protocol, _ema()).lockable
 
 
