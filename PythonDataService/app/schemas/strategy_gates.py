@@ -115,6 +115,14 @@ class GateRefusal(BaseModel):
     message: str
 
 
+class GateRefusalBody(BaseModel):
+    """A refused gate request's response body, as FastAPI wraps an ``HTTPException`` detail."""
+
+    model_config = ConfigDict(frozen=True)
+
+    detail: GateRefusal
+
+
 __all__ = [
     "CustomGate",
     "CustomGateInput",
@@ -122,6 +130,7 @@ __all__ = [
     "GateEvaluationRequest",
     "GateEvaluationResponse",
     "GateRefusal",
+    "GateRefusalBody",
     "GateSign",
     "GateTerm",
     "StrategyGateList",

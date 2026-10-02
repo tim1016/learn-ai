@@ -16,7 +16,7 @@ from app.schemas.strategy_gates import (
     CustomGateInput,
     GateEvaluationRequest,
     GateEvaluationResponse,
-    GateRefusal,
+    GateRefusalBody,
     StrategyGateList,
 )
 from app.services.strategy_gate_store import GateNotFoundError, GateStoreError, StrategyGateStore
@@ -27,9 +27,9 @@ from app.utils.timestamps import now_ms_utc
 router = APIRouter()
 
 _REFUSALS = {
-    status.HTTP_404_NOT_FOUND: {"model": GateRefusal},
-    status.HTTP_422_UNPROCESSABLE_ENTITY: {"model": GateRefusal},
-    status.HTTP_503_SERVICE_UNAVAILABLE: {"model": GateRefusal},
+    status.HTTP_404_NOT_FOUND: {"model": GateRefusalBody},
+    status.HTTP_422_UNPROCESSABLE_ENTITY: {"model": GateRefusalBody},
+    status.HTTP_503_SERVICE_UNAVAILABLE: {"model": GateRefusalBody},
 }
 
 
