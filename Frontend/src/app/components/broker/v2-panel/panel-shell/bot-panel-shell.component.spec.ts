@@ -638,7 +638,7 @@ function openDisclosure(label: string): void {
 /** The chart panel opens on the strategy view (#2639); the market tape is one
  * tab away and is only created when that tab first opens. */
 async function showTape(fixture: ComponentFixture<BotPanelShellComponent>): Promise<void> {
-  fireEvent.click(screen.getByRole('tab', { name: 'Tape · 1m' }));
+  fireEvent.click(screen.getByRole('tab', { name: /^Tape · / }));
   await fixture.whenStable();
   fixture.detectChanges();
 }

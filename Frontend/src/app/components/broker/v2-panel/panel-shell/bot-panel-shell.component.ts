@@ -529,18 +529,12 @@ export class BotPanelShellComponent {
   protected readonly runContext = computed((): StrategyRunContext | null => {
     const panel = this.panel();
     if (panel === null) return null;
-    const join = panel.startup_join ?? null;
-    const joinedAt = join?.joined_minute_start_ms ?? null;
-    const liveFrom = join?.live_from_ms ?? null;
     return {
       nowMs: panel.health.running ? panel.updated_at_ms : null,
       scheduledEndAtMs: panel.bot_page?.summary.facts.scheduled_end_at_ms ?? null,
       fills: panel.run_fills ?? [],
       workingOrders: panel.working_orders,
       feedEvents: this.feedContinuity().events,
-      skippedMinute: joinedAt !== null && liveFrom !== null && liveFrom > joinedAt
-        ? { startMs: joinedAt, endMs: liveFrom }
-        : null,
     };
   });
 
@@ -668,8 +662,19 @@ export class BotPanelShellComponent {
       // Whatever pushes the board down -- a receipt, the holding warning, a stall
       // notice that appears later -- grows an element around it or one above it,
       // at some level up to the body.
+      // A height-bound parent keeps its size when a new child -- a receipt, a
+      // stall notice -- arrives above the board, so arrivals are watched too.
+      const arrivals = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const added of Array.from(record.addedNodes)) {
+            if (added instanceof Element) observer.observe(added);
+          }
+        }
+        refit();
+      });
       for (let node: Element | null = board.parentElement; node !== null && node !== document.body; node = node.parentElement) {
         observer.observe(node);
+        arrivals.observe(node, { childList: true });
         for (let above = node.previousElementSibling; above !== null; above = above.previousElementSibling) {
           observer.observe(above);
         }
@@ -679,6 +684,7 @@ export class BotPanelShellComponent {
       onCleanup(() => {
         cancelAnimationFrame(frame);
         observer.disconnect();
+        arrivals.disconnect();
         window.removeEventListener('resize', refit);
       });
     });

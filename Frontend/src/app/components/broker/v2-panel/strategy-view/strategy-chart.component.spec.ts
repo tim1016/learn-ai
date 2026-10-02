@@ -270,7 +270,7 @@ describe('StrategyChartComponent with the bot page’s run facts (#2794)', () =>
   const minute = (ms: number) => formatTimestampDisplay(ms, { mode: 'local', granularity: 'minute' });
 
   function runContext(overrides: Partial<StrategyRunContext> = {}): StrategyRunContext {
-    return { nowMs: null, scheduledEndAtMs: null, fills: [], workingOrders: [], feedEvents: [], skippedMinute: null, ...overrides };
+    return { nowMs: null, scheduledEndAtMs: null, fills: [], workingOrders: [], feedEvents: [], ...overrides };
   }
 
   async function renderWithContext(view: StrategyViewResponse, context: StrategyRunContext | null, width = 800) {

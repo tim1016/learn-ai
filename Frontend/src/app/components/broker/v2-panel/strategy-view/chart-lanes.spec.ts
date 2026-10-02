@@ -17,7 +17,7 @@ function minuteOf(ms: number): string {
 }
 
 function context(overrides: Partial<StrategyRunContext> = {}): StrategyRunContext {
-  return { nowMs: null, scheduledEndAtMs: null, fills: [], workingOrders: [], feedEvents: [], skippedMinute: null, ...overrides };
+  return { nowMs: null, scheduledEndAtMs: null, fills: [], workingOrders: [], feedEvents: [], ...overrides };
 }
 
 function lane(lanes: readonly ChartLane[], key: LaneKey): ChartLane {
@@ -58,22 +58,20 @@ describe('chartLanes (#2794)', () => {
     ]);
   });
 
-  it('spans a market-data gap across its window and marks the skipped partial first minute', () => {
-    const gapStart = barCloseMs(2) + 60_000;
+  it('spans a market-data gap across its window, once -- the joined minute’s included', () => {
+    const joined = STRATEGY_RUN_STARTED_AT_MS - 5_000;
     const marks = lane(chartLanes(fakeStrategyView(), context({
       feedEvents: [{
-        evidence_seq: 4, kind: 'gap', occurred_at_ms: gapStart + 120_000, label: 'Bars missing', explanation: 'x',
-        cause: null, duration_ms: 120_000, duration_label: '2 min', window_start_ms: gapStart, window_end_ms: gapStart + 120_000,
+        evidence_seq: 4, kind: 'gap', occurred_at_ms: joined + 60_000, label: 'Partial first minute omitted',
+        explanation: 'x', cause: 'stream_joined', duration_ms: 55_000, duration_label: '55 s',
+        window_start_ms: joined, window_end_ms: joined + 55_000,
       }],
-      skippedMinute: { startMs: STRATEGY_RUN_STARTED_AT_MS - 5_000, endMs: STRATEGY_RUN_STARTED_AT_MS + 55_000 },
     })), 'market').marks;
 
-    expect(marks.map(({ atMs, endMs, glyph, tone }) => ({ atMs, endMs, glyph, tone }))).toEqual([
-      { atMs: STRATEGY_RUN_STARTED_AT_MS - 5_000, endMs: STRATEGY_RUN_STARTED_AT_MS + 55_000, glyph: 'span', tone: 'muted' },
-      { atMs: gapStart, endMs: gapStart + 120_000, glyph: 'span', tone: 'warn' },
-    ]);
-    expect(marks[0].label).toContain('Partial first minute skipped');
-    expect(marks[1].label).toBe(`${minuteOf(gapStart + 120_000)} · Bars missing · 2 min`);
+    expect(marks.map(({ atMs, endMs, glyph, tone, label }) => ({ atMs, endMs, glyph, tone, label }))).toEqual([{
+      atMs: joined, endMs: joined + 55_000, glyph: 'span', tone: 'warn',
+      label: `${minuteOf(joined + 60_000)} · Partial first minute omitted · 55 s`,
+    }]);
   });
 
   it('marks a running bot’s start, next decision and an end still ahead', () => {

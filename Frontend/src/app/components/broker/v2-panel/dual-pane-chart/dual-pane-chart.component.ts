@@ -9,6 +9,7 @@ import {
   effect,
   inject,
   input,
+  linkedSignal,
   output,
   signal,
   viewChild,
@@ -62,7 +63,7 @@ import {
   toIndicatorSeriesPlans,
 } from './dual-pane-chart-indicators';
 
-type ChartPane = 'live' | 'polygon';
+export type ChartPane = 'live' | 'polygon';
 export type ChartTimeZone = 'local' | 'et';
 
 interface IndicatorLoadState {
@@ -283,7 +284,9 @@ export class DualPaneChartComponent implements AfterViewInit {
   private readonly createChart = inject(DUAL_PANE_CHART_FACTORY);
   private readonly indicatorService = inject(BotChartIndicatorService);
 
-  protected readonly activePane = signal<ChartPane>('live');
+  /** The pane the chart opens on: the bot page opens a finished run on its delayed 1-minute tape (#2794 R7). */
+  readonly initialPane = input<ChartPane>('live');
+  protected readonly activePane = linkedSignal(() => this.initialPane());
   protected readonly fullscreen = signal(false);
   protected readonly timeZone = signal<ChartTimeZone>(persistedChartTimeZone());
   private readonly selectedIndicators = signal<readonly SelectedChartIndicator[]>([]);

@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input, model } from '@angular/core';
 
+import { CopyButtonComponent } from '../../../../shared/copy-button/copy-button.component';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import type { BotPanelView } from '../lib/broker-v2-panel.types';
@@ -19,7 +20,7 @@ interface SettingLine {
 @Component({
   selector: 'app-bot-setup',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [CopyButtonComponent, ReceiptLabelPipe, TimestampDisplayComponent],
   templateUrl: './bot-setup.component.html',
   styleUrl: './bot-setup.component.scss',
 })
@@ -35,8 +36,4 @@ export class BotSetupComponent {
       .filter(([name, value]) => name !== 'symbol' && value !== null && typeof value !== 'object')
       .map(([name, value]) => ({ name, value: String(value) })),
   );
-
-  protected copy(text: string): void {
-    void globalThis.navigator?.clipboard?.writeText(text);
-  }
 }
