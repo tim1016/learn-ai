@@ -14,9 +14,12 @@ import {
 } from '@angular/core';
 
 import { AssetIdentityComponent } from '../../../../shared/asset-identity/asset-identity.component';
-import type { StrategyViewResponse } from '../lib/broker-v2-panel.types';
+import type { CustomGateInput, StrategyViewResponse } from '../lib/broker-v2-panel.types';
+import { strategyCatalogueIndicators } from './strategy-catalogue-indicators';
 import { StrategyGatePickerComponent } from './strategy-gate-picker.component';
 import { readGatePreference, writeGatePreference } from './strategy-gate-preference';
+import { DRAFT_GATE_ID, gateVariableGroups } from './strategy-gates-model';
+import { strategyGatesState } from './strategy-gates-state';
 import { StrategyIndicatorsComponent } from './strategy-indicators.component';
 import { StrategyViewComponent } from './strategy-view.component';
 import {
@@ -40,6 +43,10 @@ let nextChartPanelId = 0;
  * per strategy in this browser) and the header chips. Both tabs keep their
  * content once created, so each chart's zoom and scroll survive a trip to
  * the other tab; the tape is created the first time its tab opens.
+ *
+ * The panel also brings the strategy's custom gates (saved on the data
+ * plane, judged there on these candles) and the catalogue indicators the
+ * viewer adds, so a host only supplies the read.
  */
 @Component({
   selector: 'app-bot-chart-panel',
@@ -79,23 +86,46 @@ export class BotChartPanelComponent {
   protected readonly tapeOpened = signal(false);
   private readonly tabs = viewChildren<ElementRef<HTMLButtonElement>>('tab');
 
-  protected readonly declaration = computed(() => this.view()?.declaration ?? null);
+  protected readonly gates = strategyGatesState(this.view);
+  protected readonly indicators = strategyCatalogueIndicators(this.view);
+  /** The read, with the strategy's custom gates folded in. */
+  protected readonly shownView = this.gates.view;
+  protected readonly declaration = computed(() => this.shownView()?.declaration ?? null);
+  protected readonly gateVariables = computed(() => {
+    const view = this.shownView();
+    return view === null ? [] : gateVariableGroups(view, this.gates.catalogue());
+  });
 
   protected readonly strategyTabLabel = computed(() => {
     const view = this.view();
     return view === null ? 'Strategy' : `Strategy · ${decisionTimeframeLabel(view.decision_timeframe_ms)}`;
   });
 
-  /** The viewer's pick for this strategy, reset when the strategy changes. */
-  private readonly chosenGateId = linkedSignal({
+  /** The viewer's pick for this strategy, reset when the strategy changes. A
+   * re-read of the same strategy reruns the computation too, and keeps the
+   * pick: storage may be blocked, so it is not re-read from there. */
+  private readonly chosenGateId = linkedSignal<string | null, string | null>({
     source: () => this.view()?.strategy_key ?? null,
-    computation: (strategyKey: string | null) => (strategyKey === null ? null : readGatePreference(strategyKey)),
+    computation: (strategyKey, previous) => {
+      if (previous !== undefined && previous.source === strategyKey) return previous.value;
+      return strategyKey === null ? null : readGatePreference(strategyKey);
+    },
   });
 
+  /** A previewed draft shades the chart until the editor closes. */
   protected readonly activeGate = computed(() => {
     const declaration = this.declaration();
-    return declaration === null ? null : resolveActiveGate(declaration, this.chosenGateId());
+    if (declaration === null) return null;
+    const draft = this.gates.previewing() ? declaration.gates.find((gate) => gate.gate_id === DRAFT_GATE_ID) : undefined;
+    return draft ?? resolveActiveGate(declaration, this.chosenGateId());
   });
+
+  /** Saves a gate and makes it the one shading the chart. */
+  protected readonly saveGate = async (draft: CustomGateInput, gateId: string | null): Promise<void> => {
+    const gate = await this.gates.save(draft, gateId);
+    this.chooseGate(gate.gate_id);
+  };
+  protected readonly removeGate = (gateId: string): Promise<void> => this.gates.remove(gateId);
 
   protected selectTab(tab: BotChartTab): void {
     this.activeTab.set(tab);

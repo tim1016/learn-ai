@@ -125,4 +125,12 @@ describe('RecentDecisionsListComponent', () => {
     expect(screen.queryByText(/Bot started/)).toBeNull();
     expect(screen.queryByText(BEFORE_START_TEXT)).toBeNull();
   });
+
+  it('draws no "Bot started" divider when the run has decisions the view could not include', async () => {
+    // The run's first decision predates saved values, so the first decision the
+    // view draws is not where the run began.
+    await renderList(RUN_DECISIONS, fakeStrategyView({ unexplained_decision_count: 1 }));
+
+    expect(screen.queryByText(/Bot started/)).toBeNull();
+  });
 });

@@ -25,3 +25,8 @@
 }
 
 .indicators-list__tag { color: var(--accent-text); font-size: var(--fs-xxs); }
+
+.indicators-popover__rail {
+  margin: 0 calc(-1 * var(--space-3));
+  background: transparent;
+}

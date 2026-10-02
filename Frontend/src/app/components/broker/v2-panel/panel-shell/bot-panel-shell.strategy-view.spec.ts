@@ -15,6 +15,7 @@ import { BrokersService } from '../../../../services/brokers.service';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import { fakeBotPanelView, fakeChartFeed, panelRefusalBody } from '../../../../testing/bot-panel-fixtures';
 import { fakeStrategyChartFactory } from '../../../../testing/strategy-chart-fake';
+import { fakeStrategyViewDataPlane } from '../../../../testing/strategy-view-data-plane-fakes';
 import { barCloseMs, fakeRecentDecision, fakeStrategyView } from '../../../../testing/strategy-view-fixtures';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { BotPanelLiveSnapshot, BotPanelView, RecentDecisionView } from '../lib/broker-v2-panel.types';
@@ -52,15 +53,19 @@ const originalEventSource = globalThis.EventSource;
 
 const RUN_DECISIONS: RecentDecisionView[] = [fakeRecentDecision(12, 3), fakeRecentDecision(11, 2)];
 
-function panel(decisions: readonly RecentDecisionView[] = RUN_DECISIONS): BotPanelView {
-  return fakeBotPanelView({ strategy_instance_id: 'sid-001', account_id: 'DUM284968', recent_decisions: [...decisions] });
+function panel(decisions: readonly RecentDecisionView[] = RUN_DECISIONS, status: BotPanelView['status'] = 'running'): BotPanelView {
+  return fakeBotPanelView({ strategy_instance_id: 'sid-001', account_id: 'DUM284968', recent_decisions: [...decisions], status });
 }
 
-function snapshot(version: number, decisions: readonly RecentDecisionView[] = RUN_DECISIONS): BotPanelLiveSnapshot {
+function snapshot(
+  version: number,
+  decisions: readonly RecentDecisionView[] = RUN_DECISIONS,
+  status: BotPanelView['status'] = 'running',
+): BotPanelLiveSnapshot {
   return {
     stream_epoch: 'test-epoch',
     surface_version: version,
-    panel: panel(decisions),
+    panel: panel(decisions, status),
     live_chart: {
       strategy_instance_id: 'sid-001',
       symbol: 'SPY',
@@ -102,6 +107,7 @@ async function renderPage(getStrategyView: ReturnType<typeof vi.fn>) {
       provideRouter([]),
       provideFleetDirectory({ observed_at_ms: 1_757_000_000_000, clerks: [testLane({ clerk_id: 'clrk_spec' })] }),
       { provide: STRATEGY_CHART_FACTORY, useValue: charts.create },
+      ...fakeStrategyViewDataPlane(vi).providers,
       { provide: BrokerV2PanelService, useValue: service(getStrategyView) },
       { provide: BrokersService, useValue: { checkSqliteRecoveryAction: vi.fn() } },
       { provide: MessageService, useValue: { add: vi.fn() } },
@@ -153,6 +159,17 @@ describe('BotPanelShellComponent — strategy view (#2639)', () => {
     expect(charts.created[0].candles().setData.mock.calls.length).toBeGreaterThan(1);
   });
 
+  it('re-reads the strategy view when the run stops without deciding again, so its end line appears', async () => {
+    const getStrategyView = vi.fn(() => Promise.resolve(fakeStrategyView()));
+    const fixture = await renderPage(getStrategyView);
+    expect(getStrategyView).toHaveBeenCalledTimes(1);
+
+    StubEventSource.latest?.emit('snapshot', JSON.stringify(snapshot(2, RUN_DECISIONS, 'finished')));
+    await settle(fixture);
+
+    expect(getStrategyView).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps a failed read to the chart panel, in the backend’s words, and retries on request', async () => {
     const user = userEvent.setup();
     const getStrategyView = vi.fn().mockRejectedValueOnce(new HttpErrorResponse({
@@ -178,7 +195,7 @@ describe('BotPanelShellComponent — strategy view (#2639)', () => {
 
     expect(getStrategyView).toHaveBeenCalledTimes(2);
     expect(within(chartPanel).queryByRole('alert')).toBeNull();
-    expect(within(chartPanel).getByRole('img', { name: /decision candles for SPY/ })).toBeTruthy();
+    expect(within(chartPanel).getByRole('group', { name: /decision candles for SPY/ })).toBeTruthy();
   });
 
   it('shares one candle selection between the strategy chart and the decisions list', async () => {

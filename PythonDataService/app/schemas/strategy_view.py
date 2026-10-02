@@ -148,6 +148,9 @@ class StrategyViewResponse(BaseModel):
     run_started_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     run_stopped_at_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
     declaration: StrategyViewDeclarationView
+    # The deployed settings by name: what a custom gate reads ``gap`` or
+    # ``rsi_min`` as, echoed back when the page asks for its results.
+    settings: dict[str, float | int | str | bool | None] = Field(default_factory=dict)
     candles: list[StrategyViewCandle]
     # Decisions this run took before decisions recorded their values.
     unexplained_decision_count: int = Field(default=0, ge=0)

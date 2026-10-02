@@ -80,6 +80,15 @@ class ResolvedStrategyView:
         return {name: getattr(self.params, name) for name in type(self.params).model_fields}
 
     @property
+    def scalar_settings(self) -> dict[str, float | int | str | bool | None]:
+        """The deployed settings that are plain scalars, as the wire carries them."""
+        return {
+            name: value
+            for name, value in self.settings.items()
+            if value is None or isinstance(value, bool | int | float | str)
+        }
+
+    @property
     def decision_timeframe_ms(self) -> int:
         contract = self.registration.signal_program_contract
         qualified_ms = contract.decision_timeframe_ms if contract is not None else 60_000
