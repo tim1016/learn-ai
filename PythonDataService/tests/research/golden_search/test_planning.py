@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -25,7 +26,7 @@ from app.research.golden_search.planning import (
     review_plan,
     slowest_requirement,
 )
-from app.research.golden_search.protocol import IncumbentRef, KnobPlan
+from app.research.golden_search.protocol import IncumbentRef, KnobPlan, by_importance
 from app.research.sweep.warmup import probe_warmup_samples
 from app.utils.session_anchors import et_date_at_ms, et_midnight_ms
 from tests._helpers.golden_search_study import (
@@ -99,6 +100,17 @@ def test_importance_orders_the_frozen_search_highest_first_with_ties_in_the_decl
     assert [knob.name for knob in protocol.search_knobs] == ["hold_bars", "gap"]
     # The scores are part of the frozen plan.
     assert protocol.protocol_hash() != protocol_from_request(_ranked(request, {})).protocol_hash()
+
+
+ORDER_FIXTURE = Path(__file__).resolve().parents[4] / "contracts" / "fixtures" / "golden-search-importance-order-v1.json"
+
+
+def test_the_search_order_matches_the_order_the_plan_page_shows() -> None:
+    fixture = json.loads(ORDER_FIXTURE.read_text())
+    assert fixture["declared"] == [knob.name for knob in _ema().knobs]
+    for case in fixture["cases"]:
+        knobs = [KnobPlan(name=name, mode="fixed", low=0.0, high=0.0, fixed_value=0.0, importance=case["scores"][name]) for name in reversed(fixture["declared"])]
+        assert [knob.name for knob in by_importance(knobs, fixture["declared"])] == case["order"]
 
 
 def test_a_plan_without_importance_keeps_its_own_order_and_writes_no_score() -> None:

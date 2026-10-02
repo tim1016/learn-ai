@@ -230,23 +230,29 @@ function withSteps(protocol: ProtocolRequest, capability: StrategyCapability | n
   };
 }
 
+/** Whether every knob carries an importance score; a legacy plan has none and keeps its own order. */
+export function isRanked(knobs: readonly KnobPlan[]): boolean {
+  return knobs.every((knob) => knob.importance != null);
+}
+
 /**
  * Knobs in search order (ADR 0074 decision 10): higher importance first, ties
  * in the strategy's declared order. A plan where any knob has no importance (a
- * legacy plan) keeps its own order. The server orders a plan it reads the
- * same way, so the table shows the order the search will use.
+ * legacy plan) keeps its own order. The server's `protocol.by_importance`
+ * freezes the same order; contracts/fixtures/golden-search-importance-order-v1.json pins both.
  */
 export function byImportance(knobs: readonly KnobPlan[], capability: StrategyCapability | null): KnobPlan[] {
-  if (knobs.some((knob) => knob.importance == null)) return [...knobs];
+  // The server sorts only whole-number scores too; anything else is refused knob by knob.
+  if (!knobs.every((knob) => Number.isInteger(knob.importance))) return [...knobs];
   const rank = new Map((capability?.knobs ?? []).map((knob, index) => [knob.name, index]));
   const position = (name: string): number => rank.get(name) ?? rank.size;
   return [...knobs].sort((a, b) => (b.importance ?? 0) - (a.importance ?? 0) || position(a.name) - position(b.name));
 }
 
-/** A legacy plan with every knob at the scale's starting importance, in the order that gives it; any other plan as it is. */
+/** A plan with every knob scored (a legacy plan's at the scale's starting importance), in the order the server will freeze. */
 export function withImportance(protocol: ProtocolRequest, capability: StrategyCapability | null): ProtocolRequest {
   const start = capability?.importance.default;
-  if (start === undefined || protocol.knobs.every((knob) => knob.importance != null)) return protocol;
+  if (start === undefined) return protocol;
   return { ...protocol, knobs: byImportance(protocol.knobs.map((knob) => ({ ...knob, importance: knob.importance ?? start })), capability) };
 }
 
