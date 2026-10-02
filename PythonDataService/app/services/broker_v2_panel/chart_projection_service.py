@@ -48,6 +48,7 @@ from app.lean_sidecar.trading_calendar import (
     current_trading_session_window,
     session_open_ms_utc,
     session_start_for_bar_count,
+    session_windows_ms_utc,
 )
 from app.schemas.broker_v2_panel import (
     ChartBar,
@@ -62,6 +63,7 @@ from app.schemas.fleet_history_batch import HistoryBatchQuery, HistoryBatchRespo
 from app.services.dataset_service import INDICATOR_CONFIGS
 from app.services.indicator_warmup_policy import configured_indicator_warmup_bars
 from app.services.live_chart_window import ChartFeedState, ChartFeedStatus, ChartWindowResult
+from app.utils.session_anchors import et_date_at_ms
 
 MS_PER_DAY = 86_400_000
 
@@ -407,6 +409,8 @@ def run_chart_window(
     run_end_ms = now_ms if run_ended_at_ms is None else run_ended_at_ms
     if from_ms < run_started_at_ms - RUN_WINDOW_PADDING_MS or to_ms > run_end_ms + RUN_WINDOW_PADDING_MS:
         raise ChartWindowError("The window must lie within this bot's latest run, give or take 30 minutes.")
+    if from_ms >= now_ms:
+        raise ChartWindowError("A chart window must start before now.")
     return from_ms, min(to_ms, now_ms)
 
 
@@ -423,17 +427,20 @@ async def build_run_window_chart(
     """A plain tape of one run's window (#2794): its bars and fills, no indicator warmup.
 
     One batch is asked for, ending at the window's end and long enough to
-    reach its start; a window longer than the batch bound shows its latest
-    bars and says it was truncated.
+    reach its start. The tape says it was truncated when the batch did not
+    reach the window's first session minute -- a window longer than one
+    batch, or one starting before the history Polygon serves.
     """
     from_ms, to_ms = window
     span_ms = _bar_span_ms(HISTORY_TIMEFRAME_SPECS[timeframe])
-    required = min(MAX_HISTORY_REQUIRED_BAR_COUNT, max(1, -(-(to_ms - from_ms) // span_ms)))
+    needed = max(1, -(-(to_ms - from_ms) // span_ms))
+    required = min(MAX_HISTORY_REQUIRED_BAR_COUNT, needed)
     batch = await batch_provider(
         HistoryBatchQuery(symbol=symbol, timeframe=timeframe, required_bar_count=required, as_of_ms=to_ms)
     )
     bars = [bar for bar in batch.bars if bar.start_ms >= from_ms and bar.end_ms <= to_ms]
-    reached_start = len(batch.bars) < required or (bool(batch.bars) and batch.bars[0].start_ms <= from_ms)
+    first_minute = _first_session_minute(from_ms, to_ms)
+    reached_start = first_minute is None or (bool(batch.bars) and batch.bars[0].start_ms <= first_minute)
     return ChartHistoryResponse(
         strategy_instance_id=strategy_instance_id,
         symbol=symbol,
@@ -445,10 +452,19 @@ async def build_run_window_chart(
         indicator_bar_budget=0,
         indicator_bar_budget_satisfied=True,
         fill_markers=markers_in_window(fills, from_ms=from_ms, to_ms=to_ms),
-        truncated=not reached_start,
+        truncated=needed > required or not reached_start,
         overlay_notices=list(batch.overlay_notices),
         as_of_ms=now_ms,
     )
+
+
+def _first_session_minute(from_ms: int, to_ms: int) -> int | None:
+    """The first scheduled session instant in ``[from_ms, to_ms)``, or ``None`` when no session is open in it."""
+    for session in session_windows_ms_utc(et_date_at_ms(from_ms), et_date_at_ms(to_ms)):
+        start = max(from_ms, session.open_ms_utc)
+        if start < min(to_ms, session.close_ms_utc):
+            return start
+    return None
 
 
 def _bar_span_ms(spec: _HistoryTimeframeSpec) -> int:

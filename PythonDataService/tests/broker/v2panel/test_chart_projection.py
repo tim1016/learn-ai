@@ -1061,3 +1061,27 @@ def test_a_run_window_is_held_to_the_run_give_or_take_half_an_hour() -> None:
         )
     with pytest.raises(ChartWindowError, match="has not started a run"):
         run_chart_window(_RUN_START, _RUN_END, run_started_at_ms=None, run_ended_at_ms=None, now_ms=later)
+    # A running bot's window wholly in its next half hour would end before it starts.
+    with pytest.raises(ChartWindowError, match="must start before now"):
+        run_chart_window(
+            _RUN_START + 10 * 60_000, _RUN_START + 20 * 60_000,
+            run_started_at_ms=_RUN_START, run_ended_at_ms=None, now_ms=_RUN_START,
+        )
+
+
+async def test_a_run_window_tape_says_when_the_batch_did_not_reach_its_start() -> None:
+    """Fewer bars than asked for is not proof the start was reached: history can end first."""
+    window = (_RUN_START - 10 * 60_000, _RUN_END)
+    late = [
+        ChartBar(start_ms=start, end_ms=start + 60_000, open="1", high="1", low="1", close="1", volume=1, source="polygon")
+        for start in range(_RUN_START + 30 * 60_000, _RUN_END, 60_000)
+    ]
+
+    async def _provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
+        return HistoryBatchResponse(bars=late, source="polygon", overlay_notices=[], effective_as_of_ms=query.as_of_ms)
+
+    result = await build_run_window_chart(
+        "1m", [], strategy_instance_id=SID, symbol="SPY", batch_provider=_provider, window=window, now_ms=_RUN_END,
+    )
+
+    assert result.truncated is True
