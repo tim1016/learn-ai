@@ -51,7 +51,8 @@ export function highlightActions(option: ChartOption, target: HighlightTarget | 
   if (target.kind === 'series') return [...clear, highlight];
   const series = group.find((candidate) => candidate.id === `${target.group}:${featured}`) ?? group[0];
   const dataIndex = target.at === 'last' ? lastIndex(series.values) : lowestIndex(series.values);
-  return dataIndex === null ? [...clear, highlight] : [...clear, highlight, { type: 'showTip', seriesIndex: series.index, dataIndex }];
+  // The tooltip first: its axis pointer emphasises every line at that session, which the group highlight then overrides.
+  return dataIndex === null ? [...clear, highlight] : [...clear, { type: 'showTip', seriesIndex: series.index, dataIndex }, highlight];
 }
 
 function seriesRefs(option: ChartOption): SeriesRef[] {

@@ -60,7 +60,7 @@ describe('GoldenSearchWalkthroughComponent in a chart panel', () => {
     expect(callout.textContent).toContain(STEPS[0].text);
     // The right-edge labels: the featured line's last session, tooltip open on every candidate there.
     await waitFor(() =>
-      expect(lastStep(chart)).toEqual([...CLEAR, { type: 'highlight', seriesIndex: [0, 1] }, { type: 'showTip', seriesIndex: 1, dataIndex: 3 }]),
+      expect(lastStep(chart)).toEqual([...CLEAR, { type: 'showTip', seriesIndex: 1, dataIndex: 3 }, { type: 'highlight', seriesIndex: [0, 1] }]),
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
@@ -73,7 +73,7 @@ describe('GoldenSearchWalkthroughComponent in a chart panel', () => {
 
     fireEvent.keyDown(callout, { key: 'ArrowRight' });
     // The featured line's deepest close-to-close fall.
-    expect(lastStep(chart)).toEqual([...CLEAR, { type: 'highlight', seriesIndex: [2, 3] }, { type: 'showTip', seriesIndex: 3, dataIndex: 1 }]);
+    expect(lastStep(chart)).toEqual([...CLEAR, { type: 'showTip', seriesIndex: 3, dataIndex: 1 }, { type: 'highlight', seriesIndex: [2, 3] }]);
 
     fireEvent.keyDown(callout, { key: 'ArrowLeft' });
     expect(callout.textContent).toContain('Step 3 of 5');

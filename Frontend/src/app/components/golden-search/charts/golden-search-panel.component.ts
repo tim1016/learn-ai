@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, contentChild, ElementRef, inject, input, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, contentChild, effect, ElementRef, inject, input, signal, untracked, viewChild } from '@angular/core';
 
 import { MarkdownDrawerService } from '../../../shared/markdown-drawer/markdown-drawer.service';
 import { GoldenSearchChartComponent } from './golden-search-chart.component';
@@ -31,6 +31,17 @@ export class GoldenSearchPanelComponent {
   protected readonly guide = computed(() => CHART_GUIDES[this.chart()]);
   protected readonly headingId = computed(() => `gs-chart-${this.chart()}`);
   protected readonly walking = signal(false);
+  /** The walkthrough's current step; null when no walkthrough is open. */
+  private readonly step = signal<number | null>(null);
+
+  constructor() {
+    // The chart may appear after the walkthrough opened (its runs still loading): it gets the current step when it does.
+    effect(() => {
+      const host = this.host();
+      const step = this.step();
+      if (host !== undefined) untracked(() => host.highlight(step === null ? null : this.guide().steps[step].target));
+    });
+  }
 
   protected about(): void {
     this.drawer.open('golden-search-guide', this.chart());
@@ -42,11 +53,11 @@ export class GoldenSearchPanelComponent {
   }
 
   protected showStep(index: number): void {
-    this.host()?.highlight(this.guide().steps[index].target);
+    this.step.set(index);
   }
 
   protected endWalk(): void {
-    this.host()?.highlight(null);
+    this.step.set(null);
     this.walking.set(false);
     this.walkButton().nativeElement.focus();
   }
