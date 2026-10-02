@@ -70,7 +70,8 @@ class GoldenSearchKnobPlanRequest(_CamelTolerantModel):
     high: float
     fixed_value: float
     step: float | None = None
-    importance: int | None = Field(None, description="1-10, higher searched first; null on a plan that keeps its own knob order.")
+    # Strict: a JSON true or 5.5 is refused here rather than coerced to a score (#2813 review).
+    importance: int | None = Field(None, strict=True, description="1-10, higher searched first; null on a plan that keeps its own knob order.")
 
 
 class GoldenSearchSelectionPolicyRequest(_CamelTolerantModel):
@@ -137,7 +138,9 @@ class GoldenSearchProtocolRequest(_CamelTolerantModel):
     exam_min_trades: int | None = Field(30, description="A fixed final-test floor; null on a plan with an expected trade frequency.")
     budget_cap: int = MAX_BUDGET_CAP
     expected_trades_per_year: int | None = Field(
-        None, description="Completed trades per trading year; each window's minimum scales with its trading sessions. Null keeps the fixed floors."
+        None,
+        strict=True,
+        description="Completed trades per trading year; each window's minimum scales with its trading sessions. Null keeps the fixed floors.",
     )
 
     @field_validator("symbol", mode="before")
