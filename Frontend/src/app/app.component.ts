@@ -4,9 +4,11 @@ import { ActivatedRouteSnapshot, Router, RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { AlpacaLiveBannerComponent } from './shell/alpaca-live-banner.component';
 import { LaneAttentionBellComponent } from './shell/lane-attention-bell.component';
+import { IbkrFeedPillComponent } from './shell/ibkr-feed-pill.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
 import { AlpacaLiveVerdictService } from './services/alpaca-live-verdict.service';
 import { LaneAttentionService } from './services/lane-attention.service';
+import { IbkrFeedService } from './services/ibkr-feed.service';
 import { FleetDirectoryService } from './fleet/fleet-directory.service';
 import { AppMenubarComponent } from './shell/app-menubar.component';
 import { TopBarComponent } from './shell/top-bar.component';
@@ -32,6 +34,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
     AppMenubarComponent,
     AlpacaLiveBannerComponent,
     LaneAttentionBellComponent,
+    IbkrFeedPillComponent,
     TopBarComponent,
     PageBodyComponent,
     MarkdownDrawerHostComponent,
@@ -106,6 +109,9 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
     <div class="shell">
       <app-top-bar>
         <app-menubar shell-nav />
+        <!-- Beside the menu, where the bar has room: the account pills'
+             row scrolls and would clip it at narrow widths. -->
+        <app-ibkr-feed-pill shell-nav />
         <nav class="shell-actions" shell-connection aria-label="Accounts">
           @for (lane of alpacaLanes(); track lane.clerk_id) {
             <app-alpaca-live-banner [lane]="lane" />
@@ -132,6 +138,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
 export class AppComponent {
   private readonly alpacaLive = inject(AlpacaLiveVerdictService);
   private readonly laneAttention = inject(LaneAttentionService);
+  private readonly ibkrFeed = inject(IbkrFeedService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly title = inject(Title);
   private readonly router = inject(Router);
@@ -181,6 +188,9 @@ export class AppComponent {
     // coordinator fans the read out to each lane server-side, and each bell
     // renders only its own lane's slice of the fold.
     this.laneAttention.start();
+    // Every lane's IBKR market-data connection, for the pill that says
+    // when IB Gateway has logged out and is refusing every deploy.
+    this.ibkrFeed.start();
   }
 }
 

@@ -8,7 +8,12 @@ from typing import Any, Literal
 
 from pydantic import ValidationError
 
-from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus
+from app.broker.alpaca.clerk.models import ChannelHealth, ClerkStatus, HoldState
+from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE,
+    STREAM_HEALTH_HOLD_REASON_CODE,
+    UNEXPLAINED_ORDER_HOLD_REASON_CODE,
+)
 from app.broker.contract.models import BrokerAccountSnapshot
 from app.engine.strategy.registry import (
     _STRATEGY_REGISTRY,
@@ -516,6 +521,59 @@ def _channel_phrase(channel: ChannelHealth, failing: frozenset[str]) -> str:
     return f"unhealthy ({channel.reason})" if channel.reason else "unhealthy"
 
 
+#: Where each account hold is cleared — the same places the lane's attention
+#: bell sends each cause. A stream-health hold is absent on purpose: it has
+#: no operator action and lifts by itself once its channels recover.
+_HOLD_RECOVERY: dict[str, str] = {
+    LIVE_ENVELOPE_LOSS_HOLD_REASON_CODE: "Review and clear the loss hold in this account's Settings, then refresh this page.",
+    UNEXPLAINED_ORDER_HOLD_REASON_CODE: (
+        "Review the unexplained order in this account's Activity order records, then refresh this page."
+    ),
+}
+_UNNAMED_HOLD_RECOVERY = "Open this account's attention bell in the top bar to see the hold, then refresh this page."
+_IBKR_LOGIN = (
+    "Log in to IB Gateway: the Clerks read IBKR market data through it. The hold lifts by itself "
+    "within a minute of the feed reconnecting"
+)
+_CHANNELS_RECOVERY = "Restore both Clerk channels and refresh the deployment check."
+
+
+def _ibkr_disconnected(channels: list[ChannelHealth], evaluation: ChannelHealthEvaluation) -> bool:
+    """Market data is down because its connection is lost — not a symbol still warming up."""
+    return "market_data" in evaluation.failing and any(
+        channel.stream == "market_data" and not channel.connected for channel in channels
+    )
+
+
+def _ibkr_only_down(channels: list[ChannelHealth], evaluation: ChannelHealthEvaluation) -> bool:
+    """IB Gateway is the whole problem: logging in to it is the one fix."""
+    return _ibkr_disconnected(channels, evaluation) and evaluation.failing == {"market_data"}
+
+
+def _channel_recovery(channels: list[ChannelHealth], evaluation: ChannelHealthEvaluation) -> str | None:
+    if evaluation.ready:
+        return None
+    if _ibkr_only_down(channels, evaluation):
+        return f"{_IBKR_LOGIN}; then refresh this page."
+    if _ibkr_disconnected(channels, evaluation):
+        return f"{_IBKR_LOGIN}. The execution channel is down too: restore it, then refresh this page."
+    return _CHANNELS_RECOVERY
+
+
+def _hold_recovery(
+    hold: HoldState, channels: list[ChannelHealth], evaluation: ChannelHealthEvaluation
+) -> str | None:
+    """Name the fix for this hold's own cause, never a generic place to look."""
+    if not hold.active:
+        return None
+    if hold.reason_code == STREAM_HEALTH_HOLD_REASON_CODE:
+        return _channel_recovery(channels, evaluation) or (
+            "The Clerk's channels are connected again; the hold lifts on its next connection check. "
+            "Refresh this page in a minute."
+        )
+    return _HOLD_RECOVERY.get(hold.reason_code or "", _UNNAMED_HOLD_RECOVERY)
+
+
 def _readiness_checks(
     account: BrokerAccountSnapshot,
     clerk_status: ClerkStatus,
@@ -545,6 +603,7 @@ def _readiness_checks(
     channels = clerk_status.channel_healths or []
     channel_evaluation = _channel_evaluation(clerk_status, now_ms, symbol=symbol)
     channel_ready = channel_evaluation.ready
+    ibkr_only_down = _ibkr_only_down(channels, channel_evaluation)
     failing = channel_evaluation.failing
     channel_summary = (
         ", ".join(
@@ -667,9 +726,7 @@ def _readiness_checks(
                 "No Clerk exposure hold is active." if not hold.active else "An active Clerk exposure hold is recorded."
             ),
             evidence={"hold_active": hold.active, "reason_code": hold.reason_code},
-            recovery=(
-                None if not hold.active else "Resolve the Clerk hold from the Operator panel, then refresh this page."
-            ),
+            recovery=_hold_recovery(hold, channels, channel_evaluation),
         ),
         AlpacaPaperDeployReadinessCheck(
             gate_id="clerk.intent_custody",
@@ -700,6 +757,8 @@ def _readiness_checks(
             headline=(
                 "Market-data and execution channels are healthy."
                 if channel_ready
+                else "Deployment is blocked: IBKR market data is disconnected."
+                if ibkr_only_down
                 else "Deployment is blocked until Clerk channels are installed and healthy."
             ),
             explanation=f"Current channel observations: {channel_summary}.",
@@ -711,7 +770,7 @@ def _readiness_checks(
                 "stale_channels": ", ".join(channel_evaluation.stale) or "none",
                 "unhealthy_channels": ", ".join(channel_evaluation.unhealthy) or "none",
             },
-            recovery=None if channel_ready else "Restore both Clerk channels and refresh the deployment check.",
+            recovery=_channel_recovery(channels, channel_evaluation),
         ),
     )
 

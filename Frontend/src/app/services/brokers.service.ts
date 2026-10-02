@@ -322,6 +322,14 @@ export class BrokersService {
     return this.polls.get<ClerkStatus>(operationUrl('clerk_status_read', target));
   }
 
+  /** Every lane's {@link getClerkStatus} as one concurrent group, so one slow
+   * lane never delays another's read (the `getLiveVerdicts` rule). */
+  getClerkStatuses(targets: readonly ResourceTarget[]): Promise<ClerkStatus>[] {
+    return this.polls.getGroup<ClerkStatus>(
+      targets.map((target) => operationUrl('clerk_status_read', target)),
+    );
+  }
+
   /**
    * Slice 1 — the structured, backend-authored Clerk↔broker custody diagnosis
    * the Accounts page renders verbatim. A protected read under `/api/brokers`

@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import STREAM_HEALTH_REASON_CODE
@@ -29,6 +30,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
     LossHoldCause,
 )
 from app.broker.alpaca.clerk.trade_evidence import UNEXPLAINED_TRADE_UPDATE_REASON_CODE
+from app.broker.v2panel.vocabulary import copy_for, hold_reason_for
 from app.schemas.broker_v2_panel import ClerkCard
 from app.services.broker_v2_panel.panel_projection_service import build_clerk_card
 from app.services.sqlite_clerk_compat import sqlite_clerk_status
@@ -94,6 +96,13 @@ def _write_hold(repo: ClerkSqliteRepository, reason_code: str) -> None:
 
 def _card_for_stored_cause(tmp_path: Path, reason_code: str) -> ClerkCard:
     """Write one hold through the real fold and render the operator's card."""
+    return build_clerk_card(sqlite_clerk_status(_projection_for_stored_cause(tmp_path, reason_code)), _NOW)
+
+
+def _projection_for_stored_cause(
+    tmp_path: Path, reason_code: str, *, account_wide: bool = False
+) -> ClerkProjection:
+    """Write one hold through the real fold and read it back, bot- or account-wide."""
     clock = _Clock()
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID,
@@ -110,13 +119,13 @@ def _card_for_stored_cause(tmp_path: Path, reason_code: str) -> ClerkCard:
         repo, clock=clock
     )
     try:
-        projection = reader.bot_snapshot(SID)
+        projection = reader.account_snapshot() if account_wide else reader.bot_snapshot(SID)
     finally:
         reader.close()
         repo.close()
 
     assert projection is not None
-    return build_clerk_card(sqlite_clerk_status(projection), _NOW)
+    return projection
 
 
 @pytest.mark.parametrize("reason_code", _STORED_HOLD_CAUSES)
@@ -144,6 +153,21 @@ def test_the_unexplained_order_cause_keeps_its_own_identity(tmp_path: Path) -> N
 
     assert card.hold_reason == "UNEXPLAINED_ORDER_HOLD"
     assert card.hold_reason_label == "Unexplained-order hold"
+
+
+@pytest.mark.parametrize("reason_code", _STORED_HOLD_CAUSES)
+def test_the_account_hold_explains_its_own_cause(tmp_path: Path, reason_code: str) -> None:
+    """The account Clerk status — what the deploy page's "Account hold" row
+    quotes — explains the hold by its own cause. It used to borrow the
+    projection's guidance, which beside a stream-health hold read "Normal
+    Clerk-governed controls remain available." while every entry was refused.
+    """
+    status = sqlite_clerk_status(_projection_for_stored_cause(tmp_path, reason_code, account_wide=True))
+
+    assert status.hold.active is True
+    assert status.hold.reason == copy_for(
+        hold_reason_for(active=True, stored_code=reason_code)
+    ).explanation
 
 
 def test_an_unregistered_hold_cause_cannot_be_written_at_all(tmp_path: Path) -> None:
