@@ -12903,6 +12903,13 @@ export interface components {
             message: string;
         };
         /**
+         * GateRefusalBody
+         * @description A refused gate request's response body, as FastAPI wraps an ``HTTPException`` detail.
+         */
+        GateRefusalBody: {
+            detail: components["schemas"]["GateRefusal"];
+        };
+        /**
          * GateTerm
          * @description One ``coefficient · variable`` term of a gate's linear expression.
          */
@@ -34241,7 +34248,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
             /** @description Unprocessable Entity */
@@ -34250,7 +34257,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
             /** @description Service Unavailable */
@@ -34259,7 +34266,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
         };
@@ -34296,7 +34303,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
             /** @description Unprocessable Entity */
@@ -34305,7 +34312,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
             /** @description Service Unavailable */
@@ -34314,7 +34321,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
         };
@@ -34351,7 +34358,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
             /** @description Unprocessable Entity */
@@ -34360,7 +34367,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
             /** @description Service Unavailable */
@@ -34369,7 +34376,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
         };
@@ -34407,7 +34414,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
             /** @description Unprocessable Entity */
@@ -34416,7 +34423,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
             /** @description Service Unavailable */
@@ -34425,7 +34432,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
         };
@@ -34457,7 +34464,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
             /** @description Unprocessable Entity */
@@ -34466,7 +34473,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
             /** @description Service Unavailable */
@@ -34475,7 +34482,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusal"];
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
         };

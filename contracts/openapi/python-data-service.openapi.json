@@ -17346,6 +17346,19 @@
         "title": "GateRefusal",
         "type": "object"
       },
+      "GateRefusalBody": {
+        "description": "A refused gate request's response body, as FastAPI wraps an ``HTTPException`` detail.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/GateRefusal"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "GateRefusalBody",
+        "type": "object"
+      },
       "GateTerm": {
         "additionalProperties": false,
         "description": "One ``coefficient \u00b7 variable`` term of a gate's linear expression.",
@@ -65625,7 +65638,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
@@ -65635,7 +65648,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
@@ -65645,7 +65658,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
@@ -65711,7 +65724,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
@@ -65721,7 +65734,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
@@ -65731,7 +65744,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
@@ -65800,7 +65813,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
@@ -65810,7 +65823,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
@@ -65820,7 +65833,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
@@ -65880,7 +65893,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
@@ -65890,7 +65903,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
@@ -65900,7 +65913,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
@@ -65975,7 +65988,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
@@ -65985,7 +65998,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
@@ -65995,7 +66008,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusal"
+                  "$ref": "#/components/schemas/GateRefusalBody"
                 }
               }
             },
