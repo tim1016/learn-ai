@@ -39,6 +39,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerAccountSnapshot
+from app.broker.v2panel.vocabulary import copy_for, hold_reason_for
 from app.schemas.account_authority import CustodyWorld
 from app.schemas.clerk_custody import CustodyDiagnosis
 from app.utils.timestamps import now_ms_utc
@@ -289,7 +290,13 @@ def sqlite_clerk_status(
         hold={
             "active": hold is not None,
             "reason_code": hold.reason_code if hold is not None else None,
-            "reason": projection.guidance.impact if hold is not None else None,
+            # The hold's own cause, not the projection's guidance: guidance is
+            # authored from uncertainties and can read "healthy" beside a hold.
+            "reason": (
+                copy_for(hold_reason_for(active=True, stored_code=hold.reason_code)).explanation
+                if hold is not None
+                else None
+            ),
             "since_ms": hold.opened_at_ms if hold is not None else None,
         },
         latest_reconciliation=(

@@ -94,6 +94,12 @@
   min-width: 0;
 }
 
+.top-bar__nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 @media (max-width: 760px) {
   .top-bar {
     gap: var(--space-2);
