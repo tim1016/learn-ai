@@ -20256,17 +20256,25 @@ export interface components {
          * @description The run facts the summary line is written from; the same facts give the same line.
          */
         RunSummaryFacts: {
-            /** Current Year */
-            current_year: number;
+            /**
+             * Authored At Ms
+             * Format: int64
+             */
+            authored_at_ms: number;
             /** Decision Count */
             decision_count: number;
+            /**
+             * Decision Count Is Floor
+             * @default false
+             */
+            decision_count_is_floor?: boolean;
             /** Ended At Ms */
             ended_at_ms?: number | null;
             /**
              * Ending
              * @enum {string}
              */
-            ending: "not_started" | "running" | "ended" | "on_schedule" | "stopped" | "halted" | "crashed" | "failed_to_start" | "exited_unverified" | "retired";
+            ending: "not_started" | "running" | "ended" | "on_schedule" | "stopped" | "halted" | "crashed" | "failed_to_start" | "exited_unverified" | "retired" | "unreadable";
             /** Exit Queued */
             exit_queued: boolean;
             /** Held */

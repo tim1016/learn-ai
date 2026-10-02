@@ -35990,14 +35990,22 @@
         "additionalProperties": false,
         "description": "The run facts the summary line is written from; the same facts give the same line.",
         "properties": {
-          "current_year": {
-            "title": "Current Year",
+          "authored_at_ms": {
+            "format": "int64",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Authored At Ms",
             "type": "integer"
           },
           "decision_count": {
             "minimum": 0.0,
             "title": "Decision Count",
             "type": "integer"
+          },
+          "decision_count_is_floor": {
+            "default": false,
+            "title": "Decision Count Is Floor",
+            "type": "boolean"
           },
           "ended_at_ms": {
             "anyOf": [
@@ -36024,7 +36032,8 @@
               "crashed",
               "failed_to_start",
               "exited_unverified",
-              "retired"
+              "retired",
+              "unreadable"
             ],
             "title": "Ending",
             "type": "string"
@@ -36116,7 +36125,7 @@
           "returned_usd",
           "held",
           "exit_queued",
-          "current_year"
+          "authored_at_ms"
         ],
         "title": "RunSummaryFacts",
         "type": "object"

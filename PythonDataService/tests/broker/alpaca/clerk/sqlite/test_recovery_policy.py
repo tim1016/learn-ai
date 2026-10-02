@@ -150,6 +150,40 @@ def test_coverage_resolution_requires_one_exact_economic_replacement() -> None:
         )
 
 
+def test_a_missing_fill_whose_exact_evidence_is_held_needs_no_recovery() -> None:
+    """Codex on #2804: with the exact execution already quarantined, Resolve is the step, not Recover."""
+    conflict = ProjectedExecutionCoverageConflict(
+        uncertainty_id="uncertainty:coverage-1",
+        order_ref="alpaca/intent-1",
+        execution_id="execution-1",
+        execution_ids=("execution-1",),
+        cumulative_fill_id="alpaca/intent-1:5.000000000",
+        exact_qty=5.0,
+        exact_price=100.0,
+        exact_side="BUY",
+        cumulative_qty=5.0,
+        cumulative_price=100.0,
+        cumulative_side="BUY",
+        proof_available=True,
+        unavailable_reason=None,
+    )
+    actions = {
+        action.action_id: action
+        for action in build_recovery_catalog(_context(execution_coverage_conflicts=(conflict,)))
+    }
+
+    recover = actions["recover_exact_execution_evidence"]
+    assert (recover.available, recover.unavailable_reason_code, recover.needed) == (
+        False,
+        "EXACT_EVIDENCE_ALREADY_AVAILABLE",
+        False,
+    )
+    assert (actions["resolve_execution_coverage"].available, actions["resolve_execution_coverage"].needed) == (
+        True,
+        True,
+    )
+
+
 def test_coverage_resolution_explains_when_exact_proof_is_insufficient() -> None:
     conflict = ProjectedExecutionCoverageConflict(
         uncertainty_id="uncertainty:coverage-1",

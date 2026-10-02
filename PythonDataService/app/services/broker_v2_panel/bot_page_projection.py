@@ -21,10 +21,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
 
+from app.broker.alpaca.clerk.account_money import quantity_text
 from app.broker.alpaca.clerk.fills import FillRecord
 from app.broker.alpaca.clerk.money import dollars
+from app.broker.alpaca.clerk.sqlite.economic_projection_models import RunActivity
 from app.schemas.bot_lifecycle import BotDutyOutcomeKind
 from app.schemas.bot_page import (
     BotHealthGroupsView,
@@ -45,10 +46,12 @@ from app.schemas.bot_page import (
 from app.schemas.broker_bots import BotRunView
 from app.schemas.broker_v2_panel import BotPanelView, ChannelHealthView, PanelAction
 from app.services.broker_v2_panel.catalog_projection_service import duty_outcome_needs_attention
-from app.utils.et_words import et_clock_words, et_day_words_in_year
+from app.utils.et_words import et_clock_words, et_day_words
 from app.utils.session_anchors import et_date_at_ms
 
 SUMMARY_TEMPLATE_VERSION = 1
+# A run the Clerk admitted whose launch record cannot be read.
+_UNREADABLE_RUN = "This bot's latest run record could not be read."
 # The bot page lists a run's newest fills; a longer run still counts every trade.
 RUN_FILL_LIMIT = 50
 
@@ -62,8 +65,11 @@ class RunFacts:
     # When the run's own terminal outcome was recorded, and its kind; ``None`` while it runs.
     ended_at_ms: int | None
     ending_kind: BotDutyOutcomeKind | None
+    # The Clerk admitted the run, but its launch record cannot be read.
+    unreadable: bool
     decision_count: int
-    # Orders whose fills landed since the run started.
+    decision_count_is_floor: bool
+    # The run's effective fills, as Bot history counts its transactions.
     trade_count: int
     orders_sent: int
     # The bot's budget, and what its Stop released, in cents (``None`` when unrecorded).
@@ -76,22 +82,24 @@ class RunFacts:
 def run_facts(
     run: BotRunView | None,
     *,
+    unreadable: bool = False,
     run_fills: Sequence[FillRecord],
-    counts: tuple[int, int],
+    activity: RunActivity | None,
     budget: Mapping[str, int | None] | None,
     exit_in_progress: bool,
 ) -> RunFacts:
-    """The run's facts from its record, its fills, its counts and the bot's budget row."""
+    """The run's facts from its record, its fills, its activity and the bot's budget row."""
     terminal = None if run is None else run.terminal_outcome
-    decisions, orders = counts
     return RunFacts(
         run_id=None if run is None else run.run_id,
         started_at_ms=None if run is None else run.started_at_ms,
         ended_at_ms=None if terminal is None else terminal.recorded_at_ms,
         ending_kind=None if terminal is None else terminal.kind,
-        decision_count=decisions,
-        trade_count=len({fill.order_ref for fill in run_fills}),
-        orders_sent=orders,
+        unreadable=unreadable,
+        decision_count=0 if activity is None else activity.decisions,
+        decision_count_is_floor=activity is not None and activity.decisions_is_floor,
+        trade_count=len(run_fills),
+        orders_sent=0 if activity is None else activity.orders_sent,
         committed_cents=None if budget is None else budget["committed_cents"],
         released_cents=None if budget is None else budget["released_cents"],
         exit_in_progress=exit_in_progress,
@@ -102,7 +110,11 @@ def run_facts(
 
 
 def bot_own_status(
-    panel: BotPanelView, *, bot_owns_custody_problem: bool, execution_coverage_complete: bool
+    panel: BotPanelView,
+    *,
+    bot_owns_custody_problem: bool,
+    execution_coverage_complete: bool,
+    run_unreadable: bool = False,
 ) -> BotOwnStatusView:
     """The bot's own status: needs attention, running, ended holding or finished.
 
@@ -114,6 +126,12 @@ def bot_own_status(
     outcome = panel.health.duty_outcome
     if outcome is not None and duty_outcome_needs_attention(outcome.kind):
         return BotOwnStatusView(state="needs_attention", label="Needs attention", reason=outcome.explanation)
+    if run_unreadable:
+        return BotOwnStatusView(
+            state="needs_attention",
+            label="Needs attention",
+            reason=_UNREADABLE_RUN,
+        )
     if not execution_coverage_complete:
         return BotOwnStatusView(
             state="needs_attention",
@@ -159,6 +177,8 @@ _ENDING_WORDS: dict[RunEnding, str] = {
 
 def run_ending(panel: BotPanelView, run: RunFacts) -> RunEnding:
     """How the latest run ended, from its own terminal outcome and whether its end was carried out."""
+    if run.unreadable:
+        return "unreadable"
     if run.started_at_ms is None:
         return "not_started"
     if panel.health.running:
@@ -168,12 +188,6 @@ def run_ending(panel: BotPanelView, run: RunFacts) -> RunEnding:
     if run.ending_kind == "STOPPED" and panel.end is not None and panel.end.status == "ended":
         return "on_schedule"
     return _ENDING_BY_OUTCOME[run.ending_kind]
-
-
-def _quantity_words(quantity: float) -> str:
-    """A share count as the owner reads it: ``1``, ``0.5``, never ``1.0``."""
-    text = format(Decimal(repr(abs(quantity))).normalize(), "f")
-    return f"-{text}" if quantity < 0 else text
 
 
 def run_summary_facts(panel: BotPanelView, run: RunFacts, *, now_ms: int) -> RunSummaryFacts:
@@ -189,36 +203,43 @@ def run_summary_facts(panel: BotPanelView, run: RunFacts, *, now_ms: int) -> Run
         ),
         ending=ending,
         decision_count=run.decision_count,
+        decision_count_is_floor=run.decision_count_is_floor,
         trade_count=run.trade_count,
         set_aside_usd=(
             dollars(run.committed_cents) if ending == "running" and run.committed_cents is not None else None
         ),
         returned_usd=dollars(run.released_cents) if stopped and run.released_cents is not None else None,
         held=[
-            HeldPositionFact(symbol=symbol, quantity=_quantity_words(quantity))
+            HeldPositionFact(symbol=symbol, quantity=quantity_text(quantity))
             for symbol, quantity in sorted(panel.exposure.items())
         ],
         exit_queued=run.exit_in_progress or (panel.end is not None and panel.end.status == "ending"),
-        current_year=et_date_at_ms(now_ms).year,
+        authored_at_ms=now_ms,
     )
 
 
-def _count_words(count: int, noun: str) -> str:
+def _count_words(count: int, noun: str, *, floor: bool = False) -> str:
+    if floor:
+        return f"at least {count:,} {noun}s"
     if count == 0:
         return f"no {noun}s"
-    return f"1 {noun}" if count == 1 else f"{count} {noun}s"
+    return f"1 {noun}" if count == 1 else f"{count:,} {noun}s"
+
+
+def _decision_words(count: int, *, floor: bool) -> str:
+    return _count_words(count, "decision", floor=floor)
 
 
 def _span_words(facts: RunSummaryFacts) -> str:
     """``Wed Sep 30, 14:30–15:59 ET``, naming the end's day only when it differs."""
     assert facts.started_at_ms is not None
-    start_day = et_day_words_in_year(facts.started_at_ms, current_year=facts.current_year)
+    start_day = et_day_words(facts.started_at_ms, now_ms=facts.authored_at_ms)
     start = f"{start_day}, {et_clock_words(facts.started_at_ms)}"
     if facts.ended_at_ms is None:
         return f"{start} ET"
     if et_date_at_ms(facts.ended_at_ms) == et_date_at_ms(facts.started_at_ms):
         return f"{start}–{et_clock_words(facts.ended_at_ms)} ET"
-    end_day = et_day_words_in_year(facts.ended_at_ms, current_year=facts.current_year)
+    end_day = et_day_words(facts.ended_at_ms, now_ms=facts.authored_at_ms)
     return f"{start} ET – {end_day}, {et_clock_words(facts.ended_at_ms)} ET"
 
 
@@ -238,9 +259,12 @@ def run_summary_text(facts: RunSummaryFacts) -> str:
     "Ran Wed Sep 30, 14:30–15:59 ET · ended on schedule · 5 decisions, no
     trades · $800.00 back to the account."
     """
+    if facts.ending == "unreadable":
+        return _UNREADABLE_RUN
     if facts.ending == "not_started" or facts.started_at_ms is None:
         return "Not started yet."
-    activity = f"{_count_words(facts.decision_count, 'decision')}, {_count_words(facts.trade_count, 'trade')}"
+    decisions = _decision_words(facts.decision_count, floor=facts.decision_count_is_floor)
+    activity = f"{decisions}, {_count_words(facts.trade_count, 'trade')}"
     if facts.ending == "running":
         parts = [f"Running since {_span_words(facts)}"]
         if facts.scheduled_end_at_ms is not None:
@@ -322,7 +346,7 @@ def _sell_label(panel: BotPanelView) -> str:
     if len(panel.exposure) != 1:
         return "Sell"
     ((symbol, quantity),) = panel.exposure.items()
-    return f"Sell {_quantity_words(abs(quantity))} {symbol}"
+    return f"Sell {quantity_text(abs(quantity))} {symbol}"
 
 
 def _custody_entry(action: PanelAction, panel: BotPanelView) -> ToolbarActionView:
@@ -472,7 +496,10 @@ _NO_EFFECT_ON_STOPPED = "No effect on this stopped bot."
 
 def _run_lines(panel: BotPanelView, run: RunFacts) -> list[HealthLineView]:
     feed = panel.feed_continuity
-    late = panel.health.running and panel.health.decision_stale
+    # The panel's last decision is the bot's latest ever; only this run's counts here.
+    last = panel.health.last_decision_at_ms
+    last_this_run = last if last is not None and run.started_at_ms is not None and last >= run.started_at_ms else None
+    late = panel.health.running and panel.health.decision_stale and last_this_run is not None
     return [
         HealthLineView(
             key="feed",
@@ -485,9 +512,9 @@ def _run_lines(panel: BotPanelView, run: RunFacts) -> list[HealthLineView]:
             key="decisions",
             label="Decisions",
             state="attention" if late else "ok",
-            value=_count_words(run.decision_count, "decision"),
+            value=_decision_words(run.decision_count, floor=run.decision_count_is_floor),
             note="No decision has come on time." if late else None,
-            at_ms=panel.health.last_decision_at_ms,
+            at_ms=last_this_run,
         ),
         HealthLineView(key="orders", label="Orders sent", state="ok", value=_count_words(run.orders_sent, "order")),
     ]
@@ -566,6 +593,7 @@ def bot_page_view(
         panel,
         bot_owns_custody_problem=bot_owns_custody_problem,
         execution_coverage_complete=execution_coverage_complete,
+        run_unreadable=run.unreadable,
     )
     return BotPageView(
         status=status,

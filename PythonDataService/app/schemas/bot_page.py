@@ -38,10 +38,12 @@ RunEnding = Literal[
     "failed_to_start",
     "exited_unverified",
     "retired",
+    "unreadable",
 ]
 """How the bot's latest run ended, or that it has none yet or is still running.
 
-``ended`` is a run whose end recorded no outcome.
+``ended`` is a run whose end recorded no outcome; ``unreadable`` is a run the
+Clerk admitted whose launch record cannot be read.
 """
 
 
@@ -66,6 +68,8 @@ class RunSummaryFacts(BaseModel):
     scheduled_end_at_ms: EpochMs | None = None
     ending: RunEnding
     decision_count: int = Field(ge=0)
+    # The Clerk keeps a bot's newest 1,000 decisions; a longer run may count only those.
+    decision_count_is_floor: bool = False
     trade_count: int = Field(ge=0)
     # A running bot's budget, in dollars.
     set_aside_usd: str | None
@@ -73,8 +77,8 @@ class RunSummaryFacts(BaseModel):
     returned_usd: str | None
     held: list[HeldPositionFact]
     exit_queued: bool
-    # The ET year the line was read in: a run in another year names its year.
-    current_year: int
+    # When the line was written: a run in another ET year names its year.
+    authored_at_ms: EpochMs
 
 
 class RunSummaryView(BaseModel):

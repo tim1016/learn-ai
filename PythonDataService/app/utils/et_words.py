@@ -30,13 +30,8 @@ def et_when_words(instant_ms: int, *, now_ms: int) -> str:
 
 def et_day_words(instant_ms: int, *, now_ms: int) -> str:
     """An instant's ET date as the owner reads it: ``Wed Sep 30``, with the year when it is not now's (in ET)."""
-    return et_day_words_in_year(instant_ms, current_year=et_date_at_ms(now_ms).year)
-
-
-def et_day_words_in_year(instant_ms: int, *, current_year: int) -> str:
-    """``Wed Sep 30``, with the year when it is not ``current_year``: for copy that must not read the clock."""
     day = et_date_at_ms(instant_ms)
-    year = "" if day.year == current_year else f" {day.year}"
+    year = "" if day.year == et_date_at_ms(now_ms).year else f" {day.year}"
     return f"{day:%a %b} {day.day}{year}"
 
 
