@@ -241,7 +241,10 @@ describe('StrategyChartComponent (#2639)', () => {
     await select('{End}');
     expect(selections).toEqual([barCloseMs(3), barCloseMs(2), barCloseMs(0), barCloseMs(0), barCloseMs(3)]);
 
-    await select('{ArrowLeft}');
+    // Presses faster than a render still step one bar each.
+    await user.keyboard('{ArrowLeft}{ArrowLeft}');
+    expect(selections.slice(-2)).toEqual([barCloseMs(2), barCloseMs(1)]);
+    await select('{ArrowRight}');
     await user.keyboard('{Enter}');
     // Placed where the candle is drawn: its close's coordinates inside the chart.
     expect(clicks).toEqual([{ barCloseMs: barCloseMs(2), clientX: 120, clientY: 40 }]);

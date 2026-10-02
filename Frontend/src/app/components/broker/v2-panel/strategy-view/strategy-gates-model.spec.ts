@@ -70,4 +70,20 @@ describe('strategy gates model (#2639)', () => {
     ]);
     expect(groups.find((group) => group.title === 'Catalogue')?.note).toBe('chart-computed from these candles');
   });
+
+  it('leaves out a catalogue name the bot already records, which the data plane reads as the bot’s value', () => {
+    const view = fakeStrategyView();
+    const recordsEma = fakeStrategyView({
+      declaration: {
+        ...view.declaration,
+        values: [
+          ...view.declaration.values,
+          { key: 'ema_slow', label: 'EMA 10', variable: 'EMA10', pane: 'price', band: null, decimals: 2, catalogue: null },
+        ],
+      },
+    });
+
+    const catalogue = gateVariableGroups(recordsEma, FAKE_INDICATOR_CATALOGUE).find((group) => group.title === 'Catalogue');
+    expect(catalogue?.chips.map((chip) => chip.name)).toEqual(['VWAP']);
+  });
 });

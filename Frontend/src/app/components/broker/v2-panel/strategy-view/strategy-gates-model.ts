@@ -128,7 +128,9 @@ export interface GateVariableGroup {
  * bot's recorded values, its deployed settings, the candle, then catalogue
  * indicators the chart computes from the candles. Only catalogue indicators
  * with no setting or a single length are offered, written with their default
- * length; the owner edits the number.
+ * length; the owner edits the number. A catalogue name the bot already
+ * records is left out: the data plane reads it as the bot's own value, so it
+ * would not be chart-computed.
  */
 export function gateVariableGroups(
   view: StrategyViewResponse,
@@ -137,6 +139,7 @@ export function gateVariableGroups(
   const settings = Object.entries(view.settings ?? {}).flatMap(([name, value]): GateVariableChip[] =>
     typeof value === 'number' ? [{ name, hint: String(value) }] : [],
   );
+  const recorded = new Set(view.declaration.values.map((value) => value.variable.toUpperCase()));
   const indicators = catalogue.flatMap((category) => category.indicators).flatMap((indicator): GateVariableChip[] => {
     const params = indicator.configurable_params;
     const name = indicator.name.toUpperCase();
@@ -154,7 +157,11 @@ export function gateVariableGroups(
     },
     { title: 'Settings', note: 'as deployed', chips: settings },
     { title: 'Candle', note: null, chips: CANDLE_VARIABLES.map((name) => ({ name, hint: `the bar’s ${name}` })) },
-    { title: 'Catalogue', note: 'chart-computed from these candles', chips: indicators },
+    {
+      title: 'Catalogue',
+      note: 'chart-computed from these candles',
+      chips: indicators.filter((chip) => !recorded.has(chip.name.toUpperCase())),
+    },
   ].filter((group) => group.chips.length > 0);
 }
 

@@ -159,6 +159,9 @@ export class StrategyChartComponent implements AfterViewInit {
   /** The run whose bars were last fitted to the width; a new run fits again. */
   private fittedRunId: string | null = null;
   private fitPending = false;
+  /** The candle the keyboard last chose, until the host's selection catches
+   * up: key presses faster than a render still step one bar each. */
+  private keyboardSelection: number | null = null;
 
   constructor() {
     effect(() => this.renderCandles());
@@ -170,6 +173,7 @@ export class StrategyChartComponent implements AfterViewInit {
     effect(() => this.renderOverlays());
     effect(() => {
       const selected = this.selectedBarCloseMs();
+      this.keyboardSelection = null;
       untracked(() => this.revealSelected(selected));
     });
   }
@@ -350,7 +354,8 @@ export class StrategyChartComponent implements AfterViewInit {
     const candles = this.view().candles;
     if (candles.length === 0) return;
     const last = candles.length - 1;
-    const current = candles.findIndex((candle) => candle.bar_close_ms === this.selectedBarCloseMs());
+    const selected = this.keyboardSelection ?? this.selectedBarCloseMs();
+    const current = candles.findIndex((candle) => candle.bar_close_ms === selected);
     let next: number;
     switch (event.key) {
       case 'ArrowLeft': next = current < 0 ? last : Math.max(0, current - 1); break;
@@ -366,7 +371,8 @@ export class StrategyChartComponent implements AfterViewInit {
         return;
     }
     event.preventDefault();
-    this.candleSelected.emit(candles[next].bar_close_ms);
+    this.keyboardSelection = candles[next].bar_close_ms;
+    this.candleSelected.emit(this.keyboardSelection);
   }
 
   /** Reports candle `index` as a click at its place on the chart. */
