@@ -256,6 +256,10 @@ async def test_run_research_locks_and_reaches_compare_in_one_job_spending_what_s
     assert done.consumed_evaluations == stepped.consumed_evaluations
     assert done.results["validation"]["verdict"] == stepped.results["validation"]["verdict"]
     assert [item["key"] for item in done.results["evidence"]["candidates"]] == [item["key"] for item in stepped.results["evidence"]["candidates"]]
+    # Compare's decision summary covers each candidate; nothing measures concentration, so it reads missing.
+    summaries = (await driver.detail(done))["decision_summaries"]
+    assert [summary["candidate_key"] for summary in summaries] == [item["key"] for item in done.results["evidence"]["candidates"]]
+    assert all(next(row for row in summary["rows"] if row["key"] == "concentration")["status"] == "missing" for summary in summaries)
 
 
 async def test_a_retried_run_research_resolves_to_the_same_study_and_run(driver: Driver, symbol: str) -> None:

@@ -1,13 +1,14 @@
-import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, output, signal, viewChild } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 
 import { GoldenSearchCandidateAsideComponent } from './golden-search-candidate-aside.component';
 import { GoldenSearchCandidateTableComponent } from './golden-search-candidate-table.component';
 import { candidateRows, initialRowKey, rowKeyFor, selectedCaption, type CandidateRow } from './golden-search-compare';
-import { GoldenSearchEvidenceTabsComponent } from './golden-search-evidence-tabs.component';
+import { GoldenSearchDecisionSummaryComponent } from './golden-search-decision-summary.component';
+import { EVIDENCE_TABS, GoldenSearchEvidenceTabsComponent, type EvidenceTab } from './golden-search-evidence-tabs.component';
 import { GoldenSearchRetainComponent, type RetainDecision } from './golden-search-retain.component';
-import type { StudyStep } from './golden-search-steps';
-import type { CandidateKey, StrategyCapability, StudyCommand, StudyDetail } from './golden-search.types';
+import { STUDY_STEPS, type StudyStep } from './golden-search-steps';
+import type { CandidateKey, StrategyCapability, StudyCommand, StudyDetail, SummaryLink } from './golden-search.types';
 
 /** The one forward action Compare offers for the selected candidate. */
 type CompareAction =
@@ -28,7 +29,14 @@ const INCUMBENT_CAPTION = 'The incumbent is not a new candidate. Use “Keep cur
  */
 @Component({
   selector: 'app-golden-search-compare-step',
-  imports: [ButtonModule, GoldenSearchCandidateAsideComponent, GoldenSearchCandidateTableComponent, GoldenSearchEvidenceTabsComponent, GoldenSearchRetainComponent],
+  imports: [
+    ButtonModule,
+    GoldenSearchCandidateAsideComponent,
+    GoldenSearchCandidateTableComponent,
+    GoldenSearchDecisionSummaryComponent,
+    GoldenSearchEvidenceTabsComponent,
+    GoldenSearchRetainComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-compare-step.component.html',
   styleUrl: './golden-search-compare-step.component.scss',
@@ -53,6 +61,12 @@ export class GoldenSearchCompareStepComponent {
     return rowKeyFor(rows, picked?.studyId === study.id ? picked.key : null) ?? initialRowKey(rows, study.candidate_key);
   });
   protected readonly selectedRow = computed(() => this.rows().find((row) => row.key === this.selectedKey()) ?? null);
+  /** The server's decision summary for the selected candidate; none before the evidence exists. */
+  protected readonly summary = computed(() => {
+    const row = this.selectedRow();
+    return row === null ? null : (this.study().decision_summaries.find((item) => item.candidate_key === row.candidate.key)?.rows ?? null);
+  });
+  private readonly tabs = viewChild(GoldenSearchEvidenceTabsComponent);
   protected readonly caption = computed(() => {
     const row = this.selectedRow();
     return row === null ? null : selectedCaption(row.candidate);
@@ -83,6 +97,12 @@ export class GoldenSearchCompareStepComponent {
     return { kind: 'none', label: 'Review final-test lock', reason: study.action_refusals.select_candidate ?? 'This study cannot lock a candidate now.' };
   });
 
+  /** A summary row's evidence: one of this step's tabs, or the study step that holds it. */
+  protected follow(link: SummaryLink): void {
+    if (link.kind === 'tab' && isEvidenceTab(link.target)) this.tabs()?.open(link.target);
+    else if (link.kind === 'step' && isStudyStep(link.target)) this.goTo.emit(link.target);
+  }
+
   protected pick(key: CandidateKey): void {
     this.picked.set({ studyId: this.study().id, key });
   }
@@ -96,4 +116,12 @@ export class GoldenSearchCompareStepComponent {
   protected retain(decision: RetainDecision): void {
     this.studyCommand.emit({ command: 'retain', payload: { kind: decision.kind, note: decision.note } });
   }
+}
+
+function isEvidenceTab(target: string): target is EvidenceTab {
+  return EVIDENCE_TABS.some((tab) => tab.id === target);
+}
+
+function isStudyStep(target: string): target is StudyStep {
+  return STUDY_STEPS.some((step) => step.id === target);
 }

@@ -20,6 +20,7 @@ from typing import Any
 
 from app.research.golden_search.actions import permitted
 from app.research.golden_search.activity import TradeFloors
+from app.research.golden_search.decision_summary import decision_summaries
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, scalar
 from app.research.golden_search.evidence import CANDIDATE_LABELS, drawdown_series, monthly_results
 from app.research.golden_search.guidance import (
@@ -96,6 +97,12 @@ def study_detail(
         "protocol": dict(row.protocol),
         "receipt": receipt_summary(row),
         "activity": row.receipt.get("activity"),
+        "decision_summaries": decision_summaries(
+            row.results,
+            floors=TradeFloors(protocol, row.receipt),
+            development=(protocol.development_start_ms, protocol.development_end_ms),
+            exposure=exposure_preview,
+        ),
         "permitted_actions": permitted(dict(refusals)),
         "action_refusals": {command: reason for command, reason in refusals.items() if reason is not None},
         "guidance": study_guidance(

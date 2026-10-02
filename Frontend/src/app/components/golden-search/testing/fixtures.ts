@@ -2,6 +2,7 @@ import { etMidnightMs } from '../../../shared/date/et-midnight';
 import type {
   CandidateDetail,
   CandidateKey,
+  DecisionSummary,
   EvidenceCandidate,
   EvidenceView,
   ExamOutcome,
@@ -577,6 +578,21 @@ function qualificationFor(state: StudyState): QualificationView | null {
   return null;
 }
 
+/** A candidate's decision summary as the server classifies it: meets, a concern, and evidence that was not recorded. */
+export function decisionSummary(key: CandidateKey, rows: DecisionSummary['rows'] | null = null): DecisionSummary {
+  return {
+    candidate_key: key,
+    rows: rows ?? [
+      { key: 'development_activity', label: 'Development activity', status: 'meets', text: '42 trades over the development period; its minimum is 30.', link: { kind: 'tab', target: 'trades' } },
+      { key: 'test_over_time', label: 'Test over time', status: 'meets', text: 'The search procedure still worked: median out-of-sample Sharpe is positive. 9 of 9 scheduled folds completed.', link: { kind: 'step', target: 'test' } },
+      { key: 'neighbors', label: 'Neighbor sensitivity', status: 'concern', text: 'A one-step change in hold_bars loses money.', link: { kind: 'tab', target: 'neighbors' } },
+      { key: 'stress', label: 'Cost stresses', status: 'meets', text: 'Every stressed run still makes money.', link: { kind: 'tab', target: 'stress' } },
+      { key: 'concentration', label: 'Concentration', status: 'missing', text: 'Not measured: no stage yet checks how much of the result comes from a few trades or months.', link: { kind: 'tab', target: 'months' } },
+      { key: 'final_exposure', label: 'Final-test exposure', status: 'meets', text: 'No recorded research has used the final interval, so its one look counts as confirmatory.', link: { kind: 'step', target: 'decision' } },
+    ],
+  };
+}
+
 export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> = {}): StudyDetail {
   const reachedSearch = !['locked', 'search_running'].includes(state);
   const reachedValidation = reachedSearch && !['awaiting_validation', 'validation_running'].includes(state);
@@ -602,6 +618,7 @@ export function studyDetail(state: StudyState, overrides: Partial<StudyDetail> =
     failure_reason: state === 'qualification_failed' ? QUALIFICATION_FAILURE : null,
     hidden: false,
     run_to_compare: false,
+    decision_summaries: reachedValidation ? [decisionSummary('all_period'), decisionSummary('recent'), decisionSummary('incumbent')] : [],
     exposure_claim: examOpened ? 'confirmatory' : null,
     exam_outcome: examJudged ? 'meets_rules' : null,
     qualification_id: state === 'approved' ? 'gq-0001-aaaa-bbbb' : null,

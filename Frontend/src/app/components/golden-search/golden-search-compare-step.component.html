@@ -25,7 +25,10 @@
           <app-golden-search-evidence-tabs [studyId]="s.id" [rows]="rows()" [selected]="row" [pairMaps]="pairMaps()" [mapCenter]="mapCenter()"
             [mapCenterLabel]="mapCenterLabel()" [capability]="capability()" [scope]="s.scope" />
         </section>
-        <app-golden-search-candidate-aside [candidate]="row.candidate" [study]="s" />
+        <div class="side">
+          <app-golden-search-candidate-aside [candidate]="row.candidate" [study]="s" />
+          @if (summary(); as rows) { <app-golden-search-decision-summary [rows]="rows" (follow)="follow($event)" /> }
+        </div>
       </div>
     }
 

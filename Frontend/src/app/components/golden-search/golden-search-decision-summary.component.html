@@ -1,0 +1,15 @@
+<section class="summary" aria-labelledby="gs-decision-summary-title">
+  <h3 id="gs-decision-summary-title">What the research supports</h3>
+  <ul class="rows">
+    @for (row of rows(); track row.key) {
+      <li class="row" [attr.data-status]="row.status">
+        <span class="row__status"><i [class]="'pi ' + statusIcon[row.status]" aria-hidden="true"></i>{{ statusText[row.status] }}</span>
+        <div class="row__body">
+          <strong>{{ row.label }}</strong>
+          <span>{{ row.text }}</span>
+          <button type="button" class="link" (click)="follow.emit(row.link)">See the evidence<span class="sr-only"> for {{ row.label }}</span></button>
+        </div>
+      </li>
+    }
+  </ul>
+</section>

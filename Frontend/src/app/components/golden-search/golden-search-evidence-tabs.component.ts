@@ -13,7 +13,7 @@ import type { CandidateDetail, CandidateKey, PairMap, Point, StrategyCapability,
 
 export type EvidenceTab = 'map' | 'equity' | 'months' | 'trades' | 'neighbors' | 'stress';
 
-const TABS: readonly { id: EvidenceTab; label: string }[] = [
+export const EVIDENCE_TABS: readonly { id: EvidenceTab; label: string }[] = [
   { id: 'map', label: 'Parameter map' },
   { id: 'equity', label: 'Equity' },
   { id: 'months', label: 'By month' },
@@ -56,7 +56,7 @@ export class GoldenSearchEvidenceTabsComponent {
   readonly capability = input<StrategyCapability | null>(null);
   readonly scope = input.required<StudyScope>();
 
-  protected readonly tabs = TABS;
+  protected readonly tabs = EVIDENCE_TABS;
   readonly active = signal<EvidenceTab>('map');
   private readonly detailWanted = signal(false);
 
