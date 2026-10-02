@@ -78,7 +78,8 @@ async def get_backtest_run(run_id: int) -> BacktestRunDetailResponse:
 )
 async def get_backtest_run_strategy_view(run_id: int) -> StrategyViewResponse:
     """The run's strategy view, replayed from its own record; 409 says why when it cannot be replayed exactly."""
-    run = await with_connection(repo.get_run, run_id)
+    # Every trade, not the report's newest: the replay is held to each one.
+    run = await with_connection(repo.get_run, run_id, trade_limit=None)
     if run is None:
         raise _not_found(run_id)
     try:

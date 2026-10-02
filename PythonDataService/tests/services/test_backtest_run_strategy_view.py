@@ -23,7 +23,7 @@ from app.engine.strategy.registry import strategy_program_version
 from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
 from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
 from app.research.backtest_runs.records import persisted_execution_configuration
-from app.research.backtest_runs.repository import RunDetail, TradeRow
+from app.research.backtest_runs.repository import REPORT_TRADE_LIMIT, RunDetail, TradeRow
 from app.routers import backtest_runs
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.services.backtest_run_strategy_view import _request_from_run, build_backtest_run_strategy_view
@@ -170,6 +170,11 @@ def test_a_replay_that_does_not_reproduce_the_runs_trades_is_refused(saved_run: 
         build_backtest_run_strategy_view(moved)
 
 
+def test_a_run_read_with_only_its_newest_trades_is_not_checked_against_some_of_them(saved_run: RunDetail) -> None:
+    with pytest.raises(ValueError, match="checked against every one"):
+        build_backtest_run_strategy_view(replace(saved_run, trades=saved_run.trades[1:], trades_truncated=True))
+
+
 def test_a_run_replays_on_its_code_whatever_data_receipt_it_or_the_lake_holds(
     saved_run: RunDetail, lake_receipt: dict[str, str]
 ) -> None:
@@ -225,7 +230,7 @@ async def test_the_route_answers_a_refusal_with_its_reason(
 ) -> None:
     runs = {7: replace(saved_run, source="lean-sidecar")}
 
-    async def read(function: object, run_id: int) -> RunDetail | None:
+    async def read(function: object, run_id: int, **_kwargs: object) -> RunDetail | None:
         return runs.get(run_id)
 
     monkeypatch.setattr(backtest_runs, "with_connection", read)
@@ -241,6 +246,28 @@ async def test_the_route_answers_a_refusal_with_its_reason(
     assert missing.status_code == 404
 
 
+async def test_the_route_checks_the_replay_against_trades_older_than_the_report_keeps(
+    saved_run: RunDetail, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run report keeps only a run's newest trades; the replay is held to every one."""
+    monkeypatch.setattr(backtest_runs, "_view_cache", OrderedDict())
+    first, *rest = saved_run.trades
+    moved = replace(saved_run, trades=(replace(first, entry_price=first.entry_price + 0.01), *rest))
+
+    async def read(function: object, run_id: int, *, trade_limit: int | None = REPORT_TRADE_LIMIT) -> RunDetail:
+        # A read capped like the report's leaves out the run's oldest trade, the one that moved.
+        return moved if trade_limit is None else replace(moved, trades=tuple(rest), trades_truncated=True)
+
+    monkeypatch.setattr(backtest_runs, "with_connection", read)
+    app = FastAPI()
+    app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs")
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        refused = await client.get("/api/research/backtest-runs/7/strategy-view")
+
+    assert refused.status_code == 409
+    assert "changed its trade 1" in refused.json()["detail"]["message"]
+
+
 async def test_a_replay_in_flight_is_joined_and_then_kept(
     saved_run: RunDetail, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -253,7 +280,7 @@ async def test_a_replay_in_flight_is_joined_and_then_kept(
         built.append(run.id)
         return view
 
-    async def read(function: object, run_id: int) -> RunDetail:
+    async def read(function: object, run_id: int, **_kwargs: object) -> RunDetail:
         return saved_run
 
     monkeypatch.setattr(backtest_runs, "build_backtest_run_strategy_view", build)
