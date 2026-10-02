@@ -10,11 +10,13 @@ import {
   inject,
   input,
   output,
+  signal,
   untracked,
   viewChild,
 } from '@angular/core';
 import {
   CandlestickSeries,
+  HistogramSeries,
   LineSeries,
   createSeriesMarkers,
   type IChartApi,
@@ -29,6 +31,7 @@ import {
 import { createAppChart, formatChartAxisTick } from '../../../../shared/charts/chart-utils';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import { formatChartCrosshairTime } from '../dual-pane-chart/dual-pane-chart.component';
+import type { IndicatorSeriesPlan } from '../dual-pane-chart/dual-pane-chart-indicators';
 import type { StrategyViewResponse } from '../lib/broker-v2-panel.types';
 import {
   StrategyChartOverlay,
@@ -38,6 +41,8 @@ import {
 import {
   BAND_LINE_COLOR,
   decisionMarkers,
+  gateResult,
+  gateResultText,
   lineColorHex,
   openingRange,
   rangeRevealing,
@@ -66,23 +71,49 @@ function minuteOf(ms: number): string {
   return formatTimestampDisplay(ms, { mode: 'local', granularity: 'minute' });
 }
 
+/** A bar's date and minute: a warmup bar can be from an earlier day. */
+function barOf(ms: number): string {
+  return `${formatTimestampDisplay(ms, { mode: 'local', granularity: 'date' })} ${minuteOf(ms)}`;
+}
+
 /**
  * The bot's own decision candles on a lightweight-charts canvas (#2639).
  *
  * Candles are the strategy view's bars, placed at their close and shaded by
  * the active gate's result as the backend recorded it. Each declared value
  * with a pane is a line from the bot's recorded values; a band draws two
- * dashed levels on its pane. The before-start shade, the run's start and end
- * lines and the selected candle's band are one overlay primitive per pane.
- * Clicking a candle reports it; the host owns selection.
+ * dashed levels on its pane. Catalogue indicators the viewer adds are drawn
+ * thinner, from the chart's own computation on these candles, on the price
+ * pane or on panes after the strategy's. The before-start shade, the run's
+ * start and end lines and the selected candle's band are one overlay
+ * primitive per pane. Clicking a candle reports it; the host owns selection.
+ *
+ * The chart takes focus: the arrow keys (and Home/End) move the selected
+ * candle, and Enter or Space opens its checks as a click would.
  */
 @Component({
   selector: 'app-strategy-chart',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `<div #chartContainer class="strategy-chart" role="img" [attr.aria-label]="ariaLabel()"></div>`,
+  template: `
+    <div
+      #chartContainer
+      class="strategy-chart"
+      role="group"
+      aria-roledescription="chart"
+      tabindex="0"
+      [attr.aria-label]="ariaLabel()"
+      (keydown)="onKeydown($event)"
+    ></div>
+    <p class="strategy-chart__announcement" aria-live="polite">{{ announcement() }}</p>
+  `,
   styles: `
-    :host { display: block; min-height: 0; }
+    :host { display: block; position: relative; min-height: 0; }
+    .strategy-chart__announcement {
+      position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+      overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+    }
     .strategy-chart { width: 100%; height: 100%; min-height: 22rem; cursor: pointer; }
+    .strategy-chart:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
   `,
 })
 export class StrategyChartComponent implements AfterViewInit {
@@ -90,16 +121,23 @@ export class StrategyChartComponent implements AfterViewInit {
   /** The active gate; `null` shades every candle dark. */
   readonly gateId = input.required<string | null>();
   readonly selectedBarCloseMs = input<number | null>(null);
+  /** Chart-computed catalogue lines, placed at each candle's close. */
+  readonly indicatorPlans = input<readonly IndicatorSeriesPlan[]>([]);
 
   readonly candleClicked = output<StrategyCandleClick>();
+  /** A candle chosen from the keyboard, by its bar close. */
+  readonly candleSelected = output<number>();
 
   private readonly chartContainer = viewChild.required<ElementRef<HTMLDivElement>>('chartContainer');
+  /** What a keyboard move selected, read out politely: the bar and what the gate made of it. */
+  protected readonly announcement = signal('');
   private readonly destroyRef = inject(DestroyRef);
   private readonly createChart = inject(STRATEGY_CHART_FACTORY);
 
   protected readonly ariaLabel = computed(() => {
     const view = this.view();
-    return `${view.strategy_name} decision candles for ${view.symbol}. Click a candle for its checks.`;
+    return `${view.strategy_name} decision candles for ${view.symbol}. `
+      + 'Click a candle for its checks, or use the arrow keys and Enter.';
   });
 
   private readonly linePlans = computed(() => strategyLinePlans(this.view().declaration, this.view().candles));
@@ -131,17 +169,26 @@ export class StrategyChartComponent implements AfterViewInit {
   private priceOverlay: StrategyChartOverlay | null = null;
   private paneOverlays: StrategyChartOverlay[] = [];
   private lineSeries = new Map<string, ISeriesApi<SeriesType>>();
+  private computedSeries: ISeriesApi<SeriesType>[] = [];
   private lineSignature: string | null = null;
   /** The run whose bars were last fitted to the width; a new run fits again. */
   private fittedRunId: string | null = null;
   private fitPending = false;
+  /** The candle the keyboard last chose, until the host's selection catches
+   * up: key presses faster than a render still step one bar each. */
+  private keyboardSelection: number | null = null;
 
   constructor() {
     effect(() => this.renderCandles());
     effect(() => this.renderLines());
+    effect(() => {
+      const plans = this.indicatorPlans();
+      untracked(() => this.renderComputed(plans));
+    });
     effect(() => this.renderOverlays());
     effect(() => {
       const selected = this.selectedBarCloseMs();
+      this.keyboardSelection = null;
       untracked(() => this.revealSelected(selected));
     });
   }
@@ -188,9 +235,11 @@ export class StrategyChartComponent implements AfterViewInit {
       this.priceOverlay = null;
       this.paneOverlays = [];
       this.lineSeries.clear();
+      this.computedSeries = [];
     });
     this.renderCandles();
     this.renderLines();
+    this.renderComputed(this.indicatorPlans());
     this.renderOverlays();
   }
 
@@ -244,6 +293,8 @@ export class StrategyChartComponent implements AfterViewInit {
   }
 
   private rebuildLines(chart: IChartApi, plans: readonly StrategyLinePlan[]): void {
+    // The catalogue's panes come after the strategy's, so they go first and return last.
+    this.clearComputed(chart);
     for (const series of this.lineSeries.values()) chart.removeSeries(series);
     this.lineSeries.clear();
     this.paneOverlays = [];
@@ -270,13 +321,88 @@ export class StrategyChartComponent implements AfterViewInit {
     const panes = chart.panes();
     panes[0]?.setStretchFactor(PRICE_PANE_STRETCH);
     for (const pane of panes.slice(1)) pane.setStretchFactor(1);
-    untracked(() => this.renderOverlays());
+    untracked(() => {
+      this.renderComputed(this.indicatorPlans());
+      this.renderOverlays();
+    });
+  }
+
+  /** Redraws the catalogue lines: overlays on the price pane, the rest on
+   * panes of their own after the strategy's (one pane per indicator panel). */
+  private renderComputed(plans: readonly IndicatorSeriesPlan[]): void {
+    const chart = this.chart;
+    if (chart === null) return;
+    this.clearComputed(chart);
+    const firstFreePane = Math.max(0, ...this.linePlans().map((plan) => plan.paneIndex)) + 1;
+    const paneIndices = new Map<string, number>();
+    for (const plan of plans) {
+      let paneIndex = 0;
+      if (plan.pane !== 'main') {
+        paneIndex = paneIndices.get(plan.pane) ?? firstFreePane + paneIndices.size;
+        paneIndices.set(plan.pane, paneIndex);
+      }
+      const options = { color: plan.color, priceLineVisible: false, lastValueVisible: false };
+      const series = plan.type === 'histogram'
+        ? chart.addSeries(HistogramSeries, options, paneIndex)
+        : chart.addSeries(LineSeries, { ...options, lineWidth: 1, crosshairMarkerVisible: false }, paneIndex);
+      series.setData(plan.points.map((point) => ({ time: point.time, value: point.value })));
+      for (const price of plan.referenceLevels) {
+        series.createPriceLine({ price, color: BAND_LINE_COLOR, lineWidth: 1, lineStyle: 2, axisLabelVisible: true });
+      }
+      this.computedSeries.push(series);
+    }
+  }
+
+  private clearComputed(chart: IChartApi): void {
+    for (const series of this.computedSeries) chart.removeSeries(series);
+    this.computedSeries = [];
   }
 
   private renderOverlays(): void {
     const state = this.overlayState();
     this.priceOverlay?.update(state);
     for (const overlay of this.paneOverlays) overlay.update(state);
+  }
+
+  /** Arrow keys and Home/End move the selected candle; Enter or Space opens it. */
+  protected onKeydown(event: KeyboardEvent): void {
+    const candles = this.view().candles;
+    if (candles.length === 0) return;
+    const last = candles.length - 1;
+    const selected = this.keyboardSelection ?? this.selectedBarCloseMs();
+    const current = candles.findIndex((candle) => candle.bar_close_ms === selected);
+    let next: number;
+    switch (event.key) {
+      case 'ArrowLeft': next = current < 0 ? last : Math.max(0, current - 1); break;
+      case 'ArrowRight': next = current < 0 ? last : Math.min(last, current + 1); break;
+      case 'Home': next = 0; break;
+      case 'End': next = last; break;
+      case 'Enter':
+      case ' ':
+        event.preventDefault();
+        this.openCandle(current < 0 ? last : current);
+        return;
+      default:
+        return;
+    }
+    event.preventDefault();
+    const candle = candles[next];
+    this.keyboardSelection = candle.bar_close_ms;
+    this.announcement.set(`${barOf(candle.bar_close_ms)} bar: gate ${gateResultText(gateResult(candle, this.gateId()))}.`);
+    this.candleSelected.emit(this.keyboardSelection);
+  }
+
+  /** Reports candle `index` as a click at its place on the chart. */
+  private openCandle(index: number): void {
+    const candle = this.view().candles[index];
+    const bounds = this.chartContainer().nativeElement.getBoundingClientRect();
+    const x = this.chart?.timeScale().timeToCoordinate(toChartTime(candle.bar_close_ms)) ?? null;
+    const y = this.candles?.priceToCoordinate(candle.close) ?? null;
+    this.candleClicked.emit({
+      barCloseMs: candle.bar_close_ms,
+      clientX: bounds.left + (x ?? bounds.width / 2),
+      clientY: bounds.top + (y ?? bounds.height / 2),
+    });
   }
 
   private onChartClick(param: MouseEventParams<Time>): void {

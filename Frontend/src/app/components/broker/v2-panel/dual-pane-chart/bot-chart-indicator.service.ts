@@ -7,6 +7,7 @@ import type { ChartBar } from '../lib/broker-v2-panel.types';
 import type { ChartIndicatorEntry } from '../../../../shared/trading-chart';
 import {
   type ChartIndicatorBatchResponse,
+  type ChartIndicatorRequestBar,
   type ChartIndicatorSupportResponse,
   toChartIndicatorRequestBars,
 } from './dual-pane-chart-indicators';
@@ -26,11 +27,20 @@ export class BotChartIndicatorService {
     bars: readonly ChartBar[],
     indicators: readonly ChartIndicatorEntry[],
   ): Observable<ChartIndicatorBatchResponse> {
+    return this.calculateBars(symbol, toChartIndicatorRequestBars(bars), indicators);
+  }
+
+  /** The indicators on bars already in the request's shape, e.g. a strategy's decision candles. */
+  calculateBars(
+    symbol: string,
+    bars: readonly ChartIndicatorRequestBar[],
+    indicators: readonly ChartIndicatorEntry[],
+  ): Observable<ChartIndicatorBatchResponse> {
     return this.http.post<ChartIndicatorBatchResponse>(
       `${environment.pythonServiceUrl}/api/chart/indicators`,
       {
         symbol,
-        bars: toChartIndicatorRequestBars(bars),
+        bars,
         indicators: indicators.map((indicator) => ({
           name: indicator.name,
           params: { ...indicator.params },

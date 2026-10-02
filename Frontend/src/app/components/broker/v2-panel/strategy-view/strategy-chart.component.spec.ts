@@ -1,4 +1,5 @@
-import { render } from '@testing-library/angular';
+import { render, screen } from '@testing-library/angular';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -14,13 +15,14 @@ import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-d
 import type { StrategyViewResponse } from '../lib/broker-v2-panel.types';
 import type { StrategyChartOverlay } from './strategy-chart-overlay';
 import { STRATEGY_CHART_FACTORY, StrategyChartComponent, type StrategyCandleClick } from './strategy-chart.component';
-import { GATE_CANDLE_COLORS } from './strategy-view-model';
+import { GATE_CANDLE_COLORS, toChartTime } from './strategy-view-model';
 
 const markers = vi.hoisted(() => ({ setMarkers: vi.fn() }));
 
 vi.mock('lightweight-charts', () => ({
   createSeriesMarkers: vi.fn().mockReturnValue(markers),
   CandlestickSeries: 'CandlestickSeries',
+  HistogramSeries: 'HistogramSeries',
   LineSeries: 'LineSeries',
   TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
 }));
@@ -133,6 +135,36 @@ describe('StrategyChartComponent (#2639)', () => {
     expect(lastData(foo).at(-1)).toEqual({ time: barCloseMs(4) / 1000, value: 104 });
   });
 
+  it('draws catalogue lines thinner, on the price pane or on panes after the strategy’s, never rebuilding its own', async () => {
+    const { chart, series, fixture } = await renderChart();
+    const [ownFoo, ownBar] = series.filter((each) => each.type === 'LineSeries');
+    chart.removeSeries.mockClear();
+
+    fixture.componentRef.setInput('indicatorPlans', [
+      { id: 'vwap', pane: 'main', type: 'line', color: '#e0c050', points: [{ time: toChartTime(barCloseMs(3)), value: 499 }], referenceLevels: [] },
+      { id: 'rsi_20', pane: 'rsi', type: 'line', color: '#a0a0ff', points: [], referenceLevels: [30, 70] },
+      { id: 'macd-hist', pane: 'macd', type: 'histogram', color: '#888888', points: [], referenceLevels: [] },
+    ]);
+    await fixture.whenStable();
+
+    const computed = series.slice(-3);
+    // The strategy's own lines hold panes 0 and 1, so the catalogue's own panes start at 2.
+    expect(computed.map((each) => [each.type, each.pane, each.options['lineWidth']])).toEqual([
+      ['LineSeries', 0, 1],
+      ['LineSeries', 2, 1],
+      ['HistogramSeries', 3, undefined],
+    ]);
+    expect(computed[0].setData).toHaveBeenLastCalledWith([{ time: toChartTime(barCloseMs(3)), value: 499 }]);
+    expect(computed[1].createPriceLine.mock.calls.map(([line]) => line.price)).toEqual([30, 70]);
+    expect(chart.removeSeries).not.toHaveBeenCalled();
+
+    fixture.componentRef.setInput('indicatorPlans', []);
+    await fixture.whenStable();
+    expect(chart.removeSeries.mock.calls.map(([removed]) => removed)).toEqual(computed);
+    expect(chart.removeSeries).not.toHaveBeenCalledWith(ownFoo);
+    expect(chart.removeSeries).not.toHaveBeenCalledWith(ownBar);
+  });
+
   it('opens on the run once the chart has measured its width, and keeps the viewer’s zoom after', async () => {
     const { timeScale, fixture } = await renderChart(fakeStrategyView(), 'g_rule', 0);
     expect(timeScale.setVisibleLogicalRange).not.toHaveBeenCalled();
@@ -179,6 +211,48 @@ describe('StrategyChartComponent (#2639)', () => {
     expect(markers.setMarkers).toHaveBeenLastCalledWith([
       expect.objectContaining({ time: barCloseMs(3) / 1000, shape: 'arrowUp', text: 'Enter' }),
     ]);
+  });
+
+  it('lets the keyboard step through the candles and open one’s checks', async () => {
+    const user = userEvent.setup();
+    const mock = fakeStrategyChart(vi);
+    const clicks: StrategyCandleClick[] = [];
+    const selections: number[] = [];
+    const { fixture } = await render(StrategyChartComponent, {
+      inputs: { view: fakeStrategyView(), gateId: 'g_rule' },
+      on: {
+        candleClicked: (click: StrategyCandleClick) => clicks.push(click),
+        candleSelected: (barCloseMs: number) => selections.push(barCloseMs),
+      },
+      providers: [{ provide: STRATEGY_CHART_FACTORY, useValue: () => mock.chart }],
+    });
+    const select = async (key: string) => {
+      await user.keyboard(key);
+      fixture.componentRef.setInput('selectedBarCloseMs', selections.at(-1) ?? null);
+      await fixture.whenStable();
+    };
+
+    screen.getByRole('group', { name: /decision candles for SPY/ }).focus();
+    // With nothing selected, an arrow starts from the newest candle.
+    await select('{ArrowRight}');
+    await select('{ArrowLeft}');
+    await select('{Home}');
+    await select('{ArrowLeft}');
+    await select('{End}');
+    expect(selections).toEqual([barCloseMs(3), barCloseMs(2), barCloseMs(0), barCloseMs(0), barCloseMs(3)]);
+
+    // Presses faster than a render still step one bar each.
+    await user.keyboard('{ArrowLeft}{ArrowLeft}');
+    expect(selections.slice(-2)).toEqual([barCloseMs(2), barCloseMs(1)]);
+    await select('{ArrowRight}');
+    await user.keyboard('{Enter}');
+    // Placed where the candle is drawn: its close's coordinates inside the chart.
+    expect(clicks).toEqual([{ barCloseMs: barCloseMs(2), clientX: 120, clientY: 40 }]);
+    // Each move is read out: the bar and what the active gate made of it (bar 2 has no result).
+    const barTwo = `${formatTimestampDisplay(barCloseMs(2), { mode: 'local', granularity: 'date' })} `
+      + formatTimestampDisplay(barCloseMs(2), { mode: 'local', granularity: 'minute' });
+    expect(screen.getByText(`${barTwo} bar: gate no result.`).getAttribute('aria-live')).toBe('polite');
+    expect(mock.timeScale.timeToCoordinate).toHaveBeenLastCalledWith(toChartTime(barCloseMs(2)));
   });
 
   it('reports a click on a candle by its bar close', async () => {

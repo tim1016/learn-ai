@@ -5738,6 +5738,82 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/strategy-gates/catalogue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Catalogue
+         * @description The catalogue indicators a gate can read, so the editor offers no name the data plane would refuse.
+         */
+        get: operations["catalogue_api_strategy_gates_catalogue_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/strategy-gates/{strategy_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Gates */
+        get: operations["list_gates_api_strategy_gates__strategy_key__get"];
+        put?: never;
+        /** Create Gate */
+        post: operations["create_gate_api_strategy_gates__strategy_key__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/strategy-gates/{strategy_key}/evaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Evaluate
+         * @description Judge the strategy's saved gates, and an unsaved draft, on the caller's decision candles.
+         */
+        post: operations["evaluate_api_strategy_gates__strategy_key__evaluate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/strategy-gates/{strategy_key}/{gate_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Replace Gate */
+        put: operations["replace_gate_api_strategy_gates__strategy_key___gate_id__put"];
+        post?: never;
+        /** Delete Gate */
+        delete: operations["delete_gate_api_strategy_gates__strategy_key___gate_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/strategy-validation/strategies": {
         parameters: {
             query?: never;
@@ -10327,6 +10403,70 @@ export interface components {
              */
             scope: "account" | "bot" | "broker";
         };
+        /**
+         * CustomGate
+         * @description A saved gate: the owner's text plus its validated linear form.
+         */
+        CustomGate: {
+            /** Constant */
+            constant: number;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Expression */
+            expression: string;
+            /** Gate Id */
+            gate_id: string;
+            /** Label */
+            label: string;
+            /**
+             * Sign
+             * @enum {string}
+             */
+            sign: "gt" | "lt";
+            /** Strategy Key */
+            strategy_key: string;
+            /** Terms */
+            terms: components["schemas"]["GateTerm"][];
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
+        /**
+         * CustomGateInput
+         * @description What the owner types: a name, the expression and the side of zero that is bright.
+         */
+        CustomGateInput: {
+            /** Expression */
+            expression: string;
+            /** Label */
+            label: string;
+            /**
+             * Sign
+             * @enum {string}
+             */
+            sign: "gt" | "lt";
+        };
+        /**
+         * CustomGateSave
+         * @description A gate to save, with the deployed settings it was previewed under.
+         *
+         *     A recorded value's name follows the settings (``ADX20`` under
+         *     ``adx_period=20``), so the gate is checked against them, as its preview was.
+         */
+        CustomGateSave: {
+            /** Expression */
+            expression: string;
+            /** Label */
+            label: string;
+            /** Settings */
+            settings?: {
+                [key: string]: number | string | boolean | null;
+            };
+            /**
+             * Sign
+             * @enum {string}
+             */
+            sign: "gt" | "lt";
+        };
         /** DataAvailabilityResult */
         DataAvailabilityResult: {
             /**
@@ -12715,6 +12855,130 @@ export interface components {
             paged_bar_count?: number | null;
             /** Symbol */
             symbol: string;
+        };
+        /**
+         * GateCandle
+         * @description One decision candle a gate is judged on: its OHLCV and the bot's values by key.
+         */
+        GateCandle: {
+            /** Bar Close Ms */
+            bar_close_ms: number;
+            /** Close */
+            close: number;
+            /** High */
+            high: number;
+            /** Low */
+            low: number;
+            /** Open */
+            open: number;
+            /** Values */
+            values?: {
+                [key: string]: number | null;
+            };
+            /** Volume */
+            volume: number;
+        };
+        /**
+         * GateCatalogue
+         * @description Every catalogue indicator a gate can read: one line, no setting or only a length.
+         */
+        GateCatalogue: {
+            /** Indicators */
+            indicators: components["schemas"]["GateCatalogueEntry"][];
+        };
+        /**
+         * GateCatalogueEntry
+         * @description A catalogue indicator a gate can read, and how a gate writes it.
+         */
+        GateCatalogueEntry: {
+            /** Default Length */
+            default_length: number | null;
+            /** Description */
+            description: string;
+            /** Max Length */
+            max_length: number | null;
+            /** Min Length */
+            min_length: number | null;
+            /** Name */
+            name: string;
+            /** Variable */
+            variable: string;
+        };
+        /**
+         * GateEvaluationRequest
+         * @description Judge a strategy's saved gates (and an unsaved draft) on these candles.
+         *
+         *     ``settings`` are the deployed settings the candles were decided under; a
+         *     gate naming a setting reads it from here.
+         */
+        GateEvaluationRequest: {
+            /** Candles */
+            candles: components["schemas"]["GateCandle"][];
+            draft?: components["schemas"]["CustomGateInput"] | null;
+            /** Settings */
+            settings?: {
+                [key: string]: number | string | boolean | null;
+            };
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * GateEvaluationResponse
+         * @description Each gate's result per candle, in candle order, plus where its numbers came from.
+         *
+         *     ``results`` maps a gate id (``"draft"`` for the unsaved draft) to one
+         *     entry per candle: ``True`` bright, ``False`` dark, ``None`` when a
+         *     variable had no value on that candle. ``chart_computed`` names the
+         *     variables the chart computed from the candles rather than read from the
+         *     bot's records.
+         */
+        GateEvaluationResponse: {
+            /** Chart Computed */
+            chart_computed: string[];
+            /** Notices */
+            notices?: string[];
+            /** Results */
+            results: {
+                [key: string]: (boolean | null)[];
+            };
+        };
+        /**
+         * GateRefusal
+         * @description Why a gate was not saved or judged, in the owner's words.
+         */
+        GateRefusal: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "GATE_EXPRESSION_REFUSED" | "GATE_NOT_FOUND" | "GATE_STORE_UNAVAILABLE" | "STRATEGY_VIEW_UNAVAILABLE";
+            /** Message */
+            message: string;
+        };
+        /**
+         * GateRefusalBody
+         * @description A refused gate request's response body, as FastAPI wraps an ``HTTPException`` detail.
+         */
+        GateRefusalBody: {
+            detail: components["schemas"]["GateRefusal"];
+        };
+        /**
+         * GateRequestInvalidBody
+         * @description A request body that failed validation, as FastAPI reports it.
+         */
+        GateRequestInvalidBody: {
+            /** Detail */
+            detail: Record<string, never>[];
+        };
+        /**
+         * GateTerm
+         * @description One ``coefficient · variable`` term of a gate's linear expression.
+         */
+        GateTerm: {
+            /** Coefficient */
+            coefficient: number;
+            /** Variable */
+            variable: string;
         };
         /**
          * GoLiveHoldMarker
@@ -21220,6 +21484,16 @@ export interface components {
             /** Validator Code Sha256 */
             validator_code_sha256?: string | null;
         };
+        /**
+         * StrategyGateList
+         * @description Every gate saved on one strategy, oldest first.
+         */
+        StrategyGateList: {
+            /** Gates */
+            gates: components["schemas"]["CustomGate"][];
+            /** Strategy Key */
+            strategy_key: string;
+        };
         /** StrategyGridConfigRequest */
         StrategyGridConfigRequest: {
             /** Paramranges */
@@ -21852,6 +22126,10 @@ export interface components {
             run_started_at_ms?: number | null;
             /** Run Stopped At Ms */
             run_stopped_at_ms?: number | null;
+            /** Settings */
+            settings?: {
+                [key: string]: number | string | boolean | null;
+            };
             /** Strategy Key */
             strategy_key: string;
             /** Strategy Name */
@@ -34081,6 +34359,304 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    catalogue_api_strategy_gates_catalogue_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateCatalogue"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_gates_api_strategy_gates__strategy_key__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                strategy_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyGateList"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"] | components["schemas"]["GateRequestInvalidBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"];
+                };
+            };
+        };
+    };
+    create_gate_api_strategy_gates__strategy_key__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                strategy_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomGateSave"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomGate"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"] | components["schemas"]["GateRequestInvalidBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"];
+                };
+            };
+        };
+    };
+    evaluate_api_strategy_gates__strategy_key__evaluate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                strategy_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GateEvaluationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateEvaluationResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"] | components["schemas"]["GateRequestInvalidBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"];
+                };
+            };
+        };
+    };
+    replace_gate_api_strategy_gates__strategy_key___gate_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                strategy_key: string;
+                gate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomGateSave"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomGate"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"] | components["schemas"]["GateRequestInvalidBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"];
+                };
+            };
+        };
+    };
+    delete_gate_api_strategy_gates__strategy_key___gate_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                strategy_key: string;
+                gate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"] | components["schemas"]["GateRequestInvalidBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateRefusalBody"];
                 };
             };
         };

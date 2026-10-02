@@ -11425,6 +11425,167 @@
         "title": "CustodyResolutionStep",
         "type": "object"
       },
+      "CustomGate": {
+        "additionalProperties": false,
+        "description": "A saved gate: the owner's text plus its validated linear form.",
+        "properties": {
+          "constant": {
+            "title": "Constant",
+            "type": "number"
+          },
+          "created_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Created At Ms",
+            "type": "integer"
+          },
+          "expression": {
+            "maxLength": 400,
+            "minLength": 1,
+            "title": "Expression",
+            "type": "string"
+          },
+          "gate_id": {
+            "pattern": "^g-[0-9a-f]{12}$",
+            "title": "Gate Id",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "sign": {
+            "enum": [
+              "gt",
+              "lt"
+            ],
+            "title": "Sign",
+            "type": "string"
+          },
+          "strategy_key": {
+            "minLength": 1,
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "terms": {
+            "items": {
+              "$ref": "#/components/schemas/GateTerm"
+            },
+            "title": "Terms",
+            "type": "array"
+          },
+          "updated_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "gate_id",
+          "strategy_key",
+          "label",
+          "expression",
+          "sign",
+          "terms",
+          "constant",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "title": "CustomGate",
+        "type": "object"
+      },
+      "CustomGateInput": {
+        "additionalProperties": false,
+        "description": "What the owner types: a name, the expression and the side of zero that is bright.",
+        "properties": {
+          "expression": {
+            "maxLength": 400,
+            "minLength": 1,
+            "title": "Expression",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "sign": {
+            "enum": [
+              "gt",
+              "lt"
+            ],
+            "title": "Sign",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "expression",
+          "sign"
+        ],
+        "title": "CustomGateInput",
+        "type": "object"
+      },
+      "CustomGateSave": {
+        "additionalProperties": false,
+        "description": "A gate to save, with the deployed settings it was previewed under.\n\nA recorded value's name follows the settings (``ADX20`` under\n``adx_period=20``), so the gate is checked against them, as its preview was.",
+        "properties": {
+          "expression": {
+            "maxLength": 400,
+            "minLength": 1,
+            "title": "Expression",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "settings": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Settings",
+            "type": "object"
+          },
+          "sign": {
+            "enum": [
+              "gt",
+              "lt"
+            ],
+            "title": "Sign",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "expression",
+          "sign"
+        ],
+        "title": "CustomGateSave",
+        "type": "object"
+      },
       "DataAvailabilityResult": {
         "properties": {
           "artifacts": {
@@ -17116,6 +17277,317 @@
           "symbol"
         ],
         "title": "GallerySymbolBars",
+        "type": "object"
+      },
+      "GateCandle": {
+        "additionalProperties": false,
+        "description": "One decision candle a gate is judged on: its OHLCV and the bot's values by key.",
+        "properties": {
+          "bar_close_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Bar Close Ms",
+            "type": "integer"
+          },
+          "close": {
+            "title": "Close",
+            "type": "number"
+          },
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "open": {
+            "title": "Open",
+            "type": "number"
+          },
+          "values": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Values",
+            "type": "object"
+          },
+          "volume": {
+            "minimum": 0.0,
+            "title": "Volume",
+            "type": "number"
+          }
+        },
+        "required": [
+          "bar_close_ms",
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume"
+        ],
+        "title": "GateCandle",
+        "type": "object"
+      },
+      "GateCatalogue": {
+        "description": "Every catalogue indicator a gate can read: one line, no setting or only a length.",
+        "properties": {
+          "indicators": {
+            "items": {
+              "$ref": "#/components/schemas/GateCatalogueEntry"
+            },
+            "title": "Indicators",
+            "type": "array"
+          }
+        },
+        "required": [
+          "indicators"
+        ],
+        "title": "GateCatalogue",
+        "type": "object"
+      },
+      "GateCatalogueEntry": {
+        "description": "A catalogue indicator a gate can read, and how a gate writes it.",
+        "properties": {
+          "default_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Length"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "max_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Length"
+          },
+          "min_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Length"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "variable": {
+            "title": "Variable",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "variable",
+          "default_length",
+          "min_length",
+          "max_length"
+        ],
+        "title": "GateCatalogueEntry",
+        "type": "object"
+      },
+      "GateEvaluationRequest": {
+        "additionalProperties": false,
+        "description": "Judge a strategy's saved gates (and an unsaved draft) on these candles.\n\n``settings`` are the deployed settings the candles were decided under; a\ngate naming a setting reads it from here.",
+        "properties": {
+          "candles": {
+            "items": {
+              "$ref": "#/components/schemas/GateCandle"
+            },
+            "maxItems": 20000,
+            "title": "Candles",
+            "type": "array"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomGateInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "settings": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Settings",
+            "type": "object"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "candles"
+        ],
+        "title": "GateEvaluationRequest",
+        "type": "object"
+      },
+      "GateEvaluationResponse": {
+        "description": "Each gate's result per candle, in candle order, plus where its numbers came from.\n\n``results`` maps a gate id (``\"draft\"`` for the unsaved draft) to one\nentry per candle: ``True`` bright, ``False`` dark, ``None`` when a\nvariable had no value on that candle. ``chart_computed`` names the\nvariables the chart computed from the candles rather than read from the\nbot's records.",
+        "properties": {
+          "chart_computed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Chart Computed",
+            "type": "array"
+          },
+          "notices": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "results": {
+            "additionalProperties": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "title": "Results",
+            "type": "object"
+          }
+        },
+        "required": [
+          "results",
+          "chart_computed"
+        ],
+        "title": "GateEvaluationResponse",
+        "type": "object"
+      },
+      "GateRefusal": {
+        "description": "Why a gate was not saved or judged, in the owner's words.",
+        "properties": {
+          "code": {
+            "enum": [
+              "GATE_EXPRESSION_REFUSED",
+              "GATE_NOT_FOUND",
+              "GATE_STORE_UNAVAILABLE",
+              "STRATEGY_VIEW_UNAVAILABLE"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "GateRefusal",
+        "type": "object"
+      },
+      "GateRefusalBody": {
+        "description": "A refused gate request's response body, as FastAPI wraps an ``HTTPException`` detail.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/GateRefusal"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "GateRefusalBody",
+        "type": "object"
+      },
+      "GateRequestInvalidBody": {
+        "description": "A request body that failed validation, as FastAPI reports it.",
+        "properties": {
+          "detail": {
+            "items": {
+              "type": "object"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "GateRequestInvalidBody",
+        "type": "object"
+      },
+      "GateTerm": {
+        "additionalProperties": false,
+        "description": "One ``coefficient \u00b7 variable`` term of a gate's linear expression.",
+        "properties": {
+          "coefficient": {
+            "title": "Coefficient",
+            "type": "number"
+          },
+          "variable": {
+            "minLength": 1,
+            "title": "Variable",
+            "type": "string"
+          }
+        },
+        "required": [
+          "coefficient",
+          "variable"
+        ],
+        "title": "GateTerm",
         "type": "object"
       },
       "GoLiveHoldMarker": {
@@ -38517,6 +38989,28 @@
         "title": "StrategyEvidenceSnapshot",
         "type": "object"
       },
+      "StrategyGateList": {
+        "description": "Every gate saved on one strategy, oldest first.",
+        "properties": {
+          "gates": {
+            "items": {
+              "$ref": "#/components/schemas/CustomGate"
+            },
+            "title": "Gates",
+            "type": "array"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_key",
+          "gates"
+        ],
+        "title": "StrategyGateList",
+        "type": "object"
+      },
       "StrategyGridConfigRequest": {
         "properties": {
           "paramRanges": {
@@ -40193,6 +40687,29 @@
               }
             ],
             "title": "Run Stopped At Ms"
+          },
+          "settings": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Settings",
+            "type": "object"
           },
           "strategy_key": {
             "title": "Strategy Key",
@@ -65561,6 +66078,524 @@
         "summary": "Get Fixture",
         "tags": [
           "spec-strategy"
+        ]
+      }
+    },
+    "/api/strategy-gates/catalogue": {
+      "get": {
+        "description": "The catalogue indicators a gate can read, so the editor offers no name the data plane would refuse.",
+        "operationId": "catalogue_api_strategy_gates_catalogue_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateCatalogue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Catalogue",
+        "tags": [
+          "strategy-gates"
+        ]
+      }
+    },
+    "/api/strategy-gates/{strategy_key}": {
+      "get": {
+        "operationId": "list_gates_api_strategy_gates__strategy_key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "strategy_key",
+            "required": true,
+            "schema": {
+              "title": "Strategy Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyGateList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GateRefusalBody"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GateRequestInvalidBody"
+                    }
+                  ],
+                  "title": "Response 422 List Gates Api Strategy Gates  Strategy Key  Get"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "List Gates",
+        "tags": [
+          "strategy-gates"
+        ]
+      },
+      "post": {
+        "operationId": "create_gate_api_strategy_gates__strategy_key__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "strategy_key",
+            "required": true,
+            "schema": {
+              "title": "Strategy Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomGateSave"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomGate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GateRefusalBody"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GateRequestInvalidBody"
+                    }
+                  ],
+                  "title": "Response 422 Create Gate Api Strategy Gates  Strategy Key  Post"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Create Gate",
+        "tags": [
+          "strategy-gates"
+        ]
+      }
+    },
+    "/api/strategy-gates/{strategy_key}/evaluate": {
+      "post": {
+        "description": "Judge the strategy's saved gates, and an unsaved draft, on the caller's decision candles.",
+        "operationId": "evaluate_api_strategy_gates__strategy_key__evaluate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "strategy_key",
+            "required": true,
+            "schema": {
+              "title": "Strategy Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GateEvaluationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateEvaluationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GateRefusalBody"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GateRequestInvalidBody"
+                    }
+                  ],
+                  "title": "Response 422 Evaluate Api Strategy Gates  Strategy Key  Evaluate Post"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Evaluate",
+        "tags": [
+          "strategy-gates"
+        ]
+      }
+    },
+    "/api/strategy-gates/{strategy_key}/{gate_id}": {
+      "delete": {
+        "operationId": "delete_gate_api_strategy_gates__strategy_key___gate_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "strategy_key",
+            "required": true,
+            "schema": {
+              "title": "Strategy Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "gate_id",
+            "required": true,
+            "schema": {
+              "title": "Gate Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GateRefusalBody"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GateRequestInvalidBody"
+                    }
+                  ],
+                  "title": "Response 422 Delete Gate Api Strategy Gates  Strategy Key   Gate Id  Delete"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Delete Gate",
+        "tags": [
+          "strategy-gates"
+        ]
+      },
+      "put": {
+        "operationId": "replace_gate_api_strategy_gates__strategy_key___gate_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "strategy_key",
+            "required": true,
+            "schema": {
+              "title": "Strategy Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "gate_id",
+            "required": true,
+            "schema": {
+              "title": "Gate Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomGateSave"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomGate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GateRefusalBody"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GateRequestInvalidBody"
+                    }
+                  ],
+                  "title": "Response 422 Replace Gate Api Strategy Gates  Strategy Key   Gate Id  Put"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Replace Gate",
+        "tags": [
+          "strategy-gates"
         ]
       }
     },

@@ -20,6 +20,7 @@ export interface FakeSeries {
   readonly setData: Mock;
   readonly attachPrimitive: Mock;
   readonly createPriceLine: Mock;
+  readonly priceToCoordinate: Mock;
 }
 
 export interface FakeClickAt {
@@ -42,6 +43,7 @@ export interface FakeStrategyChart {
   readonly timeScale: {
     readonly fitContent: Mock;
     readonly logicalToCoordinate: Mock;
+    readonly timeToCoordinate: Mock;
     readonly width: () => number;
     readonly setVisibleLogicalRange: Mock;
     readonly getVisibleLogicalRange: Mock<() => { from: number; to: number } | null>;
@@ -65,6 +67,7 @@ export function fakeStrategyChart(vi: VitestUtils, initialWidth = 800): FakeStra
   const timeScale: FakeStrategyChart['timeScale'] = {
     fitContent: vi.fn(),
     logicalToCoordinate: vi.fn(),
+    timeToCoordinate: vi.fn(() => 120),
     width: () => width,
     setVisibleLogicalRange: vi.fn(),
     getVisibleLogicalRange: vi.fn((): { from: number; to: number } | null => ({ from: 0, to: 3 })),
@@ -84,6 +87,7 @@ export function fakeStrategyChart(vi: VitestUtils, initialWidth = 800): FakeStra
         setData: vi.fn(),
         attachPrimitive: vi.fn(),
         createPriceLine: vi.fn(),
+        priceToCoordinate: vi.fn(() => 40),
       };
       series.push(created);
       return created;

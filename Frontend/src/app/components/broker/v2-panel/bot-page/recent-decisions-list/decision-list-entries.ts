@@ -102,8 +102,13 @@ export function decisionListEntries(
   ];
 }
 
-/** The listed decisions include the run's first decision bar (or the run has none yet). */
+/**
+ * The listed decisions include the run's first decision bar (or the run has
+ * none yet). A run with decisions the view leaves out — recorded before
+ * decisions saved their values — cannot show which decision came first.
+ */
 function listReachesRunStart(decisions: readonly RecentDecisionView[], view: StrategyViewResponse): boolean {
+  if ((view.unexplained_decision_count ?? 0) > 0) return false;
   const firstDecisionSeq = view.candles.find(
     (candle) => candle.phase === 'decision' && candle.decision_seq !== null && candle.decision_seq !== undefined,
   )?.decision_seq;

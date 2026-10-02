@@ -8,6 +8,7 @@
     "/api/research/golden-qualifications",
     "/api/research/golden-search",
     "/api/research/golden-validations",
+    "/api/strategy-gates",
     "/api/strategy-validation"
   ],
   "protected_read_prefixes": [

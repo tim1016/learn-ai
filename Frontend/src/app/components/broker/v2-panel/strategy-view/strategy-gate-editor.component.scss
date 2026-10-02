@@ -1,0 +1,95 @@
+@use '../../../../styles/filled-controls' as *;
+
+.gate-editor {
+  display: grid;
+  gap: var(--space-1);
+
+  h4 { margin: 0 0 var(--space-1); font-size: var(--fs-sm); }
+
+  input[type='text'],
+  input[type='search'] {
+    @include filled-field;
+    min-height: 2rem;
+    padding: 0.3rem 0.55rem;
+    font-size: var(--fs-sm);
+  }
+}
+
+.gate-editor__field { @include field-label; margin-top: var(--space-1); }
+
+.gate-editor__expression {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: var(--space-2);
+
+  input[type='text'] { font-family: var(--font-mono); }
+}
+
+.gate-editor__sign {
+  display: flex;
+  gap: var(--space-2);
+  font: var(--fs-sm) var(--font-mono);
+
+  label { display: inline-flex; align-items: center; gap: 0.2rem; cursor: pointer; }
+  input { margin: 0; accent-color: var(--accent-text); }
+}
+
+.gate-editor__hint,
+.gate-editor__note {
+  margin: 0;
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.gate-editor__group {
+  margin-top: var(--space-1);
+
+  h5 {
+    margin: 0 0 0.3rem;
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-medium);
+  }
+
+  small { color: var(--text-subtle); font-weight: normal; }
+}
+
+.gate-editor__search { margin-bottom: 0.3rem; }
+
+.gate-editor__chips { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+
+.gate-editor__chip {
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font: var(--fs-xs) var(--font-mono);
+  cursor: pointer;
+
+  &:hover { border-color: var(--accent-text); }
+  &:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 1px; }
+}
+
+.gate-editor__none { color: var(--text-subtle); font-size: var(--fs-xs); }
+
+.gate-editor__refusal { margin: var(--space-1) 0 0; color: var(--bear-text); font-size: var(--fs-xs); }
+.gate-editor__status { margin: var(--space-1) 0 0; color: var(--bull); font-size: var(--fs-xs); }
+
+.gate-editor__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+
+  button { @include soft-button; min-height: 1.8rem; padding: 0.25rem 0.65rem; font-size: var(--fs-xs); }
+
+  .gate-editor__save:not(:disabled) {
+    background-color: var(--accent);
+    color: var(--text-on-accent);
+
+    &:hover { background-color: var(--accent-hover); }
+  }
+}

@@ -24,8 +24,8 @@ export interface ChartIndicatorColorChange {
   styleUrl: './chart-indicator-rail.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
-    role: 'complementary',
-    'aria-label': 'Indicator picker rail',
+    '[attr.role]': "landmark() ? 'complementary' : null",
+    '[attr.aria-label]': "landmark() ? 'Indicator picker rail' : null",
   },
 })
 export class ChartIndicatorRailComponent {
@@ -38,6 +38,10 @@ export class ChartIndicatorRailComponent {
   readonly error = input<string | null>(null);
   readonly allowAdditionalInstances = input(true);
   readonly allowColorChanges = input(false);
+  /** The picker's search box; off for hosts that have not opted in. */
+  readonly searchable = input(false);
+  /** A rail beside the chart is a landmark; one inside a popover is not. */
+  readonly landmark = input(true);
 
   readonly indicatorAdded = output<IndicatorPickerAdd>();
   readonly indicatorRemoved = output<string>();

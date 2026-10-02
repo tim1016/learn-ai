@@ -929,16 +929,26 @@ def _indicator_warmup_report(
 # ──────────────────────────────────────────────
 # Indicator result formatting
 # ──────────────────────────────────────────────
+def _indicator_point(t: Any, v: Any, value_digits: int | None) -> dict[str, Any]:
+    """One chart point, rounded for the chart unless ``value_digits`` is None."""
+    if pd.isna(v):
+        return {"t": int(t), "value": None}
+    return {"t": int(t), "value": float(v) if value_digits is None else round(float(v), value_digits)}
+
+
 def _format_indicator_results(
     df: pd.DataFrame,
     column_meta: list[dict[str, Any]],
     indicators_requested: list[dict[str, Any]],
     compute_all_indicators: bool = False,
+    value_digits: int | None = 6,
 ) -> list[dict[str, Any]]:
     """
     Format indicator columns into the structured response schema.
     Each indicator becomes an entry with id, panel, type, color, data, and optional refs.
     When compute_all_indicators is True, each entry also gets a 'default_visible' flag.
+    Values are rounded to ``value_digits`` for the chart; a caller that compares
+    them (a custom gate) passes None to keep the computed floats.
     """
     results: list[dict[str, Any]] = []
 
@@ -983,7 +993,7 @@ def _format_indicator_results(
                 else:
                     series_key = "macd"
                 macd_data[series_key] = [
-                    {"t": int(t), "value": None if pd.isna(v) else round(float(v), 6)}
+                    _indicator_point(t, v, value_digits)
                     for t, v in zip(timestamps, values, strict=False)
                 ]
             results.append(
@@ -1004,7 +1014,7 @@ def _format_indicator_results(
                 col = meta["column"]
                 values = df[col].tolist()
                 series_data = [
-                    {"t": int(t), "value": None if pd.isna(v) else round(float(v), 6)}
+                    _indicator_point(t, v, value_digits)
                     for t, v in zip(timestamps, values, strict=False)
                 ]
                 if "bbu" in col:
@@ -1047,7 +1057,7 @@ def _format_indicator_results(
                 col = meta["column"]
                 values = df[col].tolist()
                 series_data = [
-                    {"t": int(t), "value": None if pd.isna(v) else round(float(v), 6)}
+                    _indicator_point(t, v, value_digits)
                     for t, v in zip(timestamps, values, strict=False)
                 ]
                 if "supertl" in col:
@@ -1079,7 +1089,7 @@ def _format_indicator_results(
                 col = meta["column"]
                 values = df[col].tolist()
                 series_data = [
-                    {"t": int(t), "value": None if pd.isna(v) else round(float(v), 6)}
+                    _indicator_point(t, v, value_digits)
                     for t, v in zip(timestamps, values, strict=False)
                 ]
                 if "stochk" in col:
@@ -1111,7 +1121,7 @@ def _format_indicator_results(
                 col = meta["column"]
                 values = df[col].tolist()
                 series_data = [
-                    {"t": int(t), "value": None if pd.isna(v) else round(float(v), 6)}
+                    _indicator_point(t, v, value_digits)
                     for t, v in zip(timestamps, values, strict=False)
                 ]
                 if "dmp" in col:
@@ -1152,7 +1162,7 @@ def _format_indicator_results(
             timestamps = df["timestamp"].tolist()
             series_by_column = {
                 meta["column"]: [
-                    {"t": int(t), "value": None if pd.isna(v) else round(float(v), 6)}
+                    _indicator_point(t, v, value_digits)
                     for t, v in zip(timestamps, df[meta["column"]].tolist(), strict=False)
                 ]
                 for meta in cols
@@ -1183,6 +1193,8 @@ def _format_indicator_results(
 def compute_indicator_results(
     bars: pd.DataFrame,
     indicators: list[dict[str, Any]],
+    *,
+    value_digits: int | None = 6,
 ) -> list[dict[str, Any]]:
     """Compute and format indicators on caller-owned canonical bars.
 
@@ -1193,7 +1205,7 @@ def compute_indicator_results(
     :func:`dataset_service.calculate_dynamic_indicators`.
     """
     enriched, metadata = _compute_indicators(bars, indicators)
-    return _format_indicator_results(enriched, metadata, indicators)
+    return _format_indicator_results(enriched, metadata, indicators, value_digits=value_digits)
 
 
 # ──────────────────────────────────────────────

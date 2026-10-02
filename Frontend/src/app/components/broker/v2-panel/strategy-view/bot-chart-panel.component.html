@@ -28,11 +28,36 @@
       >Tape</button>
     </div>
     @if (activeTab() === 'strategy') {
-      @if (declaration(); as declaration) {
+      @if (shownView(); as shown) {
         @if (activeGate(); as gate) {
-          <app-strategy-gate-picker [gates]="declaration.gates" [activeGate]="gate" (gateChange)="chooseGate($event)" />
+          <app-strategy-gate-picker
+            [gates]="shown.declaration.gates"
+            [activeGate]="gate"
+            [savedGates]="gates.saved()"
+            [strategyKey]="shown.strategy_key"
+            [strategyName]="shown.strategy_name"
+            [variables]="gateVariables()"
+            [draftRefusal]="gates.draftRefusal()"
+            [previewing]="gates.previewing()"
+            [save]="saveGate"
+            [remove]="removeGate"
+            (gateChange)="chooseGate($event)"
+            (previewDraft)="gates.preview($event)"
+            (editorClosed)="gates.clearDraft()"
+          />
         }
-        <app-strategy-indicators [values]="declaration.values" />
+        <app-strategy-indicators
+          [values]="shown.declaration.values"
+          [chartComputed]="indicators.chips()"
+          [chartComputedKeys]="indicators.keys()"
+          [categories]="indicators.catalog.categories()"
+          [catalogLoading]="indicators.catalog.loading()"
+          [catalogLoadFailed]="indicators.catalog.loadFailed()"
+          [calculating]="indicators.calculating()"
+          [error]="indicators.error()"
+          (indicatorAdded)="indicators.add($event)"
+          (indicatorRemoved)="indicators.remove($event)"
+        />
       }
     }
   </header>
@@ -45,11 +70,13 @@
     [hidden]="activeTab() !== 'strategy'"
   >
     <app-strategy-view
-      [view]="view()"
+      [view]="shownView()"
       [loading]="loading()"
       [failure]="failure()"
       [gate]="activeGate()"
       [(selectedBarCloseMs)]="selectedBarCloseMs"
+      [indicatorPlans]="indicators.plans()"
+      [chartComputed]="indicators.chips()"
       (retry)="retry.emit()"
     />
   </div>

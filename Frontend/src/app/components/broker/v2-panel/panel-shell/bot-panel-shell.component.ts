@@ -444,15 +444,19 @@ export class BotPanelShellComponent {
   });
 
   private readonly panelLoaded = computed(() => this.panel() !== null);
-  /** The newest decision the live panel lists. */
-  private readonly newestDecisionSeq = computed(() =>
-    (this.panel()?.recent_decisions ?? []).reduce<number | null>(
+  /** What the strategy view reflects from the live panel: its newest decision
+   * and the bot's status, so a run that stops without deciding again still
+   * gets its "Ended" line. */
+  private readonly strategyViewKey = computed(() => {
+    const panel = this.panel();
+    const newestSeq = (panel?.recent_decisions ?? []).reduce<number | null>(
       (newest, decision) => (newest === null || decision.seq > newest ? decision.seq : newest),
       null,
-    ),
-  );
-  /** The newest decision seq when the last strategy-view read began. */
-  private strategyViewReadSeq: number | null = null;
+    );
+    return `${newestSeq}|${panel?.status ?? ''}`;
+  });
+  /** The panel's key when the last strategy-view read began. */
+  private strategyViewReadKey: string | null = null;
 
   /** The bot's strategy view (#2639). Keyed like the history read: the lane's
    * binding generation fences commands, not reads. Waits for the panel so its
@@ -465,7 +469,7 @@ export class BotPanelShellComponent {
       sid: this.sid(),
     } : undefined),
     loader: ({ params }) => {
-      this.strategyViewReadSeq = untracked(this.newestDecisionSeq);
+      this.strategyViewReadKey = untracked(this.strategyViewKey);
       return this.panelSvc.getStrategyView(
         resourceTarget(params.broker, params.clerkId, { accountId: params.accountId }),
         params.sid,
@@ -511,13 +515,13 @@ export class BotPanelShellComponent {
       }
     }, CURRENT_RUN_POLL_MS);
     this.destroyRef.onDestroy(() => clearInterval(runPollTimer));
-    // A new decision re-reads the strategy view — `reload`, not new params,
-    // so the chart keeps the last read on screen while the next one lands.
-    // A read already on its way began after the decision or catches it here
-    // once it settles.
+    // A new decision or a change of status (the run stopped) re-reads the
+    // strategy view — `reload`, not new params, so the chart keeps the last
+    // read on screen while the next one lands. A read already on its way
+    // began after the change or catches it here once it settles.
     effect(() => {
-      const seq = this.newestDecisionSeq();
-      if (this.strategyView.isLoading() || seq === this.strategyViewReadSeq) return;
+      const key = this.strategyViewKey();
+      if (this.strategyView.isLoading() || key === this.strategyViewReadKey) return;
       untracked(() => this.strategyView.reload());
     });
     effect(() => {

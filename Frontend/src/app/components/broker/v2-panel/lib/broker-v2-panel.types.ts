@@ -162,6 +162,21 @@ export type DecisionExplanationView = components['schemas']['DecisionExplanation
 export type ExplainedCheckView = components['schemas']['ExplainedCheckView'];
 export type ExplainedValueView = components['schemas']['ExplainedValueView'];
 
+/** A custom Dark Bright Gate saved on its strategy: one linear expression, > 0 or < 0. */
+export type CustomGate = components['schemas']['CustomGate'];
+export type CustomGateInput = components['schemas']['CustomGateInput'];
+/** A gate to save, with the deployed settings it was previewed under (a recorded name follows them). */
+export type CustomGateSave = components['schemas']['CustomGateSave'];
+export type StrategyGateList = components['schemas']['StrategyGateList'];
+/** One decision candle a gate is judged on: OHLCV plus the bot's values by key. */
+export type GateCandle = components['schemas']['GateCandle'];
+export type GateEvaluationRequest = components['schemas']['GateEvaluationRequest'];
+/** Each gate's result per candle, in candle order: `true` bright, `false` dark, `null` unjudged. */
+export type GateEvaluationResponse = components['schemas']['GateEvaluationResponse'];
+/** A catalogue indicator a gate can read, as the data plane offers it (`EMA10`, `VWAP`). */
+export type GateCatalogueEntry = components['schemas']['GateCatalogueEntry'];
+export type GateCatalogue = components['schemas']['GateCatalogue'];
+
 export type BotPanelLiveSnapshot = components['schemas']['BotPanelLiveSnapshot'];
 /** Why the live snapshot is withheld; `PRODUCER_STALLED` is the typed stale state (#2353). */
 export type LiveSnapshotUnavailableDetail = components['schemas']['LiveSnapshotUnavailableDetail'];
