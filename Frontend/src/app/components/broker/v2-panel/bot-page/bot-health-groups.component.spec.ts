@@ -3,7 +3,7 @@ import { render, screen, within } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 
 import { fakeBotPage, fakeBotPanelView } from '../../../../testing/bot-panel-fixtures';
-import type { BotHealthCard, StartupJoinView } from '../lib/broker-v2-panel.types';
+import type { BotHealthCard, BotPanelView, StartupJoinView } from '../lib/broker-v2-panel.types';
 import { BotHealthGroupsComponent } from './bot-health-groups.component';
 
 const HEALTH = fakeBotPage(fakeBotPanelView()).health;
@@ -36,6 +36,18 @@ const REFUSED: NonNullable<BotHealthCard['duty_outcome']> = {
   }],
 };
 
+const BLOCKED: BotPanelView['mission_verdict'] = {
+  state: 'blocked',
+  label: 'Mission blocked',
+  explanation: 'The exit did not flatten the position.',
+  next_action: 'Check against Alpaca, then sell what is left.',
+  evaluated_at_ms: 1_790_000_000_000,
+  recovery_status: {
+    kind: 'allowed_from', reason_code: 'NO_SESSION_OPEN', explanation: 'No session is open.',
+    allowed_from_ms: 1_790_003_600_000,
+  },
+};
+
 describe('BotHealthGroupsComponent (#2794)', () => {
   it('splits health into this run and the account right now', async () => {
     await render(BotHealthGroupsComponent, { inputs: { health: HEALTH } });
@@ -48,6 +60,16 @@ describe('BotHealthGroupsComponent (#2794)', () => {
     await render(BotHealthGroupsComponent, { inputs: { health: HEALTH, startupJoin: JOINING } });
 
     expect(screen.getByText('Preparing: waiting for the live stream to join')).toBeTruthy();
+  });
+
+  it('gives the Clerk’s explanation, next step and next retry under the account, never its "Mission blocked" label', async () => {
+    const { container } = await render(BotHealthGroupsComponent, { inputs: { health: HEALTH, clerkGuidance: BLOCKED } });
+
+    const guidance = container.querySelector('.health__guidance') as HTMLElement;
+    expect(guidance.textContent).toContain('The exit did not flatten the position.');
+    expect(guidance.textContent).toContain('Check against Alpaca, then sell what is left.');
+    expect(guidance.textContent).toContain('Automatic retry: allowed from');
+    expect(screen.queryByText('Mission blocked')).toBeNull();
   });
 
   it('says how a run ended and what it left at the broker', async () => {
