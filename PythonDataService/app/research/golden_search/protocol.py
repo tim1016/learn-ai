@@ -42,6 +42,7 @@ from app.research.sweep.ranking import RANKING_MEASURES, RankingMeasure
 from app.research.walk_forward_study.folds import FoldPlan, FoldPlanError, add_months, plan_folds
 from app.schemas.grid_search import SYMBOL_PATTERN, FillModeName
 from app.utils.session_anchors import (
+    LAST_SCHEDULABLE_DATE,
     MAX_TIMESTAMP_MS,
     et_date_at_ms,
     et_midnight_ms,
@@ -619,6 +620,13 @@ def _validate_trade_floors(p: GoldenSearchProtocol, refusals: _Refusals) -> None
                 "POLICY_INVALID",
                 "expected_trades_per_year",
                 "A plan with an expected trade frequency takes each window's minimum from the calendar; it has no fixed trade floors.",
+            )
+        # Each year's floor divides by that whole year's sessions, which the calendar cannot count for its last, partial year.
+        if et_date_at_ms(p.final_end_ms - 1).year >= LAST_SCHEDULABLE_DATE.year:
+            refusals.add(
+                "INTERVALS_INVALID",
+                "final_end_ms",
+                f"An expected trade frequency needs every year's full calendar; end the plan before {LAST_SCHEDULABLE_DATE.year}.",
             )
         return
     if p.policy.min_trades is None or p.policy.min_trades < 1:
