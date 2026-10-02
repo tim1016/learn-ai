@@ -35,6 +35,16 @@
           <app-exposure-notices [notices]="outcome.exposure_notices ?? []" />
         </div>
       }
+    } @else if (group.key === 'account' && clerkGuidance(); as guidance) {
+      <div class="health__guidance">
+        @if (guidanceExplanation(); as explanation) {
+          <span class="health__note">{{ explanation }}</span>
+        }
+        @if (guidance.next_action) {
+          <span class="health__note">{{ guidance.next_action }}</span>
+        }
+        <app-next-attempt class="health__note" [facts]="guidance" />
+      </div>
     }
   }
   @if (marketPulse(); as pulse) {

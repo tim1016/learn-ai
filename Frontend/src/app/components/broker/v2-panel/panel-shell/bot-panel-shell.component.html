@@ -169,6 +169,7 @@
               [marketPulse]="panelData.market_pulse"
               [startupJoin]="panelData.startup_join ?? null"
               [dutyOutcome]="stranded() ? null : (panelData.health.duty_outcome ?? null)"
+              [clerkGuidance]="panelData.mission_verdict.state === 'blocked' ? panelData.mission_verdict : null"
             />
           }
         </div>
