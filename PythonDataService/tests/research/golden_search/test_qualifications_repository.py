@@ -304,8 +304,9 @@ async def test_list_qualifications_narrows_by_program_and_symbol(
     other = await _qualify(conn, golden_review, f"q-x-{unique}", params=_point(f"{symbol}X"))
 
     assert [row.id for row in await list_qualifications(conn, program_key=PROGRAM, symbol=symbol)] == [mine.id]
-    listed = {row.id for row in await list_qualifications(conn, program_key=PROGRAM, limit=1_000)}
-    assert {mine.id, other.id} <= listed
+    # Narrowed per stock rather than listed whole, so a shared database's other rows never crowd it out.
+    assert [row.id for row in await list_qualifications(conn, program_key=PROGRAM, symbol=f"{symbol}X")] == [other.id]
+    assert await list_qualifications(conn, program_key="sma_crossover", symbol=symbol) == []
 
 
 # ---------------------------------------------------------------------------

@@ -22,14 +22,14 @@
       "program_version": "ema-crossover-signal/v1",
       "golden_trace_root": "16044218d7505ab73b632318def91596fae29e9c1d6c4e58c655e9efa4dbf184",
       "artifact_digest": "5d685ceb667e78dbd4d78da739bce6f9a4dd70f7d34fb074e6be05f93855d1dc",
-      "wiring_digest": "28af0cd0fe82c5ee9e3f972f471bcba873ea01d475f743607865dcc7896ffa75",
+      "wiring_digest": "e3e3df1271421b295d160c12067f61f1d7a0c32122764d29d53b95482bfb6daf",
       "qualification_suite": "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[ema_crossover_signal]",
-      "qualified_at_ms": 1790888195071,
+      "qualified_at_ms": 1790901676830,
       "git_provenance": {
         "commit_sha": "092fff8e20094d5aa5969b5b3cb87a870ce0120a",
-        "dirty": false
+        "dirty": true
       },
-      "receipt_hash": "2fae4f859a68429c18b28fb5ef425e4bf4b7ea0d49935189cee362c5aed17104"
+      "receipt_hash": "c280523d567cd71844a5ca9cfd8482b0d24f33e888040407e0d018b808ff99fd"
     },
     {
       "schema_version": 2,

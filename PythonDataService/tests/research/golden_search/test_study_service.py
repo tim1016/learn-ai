@@ -527,10 +527,13 @@ async def test_a_proof_draw_lost_before_its_checkpoint_is_not_drawn_again_by_a_l
     await service.bind_dispatch(row.id, stage_token=token, job_id="job-draw")
     claimed, attempt = await repo.claim_stage(conn, row.id, stage_token=token, job_id="job-draw")
 
-    # The first attempt drew the proof, then died before saving its checkpoint; its retry draws the same step.
-    for _ in range(2):
-        assert await repo.consume_budget(conn, row.id, attempt, 2, limit=claimed.budget_cap, step="proof", once_key="approval:proof")
-    assert await repo.consume_budget(conn, row.id, attempt, 1, limit=claimed.budget_cap, step="proof", once_key="approval:run")
+    def draw(key: str, count: int):  # type: ignore[no-untyped-def]
+        return repo.consume_budget(conn, row.id, attempt, count, limit=claimed.budget_cap, step="proof", once_key=key, retry_allowance=2)
+
+    # The first attempt drew the proof, then died before saving its checkpoint; each retry reuses the draw,
+    # until the step has been redone as often as allowed.
+    assert [await draw("approval:proof", 2) for _ in range(4)] == ["drawn", "reused", "reused", "retries_spent"]
+    assert await draw("approval:run", 1) == "drawn"
 
     assert await conn.fetchval("SELECT consumed_evaluations FROM research_golden_search_studies WHERE id = $1", row.id) == 3
 

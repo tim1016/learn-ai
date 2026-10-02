@@ -58,7 +58,7 @@ from app.research.golden_search.proof import (
     default_blob_store,
 )
 from app.research.golden_search.protocol import ExecutionAssumptions
-from app.research.golden_search.zoom import BudgetExhausted
+from app.research.golden_search.zoom import BudgetExhausted, RetryAllowanceExhausted
 from app.research.golden_validation import service as golden_validation
 from app.research.persistence.db import run_sync, with_connection
 from app.research.sweep.snapshot import DataSnapshot
@@ -88,6 +88,7 @@ ApprovalFailureCode = Literal[
     "PUBLISH_REFUSED",
     "REQUEST_INVALID",
     "RESTART_NEEDED",
+    "RETRIES_EXHAUSTED",
     "RUN_NOT_SAVED",
     "STORE_UNAVAILABLE",
     "WARMUP_TOO_SHORT",
@@ -179,7 +180,8 @@ def approve_study(
 
     ``consume_reserved(step, n)`` draws a step's evaluations from the
     study's proof reservation once: a step already drawn (by an attempt
-    that died before its checkpoint) draws nothing,
+    that died before its checkpoint) draws nothing, and a step redone as
+    often as allowed raises ``RetryAllowanceExhausted``,
     ``save_checkpoint`` persists progress between steps, and ``on_commit``
     is the caller's own fenced study update, awaited inside the publish
     transaction so the study reads approved exactly when the version is
@@ -290,6 +292,7 @@ def _approve(
             request=request,
             canonical=canonical,
             contract=contract,
+            parameter_schema_version=contract.resolved_parameter_schema_version(registration.param_schema.model_validate(canonical)),
             proof=proof,
             run_id=run_id,
             on_commit=on_commit,
@@ -389,6 +392,12 @@ def _canonical_candidate(registration: StrategyRegistration, request: ApprovalRe
 def _consume(consume_reserved: Callable[[str, int], None], step: str, evaluations: int) -> None:
     try:
         consume_reserved(step, evaluations)
+    except RetryAllowanceExhausted as exc:
+        raise _ApprovalFailure(
+            "RETRIES_EXHAUSTED",
+            f"The approval's {step} step was already retried as often as allowed ({exc}). Revise the study "
+            "or keep the current settings." + _UNCHANGED,
+        ) from exc
     except BudgetExhausted as exc:
         raise _ApprovalFailure(
             "BUDGET_EXHAUSTED",
@@ -611,6 +620,7 @@ async def _publish(
     request: ApprovalRequest,
     canonical: Mapping[str, Any],
     contract: SignalProgramContract,
+    parameter_schema_version: str,
     proof: ProofRecord,
     run_id: int,
     on_commit: Callable[[asyncpg.Connection, str], Awaitable[None]],
@@ -664,7 +674,7 @@ async def _publish(
                 qualification_id=qualification_id,
                 program_key=request.strategy_key,
                 program_version=contract.program_version,
-                parameter_schema_version=contract.parameter_schema_version,
+                parameter_schema_version=parameter_schema_version,
                 symbol=request.symbol,
                 params=canonical,
                 artifact_digest=proof.artifact_digest,

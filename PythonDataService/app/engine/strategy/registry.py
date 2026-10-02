@@ -165,6 +165,11 @@ class SignalProgramContract:
     # parameter set; when set, the static values describe the default point.
     signals_for: Callable[[StrategyParamsBase], tuple[SignalSeriesContract, ...]] | None = None
     exit_eligibility_for: Callable[[StrategyParamsBase], ExitEligibilityContract] | None = None
+    # Likewise the parameter-schema version and numerical provenance a seal
+    # records: an extension that keeps the default point byte-identical
+    # resolves the static (default-point) values there and its own elsewhere.
+    parameter_schema_version_for: Callable[[StrategyParamsBase], str] | None = None
+    numerical_provenance_for: Callable[[StrategyParamsBase], NumericalProvenanceContract] | None = None
 
     def resolved_signals(self, params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
         """The signal series a program built from ``params`` constructs."""
@@ -177,6 +182,18 @@ class SignalProgramContract:
         if self.exit_eligibility_for is None:
             return self.exit_eligibility
         return self.exit_eligibility_for(params)
+
+    def resolved_parameter_schema_version(self, params: StrategyParamsBase) -> str:
+        """The parameter-schema version a seal of ``params`` records."""
+        if self.parameter_schema_version_for is None:
+            return self.parameter_schema_version
+        return self.parameter_schema_version_for(params)
+
+    def resolved_numerical_provenance(self, params: StrategyParamsBase) -> NumericalProvenanceContract:
+        """The numerical provenance a seal of ``params`` records."""
+        if self.numerical_provenance_for is None:
+            return self.numerical_provenance
+        return self.numerical_provenance_for(params)
 
     def __post_init__(self) -> None:
         # An empty wiring list is the dangerous shape, not a harmless one: it
@@ -352,6 +369,83 @@ def _ema_exit_eligibility_for(params: StrategyParamsBase) -> ExitEligibilityCont
     return ExitEligibilityContract(countdown_decision_clocks=params.hold_bars, countdown_state_persistable=False)
 
 
+_EMA_LENGTHS_PROVENANCE = NumericalProvenanceContract(
+    formula=(
+        "Long-only EMA(fast)/EMA(slow) crossover on 15-minute signal bars with an "
+        "RSI(14) filter; fast/slow default to 5/10. Entry: fresh EMA(fast) > "
+        "EMA(slow) crossover AND (EMA(fast) - EMA(slow)) >= gap (default 0.20) AND "
+        "the normalized gap >= gap_bps (default 0) AND rsi_min <= RSI <= rsi_max "
+        "(default 50-70). Exit: hold_bars consolidated decision bars after entry "
+        "(default 5, 75 minutes)."
+    ),
+    reference=(
+        "Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs (Apr 2026 revision); "
+        "TradingView Pine validation docs/validation/SPY_EMA_Crossover_RSI.pine; "
+        "validation report docs/validation/SPY_EMA_Crossover_Validation_Report.pdf"
+    ),
+    canonical_implementation=(
+        "app/engine/strategy/algorithms/ema_crossover_signal.py::EmaCrossoverSignalAlgorithm"
+    ),
+    validated_against=(
+        "tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py; "
+        "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+        "[ema_crossover_signal]; "
+        "docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md; "
+        "tests/engine/strategy/algorithms/test_ema_crossover_signal_lengths.py"
+    ),
+    # The trace/decision identity is Decimal-exact and
+    # SHA-256-compared (signal_program.py), not
+    # tolerance-compared — see test_validated_ema_settings_corpus_
+    # has_a_pinned_trace_root's byte-exact trace_root assertion.
+    equivalence_level="bit_exact",
+    # One level down (the EMA/RSI *value* parity against LEAN,
+    # not the trace-identity hash above): documented absolute
+    # tolerance from the reconciliation report.
+    tolerance_atol=1e-9,
+    tolerance_rtol=0.0,
+    parity_fixture_ids=(
+        "tests/fixtures/golden/ema-signal-session/v1/trace-corpus.json",
+        "tests/fixtures/golden/cross-engine-studies/cells/SPY_W3mo_2026-02-02_to_2026-04-30",
+        "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W3mo_2026-02-02_to_2026-04-30",
+        "tests/fixtures/golden/cross-engine-studies/cells/SPY_W6mo_2025-11-03_to_2026-04-30",
+        "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W6mo_2025-11-03_to_2026-04-30",
+    ),
+)
+
+# The reference's own provenance: every seal minted before the lengths became
+# parameters (#2696) records exactly this, and a seal at 5/10/5 still does.
+_EMA_REFERENCE_PROVENANCE = _EMA_LENGTHS_PROVENANCE.model_copy(
+    update={
+        "formula": (
+            "Long-only EMA(5)/EMA(10) crossover on 15-minute signal bars with an "
+            "RSI(14) filter. Entry: fresh EMA5 > EMA10 crossover AND "
+            "(EMA5 - EMA10) >= 0.20 AND 50 <= RSI <= 70. Exit: 5 consolidated bars "
+            "(75 minutes) after entry."
+        ),
+        "validated_against": (
+            "tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py; "
+            "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+            "[ema_crossover_signal]; "
+            "docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md"
+        ),
+    }
+)
+
+
+def _ema_numerical_provenance_for(params: StrategyParamsBase) -> NumericalProvenanceContract:
+    """The reference's provenance at its 5/10/5 lengths and hold; the extended program's elsewhere."""
+    assert isinstance(params, EmaCrossoverSignalParams)
+    return _EMA_REFERENCE_PROVENANCE if params.at_reference_lengths() else _EMA_LENGTHS_PROVENANCE
+
+
+def _ema_parameter_schema_version_for(params: StrategyParamsBase) -> str:
+    """v2 for a parameter set at the reference lengths (it dumps exactly as v2 did), v3 otherwise."""
+    assert isinstance(params, EmaCrossoverSignalParams)
+    if params.at_reference_lengths():
+        return params.REFERENCE_PARAMETER_SCHEMA_VERSION
+    return params.PARAMETER_SCHEMA_VERSION
+
+
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     EMA_SIGNAL_PROGRAM_KEY: StrategyRegistration(
         display_name="EMA Crossover Signal",
@@ -359,7 +453,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         signal_program_contract=SignalProgramContract(
             program_version=EMA_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
-            parameter_schema_version=EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION,
+            # The default point's version; `parameter_schema_version_for` resolves a seal's own.
+            parameter_schema_version=EmaCrossoverSignalParams.REFERENCE_PARAMETER_SCHEMA_VERSION,
+            parameter_schema_version_for=_ema_parameter_schema_version_for,
             golden_trace_root="16044218d7505ab73b632318def91596fae29e9c1d6c4e58c655e9efa4dbf184",
             provider="polygon",
             base_timeframe_ms=60_000,
@@ -406,48 +502,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             ),
             signals_for=_ema_signals_for,
             exit_eligibility_for=_ema_exit_eligibility_for,
-            numerical_provenance=NumericalProvenanceContract(
-                formula=(
-                    "Long-only EMA(fast)/EMA(slow) crossover on 15-minute signal bars with an "
-                    "RSI(14) filter; fast/slow default to 5/10. Entry: fresh EMA(fast) > "
-                    "EMA(slow) crossover AND (EMA(fast) - EMA(slow)) >= gap (default 0.20) AND "
-                    "the normalized gap >= gap_bps (default 0) AND rsi_min <= RSI <= rsi_max "
-                    "(default 50-70). Exit: hold_bars consolidated decision bars after entry "
-                    "(default 5, 75 minutes)."
-                ),
-                reference=(
-                    "Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs (Apr 2026 revision); "
-                    "TradingView Pine validation docs/validation/SPY_EMA_Crossover_RSI.pine; "
-                    "validation report docs/validation/SPY_EMA_Crossover_Validation_Report.pdf"
-                ),
-                canonical_implementation=(
-                    "app/engine/strategy/algorithms/ema_crossover_signal.py::EmaCrossoverSignalAlgorithm"
-                ),
-                validated_against=(
-                    "tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py; "
-                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
-                    "[ema_crossover_signal]; "
-                    "docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md; "
-                    "tests/engine/strategy/algorithms/test_ema_crossover_signal_lengths.py"
-                ),
-                # The trace/decision identity is Decimal-exact and
-                # SHA-256-compared (signal_program.py), not
-                # tolerance-compared — see test_validated_ema_settings_corpus_
-                # has_a_pinned_trace_root's byte-exact trace_root assertion.
-                equivalence_level="bit_exact",
-                # One level down (the EMA/RSI *value* parity against LEAN,
-                # not the trace-identity hash above): documented absolute
-                # tolerance from the reconciliation report.
-                tolerance_atol=1e-9,
-                tolerance_rtol=0.0,
-                parity_fixture_ids=(
-                    "tests/fixtures/golden/ema-signal-session/v1/trace-corpus.json",
-                    "tests/fixtures/golden/cross-engine-studies/cells/SPY_W3mo_2026-02-02_to_2026-04-30",
-                    "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W3mo_2026-02-02_to_2026-04-30",
-                    "tests/fixtures/golden/cross-engine-studies/cells/SPY_W6mo_2025-11-03_to_2026-04-30",
-                    "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W6mo_2025-11-03_to_2026-04-30",
-                ),
-            ),
+            numerical_provenance=_EMA_REFERENCE_PROVENANCE,
+            numerical_provenance_for=_ema_numerical_provenance_for,
             parameter_units={
                 "symbol": "ticker",
                 "gap": "quote_currency",

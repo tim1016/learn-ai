@@ -55,7 +55,7 @@ from app.research.golden_search.declarations import point_hash as hash_point
 from app.research.golden_search.evidence import daily_equity
 from app.research.golden_search.protocol import BASE_SCENARIO, ExecutionAssumptions, StressScenario, canonical_json
 from app.research.golden_search.selection import Metrics
-from app.research.golden_search.zoom import BudgetExhausted
+from app.research.golden_search.zoom import BudgetExhausted, RetryAllowanceExhausted
 from app.research.grid_search.service import window_dates
 from app.research.persistence.db import run_sync, with_connection
 from app.research.sweep.grid import RunSpec
@@ -421,8 +421,19 @@ class StudyEvaluator:
 
     def consume(self, count: int, *, step: str, once_key: str) -> None:
         """Atomically consume ``count`` units the caller runs outside this evaluator (the proof), once per ``once_key``."""
-        admitted = run_sync(
-            with_connection(repo.consume_budget, self.study_id, self.attempt, count, limit=self.budget_limit, step=step, once_key=once_key)
+        outcome = run_sync(
+            with_connection(
+                repo.consume_budget,
+                self.study_id,
+                self.attempt,
+                count,
+                limit=self.budget_limit,
+                step=step,
+                once_key=once_key,
+                retry_allowance=RETRY_ALLOWANCE,
+            )
         )
-        if not admitted:
+        if outcome == "over_budget":
             raise BudgetExhausted(f"the study's evaluation budget cannot admit {count} more {step} evaluation(s)")
+        if outcome == "retries_spent":
+            raise RetryAllowanceExhausted(f"the {once_key} step was already retried {RETRY_ALLOWANCE} times")

@@ -64,6 +64,7 @@ NEVER_GRANTED_TABLES = frozenset(
         "research_golden_search_trials",
         "research_golden_search_exposures",
         "research_golden_default_history",
+        "research_retired_research_windows",
     }
 )
 

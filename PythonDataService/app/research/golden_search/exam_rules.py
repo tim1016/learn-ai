@@ -114,22 +114,23 @@ def judge_exam(
     exam_min_trades: int,
     development_objective: float | None,
 ) -> ExamJudgement:
-    """Apply the frozen final-test rules to the candidate's and the incumbent's final-interval runs."""
+    """Apply the frozen final-test rules to the candidate's and the incumbent's final-interval runs.
+
+    A plan that does not require a positive net result has no net-result
+    check: the frozen rules it judges are the plan's own.
+    """
     if candidate.status != "completed":
         detail = f"The final-test run failed: {candidate.error or 'no reason recorded'}."
-        checks = tuple(
-            ExamCheck(code, label, "not_available", detail)
-            for code, label in (
-                ("NET_POSITIVE", "Positive net result after stated costs"),
-                ("DRAWDOWN_WITHIN", "Worst drawdown within your ceiling"),
-                ("SAMPLE_FLOOR", "Enough completed trades"),
-                ("BEATS_INCUMBENT", "At least as good as the current settings"),
-            )
+        rules = (
+            *((("NET_POSITIVE", "Positive net result after stated costs"),) if policy.require_positive_net else ()),
+            ("DRAWDOWN_WITHIN", "Worst drawdown within your ceiling"),
+            ("SAMPLE_FLOOR", "Enough completed trades"),
+            ("BEATS_INCUMBENT", "At least as good as the current settings"),
         )
-        return ExamJudgement("could_not_evaluate", checks, None)
+        return ExamJudgement("could_not_evaluate", tuple(ExamCheck(code, label, "not_available", detail) for code, label in rules), None)
     candidate_objective = objective_value(candidate, policy)
     checks = (
-        _net_positive(candidate),
+        *((_net_positive(candidate),) if policy.require_positive_net else ()),
         _drawdown_within(candidate, policy.max_drawdown_ceiling),
         _sample_floor(candidate, exam_min_trades),
         _beats_incumbent(candidate_objective, incumbent, policy),

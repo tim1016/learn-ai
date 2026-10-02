@@ -113,6 +113,41 @@ def _sealed_binding() -> BrokerBotBinding:
     return binding.model_copy(update={"program_build": proof})
 
 
+_LEGACY_DEFAULT_SEAL = Path(__file__).parents[1] / "fixtures" / "signal_program_seals" / "ema_default_before_2696.json"
+
+
+def test_a_default_ema_seal_minted_before_the_lengths_became_parameters_still_proves_and_reseals_byte_identically() -> None:
+    """The fixture is the seal master minted (81292e4a, before #2696) for ``_binding()`` with ``_validation()``.
+
+    The EMA lengths and hold became parameters with identity-neutral
+    defaults; a running bot sealed before that must keep proving, and a seal
+    minted now at the reference lengths must hash exactly as it did.
+    """
+    legacy = SealedBotProgram.model_validate_json(_LEGACY_DEFAULT_SEAL.read_text(encoding="utf-8"))
+    proof = prove_running_program_build(_binding().model_copy(update={"sealed_program": legacy}), verified_at_ms=_NOW)
+
+    assert (proof.state, proof.corpus_coverage) == ("PROVEN", "COVERED"), proof.explanation
+    binding = _binding()
+    fresh = build_start_program_seal(binding, _validation(), parameter_origins=binding.strategy_param_origins)
+    assert fresh is not None
+    assert (fresh.configured_signal_hash, fresh.bot_configuration_hash) == (legacy.configured_signal_hash, legacy.bot_configuration_hash)
+
+
+def test_a_seal_off_the_reference_lengths_records_the_extended_schema_and_provenance() -> None:
+    binding = _binding(
+        strategy_params={"gap": 0.2, "gap_bps": 0.0, "rsi_min": 50.0, "rsi_max": 70.0, "fast_period": 7},
+        strategy_param_origins={"gap": "deploy_override", "gap_bps": "deploy_override", "rsi_min": "registered_default", "rsi_max": "registered_default", "fast_period": "deploy_override"},
+    )
+    seal = build_start_program_seal(binding, _validation(), parameter_origins=binding.strategy_param_origins)
+    assert seal is not None
+
+    configured = seal.configured_signal
+    assert configured.parameter_schema_version == "ema-crossover-signal-params/v3"
+    assert "EMA(fast)/EMA(slow)" in configured.numerical_provenance.formula
+    proof = prove_running_program_build(binding.model_copy(update={"sealed_program": seal}), verified_at_ms=_NOW)
+    assert proof.state == "PROVEN"
+
+
 def test_seal_resolves_units_origins_and_nested_authority_hashes() -> None:
     binding = _sealed_binding()
     seal = binding.sealed_program

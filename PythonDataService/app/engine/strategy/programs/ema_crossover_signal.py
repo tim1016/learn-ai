@@ -42,8 +42,11 @@ class EmaCrossoverSignalParams(EmaCrossoverParams):
     # change without duplicating every bound into the seal itself. A
     # ``ClassVar`` is invisible to Pydantic's field machinery, so it never
     # becomes part of the JSON schema or a constructor argument.
-    # v3 (#2696): adds the fast/slow EMA lengths and the hold.
+    # v3 (#2696): adds the fast/slow EMA lengths and the hold. A parameter
+    # set at the reference lengths dumps exactly as a v2 set did, so its seal
+    # keeps v2's version: see ``at_reference_lengths``.
     PARAMETER_SCHEMA_VERSION: ClassVar[str] = "ema-crossover-signal-params/v3"
+    REFERENCE_PARAMETER_SCHEMA_VERSION: ClassVar[str] = "ema-crossover-signal-params/v2"
 
     gap: float = Field(
         0.20,
@@ -138,6 +141,11 @@ class EmaCrossoverSignalParams(EmaCrossoverParams):
             if getattr(self, name) == fields[name].default:
                 dumped.pop(name, None)
         return dumped
+
+    def at_reference_lengths(self) -> bool:
+        """Whether the EMA lengths and hold are the LEAN reference's 5/10/5, where every identity predates them."""
+        fields = type(self).model_fields
+        return all(getattr(self, name) == fields[name].default for name in _IDENTITY_NEUTRAL_FIELDS)
 
 
 EMA_SIGNAL_PROGRAM_KEY = "ema_crossover_signal"

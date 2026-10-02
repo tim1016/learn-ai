@@ -93,6 +93,10 @@ class BudgetExhausted(Exception):
     """Raised by an evaluate callback when the study's budget cannot admit another evaluation."""
 
 
+class RetryAllowanceExhausted(Exception):
+    """Raised by a reservation callback when a step has already been retried as often as allowed."""
+
+
 @dataclass(frozen=True)
 class ZoomRound:
     """One refinement round on one knob: what was sampled, skipped, evaluated and chosen."""

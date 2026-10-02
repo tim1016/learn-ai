@@ -38,6 +38,7 @@ from app.research.golden_search.approval import (
     approve_study,
     qualification_id_for,
 )
+from app.research.golden_search.evaluator import RETRY_ALLOWANCE
 from app.research.golden_search.proof import BlobStore, ProofRecord, ProofWindow
 from app.research.golden_search.protocol import ExecutionAssumptions
 from app.research.golden_search.qualifications import (
@@ -46,7 +47,7 @@ from app.research.golden_search.qualifications import (
     get_qualification_by_study,
     revoke_qualification,
 )
-from app.research.golden_search.zoom import BudgetExhausted
+from app.research.golden_search.zoom import BudgetExhausted, RetryAllowanceExhausted
 from app.research.golden_validation import repository as golden_repo
 from app.research.golden_validation import service as golden_validation
 from app.research.persistence.db import run_sync, with_connection
@@ -195,6 +196,7 @@ class _Caller:
         self.cancel_requested = False
         self.reservation_left = PROOF_EVALUATIONS + RUN_EVALUATIONS
         self.drawn: set[str] = set()
+        self.reused: list[str] = []
 
     def save_checkpoint(self, checkpoint: ApprovalCheckpoint) -> None:
         # Persisted as the worker would: through its dict form.
@@ -202,9 +204,12 @@ class _Caller:
         self.saved.append(self.checkpoint)
 
     def consume_reserved(self, step: str, evaluations: int) -> None:
-        # The study's proof reservation, drawn once per step as the study's ledger draws it;
-        # drawing past it is refused, as the evaluator refuses it.
+        # The study's proof reservation, drawn once per step as the study's ledger draws it, with the
+        # same retry allowance; drawing past it is refused, as the evaluator refuses it.
         if step in self.drawn:
+            if self.reused.count(step) >= RETRY_ALLOWANCE:
+                raise RetryAllowanceExhausted(f"the approval:{step} step was already retried {RETRY_ALLOWANCE} times")
+            self.reused.append(step)
             return
         if evaluations > self.reservation_left:
             raise BudgetExhausted("the proof reservation is spent")
@@ -520,6 +525,29 @@ async def test_a_study_reviewed_against_the_registry_replaces_a_stale_default(
     pointer = await get_default(conn, PROGRAM, symbol)
     assert pointer is not None and pointer.qualification_id == outcome.qualification_id != stale
     assert pointer.revision == 2
+
+
+async def test_a_step_that_keeps_failing_stops_after_its_retry_allowance(
+    conn: asyncpg.Connection,
+    unique: str,
+    symbol: str,
+    snapshot: DataSnapshot,
+    lake: Path,
+    blobs: BlobStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    study_id = f"study-{unique}"
+    await _study(conn, study_id, symbol)
+    engine = _Engine(save_outcome="failed")
+    monkeypatch.setattr(approval_module, "execute_engine_backtest", engine)
+    caller = _Caller(study_id)
+
+    codes = [(await _approve(_request(study_id, symbol, snapshot, lake), caller, blobs)).failure_code for _ in range(RETRY_ALLOWANCE + 2)]
+
+    # The first attempt and each allowed retry ran the saved-run step; the next one ran nothing.
+    assert codes == ["RUN_NOT_SAVED"] * (RETRY_ALLOWANCE + 1) + ["RETRIES_EXHAUSTED"]
+    assert len(engine.requests) == RETRY_ALLOWANCE + 1
+    assert caller.consumed == [PROOF_EVALUATIONS, RUN_EVALUATIONS]
 
 
 async def test_restart_needed_refuses_before_any_work(

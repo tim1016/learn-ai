@@ -161,7 +161,10 @@ def test_registry_protocol_and_parameter_schema_versions_mirror_their_one_declar
     assert contract is not None
 
     assert contract.protocol_version == SignalSession.PROTOCOL_VERSION
-    assert contract.parameter_schema_version == EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION
+    # The static value is the reference point's (#2696); any other lengths seal the full schema's version.
+    assert contract.parameter_schema_version == EmaCrossoverSignalParams.REFERENCE_PARAMETER_SCHEMA_VERSION
+    extended = EmaCrossoverSignalParams.model_validate({"symbol": "SPY", "fast_period": 7})
+    assert contract.resolved_parameter_schema_version(extended) == EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION
 
 
 def test_registry_signal_series_periods_match_the_constructed_indicators() -> None:

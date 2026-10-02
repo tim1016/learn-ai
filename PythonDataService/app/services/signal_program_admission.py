@@ -219,7 +219,7 @@ def build_start_program_seal(
         program_key=binding.strategy_key,
         program_version=contract.program_version,
         protocol_version=contract.protocol_version,
-        parameter_schema_version=contract.parameter_schema_version,
+        parameter_schema_version=contract.resolved_parameter_schema_version(validated),
         golden_trace_root=contract.golden_trace_root,
         parameters=parameters,
         parameters_match_validated_settings=registry_point,
@@ -235,13 +235,14 @@ def build_start_program_seal(
         ),
         # Copied straight from the registry contract — the same objects, not
         # a re-derivation — so these can never fall out of sync with it.
-        # Series and exit rule are resolved for these parameters: an EMA
-        # length or hold is a parameter (#2696).
+        # Series, exit rule, parameter-schema version and provenance are
+        # resolved for these parameters: an EMA length or hold is a parameter,
+        # and a seal at the reference lengths stays byte-identical (#2696).
         signals=contract.resolved_signals(validated),
         decision_streams=contract.decision_streams,
         bar_integrity=contract.bar_integrity,
         exit_eligibility=contract.resolved_exit_eligibility(validated),
-        numerical_provenance=contract.numerical_provenance,
+        numerical_provenance=contract.resolved_numerical_provenance(validated),
         qualification_id=qualification_id,
     )
     configured_hash = configured.semantic_hash()
@@ -753,15 +754,18 @@ def _seal_checks(
             configured.protocol_version == contract.protocol_version,
             "The registered session protocol has moved since this instance was sealed.",
         ),
-        _SealCheck(
-            "parameter_schema_version",
-            configured.parameter_schema_version == contract.parameter_schema_version,
-            "The registered parameter schema has moved since this instance was sealed.",
-        ),
+        # The parameters come first: the rows after them compare against the
+        # contract resolved for the seal's own parameters.
         _SealCheck(
             "parameters",
             sealed_params is not None,
             "The sealed parameters no longer validate against the registered parameter schema.",
+        ),
+        _SealCheck(
+            "parameter_schema_version",
+            sealed_params is not None
+            and configured.parameter_schema_version == contract.resolved_parameter_schema_version(sealed_params),
+            "The registered parameter schema has moved since this instance was sealed.",
         ),
         _SealCheck(
             "signals",
@@ -786,7 +790,8 @@ def _seal_checks(
         ),
         _SealCheck(
             "numerical_provenance",
-            configured.numerical_provenance == contract.numerical_provenance,
+            sealed_params is not None
+            and configured.numerical_provenance == contract.resolved_numerical_provenance(sealed_params),
             "The registered numerical provenance has moved since this instance was sealed.",
         ),
         _SealCheck(

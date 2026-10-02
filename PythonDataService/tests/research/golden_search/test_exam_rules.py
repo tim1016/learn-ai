@@ -75,6 +75,17 @@ def test_judge_exam_any_failed_check_does_not_meet_the_rules() -> None:
     assert _statuses(losing_to_incumbent)["BEATS_INCUMBENT"] == "fail"
 
 
+def test_judge_exam_a_plan_that_does_not_require_a_positive_net_has_no_net_check() -> None:
+    relaxed = SelectionPolicy(objective="sharpe_ratio", min_trades=30, max_drawdown_ceiling=0.2, require_positive_net=False)
+
+    judgement = judge_exam(metrics(1.5, trades=30, net=-10.0, drawdown=0.1), metrics(1.0), policy=relaxed, exam_min_trades=30, development_objective=2.0)
+
+    assert judgement.outcome == "meets_rules"
+    assert "NET_POSITIVE" not in _statuses(judgement)
+    failed = judge_exam(Metrics.failed("no data"), metrics(1.0), policy=relaxed, exam_min_trades=30, development_objective=2.0)
+    assert set(_statuses(failed)) == {"DRAWDOWN_WITHIN", "SAMPLE_FLOOR", "BEATS_INCUMBENT"}
+
+
 def test_judge_exam_a_missing_or_failed_incumbent_is_never_a_pass() -> None:
     for incumbent in (Metrics.failed("no data"), metrics(None)):
         judgement = _judge(metrics(1.5), incumbent=incumbent)

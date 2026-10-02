@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -756,6 +756,33 @@ DDL_V11: tuple[str, ...] = (
     """,
 )
 
+# Exposure survives deleting research (#2696): a Grid Search or Walk-Forward Study
+# that read a symbol's window leaves that window here when it is deleted, so a
+# final test over it never reads as fresh again. Append-only.
+DDL_V12: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS research_retired_research_windows (
+        id                BIGSERIAL PRIMARY KEY,
+        symbol            TEXT NOT NULL,
+        interval_start_ms BIGINT NOT NULL,
+        interval_end_ms   BIGINT NOT NULL,
+        source            TEXT NOT NULL CHECK (source IN ('grid_search', 'walk_forward_study')),
+        source_id         TEXT NOT NULL,
+        retired_at_ms     BIGINT NOT NULL,
+        CHECK (interval_start_ms < interval_end_ms)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS research_retired_research_windows_symbol_idx
+        ON research_retired_research_windows (symbol, interval_start_ms, interval_end_ms)
+    """,
+    """
+    CREATE TRIGGER research_retired_research_windows_no_update_or_delete
+        BEFORE UPDATE OR DELETE ON research_retired_research_windows
+        FOR EACH ROW EXECUTE FUNCTION reject_golden_search_ledger_mutation()
+    """,
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -768,6 +795,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (9, DDL_V9),
     (10, DDL_V10),
     (11, DDL_V11),
+    (12, DDL_V12),
 )
 
 

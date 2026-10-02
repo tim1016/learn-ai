@@ -105,7 +105,7 @@ The active default decides only what Deploy *offers*: "Use qualified configurati
 - `slow_period`, from 3 to 40, with fast below slow;
 - `hold_bars`, from 1 to 26.
 
-`hold_bars` counts decision bars, never wall-clock time, across sessions. The parameter schema becomes `ema-crossover-signal-params/v3`. At the default point, the new settings are omitted from parameter dumps and from the program's evaluation settings. So every existing identity stays byte-identical at that point and the golden trace root does not move: Golden Validation cases, seals, budget tokens and corpus entries. The seal's signal series and exit countdown are resolved from the bot's own parameters. The LEAN twin hard-codes 5, 10 and 5, so any other value makes the parity companion honestly unavailable.
+`hold_bars` counts decision bars, never wall-clock time, across sessions. The parameter schema becomes `ema-crossover-signal-params/v3`. At the default point, the new settings are omitted from parameter dumps and from the program's evaluation settings. So every existing identity stays byte-identical at that point and the golden trace root does not move: Golden Validation cases, seals, budget tokens and corpus entries. The seal's signal series, exit countdown, parameter-schema version and numerical provenance are resolved from the bot's own parameters: at 5/10/5 they are the reference's own (`v2` and the reference formula), so a seal minted before the change still proves and a new one hashes identically; any other lengths seal `v3` and the extended formula. The LEAN twin hard-codes 5, 10 and 5, so any other value makes the parity companion honestly unavailable.
 
 ### 8. Clerks read, the data plane migrates
 

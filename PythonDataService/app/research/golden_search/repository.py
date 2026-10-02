@@ -485,9 +485,10 @@ async def exposure_overlaps(
     Ledger overlaps count studies, from any strategy or revision. Outside
     activity is research that was never instrumented for exposure: Grid
     Search and Walk-Forward windows (half-open), saved backtests (start and
-    end dates inclusive) and other studies' evaluations. A Grid or
-    Walk-Forward request whose window cannot be read counts as overlapping:
-    an unreadable history is never a fresh one.
+    end dates inclusive), the windows deleted Grid and Walk-Forward work
+    left on record, and other studies' evaluations. A Grid or Walk-Forward
+    request whose window cannot be read counts as overlapping: an
+    unreadable history is never a fresh one.
     """
     row = await conn.fetchrow(
         """
@@ -504,6 +505,8 @@ async def exposure_overlaps(
               AND COALESCE((w.request_json ->> 'end_ms')::bigint, 9223372036854775807) > $2)
           + (SELECT COUNT(*) FROM research_backtest_runs r
             WHERE upper(r.symbol) = $1 AND r.start_ms < $3 AND r.end_ms >= $2)
+          + (SELECT COUNT(*) FROM research_retired_research_windows d
+            WHERE d.symbol = $1 AND d.interval_start_ms < $3 AND d.interval_end_ms > $2)
           + (SELECT COUNT(DISTINCT v.study_id) FROM research_golden_search_evaluations v
                JOIN research_golden_search_studies s ON s.id = v.study_id
             WHERE s.symbol = $1 AND ($4::text IS NULL OR v.study_id <> $4)
@@ -820,14 +823,26 @@ async def complete_evaluation(
         )
 
 
+ConsumeOutcome = Literal["drawn", "reused", "over_budget", "retries_spent"]
+
+
 async def consume_budget(
-    conn: asyncpg.Connection, study_id: str, attempt: int, count: int, *, limit: int, step: str, once_key: str
-) -> bool:
-    """Atomically take ``count`` units for work run outside the evaluator (the proof); ``False`` when it does not fit.
+    conn: asyncpg.Connection,
+    study_id: str,
+    attempt: int,
+    count: int,
+    *,
+    limit: int,
+    step: str,
+    once_key: str,
+    retry_allowance: int,
+) -> ConsumeOutcome:
+    """Atomically take ``count`` units for work run outside the evaluator (the proof).
 
     Each ``once_key`` is drawn at most once per study, whichever attempt drew
     it: a worker that died between the draw and its checkpoint resumes
-    without drawing again, and the repeat reports ``True``.
+    without drawing again (``reused``). A key reused ``retry_allowance``
+    times is spent: the step's work is not redone again for free.
     """
     if count < 1:
         raise ValueError("consume at least one evaluation")
@@ -845,10 +860,22 @@ async def consume_budget(
             once_key,
         )
         if drawn:
-            return True
+            reused = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM research_golden_search_trials
+                 WHERE study_id = $1 AND kind = 'approval'
+                   AND payload_json->>'event' = 'reused' AND payload_json->>'key' = $2
+                """,
+                study_id,
+                once_key,
+            )
+            if reused >= retry_allowance:
+                return "retries_spent"
+            await insert_trial(conn, study_id, stage=step, kind="approval", payload={"event": "reused", "key": once_key, "attempt": attempt})
+            return "reused"
         consumed = await conn.fetchval(f"SELECT consumed_evaluations FROM {STUDIES} WHERE id = $1", study_id)
         if consumed + count > limit:
-            return False
+            return "over_budget"
         await conn.execute(
             f"UPDATE {STUDIES} SET consumed_evaluations = consumed_evaluations + $2, updated_at_ms = $3 WHERE id = $1",
             study_id,
@@ -858,7 +885,7 @@ async def consume_budget(
         await insert_trial(
             conn, study_id, stage=step, kind="approval", payload={"event": "consumed", "key": once_key, "evaluations": count, "attempt": attempt}
         )
-        return True
+        return "drawn"
 
 
 async def get_evaluation(conn: asyncpg.Connection, study_id: str, evaluation_key: str) -> EvaluationRecord | None:
