@@ -853,6 +853,12 @@ const UNANSWERED_ON_PURPOSE: readonly { readonly pattern: RegExp; readonly why: 
     why: 'the bot page\'s chart history',
   },
   {
+    // The chart panel opens on the strategy view (#2639); it says its read
+    // failed and keeps every control working.
+    pattern: /\/bots\/[^/]+\/strategy-view$/,
+    why: 'the bot page\'s strategy view',
+  },
+  {
     pattern: /\/bots\/[^/]+\/runs\/(current|history)$/,
     why: 'the bot page\'s run timing, which says it could not be loaded',
   },

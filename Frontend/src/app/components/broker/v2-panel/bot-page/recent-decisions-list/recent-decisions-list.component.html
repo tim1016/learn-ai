@@ -3,30 +3,62 @@
     <h3 id="recent-decisions-title" class="recent-decisions__title">Recent decisions</h3>
   </header>
 
-  @if (hasDecisions()) {
-    <table class="recent-decisions__table" aria-label="Recent decisions">
-      <thead>
-        <tr>
-          <th scope="col">Time</th>
-          <th scope="col">Outcome</th>
-          <th scope="col">Reason</th>
-          <th scope="col">Authority</th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (decision of decisions(); track trackDecision($index, decision)) {
-          <tr>
-            <td><app-timestamp-display [value]="decision.recorded_at_ms" mode="local" granularity="time" /></td>
-            <td>{{ decision.outcome | receiptLabel }}</td>
-            <td>{{ decision.reason_code | receiptLabel }}</td>
-            <td>
-              <span class="recent-decisions__authority">{{ decision.authority_kind | receiptLabel }}</span>
-            </td>
-          </tr>
+  @if (entries().length > 0) {
+    <ol class="decisions" aria-label="Recent decisions">
+      @for (entry of entries(); track entryKey(entry)) {
+        @if (entry.kind === 'start') {
+          <li class="decisions__start">
+            Bot started <app-timestamp-display [value]="entry.startedAtMs" mode="local" granularity="minute" />
+          </li>
+        } @else {
+          @let row = entry.row;
+          <li
+            class="decision"
+            [class.decision--selected]="isSelected(row)"
+            [class.decision--before-start]="row.beforeStart"
+            [attr.aria-current]="isSelected(row) ? 'true' : null"
+          >
+            <button
+              type="button"
+              class="decision__head"
+              [attr.aria-expanded]="row.explanation === null ? null : isExpanded(row)"
+              [attr.aria-controls]="row.explanation === null ? null : idPrefix + '-' + row.key"
+              (click)="toggle(row)"
+            >
+              <app-timestamp-display class="decision__time" [value]="row.timeMs" mode="local" [granularity]="row.granularity" />
+              <span class="decision__summary">
+                <span class="decision__what">
+                  @if (row.phaseText) { {{ row.phaseText }} } @else { {{ row.outcome | receiptLabel }} }
+                </span>
+                @if (row.reasonCode) {
+                  <span class="decision__reason">{{ row.reasonCode | receiptLabel }}</span>
+                }
+                @if (row.authorityKind) {
+                  <span class="decision__authority">{{ row.authorityKind | receiptLabel }}</span>
+                }
+              </span>
+            </button>
+            @if (row.explanation; as explanation) {
+              <ul class="decision__chips" aria-label="Checks">
+                @for (check of row.checks; track check.check_id) {
+                  <li class="chip" [class.chip--passed]="check.passed" [class.chip--idle]="!check.applies">
+                    <span aria-hidden="true">{{ check.passed ? '✓' : '✗' }}</span> {{ check.chip }}
+                    <span class="chip__sr">{{ check.passed ? 'passed' : 'failed' }}</span>
+                  </li>
+                }
+              </ul>
+              @if (isExpanded(row)) {
+                <app-strategy-checks class="decision__detail" [id]="idPrefix + '-' + row.key" [explanation]="explanation" />
+              }
+            } @else {
+              <p class="decision__unrecorded">values not recorded</p>
+            }
+          </li>
         }
-      </tbody>
-    </table>
-  } @else {
+      }
+    </ol>
+  }
+  @if (!hasDecisions()) {
     <p class="recent-decisions__empty" role="status">No decisions recorded yet.</p>
   }
 </section>

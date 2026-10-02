@@ -1,0 +1,35 @@
+@use 'strategy-view' as *;
+@use '../../../../styles/filled-controls' as *;
+
+:host { display: contents; }
+
+.candle-popover {
+  @include anchored-popover(29rem);
+
+  > header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+
+    h3 { margin: 0; }
+  }
+}
+
+.candle-popover__close { @include soft-button; }
+
+.candle-popover__ohlc {
+  margin: var(--space-1) 0 var(--space-2);
+  color: var(--text-subtle);
+  font: var(--fs-xxs) var(--font-mono);
+}
+
+.candle-popover__gate {
+  margin: var(--space-2) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+
+  strong { color: var(--text-secondary); }
+  .candle-popover__gate--holds { color: var(--bull); }
+  .candle-popover__gate--fails { color: #ff8a87; }
+}

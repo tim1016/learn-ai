@@ -33,6 +33,7 @@ import { BotChartIndicatorService } from '../dual-pane-chart/bot-chart-indicator
 import type { BotPanelView, BotPanelLiveSnapshot, BotRunView, PanelProfile } from '../lib/broker-v2-panel.types';
 import { provideRouter } from '@angular/router';
 import { provideFleetDirectory, testLane } from '../../../../fleet/fleet-directory-testing';
+import { fakeStrategyView } from '../../../../testing/strategy-view-fixtures';
 
 const chartMocks = vi.hoisted(() => {
   const timeScale = { fitContent: vi.fn() };
@@ -275,7 +276,15 @@ function makeService(historyChart: ReturnType<typeof vi.fn>) {
     liveStreamUrl: vi.fn().mockReturnValue('/api/test/live-stream'),
     getCurrentRun: vi.fn().mockResolvedValue(makeRun()),
     getHistoryChart: historyChart,
+    getStrategyView: vi.fn().mockResolvedValue(fakeStrategyView({ candles: [] })),
   };
+}
+
+/** The chart panel opens on the strategy view (#2639); the tape is one tab away. */
+async function showTape(fixture: { whenStable(): Promise<unknown>; detectChanges(): void }): Promise<void> {
+  await userEvent.setup().click(screen.getByRole('tab', { name: 'Tape' }));
+  await fixture.whenStable();
+  fixture.detectChanges();
 }
 
 async function renderTraderPanel(historyChart: ReturnType<typeof vi.fn>) {
@@ -298,6 +307,7 @@ async function renderTraderPanel(historyChart: ReturnType<typeof vi.fn>) {
   });
   await fixture.whenStable();
   fixture.detectChanges();
+  await showTape(fixture);
   return { fixture, service };
 }
 

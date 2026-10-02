@@ -81,19 +81,30 @@
     }
 
     <div class="bot-page__grid bot-page__grid--market">
-      <app-bot-day-chart
+      <app-bot-chart-panel
         [symbol]="panelData.symbol"
-        [liveChart]="liveChart()"
-        [histChart]="histChart.hasValue() ? histChart.value() : null"
-        [liveChartLoading]="liveChart() === null && liveStreamStatus() === 'connecting'"
-        [histChartLoading]="histChart.isLoading()"
-        [histChartFailed]="histChartFailed()"
-        [liveResolution]="liveResolution()"
-        [historyTimeframe]="selectedHistoryTimeframe()"
-        (historyTimeframeChange)="onHistoryTimeframeChange($event)"
-        (liveResolutionChange)="onLiveResolutionChange($event)"
-        (historyRetry)="histChart.reload()"
+        [view]="strategyViewValue()"
+        [loading]="strategyView.isLoading()"
+        [failure]="strategyViewFailure()"
+        [tape]="tape"
+        [(selectedBarCloseMs)]="selectedDecisionBarMs"
+        (retry)="strategyView.reload()"
       />
+      <ng-template #tape>
+        <app-bot-day-chart
+          [symbol]="panelData.symbol"
+          [liveChart]="liveChart()"
+          [histChart]="histChart.hasValue() ? histChart.value() : null"
+          [liveChartLoading]="liveChart() === null && liveStreamStatus() === 'connecting'"
+          [histChartLoading]="histChart.isLoading()"
+          [histChartFailed]="histChartFailed()"
+          [liveResolution]="liveResolution()"
+          [historyTimeframe]="selectedHistoryTimeframe()"
+          (historyTimeframeChange)="onHistoryTimeframeChange($event)"
+          (liveResolutionChange)="onLiveResolutionChange($event)"
+          (historyRetry)="histChart.reload()"
+        />
+      </ng-template>
       <app-deployment-budget
         [target]="target()"
         [strategyInstanceId]="panelData.strategy_instance_id"
@@ -116,7 +127,11 @@
           [tradingDateMs]="liveChart()?.trading_date_open_ms ?? null"
         />
       }
-      <app-recent-decisions-list [decisions]="panelData.recent_decisions" />
+      <app-recent-decisions-list
+        [decisions]="panelData.recent_decisions"
+        [strategyView]="strategyViewValue()"
+        [(selectedBarCloseMs)]="selectedDecisionBarMs"
+      />
     </div>
 
     <app-bot-details

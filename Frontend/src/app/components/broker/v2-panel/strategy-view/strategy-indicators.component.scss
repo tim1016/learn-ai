@@ -1,0 +1,27 @@
+@use 'strategy-view' as *;
+
+:host { display: contents; }
+
+.indicators-chip { @include chip-button; }
+
+.indicators-popover { @include anchored-popover(28rem); }
+
+.indicators-popover__section { @include popover-section-label; }
+
+.indicators-list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+
+  li {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: 0.35rem 0.4rem;
+    font-size: var(--fs-sm);
+  }
+}
+
+.indicators-list__tag { color: var(--accent-text); font-size: var(--fs-xxs); }

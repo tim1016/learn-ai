@@ -1,0 +1,49 @@
+@use 'strategy-view' as *;
+
+:host { display: contents; }
+
+.gate-chip { @include chip-button; }
+.gate-chip__icon { font-size: var(--fs-sm); }
+
+.gate-popover { @include anchored-popover(27rem); }
+
+.gate-popover__note {
+  margin: 0 0 var(--space-2);
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.gate-list { display: grid; gap: 2px; }
+
+.gate-option {
+  display: grid;
+  grid-template-columns: 1rem 1fr auto;
+  align-items: center;
+  gap: 2px var(--space-2);
+  padding: 0.45rem 0.4rem;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+
+  &:hover { background: var(--bg-hover); }
+
+  input { margin: 0; accent-color: var(--accent-text); }
+}
+
+.gate-option__label { font-size: var(--fs-sm); }
+
+.gate-option__source {
+  padding: 1px 0.4rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+
+  &--strategy { background: var(--accent-soft); color: var(--accent-text); }
+}
+
+.gate-option__expression {
+  grid-column: 2 / -1;
+  color: var(--text-subtle);
+  font: var(--fs-xs) var(--font-mono);
+}

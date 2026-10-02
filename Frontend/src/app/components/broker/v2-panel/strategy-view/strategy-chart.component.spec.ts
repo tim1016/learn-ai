@@ -1,0 +1,193 @@
+import { render } from '@testing-library/angular';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  BEFORE_START_TEXT,
+  STRATEGY_RUN_STARTED_AT_MS,
+  STRATEGY_RUN_STOPPED_AT_MS,
+  barCloseMs,
+  fakeStrategyView,
+} from '../../../../testing/strategy-view-fixtures';
+import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
+import type { StrategyViewResponse } from '../lib/broker-v2-panel.types';
+import type { StrategyChartOverlay } from './strategy-chart-overlay';
+import { STRATEGY_CHART_FACTORY, StrategyChartComponent, type StrategyCandleClick } from './strategy-chart.component';
+import { GATE_CANDLE_COLORS } from './strategy-view-model';
+
+const markers = vi.hoisted(() => ({ setMarkers: vi.fn() }));
+
+vi.mock('lightweight-charts', () => ({
+  createSeriesMarkers: vi.fn().mockReturnValue(markers),
+  CandlestickSeries: 'CandlestickSeries',
+  LineSeries: 'LineSeries',
+  TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
+}));
+
+interface MockSeries {
+  readonly type: string;
+  readonly options: Record<string, unknown>;
+  readonly pane: number;
+  readonly setData: ReturnType<typeof vi.fn>;
+  readonly attachPrimitive: ReturnType<typeof vi.fn>;
+  readonly createPriceLine: ReturnType<typeof vi.fn>;
+}
+
+function mockChart(initialWidth = 800) {
+  const series: MockSeries[] = [];
+  let width = initialWidth;
+  const timeScale = {
+    fitContent: vi.fn(), logicalToCoordinate: vi.fn(), width: () => width,
+    subscribeSizeChange: vi.fn(), unsubscribeSizeChange: vi.fn(),
+    /** The library measuring its auto-sized canvas, a frame after creation. */
+    resize: (next: number) => {
+      width = next;
+      for (const [handler] of timeScale.subscribeSizeChange.mock.calls) handler(next, 300);
+    },
+  };
+  const chart = {
+    addSeries: vi.fn((type: string, options: Record<string, unknown>, pane?: number) => {
+      const created: MockSeries = {
+        type, options, pane: pane ?? 0,
+        setData: vi.fn(), attachPrimitive: vi.fn(), createPriceLine: vi.fn(),
+      };
+      series.push(created);
+      return created;
+    }),
+    removeSeries: vi.fn(),
+    timeScale: () => timeScale,
+    panes: () => [{ setStretchFactor: vi.fn() }, { setStretchFactor: vi.fn() }],
+    applyOptions: vi.fn(),
+    subscribeClick: vi.fn(),
+    unsubscribeClick: vi.fn(),
+    remove: vi.fn(),
+  };
+  return { chart, series, timeScale };
+}
+
+async function renderChart(view: StrategyViewResponse = fakeStrategyView(), gateId = 'g_rule', initialWidth = 800) {
+  const mock = mockChart(initialWidth);
+  const clicks: StrategyCandleClick[] = [];
+  const rendered = await render(StrategyChartComponent, {
+    inputs: { view, gateId },
+    on: { candleClicked: (click: StrategyCandleClick) => clicks.push(click) },
+    providers: [{ provide: STRATEGY_CHART_FACTORY, useValue: () => mock.chart }],
+  });
+  const candles = mock.series.find((each) => each.type === 'CandlestickSeries');
+  if (candles === undefined) throw new Error('The chart drew no candles.');
+  return { ...rendered, ...mock, candles, clicks };
+}
+
+function lastData(series: MockSeries): Record<string, unknown>[] {
+  return series.setData.mock.calls.at(-1)?.[0] ?? [];
+}
+
+describe('StrategyChartComponent (#2639)', () => {
+  beforeEach(() => markers.setMarkers.mockClear());
+
+  it('fills each candle from the active gate’s recorded result, never from its own arithmetic', async () => {
+    const { candles } = await renderChart();
+
+    expect(lastData(candles).map(({ time, color, borderColor }) => ({ time, color, borderColor }))).toEqual([
+      // up + holds
+      { time: barCloseMs(0) / 1000, color: GATE_CANDLE_COLORS.upBright, borderColor: GATE_CANDLE_COLORS.upBright },
+      // down + fails
+      { time: barCloseMs(1) / 1000, color: GATE_CANDLE_COLORS.downDark, borderColor: GATE_CANDLE_COLORS.downDarkEdge },
+      // up + no result reads as dark
+      { time: barCloseMs(2) / 1000, color: GATE_CANDLE_COLORS.upDark, borderColor: GATE_CANDLE_COLORS.upDarkEdge },
+      // down + holds
+      { time: barCloseMs(3) / 1000, color: GATE_CANDLE_COLORS.downBright, borderColor: GATE_CANDLE_COLORS.downBright },
+    ]);
+  });
+
+  it('re-shades the same candles when the active gate changes', async () => {
+    const { candles, fixture } = await renderChart();
+
+    fixture.componentRef.setInput('gateId', 'g_mine');
+    await fixture.whenStable();
+
+    expect(lastData(candles).map(({ color }) => color)).toEqual([
+      GATE_CANDLE_COLORS.upDark,
+      GATE_CANDLE_COLORS.downBright,
+      GATE_CANDLE_COLORS.upBright,
+      GATE_CANDLE_COLORS.downDark,
+    ]);
+  });
+
+  it('hands the overlay the bot’s start and end instants and the before-start shade', async () => {
+    const { candles } = await renderChart(fakeStrategyView({ run_stopped_at_ms: STRATEGY_RUN_STOPPED_AT_MS }));
+    const overlay = candles.attachPrimitive.mock.calls[0][0] as StrategyChartOverlay;
+
+    const state = overlay.current();
+    expect(state.shadeBeforeMs).toBe(STRATEGY_RUN_STARTED_AT_MS);
+    expect(state.shadeLabel).toBe(BEFORE_START_TEXT);
+    expect(state.lines).toEqual([
+      {
+        atMs: STRATEGY_RUN_STARTED_AT_MS,
+        label: `Bot started ${formatTimestampDisplay(STRATEGY_RUN_STARTED_AT_MS, { mode: 'local', granularity: 'minute' })}`,
+        emphasis: 'start',
+      },
+      {
+        atMs: STRATEGY_RUN_STOPPED_AT_MS,
+        label: `Ended ${formatTimestampDisplay(STRATEGY_RUN_STOPPED_AT_MS, { mode: 'local', granularity: 'minute' })}`,
+        emphasis: 'end',
+      },
+    ]);
+    expect(state.bars[0]).toEqual({ startMs: barCloseMs(0) - 15 * 60_000, closeMs: barCloseMs(0) });
+  });
+
+  it('shades nothing when the run has no before-start bars', async () => {
+    const decided = fakeStrategyView();
+    const { candles: decidedCandles } = await renderChart({
+      ...decided, candles: decided.candles.filter((candle) => candle.phase === 'decision'),
+    });
+    expect((decidedCandles.attachPrimitive.mock.calls[0][0] as StrategyChartOverlay).current().shadeBeforeMs).toBeNull();
+  });
+
+  it('draws every declared value with a pane from the bot’s values, on the panes the backend names', async () => {
+    const { series } = await renderChart();
+    const lines = series.filter((each) => each.type === 'LineSeries');
+
+    // "Foo 7" overlays the candles, "Bar 3" gets its own pane, "Baz 1" (no pane) is not drawn.
+    expect(lines.map((line) => line.pane)).toEqual([0, 1]);
+    const [foo, bar] = lines;
+    // The bar whose value was not ready is skipped, never drawn as zero.
+    expect(lastData(foo)).toEqual([
+      { time: barCloseMs(1) / 1000, value: 101 },
+      { time: barCloseMs(2) / 1000, value: 102 },
+      { time: barCloseMs(3) / 1000, value: 103 },
+    ]);
+    expect(bar.createPriceLine.mock.calls.map(([line]) => line.price)).toEqual([20, 80]);
+    expect(bar.createPriceLine.mock.calls[0][0]).toMatchObject({ lineStyle: 2 });
+  });
+
+  it('fits a run’s bars to the width only once the chart has measured one, and keeps the viewer’s zoom after', async () => {
+    const { timeScale, fixture } = await renderChart(fakeStrategyView(), 'g_rule', 0);
+    expect(timeScale.fitContent).not.toHaveBeenCalled();
+
+    timeScale.resize(640);
+    expect(timeScale.fitContent).toHaveBeenCalledTimes(1);
+
+    timeScale.resize(700);
+    fixture.componentRef.setInput('view', fakeStrategyView({ notices: ['A refreshed read.'] }));
+    await fixture.whenStable();
+    expect(timeScale.fitContent).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks entry and exit decisions only', async () => {
+    await renderChart();
+
+    expect(markers.setMarkers).toHaveBeenLastCalledWith([
+      expect.objectContaining({ time: barCloseMs(3) / 1000, shape: 'arrowUp', text: 'Enter' }),
+    ]);
+  });
+
+  it('reports a click on a candle by its bar close', async () => {
+    const { chart, clicks } = await renderChart();
+    const onClick = chart.subscribeClick.mock.calls[0][0];
+
+    onClick({ time: barCloseMs(2) / 1000, point: { x: 40, y: 12 }, sourceEvent: { clientX: 300, clientY: 200 } });
+    onClick({ time: undefined, point: { x: 900, y: 12 } });
+
+    expect(clicks).toEqual([{ barCloseMs: barCloseMs(2), clientX: 300, clientY: 200 }]);
+  });
+});

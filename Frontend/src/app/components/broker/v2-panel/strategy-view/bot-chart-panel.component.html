@@ -1,0 +1,70 @@
+<section class="chart-panel" [attr.aria-label]="'Chart for ' + symbol()">
+  <header class="chart-panel__head">
+    <app-asset-identity [symbol]="symbol()" size="sm" />
+    <div class="chart-panel__tabs" role="tablist" aria-label="Chart view">
+      <button
+        #tab
+        [id]="ids.strategyTab"
+        type="button"
+        role="tab"
+        data-chart-tab="strategy"
+        [attr.aria-selected]="activeTab() === 'strategy'"
+        [attr.tabindex]="activeTab() === 'strategy' ? 0 : -1"
+        [attr.aria-controls]="ids.strategyPanel"
+        (click)="selectTab('strategy')"
+        (keydown)="onTabKeydown($event)"
+      >{{ strategyTabLabel() }}</button>
+      <button
+        #tab
+        [id]="ids.tapeTab"
+        type="button"
+        role="tab"
+        data-chart-tab="tape"
+        [attr.aria-selected]="activeTab() === 'tape'"
+        [attr.tabindex]="activeTab() === 'tape' ? 0 : -1"
+        [attr.aria-controls]="ids.tapePanel"
+        (click)="selectTab('tape')"
+        (keydown)="onTabKeydown($event)"
+      >Tape</button>
+    </div>
+    @if (activeTab() === 'strategy') {
+      @if (declaration(); as declaration) {
+        @if (activeGate(); as gate) {
+          <app-strategy-gate-picker [gates]="declaration.gates" [activeGate]="gate" (gateChange)="chooseGate($event)" />
+        }
+        <app-strategy-indicators [values]="declaration.values" />
+      }
+    }
+  </header>
+
+  <div
+    [id]="ids.strategyPanel"
+    class="chart-panel__body"
+    role="tabpanel"
+    [attr.aria-labelledby]="ids.strategyTab"
+    [hidden]="activeTab() !== 'strategy'"
+  >
+    @if (activeTab() === 'strategy') {
+      <app-strategy-view
+        [view]="view()"
+        [loading]="loading()"
+        [failure]="failure()"
+        [gate]="activeGate()"
+        [(selectedBarCloseMs)]="selectedBarCloseMs"
+        (retry)="retry.emit()"
+      />
+    }
+  </div>
+
+  <div
+    [id]="ids.tapePanel"
+    class="chart-panel__body"
+    role="tabpanel"
+    [attr.aria-labelledby]="ids.tapeTab"
+    [hidden]="activeTab() !== 'tape'"
+  >
+    @if (tapeOpened() && tape(); as tapeTemplate) {
+      <ng-container [ngTemplateOutlet]="tapeTemplate" />
+    }
+  </div>
+</section>
