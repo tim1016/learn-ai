@@ -1,6 +1,7 @@
 import { DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, inject, input, resource, signal } from '@angular/core';
 
+import { extractServerMessage } from '../broker/operation-error';
 import type { CandidateRow } from './golden-search-compare';
 import { GoldenSearchMonthlyComponent } from './golden-search-monthly.component';
 import { GoldenSearchNeighborhoodComponent } from './golden-search-neighborhood.component';
@@ -70,6 +71,11 @@ export class GoldenSearchEvidenceTabsComponent {
       const entries = await Promise.all(params.keys.map(async (key) => [key, await this.service.candidate(params.studyId, key)] as const));
       return new Map<CandidateKey, CandidateDetail>(entries);
     },
+  });
+
+  protected readonly detailsError = computed(() => {
+    const error = this.details.error();
+    return error === undefined ? null : extractServerMessage(error, 'The candidates’ detail runs could not be loaded.');
   });
 
   protected readonly selectedRun = computed(() => (this.details.hasValue() ? (this.details.value().get(this.selected().key)?.development ?? null) : null));

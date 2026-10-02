@@ -3,6 +3,7 @@ import { Router } from '@angular/router';
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from 'primeng/tabs';
 
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
+import { extractServerMessage } from '../broker/operation-error';
 import { GoldenSearchHistoryComponent } from './golden-search-history.component';
 import { GoldenSearchPlanFormComponent } from './golden-search-plan-form.component';
 import { GoldenSearchStudyComponent } from './golden-search-study.component';
@@ -64,8 +65,8 @@ export class GoldenSearchPageComponent {
   private async loadCapabilities(): Promise<void> {
     try {
       this.capabilities.set(await this.service.capabilities());
-    } catch {
-      this.capabilitiesError.set('The Golden Search strategy declarations could not be loaded.');
+    } catch (error) {
+      this.capabilitiesError.set(extractServerMessage(error, 'The Golden Search strategy declarations could not be loaded.'));
     }
   }
 
@@ -81,8 +82,10 @@ export class GoldenSearchPageComponent {
     try {
       const study = await this.service.get(id);
       if (generation === this.reviseGeneration) this.reviseFrom.set(study);
-    } catch {
-      if (generation === this.reviseGeneration) this.reviseError.set('The study to revise could not be loaded; the plan starts from the defaults instead.');
+    } catch (error) {
+      if (generation === this.reviseGeneration) {
+        this.reviseError.set(`${extractServerMessage(error, 'The study to revise could not be loaded.')} The plan starts from the defaults instead.`);
+      }
     }
   }
 }

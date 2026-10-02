@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
 import axe from 'axe-core';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
@@ -231,6 +232,22 @@ describe('GoldenSearchStudyComponent', () => {
     await waitFor(() => expect(service.get).toHaveBeenCalledTimes(3));
     answerRetry(running);
     await waitFor(() => expect(screen.queryByText('This study could not be refreshed; retrying.')).toBeNull());
+  });
+
+  it('a study the server cannot load, or a command it fails, says why in its words', async () => {
+    const service = fakeService(studyDetail('locked'));
+    service.get.mockRejectedValueOnce(new HttpErrorResponse({ status: 404, error: { detail: { code: 'NOT_FOUND', message: 'No Golden Search study study-0001-aaaa exists.' } } }));
+    const view = await render(GoldenSearchStudyComponent, {
+      inputs: { studyId: 'study-0001-aaaa', capabilities: [emaCapability()], pollMs: 0 },
+      providers: [provideRouter([]), { provide: GoldenSearchService, useValue: service }],
+    });
+    expect((await screen.findByRole('alert')).textContent).toContain('No Golden Search study study-0001-aaaa exists.');
+
+    await view.fixture.componentInstance.reload();
+    service.command.mockRejectedValueOnce(new HttpErrorResponse({ status: 503, error: { detail: { message: 'The research store is not reachable.' } } }));
+    fireEvent.click(await screen.findByRole('button', { name: /start the search/i }));
+
+    expect(await screen.findByText('The research store is not reachable.')).not.toBeNull();
   });
 
   it('a command with no answer can be retried with the same idempotency key', async () => {

@@ -20,9 +20,9 @@
     <app-golden-search-neighborhood view="stress" [neighbors]="row.candidate.neighbors" [stress]="row.candidate.stress" [capability]="capability()" [candidateLabel]="row.candidate.label" />
   }
   @default {
-    @if (details.error()) {
+    @if (detailsError(); as message) {
       <div role="alert" class="failed">
-        <p>The candidates' detail runs could not be loaded.</p>
+        <p>{{ message }}</p>
         <button type="button" class="link" (click)="retry()">Try again</button>
       </div>
     } @else if (!details.hasValue()) {

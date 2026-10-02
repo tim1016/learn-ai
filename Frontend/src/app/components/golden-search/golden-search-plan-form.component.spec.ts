@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
@@ -346,6 +347,16 @@ describe('GoldenSearchPlanFormComponent', () => {
     const sent = service.preflight.mock.lastCall?.[0];
     expect(sent?.final_start_ms).toBe(etMidnightMs('2025-10-01'));
     expect(sent?.development_end_ms).toBe(etMidnightMs('2025-10-01'));
+  });
+
+  it('defaults the server refuses show its reason', async () => {
+    const service = fakeService();
+    service.defaults.mockRejectedValueOnce(new HttpErrorResponse({ status: 400, error: { detail: { code: 'NO_COVERAGE', message: 'SPY has no bars held before 2024-01-01.' } } }));
+    const { view } = await renderForm(service);
+
+    pickSymbol(view.fixture, 'SPY');
+
+    expect(await screen.findByText('SPY has no bars held before 2024-01-01.')).not.toBeNull();
   });
 
   it('a failed layout says so and keeps the plan from being checked or locked', async () => {

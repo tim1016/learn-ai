@@ -6,6 +6,7 @@ import { ButtonModule } from 'primeng/button';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { ConfirmDeleteComponent } from '../../shared/research-record/confirm-delete.component';
 import { RecordPoller } from '../../shared/research-record/record-poller';
+import { extractServerMessage } from '../broker/operation-error';
 import type { GridSearchRefusal } from '../grid-search/grid-search.types';
 import { GoldenSearchCompareStepComponent } from './golden-search-compare-step.component';
 import { GoldenSearchDecisionStepComponent } from './golden-search-decision-step.component';
@@ -161,11 +162,11 @@ export class GoldenSearchStudyComponent {
       this.loadError.set(null);
       this.refreshNotice.set(null);
       this.apply(detail);
-    } catch {
+    } catch (error) {
       if (generation !== this.loadGeneration) return;
       const shown = this.detail();
       if (shown?.id !== id) {
-        this.loadError.set('This study could not be loaded.');
+        this.loadError.set(extractServerMessage(error, 'This study could not be loaded.'));
         return;
       }
       // One failed refresh of a study on screen is not the end of it.
@@ -201,7 +202,7 @@ export class GoldenSearchStudyComponent {
     } catch (error) {
       if (error instanceof GoldenSearchRefusedError) this.actionRefusal.set(error.refusal);
       else if (error instanceof StudyConflictError) this.actionMessage.set(error.message);
-      else this.actionMessage.set('The study could not be hidden. Try again.');
+      else this.actionMessage.set(extractServerMessage(error, 'The study could not be hidden. Try again.'));
     } finally {
       this.busy.set(false);
     }
@@ -252,7 +253,7 @@ export class GoldenSearchStudyComponent {
       this.keys.settle();
       this.actionRefusal.set(error.refusal);
     } else {
-      this.actionMessage.set('The command got no answer. Press it again: the retry is recognised and cannot act twice.');
+      this.actionMessage.set(extractServerMessage(error, 'The command got no answer. Press it again: the retry is recognised and cannot act twice.'));
     }
   }
 
