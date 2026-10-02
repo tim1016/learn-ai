@@ -16,7 +16,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { MessageService } from 'primeng/api';
 
 import type {
@@ -41,14 +41,17 @@ import type {
   PanelActionResult,
   PanelActionTrigger,
 } from '../lib/broker-v2-panel.types';
+import { FEED_CONTINUITY_NOT_RECORDED, feedContinuityFor } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService, type BotEndInput } from '../lib/broker-v2-panel.service';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { BrokersService } from '../../../../services/brokers.service';
 import {
+  accountWorkspaceDeployAgainRoute,
   accountWorkspaceHomeRoute,
   accountWorkspaceTabLabel,
 } from '../../../../fleet/account-workspace';
+import { buildManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
 import {
   laneKey,
   resourceTarget,
@@ -71,12 +74,16 @@ import {
   extractActionErrorDetail,
   type ActionRejection,
 } from '../lib/panel-action-outcome';
-import { BotBannerComponent } from '../bot-banner/bot-banner.component';
+import { BotPageHeaderComponent } from '../bot-page/bot-page-header.component';
+import { BotToolbarComponent } from '../bot-page/bot-toolbar.component';
+import { BotHealthGroupsComponent } from '../bot-page/bot-health-groups.component';
+import { BotOrderRecordsComponent } from '../bot-page/bot-order-records.component';
+import { BotSetupComponent } from '../bot-page/bot-setup.component';
+import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-history.component';
 import { DeploymentBudgetComponent } from '../../deployment-budget/deployment-budget.component';
 import { TradesTodayListComponent } from '../bot-page/trades-today-list.component';
 import { RecentDecisionsListComponent } from '../bot-page/recent-decisions-list/recent-decisions-list.component';
 import { BotDayChartComponent } from '../bot-page/bot-day-chart.component';
-import { BotDetailsComponent } from '../bot-page/bot-details.component';
 import { BotEndCardComponent } from '../bot-page/bot-end-card.component';
 import { StrandedPositionWarningComponent } from '../bot-page/stranded-position-warning.component';
 import { BotChartPanelComponent } from '../strategy-view/bot-chart-panel.component';
@@ -183,6 +190,9 @@ const FLATTEN_STEP_ACTIONS: Readonly<Record<FlattenStepId, PanelAction['action_i
  * - Action execution, each command owned by the bot it was sent to (#2471),
  *   including the one-confirmation Flatten sequence (hurdle H30).
  */
+/** How far either side of a finished run its tape reaches (the data plane allows 30 minutes). */
+const RUN_TAPE_PADDING_MS = 15 * 60_000;
+
 @Component({
   selector: 'app-bot-panel-shell',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -192,11 +202,16 @@ const FLATTEN_STEP_ACTIONS: Readonly<Record<FlattenStepId, PanelAction['action_i
     PanelActionReceiptComponent,
     SafeFlattenPlanComponent,
     TypedHaltConfirmComponent,
-    BotBannerComponent,
     BotChartPanelComponent,
     BotDayChartComponent,
-    BotDetailsComponent,
     BotEndCardComponent,
+    BotHealthGroupsComponent,
+    BotOrderRecordsComponent,
+    BotPageHeaderComponent,
+    BotSetupComponent,
+    BotToolbarComponent,
+    OperatorRunHistoryComponent,
+    RouterLink,
     DeploymentBudgetComponent,
     RecentDecisionsListComponent,
     StrandedPositionWarningComponent,
@@ -248,6 +263,32 @@ export class BotPanelShellComponent {
   );
 
   protected readonly backLabel = accountWorkspaceTabLabel('home');
+
+  // ── The bot page's lead and toolbar (#2794) ──────────────────────────────
+
+  /** Deploy again for this bot, under the routed account. */
+  protected readonly deployAgain = computed(() => accountWorkspaceDeployAgainRoute({
+    broker: this.broker(),
+    clerkId: this.clerkId(),
+    accountId: this.accountId(),
+  }, this.sid()));
+
+  /** A Dry Run trades no account money and a cleared bot's page is read-only: neither opens a manual ticket. */
+  protected readonly manualOrderNavigation = computed(() => {
+    const panel = this.panel();
+    if (panel === null || panel.mode === 'dry_run' || panel.status === 'cleared') return null;
+    return buildManualOrderTicketNavigation({
+      broker: panel.broker,
+      clerkId: this.clerkId(),
+      routeAccountId: this.accountId(),
+      accountId: panel.account_id,
+      symbol: panel.symbol,
+    });
+  });
+
+  /** The toolbar's Change end opens the bot's end card; its Build proof opens the hashes in Setup. */
+  protected readonly changingEnd = signal(false);
+  protected readonly proofOpen = signal(false);
 
   /** The frozen lane context (FR-094): every request and command this shell
    * issues carries broker, clerk and account identity, and commands pin the
@@ -427,13 +468,43 @@ export class BotPanelShellComponent {
       accountId: this.accountId(),
       sid: this.sid(),
       timeframe: this.selectedHistoryTimeframe(),
+      runFromMs: this.runWindowFromMs(),
+      runToMs: this.runWindowToMs(),
     }),
     loader: ({ params }) =>
       this.panelSvc.getHistoryChart(
         resourceTarget(params.broker, params.clerkId, { accountId: params.accountId }),
         params.sid,
         params.timeframe,
+        params.runFromMs === null || params.runToMs === null
+          ? null
+          : { fromMs: params.runFromMs, toMs: params.runToMs },
       ),
+  });
+
+  /** A finished run's Tape · 1m reads that run, with some padding (#2794 R7);
+   * a running bot's reads the newest bars. Plain numbers, so a new snapshot
+   * of the same run does not re-read the tape. */
+  private readonly runWindowFromMs = computed((): number | null => {
+    const facts = this.panel()?.bot_page?.summary.facts;
+    if (this.selectedHistoryTimeframe() !== '1m' || facts?.started_at_ms == null || facts.ended_at_ms == null) {
+      return null;
+    }
+    return facts.started_at_ms - RUN_TAPE_PADDING_MS;
+  });
+  private readonly runWindowToMs = computed((): number | null => {
+    const facts = this.panel()?.bot_page?.summary.facts;
+    if (this.runWindowFromMs() === null || facts?.ended_at_ms == null) return null;
+    return facts.ended_at_ms + RUN_TAPE_PADDING_MS;
+  });
+
+  /** The run's fills, under the run's date (#2794 R8). */
+  protected readonly runFills = computed(() => this.panel()?.run_fills ?? []);
+  protected readonly runStartedAtMs = computed(() => this.panel()?.bot_page?.summary.facts.started_at_ms ?? null);
+  protected readonly notFound = this.liveStore.notFound;
+  protected readonly feedContinuity = computed(() => {
+    const panel = this.panel();
+    return panel === null ? FEED_CONTINUITY_NOT_RECORDED : feedContinuityFor(panel);
   });
 
   /** The decision bar the owner selected, by its close: one selection the

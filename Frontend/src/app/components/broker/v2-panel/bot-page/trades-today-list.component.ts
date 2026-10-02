@@ -13,10 +13,11 @@ import { FillTableComponent } from './fill-table/fill-table.component';
 const INLINE_FILL_LIMIT = 4;
 
 /**
- * Fills list for today's session.
+ * A fills list: today's session, or the bot's run (#2794 R8), labelled by
+ * its date and never "today" for a run.
  *
- * Renders raw fill events from the live chart response. P&L stays in the
- * adjacent trader summary, where the backend-provided totals are prominent.
+ * Renders raw fill events. P&L stays in the money panel, where the
+ * backend-provided totals are prominent.
  */
 @Component({
   selector: 'app-trades-today-list',
@@ -27,6 +28,8 @@ const INLINE_FILL_LIMIT = 4;
 })
 export class TradesTodayListComponent {
   readonly fills = input<readonly ChartFillMarker[]>([]);
+  /** The list's name: "Fills today", or "Fills this run" for a run. */
+  readonly heading = input('Fills today');
   /** Backend count; null means the active custody fold cannot provide history. */
   readonly fillCount = input<number | null>(0);
   /** Today trading date as int64 ms UTC for display. */
@@ -43,7 +46,7 @@ export class TradesTodayListComponent {
       return 'Fill history unavailable from active custody folds.';
     }
     if (fillCount === 0) {
-      return 'No fills today.';
+      return this.heading() === 'Fills today' ? 'No fills today.' : `No ${this.heading().toLowerCase()}.`;
     }
     return 'Fill details are outside the current chart window.';
   });

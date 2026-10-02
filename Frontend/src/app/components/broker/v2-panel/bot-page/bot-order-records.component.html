@@ -22,18 +22,20 @@
   }
 </div>
 
-<div class="records-block">
-  <h4>Order path</h4>
-  <p class="records-block__hint">The selected order's recorded path. Choosing an audit-trail entry shows its path here.</p>
-  <app-transaction-rail
-    [rail]="panel().rail"
-    [profile]="profile()"
-    [broker]="broker()"
-    [clerkId]="clerkId()"
-    [accountId]="accountId()"
-    [sid]="sid()"
-  />
-</div>
+@if (panel().rail.transaction_ref !== null) {
+  <div class="records-block">
+    <h4>Order path</h4>
+    <p class="records-block__hint">The selected order's recorded path. Choosing an audit-trail entry shows its path here.</p>
+    <app-transaction-rail
+      [rail]="panel().rail"
+      [profile]="profile()"
+      [broker]="broker()"
+      [clerkId]="clerkId()"
+      [accountId]="accountId()"
+      [sid]="sid()"
+    />
+  </div>
+}
 
 <div class="records-block">
   <h4>Audit trail</h4>

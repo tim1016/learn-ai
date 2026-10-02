@@ -1,0 +1,23 @@
+<section class="health" aria-labelledby="bot-health-title">
+  <h3 id="bot-health-title" class="panel-title">Health</h3>
+  @for (group of groups(); track group.title) {
+    <h4 class="health__group">{{ group.title }}</h4>
+    <ul class="health__lines" [attr.aria-label]="group.title">
+      @for (line of group.lines; track line.key) {
+        <li class="health__line" [attr.data-state]="line.state">
+          <span class="health__dot" aria-hidden="true"></span>
+          <span class="health__label">{{ line.label }}</span>
+          <span class="health__value">{{ line.value }}</span>
+          @if (line.note || line.at_ms !== null) {
+            <span class="health__note">
+              {{ line.note }}
+              @if (line.at_ms !== null) {
+                <app-timestamp-display [value]="line.at_ms" mode="local" />
+              }
+            </span>
+          }
+        </li>
+      }
+    </ul>
+  }
+</section>

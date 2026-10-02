@@ -7,9 +7,11 @@
 
 import type {
   BotCatalogView,
+  BotPageView,
   BotPanelView,
   ChartFeedView,
   PanelAction,
+  ToolbarActionView,
 } from '../components/broker/v2-panel/lib/broker-v2-panel.types';
 import { operatorBlockerFixture } from './operator-blocker-fixtures';
 
@@ -54,7 +56,7 @@ export function fakeChartFeed(overrides: Partial<ChartFeedView> = {}): ChartFeed
 }
 
 export function fakeBotPanelView(overrides: Partial<BotPanelView> = {}): BotPanelView {
-  return {
+  const panel: BotPanelView = {
     strategy_instance_id: 'spy-momentum-01',
     strategy_key: 'deployment_validation',
     strategy_label: 'Deployment Validation',
@@ -164,6 +166,132 @@ export function fakeBotPanelView(overrides: Partial<BotPanelView> = {}): BotPane
     open_pnl_direction: null,
     ...overrides,
   };
+  return 'bot_page' in overrides ? panel : { ...panel, bot_page: fakeBotPage(panel) };
+}
+
+interface FakeToolbarEntry {
+  readonly label: string;
+  readonly group: ToolbarActionView['group'];
+  readonly tone: ToolbarActionView['tone'];
+  readonly notNeeded: string;
+}
+
+/** The custody actions in the backend's toolbar order and plain names (`bot_page_projection`). */
+const CUSTODY_ENTRIES: Readonly<Partial<Record<ToolbarActionView['action_id'], FakeToolbarEntry>>> = {
+  stop_bot_decisions: { label: 'Stop', group: 'bot', tone: 'danger', notNeeded: 'This bot is not running.' },
+  prepare_safe_flatten: { label: 'Sell', group: 'bot', tone: 'danger', notNeeded: 'This bot holds no shares.' },
+  reconcile_now: { label: 'Check against Alpaca', group: 'fix', tone: 'neutral', notNeeded: 'Nothing to check.' },
+  cancel_verified_working_orders: {
+    label: 'Cancel open orders', group: 'fix', tone: 'danger', notNeeded: 'This bot has no open orders.',
+  },
+  discharge_attributed_residue: {
+    label: 'Write off missing shares', group: 'fix', tone: 'danger', notNeeded: 'No shares are missing.',
+  },
+  recover_exact_execution_evidence: {
+    label: 'Recover a missing fill', group: 'fix', tone: 'warning', notNeeded: 'No fill is missing.',
+  },
+  resolve_execution_coverage: {
+    label: 'Use the exact fill', group: 'fix', tone: 'warning', notNeeded: 'No fill is recorded two ways.',
+  },
+  open_custody_timeline: { label: 'Custody timeline', group: 'inspect', tone: 'neutral', notNeeded: 'Nothing to show.' },
+};
+
+function entry(
+  action_id: ToolbarActionView['action_id'],
+  label: string,
+  group: ToolbarActionView['group'],
+  availability: ToolbarActionView['availability'],
+  reason: string,
+  tone: ToolbarActionView['tone'] = 'neutral',
+): ToolbarActionView {
+  return { action_id, label, group, availability, reason, tone, primary: false };
+}
+
+/**
+ * What the backend leads a bot page with (`bot_page_projection.bot_page_view`),
+ * derived from the fixture's own actions, health and exposure so a spec that
+ * overrides those sees the toolbar the backend would send.
+ */
+export function fakeBotPage(panel: BotPanelView): BotPageView {
+  const running = panel.health.running;
+  const held = Object.entries(panel.exposure);
+  const status: BotPageView['status'] = running
+    ? { state: 'running', label: 'Running', reason: null }
+    : held.length > 0
+      ? { state: 'ended_holding', label: 'Ended holding', reason: null }
+      : { state: 'finished', label: 'Finished', reason: null };
+  const custody = (actionId: ToolbarActionView['action_id']): ToolbarActionView[] => {
+    const action = panel.actions.find((candidate) => candidate.action_id === actionId);
+    const spec = CUSTODY_ENTRIES[actionId];
+    if (action === undefined || spec === undefined) return [];
+    const label = actionId === 'prepare_safe_flatten' && held.length === 1
+      ? `Sell ${held[0][1]} ${held[0][0]}`
+      : spec.label;
+    const needed = (action.needed ?? true) || (actionId === 'stop_bot_decisions' && running);
+    if (action.enabled) return [entry(actionId, label, spec.group, 'available', action.explanation, spec.tone)];
+    if (!needed) return [entry(actionId, label, spec.group, 'not_needed', spec.notNeeded, spec.tone)];
+    return [entry(actionId, label, spec.group, 'blocked', action.blockers[0]?.headline ?? action.explanation, spec.tone)];
+  };
+  const archive = panel.actions.find((action) => action.action_id === 'archive');
+  const toolbar: ToolbarActionView[] = [
+    ...custody('stop_bot_decisions'),
+    ...custody('prepare_safe_flatten'),
+    panel.end?.editable
+      ? entry('change_end', 'Change end', 'bot', 'available', 'Change when this bot ends and what it does then.')
+      : entry('change_end', 'Change end', 'bot', 'not_needed', 'This bot has no end to change.'),
+    running
+      ? entry('deploy_again', 'Deploy again', 'bot', 'not_needed', 'This bot is still running.')
+      : entry('deploy_again', 'Deploy again', 'bot', 'available', 'Deploy a new bot with these settings.'),
+    archive === undefined
+      ? entry('archive', 'Clear from Home', 'bot', 'not_needed', 'A running bot stays on Home.')
+      : entry('archive', 'Clear from Home', 'bot', archive.enabled ? 'available' : 'blocked',
+        archive.enabled ? 'Take this finished bot off Home.' : archive.blockers[0]?.headline ?? archive.explanation),
+    panel.mode === 'dry_run' || panel.status === 'cleared'
+      ? entry('manual_order', 'Manual order', 'bot', 'not_needed', 'This bot places no manual orders.')
+      : entry('manual_order', 'Manual order', 'bot', 'available', `Place an order for ${panel.symbol} on this account.`),
+    ...custody('reconcile_now'),
+    ...custody('cancel_verified_working_orders'),
+    ...custody('discharge_attributed_residue'),
+    ...custody('recover_exact_execution_evidence'),
+    ...custody('resolve_execution_coverage'),
+    ...custody('open_custody_timeline'),
+    panel.program_build.state === 'NOT_APPLICABLE'
+      ? entry('build_proof', 'Build proof', 'inspect', 'not_needed', 'This strategy has no sealed program to prove.')
+      : entry('build_proof', 'Build proof', 'inspect', 'available', 'Show this run\'s build proof and its hashes.'),
+  ];
+  const primaryId = panel.primary_action === 'execute_safe_flatten' ? 'prepare_safe_flatten' : panel.primary_action;
+  const primary = primaryId ?? (status.state === 'finished' ? 'deploy_again' : null);
+  return {
+    status,
+    summary: {
+      text: running ? 'Running since Tue Nov 14 2023, 17:13 ET · no decisions, no trades.'
+        : 'Ran Tue Nov 14 2023, 17:13–17:14 ET · stopped · no decisions, no trades.',
+      template_version: 1,
+      facts: {
+        run_id: 'run-fixture',
+        started_at_ms: OBSERVED_AT_MS - 60_000,
+        ended_at_ms: running ? null : OBSERVED_AT_MS,
+        scheduled_end_at_ms: null,
+        ending: running ? 'running' : 'stopped',
+        decision_count: 0,
+        trade_count: 0,
+        set_aside_usd: null,
+        returned_usd: null,
+        held: held.map(([symbol, quantity]) => ({ symbol, quantity: String(quantity) })),
+        exit_queued: false,
+        current_year: 2023,
+      },
+    },
+    toolbar: toolbar.map((item) =>
+      item.action_id === primary && item.availability === 'available' ? { ...item, primary: true } : item),
+    health: {
+      run: [{
+        key: 'feed', label: 'IBKR market data feed', state: 'ok', value: 'Continuous',
+        note: 'No IBKR market-data interruptions are recorded in this run.', at_ms: null,
+      }],
+      account: [{ key: 'holds', label: 'Holds', state: 'ok', value: 'None', note: null, at_ms: null }],
+    },
+  };
 }
 
 export function fakePanelAction(
@@ -196,8 +324,10 @@ function unavailableSqliteAction(
   actionId: PanelAction['action_id'],
   label: string,
   reason: { id: string; headline: string; detail: string },
+  { needed = false }: { needed?: boolean } = {},
 ): PanelAction {
-  return fakePanelAction(actionId, { label, enabled: false, blockers: sqliteBlockers(reason) });
+  // The default bot holds nothing, so the policy says each of these has nothing to do (`PanelAction.needed`).
+  return fakePanelAction(actionId, { label, enabled: false, blockers: sqliteBlockers(reason), needed });
 }
 
 /** The stop the SQLite panel presents for a running bot: the Clerk's
@@ -285,6 +415,7 @@ export function fakeSqliteBotActions(
       ? fakeSqliteStopAction({}, { sid })
       : fakeSqliteStopAction({
         enabled: false,
+        needed: false,
         blockers: sqliteBlockers({
           id: 'NO_ACTIVE_BOT_RUN',
           headline: 'Select a bot with an active run; no decision process is currently stoppable.',

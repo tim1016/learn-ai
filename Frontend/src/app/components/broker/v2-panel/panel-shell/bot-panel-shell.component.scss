@@ -1,38 +1,60 @@
 :host {
-  display: block;
+  display: flex;
+  flex-direction: column;
   min-height: 100%;
+  height: 100%;
   overflow-y: auto;
   overflow-x: clip;
   background: var(--bg-canvas);
   color: var(--text-primary);
 }
 
-.bot-banner-strip { margin: var(--space-2) var(--space-4) var(--space-3); }
-
 .bot-page {
-  display: grid;
-  gap: var(--space-3);
-  padding: 0 var(--space-4) var(--space-4);
-}
-
-.bot-page__grid {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) minmax(20rem, 24rem);
-  align-items: start;
-  gap: var(--space-3);
-}
-
-.bot-page__grid--market { align-items: stretch; }
-
-.observation-note {
   display: flex;
-  align-items: baseline;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
   gap: var(--space-2);
-  padding: var(--space-3);
+  padding: var(--space-2) var(--space-4) var(--space-3);
+}
+
+// #2794 R4: the board fills the screen under the banner -- chart 6 · money 3 ·
+// decisions 3, then orders 6 · health 3 · setup 3 -- and each panel scrolls
+// inside itself, so the page does not.
+.bot-board {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 34rem;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.bot-board__panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   background: var(--bg-surface);
+}
+
+.bot-board__chart { grid-column: span 6; padding: 0; overflow: hidden; }
+.bot-board__money { grid-column: span 3; }
+.bot-board__decisions { grid-column: span 3; }
+.bot-board__orders { grid-column: span 6; }
+.bot-board__health { grid-column: span 3; }
+.bot-board__setup { grid-column: span 3; }
+
+.bot-board__runs {
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.observation-note {
+  margin: var(--space-2) 0 0;
   color: var(--text-secondary);
   font-size: var(--fs-sm);
 
@@ -41,8 +63,22 @@
 
 .flatten-ticket:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+.not-found {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 40rem;
+  margin: var(--space-6, 3rem) auto;
+  padding: var(--space-4);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+
+  h2 { margin: 0; font-size: var(--fs-lg); }
+  p { margin: 0; color: var(--text-secondary); }
+}
+
 .load-error {
-  margin-bottom: var(--space-3);
+  margin: var(--space-3) var(--space-4);
   padding: var(--space-3);
   border: 1px solid rgba(239, 83, 80, 0.5);
   border-radius: var(--radius);
@@ -66,7 +102,6 @@
 
 // Frozen, not live: the panel stays readable and its controls stay usable,
 // but it visibly stops looking current while the notice above explains why.
-:host(.is-stale) .bot-banner-strip,
 :host(.is-stale) .bot-page {
   filter: grayscale(0.7);
 }
@@ -80,10 +115,22 @@
 
 .flatten-quote-error { margin: var(--space-2) 0 0; color: var(--bear); font-size: var(--fs-xs); }
 
+// Narrow windows: two columns, then one; the page scrolls instead of the panels.
 @media (max-width: 1100px) {
-  .bot-page__grid { grid-template-columns: minmax(0, 1fr); }
+  .bot-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: auto;
+  }
+
+  .bot-board__chart { grid-column: 1 / -1; min-height: 28rem; }
+  .bot-board__money,
+  .bot-board__decisions,
+  .bot-board__orders,
+  .bot-board__health,
+  .bot-board__setup { grid-column: span 1; max-height: 32rem; }
 }
 
-@media (max-width: 800px) {
+@media (max-width: 720px) {
   .bot-page { padding-inline: var(--space-3); }
+  .bot-board { grid-template-columns: minmax(0, 1fr); }
 }

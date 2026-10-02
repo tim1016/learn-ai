@@ -1,153 +1,193 @@
-@if (loadError()) {
-  <div class="load-error" role="alert" aria-live="assertive">{{ loadError() }}</div>
-}
-
-@if (liveStall(); as stall) {
-  <section class="live-stall" role="alert" aria-live="assertive" aria-labelledby="live-stall-title">
-    <h2 id="live-stall-title" class="live-stall__title">{{ stall.message }}</h2>
-    <p>{{ stall.why }}</p>
-    <p>{{ stall.next_action }}</p>
-    <p class="live-stall__meta">
-      Last complete refresh
-      <app-timestamp-display [value]="stall.last_produced_at_ms" mode="local" />
-    </p>
+@if (notFound(); as reason) {
+  <section class="not-found" role="alert" aria-labelledby="bot-not-found-title">
+    <h2 id="bot-not-found-title">No bot named {{ sid() }} on this account</h2>
+    <p>{{ reason }}</p>
+    <a [routerLink]="backRoute()">Back to {{ backLabel }}</a>
   </section>
-}
+} @else {
+  @if (loadError()) {
+    <div class="load-error" role="alert" aria-live="assertive">{{ loadError() }}</div>
+  }
 
-@if (!isLoaded()) {
-  <div class="loading-state" role="status" aria-live="polite" aria-label="Loading bot panel">
-    <span class="loading-text">Loading bot control…</span>
-  </div>
-}
+  @if (liveStall(); as stall) {
+    <section class="live-stall" role="alert" aria-live="assertive" aria-labelledby="live-stall-title">
+      <h2 id="live-stall-title" class="live-stall__title">{{ stall.message }}</h2>
+      <p>{{ stall.why }}</p>
+      <p>{{ stall.next_action }}</p>
+      <p class="live-stall__meta">
+        Last complete refresh
+        <app-timestamp-display [value]="stall.last_produced_at_ms" mode="local" />
+      </p>
+    </section>
+  }
 
-@if (isLoaded()) {
-  @let panelData = panel()!;
-  @let profileData = profile.value()!;
-
-  <app-bot-banner
-    class="bot-banner-strip"
-    [panel]="panelData"
-    [runState]="currentRunState()"
-    [backRoute]="backRoute()"
-    [backLabel]="backLabel"
-    [clerkId]="clerkId()"
-    [routeAccountId]="accountId()"
-    [actionPending]="actionPending()"
-    (actionRequested)="onActionRequested($event)"
-    (retryRequested)="currentRun.reload()"
-  />
-
-  <div class="bot-page">
-    @if (actionReceipt(); as receipt) {
-      <app-panel-action-receipt [receipt]="receipt" (dismissed)="dismissActionReceipt()" />
-    }
-
-    @if (stranded()) {
-      <app-stranded-position-warning
-        [panel]="panelData"
-        [steps]="flattenSteps()"
-        [pending]="actionPending() || flattenInProgress()"
-        (flatten)="onFlattenConfirmed($event)"
-      />
-    }
-
-    @if (reductionPlan(); as plan) {
-      <div #flattenTicket class="flatten-ticket" tabindex="-1" aria-label="Prepared sale">
-        <app-safe-flatten-plan [plan]="plan" [pricing]="reductionPricing()" />
-        @if (extendedFlattenTicket(); as ticket) {
-          <app-extended-flatten-ticket
-            [pricing]="ticket.pricing"
-            [quantity]="ticket.quantity"
-            [quoteReceivedAtMs]="ticket.receivedAtMs"
-            [pending]="actionPending()"
-            (send)="sendExtendedFlatten($event)"
-            (priceCheck)="priceExtendedFlatten($event)"
-            (overridePriceCheck)="priceExtendedFlatten($event, true)"
-            (refresh)="refreshFlattenQuote()"
-          />
-          @if (preparedFlatten()?.quoteError; as quoteError) {
-            <p class="flatten-quote-error" role="alert">Quote refresh failed: {{ quoteError }}</p>
-          }
-        }
-      </div>
-    }
-
-    @if (flattenFills().length > 0) {
-      <app-flatten-fills [fills]="flattenFills()" />
-    }
-
-    @if (panelData.end; as end) {
-      <app-bot-end-card [end]="end" [dryRun]="panelData.mode === 'dry_run'" [locked]="actionPending()" [save]="saveBotEnd" />
-    }
-
-    <div class="bot-page__grid bot-page__grid--market">
-      <app-bot-chart-panel
-        [symbol]="panelData.symbol"
-        [view]="strategyViewValue()"
-        [loading]="strategyView.isLoading()"
-        [failure]="strategyViewFailure()"
-        [tape]="tape"
-        [(selectedBarCloseMs)]="selectedDecisionBarMs"
-        (retry)="strategyView.reload()"
-      />
-      <ng-template #tape>
-        <app-bot-day-chart
-          [symbol]="panelData.symbol"
-          [liveChart]="liveChart()"
-          [histChart]="histChart.hasValue() ? histChart.value() : null"
-          [liveChartLoading]="liveChart() === null && liveStreamStatus() === 'connecting'"
-          [histChartLoading]="histChart.isLoading()"
-          [histChartFailed]="histChartFailed()"
-          [liveResolution]="liveResolution()"
-          [historyTimeframe]="selectedHistoryTimeframe()"
-          (historyTimeframeChange)="onHistoryTimeframeChange($event)"
-          (liveResolutionChange)="onLiveResolutionChange($event)"
-          (historyRetry)="histChart.reload()"
-        />
-      </ng-template>
-      <app-deployment-budget
-        [target]="target()"
-        [strategyInstanceId]="panelData.strategy_instance_id"
-        [revision]="panelData.revision"
-        [holdsShares]="holdsShares()"
-        [openPnl]="panelData"
-      />
+  @if (!isLoaded()) {
+    <div class="loading-state" role="status" aria-live="polite" aria-label="Loading bot panel">
+      <span class="loading-text">Loading bot control…</span>
     </div>
+  }
 
-    <div class="bot-page__grid">
-      @if (panelData.mode === 'log_only') {
-        <section class="observation-note" role="status">
-          <strong>Observation only</strong>
-          <span>This bot records decisions but does not place broker orders.</span>
-        </section>
-      } @else {
-        <app-trades-today-list
-          [fills]="liveChart()?.fill_markers ?? []"
-          [fillCount]="panelData.fills_today"
-          [tradingDateMs]="liveChart()?.trading_date_open_ms ?? null"
+  @if (isLoaded()) {
+    @let panelData = panel()!;
+    @let profileData = profile.value()!;
+
+    <div class="bot-page">
+      <app-bot-page-header
+        [panel]="panelData"
+        [backRoute]="backRoute()"
+        [backLabel]="backLabel"
+        [clerkId]="clerkId()"
+      />
+      <app-bot-toolbar
+        [panel]="panelData"
+        [pending]="actionPending()"
+        [deployAgain]="deployAgain()"
+        [manualOrder]="manualOrderNavigation()"
+        (actionRequested)="onActionRequested($event)"
+        (changeEnd)="changingEnd.set(!changingEnd())"
+        (buildProof)="proofOpen.set(true)"
+      />
+
+      @if (actionReceipt(); as receipt) {
+        <app-panel-action-receipt [receipt]="receipt" (dismissed)="dismissActionReceipt()" />
+      }
+
+      @if (stranded()) {
+        <app-stranded-position-warning
+          [panel]="panelData"
+          [steps]="flattenSteps()"
+          [pending]="actionPending() || flattenInProgress()"
+          (flatten)="onFlattenConfirmed($event)"
         />
       }
-      <app-recent-decisions-list
-        [decisions]="panelData.recent_decisions"
-        [strategyView]="strategyViewValue()"
-        [(selectedBarCloseMs)]="selectedDecisionBarMs"
-      />
-    </div>
 
-    <app-bot-details
-      [panel]="panelData"
-      [profile]="profileData"
-      [actionPending]="actionPending()"
-      [broker]="broker()"
-      [clerkId]="clerkId()"
-      [accountId]="accountId()"
-      [sid]="sid()"
-      [currentRunState]="currentRunState()"
-      (actionRequested)="onActionRequested($event)"
-      (transactionSelected)="onTransactionSelected($event)"
-      (runRefreshRequested)="currentRun.reload()"
-    />
-  </div>
+      @if (reductionPlan(); as plan) {
+        <div #flattenTicket class="flatten-ticket" tabindex="-1" aria-label="Prepared sale">
+          <app-safe-flatten-plan [plan]="plan" [pricing]="reductionPricing()" />
+          @if (extendedFlattenTicket(); as ticket) {
+            <app-extended-flatten-ticket
+              [pricing]="ticket.pricing"
+              [quantity]="ticket.quantity"
+              [quoteReceivedAtMs]="ticket.receivedAtMs"
+              [pending]="actionPending()"
+              (send)="sendExtendedFlatten($event)"
+              (priceCheck)="priceExtendedFlatten($event)"
+              (overridePriceCheck)="priceExtendedFlatten($event, true)"
+              (refresh)="refreshFlattenQuote()"
+            />
+            @if (preparedFlatten()?.quoteError; as quoteError) {
+              <p class="flatten-quote-error" role="alert">Quote refresh failed: {{ quoteError }}</p>
+            }
+          }
+        </div>
+      }
+
+      @if (flattenFills().length > 0) {
+        <app-flatten-fills [fills]="flattenFills()" />
+      }
+
+      @if (changingEnd()) {
+        @if (panelData.end; as end) {
+          <app-bot-end-card [end]="end" [dryRun]="panelData.mode === 'dry_run'" [locked]="actionPending()" [save]="saveBotEnd" />
+        }
+      }
+
+      <div class="bot-board">
+        <section class="bot-board__panel bot-board__chart" aria-label="Chart">
+          <app-bot-chart-panel
+            [symbol]="panelData.symbol"
+            [view]="strategyViewValue()"
+            [loading]="strategyView.isLoading()"
+            [failure]="strategyViewFailure()"
+            [tape]="tape"
+            tapeLabel="Tape · 1m"
+            [(selectedBarCloseMs)]="selectedDecisionBarMs"
+            (retry)="strategyView.reload()"
+          />
+          <ng-template #tape>
+            <app-bot-day-chart
+              [symbol]="panelData.symbol"
+              [liveChart]="liveChart()"
+              [histChart]="histChart.hasValue() ? histChart.value() : null"
+              [liveChartLoading]="liveChart() === null && liveStreamStatus() === 'connecting'"
+              [histChartLoading]="histChart.isLoading()"
+              [histChartFailed]="histChartFailed()"
+              [liveResolution]="liveResolution()"
+              [historyTimeframe]="selectedHistoryTimeframe()"
+              (historyTimeframeChange)="onHistoryTimeframeChange($event)"
+              (liveResolutionChange)="onLiveResolutionChange($event)"
+              (historyRetry)="histChart.reload()"
+            />
+          </ng-template>
+        </section>
+
+        <section class="bot-board__panel bot-board__money" aria-label="Money">
+          <app-deployment-budget
+            [target]="target()"
+            [strategyInstanceId]="panelData.strategy_instance_id"
+            [revision]="panelData.revision"
+            [holdsShares]="holdsShares()"
+            [openPnl]="panelData"
+          />
+        </section>
+
+        <section class="bot-board__panel bot-board__decisions" aria-label="Decisions">
+          <app-recent-decisions-list
+            [decisions]="panelData.recent_decisions"
+            [strategyView]="strategyViewValue()"
+            [(selectedBarCloseMs)]="selectedDecisionBarMs"
+          />
+          @if (panelData.mode === 'log_only') {
+            <p class="observation-note" role="status">
+              <strong>Observation only.</strong> This bot records decisions but does not place broker orders.
+            </p>
+          } @else {
+            <app-trades-today-list
+              heading="Fills this run"
+              [fills]="runFills()"
+              [fillCount]="runFills().length"
+              [tradingDateMs]="runStartedAtMs()"
+            />
+          }
+        </section>
+
+        <section class="bot-board__panel bot-board__orders" aria-label="Orders">
+          <app-bot-order-records
+            [panel]="panelData"
+            [profile]="profileData"
+            [broker]="broker()"
+            [clerkId]="clerkId()"
+            [accountId]="accountId()"
+            [sid]="sid()"
+            [activated]="true"
+            (transactionSelected)="onTransactionSelected($event)"
+          />
+        </section>
+
+        <section class="bot-board__panel bot-board__health" aria-label="Health">
+          @if (panelData.bot_page; as page) {
+            <app-bot-health-groups [health]="page.health" />
+          }
+        </section>
+
+        <section class="bot-board__panel bot-board__setup" aria-label="Setup">
+          <app-bot-setup [panel]="panelData" [settings]="strategyViewValue()?.settings ?? null" [(proofOpen)]="proofOpen" />
+          <details class="bot-board__runs">
+            <summary>Run history</summary>
+            <app-operator-run-history
+              [broker]="broker()"
+              [clerkId]="clerkId()"
+              [strategyInstanceId]="sid()"
+              [currentRunState]="currentRunState()"
+              (runRefreshRequested)="currentRun.reload()"
+              [botRunning]="panelData.health.running"
+              [feedContinuity]="feedContinuity()"
+            />
+          </details>
+        </section>
+      </div>
+    </div>
+  }
 }
 
 @if (historicalRecoveryDraft(); as draft) {
