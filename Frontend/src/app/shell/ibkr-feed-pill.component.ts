@@ -115,9 +115,14 @@ export class IbkrFeedPillComponent {
     ibkrFeedPill(this.directory.lanesOf('alpaca'), this.feed.stateByClerkId()),
   );
 
+  /** A `computed`, not an inline function: `linkedSignal` re-runs on every
+   * change its source reads, so an inline `pill()?.tone` would close the
+   * panel on every 15 s poll even when the tone is unchanged. */
+  private readonly tone = computed(() => this.pill()?.tone ?? null);
+
   /** Closed again whenever the pill changes state, so a new outage never
    * opens on its own. */
-  protected readonly open = linkedSignal({ source: () => this.pill()?.tone ?? null, computation: () => false });
+  protected readonly open = linkedSignal({ source: this.tone, computation: () => false });
 
   /** A press anywhere outside the pill closes its detail; mousedown, as the
    * bell does, so one press cannot both close it and toggle it back open. */

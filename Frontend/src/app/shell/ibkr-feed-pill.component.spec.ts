@@ -13,12 +13,14 @@ const LIVE = testLane({ clerk_id: 'clrk_live', display_label: 'Live' });
 const DOWN: LaneFeedState = { kind: 'disconnected', reason: 'IBKR connection lost', sinceMs: 1_790_916_315_993 };
 
 async function renderPill(states: Record<string, LaneFeedState>, lanes: LaneDescriptor[] = [PAPER, LIVE]) {
-  return render(IbkrFeedPillComponent, {
+  const stateByClerkId = signal<ReadonlyMap<string, LaneFeedState>>(new Map(Object.entries(states)));
+  const view = await render(IbkrFeedPillComponent, {
     providers: [
       provideFleetDirectory({ observed_at_ms: 1_790_000_000_000, clerks: lanes }),
-      { provide: IbkrFeedService, useValue: { stateByClerkId: signal(new Map(Object.entries(states))) } },
+      { provide: IbkrFeedService, useValue: { stateByClerkId } },
     ],
   });
+  return { ...view, stateByClerkId };
 }
 
 function pillButton(): HTMLElement {
@@ -64,6 +66,19 @@ describe('IbkrFeedPillComponent', () => {
 
     expect(container.querySelector('#ibkr-feed-detail')).toBeNull();
     expect(pillButton().getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('stays open across a poll that keeps the outage, and closes when the outage ends', async () => {
+    const { container, fixture, stateByClerkId } = await renderPill({ clrk_paper: DOWN, clrk_live: DOWN });
+    await fireEvent.click(pillButton());
+
+    stateByClerkId.set(new Map([['clrk_paper', DOWN], ['clrk_live', { ...DOWN, reason: 'Client id already in use' }]]));
+    fixture.detectChanges();
+    expect(container.querySelector('#ibkr-feed-detail')?.textContent).toContain('Live (Client id already in use');
+
+    stateByClerkId.set(new Map([['clrk_paper', { kind: 'unknown' }], ['clrk_live', { kind: 'unknown' }]]));
+    fixture.detectChanges();
+    expect(container.querySelector('#ibkr-feed-detail')).toBeNull();
   });
 
   it('says a lane it could not read is unknown rather than staying silent', async () => {
