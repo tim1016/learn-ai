@@ -1,0 +1,59 @@
+<section class="setup" aria-labelledby="bot-setup-title">
+  <h3 id="bot-setup-title" class="panel-title">Setup</h3>
+  @let bot = panel();
+  <dl class="kv">
+    <div><dt>Strategy</dt><dd>{{ bot.strategy_label }}</dd></div>
+    @if (settingLines().length > 0) {
+      <div>
+        <dt>Settings</dt>
+        <dd class="setup__settings">
+          @for (line of settingLines(); track line.name) {
+            <span><code>{{ line.name }}</code> {{ line.value }}</span>
+          }
+        </dd>
+      </div>
+    }
+    @if (bot.exit_terms; as terms) {
+      <div>
+        <dt>Exit allowance</dt>
+        <dd>
+          @if (terms.exit_allowance_bps === null) { Not set } @else { {{ terms.exit_allowance_bps }} bps }
+        </dd>
+      </div>
+      <div><dt>Band · spread cap</dt><dd>{{ terms.band_multiple }}× · {{ terms.spread_cap_bps }} bps</dd></div>
+    }
+    <div>
+      <dt>Build</dt>
+      <dd>
+        {{ bot.program_build.state | receiptLabel }}
+        <button type="button" class="setup__proof-toggle" [attr.aria-expanded]="proofOpen()" (click)="proofOpen.set(!proofOpen())">
+          {{ proofOpen() ? 'Hide proof' : 'Build proof' }}
+        </button>
+      </dd>
+    </div>
+  </dl>
+
+  @if (proofOpen()) {
+    @let build = bot.program_build;
+    <dl class="kv setup__proof" aria-label="Build proof">
+      <div>
+        <dt>Program</dt>
+        <dd><code>{{ build.program_key }}</code> @if (build.program_version; as version) { <code>{{ version }}</code> }</dd>
+      </div>
+      <div><dt>Checked</dt><dd><app-timestamp-display [value]="build.verified_at_ms" mode="local" /></dd></div>
+      @if (build.running_artifact_digest; as digest) {
+        <div><dt>Running build</dt><dd><code>{{ digest }}</code> <app-copy-button [text]="digest" ariaLabel="Copy running build hash" /></dd></div>
+      }
+      @if (build.qualification_receipt_hash; as receiptHash) {
+        <div><dt>Qualification receipt</dt><dd><code>{{ receiptHash }}</code> <app-copy-button [text]="receiptHash" ariaLabel="Copy qualification receipt hash" /></dd></div>
+      }
+      @if (bot.sealed_program; as seal) {
+        <div><dt>Configuration hash</dt><dd><code>{{ seal.bot_configuration_hash }}</code> <app-copy-button [text]="seal.bot_configuration_hash" ariaLabel="Copy configuration hash" /></dd></div>
+        <div><dt>Signal hash</dt><dd><code>{{ seal.configured_signal_hash }}</code> <app-copy-button [text]="seal.configured_signal_hash" ariaLabel="Copy signal hash" /></dd></div>
+        <div><dt>Validation snapshot</dt><dd><code>{{ seal.validation_snapshot_sha256 }}</code> <app-copy-button [text]="seal.validation_snapshot_sha256" ariaLabel="Copy validation snapshot hash" /></dd></div>
+      } @else {
+        <div><dt>Seal</dt><dd>No sealed program was recorded for this bot.</dd></div>
+      }
+    </dl>
+  }
+</section>

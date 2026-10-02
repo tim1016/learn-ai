@@ -859,6 +859,18 @@ const UNANSWERED_ON_PURPOSE: readonly { readonly pattern: RegExp; readonly why: 
     why: 'the bot page\'s strategy view',
   },
   {
+    // The strategy chart's gate catalogue (#2639); without it the chart
+    // offers only the strategy's own variables.
+    pattern: /^\/api\/strategy-gates\/catalogue$/,
+    why: 'the strategy chart\'s gate catalogue',
+  },
+  {
+    // The Orders panel is always on screen (#2794), so it reads the audit
+    // trail at once; it says the trail could not be loaded.
+    pattern: /\/bots\/[^/]+\/evidence$/,
+    why: 'the bot page\'s audit trail',
+  },
+  {
     pattern: /\/bots\/[^/]+\/runs\/(current|history)$/,
     why: 'the bot page\'s run timing, which says it could not be loaded',
   },

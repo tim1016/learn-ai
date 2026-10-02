@@ -13,6 +13,7 @@ import type {
 } from './broker-v2-panel.types';
 import { BrokerV2PanelService } from './broker-v2-panel.service';
 import { resourceTarget, type ResourceTarget } from '../../../../fleet/resource-target';
+import { refusalBody } from '../../../../shared/errors/refusal-body';
 
 interface LivePanelRequest {
   readonly broker: string;
@@ -60,6 +61,13 @@ function stallFromHttpError(error: unknown): LiveSnapshotUnavailableDetail | nul
   return isStallDetail(detail) ? detail : null;
 }
 
+/** The data plane's word that no such bot is on this account (a 404), if that is what failed. */
+function notFoundFromHttpError(error: unknown): string | null {
+  if (!(error instanceof HttpErrorResponse) || error.status !== 404) return null;
+  const message = refusalBody(error)?.['message'];
+  return typeof message === 'string' ? message : 'No such bot is on this account.';
+}
+
 /** Keeps the last complete same-session panel visible across SSE reconnects.
  * While the server reports its producer stalled (#2353), `stall()` carries the
  * server's typed notice: the snapshot stays visible but is frozen, not live. */
@@ -70,6 +78,7 @@ export class BotPanelLiveStore {
   private readonly currentStatus = signal<AuthenticatedSseStatus>('closed');
   private readonly currentError = signal<string | null>(null);
   private readonly currentStall = signal<LiveSnapshotUnavailableDetail | null>(null);
+  private readonly currentNotFound = signal<string | null>(null);
   private stream: SnapshotStream | null = null;
   private fallbackTimer: ReturnType<typeof setInterval> | null = null;
   private request: LivePanelRequest | null = null;
@@ -85,6 +94,8 @@ export class BotPanelLiveStore {
   readonly status = this.currentStatus.asReadonly();
   readonly error = this.currentError.asReadonly();
   readonly stall = this.currentStall.asReadonly();
+  /** The data plane's reason when the bot is not on this account; nothing is streamed for it (#2794). */
+  readonly notFound = this.currentNotFound.asReadonly();
 
   async start(request: LivePanelRequest): Promise<void> {
     const generation = ++this.generation;
@@ -102,12 +113,17 @@ export class BotPanelLiveStore {
       this.currentSnapshot.set(null);
       this.currentError.set(null);
       this.currentStall.set(null);
+      this.currentNotFound.set(null);
     }
     this.stopTransport();
     this.request = request;
     this.currentStatus.set('connecting');
     await this.fetchAndAdopt(request, generation, 'Live snapshot is unavailable.');
     if (!this.isCurrent(generation)) return;
+    if (this.currentNotFound() !== null) {
+      this.currentStatus.set('closed');
+      return;
+    }
     this.openStream(generation, request);
   }
 
@@ -244,6 +260,7 @@ export class BotPanelLiveStore {
     const adopted = adoptVersionedSnapshot(current, candidate);
     if (adopted !== current) this.currentSnapshot.set(adopted);
     this.currentError.set(null);
+    this.currentNotFound.set(null);
     // Any delivered snapshot, even one at the current version, proves the
     // producer completed a refresh: the stall is over — unless a newer stream
     // event already reported otherwise.
@@ -251,6 +268,18 @@ export class BotPanelLiveStore {
   }
 
   private adoptFailure(error: unknown, fallback: string, updatesLiveness: boolean): void {
+    const notFound = notFoundFromHttpError(error);
+    if (notFound !== null) {
+      // Only a page that never loaded becomes "not found"; a loaded one keeps
+      // its controls -- Stop, an open ticket -- and says what the read was told.
+      if (this.currentSnapshot() === null) {
+        this.currentNotFound.set(notFound);
+        this.currentError.set(null);
+      } else {
+        this.currentError.set(notFound);
+      }
+      return;
+    }
     const stall = stallFromHttpError(error);
     if (stall !== null) {
       if (updatesLiveness) this.currentStall.set(stall);

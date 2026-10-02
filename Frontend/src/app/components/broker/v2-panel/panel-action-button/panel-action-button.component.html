@@ -2,14 +2,20 @@
   <button
     type="button"
     [class]="'panel-action__button panel-action__button--' + tone()"
+    [class.panel-action__button--filled]="filled()"
     [attr.aria-disabled]="disabled()"
     [attr.aria-busy]="pending()"
-    [attr.aria-label]="action().label"
+    [attr.aria-label]="shownLabel()"
     [attr.aria-describedby]="visibleBlockers().length > 0 ? blockerDescriptionId : null"
     [title]="tooltip()"
     (click)="trigger()"
   >
-    {{ action().label }}
+    @if (icon(); as name) {
+      <i [class]="'pi ' + name" aria-hidden="true"></i>
+    }
+    @if (showLabel()) {
+      {{ shownLabel() }}
+    }
     @if (visibleBlockers().length > 0) {
       <span [id]="blockerDescriptionId" class="sr-only">{{ tooltip() }}</span>
     }

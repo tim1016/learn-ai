@@ -5,6 +5,7 @@ import {
   ElementRef,
   Injector,
   afterNextRender,
+  afterRenderEffect,
   computed,
   effect,
   inject,
@@ -16,7 +17,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { MessageService } from 'primeng/api';
 
 import type {
@@ -41,14 +42,17 @@ import type {
   PanelActionResult,
   PanelActionTrigger,
 } from '../lib/broker-v2-panel.types';
+import { FEED_CONTINUITY_NOT_RECORDED, feedContinuityFor } from '../lib/broker-v2-panel.types';
 import { BrokerV2PanelService, type BotEndInput } from '../lib/broker-v2-panel.service';
 import { BotPanelLiveStore } from '../lib/bot-panel-live-store.service';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import { BrokersService } from '../../../../services/brokers.service';
 import {
+  accountWorkspaceDeployAgainRoute,
   accountWorkspaceHomeRoute,
   accountWorkspaceTabLabel,
 } from '../../../../fleet/account-workspace';
+import { buildManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
 import {
   laneKey,
   resourceTarget,
@@ -71,12 +75,16 @@ import {
   extractActionErrorDetail,
   type ActionRejection,
 } from '../lib/panel-action-outcome';
-import { BotBannerComponent } from '../bot-banner/bot-banner.component';
+import { BotPageHeaderComponent } from '../bot-page/bot-page-header.component';
+import { BotToolbarComponent } from '../bot-page/bot-toolbar.component';
+import { BotHealthGroupsComponent } from '../bot-page/bot-health-groups.component';
+import { BotOrderRecordsComponent } from '../bot-page/bot-order-records.component';
+import { BotSetupComponent } from '../bot-page/bot-setup.component';
+import { OperatorRunHistoryComponent } from '../bot-run-history/operator-run-history.component';
 import { DeploymentBudgetComponent } from '../../deployment-budget/deployment-budget.component';
-import { TradesTodayListComponent } from '../bot-page/trades-today-list.component';
+import { RunFillsListComponent } from '../bot-page/run-fills-list.component';
 import { RecentDecisionsListComponent } from '../bot-page/recent-decisions-list/recent-decisions-list.component';
 import { BotDayChartComponent } from '../bot-page/bot-day-chart.component';
-import { BotDetailsComponent } from '../bot-page/bot-details.component';
 import { BotEndCardComponent } from '../bot-page/bot-end-card.component';
 import { StrandedPositionWarningComponent } from '../bot-page/stranded-position-warning.component';
 import { BotChartPanelComponent } from '../strategy-view/bot-chart-panel.component';
@@ -165,21 +173,37 @@ const FLATTEN_STEP_ACTIONS: Readonly<Record<FlattenStepId, PanelAction['action_i
   sell: 'execute_safe_flatten',
 };
 
+/** The padding, borders and margins between an element's bottom edge and the document's. */
+function spaceBelow(element: HTMLElement): number {
+  let space = 0;
+  for (let node = element.parentElement; node !== null && node !== document.documentElement; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    for (const edge of [style.paddingBottom, style.borderBottomWidth, style.marginBottom]) {
+      space += Number.parseFloat(edge) || 0;
+    }
+  }
+  return space;
+}
+
+/** How far either side of a finished run its tape reaches (the data plane allows 30 minutes). */
+const RUN_TAPE_PADDING_MS = 15 * 60_000;
+
 /**
- * The bot page (PRD #2560 D2): one view, no lens.
+ * The bot page (PRD #2794): one screen, no scrolling at 1440×900.
  *
- * Top to bottom: the header with the backend's one primary action; the last
- * action's outcome, which takes the keyboard when it lands (story 48); for a
- * stopped bot that still holds shares, the warning with Flatten beside it
- * (stories 44–45); the chart panel — the strategy's own decision candles,
- * the market tape one tab away — beside "This bot's money"; fills and recent
- * decisions, which share the chart's candle selection; and the audit depth
- * folded under Details (story 47).
+ * Top to bottom: the header with the bot's own status and the backend's
+ * one-line run summary; the toolbar of every action the owner can take now;
+ * the last action's outcome, which takes the keyboard when it lands; for a
+ * stopped bot that still holds shares, the warning with Flatten beside it;
+ * then the board -- the chart (the strategy's own decision candles, the
+ * market tape one tab away), this bot's money and its decisions on top, its
+ * orders, health and setup below -- each panel scrolling inside itself.
  *
  * ## Shell responsibilities
  * - Route parameter extraction (broker, clerk, account, sid).
  * - Data loading: the live panel snapshot, the current run, the delayed
- *   history chart, the strategy view (re-read on each new decision).
+ *   history chart (a finished run's own window), the strategy view
+ *   (re-read on each new decision).
  * - Action execution, each command owned by the bot it was sent to (#2471),
  *   including the one-confirmation Flatten sequence (hurdle H30).
  */
@@ -192,16 +216,21 @@ const FLATTEN_STEP_ACTIONS: Readonly<Record<FlattenStepId, PanelAction['action_i
     PanelActionReceiptComponent,
     SafeFlattenPlanComponent,
     TypedHaltConfirmComponent,
-    BotBannerComponent,
     BotChartPanelComponent,
     BotDayChartComponent,
-    BotDetailsComponent,
     BotEndCardComponent,
+    BotHealthGroupsComponent,
+    BotOrderRecordsComponent,
+    BotPageHeaderComponent,
+    BotSetupComponent,
+    BotToolbarComponent,
+    OperatorRunHistoryComponent,
+    RouterLink,
     DeploymentBudgetComponent,
     RecentDecisionsListComponent,
     StrandedPositionWarningComponent,
     TimestampDisplayComponent,
-    TradesTodayListComponent,
+    RunFillsListComponent,
   ],
   templateUrl: './bot-panel-shell.component.html',
   styleUrl: './bot-panel-shell.component.scss',
@@ -248,6 +277,32 @@ export class BotPanelShellComponent {
   );
 
   protected readonly backLabel = accountWorkspaceTabLabel('home');
+
+  // ── The bot page's lead and toolbar (#2794) ──────────────────────────────
+
+  /** Deploy again for this bot, under the routed account. */
+  protected readonly deployAgain = computed(() => accountWorkspaceDeployAgainRoute({
+    broker: this.broker(),
+    clerkId: this.clerkId(),
+    accountId: this.accountId(),
+  }, this.sid()));
+
+  /** Where Manual order goes; whether the toolbar offers it is the backend's word (#2794 R2). */
+  protected readonly manualOrderNavigation = computed(() => {
+    const panel = this.panel();
+    if (panel === null) return null;
+    return buildManualOrderTicketNavigation({
+      broker: panel.broker,
+      clerkId: this.clerkId(),
+      routeAccountId: this.accountId(),
+      accountId: panel.account_id,
+      symbol: panel.symbol,
+    });
+  });
+
+  /** The toolbar's Change end opens the end card's fields; its Build proof opens the hashes in Setup. */
+  protected readonly endCard = viewChild(BotEndCardComponent);
+  protected readonly proofOpen = signal(false);
 
   /** The frozen lane context (FR-094): every request and command this shell
    * issues carries broker, clerk and account identity, and commands pin the
@@ -413,6 +468,8 @@ export class BotPanelShellComponent {
   private readonly receiptView = viewChild(PanelActionReceiptComponent);
   private readonly strandedWarning = viewChild(StrandedPositionWarningComponent);
   private readonly flattenTicketView = viewChild<ElementRef<HTMLElement>>('flattenTicket');
+  private readonly boardView = viewChild<ElementRef<HTMLElement>>('board');
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
   /** FR-006 (#2202): history read identity is broker + clerk + account + sid
    * + timeframe only. `ResourceTarget.bindingGeneration`/`routingEpoch` fence
@@ -427,13 +484,45 @@ export class BotPanelShellComponent {
       accountId: this.accountId(),
       sid: this.sid(),
       timeframe: this.selectedHistoryTimeframe(),
+      runFromMs: this.runWindowFromMs(),
+      runToMs: this.runWindowToMs(),
     }),
     loader: ({ params }) =>
       this.panelSvc.getHistoryChart(
         resourceTarget(params.broker, params.clerkId, { accountId: params.accountId }),
         params.sid,
         params.timeframe,
+        params.runFromMs === null || params.runToMs === null
+          ? null
+          : { fromMs: params.runFromMs, toMs: params.runToMs },
       ),
+  });
+
+  /** A finished run's Tape · 1m reads that run, with some padding (#2794 R7);
+   * a running bot's reads the newest bars. Plain numbers, so a new snapshot
+   * of the same run does not re-read the tape. */
+  private readonly runWindowFromMs = computed((): number | null => {
+    const facts = this.panel()?.bot_page?.summary.facts;
+    if (this.selectedHistoryTimeframe() !== '1m' || facts?.started_at_ms == null || facts.ended_at_ms == null) {
+      return null;
+    }
+    return facts.started_at_ms - RUN_TAPE_PADDING_MS;
+  });
+  private readonly runWindowToMs = computed((): number | null => {
+    const facts = this.panel()?.bot_page?.summary.facts;
+    if (this.runWindowFromMs() === null || facts?.ended_at_ms == null) return null;
+    return facts.ended_at_ms + RUN_TAPE_PADDING_MS;
+  });
+
+  /** The run's fills, under the run's date (#2794 R8). */
+  protected readonly runFills = computed(() => this.panel()?.run_fills ?? []);
+  /** Every fill the run has; the panel sends only its newest. */
+  protected readonly runFillCount = computed(() => this.panel()?.bot_page?.summary.facts.trade_count ?? this.runFills().length);
+  protected readonly runStartedAtMs = computed(() => this.panel()?.bot_page?.summary.facts.started_at_ms ?? null);
+  protected readonly notFound = this.liveStore.notFound;
+  protected readonly feedContinuity = computed(() => {
+    const panel = this.panel();
+    return panel === null ? FEED_CONTINUITY_NOT_RECORDED : feedContinuityFor(panel);
   });
 
   /** The decision bar the owner selected, by its close: one selection the
@@ -538,6 +627,54 @@ export class BotPanelShellComponent {
     // fact this page publishes upward; it is cleared on the way out so no
     // other page can inherit it.
     effect(() => this.titleContext.setBotLabel(this.panel()?.strategy_label ?? null));
+    // #2794 R4: the board fills the window below whatever sits above it --
+    // banner, toolbar, a receipt, the holding warning -- so the page itself
+    // does not scroll; its panels scroll inside themselves.
+    afterRenderEffect((onCleanup) => {
+      const board = this.boardView()?.nativeElement;
+      if (board === undefined || typeof ResizeObserver === 'undefined') return;
+      const host = this.host.nativeElement;
+      const fit = (): void => {
+        // Where the board starts with nothing scrolled: the window's scroll and the host's own.
+        const top = board.getBoundingClientRect().top + window.scrollY + host.scrollTop;
+        host.style.setProperty('--bot-board-height', `${window.innerHeight - top - spaceBelow(board)}px`);
+      };
+      // A frame later, so a fit never resizes what the observer is reporting on.
+      let frame = 0;
+      const refit = (): void => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(fit);
+      };
+      const observer = new ResizeObserver(refit);
+      // Whatever pushes the board down -- a receipt, the holding warning, a stall
+      // notice that appears later -- grows an element around it or one above it,
+      // at some level up to the body.
+      // A height-bound parent keeps its size when a new child -- a receipt, a
+      // stall notice -- arrives above the board, so arrivals are watched too.
+      const arrivals = new MutationObserver((records) => {
+        for (const record of records) {
+          for (const added of Array.from(record.addedNodes)) {
+            if (added instanceof Element) observer.observe(added);
+          }
+        }
+        refit();
+      });
+      for (let node: Element | null = board.parentElement; node !== null && node !== document.body; node = node.parentElement) {
+        observer.observe(node);
+        arrivals.observe(node, { childList: true });
+        for (let above = node.previousElementSibling; above !== null; above = above.previousElementSibling) {
+          observer.observe(above);
+        }
+      }
+      window.addEventListener('resize', refit);
+      fit();
+      onCleanup(() => {
+        cancelAnimationFrame(frame);
+        observer.disconnect();
+        arrivals.disconnect();
+        window.removeEventListener('resize', refit);
+      });
+    });
     this.destroyRef.onDestroy(() => {
       this.titleContext.setBotLabel(null);
       this.liveStore.stop();

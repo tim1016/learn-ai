@@ -135,6 +135,36 @@ describe('BotPanelLiveStore', () => {
     expect(store.snapshot()?.surface_version).toBe(2);
   });
 
+  it('says the bot is not on this account in the data plane’s words, and opens no stream for it (#2794)', async () => {
+    const store = TestBed.inject(BotPanelLiveStore);
+    service.getLiveSnapshot.mockRejectedValueOnce(new HttpErrorResponse({
+      status: 404,
+      error: { detail: { message: "No bot 'sid-1' is bound to broker 'alpaca'.", why: null, next_action: null } },
+    }));
+
+    await store.start({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA-1', sid: 'sid-1', resolution: '5s' });
+
+    expect(store.notFound()).toBe("No bot 'sid-1' is bound to broker 'alpaca'.");
+    expect(store.error()).toBeNull();
+    expect(store.status()).toBe('closed');
+    expect(StubEventSource.instances).toHaveLength(0);
+  });
+
+  it('keeps a loaded page when a later read says not found, and says so as an error (#2794)', async () => {
+    const store = TestBed.inject(BotPanelLiveStore);
+    await store.start({ broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'PA-1', sid: 'sid-1', resolution: '5s' });
+    service.getLiveSnapshot.mockRejectedValueOnce(new HttpErrorResponse({
+      status: 404,
+      error: { detail: { message: "No bot 'sid-1' is bound to broker 'alpaca'.", why: null, next_action: null } },
+    }));
+
+    await store.refresh();
+
+    expect(store.snapshot()?.surface_version).toBe(2);
+    expect(store.notFound()).toBeNull();
+    expect(store.error()).toBe("No bot 'sid-1' is bound to broker 'alpaca'.");
+  });
+
   it('adopts a typed stalled-producer refusal from REST instead of the frozen snapshot (#2353)', async () => {
     const store = TestBed.inject(BotPanelLiveStore);
     await store.start({

@@ -1,27 +1,26 @@
-<section class="trades-today" aria-labelledby="fills-today-title">
-  <header class="trades-header">
-    <h3 id="fills-today-title" class="trades-title">Fills today</h3>
-    @if (tradingDateMs()) {
+<section class="run-fills" aria-labelledby="run-fills-title">
+  <header class="run-fills-header">
+    <h3 id="run-fills-title" class="run-fills-title">Fills this run</h3>
+    @if (runStartedAtMs()) {
       <app-timestamp-display
-        [value]="tradingDateMs()"
+        [value]="runStartedAtMs()"
         mode="date-et"
         class="trading-date"
-        aria-label="Trading date"
+        aria-label="Run date"
       />
     }
   </header>
 
   @if (hasFills()) {
-    <app-fill-table [fills]="inlineFills()" label="Fills today" />
+    <app-fill-table [fills]="inlineFills()" label="Fills this run" />
 
     @if (hasMoreFills()) {
       <button type="button" class="view-all-fills" (click)="openAllFills()">
-        View all {{ fills().length }} fills
+        View {{ shownWords() }}
       </button>
     }
-
   } @else {
-    <p class="no-trades" role="status">{{ emptyStateLabel() }}</p>
+    <p class="no-fills" role="status">No fills this run.</p>
   }
 </section>
 
@@ -37,12 +36,15 @@
 >
   <ng-template #header>
     <div class="fills-drawer__header">
-      <h2>All fills today</h2>
+      <h2>All fills this run</h2>
       <button type="button" aria-label="Close all fills" (click)="closeAllFills()">×</button>
     </div>
   </ng-template>
 
   @if (allFillsOpen()) {
-    <app-fill-table [fills]="fills()" label="All fills today" />
+    @if (fillCount() > fills().length) {
+      <p class="fills-drawer__note">The newest {{ fills().length }} of this run's {{ fillCount() }} fills.</p>
+    }
+    <app-fill-table [fills]="fills()" label="All fills this run" />
   }
 </p-drawer>

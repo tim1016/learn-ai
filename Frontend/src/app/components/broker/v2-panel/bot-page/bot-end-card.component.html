@@ -1,7 +1,7 @@
 <section class="bot-end" [attr.aria-labelledby]="titleId">
   <div class="bot-end__head">
     <h3 [id]="titleId">End</h3>
-    @if (end().editable) {
+    @if (end().editable && showChange()) {
       <button type="button" class="bot-end__change" [attr.popovertarget]="editor.id" [disabled]="busy()" (click)="prepare()">Change end</button>
     }
   </div>

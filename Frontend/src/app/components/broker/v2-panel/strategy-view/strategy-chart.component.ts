@@ -112,7 +112,7 @@ function barOf(ms: number): string {
       position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
       overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
     }
-    .strategy-chart { width: 100%; height: 100%; min-height: 22rem; cursor: pointer; }
+    .strategy-chart { width: 100%; height: 100%; min-height: 10rem; cursor: pointer; }
     .strategy-chart:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
   `,
 })

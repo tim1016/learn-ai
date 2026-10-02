@@ -1,0 +1,62 @@
+<header class="bot-header">
+  <span class="sr-only" role="status" aria-live="polite" aria-atomic="true" [attr.aria-label]="snapshotStatus()">{{ snapshotStatus() }}</span>
+  <div class="bot-header__lead">
+    <div class="bot-header__identity">
+      <a class="bot-header__back" [routerLink]="backRoute()"><span aria-hidden="true">←</span> {{ backLabel() }}</a>
+      <h2 class="bot-header__name">{{ panel().strategy_instance_id }}</h2>
+      <p class="bot-header__meta">
+        <span>{{ panel().strategy_label }}</span>
+        <span aria-hidden="true">·</span>
+        <app-asset-identity [symbol]="panel().symbol" size="sm" />
+      </p>
+      @if (panel().mode === 'dry_run') {
+        <app-alpaca-lane-mode-chip [chip]="dryRunChip" />
+      }
+      @if (page(); as lead) {
+        <span
+          class="bot-header__status"
+          [attr.data-state]="lead.status.state"
+          [attr.title]="lead.status.reason"
+        >{{ lead.status.label }}</span>
+      }
+    </div>
+    @if (page(); as lead) {
+      <p class="bot-header__summary">{{ lead.summary.text }}</p>
+      @if (lead.status.reason; as reason) {
+        <p class="bot-header__reason">{{ reason }}</p>
+      }
+    }
+    @if (panel().experimental_notice; as notice) {
+      <app-experimental-notice [notice]="notice" />
+    }
+    @if (cleared()) {
+      <p class="bot-header__cleared" role="note">
+        Cleared: this bot will not run again, and its records here are read-only.
+        <a [routerLink]="history().commands" [queryParams]="history().queryParams">Every cleared bot is in History</a>.
+      </p>
+    }
+  </div>
+
+  <dl class="bot-header__figures">
+    @if (held().length > 0) {
+      <div>
+        <dt>Open P&amp;L</dt>
+        <dd
+          class="num"
+          [class.positive]="panel().open_pnl_direction === 'gain'"
+          [class.negative]="panel().open_pnl_direction === 'loss'"
+        >{{ (panel().open_pnl_usd | authoredUsd) ?? 'No price' }}</dd>
+      </div>
+    }
+    <div>
+      <dt>Held</dt>
+      <dd class="num">
+        @for (figure of held(); track figure.symbol) {
+          <span class="bot-header__held">{{ figure.quantity }} <app-asset-identity [symbol]="figure.symbol" size="sm" /></span>
+        } @empty {
+          None
+        }
+      </dd>
+    </div>
+  </dl>
+</header>

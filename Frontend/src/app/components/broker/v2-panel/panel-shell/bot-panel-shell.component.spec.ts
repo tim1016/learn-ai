@@ -15,7 +15,7 @@ import { BotPanelShellComponent, CURRENT_RUN_POLL_MS } from './bot-panel-shell.c
 import { BrokerV2PanelService, type BotEndView, type DeploymentBudgetView } from '../lib/broker-v2-panel.service';
 import { BrokersService, sqliteTimelineQueryFromParams } from '../../../../services/brokers.service';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
-import { fakeChartFeed, fakeSqliteStopAction } from '../../../../testing/bot-panel-fixtures';
+import { fakeBotPage, fakeChartFeed, fakeSqliteStopAction } from '../../../../testing/bot-panel-fixtures';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import type {
   BotPanelView,
@@ -310,7 +310,8 @@ function liveSnapshot(panel: BotPanelView = PANEL): BotPanelLiveSnapshot {
   return {
     stream_epoch: 'test-epoch',
     surface_version: 1,
-    panel,
+    // What the backend leads the page with, for this panel's own actions and state (#2794).
+    panel: panel.bot_page ? panel : { ...panel, bot_page: fakeBotPage(panel) },
     live_chart: LIVE_CHART,
   };
 }
@@ -637,7 +638,7 @@ function openDisclosure(label: string): void {
 /** The chart panel opens on the strategy view (#2639); the market tape is one
  * tab away and is only created when that tab first opens. */
 async function showTape(fixture: ComponentFixture<BotPanelShellComponent>): Promise<void> {
-  fireEvent.click(screen.getByRole('tab', { name: 'Tape' }));
+  fireEvent.click(screen.getByRole('tab', { name: /^Tape · / }));
   await fixture.whenStable();
   fixture.detectChanges();
 }
@@ -802,7 +803,7 @@ describe('BotPanelShellComponent', () => {
       expect(fixture.nativeElement.classList.contains('is-stale')).toBe(true);
       await showTape(fixture);
       expect(screen.getByRole('article', { name: 'Market tape for QQQ' })).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'Reconcile now' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Check against Alpaca' })).toBeTruthy();
 
       emitOnLiveStream('snapshot', JSON.stringify(oneCommandSnapshot()));
       await fixture.whenStable();
@@ -818,7 +819,7 @@ describe('BotPanelShellComponent', () => {
         .mockRejectedValueOnce(new HttpErrorResponse({ status: 503, error: { detail: STALL } }));
       const fixture = await renderShell();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
       for (let step = 0; step < 4; step += 1) {
         await fixture.whenStable();
         fixture.detectChanges();
@@ -828,7 +829,7 @@ describe('BotPanelShellComponent', () => {
       expect(screen.getByRole('alert', { name: 'The live panel stopped updating.' })).toBeTruthy();
       expect(screen.getByText('Reconciliation requested.')).toBeTruthy();
       expect(screen.getByText('receipt-001')).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'Reconcile now' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Check against Alpaca' })).toBeTruthy();
     });
   });
 
@@ -895,10 +896,8 @@ describe('BotPanelShellComponent', () => {
     );
     expect(screen.queryByText('run-current')).toBeNull();
     expect(mockService.getCurrentRun).toHaveBeenCalledTimes(1);
-    const runTimes = within(fixture.nativeElement.querySelector('.run-timing'));
-    expect(runTimes.getByText(
-      formatTimestampDisplay(makeRun().started_at_ms, { granularity: 'time' }),
-    )).toBeTruthy();
+    // The backend's summary line names the run, never a ticking time.
+    expect(screen.getByText(/^Running since /)).toBeTruthy();
 
 
     openDisclosure('Runs');
@@ -909,26 +908,6 @@ describe('BotPanelShellComponent', () => {
   });
 
   describe('every safe-flatten trigger routes into the warning (H30)', () => {
-    /** The panel with one flatten command presented in its Checks fold. */
-    function checksSnapshot(panel: BotPanelView, action: PanelAction): BotPanelLiveSnapshot {
-      return liveSnapshot({
-        ...panel,
-        actions: [...panel.actions, action],
-        readiness_checks: [{
-          operation: action.action_id,
-          label: action.label,
-          ready: true,
-          scope: 'bot',
-          authority: 'Alpaca SQLite Clerk',
-          explanation: action.explanation,
-          evidence: { primary: true },
-          evaluated_at_ms: 1_753_800_000_000,
-          cure: null,
-        }],
-        readiness_ready_count: 1,
-      });
-    }
-
     async function renderWith(snapshot: BotPanelLiveSnapshot) {
       const view = await render(BotPanelShellComponent, {
         inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
@@ -944,22 +923,19 @@ describe('BotPanelShellComponent', () => {
       return view;
     }
 
-    async function clickChecksAction(fixture: ComponentFixture<BotPanelShellComponent>, label: string): Promise<void> {
-      fireEvent.click(screen.getByRole('button', { name: new RegExp(`Ready ${label}`, 'i') }));
-      await fixture.whenStable();
-      fixture.detectChanges();
-      fireEvent.click(await screen.findByRole('button', { name: label }));
+    /** The toolbar's Sell: one button for the two-step ticket (#2794 R6). */
+    async function clickToolbarSell(fixture: ComponentFixture<BotPanelShellComponent>): Promise<void> {
+      const toolbar = screen.getByRole('toolbar', { name: 'Actions for this bot' });
+      fireEvent.click(within(toolbar).getByRole('button', { name: /^Sell/ }));
       await fixture.whenStable();
       fixture.detectChanges();
     }
 
-    it.each([
-      ['Prepare safe flatten', PREPARE_SAFE_FLATTEN_ACTION],
-      ['Execute safe flatten', ENABLED_EXECUTE],
-    ])('opens the warning’s confirmation from the Checks fold (%s) and sends nothing', async (label, action) => {
-      const { fixture } = await renderWith(checksSnapshot(strandedPanel(), action));
+    it('opens the warning’s confirmation from the toolbar’s Sell and sends nothing', async () => {
+      const panel = strandedPanel();
+      const { fixture } = await renderWith(liveSnapshot({ ...panel, actions: [...panel.actions, PREPARE_SAFE_FLATTEN_ACTION] }));
 
-      await clickChecksAction(fixture, label);
+      await clickToolbarSell(fixture);
 
       await vi.waitFor(() => expect(document.activeElement?.textContent?.trim()).toBe('Sell 2.5 QQQ'));
       expect(screen.getByRole('group', { name: 'Sell 2.5 QQQ?' })).toBeTruthy();
@@ -970,7 +946,7 @@ describe('BotPanelShellComponent', () => {
     it('refuses a safe flatten of a running bot and sends nothing', async () => {
       const { fixture } = await renderWith(safeFlattenSnapshot());
 
-      await clickChecksAction(fixture, 'Prepare safe flatten');
+      await clickToolbarSell(fixture);
 
       const outcome = await screen.findByRole('alert', { name: 'Action outcome' });
       expect(outcome.textContent).toContain(
@@ -981,10 +957,9 @@ describe('BotPanelShellComponent', () => {
       expect(mockService.runBotAction).not.toHaveBeenCalled();
     });
 
-    it('gives a stopped bot still holding shares no header action; its Flatten is the warning’s', async () => {
-      const { container } = await renderWith(liveSnapshot(strandedPanel()));
+    it('keeps the warning’s Flatten for a stopped bot still holding shares', async () => {
+      await renderWith(liveSnapshot(strandedPanel()));
 
-      expect(container.querySelector('.bot-banner__actions app-panel-action-button')).toBeNull();
       const warning = screen.getByRole('region', { name: /No bot is managing 2.5 QQQ/ });
       expect(within(warning).getByRole('button', { name: 'Flatten…' }).hasAttribute('disabled')).toBe(false);
     });
@@ -1007,8 +982,8 @@ describe('BotPanelShellComponent', () => {
     // The backend policy folds RecoveryCapability.primary into the Operator
     // reference (ADR 0027 precedence, #1665): the banner renders it once,
     // and the readiness accordion suppresses its own would-be duplicate row.
-    expect(screen.getAllByRole('button', { name: 'Recover exact execution evidence' })).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Recover exact execution evidence' }));
+    expect(screen.getAllByRole('button', { name: 'Recover a missing fill' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Recover a missing fill' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -1068,7 +1043,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open custody timeline' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Custody timeline' }));
 
     const queryParams = { timelineBot: 'sid-001', timelineUncertaintyId: 'uncertainty:17' };
     expect(navigate).toHaveBeenLastCalledWith(
@@ -1104,7 +1079,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Recover exact execution evidence' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Recover a missing fill' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -1135,7 +1110,7 @@ describe('BotPanelShellComponent', () => {
     fixture.detectChanges();
 
     await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
-    await userEvent.click(screen.getByRole('button', { name: 'Sell 2.5 QQQ' }));
+    await userEvent.click(within(screen.getByRole('group', { name: 'Sell 2.5 QQQ?' })).getByRole('button', { name: 'Sell 2.5 QQQ' }));
     await vi.waitFor(() => expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(1));
 
     fixture.componentRef.setInput('sid', 'sid-002');
@@ -1180,7 +1155,7 @@ describe('BotPanelShellComponent', () => {
       const { fixture } = await renderShell({
         runBotAction: vi.fn().mockResolvedValue(fakeActionResult()),
       });
-      fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
       await fixture.whenStable();
       fixture.detectChanges();
       expect(screen.getByText('Reconciliation requested.')).toBeTruthy();
@@ -1199,7 +1174,7 @@ describe('BotPanelShellComponent', () => {
       const runBotAction = vi.fn().mockReturnValueOnce(pending.promise);
       const { fixture } = await renderShell({ runBotAction });
 
-      fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
       await fixture.whenStable();
       fixture.detectChanges();
 
@@ -1219,7 +1194,7 @@ describe('BotPanelShellComponent', () => {
       const runBotAction = vi.fn().mockReturnValueOnce(pending.promise);
       const { fixture } = await renderShell({ runBotAction });
 
-      fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
       await fixture.whenStable();
       fixture.detectChanges();
 
@@ -1234,7 +1209,7 @@ describe('BotPanelShellComponent', () => {
       const runBotAction = vi.fn().mockReturnValueOnce(pending.promise);
       const { fixture } = await renderShell({ runBotAction });
 
-      fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
       await fixture.whenStable();
       fixture.detectChanges();
 
@@ -1283,7 +1258,7 @@ describe('BotPanelShellComponent', () => {
       await fixture.whenStable();
       fixture.detectChanges();
       await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
-      await userEvent.click(screen.getByRole('button', { name: 'Sell 2.5 QQQ' }));
+      await userEvent.click(within(screen.getByRole('group', { name: 'Sell 2.5 QQQ?' })).getByRole('button', { name: 'Sell 2.5 QQQ' }));
       await vi.waitFor(() => expect(brokersMock.checkSqliteSafeFlatten).toHaveBeenCalledTimes(1));
       await settle(fixture);
       return fixture;
@@ -1637,7 +1612,7 @@ describe('BotPanelShellComponent', () => {
       fixture.detectChanges();
 
       await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
-      await userEvent.click(screen.getByRole('button', { name: 'Sell 2.5 QQQ' }));
+      await userEvent.click(within(screen.getByRole('group', { name: 'Sell 2.5 QQQ?' })).getByRole('button', { name: 'Sell 2.5 QQQ' }));
 
       await vi.waitFor(() => expect(document.activeElement?.classList.contains('action-receipt')).toBe(true));
       expect(document.activeElement?.textContent).toContain('Stale Action Token');
@@ -1647,7 +1622,7 @@ describe('BotPanelShellComponent', () => {
     });
   });
 
-  it('renders one view: the header once, no Trader/Operator switch, and the audit folded away', async () => {
+  it('renders one view: the banner, the toolbar and the six-panel board, with no Trader/Operator switch', async () => {
     const { fixture, container } = await render(BotPanelShellComponent, {
       inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
       providers: [
@@ -1660,12 +1635,13 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(container.querySelectorAll('app-bot-banner')).toHaveLength(1);
+    expect(container.querySelectorAll('app-bot-page-header')).toHaveLength(1);
+    expect(screen.getByRole('toolbar', { name: 'Actions for this bot' })).toBeTruthy();
     expect(screen.queryByRole('tab', { name: 'Trader' })).toBeNull();
     expect(screen.queryByRole('tab', { name: 'Operator' })).toBeNull();
-    const folds = [...container.querySelectorAll<HTMLDetailsElement>('app-bot-details details.fold')];
-    expect(folds.length).toBeGreaterThan(0);
-    expect(folds.every((fold) => !fold.open)).toBe(true);
+    // #2794 R4: chart, money and decisions above; orders, health and setup below.
+    expect([...container.querySelectorAll('.bot-board > .bot-board__panel')].map((panel) => panel.classList[1]))
+      .toEqual(['bot-board__chart', 'bot-board__money', 'bot-board__decisions', 'bot-board__orders', 'bot-board__health', 'bot-board__setup']);
   });
 
   it('prices the tape from the last IBKR bar and never reads a Polygon snapshot (H15)', async () => {
@@ -1742,7 +1718,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
     await fixture.whenStable();
 
     expect(mockService.runBotAction).toHaveBeenCalledWith(
@@ -1898,10 +1874,9 @@ describe('BotPanelShellComponent', () => {
     });
     await fixture.whenStable();
 
-    openDisclosure('Audit trail');
-    await fixture.whenStable();
+    // The audit trail is on the page, in the Orders panel (#2794).
     fixture.detectChanges();
-    fireEvent.click(screen.getByRole('button', { name: /Submit acknowledged at/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Submit acknowledged at/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Select transaction tx-001 on rail' }));
     await fixture.whenStable();
 
@@ -1929,7 +1904,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -1970,7 +1945,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -2028,7 +2003,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -2062,7 +2037,7 @@ describe('BotPanelShellComponent', () => {
     );
     const { fixture } = await renderShell({ directory, runBotAction });
 
-    await userEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
     await fixture.whenStable();
 
     expect(refresh).toHaveBeenCalledTimes(1);
@@ -2090,7 +2065,7 @@ describe('BotPanelShellComponent', () => {
     );
     const { fixture } = await renderShell({ directory, runBotAction });
 
-    await userEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
     await fixture.whenStable();
 
     expect(messageService.add).toHaveBeenCalledWith(
@@ -2122,7 +2097,7 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
 
     expect(runBotAction).not.toHaveBeenCalled();
     expect(await screen.findByText(/rebound while the action was open/i)).toBeTruthy();
@@ -2141,7 +2116,7 @@ describe('BotPanelShellComponent', () => {
     const runBotAction = vi.fn().mockResolvedValue(fakeActionResult());
     await renderShell({ directory, runBotAction });
 
-    await userEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
 
     expect(runBotAction).not.toHaveBeenCalled();
     expect(await screen.findByText(/no known binding when the action was opened/i)).toBeTruthy();
@@ -2155,7 +2130,7 @@ describe('BotPanelShellComponent', () => {
     const runBotAction = vi.fn().mockResolvedValue(fakeActionResult());
     await renderShell({ directory, runBotAction });
 
-    await userEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
 
     expect(runBotAction).toHaveBeenCalledWith(
       expect.objectContaining({ bindingGeneration: 3, routingEpoch: 4 }),
@@ -2206,7 +2181,7 @@ describe('BotPanelShellComponent', () => {
       const pending = deferred<PanelActionResult>();
       const { fixture } = await renderShell({ end: END, runBotAction: vi.fn().mockReturnValueOnce(pending.promise) });
 
-      fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
       await fixture.whenStable();
       fixture.detectChanges();
 
@@ -2222,7 +2197,7 @@ describe('BotPanelShellComponent', () => {
 
       await saveNoEnd();
       await fixture.whenStable();
-      fireEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
       await fixture.whenStable();
 
       expect(runBotAction).not.toHaveBeenCalled();
@@ -2284,6 +2259,48 @@ describe('BotPanelShellComponent', () => {
         `${term.textContent?.trim()} ${term.nextElementSibling?.textContent?.trim()}`);
     }
 
+    it('leads with the bot’s own status and the backend’s summary, and no LIVE chip (#2794 R1, R3)', async () => {
+      const { container } = await renderPage({ ...PANEL, mode: 'trade' });
+
+      const banner = container.querySelector('app-bot-page-header');
+      expect(banner?.textContent).toContain('Running');
+      expect(screen.getByText('Running since Tue Nov 14 2023, 17:13 ET · no decisions, no trades.')).toBeTruthy();
+      expect(banner?.textContent).not.toContain('LIVE');
+      expect(banner?.querySelector('app-alpaca-lane-mode-chip')).toBeNull();
+    });
+
+    it('splits health into this run and the account right now (#2794 R9)', async () => {
+      await renderPage({ ...PANEL, mode: 'trade' });
+
+      const health = screen.getByRole('region', { name: 'Health' });
+      expect(within(health).getAllByRole('heading', { level: 4 }).map((heading) => heading.textContent?.trim()))
+        .toEqual(['During this run', 'Account right now', 'Market right now']);
+      expect(within(health).getByRole('list', { name: 'During this run' }).textContent).toContain('IBKR market data feed');
+    });
+
+    it('reads a finished run’s tape from that run’s window, not the newest bars (#2794 R7)', async () => {
+      const getHistoryChart = vi.fn().mockResolvedValue(mockService.getHistoryChart());
+      await renderPage({ ...PANEL, mode: 'trade', health: { ...PANEL.health, running: false } }, { getHistoryChart });
+
+      // The fixture's run ran a minute to 1_700_000_001_000; the tape reaches 15 minutes either side.
+      await vi.waitFor(() => expect(getHistoryChart).toHaveBeenLastCalledWith(
+        expect.anything(), 'sid-001', '1m', { fromMs: 1_700_000_001_000 - 60_000 - 900_000, toMs: 1_700_000_001_000 + 900_000 },
+      ));
+    });
+
+    it('says no bot by that name is on this account, with the way back, instead of loading forever', async () => {
+      const missing = new HttpErrorResponse({
+        status: 404,
+        error: { detail: { message: 'No bot \'sid-001\' is bound to broker \'alpaca\'.', why: null, next_action: null } },
+      });
+      await renderPage(PANEL, { getLiveSnapshot: vi.fn().mockRejectedValue(missing) });
+
+      const notFound = await screen.findByRole('alert', { name: 'No bot named sid-001 on this account' });
+      expect(within(notFound).getByText('No bot \'sid-001\' is bound to broker \'alpaca\'.')).toBeTruthy();
+      expect(within(notFound).getByRole('link', { name: 'Back to Home' })).toBeTruthy();
+      expect(screen.queryByText('Loading bot control…')).toBeNull();
+    });
+
     it('shows a running bot with Stop, its money statement verbatim, and no stranded warning', async () => {
       await renderPage({
         ...PANEL, mode: 'trade', exposure: { QQQ: 2.5 }, actions: [fakeSqliteStopAction()], primary_action: 'stop_bot_decisions',
@@ -2291,7 +2308,7 @@ describe('BotPanelShellComponent', () => {
       });
       await screen.findByText('Holding its position');
 
-      expect(screen.getByRole('button', { name: 'Stop bot decisions' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
       expect(statement()).toEqual([
         'Budget set aside at deploy $1,000.00',
         'Realized gains and losses $0.00',
@@ -2331,7 +2348,7 @@ describe('BotPanelShellComponent', () => {
     it('moves the keyboard to the outcome after a command (story 48)', async () => {
       await renderPage({ ...PANEL, mode: 'trade', actions: [RECONCILE_ACTION], primary_action: 'reconcile_now' });
 
-      await userEvent.click(screen.getByRole('button', { name: 'Reconcile now' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
 
       await vi.waitFor(() => expect(document.activeElement?.classList.contains('action-receipt')).toBe(true));
       expect(document.activeElement?.textContent).toContain('Reconciliation requested.');
@@ -2390,7 +2407,7 @@ describe('BotPanelShellComponent', () => {
       await renderPage(strandedPanel(), { getPanel, runBotAction });
 
       await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
-      await userEvent.click(screen.getByRole('button', { name: 'Sell 2.5 QQQ' }));
+      await userEvent.click(within(screen.getByRole('group', { name: 'Sell 2.5 QQQ?' })).getByRole('button', { name: 'Sell 2.5 QQQ' }));
 
       await vi.waitFor(() => expect(document.activeElement?.classList.contains('action-receipt')).toBe(true));
       expect(runBotAction).toHaveBeenCalledTimes(1);
@@ -2416,7 +2433,7 @@ describe('BotPanelShellComponent', () => {
       await renderPage(strandedPanel(), { getPanel, runBotAction });
 
       await userEvent.click(screen.getByRole('button', { name: 'Flatten…' }));
-      await userEvent.click(screen.getByRole('button', { name: 'Sell 2.5 QQQ' }));
+      await userEvent.click(within(screen.getByRole('group', { name: 'Sell 2.5 QQQ?' })).getByRole('button', { name: 'Sell 2.5 QQQ' }));
 
       await vi.waitFor(() => expect(document.activeElement?.classList.contains('flatten-ticket')).toBe(true));
       expect(runBotAction).toHaveBeenCalledTimes(1);

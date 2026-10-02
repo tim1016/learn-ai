@@ -1,0 +1,69 @@
+@use '../../../../styles/eyebrow-heading' as *;
+
+:host { display: block; min-width: 0; }
+
+.panel-title { @include eyebrow-heading; margin: 0 0 var(--space-2); }
+
+.health__group {
+  margin: var(--space-2) 0 var(--space-1);
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.health__lines {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.health__line {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: baseline;
+  gap: 0 var(--space-2);
+}
+
+.health__dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--text-subtle);
+
+  [data-state='ok'] & { background: var(--bull); }
+  [data-state='attention'] & { background: var(--warn); }
+  [data-state='problem'] & { background: var(--bear); }
+}
+
+.health__label { color: var(--text-primary); font-size: var(--fs-sm); }
+
+.health__value { color: var(--text-secondary); font-size: var(--fs-xs); text-align: right; }
+
+.health__note {
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.health__line > .health__note { grid-column: 2 / -1; }
+
+.health__market {
+  display: grid;
+  gap: 0.1rem;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.health__market--attention strong { color: var(--warn); }
+
+.health__join,
+.health__outcome {
+  display: grid;
+  gap: 0.125rem;
+  margin: var(--space-1) 0 var(--space-2);
+  font-size: var(--fs-xs);
+}

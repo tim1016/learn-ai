@@ -64,11 +64,23 @@ export class PanelActionButtonComponent {
    * that silently does nothing, matching the account-desk posture card.
    */
   readonly moveIsSupported = input<(move: OperatorMove) => boolean>(isSelfDispatchable);
+  /** The bot page's toolbar (#2794): a PrimeIcons name drawn before the label. */
+  readonly icon = input<string | null>(null);
+  /** The page's plain name for the action, in place of the backend's system label. */
+  readonly label = input<string | null>(null);
+  /** When false the label is for screen readers and the tooltip only: an icon button. */
+  readonly showLabel = input(true);
+  /** The page's primary: filled in its own tone, so a filled danger action stays red. */
+  readonly filled = input(false);
+  /** The page's own tooltip -- what the action does, or why it waits -- in place of the backend's system copy. */
+  readonly hint = input<string | null>(null);
 
   readonly triggered = output<PanelActionTrigger>();
   readonly moveRequested = output<OperatorMove>();
   protected readonly confirmationOpen = signal(false);
   protected readonly blockerDescriptionId = `panel-action-blocker-${nextBlockerDescriptionId++}`;
+
+  protected readonly shownLabel = computed(() => this.label() ?? this.action().label);
 
   protected readonly visibleBlockers = computed(() => {
     const suppressedBlockerId = this.suppressedBlockerId();
@@ -84,6 +96,8 @@ export class PanelActionButtonComponent {
    * beside it.
    */
   protected readonly tooltip = computed(() => {
+    const hint = this.hint();
+    if (hint !== null) return hint;
     const blockers = this.visibleBlockers();
     return blockers.length === 0
       ? this.action().explanation

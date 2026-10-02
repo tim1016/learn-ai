@@ -74,6 +74,12 @@ export interface PanelActionTrigger {
 }
 
 export type BotPanelView = components['schemas']['BotPanelView'];
+/** What the bot page leads with (#2794): its own status, the run summary, the toolbar and split health. */
+export type BotPageView = components['schemas']['BotPageView'];
+/** One action on the bot page: available, blocked with its reason, or not needed. */
+export type ToolbarActionView = components['schemas']['ToolbarActionView'];
+export type BotHealthGroupsView = components['schemas']['BotHealthGroupsView'];
+export type HealthLineView = components['schemas']['HealthLineView'];
 export type MarketPulseView = components['schemas']['MarketPulseView'];
 
 /**

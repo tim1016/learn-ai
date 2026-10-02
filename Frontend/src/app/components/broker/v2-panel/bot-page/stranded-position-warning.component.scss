@@ -1,9 +1,13 @@
 :host { display: block; }
 
+// #2794 R4: one row -- heading, how it ended, Flatten -- so the board keeps
+// the screen; the confirmation and progress take their own lines.
 .stranded {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--border));
   border-left: 4px solid var(--warn);
   border-radius: var(--radius-md);
@@ -55,6 +59,14 @@
   border-color: var(--warn);
   font-weight: var(--fw-semi);
 }
+
+app-exposure-notices,
+.stranded__confirm,
+.stranded__steps {
+  flex-basis: 100%;
+}
+
+app-exposure-notices:empty { display: none; }
 
 .stranded__confirm {
   display: grid;

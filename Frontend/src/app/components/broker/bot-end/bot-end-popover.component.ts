@@ -47,6 +47,12 @@ export class BotEndPopoverComponent {
   private readonly panel = viewChild.required<ElementRef<HTMLElement>>('panel');
   private readonly editor = viewChild.required(BotEndEditorComponent);
 
+  /** Open the fields over the page, as a Change button pointing at it would. */
+  show(): void {
+    const panel = this.panel().nativeElement;
+    if ('showPopover' in panel) panel.showPopover();
+  }
+
   hide(): void {
     const panel = this.panel().nativeElement;
     if ('hidePopover' in panel) panel.hidePopover();

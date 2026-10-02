@@ -538,12 +538,17 @@ export class BrokerV2PanelService {
     return `${operationUrl('bot_live_stream', { ...target, sid })}?${params.toString()}`;
   }
 
+  /** The newest bars for `timeframe`; with `window`, that window of the bot's latest run (#2794). */
   getHistoryChart(
     target: ResourceTarget,
     sid: string,
     timeframe: ChartHistoryTimeframe,
+    window: { readonly fromMs: number; readonly toMs: number } | null = null,
   ): Promise<ChartHistoryResponse> {
-    const params = new HttpParams().set('timeframe', timeframe);
+    let params = new HttpParams().set('timeframe', timeframe);
+    if (window !== null) {
+      params = params.set('from_ms', window.fromMs).set('to_ms', window.toMs);
+    }
     return firstValueFrom(
       this.http.get<ChartHistoryResponse>(
         operationUrl('bot_chart_history', { ...target, sid }),

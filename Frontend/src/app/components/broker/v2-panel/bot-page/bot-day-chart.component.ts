@@ -7,7 +7,7 @@ import {
 } from '@angular/core';
 
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
-import { DualPaneChartComponent } from '../dual-pane-chart/dual-pane-chart.component';
+import { DualPaneChartComponent, type ChartPane } from '../dual-pane-chart/dual-pane-chart.component';
 import { toCandle } from '../lib/chart-bar-mapping';
 import { historyUnavailableNotice } from '../lib/chart-history-notice';
 import type {
@@ -42,6 +42,8 @@ export class BotDayChartComponent {
   readonly histChartFailed = input(false);
   readonly liveResolution = input<ChartLiveResolution>('5s');
   readonly historyTimeframe = input<ChartHistoryTimeframe>('1m');
+  /** The pane it opens on: live for a running bot, the delayed tape (a finished run's window) otherwise. */
+  readonly initialPane = input<ChartPane>('live');
 
   readonly historyTimeframeChange = output<ChartHistoryTimeframe>();
   readonly liveResolutionChange = output<ChartLiveResolution>();

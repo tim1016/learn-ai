@@ -42,6 +42,8 @@ export class BotEndCardComponent {
   readonly locked = input(false);
   /** Sends the owner's choice; resolves once it is recorded, rejects with the refusal. */
   readonly save = input.required<(choice: BotEndInput) => Promise<void>>();
+  /** The bot page's toolbar owns Change end (#2794), so the card there shows no button of its own. */
+  readonly showChange = input(true);
 
   protected readonly titleId = `bot-end-${nextEndCardId++}-title`;
   protected readonly keepOffered = computed(() => !this.dryRun());
@@ -51,6 +53,13 @@ export class BotEndCardComponent {
   protected readonly refusal = signal<ActionRejection | null>(null);
 
   private readonly editor = viewChild.required(BotEndPopoverComponent);
+
+  /** Open the end's fields, as the card's own Change does; nothing while a save or command is on its way. */
+  openEditor(): void {
+    if (this.busy() || !this.end().editable) return;
+    this.prepare();
+    this.editor().show();
+  }
 
   /** Change reads the fields from the end on screen, before they open: its
    * own end, or the default end offered to a bot with none. */
