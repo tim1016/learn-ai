@@ -34,6 +34,7 @@ from app.broker.alpaca.clerk.models import (
     ReconciliationCut,
 )
 from app.broker.alpaca.clerk.money import dollars
+from app.broker.alpaca.clerk.sqlite.economic_projection_models import RunScope
 from app.broker.alpaca.clerk.sqlite.repository import (
     ExecutionLeaseLost,
     RepositoryPoisoned,
@@ -436,7 +437,7 @@ async def _get_panel_with_entries_from_authority(
             detail="Restore the selected authority before projecting this bot's execution policy.",
         )
     authority_account_id = facade.account_id
-    run = _latest_run(registry, broker, sid)
+    run = _latest_run(registry, broker, sid, binding=binding, facade=facade)
     try:
         evidence = await read_sqlite_panel_evidence(
             broker,
@@ -444,7 +445,7 @@ async def _get_panel_with_entries_from_authority(
             sid,
             now_ms=captured_now_ms,
             facade=facade,
-            run_started_at_ms=None if run is None else run.started_at_ms,
+            run=None if run.view is None else RunScope(run.view.run_id, run.view.started_at_ms),
         )
     except SqlitePanelBotNotFound as exc:
         raise UnknownBotError(str(exc)) from exc
@@ -549,36 +550,58 @@ async def _get_panel_with_entries_from_authority(
     return panel, entries, session_fills
 
 
-def _latest_run(registry: object, broker: str, sid: str) -> BotRunView | None:
-    """The bot's latest run, or ``None`` when it has never started one."""
+@dataclass(frozen=True)
+class _LatestRun:
+    """The bot's latest run, or that the run the Clerk admitted cannot be read."""
+
+    view: BotRunView | None
+    unreadable: bool = False
+
+
+def _latest_run(
+    registry: object, broker: str, sid: str, *, binding: object, facade: SqliteAlpacaClerkFacade
+) -> _LatestRun:
+    """The bot's latest run.
+
+    A binding whose run has no launch record is a bot that has not started --
+    unless the Clerk admitted that run, when the record is damaged, not
+    absent, and the page says so instead of "Not started yet".
+    """
     try:
-        return registry.current_run(broker, sid)
-    except RunnerUnknownBotError:
-        return None
+        return _LatestRun(registry.current_run(broker, sid))
+    except RunnerUnknownBotError as exc:
+        admitted = facade.repository.latest_run(sid)
+        if admitted is None or admitted.lifecycle_run_id != getattr(binding, "run_id", None):
+            return _LatestRun(None)
+        logger.warning(
+            "Bot page: the Clerk admitted a run whose launch record cannot be read",
+            extra={"action": "bot_page_run_unreadable", "strategy_instance_id": sid, "error": str(exc)},
+        )
+        return _LatestRun(None, unreadable=True)
 
 
 def _with_bot_page(
     panel: BotPanelView,
     evidence: SqlitePanelEvidence,
     *,
-    run: BotRunView | None,
+    run: _LatestRun,
     facade: SqliteAlpacaClerkFacade,
     now_ms: int,
 ) -> BotPanelView:
     """Add what the bot page leads with, and its latest run's fills (#2794).
 
-    Everything since the latest run started is that run's, including the exit
-    a Stop or an end left the Clerk to sell after the run itself ended.
+    A run's fills and orders are those its effect operations name, as Bot
+    history counts them; its decisions are those since it started. All are
+    read at the panel's own revision.
     """
     projection = evidence.projection
     sid = panel.strategy_instance_id
     run_fills = evidence.economics.run_fills
     facts = run_facts(
-        run,
+        run.view,
+        unreadable=run.unreadable,
         run_fills=run_fills,
-        counts=(0, 0)
-        if run is None
-        else facade.repository.run_activity_counts(strategy_instance_id=sid, since_ms=run.started_at_ms),
+        activity=evidence.economics.run_activity,
         budget=facade.repository.deployment_budget(sid),
         exit_in_progress=exit_in_progress(projection, sid),
     )

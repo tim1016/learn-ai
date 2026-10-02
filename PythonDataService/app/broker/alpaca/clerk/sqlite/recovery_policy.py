@@ -902,10 +902,15 @@ def _historical_execution_recovery_decision(ctx: RecoveryPolicyContext) -> _Deci
     )
 
 
+# Coverage refusals that mean the action has nothing to do: no conflict, or a
+# missing fill whose exact evidence the Clerk already holds (resolve it instead).
+_COVERAGE_NOTHING_TO_DO = frozenset({"NO_EXECUTION_COVERAGE_CONFLICT", "EXACT_EVIDENCE_ALREADY_AVAILABLE"})
+
+
 def _coverage_decision(decision: ExecutionCoverageRecoveryDecision) -> _Decision:
     return _Decision(
         available=decision.available,
-        needed=decision.reason_code != "NO_EXECUTION_COVERAGE_CONFLICT",
+        needed=decision.reason_code not in _COVERAGE_NOTHING_TO_DO,
         reason_code=decision.reason_code,
         reason=decision.reason,
         freshness=decision.freshness,

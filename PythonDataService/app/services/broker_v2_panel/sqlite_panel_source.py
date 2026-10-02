@@ -17,6 +17,7 @@ from app.broker.alpaca.clerk.sqlite.economic_projection import (
     EconomicProjectionError,
     EconomicSnapshot,
     FillWindowProjection,
+    RunScope,
     SessionEconomicProjection,
     SqliteEconomicProjectionReader,
 )
@@ -385,7 +386,7 @@ async def read_sqlite_panel_evidence(
     *,
     now_ms: int,
     facade: SqliteAlpacaClerkFacade | None = None,
-    run_started_at_ms: int | None = None,
+    run: RunScope | None = None,
 ) -> SqlitePanelEvidence | None:
     """Read one panel's custody and S2 economics at the same SQLite revision.
 
@@ -400,8 +401,8 @@ async def read_sqlite_panel_evidence(
     ``SqlitePanelBotNotFound``, which callers answer 404. Collapsing the two
     tells an operator to repair a healthy authority.
 
-    ``run_started_at_ms`` also reads the fills since that run started, at the
-    same revision: the bot page lists its run's fills (#2794).
+    ``run`` also reads that run's fills and activity, at the same revision:
+    the bot page summarizes its run and lists its fills (#2794).
     """
     facade = facade or active_sqlite_facade(broker)
     if facade is None:
@@ -419,7 +420,7 @@ async def read_sqlite_panel_evidence(
                 economics = economic_reader.bot_session_economic_projection(
                     strategy_instance_id,
                     session_window=session_window,
-                    run_started_at_ms=run_started_at_ms,
+                    run=run,
                 )
             finally:
                 custody_reader.close()

@@ -1918,3 +1918,91 @@ async def test_a_bot_whose_fills_are_not_all_proven_needs_attention(api, monkeyp
         "needs_attention",
         "This bot's fills are not all proven yet.",
     )
+
+
+async def test_a_runs_fills_are_those_its_orders_name_not_every_later_fill(api, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex on #2804: a fill is the run's when its order's effect operation names the run, as History counts it."""
+    app, repo = api
+    await _make_held_position(repo, account_id=ACCT, strategy_instance_id=SID, run_id=_run_id(SID), quantity=1.0)
+    registry = get_bot_task_registry()
+    # The runner names a run the bot's order was not placed for, started before that fill.
+    monkeypatch.setattr(
+        registry, "current_run",
+        lambda _broker, _sid: SimpleNamespace(run_id="run-other", started_at_ms=_T0, terminal_outcome=None),
+    )
+
+    async with _client(app) as client:
+        body = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()
+
+    assert body["run_fills"] == []
+    assert body["bot_page"]["summary"]["facts"]["trade_count"] == 0
+
+
+async def test_a_run_the_clerk_admitted_without_a_launch_record_needs_attention(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex on #2804: a missing launch record for the Clerk's own run is damage, never "Not started yet"."""
+    app, _repo = api
+    registry = get_bot_task_registry()
+
+    def missing_record(_broker: str, sid: str) -> object:
+        raise UnknownBotError(f"Current run '{_run_id(sid)}' has no launch evidence.")
+
+    monkeypatch.setattr(registry, "current_run", missing_record)
+    async with _client(app) as client:
+        page = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()["bot_page"]
+
+    assert page["status"] == {
+        "state": "needs_attention",
+        "label": "Needs attention",
+        "reason": "This bot's latest run record could not be read.",
+    }
+    assert page["summary"]["facts"]["ending"] == "unreadable"
+
+
+async def test_a_run_the_clerk_never_admitted_has_not_started(api, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, _repo = api
+    registry = get_bot_task_registry()
+    binding = registry.binding_for_control("alpaca", SID)
+    binding.run_id = "run-not-launched"
+    monkeypatch.setattr(registry, "binding_for_control", lambda *_: binding)
+
+    def no_record(_broker: str, _sid: str) -> object:
+        raise UnknownBotError("Current run 'run-not-launched' has no launch evidence.")
+
+    monkeypatch.setattr(registry, "current_run", no_record)
+    async with _client(app) as client:
+        page = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()["bot_page"]
+
+    assert page["summary"]["text"] == "Not started yet."
+
+
+async def test_a_decision_from_before_the_run_is_not_this_runs(api) -> None:
+    """Codex on #2804: an earlier run's last decision never dates, or makes late, this one."""
+    app, repo = api
+    _append_no_action(repo, _T0 - 3_600_000, explanation=None)
+
+    async with _client(app) as client:
+        page = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()["bot_page"]
+
+    decisions = next(line for line in page["health"]["run"] if line["key"] == "decisions")
+    assert (decisions["state"], decisions["value"], decisions["at_ms"], decisions["note"]) == (
+        "ok",
+        "no decisions",
+        None,
+        None,
+    )
+
+
+async def test_a_run_past_the_clerks_decision_retention_counts_at_least_what_it_kept(api) -> None:
+    """Codex on #2804: the Clerk keeps a bot's newest 1,000 decisions, so a longer run's count is a floor."""
+    app, repo = api
+    for minute in range(1, 1_002):
+        _append_no_action(repo, _T0 + minute * 60_000, explanation=None)
+
+    async with _client(app) as client:
+        facts = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()["bot_page"][
+            "summary"
+        ]["facts"]
+
+    assert (facts["decision_count"], facts["decision_count_is_floor"]) == (1_000, True)

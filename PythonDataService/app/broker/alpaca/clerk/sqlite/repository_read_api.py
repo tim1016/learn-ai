@@ -416,20 +416,6 @@ class ClerkSqliteRepositoryReadApi:
                 limit=limit,
             )
 
-    def run_activity_counts(
-        self: ClerkSqliteRepository,
-        *,
-        strategy_instance_id: str,
-        since_ms: int,
-    ) -> tuple[int, int]:
-        """The decisions one bot recorded and the orders it sent since ``since_ms``."""
-        with self._write_lock:
-            return reads.run_activity_counts(
-                self._conn,
-                strategy_instance_id=strategy_instance_id,
-                since_ms=since_ms,
-            )
-
     def external_order(
         self: ClerkSqliteRepository,
         external_order_id: str,
