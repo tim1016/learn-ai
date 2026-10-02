@@ -194,17 +194,22 @@ class _Caller:
         self.fail_commit = False
         self.cancel_requested = False
         self.reservation_left = PROOF_EVALUATIONS + RUN_EVALUATIONS
+        self.drawn: set[str] = set()
 
     def save_checkpoint(self, checkpoint: ApprovalCheckpoint) -> None:
         # Persisted as the worker would: through its dict form.
         self.checkpoint = ApprovalCheckpoint.from_dict(checkpoint.as_dict())
         self.saved.append(self.checkpoint)
 
-    def consume_reserved(self, evaluations: int) -> None:
-        # The study's proof reservation: drawing past it is refused, as the evaluator refuses it.
+    def consume_reserved(self, step: str, evaluations: int) -> None:
+        # The study's proof reservation, drawn once per step as the study's ledger draws it;
+        # drawing past it is refused, as the evaluator refuses it.
+        if step in self.drawn:
+            return
         if evaluations > self.reservation_left:
             raise BudgetExhausted("the proof reservation is spent")
         self.reservation_left -= evaluations
+        self.drawn.add(step)
         self.consumed.append(evaluations)
 
     def request_cancel(self) -> None:
@@ -417,7 +422,7 @@ async def test_the_real_engine_saves_a_run_golden_validation_accepts_as_current_
     assert dossier is not None
     # The run read the receipted lake bytes, so its data convention is recorded, not unknown.
     assert dossier.evidence_applicability.status == "current"
-    assert dossier.validation_case["evidence_provenance"]["data_contract"] == "lake_complete_sessions/v1"
+    assert dossier.validation_case["evidence_provenance"]["data_contract"] == "lake_receipted_snapshot/v1"
     assert dossier.latest_review is not None and dossier.latest_review.decision == "accept"
 
 
@@ -567,7 +572,7 @@ async def test_a_run_that_was_not_saved_resumes_from_the_proof_without_drawing_a
 
     assert failed.failure_code == "RUN_NOT_SAVED"
     assert caller.checkpoint.proof is not None and caller.checkpoint.run_id is None
-    assert caller.checkpoint.run_reserved is True
+    assert caller.consumed == [PROOF_EVALUATIONS, RUN_EVALUATIONS]
     built = caller.checkpoint.proof
 
     def _no_rebuild(**_kwargs: object) -> ProofRecord:
@@ -917,7 +922,7 @@ async def test_the_published_version_covers_its_tuple_at_start_until_it_is_revok
 
 
 def test_approval_checkpoint_round_trips_through_its_dict_form() -> None:
-    checkpoint = ApprovalCheckpoint(run_id=7, proof={"schema_version": 1}, proof_reserved=True, run_reserved=True)
+    checkpoint = ApprovalCheckpoint(run_id=7, proof={"schema_version": 1})
 
     assert ApprovalCheckpoint.from_dict(checkpoint.as_dict()) == checkpoint
     assert ApprovalCheckpoint.from_dict(None) == ApprovalCheckpoint()

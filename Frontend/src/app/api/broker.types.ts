@@ -13260,6 +13260,11 @@ export interface components {
              * @description Descriptive only, never a check.
              */
             retention: number | null;
+            /**
+             * Weakness
+             * @description What approving needs the owner to acknowledge as weak; empty when the evidence meets the rules.
+             */
+            weakness: components["schemas"]["GoldenSearchFinding"][];
             window: components["schemas"]["GoldenSearchWindow"];
         };
         /** GoldenSearchExecution */

@@ -598,7 +598,8 @@ def _execute_engine_backtest_core(
     # nothing to claim about which bytes it read.
     lake_manifest: str | None = None
     # A caller that binds the run to a receipted lake snapshot read exactly its
-    # admitted bytes, one artifact per expected session (#2696).
+    # admitted bytes, one artifact per expected session: its own data contract,
+    # fingerprinted by the snapshot rather than the lake's availability hash (#2696).
     snapshot_manifest = (
         _snapshot_availability_hash(data_manifest)
         if data_manifest is not None and all(lake_root_for(root / "equity") is not None for root in data_roots)
@@ -1064,7 +1065,8 @@ def _aggregate_backtest_response(
     response = EngineBacktestResponse(
         evidence_provenance=RunEvidenceProvenance(
             data_contract=(
-                "lake_complete_sessions/v1" if lake_manifest or snapshot_manifest else
+                "lake_complete_sessions/v1" if lake_manifest else
+                "lake_receipted_snapshot/v1" if snapshot_manifest else
                 "fixture_identity/v1" if request.data_policy and request.data_policy.provider_kind == "fixture" else
                 "unrecorded"
             ),

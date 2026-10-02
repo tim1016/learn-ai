@@ -92,6 +92,20 @@ from app.utils.timestamps import now_ms_utc
 logger = logging.getLogger(__name__)
 
 
+#: A research-store read that failed, on either Golden read Deploy makes: the
+#: form then offers the registry's validated point, as it did before either existed.
+_RESEARCH_READ_ERRORS: tuple[type[BaseException], ...] = (
+    asyncpg.PostgresError,
+    asyncpg.InterfaceError,
+    CatalogUnavailableError,
+    KeyError,
+    OSError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
+
 async def _ready_golden_defaults() -> GoldenDefaults:
     """Every (program, stock) Golden Search default that is READY for the running build (#2696).
 
@@ -100,15 +114,7 @@ async def _ready_golden_defaults() -> GoldenDefaults:
     """
     try:
         return await qualification_service.ready_defaults()
-    except (
-        asyncpg.PostgresError,
-        CatalogUnavailableError,
-        KeyError,
-        OSError,
-        TimeoutError,
-        TypeError,
-        ValueError,
-    ) as exc:
+    except _RESEARCH_READ_ERRORS as exc:
         logger.warning(
             "Golden Search defaults unavailable; Deploy offers the registry's validated point",
             extra={"action": "golden_search_defaults_unavailable", "error": type(exc).__name__},
@@ -167,15 +173,7 @@ async def _current_golden_validation_scopes(
             golden_validation_service.list_latest_accepted_dossiers,
             symbol=None,
         )
-    except (
-        asyncpg.PostgresError,
-        golden_validation_service.GoldenValidationError,
-        KeyError,
-        OSError,
-        TimeoutError,
-        TypeError,
-        ValueError,
-    ) as exc:
+    except (*_RESEARCH_READ_ERRORS, golden_validation_service.GoldenValidationError) as exc:
         logger.warning("Golden Validation catalog projection unavailable: %s", type(exc).__name__)
         return {}
 

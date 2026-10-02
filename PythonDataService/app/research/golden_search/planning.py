@@ -114,7 +114,10 @@ def _canonical_or_raw(strategy_key: str, symbol: str, params: Mapping[str, Any])
 
 
 def protocol_from_request(data: Mapping[str, Any]) -> GoldenSearchProtocol:
-    """A frozen plan from a request: symbol upper-cased, seed defaulted to the incumbent, both canonical.
+    """A frozen plan from a request: symbol upper-cased, the seed defaulted, both canonical.
+
+    The seed defaults to a registry incumbent's point, and to the registry
+    point when the incumbent is a qualification (see :func:`default_seed`).
 
     Raises ``GoldenSearchRefusal(PROTOCOL_MALFORMED)`` only for a request that
     is not a plan at all; every problem a plan can have is a refusal of
@@ -127,7 +130,11 @@ def protocol_from_request(data: Mapping[str, Any]) -> GoldenSearchProtocol:
         incumbent = dict(body["incumbent"])
         incumbent_params = _canonical_or_raw(strategy_key, symbol, dict(incumbent["params"]))
         raw_seed = body.get("seed")
-        seed = dict(incumbent_params) if raw_seed is None else _canonical_or_raw(strategy_key, symbol, dict(raw_seed))
+        seed = (
+            default_seed(strategy_key, symbol, source=str(incumbent["source"]), params=incumbent_params)
+            if raw_seed is None
+            else _canonical_or_raw(strategy_key, symbol, dict(raw_seed))
+        )
         body.update(symbol=symbol, seed=seed, incumbent={**incumbent, "params": incumbent_params})
         return GoldenSearchProtocol.from_dict(body)
     except (KeyError, TypeError, ValueError) as exc:
@@ -295,8 +302,9 @@ def review_plan(protocol: GoldenSearchProtocol, *, roots: Sequence[Path] | None 
         refusal = ProtocolRefusal(code="STRATEGY_UNAVAILABLE", field="strategy_key", message=reason)
         return PlanReview(protocol=protocol, review=None, refusals=(refusal,), run_up=None)
     review = review_protocol(protocol, declaration)
-    if not review.lockable:
-        return PlanReview(protocol=protocol, review=review, refusals=review.refusals, run_up=None)
+    refusals = (*review.refusals, *_qualified_seed_refusals(protocol))
+    if refusals:
+        return PlanReview(protocol=protocol, review=review, refusals=refusals, run_up=None)
     resolved = list(roots) if roots is not None else sweep_roots()
     try:
         run_up = plan_study_run_up(protocol, declaration, roots=resolved)
@@ -445,6 +453,38 @@ def prepare_lock(
 # ── Defaults ─────────────────────────────────────────────────────────────
 
 
+def default_seed(strategy_key: str, symbol: str, *, source: str, params: Mapping[str, Any]) -> dict[str, Any]:
+    """Where the searches start when the plan names no seed: never a qualified tuple.
+
+    A qualified configuration was chosen on data the walk-forward folds then
+    test, so seeding a fold from it would lean every fold toward that
+    future (#2696). It stays the frozen incumbent; the search starts from
+    the registry point.
+    """
+    if source == "qualification":
+        return dict(registry_incumbent(strategy_key, symbol).params)
+    return dict(params)
+
+
+def _qualified_seed_refusals(protocol: GoldenSearchProtocol) -> tuple[ProtocolRefusal, ...]:
+    """A seed equal to the qualified incumbent's tuple is refused, unless that tuple is the registry point itself."""
+    incumbent = protocol.incumbent
+    if incumbent.source != "qualification" or dict(protocol.seed) != dict(incumbent.params):
+        return ()
+    if dict(protocol.seed) == registry_incumbent(protocol.strategy_key, protocol.symbol).params:
+        return ()
+    return (
+        ProtocolRefusal(
+            code="SEED_IS_QUALIFIED",
+            field="seed",
+            message=(
+                "The search cannot start from the qualified configuration: it was chosen on data the "
+                "walk-forward folds test. Start from the registry point or another value fixed before results."
+            ),
+        ),
+    )
+
+
 def registry_incumbent(strategy_key: str, symbol: str) -> IncumbentRef:
     """The registry's validated point as a canonical incumbent (the strategy's schema defaults when it has none)."""
     registration = _STRATEGY_REGISTRY.get(strategy_key)
@@ -517,7 +557,7 @@ def default_protocol(
             symbol=symbol,
             method="zoom",
             knobs=knobs,
-            seed=dict(incumbent.params),
+            seed=default_seed(strategy_key, symbol, source=incumbent.source, params=incumbent.params),
             incumbent=incumbent,
             development_start_ms=et_midnight_ms(development_start),
             development_end_ms=et_midnight_ms(final_start_day),

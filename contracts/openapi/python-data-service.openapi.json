@@ -18826,6 +18826,14 @@
             "description": "Descriptive only, never a check.",
             "title": "Retention"
           },
+          "weakness": {
+            "description": "What approving needs the owner to acknowledge as weak; empty when the evidence meets the rules.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchFinding"
+            },
+            "title": "Weakness",
+            "type": "array"
+          },
           "window": {
             "$ref": "#/components/schemas/GoldenSearchWindow"
           }
@@ -18840,7 +18848,8 @@
           "checks",
           "retention",
           "candidate_metrics",
-          "incumbent_metrics"
+          "incumbent_metrics",
+          "weakness"
         ],
         "title": "GoldenSearchExamView",
         "type": "object"

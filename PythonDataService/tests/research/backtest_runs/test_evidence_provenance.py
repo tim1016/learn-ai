@@ -45,6 +45,15 @@ def test_every_convention_a_producer_records_is_current(convention: ClosingBarCo
     assert applicability.requires_manual_override is False
 
 
+def test_a_run_bound_to_a_receipted_lake_snapshot_is_current() -> None:
+    """Grid Search cells and Golden Search runs read exactly a receipted snapshot's admitted lake bytes (#2696)."""
+    applicability = assess_evidence_provenance(
+        {**_CURRENT_BEFORE_2607, "data_contract": "lake_receipted_snapshot/v1", "closing_bar_convention": "skip_closing_bar/v1"}
+    )
+
+    assert applicability.status == "current"
+
+
 def test_the_skipped_decisions_round_trip_with_the_convention() -> None:
     provenance = RunEvidenceProvenance.model_validate(
         {**_CURRENT_BEFORE_2607, "closing_bar_convention": "skip_closing_bar/v1", "closing_bar_skips": [_SKIP]}

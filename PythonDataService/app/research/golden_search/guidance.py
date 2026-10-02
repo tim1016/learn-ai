@@ -125,6 +125,32 @@ def research_weakness(exam_outcome: str | None, claim: str | None, exposure_stat
     return weakness
 
 
+_WEAKNESS_COPY: dict[str, str] = {
+    "EXAM_NOT_ENOUGH_EVIDENCE": "not enough final-test evidence",
+    "EXAM_COULD_NOT_EVALUATE": "a final test that could not be evaluated",
+    "EXAM_MISSING": "a final test without an outcome",
+    "EXPOSURE_PREVIOUSLY_USED": "the previously used test interval",
+    "EXPOSURE_HISTORY_UNKNOWN": "the unknown history of this test interval",
+    "EXPOSURE_NOT_OPENED": "an exploratory, not confirmatory, final test",
+    "EXPOSURE_UNKNOWN": "an exploratory, not confirmatory, final test",
+}
+
+
+def weakness_items(exam: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Each weakness an approval must acknowledge, in the words the acknowledgement names; empty before an outcome."""
+    if exam.get("outcome") is None:
+        return []
+    failed = [str(check["label"]).lower() for check in exam.get("checks", []) if check.get("status") == "fail"]
+    items: list[dict[str, str]] = []
+    for code in research_weakness(exam["outcome"], exam.get("claim"), exam.get("exposure_state")):
+        if code == "EXAM_DOES_NOT_MEET_RULES":
+            text = f"failing the stated rules ({', '.join(failed)})" if failed else "failing the stated rules"
+        else:
+            text = _WEAKNESS_COPY[code]
+        items.append({"code": code, "text": text})
+    return items
+
+
 # ── Stop explanations ────────────────────────────────────────────────────
 
 KNOB_STOP_COPY: dict[str, str] = {

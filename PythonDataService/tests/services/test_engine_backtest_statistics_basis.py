@@ -185,7 +185,7 @@ def test_the_actual_producer_records_conventions_and_preserves_unknown_data_iden
         result=_result(), request=_request(), strategy=_strategy(), lake_manifest=None, snapshot_manifest="b" * 64,
         on_phase=lambda _phase: None, on_log=lambda _line: None,
     )
-    assert bound.evidence_provenance.data_contract == "lake_complete_sessions/v1"
+    assert bound.evidence_provenance.data_contract == "lake_receipted_snapshot/v1"
     assert bound.evidence_provenance.data_availability_hash == "b" * 64
 
 
