@@ -14,7 +14,9 @@ from app.research.golden_search.declarations import declaration_for
 from app.research.golden_search.models import GoldenSearchRefusal
 from app.research.golden_search.planning import (
     UNKNOWN_HISTORY_MONTHS,
+    FinalInterval,
     _sessions_needed,
+    default_final_interval,
     default_protocol,
     preflight_view,
     prepare_lock,
@@ -159,15 +161,28 @@ def test_the_final_test_is_the_last_whole_months_before_the_current_month() -> N
     assert et_date_at_ms(first_of_month.final_end_ms) == date(2026, 10, 1)
 
 
-def test_a_lake_that_stops_inside_the_final_months_ends_the_final_test_after_its_last_session() -> None:
+def test_a_lake_a_few_sessions_behind_ends_the_final_test_after_its_last_session() -> None:
     # 2026-09-25 is a Friday: the final test ends with it rather than run into the three sessions the lake lacks.
     assert _intervals(earliest_session=None, latest_session=date(2026, 9, 25))[2:] == (date(2026, 7, 1), date(2026, 9, 26))
-    # A lake reaching the month boundary, or stopping before the final months start, leaves the whole months in place;
-    # the second is the availability check's to name.
-    assert _intervals(earliest_session=None, latest_session=date(2026, 10, 2))[2:] == (date(2026, 7, 1), date(2026, 10, 1))
-    assert _intervals(earliest_session=None, latest_session=date(2026, 6, 30))[2:] == (date(2026, 7, 1), date(2026, 10, 1))
+    assert default_final_interval(OCTOBER_15, 3, date(2026, 9, 25)).sessions_cut == 3
     # The development interval and its folds do not move with the cut.
     assert _intervals(earliest_session=None, latest_session=date(2026, 9, 25))[:2] == _intervals(earliest_session=None)[:2]
+
+
+def test_a_lake_further_behind_keeps_the_whole_months_for_the_availability_check_to_refuse() -> None:
+    # 2026-09-22 leaves six sessions (23rd–30th) unread: a backfill to name, not a shorter final test.
+    assert default_final_interval(OCTOBER_15, 3, date(2026, 9, 22)) == FinalInterval(date(2026, 7, 1), date(2026, 10, 1), 0)
+    assert default_final_interval(OCTOBER_15, 3, date(2026, 7, 1)).end == date(2026, 10, 1)
+    # A lake stopping before the final months start, or reaching the boundary, keeps them too.
+    assert default_final_interval(OCTOBER_15, 3, date(2026, 6, 30)).end == date(2026, 10, 1)
+    assert default_final_interval(OCTOBER_15, 3, date(2026, 10, 2)) == FinalInterval(date(2026, 7, 1), date(2026, 10, 1), 0)
+
+
+def test_a_month_ending_on_a_weekend_or_holiday_is_whole_when_the_lake_holds_its_last_session() -> None:
+    # October 2026 ends on a Saturday; its last session is Friday the 30th.
+    assert default_final_interval(et_midnight_ms(date(2026, 11, 15)), 3, date(2026, 10, 30)) == FinalInterval(date(2026, 8, 1), date(2026, 11, 1), 0)
+    # 2027-05-31 is Memorial Day; May's last session is Friday the 28th.
+    assert default_final_interval(et_midnight_ms(date(2027, 6, 10)), 3, date(2027, 5, 28)) == FinalInterval(date(2027, 3, 1), date(2027, 6, 1), 0)
 
 
 def test_unknown_lake_history_proposes_a_two_year_development_interval() -> None:
@@ -224,6 +239,16 @@ def test_a_default_range_widens_to_hold_the_seed_and_the_incumbent() -> None:
     # Knobs whose start and benchmark already sit inside keep their declared range.
     assert ranges["gap"] == (0.0, 0.6) and ranges["hold_bars"] == (2.0, 12.0)
     assert review(protocol, _ema()).lockable
+
+
+def test_a_widened_range_stays_inside_the_domain_on_the_quantum() -> None:
+    # A qualification minted under an older declaration can sit off today's quantum or outside its domain.
+    registry = registry_incumbent(EMA, "SPY")
+    stale = IncumbentRef(source="qualification", qualification_id="gq-3", params={**registry.params, "gap": 2.5, "rsi_max": 90.4})
+    protocol = default_protocol(EMA, "SPY", stale, now_ms=OCTOBER_15, earliest_session=None)
+    ranges = {plan.name: (plan.low, plan.high) for plan in protocol.knobs}
+
+    assert ranges["gap"] == (0.0, 2.0) and ranges["rsi_max"] == (60.0, 90.0)
 
 
 def test_the_preflight_counts_each_knobs_settings_exactly() -> None:

@@ -5,7 +5,7 @@
  * name, so the plan footer can take the trader straight to the field.
  */
 
-import type { KnobNumberField, ProtocolDateField, ProtocolNumberField } from './golden-search-plan-draft';
+import { problemField, type KnobNumberField, type ProtocolDateField, type ProtocolNumberField } from './golden-search-plan-draft';
 import type { KnobPlan, ProtocolRefusal, StrategyCapability } from './golden-search.types';
 
 export interface PlanProblem {
@@ -60,7 +60,7 @@ export const FILL_MODE_INPUT_ID = 'gs-plan-fill-mode';
 export const PAIR_AUDITS_INPUT_ID = 'gs-plan-pair-audits';
 
 /** The input each refusal field the server names belongs to; knob fields are resolved per knob. */
-const REFUSAL_INPUTS: Readonly<Record<string, string>> = {
+export const REFUSAL_INPUTS: Readonly<Record<string, string>> = {
   'policy.min_trades': numberInputId('min_trades'),
   'policy.max_drawdown_ceiling': numberInputId('drawdown_percent'),
   exam_min_trades: numberInputId('exam_min_trades'),
@@ -104,29 +104,21 @@ export function withoutLabel(message: string, label: string): string {
   return message.startsWith(`${label}: `) ? message.slice(label.length + 2) : message;
 }
 
-function isKnobField(value: string | undefined): value is KnobNumberField {
-  return value !== undefined && Object.hasOwn(KNOB_FIELD_LABELS, value);
-}
-
-function isNumberField(value: string | undefined): value is ProtocolNumberField {
-  return value !== undefined && Object.hasOwn(NUMBER_FIELD_LABELS, value);
-}
-
-function isDateField(value: string | undefined): value is ProtocolDateField {
-  return value !== undefined && Object.hasOwn(DATE_FIELD_LABELS, value);
-}
-
-/** The values the form cannot read, in the order they were met, each named after its input (keys from `knobProblemKey` and its peers). */
+/** The values the form cannot read, in the order they were met, each named after its input. */
 export function unreadableProblems(problems: ReadonlyMap<string, string>, capability: StrategyCapability | null): PlanProblem[] {
   const labels = new Map((capability?.knobs ?? []).map((knob) => [knob.name, knob.label]));
   return [...problems].map(([key, message]) => {
-    const [kind, first, second] = key.split(':');
-    if (kind === 'knob' && first !== undefined && isKnobField(second)) {
-      return { key, text: `${labels.get(first) ?? first} ${KNOB_FIELD_LABELS[second]}: ${message}`, target: knobInputId(first, second) };
+    const named = problemField(key);
+    switch (named?.kind) {
+      case 'knob':
+        return { key, text: `${labels.get(named.name) ?? named.name} ${KNOB_FIELD_LABELS[named.field]}: ${message}`, target: knobInputId(named.name, named.field) };
+      case 'number':
+        return { key, text: `${NUMBER_FIELD_LABELS[named.field]}: ${message}`, target: numberInputId(named.field) };
+      case 'date':
+        return { key, text: `${DATE_FIELD_LABELS[named.field]}: ${message}`, target: dateInputId(named.field) };
+      default:
+        return { key, text: message, target: null };
     }
-    if (kind === 'number' && isNumberField(first)) return { key, text: `${NUMBER_FIELD_LABELS[first]}: ${message}`, target: numberInputId(first) };
-    if (kind === 'date' && isDateField(first)) return { key, text: `${DATE_FIELD_LABELS[first]}: ${message}`, target: dateInputId(first) };
-    return { key, text: message, target: null };
   });
 }
 

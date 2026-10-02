@@ -122,6 +122,7 @@ export function defaults(overrides: Partial<GoldenSearchDefaults> = {}): GoldenS
   return {
     ...protocol(),
     seed: { ...INCUMBENT_PARAMS },
+    final_sessions_cut: 0,
     incumbent_label: 'Registry validated settings',
     incumbent_sentence: 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars',
     exposure: exposure(),

@@ -778,7 +778,7 @@ async def test_defaults_offer_the_ready_default_qualification_as_the_incumbent(
     registry = registry_incumbent("ema_crossover_signal", symbol).params
     assert ready["seed"] == registry != point
     assert ready["exposure"]["state"] in ("not_opened", "previously_used", "history_unknown")
-    plan = {key: value for key, value in ready.items() if key not in ("final_months", "incumbent_label", "incumbent_sentence", "exposure")}
+    plan = {key: value for key, value in ready.items() if key not in ("final_months", "final_sessions_cut", "incumbent_label", "incumbent_sentence", "exposure")}
     leaked = await service.preflight({**plan, "seed": point}, roots=driver.roots)
     assert [item["code"] for item in leaked["refusals"]] == ["SEED_IS_QUALIFIED"]
 

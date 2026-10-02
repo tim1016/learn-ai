@@ -56,6 +56,7 @@ from app.research.golden_search.planning import (
     DEFAULT_FINAL_MONTHS,
     DEFAULT_TEST_MONTHS,
     DEFAULT_TRAINING_MONTHS,
+    default_final_interval,
     default_protocol,
     preflight_view,
     prepare_lock,
@@ -267,13 +268,15 @@ async def defaults(
         raise GoldenSearchRefusal(reason, code="STRATEGY_UNAVAILABLE", field="strategy_key")
     incumbent = await resolve_incumbent(strategy_key, symbol, running_digest=running_digest)
     coverage = await lake_coverage(symbol)
+    now = now_ms_utc() if now_ms is None else now_ms
+    latest = None if coverage is None else coverage.last
     protocol = default_protocol(
         strategy_key,
         symbol,
         incumbent.ref,
-        now_ms=now_ms_utc() if now_ms is None else now_ms,
+        now_ms=now,
         earliest_session=None if coverage is None else coverage.first,
-        latest_session=None if coverage is None else coverage.last,
+        latest_session=latest,
         final_months=final_months,
         training_months=training_months,
         test_months=test_months,
@@ -282,6 +285,7 @@ async def defaults(
     return {
         **protocol.as_dict(),
         "final_months": final_months,
+        "final_sessions_cut": default_final_interval(now, final_months, latest).sessions_cut,
         "incumbent_label": incumbent.label,
         "incumbent_sentence": params_sentence(declaration, incumbent.ref.params),
         "exposure": await exposure_view(symbol, protocol.final_start_ms, protocol.final_end_ms),

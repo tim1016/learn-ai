@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { fakePickerWorld, pickSymbol } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { GoldenSearchPlanFormComponent } from './golden-search-plan-form.component';
+import { REFUSAL_INPUTS, refusalTarget } from './golden-search-plan-problems';
 import { GoldenSearchService, type CommandOutcome } from './golden-search.service';
 import { etMidnightMs } from '../../shared/date/et-midnight';
 import type { CreateStudyRequest, DefaultsMonths, GoldenSearchDefaults, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyCommandRequest, StudyDetail } from './golden-search.types';
@@ -247,13 +248,52 @@ describe('GoldenSearchPlanFormComponent', () => {
     const service = fakeService();
     const { view } = await renderForm(service);
     await pickSpy(service, view);
-    const cells = (name: string): string[] => Array.from(screen.getByRole('rowheader', { name: new RegExp(name) }).closest('tr')?.querySelectorAll('td') ?? []).map((cell) => cell.textContent?.trim() ?? '');
+    const table = screen.getByRole('table', { name: /knobs, in search order/i });
+    const columns = Array.from(table.querySelectorAll('thead th')).map((header) => header.textContent?.trim());
+    const cell = (knob: string, column: string): string => {
+      const row = screen.getByRole('rowheader', { name: new RegExp(knob) }).closest('tr');
+      return row?.children[columns.indexOf(column)]?.textContent?.trim() ?? '';
+    };
 
-    // Order, Vary, Golden, Range, Step, Values.
-    expect(cells('Crossover gap price')[2]).toBe('0.2');
-    expect(cells('Crossover gap price')[5]).toBe('13');
-    expect(cells('Slow EMA length')[2]).toBe('10');
-    expect(cells('Slow EMA length')[5]).toBe('23');
+    expect(cell('Crossover gap price', 'Golden')).toBe('0.2');
+    expect(cell('Crossover gap price', 'Values')).toBe('13');
+    expect(cell('Slow EMA length', 'Golden')).toBe('10');
+    expect(cell('Slow EMA length', 'Values')).toBe('23');
+  });
+
+  it('every field the server can refuse links to an input the form renders', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    const knobs = defaults().knobs;
+    const fields = [...Object.keys(REFUSAL_INPUTS), ...knobs.flatMap((knob) => [`knobs.${knob.name}`, `seed.${knob.name}`, ...(knob.mode === 'search' ? [`knobs.${knob.name}.step`] : [])])];
+
+    const missing = fields.filter((field) => {
+      const target = refusalTarget(field, knobs);
+      return target === null || view.container.querySelector(`[id="${target}"]`) === null;
+    });
+
+    expect(missing).toEqual([]);
+  });
+
+  it('says when the final test ends early because the lake has not reached its last sessions', async () => {
+    const service = fakeService();
+    service.defaults.mockResolvedValueOnce(defaults({ final_sessions_cut: 3, final_end_ms: etMidnightMs('2026-03-28') }));
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+
+    expect(screen.getByRole('note').textContent).toMatch(/3 scheduled sessions short of 3 whole months/);
+  });
+
+  it('a qualified benchmark is named as the benchmark, with the search starting from the registry settings', async () => {
+    const service = fakeService();
+    service.defaults.mockResolvedValueOnce(defaults({ incumbent: { source: 'qualification', qualification_id: 'q-1', params: { ...INCUMBENT_PARAMS, hold_bars: 6 } }, incumbent_label: 'Golden configuration q-1' }));
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+
+    expect(screen.getByText(/Benchmark · Golden configuration q-1/)).not.toBeNull();
+    expect(screen.getByText(/Searches start from the registry settings/)).not.toBeNull();
+    expect(screen.getByRole('rowheader', { name: /Hold time/ }).closest('tr')?.textContent).toContain('starts at 5');
   });
 
   it("shows a knob's refusal on its row, and the footer's link takes the trader to the field", async () => {
@@ -386,7 +426,7 @@ describe('GoldenSearchPlanFormComponent', () => {
     await pickSpy(service, view);
 
     expect((screen.getByLabelText('Final test (months)') as HTMLInputElement).value).toBe('6');
-    const describing = (sent: object | undefined): string[] => Object.keys(sent ?? {}).filter((key) => ['final_months', 'incumbent_label', 'exposure'].includes(key));
+    const describing = (sent: object | undefined): string[] => Object.keys(sent ?? {}).filter((key) => ['final_months', 'final_sessions_cut', 'incumbent_label', 'incumbent_sentence', 'exposure'].includes(key));
     expect(describing(service.preflight.mock.lastCall?.[0])).toEqual([]);
 
     fireEvent.input(screen.getByLabelText('Test window (months)'), { target: { value: '3' } });

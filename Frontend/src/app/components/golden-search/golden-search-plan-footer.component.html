@@ -1,23 +1,19 @@
 <div class="spacer" [style.height.px]="reserved()" aria-hidden="true"></div>
-<footer #panel class="footer" aria-labelledby="gs-plan-check-title">
+<section #panel class="footer" aria-labelledby="gs-plan-check-title">
   <h3 id="gs-plan-check-title" class="sr-only">Plan check</h3>
   @if (unreadable().length > 0) {
-    <div role="alert">
-      <ul class="problems" aria-label="Values to fix">
-        @for (problem of unreadable(); track problem.key) {
-          <li>@if (problem.target; as target) { <button type="button" class="problem-link" (click)="jump.emit(target)">{{ problem.text }}</button> } @else { {{ problem.text }} }</li>
-        }
-      </ul>
-    </div>
+    <ul class="problems" aria-label="Values to fix">
+      @for (problem of unreadable(); track problem.key) {
+        <li>@if (problem.target; as target) { <button type="button" class="problem-link" (click)="jump.emit(target)">{{ problem.text }}</button> } @else { {{ problem.text }} }</li>
+      }
+    </ul>
   }
-  @if (!checking() && refusals().length > 0) {
-    <div role="alert">
-      <ul class="problems" aria-label="Why this plan cannot be locked">
-        @for (problem of refusals(); track problem.key) {
-          <li>@if (problem.target; as target) { <button type="button" class="problem-link" (click)="jump.emit(target)">{{ problem.text }}</button> } @else { {{ problem.text }} }</li>
-        }
-      </ul>
-    </div>
+  @if (refusals().length > 0) {
+    <ul class="problems" aria-label="Why this plan cannot be locked">
+      @for (problem of refusals(); track problem.key) {
+        <li>@if (problem.target; as target) { <button type="button" class="problem-link" (click)="jump.emit(target)">{{ problem.text }}</button> } @else { {{ problem.text }} }</li>
+      }
+    </ul>
   }
   @if (lockMessage(); as message) { <p class="problem" role="alert">{{ message }}</p> }
 
@@ -82,9 +78,9 @@
         <span>The plan is checked as you edit it.</span>
       }
     </p>
-    <button type="button" class="ghost" [disabled]="preflight() === null || checking()" [attr.aria-expanded]="detailsOpen()" aria-controls="gs-plan-details" (click)="toggleDetails()">{{ detailsOpen() ? 'Hide details' : 'Show details' }}</button>
+    <button type="button" class="ghost" [disabled]="preflight() === null" [attr.aria-expanded]="detailsOpen()" [attr.aria-controls]="detailsOpen() ? 'gs-plan-details' : null" (click)="toggleDetails()">{{ detailsOpen() ? 'Hide details' : 'Show details' }}</button>
     <button pButton type="button" [disabled]="!canLock()" (click)="lock.emit()">
       <i class="pi pi-lock" aria-hidden="true"></i><span>{{ revising() ? 'Lock as a new study' : 'Lock plan' }}</span>
     </button>
   </div>
-</footer>
+</section>

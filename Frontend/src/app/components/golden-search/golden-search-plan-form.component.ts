@@ -6,7 +6,7 @@ import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
 import type { GridSearchRefusal } from '../grid-search/grid-search.types';
 import { GoldenSearchCostControlsComponent } from './golden-search-cost-controls.component';
-import { incumbentLabel } from './golden-search-display';
+import { incumbentLabel, pointDifferences } from './golden-search-display';
 import { GoldenSearchKnobTableComponent } from './golden-search-knob-table.component';
 import { GoldenSearchMethodChoiceComponent, METHOD_HINTS } from './golden-search-method-choice.component';
 import { applyPlanEdit, draftFromDefaults, draftFromProtocol, draftMonths, MONTH_FIELDS, wireProtocol, withServerDates, type PlanDraft, type PlanEdit } from './golden-search-plan-draft';
@@ -91,16 +91,23 @@ export class GoldenSearchPlanFormComponent {
     if (this.layingDates()) return 'Laying out the dates for these months…';
     return this.datesError();
   });
-  protected readonly canLock = computed(() => {
+  /** The server accepted the plan the form shows. Every edit drops the last answer, so a stale one never counts. */
+  protected readonly ready = computed(() => {
     const plan = this.preflight();
-    return this.draft() !== null && plan !== null && plan.refusals.length === 0 && this.blocked() === null && !this.checking() && !this.locking();
+    return this.draft() !== null && plan !== null && plan.refusals.length === 0 && this.blocked() === null && !this.checking();
   });
+  protected readonly canLock = computed(() => this.ready() && !this.locking());
   protected readonly methodHint = computed(() => METHOD_HINTS[this.draft()?.protocol.method ?? 'zoom']);
-  /** The server's refusals of the plan as checked; none while a newer edit is being checked. */
-  protected readonly refusals = computed(() => (this.checking() ? [] : (this.preflight()?.refusals ?? [])));
+  /** The server's refusals of the plan the form shows. */
+  protected readonly refusals = computed(() => this.preflight()?.refusals ?? []);
   protected readonly knobValues = computed(() => {
-    const plan = this.checking() ? null : this.preflight();
+    const plan = this.preflight();
     return plan === null ? null : new Map(plan.knob_values.map((item) => [item.name, item.values]));
+  });
+  /** The knobs on which the search's start differs from the benchmark (a qualified incumbent's searches start from the registry point). */
+  protected readonly startDiffers = computed(() => {
+    const protocol = this.draft()?.protocol;
+    return protocol?.seed != null && pointDifferences(protocol.seed, protocol.incumbent.params, this.capability()).length > 0;
   });
   protected readonly unreadable = computed(() => unreadableProblems(this.draft()?.problems ?? new Map(), this.capability()));
   protected readonly refusalList = computed(() => refusalProblems(this.refusals(), this.draft()?.protocol.knobs ?? []));

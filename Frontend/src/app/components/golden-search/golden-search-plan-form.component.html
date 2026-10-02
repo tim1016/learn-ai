@@ -23,9 +23,12 @@
       }
       @if (draft() !== null && incumbentLabel(); as label) {
         <div class="field start">
-          <span>Start and benchmark · {{ label }}</span>
+          <span>{{ startDiffers() ? 'Benchmark' : 'Start and benchmark' }} · {{ label }}</span>
           @if (incumbentSentence(); as sentence) { <strong class="start__sentence">{{ sentence }}</strong> }
-          <small>Frozen when you lock the plan.</small>
+          <small>
+            @if (startDiffers()) { Searches start from the registry settings, so they never lean on data this benchmark was chosen on; the Golden column shows where each knob starts. }
+            Frozen when you lock the plan.
+          </small>
         </div>
       }
     </div>
@@ -43,7 +46,7 @@
         </div>
         <div class="head-actions">
           <app-golden-search-method-choice [method]="d.protocol.method" (methodChange)="onMethod($event)" />
-          <button type="button" class="link" (click)="resetKnobs()">Reset to defaults</button>
+          <button type="button" class="link" (click)="resetKnobs()">{{ revising() ? 'Reset to the frozen plan' : 'Reset to defaults' }}</button>
         </div>
       </div>
       <app-golden-search-knob-table
@@ -53,13 +56,13 @@
         [problems]="d.problems"
         [refusals]="refusals()"
         [values]="knobValues()"
-        [start]="d.protocol.seed ?? d.protocol.incumbent.params"
+        [start]="d.protocol.seed ?? null"
         [golden]="d.protocol.incumbent.params"
         (edit)="onEdit($event)"
       />
     </section>
     <app-golden-search-protocol-controls [protocol]="d.protocol" [problems]="d.problems" (edit)="onEdit($event)" />
-    <app-golden-search-time-windows [protocol]="d.protocol" [finalMonths]="d.finalMonths" [preflight]="checking() ? null : preflight()" [problems]="d.problems" (edit)="onEdit($event)" />
+    <app-golden-search-time-windows [protocol]="d.protocol" [finalMonths]="d.finalMonths" [finalSessionsCut]="d.finalSessionsCut" [preflight]="preflight()" [problems]="d.problems" (edit)="onEdit($event)" />
     <app-golden-search-refinement-controls [protocol]="d.protocol" [capability]="capability()" [problems]="d.problems" (edit)="onEdit($event)" />
     <app-golden-search-cost-controls [protocol]="d.protocol" [problems]="d.problems" (edit)="onEdit($event)" />
     <app-golden-search-plan-footer
@@ -70,6 +73,7 @@
       [unreadable]="unreadable()"
       [refusals]="refusalList()"
       [lockMessage]="lockMessage()"
+      [ready]="ready()"
       [canLock]="canLock()"
       [revising]="revising()"
       (lock)="lock()"

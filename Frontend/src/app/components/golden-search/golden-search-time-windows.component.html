@@ -11,6 +11,11 @@
     <label class="field"><span>Test window (months)</span><input #testing pInputText type="number" min="1" step="1" [id]="numberId('test_months')" [value]="p.test_months" [attr.aria-invalid]="numberInvalid('test_months')" (input)="onNumber('test_months', testing.value)" /></label>
     <label class="field"><span>Final test (months)</span><input #finalMonthsInput pInputText type="number" min="1" step="1" placeholder="as dated" [id]="numberId('final_months')" [value]="finalMonths() ?? ''" [attr.aria-invalid]="numberInvalid('final_months')" (input)="onNumber('final_months', finalMonthsInput.value)" /></label>
   </div>
+  @if (finalSessionsCut(); as cut) {
+    <p class="cut" role="note">
+      The final test ends with the lake's last session on <app-timestamp-display [value]="p.final_end_ms - 1" mode="date-et" /> — {{ cut }} scheduled {{ cut === 1 ? 'session' : 'sessions' }} short of {{ finalMonths() }} whole months. Backfill the instrument and change a month count to lay out the whole months.
+    </p>
+  }
 
   @if (timeline(); as line) {
     <div class="timeline" role="img" aria-label="Development, its test-over-time folds, then the sealed final test">

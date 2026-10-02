@@ -118,7 +118,7 @@ describe('applyPlanEdit', () => {
 
   it('takes only the dates and fold months from the server and keeps every other edit', () => {
     const edited = applyPlanEdit({ ...draft(), finalMonths: 4 }, { kind: 'knob-number', name: 'fast_period', field: 'low', raw: '4' }, emaCapability());
-    const laidOut = protocol({ development_start_ms: etMidnightMs('2023-07-01'), development_end_ms: etMidnightMs('2025-12-01'), final_start_ms: etMidnightMs('2025-12-01'), final_end_ms: etMidnightMs('2026-04-01'), training_months: 7, test_months: 2, budget_cap: 1 });
+    const laidOut = defaults({ development_start_ms: etMidnightMs('2023-07-01'), development_end_ms: etMidnightMs('2025-12-01'), final_start_ms: etMidnightMs('2025-12-01'), final_end_ms: etMidnightMs('2026-03-28'), training_months: 7, test_months: 2, budget_cap: 1, final_sessions_cut: 2 });
 
     const merged = withServerDates(edited, laidOut);
 
@@ -128,6 +128,30 @@ describe('applyPlanEdit', () => {
     expect(merged.protocol.budget_cap).toBe(5000);
     expect(merged.protocol.training_months).toBe(6);
     expect(merged.finalMonths).toBe(4);
+    expect(merged.finalSessionsCut).toBe(2);
+    expect(Object.keys(merged.protocol)).not.toContain('final_sessions_cut');
+  });
+
+  it("a date typed by hand drops the server's cut along with the month count", () => {
+    const laidOut: PlanDraft = { ...draft(), finalMonths: 3, finalSessionsCut: 3 };
+    const dated = applyPlanEdit(laidOut, { kind: 'date', field: 'final_end', raw: '2026-03-31' }, emaCapability());
+
+    expect(dated.finalSessionsCut).toBeUndefined();
+  });
+
+  it('forgets an unreadable value once its input is no longer shown, so no problem points at a hidden field', () => {
+    const blankStep = applyPlanEdit(draft(), { kind: 'knob-number', name: 'fast_period', field: 'step', raw: '' }, emaCapability());
+    const single = applyPlanEdit(applyPlanEdit(blankStep, { kind: 'knob-number', name: 'fast_period', field: 'low', raw: '5' }, emaCapability()), { kind: 'knob-number', name: 'fast_period', field: 'high', raw: '5' }, emaCapability());
+    expect(single.problems.size).toBe(0);
+
+    const blankLow = applyPlanEdit(draft(), { kind: 'knob-number', name: 'slow_period', field: 'low', raw: '' }, emaCapability());
+    const held = applyPlanEdit(blankLow, { kind: 'knob-mode', name: 'slow_period', mode: 'fixed' }, emaCapability());
+    expect(held.problems.size).toBe(0);
+
+    const blankHeld = applyPlanEdit(held, { kind: 'knob-number', name: 'slow_period', field: 'fixed_value', raw: '' }, emaCapability());
+    expect([...applyPlanEdit(blankHeld, { kind: 'knob-mode', name: 'slow_period', mode: 'search' }, emaCapability()).problems.keys()]).toEqual([]);
+    // A shown input keeps its problem.
+    expect(blankHeld.problems.has(knobProblemKey('slow_period', 'fixed_value'))).toBe(true);
   });
 });
 
@@ -183,7 +207,8 @@ describe('draftFromDefaults', () => {
     expect(draftMonths(fresh)).toEqual({ final_months: 6, training_months: 6, test_months: 2 });
     expect(incumbentLabel).toBe('Registry validated settings');
     expect(incumbentSentence).toBe('Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars');
-    expect(Object.keys(fresh.protocol).filter((key) => ['final_months', 'incumbent_label', 'incumbent_sentence', 'exposure'].includes(key))).toEqual([]);
+    expect(fresh.finalSessionsCut).toBe(0);
+    expect(Object.keys(fresh.protocol).filter((key) => ['final_months', 'final_sessions_cut', 'incumbent_label', 'incumbent_sentence', 'exposure'].includes(key))).toEqual([]);
     expect(fresh.protocol).toEqual(protocol());
   });
 });

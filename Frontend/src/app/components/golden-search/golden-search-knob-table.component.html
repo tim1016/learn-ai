@@ -94,7 +94,7 @@
           </td>
           @if (!readonly()) {
             <td class="num muted">
-              @if (row.values === undefined) { <span aria-label="Not counted yet">…</span> } @else { {{ row.values ?? '—' }} }
+              @if (row.values === undefined) { <span aria-hidden="true">…</span><span class="sr-only">Not counted yet</span> } @else { {{ row.values ?? '—' }} }
             </td>
           }
         </tr>

@@ -38,6 +38,8 @@ export class GoldenSearchTimeWindowsComponent {
   readonly protocol = input.required<ProtocolRequest>();
   /** The final test's length in months; undefined while the dates do not follow a month count. */
   readonly finalMonths = input<number | undefined>(undefined);
+  /** Trailing sessions the server left out of the final test because the lake has not reached them; undefined with the month count. */
+  readonly finalSessionsCut = input<number | undefined>(undefined);
   /** The server's answer to the current plan: its folds, exposure and run-up; null until checked. */
   readonly preflight = input<GoldenSearchPreflight | null>(null);
   readonly problems = input<ReadonlyMap<string, string>>(new Map());

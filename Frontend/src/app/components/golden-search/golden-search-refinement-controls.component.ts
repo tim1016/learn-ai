@@ -2,7 +2,7 @@ import { DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 import { InputText } from 'primeng/inputtext';
 
-import { isVaried, numberProblemKey, type PlanEdit, type ProtocolFlag, type ProtocolNumberField } from './golden-search-plan-draft';
+import { isVaried, numberProblemKey, wireProtocol, type PlanEdit, type ProtocolFlag, type ProtocolNumberField } from './golden-search-plan-draft';
 import { numberInputId, PAIR_AUDITS_INPUT_ID } from './golden-search-plan-problems';
 import type { KnobPair, ProtocolRequest, StrategyCapability } from './golden-search.types';
 
@@ -54,8 +54,8 @@ export class GoldenSearchRefinementControlsComponent {
     });
   });
 
-  /** The folded card's one-line summary of what it holds. */
-  protected readonly pairsSent = computed(() => this.pairOptions().filter((option) => option.included && option.heldBy === null).length);
+  /** The pair audits the plan sends, for the folded card's one-line summary. */
+  protected readonly pairsSent = computed(() => wireProtocol(this.protocol()).pair_audits.length);
 
   protected numberInvalid(field: ProtocolNumberField): boolean {
     return this.problems().has(numberProblemKey(field));

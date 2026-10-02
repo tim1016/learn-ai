@@ -36,6 +36,8 @@ export class GoldenSearchPlanFooterComponent {
   readonly refusals = input<readonly PlanProblem[]>([]);
   /** Why the last Lock did not lock. */
   readonly lockMessage = input<string | null>(null);
+  /** The server accepted the plan the form shows. */
+  readonly ready = input(false);
   readonly canLock = input(false);
   readonly revising = input(false);
   readonly lock = output();
@@ -56,7 +58,7 @@ export class GoldenSearchPlanFooterComponent {
       destroyRef.onDestroy(() => observer.disconnect());
     });
   }
-  protected readonly estimate = computed(() => (this.checking() ? null : (this.preflight()?.estimate ?? null)));
+  protected readonly estimate = computed(() => this.preflight()?.estimate ?? null);
   protected readonly duration = computed(() => {
     const estimate = this.estimate();
     return estimate === null ? null : durationRangeText(estimate.serial_seconds_low, estimate.serial_seconds_high);
@@ -65,7 +67,6 @@ export class GoldenSearchPlanFooterComponent {
     const estimate = this.estimate();
     return estimate !== null && estimate.total_max > estimate.budget_cap;
   });
-  protected readonly ready = computed(() => !this.checking() && this.error() === null && this.blocked() === null && this.preflight() !== null && this.refusals().length === 0);
 
   protected toggleDetails(): void {
     this.detailsOpen.update((open) => !open);

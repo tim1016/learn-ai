@@ -329,6 +329,9 @@ class GoldenSearchDefaults(GoldenSearchProtocol):
     """A complete starting plan with server-computed intervals, the incumbent's name and the final interval's exposure."""
 
     final_months: int = Field(description="The final interval's length in whole months, as laid out.")
+    final_sessions_cut: int = Field(
+        description="Trailing scheduled sessions the final interval leaves out because the lake has not reached them yet; 0 for whole months."
+    )
     incumbent_label: str
     incumbent_sentence: str = Field(description="The incumbent's settings at a glance, e.g. 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars'.")
     exposure: GoldenSearchExposure

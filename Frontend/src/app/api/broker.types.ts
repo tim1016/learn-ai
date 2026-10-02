@@ -12999,6 +12999,11 @@ export interface components {
              * @description The final interval's length in whole months, as laid out.
              */
             final_months: number;
+            /**
+             * Final Sessions Cut
+             * @description Trailing scheduled sessions the final interval leaves out because the lake has not reached them yet; 0 for whole months.
+             */
+            final_sessions_cut: number;
             /** Final Start Ms */
             final_start_ms: number;
             incumbent: components["schemas"]["GoldenSearchIncumbent"];

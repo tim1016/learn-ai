@@ -18018,6 +18018,11 @@
             "title": "Final Months",
             "type": "integer"
           },
+          "final_sessions_cut": {
+            "description": "Trailing scheduled sessions the final interval leaves out because the lake has not reached them yet; 0 for whole months.",
+            "title": "Final Sessions Cut",
+            "type": "integer"
+          },
           "final_start_ms": {
             "maximum": 253402300799999.0,
             "minimum": 0.0,
@@ -18133,6 +18138,7 @@
           "exam_min_trades",
           "budget_cap",
           "final_months",
+          "final_sessions_cut",
           "incumbent_label",
           "incumbent_sentence",
           "exposure"
