@@ -7,6 +7,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { fakeBotPage, fakeBotPanelView, fakePanelAction, fakeSqliteStopAction } from '../../../../testing/bot-panel-fixtures';
+import type { ManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
 import type { BotPanelView, ToolbarActionView } from '../lib/broker-v2-panel.types';
 import { BotToolbarComponent } from './bot-toolbar.component';
 
@@ -45,11 +46,11 @@ function runningPanel(): BotPanelView {
   };
 }
 
-async function renderToolbar(panel: BotPanelView) {
+async function renderToolbar(panel: BotPanelView, manualOrder: ManualOrderTicketNavigation | null = null) {
   const actionRequested = vi.fn();
   const buildProof = vi.fn();
   const view = await render(BotToolbarComponent, {
-    inputs: { panel, deployAgain: DEPLOY_AGAIN, manualOrder: null },
+    inputs: { panel, deployAgain: DEPLOY_AGAIN, manualOrder },
     on: { actionRequested, buildProof },
     providers: [provideRouter([])],
   });
@@ -120,6 +121,31 @@ describe('BotToolbarComponent (#2794)', () => {
 
     expect(screen.getByRole('button', { name: 'Check against Alpaca' }).textContent?.trim()).toBe('Check against Alpaca');
     expect(localStorage.getItem('bot-page.toolbar.labels.v1')).toBe('on');
+  });
+
+  it('keeps a blocked Manual order where it is, saying why, and an entry it does not know inert', async () => {
+    const user = userEvent.setup();
+    const panel = runningPanel();
+    const { actionRequested } = await renderToolbar({
+      ...panel,
+      bot_page: {
+        ...fakeBotPage(panel),
+        toolbar: [
+          toolbarEntry({
+            action_id: 'manual_order', label: 'Manual order', availability: 'blocked',
+            reason: 'A Dry Run trades no account money.',
+          }),
+          toolbarEntry({ action_id: 'archive', label: 'Clear' }),
+        ],
+      },
+    }, { commands: ['/brokers', 'alpaca', 'clerks', 'c', 'accounts', 'a'], queryParams: {} });
+
+    expect(screen.queryByRole('link', { name: 'Manual order' })).toBeNull();
+    const manual = screen.getByRole('button', { name: 'Manual order' });
+    expect(manual.getAttribute('aria-disabled')).toBe('true');
+    expect(manual.getAttribute('title')).toBe('A Dry Run trades no account money.');
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(actionRequested).not.toHaveBeenCalled();
   });
 
   it('offers a finished bot’s Deploy again as its filled, named primary link', async () => {
