@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -33,6 +32,7 @@ from app.research.golden_search.actions import (
     LIVE_PRESENTATIONS,
     STAGE_START_STATES,
     action_refusals,
+    authorize,
     presented_status,
     unclaimed,
 )
@@ -45,11 +45,9 @@ from app.research.golden_search.models import (
     COMMANDS,
     RETAIN_KINDS,
     RUNNING_STATES,
-    STAGE_STATES,
     STAGE_STEPS,
     CommandName,
     GoldenSearchRefusal,
-    StageName,
     StudyRow,
     require_mapping,
 )
@@ -338,6 +336,31 @@ async def lock_study(
     return row
 
 
+#: The run command a lock-and-run records on the study it locked. One study per lock key, so one constant key
+#: makes a retried Run research resolve to the same run.
+RUN_AT_LOCK_KEY = "run-research-at-lock"
+
+
+async def lock_and_run(
+    request: Mapping[str, Any],
+    *,
+    idempotency_key: str,
+    roots: Sequence[Path] | None = None,
+    identity: CodeIdentity | None = None,
+    liveness: Liveness = job_is_live,
+) -> CommandOutcome:
+    """Run research (#2811): lock the plan and authorize Search with the intent to run on to Compare.
+
+    Both halves are idempotent: a retry after a lost response finds the study
+    its key locked and the run already recorded, and re-offers the dispatch
+    while no worker has claimed it.
+    """
+    row = await lock_study(request, idempotency_key=idempotency_key, roots=roots, identity=identity)
+    return await run_command(
+        row.id, command="run_research", expected_revision=0, idempotency_key=RUN_AT_LOCK_KEY, roots=roots, liveness=liveness, identity=identity
+    )
+
+
 def _lock_conflict(row: StudyRow | None) -> GoldenSearchRefusal:
     return GoldenSearchRefusal("This idempotency key already locked a different plan.", code="IDEMPOTENCY_CONFLICT", kind="conflict", study=row)
 
@@ -517,23 +540,6 @@ def _dispatch(study_id: str, token: str) -> dict[str, Any]:
     return {"job_type": JOB_TYPE, "payload": {"study_id": study_id, "stage_token": token}}
 
 
-def _authorize(stage: StageName) -> tuple[dict[str, Any], str]:
-    token = secrets.token_hex(16)
-    return (
-        {
-            "state": STAGE_STATES[stage],
-            "status": "queued",
-            "pending_stage": stage,
-            "stage_token": token,
-            "job_id": None,
-            "failure_reason": None,
-            "incomplete": False,
-            "finished_at_ms": None,
-        },
-        token,
-    )
-
-
 async def _replayed(study_id: str, idempotency_key: str, digest: str) -> CommandOutcome | None:
     async with connection() as conn:
         record = await repo.get_command(conn, study_id, idempotency_key)
@@ -589,7 +595,7 @@ async def run_command(
     seen = await get_row(study_id)
     if seen.revision != expected_revision:
         raise _stale(seen)
-    presentation = await asyncio.to_thread(_present, seen, liveness=liveness, identity=identity, verify_data=command == "finish")
+    presentation = await asyncio.to_thread(_present, seen, liveness=liveness, identity=identity, verify_data=command in ("finish", "run_research"))
     reason = presentation.refusals[command]
     if reason is not None:
         raise GoldenSearchRefusal(reason, code="COMMAND_NOT_PERMITTED", kind="conflict", study=seen)
@@ -632,8 +638,12 @@ async def run_command(
 
 
 async def _apply(conn: Any, row: StudyRow, command: str, body: Mapping[str, Any], *, prepared: Any) -> CommandOutcome:
-    if command == "continue":
-        changes, token = _authorize("search" if row.state == "locked" else "validation")
+    if command in ("continue", "run_research"):
+        # Run research resumes a stopped stage or starts the next; either way the study then runs on to Compare.
+        stage = row.pending_stage if row.state in RUNNING_STATES else ("search" if row.state == "locked" else "validation")
+        assert stage is not None  # a stopped stage keeps the stage it was authorized for
+        changes, token = authorize(stage)
+        changes["run_to_compare"] = command == "run_research"
         return CommandOutcome(study=await repo.update_study(conn, row.id, changes=changes), dispatch=_dispatch(row.id, token))
     if command == "select_candidate":
         return await _select_candidate(conn, row, body)
@@ -644,17 +654,18 @@ async def _apply(conn: Any, row: StudyRow, command: str, body: Mapping[str, Any]
     if command in ("retain", "close"):
         return await _decide(conn, row, command, body)
     if command == "cancel":
+        # A cancel also ends Run research: resuming it is a new, explicit command.
         if unclaimed(row):
-            changes: dict[str, Any] = {"status": "cancelled", "stage_token": None, "incomplete": True}
+            changes: dict[str, Any] = {"status": "cancelled", "stage_token": None, "incomplete": True, "run_to_compare": False}
         else:
             # Delivered before the command is recorded: an unreachable job store records nothing.
             await _request_cancel(str(row.job_id))
-            changes = {}
+            changes = {"run_to_compare": False}
         return CommandOutcome(study=await repo.update_study(conn, row.id, changes=changes), dispatch=None)
     if command == "finish":
         stage = row.pending_stage
         assert stage is not None  # a stopped stage keeps the stage it was authorized for
-        changes, token = _authorize(stage)
+        changes, token = authorize(stage)
         return CommandOutcome(study=await repo.update_study(conn, row.id, changes=changes), dispatch=_dispatch(row.id, token))
     created, _ = await repo.insert_study(conn, prepared)
     return CommandOutcome(study=created, dispatch=None)
@@ -727,7 +738,7 @@ async def _open_exam(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> Comma
         },
     )
     await repo.insert_trial(conn, row.id, stage="exam", kind="exam_open", payload={"candidate_key": row.candidate_key, "state": state, "claim": claim})
-    changes, token = _authorize("exam")
+    changes, token = authorize("exam")
     exam = {
         "candidate_key": row.candidate_key,
         "candidate_point": dict(chosen["point"]),
@@ -788,7 +799,7 @@ async def _approve(conn: Any, row: StudyRow, body: Mapping[str, Any]) -> Command
         "checkpoint": previous.get("checkpoint") if previous.get("kind") == "approve" else None,
     }
     await repo.insert_trial(conn, row.id, stage="qualification", kind="approval", payload={"event": "intent", "weakness": weakness, "override": bool(weakness)})
-    changes, token = _authorize("qualification")
+    changes, token = authorize("qualification")
     updated = await repo.update_study(conn, row.id, changes=changes, decision=decision)
     return CommandOutcome(study=updated, dispatch=_dispatch(row.id, token))
 

@@ -5018,6 +5018,9 @@ export interface paths {
         /**
          * Lock Study
          * @description Lock a reviewed plan into a new study; the same key and plan return the study it already locked.
+         *
+         *     With ``run_research`` the study also starts Search and runs on to Compare;
+         *     the answer carries the dispatch the client starts through the jobs boundary.
          */
         post: operations["lock_study_api_research_golden_search_studies_post"];
         delete?: never;
@@ -13414,7 +13417,7 @@ export interface components {
              * Command
              * @enum {string}
              */
-            command: "continue" | "select_candidate" | "open_exam" | "approve" | "retain" | "close" | "cancel" | "finish" | "revise";
+            command: "continue" | "run_research" | "select_candidate" | "open_exam" | "approve" | "retain" | "close" | "cancel" | "finish" | "revise";
             /** Expectedrevision */
             expectedRevision: number;
             /** Idempotencykey */
@@ -13453,6 +13456,12 @@ export interface components {
             /** Idempotencykey */
             idempotencyKey: string;
             protocol: components["schemas"]["GoldenSearchProtocolRequest"];
+            /**
+             * Runresearch
+             * @description Also start Search and run on through Test over time, pausing at Compare; the answer carries the dispatch.
+             * @default false
+             */
+            runResearch?: boolean;
         };
         /** GoldenSearchCumulativeReturnPoint */
         GoldenSearchCumulativeReturnPoint: {
@@ -14604,7 +14613,7 @@ export interface components {
             /** Parent Study Id */
             parent_study_id: string | null;
             /** Permitted Actions */
-            permitted_actions: ("continue" | "select_candidate" | "open_exam" | "approve" | "retain" | "close" | "cancel" | "finish" | "revise")[];
+            permitted_actions: ("continue" | "run_research" | "select_candidate" | "open_exam" | "approve" | "retain" | "close" | "cancel" | "finish" | "revise")[];
             /**
              * Presented Status
              * @enum {string}
@@ -14620,6 +14629,11 @@ export interface components {
             results: components["schemas"]["GoldenSearchResults"];
             /** Revision */
             revision: number;
+            /**
+             * Run To Compare
+             * @description Run research is on: Search hands on to Test over time and the study pauses at Compare.
+             */
+            run_to_compare: boolean;
             scope: components["schemas"]["GoldenSearchScope"];
             /**
              * State
@@ -14675,6 +14689,11 @@ export interface components {
             qualification_id: string | null;
             /** Revision */
             revision: number;
+            /**
+             * Run To Compare
+             * @description Run research is on: Search hands on to Test over time and the study pauses at Compare.
+             */
+            run_to_compare: boolean;
             /**
              * State
              * @enum {string}

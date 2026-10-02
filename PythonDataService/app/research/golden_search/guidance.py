@@ -61,7 +61,23 @@ _STOPPED_STAGE = (
     "This stage stopped before it finished",
     "Finish resumes it: every evaluation already recorded is reused, and no budget is spent twice.",
 )
-_QUEUED_STAGE = ("Waiting for a worker", "The stage is authorized and will start when a worker picks it up.")
+_QUEUED_STAGE = (
+    "Waiting for a worker",
+    "The stage is authorized and will start when a worker picks it up. If it does not start, cancel it and run it again.",
+)
+# Run research (#2811): the study runs Search, then Test over time, on the server and pauses at Compare.
+_RESEARCH_RUNNING = {
+    "search_running": ("Running your research: searching", "Search, then Test over time, run on the server; this page need not stay open. It stops at Compare, where you choose."),
+    "validation_running": ("Running your research: testing over time", "The search is done. Each fold now repeats it on its own past; the study stops at Compare, where you choose."),
+}
+_RESEARCH_INTERRUPTED = (
+    "Your research was interrupted",
+    "Resume research reuses every recorded evaluation and still stops at Compare.",
+)
+_RESEARCH_PAUSED = (
+    "Research paused after the search",
+    "The search did not finish within its budget, so Test over time did not start on its own. Review the search, then continue or revise the plan.",
+)
 
 
 def study_guidance(
@@ -73,8 +89,20 @@ def study_guidance(
     exposure_state: str | None,
     exam_locked: bool,
     failure_reason: str | None,
+    run_to_compare: bool = False,
+    incomplete: bool = False,
 ) -> dict[str, str]:
     """The decision to make now, as ``{headline, detail}``."""
+    if run_to_compare and state in _RESEARCH_RUNNING:
+        if presented_status == "interrupted":
+            headline, detail = _RESEARCH_INTERRUPTED
+            return {"headline": headline, "detail": detail}
+        if presented_status == "running":
+            headline, detail = _RESEARCH_RUNNING[state]
+            return {"headline": headline, "detail": detail}
+    if run_to_compare and state == "awaiting_validation" and incomplete:
+        headline, detail = _RESEARCH_PAUSED
+        return {"headline": headline, "detail": detail}
     if state in ("search_running", "validation_running", "exam_running", "qualification_pending"):
         if presented_status in ("failed", "cancelled", "interrupted"):
             headline, detail = _STOPPED_STAGE

@@ -268,6 +268,12 @@ class Driver:
         request = plan_request(symbol, **overrides) if rate is None else frequency_plan_request(symbol, rate, **overrides)
         return await service.lock_study(request, idempotency_key=self.key(), roots=self.roots, identity=clean_identity())
 
+    async def lock_and_run(self, symbol: str, *, key: str | None = None, **overrides: Any) -> service.CommandOutcome:
+        """Run research (#2811): lock :func:`plan_request` and authorize Search with the intent to reach Compare."""
+        return await service.lock_and_run(
+            plan_request(symbol, **overrides), idempotency_key=key or self.key(), roots=self.roots, identity=clean_identity(), liveness=self.liveness
+        )
+
     async def command(self, row: StudyRow, command: str, payload: Mapping[str, Any] | None = None, **kwargs: Any) -> service.CommandOutcome:
         return await service.run_command(
             row.id,

@@ -40,7 +40,10 @@ export class GoldenSearchPlanFooterComponent {
   readonly ready = input(false);
   readonly canLock = input(false);
   readonly revising = input(false);
+  /** Lock the plan only; the study then waits for its first stage. */
   readonly lock = output();
+  /** Run research (#2811): lock, then Search and Test over time on the server, pausing at Compare. */
+  readonly run = output();
   /** The id of the input a problem belongs to. */
   readonly jump = output<string>();
 

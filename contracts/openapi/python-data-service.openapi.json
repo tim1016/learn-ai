@@ -18711,6 +18711,7 @@
           "command": {
             "enum": [
               "continue",
+              "run_research",
               "select_candidate",
               "open_exam",
               "approve",
@@ -18816,6 +18817,12 @@
           },
           "protocol": {
             "$ref": "#/components/schemas/GoldenSearchProtocolRequest"
+          },
+          "runResearch": {
+            "default": false,
+            "description": "Also start Search and run on through Test over time, pausing at Compare; the answer carries the dispatch.",
+            "title": "Runresearch",
+            "type": "boolean"
           }
         },
         "required": [
@@ -22239,6 +22246,7 @@
             "items": {
               "enum": [
                 "continue",
+                "run_research",
                 "select_candidate",
                 "open_exam",
                 "approve",
@@ -22304,6 +22312,11 @@
             "title": "Revision",
             "type": "integer"
           },
+          "run_to_compare": {
+            "description": "Run research is on: Search hands on to Test over time and the study pauses at Compare.",
+            "title": "Run To Compare",
+            "type": "boolean"
+          },
           "scope": {
             "$ref": "#/components/schemas/GoldenSearchScope"
           },
@@ -22360,6 +22373,7 @@
           "incomplete",
           "failure_reason",
           "hidden",
+          "run_to_compare",
           "exposure_claim",
           "exam_outcome",
           "qualification_id",
@@ -22511,6 +22525,11 @@
             "title": "Revision",
             "type": "integer"
           },
+          "run_to_compare": {
+            "description": "Run research is on: Search hands on to Test over time and the study pauses at Compare.",
+            "title": "Run To Compare",
+            "type": "boolean"
+          },
           "state": {
             "enum": [
               "locked",
@@ -22564,6 +22583,7 @@
           "incomplete",
           "failure_reason",
           "hidden",
+          "run_to_compare",
           "exposure_claim",
           "exam_outcome",
           "qualification_id"
@@ -63403,7 +63423,7 @@
         ]
       },
       "post": {
-        "description": "Lock a reviewed plan into a new study; the same key and plan return the study it already locked.",
+        "description": "Lock a reviewed plan into a new study; the same key and plan return the study it already locked.\n\nWith ``run_research`` the study also starts Search and runs on to Compare;\nthe answer carries the dispatch the client starts through the jobs boundary.",
         "operationId": "lock_study_api_research_golden_search_studies_post",
         "parameters": [
           {

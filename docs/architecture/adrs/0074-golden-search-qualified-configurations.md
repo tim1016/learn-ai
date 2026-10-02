@@ -30,6 +30,13 @@ A Golden Search study covers one registered strategy and one stock. Locking the 
 
 Locking also captures one content-hashed data snapshot over the run-up, development and final intervals, together with the executable identity. An edit after lock creates a linked new study and never rewrites the old one. The study pauses after search, after test over time, after the candidate pick, after the final test and after the decision.
 
+**Amendment, 2026-10-02 ([#2811](https://github.com/tim1016/learn-ai/issues/2811)): Run research.** The owner may choose **Run research** instead of stepping through. The study then records the intent on the server. When search finishes whole, the same job authorizes test over time in the same fenced transaction and runs it, so no browser needs to stay open. The study then pauses at Compare as before.
+- The intent never picks a candidate, opens the final interval, records an approval or starts a bot; the pauses from the candidate pick onward are unchanged.
+- An unfinished search (its budget ran out) pauses the run before test over time, so the owner sees why before more budget is spent.
+- Cancel ends the intent. Resuming the run is a new, explicit command, and it reuses every recorded evaluation under the frozen identity.
+- An interruption (a restart) keeps the intent, and the study waits for the owner to resume. Only the .NET jobs API creates jobs, so nothing restarts a stage unasked.
+- The budget ledger, reservations, retries, the serial engine gate and the code-identity check apply to each stage exactly as they do when the owner steps through.
+
 ### 2. Search is a procedure over one study-owned evaluator
 
 **One evaluator.** Grid and Zoom are two adapters over a single evaluator. The evaluator owns:

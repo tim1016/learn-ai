@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import asyncpg
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 # Arbitrary but fixed: serializes concurrent first-use across FastAPI's loop
 # and the worker loop so CREATE IF NOT EXISTS never races itself.
 _ADVISORY_LOCK_KEY = 0x1926_0001
@@ -783,6 +783,14 @@ DDL_V12: tuple[str, ...] = (
     """,
 )
 
+# Run research (#2811): the study's standing intent to hand Search on to Test over time and pause at Compare.
+DDL_V13: tuple[str, ...] = (
+    """
+    ALTER TABLE research_golden_search_studies
+        ADD COLUMN IF NOT EXISTS run_to_compare BOOLEAN NOT NULL DEFAULT FALSE
+    """,
+)
+
 VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (1, DDL_V1),
     (2, DDL_V2),
@@ -796,6 +804,7 @@ VERSIONED_DDL: tuple[tuple[int, tuple[str, ...]], ...] = (
     (10, DDL_V10),
     (11, DDL_V11),
     (12, DDL_V12),
+    (13, DDL_V13),
 )
 
 

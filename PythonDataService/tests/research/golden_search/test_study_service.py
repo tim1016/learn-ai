@@ -89,7 +89,7 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     row = await driver.lock(symbol)
     detail = await driver.detail(row)
     assert detail["state"] == "locked" and detail["presented_status"] == "idle"
-    assert detail["permitted_actions"] == ["continue", "close", "revise"]
+    assert detail["permitted_actions"] == ["continue", "run_research", "close", "revise"]
     assert detail["guidance"]["headline"] == "Ready to search"
     assert detail["scope"]["final_state"] == "locked"
     assert detail["scope"]["data_source"] == "Historical research: Polygon, split adjusted, regular sessions"
@@ -237,6 +237,112 @@ async def test_cancelling_a_bound_stage_asks_its_worker_and_an_unreachable_job_s
     monkeypatch.setattr(lifecycle, "request_cancel", asked.append)
     cancelled = await driver.command(bound, "cancel", idempotency_key=key)
     assert asked == ["job-live"] and cancelled.study.status == "queued"  # the worker acknowledges by cancelling
+
+
+# ── Run research (#2811, ADR 0074 decision 1 amendment) ─────────────────
+
+
+async def test_run_research_locks_and_reaches_compare_in_one_job_spending_what_stepping_spends(driver: Driver, symbol: str) -> None:
+    stepped = await driver.to_candidate(symbol)
+    outcome = await driver.lock_and_run(symbol)
+    assert outcome.dispatch is not None
+    assert (outcome.study.state, outcome.study.status, outcome.study.run_to_compare) == ("search_running", "queued", True)
+
+    stage = await driver.run(outcome, job_id="job-research")
+    done = await service.get_row(outcome.study.id)
+    assert (stage.stage, done.state, done.status) == ("validation", "awaiting_candidate", "completed")
+    # One job ran both stages, one attempt each, and stopped at Compare: no candidate, no final test.
+    assert (done.job_id, done.attempt, done.candidate_key, done.exam_locked) == ("job-research", 2, None, False)
+    assert done.consumed_evaluations == stepped.consumed_evaluations
+    assert done.results["validation"]["verdict"] == stepped.results["validation"]["verdict"]
+    assert [item["key"] for item in done.results["evidence"]["candidates"]] == [item["key"] for item in stepped.results["evidence"]["candidates"]]
+
+
+async def test_a_retried_run_research_resolves_to_the_same_study_and_run(driver: Driver, symbol: str) -> None:
+    key = driver.key()
+    first = await driver.lock_and_run(symbol, key=key)
+    again = await driver.lock_and_run(symbol, key=key)
+    # A lost answer: the retry finds the same study and is offered the same dispatch while no worker holds it.
+    assert again.study.id == first.study.id and again.dispatch == first.dispatch and again.replayed
+    assert first.dispatch is not None
+    await service.bind_dispatch(first.study.id, stage_token=first.dispatch["payload"]["stage_token"], job_id="job-once")
+    claimed = await driver.lock_and_run(symbol, key=key)
+    assert claimed.study.id == first.study.id and claimed.dispatch is None
+
+
+async def test_a_cancel_that_lands_before_the_search_closes_leaves_the_study_paused(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    outcome = await driver.lock_and_run(symbol)
+    # The owner's Cancel clears the intent under the row lock; the worker reads it there when the search closes.
+    await conn.execute("UPDATE research_golden_search_studies SET run_to_compare = FALSE WHERE id = $1", outcome.study.id)
+
+    stage = await driver.run(outcome)
+    row = await service.get_row(outcome.study.id)
+    assert (stage.stage, row.state, row.status, row.pending_stage) == ("search", "awaiting_validation", "completed", None)
+
+
+async def test_an_unfinished_search_pauses_the_run_and_says_why(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    outcome = await driver.lock_and_run(symbol)
+    await conn.execute("UPDATE research_golden_search_studies SET budget_cap = 11 WHERE id = $1", outcome.study.id)
+
+    await driver.run(outcome)
+    row = await service.get_row(outcome.study.id)
+    assert (row.state, row.incomplete, row.run_to_compare) == ("awaiting_validation", True, True)
+    assert (await driver.detail(row))["guidance"]["headline"] == "Research paused after the search"
+
+
+async def test_an_interrupted_run_keeps_its_intent_and_finish_resumes_it_through_compare(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    outcome = await driver.lock_and_run(symbol)
+    assert outcome.dispatch is not None
+    token = outcome.dispatch["payload"]["stage_token"]
+    await service.bind_dispatch(outcome.study.id, stage_token=token, job_id="job-lost")
+    # The worker claims the stage and its process dies: the attempt stays running with no live job.
+    await repo.claim_stage(conn, outcome.study.id, stage_token=token, job_id="job-lost")
+    interrupted = await driver.detail(await service.get_row(outcome.study.id))
+    assert interrupted["presented_status"] == "interrupted" and interrupted["run_to_compare"]
+    assert interrupted["guidance"]["headline"] == "Your research was interrupted"
+    assert {"finish", "run_research"} <= set(interrupted["permitted_actions"])
+
+    resumed = await driver.command(await service.get_row(outcome.study.id), "finish")
+    await driver.run(resumed)
+    assert (await service.get_row(outcome.study.id)).state == "awaiting_candidate"
+
+
+async def test_cancel_ends_the_run_and_only_an_explicit_resume_runs_on_to_compare(driver: Driver, symbol: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    outcome = await driver.lock_and_run(symbol)
+    assert outcome.dispatch is not None
+    await service.bind_dispatch(outcome.study.id, stage_token=outcome.dispatch["payload"]["stage_token"], job_id="job-cancel")
+    driver.live = True
+    monkeypatch.setattr(lifecycle, "request_cancel", lambda job_id: None)
+    cancelled = await driver.command(await service.get_row(outcome.study.id), "cancel")
+    assert not cancelled.study.run_to_compare
+
+    def cancelled_flag() -> None:
+        raise JobCancelled("cancelled")
+
+    with pytest.raises(JobCancelled):
+        await driver.run(outcome, job_id="job-cancel", cancel_check=cancelled_flag)
+    driver.live = False
+    stopped = await service.get_row(outcome.study.id)
+    assert (stopped.state, stopped.status, stopped.run_to_compare) == ("search_running", "cancelled", False)
+
+    resumed = await driver.command(stopped, "run_research")
+    assert resumed.study.run_to_compare and resumed.dispatch is not None
+    await driver.run(resumed)
+    assert (await service.get_row(outcome.study.id)).state == "awaiting_candidate"
+
+
+async def test_a_superseded_worker_cannot_hand_the_search_on(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
+    outcome = await driver.lock_and_run(symbol)
+    assert outcome.dispatch is not None
+    token = outcome.dispatch["payload"]["stage_token"]
+    await service.bind_dispatch(outcome.study.id, stage_token=token, job_id="job-old")
+    _, attempt = await repo.claim_stage(conn, outcome.study.id, stage_token=token, job_id="job-old")
+    await conn.execute("UPDATE research_golden_search_studies SET attempt = attempt + 1 WHERE id = $1", outcome.study.id)
+
+    with pytest.raises(StaleAttemptError):
+        await repo.finish_or_advance(conn, outcome.study.id, attempt, changes={"status": "completed"}, advance={"pending_stage": "validation"})
+    row = await service.get_row(outcome.study.id)
+    assert (row.state, row.pending_stage) == ("search_running", "search")
 
 
 # ── Budget, crash and Finish ─────────────────────────────────────────────

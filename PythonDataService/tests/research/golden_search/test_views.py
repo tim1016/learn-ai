@@ -123,9 +123,9 @@ def test_a_bound_stage_whose_worker_died_reads_interrupted_and_finish_follows_th
     row = _row(state="validation_running", status="running", pending_stage="validation", job_id="j")
     presented = presented_status(row, live=False)
     assert presented == "interrupted"
-    assert permitted(action_refusals(row, presented=presented, resume_refusal=None)) == ["close", "finish", "revise"]
+    assert permitted(action_refusals(row, presented=presented, resume_refusal=None)) == ["run_research", "close", "finish", "revise"]
     blocked = action_refusals(row, presented=presented, resume_refusal="the engine or strategy code changed since launch")
-    assert blocked["finish"] == "the engine or strategy code changed since launch"
+    assert blocked["finish"] == blocked["run_research"] == "the engine or strategy code changed since launch"
     # Redis unreachable: never declared dead, so nothing that assumes the worker stopped is offered.
     assert permitted(action_refusals(row, presented=presented_status(row, live=None), resume_refusal=None)) == ["cancel"]
 

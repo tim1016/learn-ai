@@ -64,6 +64,10 @@ function lockButton(): HTMLButtonElement {
   return screen.getByRole('button', { name: /lock/i }) as HTMLButtonElement;
 }
 
+function runButton(): HTMLButtonElement {
+  return screen.getByRole('button', { name: 'Run research' }) as HTMLButtonElement;
+}
+
 describe('GoldenSearchPlanFormComponent', () => {
   it('shows editable expected trade frequency and locks the selected annual policy with the server preview', async () => {
     const service = fakeService();
@@ -164,6 +168,38 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(screen.getByRole('note').textContent).toContain('this revision ranks them by importance, starting every knob at 5');
     expect(screen.getAllByRole('rowheader')[0].textContent).toContain('Crossover gap');
     expect(service.preflight.mock.lastCall?.[0].knobs.every((knob) => knob.importance === 5)).toBe(true);
+  });
+
+  it('Run research locks the plan with the intent to run on to Compare; Lock only does not', async () => {
+    const service = fakeService();
+    const { view, locked } = await renderForm(service);
+    await pickSpy(service, view);
+    await waitFor(() => expect(runButton().disabled).toBe(false));
+    expect(runButton().getAttribute('aria-describedby')).toBe('gs-run-research-scope');
+    expect(screen.getByText(/runs Search and Test over time on the server, and stops at Compare/)).not.toBeNull();
+
+    fireEvent.click(runButton());
+    await waitFor(() => expect(locked).toHaveBeenCalledTimes(1));
+    expect(service.createStudy.mock.lastCall?.[0]).toMatchObject({ run_research: true });
+
+    fireEvent.click(lockButton());
+    await waitFor(() => expect(service.createStudy).toHaveBeenCalledTimes(2));
+    expect(service.createStudy.mock.lastCall?.[0]).toMatchObject({ run_research: false });
+  });
+
+  it('Run research on a revision runs the new study under a key derived from the revision', async () => {
+    const service = fakeService();
+    const revised = studyDetail('locked', { id: 'study-0002-bbbb', revision: 0, parent_study_id: 'study-0001-aaaa' });
+    service.command.mockResolvedValueOnce({ study: revised, jobId: null }).mockResolvedValueOnce({ study: studyDetail('search_running', { id: 'study-0002-bbbb' }), jobId: 'job-9' });
+    await renderForm(service, { reviseFrom: studyDetail('awaiting_validation') });
+    await waitFor(() => expect(runButton().disabled).toBe(false));
+
+    fireEvent.click(runButton());
+    await waitFor(() => expect(service.command).toHaveBeenCalledTimes(2));
+    const [[, revise], [target, run]] = service.command.mock.calls;
+    expect(revise.command).toBe('revise');
+    expect(target).toBe('study-0002-bbbb');
+    expect(run).toMatchObject({ command: 'run_research', expected_revision: 0, idempotency_key: `${revise.idempotency_key}:run` });
   });
 
   it('shows where the plan sits in the research process', async () => {
@@ -496,7 +532,7 @@ describe('GoldenSearchPlanFormComponent', () => {
     await waitFor(() => expect(service.defaults).toHaveBeenCalledWith('ema_crossover_signal', 'SPY'));
     await waitFor(() => expect(service.preflight.mock.lastCall?.[0].incumbent.source).toBe('registry'));
     expect(screen.getByRole('combobox', { name: 'Strategy' })).not.toBeNull();
-    expect(screen.getByRole('button', { name: 'Lock plan' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Lock only' })).not.toBeNull();
   });
 
   it('changing the final-test months has the server lay the dates out again, keeping every other edit', async () => {

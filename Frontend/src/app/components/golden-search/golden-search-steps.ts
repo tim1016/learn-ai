@@ -58,13 +58,16 @@ export function stepProgress(step: StudyStep, state: StudyState): StepProgress {
 }
 
 export type PrimaryAction =
-  | { readonly kind: 'command'; readonly command: Extract<StudyCommandName, 'continue'>; readonly label: string }
+  | { readonly kind: 'command'; readonly command: Extract<StudyCommandName, 'continue' | 'run_research'>; readonly label: string }
   | { readonly kind: 'step'; readonly step: StudyStep; readonly label: string };
 
 const CONTINUE_LABELS: Partial<Readonly<Record<StudyState, string>>> = {
-  locked: 'Start the search',
-  awaiting_validation: 'Test over time',
+  locked: 'Search only',
+  awaiting_validation: 'Test over time only',
 };
+
+/** Run research (#2811) carries the study through Search and Test over time and stops at Compare. */
+const RESEARCH_STATES: ReadonlySet<StudyState> = new Set(['locked', 'awaiting_validation']);
 
 const STEP_ACTIONS: Partial<Readonly<Record<StudyState, PrimaryAction>>> = {
   awaiting_candidate: { kind: 'step', step: 'compare', label: 'Compare candidates' },
@@ -80,7 +83,15 @@ const STEP_ACTIONS: Partial<Readonly<Record<StudyState, PrimaryAction>>> = {
  * Hide are record controls, not the next step.
  */
 export function primaryAction(study: Pick<StudyDetail, 'state' | 'permitted_actions'>): PrimaryAction | null {
-  const label = CONTINUE_LABELS[study.state];
-  if (label !== undefined) return study.permitted_actions.includes('continue') ? { kind: 'command', command: 'continue', label } : null;
+  if (study.permitted_actions.includes('run_research')) {
+    return { kind: 'command', command: 'run_research', label: RESEARCH_STATES.has(study.state) ? 'Run research' : 'Resume research' };
+  }
+  if (CONTINUE_LABELS[study.state] !== undefined) return null;
   return STEP_ACTIONS[study.state] ?? null;
+}
+
+/** Running only the next stage and pausing after it: the quieter alternative to Run research. */
+export function singleStageAction(study: Pick<StudyDetail, 'state' | 'permitted_actions'>): PrimaryAction | null {
+  const label = CONTINUE_LABELS[study.state];
+  return label !== undefined && study.permitted_actions.includes('continue') ? { kind: 'command', command: 'continue', label } : null;
 }

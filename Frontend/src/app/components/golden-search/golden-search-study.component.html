@@ -6,6 +6,7 @@
 
   @if (detail(); as d) {
     <app-golden-search-study-strip [study]="d" [capability]="capability()" />
+    @if (stage(); as current) { <app-golden-search-process [current]="current" /> }
 
     <nav class="steps" aria-label="Research steps">
       <ol>
@@ -33,10 +34,16 @@
       <div aria-live="polite">
         @if (actionRefusal(); as refusal) { <p class="refusal" role="alert"><strong>{{ refusal.code | receiptLabel }}</strong> — {{ refusal.message }}</p> }
         @if (actionMessage(); as message) { <p class="refusal" role="alert">{{ message }}</p> }
+        @if (undispatched()) {
+          <button pButton type="button" size="small" [disabled]="busy()" (click)="startAgain()"><i class="pi pi-replay" aria-hidden="true"></i><span>Start again</span></button>
+        }
       </div>
       <div class="actions">
         @if (primary(); as action) {
           <button pButton type="button" [disabled]="busy()" (click)="runPrimary(action)"><span>{{ action.label }}</span><i class="pi pi-arrow-right" aria-hidden="true"></i></button>
+        }
+        @if (secondary(); as action) {
+          <button pButton type="button" size="small" severity="secondary" [outlined]="true" [disabled]="busy()" (click)="runPrimary(action)"><span>{{ action.label }}</span></button>
         }
         <span class="spacer"></span>
         @if (canCancel()) {

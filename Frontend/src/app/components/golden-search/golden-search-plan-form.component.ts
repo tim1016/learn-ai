@@ -16,8 +16,8 @@ import { refusalProblems, unreadableProblems } from './golden-search-plan-proble
 import { GoldenSearchProtocolControlsComponent } from './golden-search-protocol-controls.component';
 import { GoldenSearchRefinementControlsComponent } from './golden-search-refinement-controls.component';
 import { GoldenSearchTimeWindowsComponent } from './golden-search-time-windows.component';
-import { GoldenSearchRefusedError, GoldenSearchService, StageDispatchError, StudyConflictError } from './golden-search.service';
-import type { DefaultsMonths, GoldenSearchMethod, GoldenSearchPreflight, StrategyCapability, StudyDetail } from './golden-search.types';
+import { GoldenSearchRefusedError, GoldenSearchService, StageDispatchError, StudyConflictError, type CommandOutcome } from './golden-search.service';
+import type { DefaultsMonths, GoldenSearchMethod, GoldenSearchPreflight, ProtocolRequest, StrategyCapability, StudyDetail } from './golden-search.types';
 import { IdempotencyKeys } from './idempotency-keys';
 
 /**
@@ -198,7 +198,8 @@ export class GoldenSearchPlanFormComponent {
     target.focus({ preventScroll: true });
   }
 
-  async lock(): Promise<void> {
+  /** Lock the plan; with `run`, Run research (#2811) also starts Search and runs on to Compare. */
+  async lock(run: boolean): Promise<void> {
     const draft = this.draft();
     if (draft === null || !this.canLock()) return;
     const protocol = wireProtocol(draft.protocol);
@@ -209,9 +210,7 @@ export class GoldenSearchPlanFormComponent {
     this.lockError.set(null);
     try {
       const outcome =
-        revise === null
-          ? await this.service.createStudy({ protocol, idempotency_key: key })
-          : await this.service.command(revise.id, { command: 'revise', expected_revision: revise.revision, idempotency_key: key, payload: { protocol } });
+        revise === null ? await this.service.createStudy({ protocol, idempotency_key: key, run_research: run }) : await this.revise(revise, protocol, key, run);
       this.keys.settle();
       this.locked.emit(outcome.study.id);
     } catch (error) {
@@ -219,6 +218,16 @@ export class GoldenSearchPlanFormComponent {
     } finally {
       this.locking.set(false);
     }
+  }
+
+  /**
+   * A revision is a new study; Run research then starts it under a key derived
+   * from the revision's, so a retry after a lost answer replays both halves.
+   */
+  private async revise(source: StudyDetail, protocol: ProtocolRequest, key: string, run: boolean): Promise<CommandOutcome> {
+    const revised = await this.service.command(source.id, { command: 'revise', expected_revision: source.revision, idempotency_key: key, payload: { protocol } });
+    if (!run) return revised;
+    return this.service.command(revised.study.id, { command: 'run_research', expected_revision: revised.study.revision, idempotency_key: `${key}:run`, payload: {} });
   }
 
   private onLockFailure(error: unknown): void {
