@@ -270,6 +270,28 @@ async def test_a_retried_run_research_resolves_to_the_same_study_and_run(driver:
     assert claimed.study.id == first.study.id and claimed.dispatch is None
 
 
+async def test_a_run_whose_job_never_started_is_authorized_again_and_the_lost_token_is_withdrawn(driver: Driver, symbol: str) -> None:
+    lost = await driver.lock_and_run(symbol)
+    assert lost.dispatch is not None
+    queued = await driver.detail(lost.study)
+    assert queued["presented_status"] == "queued" and "run_research" in queued["permitted_actions"]
+    assert "Start research again" in queued["guidance"]["detail"]
+
+    again = await driver.command(lost.study, "run_research")
+    assert again.dispatch is not None and again.dispatch != lost.dispatch
+    with pytest.raises(GoldenSearchRefusal) as withdrawn:
+        await service.bind_dispatch(lost.study.id, stage_token=lost.dispatch["payload"]["stage_token"], job_id="job-late")
+    assert withdrawn.value.code == "STAGE_TOKEN_MISMATCH"
+    await driver.run(again)
+    assert (await service.get_row(lost.study.id)).state == "awaiting_candidate"
+
+
+async def test_a_lock_key_cannot_collide_with_the_run_it_starts(driver: Driver, symbol: str) -> None:
+    # The run's key is derived from the lock key in its own namespace, so no caller key can equal it.
+    outcome = await driver.lock_and_run(symbol, key="run-research-at-lock")
+    assert outcome.dispatch is not None and outcome.study.run_to_compare
+
+
 async def test_a_cancel_that_lands_before_the_search_closes_leaves_the_study_paused(conn: asyncpg.Connection, driver: Driver, symbol: str) -> None:
     outcome = await driver.lock_and_run(symbol)
     # The owner's Cancel clears the intent under the row lock; the worker reads it there when the search closes.

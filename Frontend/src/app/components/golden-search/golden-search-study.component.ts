@@ -107,7 +107,7 @@ export class GoldenSearchStudyComponent {
   });
   protected readonly stage = computed(() => {
     const detail = this.detail();
-    return detail === null ? null : researchStage(detail.state);
+    return detail === null ? null : researchStage(detail);
   });
   /** A command the server accepted whose job did not start; sending it again replays the same authorization. */
   protected readonly undispatched = signal<StudyCommandRequest | null>(null);

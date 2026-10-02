@@ -70,6 +70,10 @@ _RESEARCH_RUNNING = {
     "search_running": ("Running your research: searching", "Search, then Test over time, run on the server; this page need not stay open. It stops at Compare, where you choose."),
     "validation_running": ("Running your research: testing over time", "The search is done. Each fold now repeats it on its own past; the study stops at Compare, where you choose."),
 }
+_RESEARCH_QUEUED = (
+    "Waiting for a worker",
+    "The stage is authorized and starts when a worker takes it. If it does not start, Start research again withdraws this authorization and issues a new one.",
+)
 _RESEARCH_INTERRUPTED = (
     "Your research was interrupted",
     "Resume research reuses every recorded evaluation and still stops at Compare.",
@@ -99,6 +103,9 @@ def study_guidance(
             return {"headline": headline, "detail": detail}
         if presented_status == "running":
             headline, detail = _RESEARCH_RUNNING[state]
+            return {"headline": headline, "detail": detail}
+        if presented_status == "queued":
+            headline, detail = _RESEARCH_QUEUED
             return {"headline": headline, "detail": detail}
     if run_to_compare and state == "awaiting_validation" and incomplete:
         headline, detail = _RESEARCH_PAUSED

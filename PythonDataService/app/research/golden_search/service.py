@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -336,9 +337,10 @@ async def lock_study(
     return row
 
 
-#: The run command a lock-and-run records on the study it locked. One study per lock key, so one constant key
-#: makes a retried Run research resolve to the same run.
-RUN_AT_LOCK_KEY = "run-research-at-lock"
+def _run_at_lock_key(lock_key: str) -> str:
+    """The run command a lock-and-run records on the study its lock key locked: derived, so a retry finds the same
+    run, and hashed into a namespace no 1-200 character caller key can equal (#2814 review)."""
+    return "run-research:" + hashlib.sha256(lock_key.encode("utf-8")).hexdigest()
 
 
 async def lock_and_run(
@@ -357,7 +359,13 @@ async def lock_and_run(
     """
     row = await lock_study(request, idempotency_key=idempotency_key, roots=roots, identity=identity)
     return await run_command(
-        row.id, command="run_research", expected_revision=0, idempotency_key=RUN_AT_LOCK_KEY, roots=roots, liveness=liveness, identity=identity
+        row.id,
+        command="run_research",
+        expected_revision=0,
+        idempotency_key=_run_at_lock_key(idempotency_key),
+        roots=roots,
+        liveness=liveness,
+        identity=identity,
     )
 
 

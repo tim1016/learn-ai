@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
-import type { StudyState } from './golden-search.types';
+import type { StudyDetail, StudyState } from './golden-search.types';
 
 /** The research process a Golden Search study follows (#2811), from the plan to a deployable configuration. */
 export const RESEARCH_PROCESS = [
@@ -30,9 +30,15 @@ const STAGE_OF_STATE: Readonly<Record<StudyState, ResearchStage>> = {
   approved: 'deploy',
 };
 
-/** Where a study in `state` sits in the research process; an approved study's next place is Deploy. */
-export function researchStage(state: StudyState): ResearchStage {
-  return STAGE_OF_STATE[state];
+/**
+ * Where a study sits in the research process; an approved study's next place
+ * is Deploy. A study kept or closed early ends where its recorded evidence
+ * stops, so stages it never ran are not shown as done (#2814 review).
+ */
+export function researchStage(study: Pick<StudyDetail, 'state' | 'results'>): ResearchStage {
+  if (study.state !== 'retained' && study.state !== 'closed') return STAGE_OF_STATE[study.state];
+  if (study.results.exam !== null) return 'decision';
+  return study.results.evidence !== null ? 'compare' : 'research';
 }
 
 /** Where the user is in the research process; finished stages are marked by text and icon, not colour alone. */

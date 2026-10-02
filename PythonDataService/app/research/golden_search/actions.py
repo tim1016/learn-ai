@@ -71,7 +71,9 @@ def action_refusals(
     reasons: dict[CommandName, str | None] = dict.fromkeys(COMMANDS)
     if row.state not in RESEARCH_STATES:
         reasons["continue"] = "Continue starts the next stage of a study that is waiting for it."
-    resumes_research = stopped and row.state in RESEARCH_RUNNING_STATES
+    # A stopped research stage resumes; one no worker claimed is authorized afresh, withdrawing the
+    # token its lost dispatch carried (#2814 review: a job that never started must be restartable).
+    resumes_research = (stopped or (running and unclaimed(row))) and row.state in RESEARCH_RUNNING_STATES
     if row.state not in RESEARCH_STATES and not resumes_research:
         reasons["run_research"] = "Run research starts or resumes Search and Test over time; this study is past them, or a stage is running."
     elif resumes_research and resume_refusal is not None:
