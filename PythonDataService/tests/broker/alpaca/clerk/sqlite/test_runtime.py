@@ -36,6 +36,7 @@ from app.broker.alpaca.clerk.sqlite.runtime import (
 from app.broker.alpaca.clerk.stream_health import StreamHealthGate
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg
+from app.schemas.decision_explanation import DecisionBarRecord, DecisionExplanationRecord, ExplainedCheckRecord
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 from app.services.strategy_validation_manifest import strategy_registry_seeds
@@ -689,6 +690,80 @@ async def test_exit_decision_receipt_records_its_lateness_only_when_late(
         assert "decision_lateness_ms" not in facts
     else:
         assert facts["decision_lateness_ms"] == lateness_ms
+    repo.close()
+
+
+@pytest.mark.parametrize("explained", [True, False])
+async def test_the_clerks_decision_receipt_carries_the_explanation_it_was_handed(
+    tmp_path: Path, explained: bool
+) -> None:
+    """#2639: the Clerk's own receipt keeps what the decision saw, and omits the key when it saw nothing."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _Broker()
+    broker.release_submit.set()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    binding = _binding()
+    await facade.register_strategy_run(binding)
+    already_active = EffectOperationResource(
+        effect_operation_id="effect:already-exiting",
+        authority_generation=1,
+        idempotency_key="exit:already",
+        command_id="cmd:already",
+        strategy_instance_id=binding.strategy_instance_id,
+        run_id=binding.run_id,
+        kind="EXIT",
+        state="in_progress",
+        custody_owner="clerk",
+        created_at_ms=1,
+        updated_at_ms=1,
+        terminal_receipt_id=None,
+    )
+    captured_facts: list[dict[str, Any]] = []
+
+    def _capture(
+        *, strategy_instance_id: str, run_id: str, decision_receipt: Any
+    ) -> EffectOperationResource:
+        captured_facts.append(json.loads(decision_receipt.facts_json))
+        return already_active
+
+    repo.active_exit_for_strategy = lambda _sid: already_active  # type: ignore[method-assign]
+    repo.capture_decision_against_active_exit = _capture  # type: ignore[method-assign]
+    explanation = DecisionExplanationRecord(
+        bar=DecisionBarRecord(start_ms=0, end_ms=900_000, open=1.0, high=1.0, low=1.0, close=1.0, volume=1.0),
+        ready=True,
+        holding=True,
+        signal="EXIT",
+        values={"ema_fast": 1.0},
+        checks=[
+            ExplainedCheckRecord(
+                check_id="exit_countdown", role="exit", comparison="le", passed=True, observed=0, threshold=0
+            )
+        ],
+    )
+
+    decision_id = "e" * 64
+    await facade.execute_for_instance(
+        strategy_instance_id=binding.strategy_instance_id,
+        run_id=binding.run_id,
+        decision_id=decision_id,
+        purpose=EffectPurpose.EXIT,
+        action_plan=binding.action_plan,
+        quantity=binding.quantity,
+        decision_evidence=EffectDecisionEvidence(
+            evaluation_id=decision_id,
+            bar_ref="decision-bar:test:SPY:900000",
+            symbol=binding.symbol,
+            outcome="exit_intent",
+            observed_at_ms=1_700_000_000_000,
+            explanation=explanation if explained else None,
+        ),
+    )
+
+    (facts,) = captured_facts
+    if explained:
+        assert DecisionExplanationRecord.model_validate(facts["explanation"]) == explanation
+    else:
+        assert "explanation" not in facts
     repo.close()
 
 
