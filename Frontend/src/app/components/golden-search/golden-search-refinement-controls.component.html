@@ -33,6 +33,6 @@
       <label class="field"><span>Min final-test trades</span><input #examTrades pInputText type="number" min="1" step="1" [id]="inputId('exam_min_trades')" [value]="p.exam_min_trades" [attr.aria-invalid]="numberInvalid('exam_min_trades')" (input)="onNumber('exam_min_trades', examTrades.value)" /></label>
     </div>
     }
-    <p class="hint">Pair audits count toward the run total. The search order is the knob table's order.</p>
+    <p class="hint">Pair audits count toward the run total. Knobs are searched in the knob table's order: the most important first, ties in the strategy's order.</p>
   </div>
 </details>

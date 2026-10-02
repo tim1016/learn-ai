@@ -18,7 +18,7 @@ from app.research.golden_search.declarations import (
     violates,
 )
 from app.research.golden_search.grid_procedure import run_grid
-from app.research.golden_search.protocol import KnobPlan, ZoomSettings
+from app.research.golden_search.protocol import KnobPlan, ZoomSettings, by_importance
 from app.research.golden_search.zoom import (
     BudgetExhausted,
     ProcedureResult,
@@ -127,6 +127,23 @@ def test_run_zoom_alternate_knob_order_reaches_a_different_winner() -> None:
 
     assert _xy(_zoom(decl, x_first, Landscape(score))) == (2, 0)
     assert _xy(_zoom(decl, y_first, Landscape(score))) == (0, 2)
+
+
+def test_run_zoom_moves_the_more_important_knob_first() -> None:
+    table = {(0, 0): 10.0, (2, 0): 12.0, (0, 2): 11.0}
+    decl = declaration()
+    plain = protocol(decl)
+
+    def ranked(x: int, y: int) -> Any:
+        scored = tuple(dataclasses.replace(plan, importance={"x": x, "y": y}[plan.name]) for plan in plain.knobs)
+        return dataclasses.replace(plain, knobs=by_importance(scored, ["x", "y"]))
+
+    def score(p: Mapping[str, Any]) -> float:
+        return table.get((p["x"], p["y"]), 5.0)
+
+    # A tie keeps the declared order (x first); raising y's importance moves y first and changes the winner.
+    assert _xy(_zoom(decl, ranked(5, 5), Landscape(score))) == (2, 0)
+    assert _xy(_zoom(decl, ranked(5, 8), Landscape(score))) == (0, 2)
 
 
 def test_run_zoom_ties_keep_the_current_value() -> None:

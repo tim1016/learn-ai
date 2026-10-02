@@ -2,7 +2,7 @@
 
 Formula: ``current`` starts at the seed's canonical point and is evaluated
 first, alone. For pass ``p`` in ``0..passes-1``, for each searched knob in
-protocol order, with ``[lo, hi]`` its plan range and ``step`` its plan's
+protocol order (most important first, ADR 0074 decision 10), with ``[lo, hi]`` its plan range and ``step`` its plan's
 smallest step, for round ``r`` in ``0..refinements``, with
 ``spacing = (hi − lo) / (points − 1)``:
   1. when ``spacing > step``, sample ``points`` values evenly spaced over

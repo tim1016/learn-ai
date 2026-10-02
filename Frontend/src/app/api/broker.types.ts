@@ -13348,6 +13348,7 @@ export interface components {
             display_name: string;
             /** Fixed */
             fixed: components["schemas"]["GoldenSearchFixedControl"][];
+            importance: components["schemas"]["GoldenSearchImportanceScale"];
             /** Knobs */
             knobs: components["schemas"]["GoldenSearchCapabilityKnob"][];
             /** Reason */
@@ -13863,6 +13864,18 @@ export interface components {
             /** Headline */
             headline: string;
         };
+        /**
+         * GoldenSearchImportanceScale
+         * @description How important each knob is to its owner; the more important, the earlier the search moves it.
+         */
+        GoldenSearchImportanceScale: {
+            /** Default */
+            default: number;
+            /** High */
+            high: number;
+            /** Low */
+            low: number;
+        };
         /** GoldenSearchIncumbent */
         GoldenSearchIncumbent: {
             /** Params */
@@ -13917,6 +13930,8 @@ export interface components {
             fixed_value: number;
             /** High */
             high: number;
+            /** Importance */
+            importance?: number | null;
             /** Low */
             low: number;
             /**
@@ -13938,6 +13953,11 @@ export interface components {
             fixedValue: number;
             /** High */
             high: number;
+            /**
+             * Importance
+             * @description 1-10, higher searched first; null on a plan that keeps its own knob order.
+             */
+            importance?: number | null;
             /** Low */
             low: number;
             /**

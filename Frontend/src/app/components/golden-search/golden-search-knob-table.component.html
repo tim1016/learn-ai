@@ -4,6 +4,7 @@
     <thead>
       <tr>
         <th scope="col">Order</th>
+        @if (ranked()) { <th scope="col">Importance</th> }
         <th scope="col">Vary</th>
         <th scope="col">Knob</th>
         <th scope="col" class="num">Golden</th>
@@ -15,15 +16,19 @@
     <tbody>
       @for (row of rows(); track row.plan.name; let i = $index) {
         <tr [class.held]="!row.searched">
-          <td>
-            <div class="order">
-              <span class="order__n">{{ i + 1 }}</span>
-              @if (!readonly()) {
-                <button type="button" class="icon" [disabled]="row.first" [attr.aria-label]="'Search ' + row.label + ' earlier'" (click)="move(row.plan.name, -1)"><i class="pi pi-arrow-up" aria-hidden="true"></i></button>
-                <button type="button" class="icon" [disabled]="row.last" [attr.aria-label]="'Search ' + row.label + ' later'" (click)="move(row.plan.name, 1)"><i class="pi pi-arrow-down" aria-hidden="true"></i></button>
+          <td class="order">{{ i + 1 }}</td>
+          @if (ranked()) {
+            <td>
+              @if (readonly()) {
+                {{ row.plan.importance }}
+              } @else {
+                <select class="importance" [id]="importanceId(row.plan.name)" [attr.aria-label]="row.label + ' importance'" [attr.aria-invalid]="row.importanceRefusals.length > 0" (change)="onImportance(row.plan.name, $event)">
+                  @for (level of scale(); track level) { <option [value]="level" [selected]="level === row.plan.importance">{{ level }}</option> }
+                </select>
+                @for (message of row.importanceRefusals; track message) { <small class="problem">{{ message }}</small> }
               }
-            </div>
-          </td>
+            </td>
+          }
           <td>
             @if (readonly()) {
               {{ row.searched ? 'Varied' : 'Held' }}

@@ -60,6 +60,7 @@ export function emaCapability(overrides: Partial<StrategyCapability> = {}): Stra
       ['rsi_min', 'rsi_max'],
     ],
     default_expected_trades_per_year: 50,
+    importance: { low: 1, high: 10, default: 5 },
     ...overrides,
   };
 }
@@ -75,6 +76,7 @@ export function unavailableCapability(): StrategyCapability {
     constraints: [],
     default_pair_audits: [],
     default_expected_trades_per_year: 50,
+    importance: { low: 1, high: 10, default: 5 },
   };
 }
 
@@ -86,13 +88,13 @@ export function protocol(overrides: Partial<ProtocolRequest> = {}): ProtocolRequ
     symbol: 'SPY',
     method: 'zoom',
     knobs: [
-      { name: 'gap', mode: 'search', low: 0, high: 0.6, fixed_value: 0.2, step: 0.05 },
-      { name: 'rsi_min', mode: 'search', low: 30, high: 60, fixed_value: 50, step: 1 },
-      { name: 'rsi_max', mode: 'search', low: 60, high: 90, fixed_value: 70, step: 1 },
-      { name: 'fast_period', mode: 'search', low: 3, high: 12, fixed_value: 5, step: 1 },
-      { name: 'slow_period', mode: 'search', low: 8, high: 30, fixed_value: 10, step: 1 },
-      { name: 'hold_bars', mode: 'search', low: 2, high: 12, fixed_value: 5, step: 1 },
-      { name: 'gap_bps', mode: 'fixed', low: 0, high: 5, fixed_value: 0, step: null },
+      { name: 'gap', mode: 'search', low: 0, high: 0.6, fixed_value: 0.2, step: 0.05, importance: 5 },
+      { name: 'rsi_min', mode: 'search', low: 30, high: 60, fixed_value: 50, step: 1, importance: 5 },
+      { name: 'rsi_max', mode: 'search', low: 60, high: 90, fixed_value: 70, step: 1, importance: 5 },
+      { name: 'fast_period', mode: 'search', low: 3, high: 12, fixed_value: 5, step: 1, importance: 5 },
+      { name: 'slow_period', mode: 'search', low: 8, high: 30, fixed_value: 10, step: 1, importance: 5 },
+      { name: 'hold_bars', mode: 'search', low: 2, high: 12, fixed_value: 5, step: 1, importance: 5 },
+      { name: 'gap_bps', mode: 'fixed', low: 0, high: 5, fixed_value: 0, step: null, importance: 5 },
     ],
     seed: { ...INCUMBENT_PARAMS },
     incumbent: { source: 'registry', qualification_id: null, params: { ...INCUMBENT_PARAMS } },

@@ -1,0 +1,9 @@
+<ol class="process" aria-label="Research process">
+  @for (stage of stages(); track stage.id; let i = $index) {
+    <li [class]="'process__stage process__stage--' + stage.state" [attr.aria-current]="stage.state === 'current' ? 'step' : null">
+      <span class="process__mark" aria-hidden="true">@if (stage.state === 'done') { <i class="pi pi-check"></i> } @else { {{ i + 1 }} }</span>
+      <span>{{ stage.label }}</span>
+      @if (stage.state === 'done') { <span class="sr-only">(done)</span> }
+    </li>
+  }
+</ol>
