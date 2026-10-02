@@ -13,11 +13,12 @@ because the history table requests one fixed page and never pages.
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.research.backtest_runs import repository as repo
-from app.research.backtest_runs.repository import Engine
+from app.research.backtest_runs.repository import Engine, RunDetail
 from app.research.persistence.db import with_connection
 from app.schemas.backtest_runs import (
     BacktestRunDetailResponse,
@@ -34,6 +35,14 @@ router = APIRouter()
 
 DEFAULT_HISTORY_LIMIT = 50
 MAX_HISTORY_LIMIT = 500
+
+# A strategy view replays a whole backtest: one replay per run at a time, so a
+# read abandoned mid-replay and asked again joins it rather than queueing
+# another, and the last few views kept, keyed by what the replay was checked
+# against.
+_VIEW_CACHE_SIZE = 8
+_view_replays: dict[tuple[object, ...], asyncio.Future[StrategyViewResponse]] = {}
+_view_cache: OrderedDict[tuple[object, ...], StrategyViewResponse] = OrderedDict()
 
 
 def _not_found(run_id: int) -> HTTPException:
@@ -73,7 +82,7 @@ async def get_backtest_run_strategy_view(run_id: int) -> StrategyViewResponse:
     if run is None:
         raise _not_found(run_id)
     try:
-        return await asyncio.to_thread(build_backtest_run_strategy_view, run)
+        return await _replayed_view(run)
     except SavedRunNotReplayable as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -86,3 +95,27 @@ async def update_backtest_run_notes(run_id: int, body: BacktestRunNotesRequest) 
     if not await with_connection(repo.update_notes, run_id, body.notes):
         raise _not_found(run_id)
     return BacktestRunNotesResponse(id=run_id, notes=body.notes)
+
+
+async def _replayed_view(run: RunDetail) -> StrategyViewResponse:
+    """The run's view: kept, joined while it replays, or replayed once in a worker thread."""
+    key = (run.id, run.program_version, run.evidence_provenance_json)
+    if (kept := _view_cache.get(key)) is not None:
+        _view_cache.move_to_end(key)
+        return kept
+    replay = _view_replays.get(key)
+    if replay is None:
+        replay = asyncio.ensure_future(asyncio.to_thread(build_backtest_run_strategy_view, run))
+        _view_replays[key] = replay
+        replay.add_done_callback(lambda done: _settle_replay(key, done))
+    # Shielded: a reader that goes away leaves the replay for the next one to join.
+    return await asyncio.shield(replay)
+
+
+def _settle_replay(key: tuple[object, ...], done: asyncio.Future[StrategyViewResponse]) -> None:
+    _view_replays.pop(key, None)
+    if done.cancelled() or done.exception() is not None:
+        return
+    _view_cache[key] = done.result()
+    while len(_view_cache) > _VIEW_CACHE_SIZE:
+        _view_cache.popitem(last=False)

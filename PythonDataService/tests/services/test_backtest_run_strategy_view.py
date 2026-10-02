@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections import OrderedDict
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -13,15 +16,17 @@ from fastapi import FastAPI
 from httpx import ASGITransport
 
 from app.config import settings
+from app.data_lake import run_materialization
 from app.data_lake.path_policy import lake_subpath
 from app.data_lake.types import polygon_mode_for
 from app.engine.strategy.registry import strategy_program_version
 from app.lean_sidecar.trading_calendar import next_trading_day, session_open_ms_utc
+from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
 from app.research.backtest_runs.records import persisted_execution_configuration
 from app.research.backtest_runs.repository import RunDetail, TradeRow
 from app.routers import backtest_runs
 from app.schemas.engine_backtest import EngineBacktestRequest
-from app.services.backtest_run_strategy_view import build_backtest_run_strategy_view
+from app.services.backtest_run_strategy_view import _request_from_run, build_backtest_run_strategy_view
 from app.services.engine_backtest_service import SavedRunNotReplayable, execute_engine_backtest
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.lake_fixture import seed_lake_daily, seed_lake_minute_day
@@ -31,6 +36,18 @@ pytestmark = pytest.mark.usefixtures("seeded_lake_catalog")
 WARMUP_DAY = date(2026, 1, 5)
 EVALUATED_DAY = next_trading_day(WARMUP_DAY)
 PARAMS = {"symbol": "SPY", "rsi_min": 45, "rsi_max": 75}
+# The lake state the saved run recorded, and that its window materializes against again.
+RECEIPT = "a" * 64
+
+
+@pytest.fixture(autouse=True)
+def lake_receipt(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """The lake answers the run's window with ``RECEIPT`` unless a test changes it."""
+    current = {"hash": RECEIPT}
+    monkeypatch.setattr(
+        run_materialization, "materialize_engine_run", lambda **_kwargs: SimpleNamespace(availability_hash=current["hash"])
+    )
+    return current
 
 
 @pytest.fixture
@@ -121,10 +138,13 @@ def saved_run(two_day_store: None) -> RunDetail:
         ),
         trades_truncated=False,
         parity_verdicts=(),
-        evidence_provenance_json=(
-            None if response.evidence_provenance is None else response.evidence_provenance.model_dump_json()
-        ),
+        evidence_provenance_json=_with_receipt(response.evidence_provenance, RECEIPT),
     )
+
+
+def _with_receipt(provenance: RunEvidenceProvenance | None, receipt: str | None) -> str:
+    assert provenance is not None
+    return provenance.model_copy(update={"data_availability_hash": receipt}).model_dump_json()
 
 
 def test_a_saved_runs_view_replays_its_own_decisions_behind_its_warmup(saved_run: RunDetail) -> None:
@@ -148,6 +168,42 @@ def test_a_replay_that_does_not_reproduce_the_runs_trades_is_refused(saved_run: 
     moved = replace(saved_run, trades=(replace(first, entry_price=first.entry_price + 0.01), *rest))
     with pytest.raises(SavedRunNotReplayable, match="changed its trade 1"):
         build_backtest_run_strategy_view(moved)
+
+
+def test_bars_that_changed_since_the_run_or_a_run_with_no_receipt_are_refused(
+    saved_run: RunDetail, lake_receipt: dict[str, str]
+) -> None:
+    unreceipted = replace(
+        saved_run,
+        evidence_provenance_json=_with_receipt(
+            RunEvidenceProvenance.model_validate_json(saved_run.evidence_provenance_json or ""), None
+        ),
+    )
+    with pytest.raises(SavedRunNotReplayable, match="recorded no data receipt"):
+        build_backtest_run_strategy_view(unreceipted)
+
+    # Zero trades or not, a run read on other bars is not its own evidence.
+    lake_receipt["hash"] = "b" * 64
+    with pytest.raises(SavedRunNotReplayable, match="bars for this run have changed"):
+        build_backtest_run_strategy_view(saved_run)
+
+
+def test_a_compatibility_run_is_rebuilt_without_the_flat_commission_it_never_charged(saved_run: RunDetail) -> None:
+    compatibility = replace(
+        saved_run,
+        commission_per_order=None,
+        execution_config_json=json.dumps(
+            persisted_execution_configuration(
+                compatibility_profile="us-equity-raw-ibkr-v1", warmup_from_date=None, slippage_per_share=0.0
+            )
+        ),
+        data_policy_json=json.dumps({**json.loads(saved_run.data_policy_json or "{}"), "adjusted": False}),
+    )
+
+    request = _request_from_run(compatibility)
+
+    assert request.compatibility_profile == "us-equity-raw-ibkr-v1"
+    assert "commission_per_order" not in request.model_fields_set
 
 
 @pytest.mark.parametrize(
@@ -185,3 +241,33 @@ async def test_the_route_answers_a_refusal_with_its_reason(
     assert refused.json()["detail"]["code"] == "STRATEGY_VIEW_NOT_REPLAYABLE"
     assert refused.json()["detail"]["message"].startswith("This is a LEAN run")
     assert missing.status_code == 404
+
+
+async def test_a_replay_in_flight_is_joined_and_then_kept(
+    saved_run: RunDetail, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A strategy view replays a whole backtest: a second read joins the first, and a third is served kept."""
+    monkeypatch.setattr(backtest_runs, "_view_cache", OrderedDict())
+    view = await asyncio.to_thread(build_backtest_run_strategy_view, saved_run)
+    built: list[int] = []
+
+    def build(run: RunDetail):
+        built.append(run.id)
+        return view
+
+    async def read(function: object, run_id: int) -> RunDetail:
+        return saved_run
+
+    monkeypatch.setattr(backtest_runs, "build_backtest_run_strategy_view", build)
+    monkeypatch.setattr(backtest_runs, "with_connection", read)
+    app = FastAPI()
+    app.include_router(backtest_runs.router, prefix="/api/research/backtest-runs")
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first, second = await asyncio.gather(
+            client.get("/api/research/backtest-runs/7/strategy-view"),
+            client.get("/api/research/backtest-runs/7/strategy-view"),
+        )
+        third = await client.get("/api/research/backtest-runs/7/strategy-view")
+
+    assert [response.status_code for response in (first, second, third)] == [200, 200, 200]
+    assert built == [7]

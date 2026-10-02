@@ -2,11 +2,11 @@
 
 The run is run again exactly as it ran -- its engine, fills, closing-bar rule,
 evaluation boundary, settings and bars (``replay_engine_run``) -- and each
-decision it stages is kept. The replay is shown as the run's own only when it
-reproduces the run's stored trades; otherwise, and for a run that cannot be
-replayed exactly at all (a LEAN run, or one whose strategy has changed since),
-the view refuses and says why. Nothing about the decisions is stored with the
-run.
+decision it stages is kept. The replay is shown as the run's own only when its
+bars still match the data receipt the run recorded and it reproduces the run's
+stored trades; otherwise, and for a run that cannot be replayed exactly at all
+(a LEAN run, or one whose strategy has changed since), the view refuses and
+says why. Nothing about the decisions is stored with the run.
 """
 
 from __future__ import annotations
@@ -15,17 +15,22 @@ import json
 import math
 from collections import deque
 
+from pydantic import ValidationError
+
 from app.engine.data.trade_bar import TradeBar
 from app.engine.strategy.base import LoggedTrade
 from app.engine.strategy.registry import strategy_program_version
 from app.engine.strategy.signal_program import SignalDecision
-from app.lean_sidecar.trading_calendar import session_windows_ms_utc
 from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
 from app.research.backtest_runs.repository import RunDetail
 from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.schemas.engine_backtest import EngineBacktestRequest
 from app.schemas.strategy_view import StrategyViewCandle, StrategyViewResponse
-from app.services.engine_backtest_service import SavedRunNotReplayable, replay_engine_run
+from app.services.engine_backtest_service import (
+    SavedRunNotReplayable,
+    replay_availability_hash,
+    replay_engine_run,
+)
 from app.services.strategy_view import ResolvedStrategyView, StrategyViewUnavailableError
 from app.utils.session_anchors import et_date_at_ms
 
@@ -55,6 +60,7 @@ def build_backtest_run_strategy_view(run: RunDetail) -> StrategyViewResponse:
     except StrategyViewUnavailableError as exc:
         raise SavedRunNotReplayable(str(exc)) from exc
 
+    _require_the_runs_bars(run, request)
     kept: deque[tuple[TradeBar, SignalDecision]] = deque(maxlen=MAX_STRATEGY_VIEW_CANDLES)
     staged_count = 0
 
@@ -66,7 +72,9 @@ def build_backtest_run_strategy_view(run: RunDetail) -> StrategyViewResponse:
     _require_the_runs_trades(run, replay_engine_run(request, record=record))
 
     evaluation_start_ms = None if request.warmup_from_date is None else run.start_ms
-    skipped = _closing_bar_skips(run)
+    provenance = _provenance(run)
+    # Decisions the run's closing-bar rule set aside (#2607).
+    skipped = set() if provenance is None else {skip.bar_close_ms for skip in provenance.closing_bar_skips}
     candles: list[StrategyViewCandle] = []
     for bar, decision in kept:
         explained = DecisionExplanationRecord.from_decision(bar, decision)
@@ -75,7 +83,6 @@ def build_backtest_run_strategy_view(run: RunDetail) -> StrategyViewResponse:
         if evaluation_start_ms is not None and bar.end_ms <= evaluation_start_ms:
             candle = view.candle(explained, phase="before_start")
         elif bar.end_ms in skipped:
-            # The run's closing-bar rule set this decision aside (#2607).
             candle = view.candle(explained, phase="decision", outcome="blocked", reason_code="CLOSING_BAR_SKIPPED")
         else:
             candle = view.candle(explained, phase="decision", outcome=_OUTCOME[explained.signal])
@@ -86,12 +93,13 @@ def build_backtest_run_strategy_view(run: RunDetail) -> StrategyViewResponse:
         notices.append("No decision bars were found for this run.")
     elif staged_count > len(kept):
         notices.append(f"This run has {staged_count} decision bars; the latest {len(kept)} are shown.")
-    sessions = session_windows_ms_utc(et_date_at_ms(run.start_ms), et_date_at_ms(run.end_ms))
+    # The run's own first and last evaluated bars bound it, in whatever session it read.
+    evaluated = [candle for candle in candles if candle.phase == "decision"]
     return view.response(
         symbol=run.symbol,
         run_id=f"backtest-run:{run.id}",
-        run_started_at_ms=sessions[0].open_ms_utc if sessions else run.start_ms,
-        run_stopped_at_ms=sessions[-1].close_ms_utc if sessions else run.end_ms,
+        run_started_at_ms=evaluated[0].bar_start_ms if evaluated else run.start_ms,
+        run_stopped_at_ms=evaluated[-1].bar_close_ms if evaluated else run.end_ms,
         candles=candles,
         notices=notices,
     )
@@ -104,23 +112,52 @@ def _request_from_run(run: RunDetail) -> EngineBacktestRequest:
     if run.timespan not in ("minute", "daily"):
         raise SavedRunNotReplayable(f"This run read '{run.timespan}' bars, which cannot be replayed.")
     execution = json.loads(run.execution_config_json) if run.execution_config_json else {}
-    return EngineBacktestRequest(
-        strategy_name=run.strategy_name,
-        fill_mode=run.fill_mode,
-        commission_per_order=run.commission_per_order or 0.0,
-        slippage_per_share=execution.get("slippage_per_share") or 0.0,
+    compatibility_profile = execution.get("compatibility_profile")
+    # A compatibility run charges its pinned IBKR fees and recorded no flat commission; naming one is refused.
+    commission = {} if compatibility_profile is not None else {"commission_per_order": run.commission_per_order or 0.0}
+    try:
+        return EngineBacktestRequest(
+            strategy_name=run.strategy_name,
+            fill_mode=run.fill_mode,
+            **commission,
+            slippage_per_share=execution.get("slippage_per_share") or 0.0,
         from_date=et_date_at_ms(run.start_ms).isoformat(),
         to_date=et_date_at_ms(run.end_ms).isoformat(),
-        warmup_from_date=execution.get("warmup_from_date"),
-        compatibility_profile=execution.get("compatibility_profile"),
-        save_study=False,
-        summary_only=True,
-        initial_cash=run.initial_cash,
-        params=json.loads(run.parameters_json),
-        resolution=run.timespan,
-        auto_fetch=False,
-        data_policy=json.loads(run.data_policy_json),
-    )
+            warmup_from_date=execution.get("warmup_from_date"),
+            compatibility_profile=compatibility_profile,
+            save_study=False,
+            summary_only=True,
+            initial_cash=run.initial_cash,
+            params=json.loads(run.parameters_json),
+            resolution=run.timespan,
+            auto_fetch=False,
+            data_policy=json.loads(run.data_policy_json),
+        )
+    except ValidationError as exc:
+        raise SavedRunNotReplayable(f"This run's recorded settings no longer form a backtest: {exc}") from exc
+
+
+def _provenance(run: RunDetail) -> RunEvidenceProvenance | None:
+    if run.evidence_provenance_json is None:
+        return None
+    return RunEvidenceProvenance.model_validate_json(run.evidence_provenance_json)
+
+
+def _require_the_runs_bars(run: RunDetail, request: EngineBacktestRequest) -> None:
+    """Refuse a replay whose bars cannot be shown to be the ones the run read.
+
+    The run recorded the lake state it ran against (``data_availability_hash``);
+    the same window is materialized again and must hash the same. A run that
+    recorded none cannot prove its bars, so it is not replayed.
+    """
+    provenance = _provenance(run)
+    receipt = None if provenance is None else provenance.data_availability_hash
+    if receipt is None:
+        raise SavedRunNotReplayable(
+            "This run recorded no data receipt, so its bars cannot be shown to be the ones it read."
+        )
+    if replay_availability_hash(request) != receipt:
+        raise SavedRunNotReplayable("The lake's bars for this run have changed since it ran.")
 
 
 def _require_the_runs_trades(run: RunDetail, trades: list[LoggedTrade]) -> None:
@@ -144,13 +181,6 @@ def _require_the_runs_trades(run: RunDetail, trades: list[LoggedTrade]) -> None:
                 f"Replaying this run changed its trade {stored.trade_number}, "
                 "so the bars or the strategy have changed since it ran."
             )
-
-
-def _closing_bar_skips(run: RunDetail) -> frozenset[int]:
-    if run.evidence_provenance_json is None:
-        return frozenset()
-    provenance = RunEvidenceProvenance.model_validate_json(run.evidence_provenance_json)
-    return frozenset(skip.bar_close_ms for skip in provenance.closing_bar_skips)
 
 
 __all__ = ["MAX_STRATEGY_VIEW_CANDLES", "build_backtest_run_strategy_view"]

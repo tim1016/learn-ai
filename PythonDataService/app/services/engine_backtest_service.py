@@ -437,6 +437,33 @@ class SavedRunNotReplayable(ValueError):
     """A saved run cannot be replayed exactly as it ran; the message says why."""
 
 
+def replay_availability_hash(request: EngineBacktestRequest) -> str:
+    """The lake state a saved run's window materializes against now, as the run recorded its own.
+
+    The same materialization the run's own ``auto_fetch`` did
+    (``_materialize_missing_bars``): a day the lake has lost is fetched again,
+    and the hash says whether the bars are still the ones the run read.
+    """
+    from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run
+    from app.data_lake.types import polygon_mode_for
+
+    symbol = None if request.data_policy is None else request.data_policy.symbol
+    start = request.warmup_from_date or request.from_date
+    if symbol is None or start is None or request.to_date is None:
+        raise SavedRunNotReplayable("This run recorded no symbol or window, so its bars cannot be read again.")
+    try:
+        return materialize_engine_run(
+            symbol=symbol,
+            start=_parse_iso_date(start, "start_date"),
+            end=_parse_iso_date(request.to_date, "to_date"),
+            resolution=request.resolution,
+            price_adjustment_mode=polygon_mode_for(_policy_adjusted(request.data_policy)),
+            requester=request.strategy_name,
+        ).availability_hash
+    except LakeMaterializationError as exc:
+        raise SavedRunNotReplayable(f"The lake could not read this run's bars again: {exc}") from exc
+
+
 def replay_engine_run(
     request: EngineBacktestRequest,
     *,
