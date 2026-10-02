@@ -244,11 +244,15 @@ def test_a_default_range_widens_to_hold_the_seed_and_the_incumbent() -> None:
 def test_a_widened_range_stays_inside_the_domain_on_the_quantum() -> None:
     # A qualification minted under an older declaration can sit off today's quantum or outside its domain.
     registry = registry_incumbent(EMA, "SPY")
-    stale = IncumbentRef(source="qualification", qualification_id="gq-3", params={**registry.params, "gap": 2.5, "rsi_max": 90.4})
+    stale = IncumbentRef(
+        source="qualification", qualification_id="gq-3", params={**registry.params, "gap": 2.5, "rsi_min": 29.6, "rsi_max": 90.4}
+    )
     protocol = default_protocol(EMA, "SPY", stale, now_ms=OCTOBER_15, earliest_session=None)
     ranges = {plan.name: (plan.low, plan.high) for plan in protocol.knobs}
 
-    assert ranges["gap"] == (0.0, 2.0) and ranges["rsi_max"] == (60.0, 90.0)
+    assert ranges["gap"] == (0.0, 2.0)
+    # Each end rounds outward, so the range still holds the benchmark: half-even would give 30 and 90.
+    assert ranges["rsi_min"] == (29.0, 60.0) and ranges["rsi_max"] == (60.0, 91.0)
 
 
 def test_the_preflight_counts_each_knobs_settings_exactly() -> None:

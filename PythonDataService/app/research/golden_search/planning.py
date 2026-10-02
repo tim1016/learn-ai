@@ -25,9 +25,9 @@ run-up (24 months when the lake's first session is unknown), and (c) keeps
 the default plan's conservative evaluation bound within its budget.
 
 Formula (default ranges): a knob's range is its declared default range
-widened to hold the seed's and the incumbent's values, each end quantized
-and clamped to the domain, so the range holds where the search starts and
-the benchmark it must beat.
+widened to hold the seed's and the incumbent's values, each end rounded
+outward onto the quantum and clamped to the domain, so the range holds
+where the search starts and the benchmark it must beat.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Plan before
   seeing results", "Open one final test"; ``app/research/sweep/warmup.py``.
 Canonical implementation: this file.
@@ -41,7 +41,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from itertools import product
 from pathlib import Path
 from typing import Any
@@ -555,12 +555,12 @@ def default_final_interval(now_ms: int, final_months: int, latest_session: date 
 
 def _default_knob(knob: SearchKnob, seed: Decimal, benchmark: Decimal) -> KnobPlan:
     """A knob as a fresh plan starts it: searched or held by declaration, its default range widened to hold the seed
-    and the benchmark (each end quantized and clamped to the domain), and held at the seed."""
+    and the benchmark (each end rounded outward onto the quantum and clamped to the domain), and held at the seed."""
     return KnobPlan(
         name=knob.name,
         mode="search" if knob.searchable_by_default else "fixed",
-        low=float(quantize(knob, min(knob.default_low, seed, benchmark))),
-        high=float(quantize(knob, max(knob.default_high, seed, benchmark))),
+        low=float(quantize(knob, min(knob.default_low, seed, benchmark), ROUND_FLOOR)),
+        high=float(quantize(knob, max(knob.default_high, seed, benchmark), ROUND_CEILING)),
         fixed_value=float(seed),
         step=float(knob.default_step) if knob.searchable_by_default else None,
     )

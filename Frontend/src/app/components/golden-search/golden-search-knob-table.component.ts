@@ -56,7 +56,7 @@ export class GoldenSearchKnobTableComponent {
   readonly knobs = input.required<readonly KnobPlan[]>();
   readonly capability = input.required<StrategyCapability | null>();
   readonly method = input.required<GoldenSearchMethod>();
-  /** The plan's starting point (the seed, or the incumbent's params); a knob it omits starts at its declared default. */
+  /** The plan's seed; a knob it omits starts at its declared default. */
   readonly start = input<Point | null>(null);
   /** The frozen incumbent's params: the golden values the search is judged against. */
   readonly golden = input<Point | null>(null);

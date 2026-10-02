@@ -109,6 +109,8 @@ export class GoldenSearchPlanFormComponent {
     const protocol = this.draft()?.protocol;
     return protocol?.seed != null && pointDifferences(protocol.seed, protocol.incumbent.params, this.capability()).length > 0;
   });
+  /** A qualification's benchmark, whose searches start from the registry settings rather than its own values. */
+  protected readonly qualifiedBenchmark = computed(() => this.draft()?.protocol.incumbent.source === 'qualification');
   protected readonly unreadable = computed(() => unreadableProblems(this.draft()?.problems ?? new Map(), this.capability()));
   protected readonly refusalList = computed(() => refusalProblems(this.refusals(), this.draft()?.protocol.knobs ?? []));
   protected readonly lockMessage = computed(() => this.lockRefusal()?.message ?? this.lockError());

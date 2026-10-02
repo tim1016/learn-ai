@@ -306,7 +306,11 @@ export function applyPlanEdit(draft: PlanDraft, edit: PlanEdit, capability: Stra
       const value = readNumber(edit.raw);
       if (value === null) return { ...draft, protocol, problems: withProblem(problems, key, 'Enter a number.') };
       if (WHOLE_NUMBER_FIELDS.has(edit.field) && !Number.isInteger(value)) return { ...draft, problems: withProblem(problems, key, 'Enter a whole number.') };
-      if (edit.field === 'final_months') return { ...draft, finalMonths: value, problems: withProblem(problems, key, null) };
+      if (edit.field === 'final_months') {
+        // The cut belonged to the old count; the server's new dates bring their own.
+        const { finalSessionsCut: _cut, ...rest } = draft;
+        return { ...rest, finalMonths: value, problems: withProblem(problems, key, null) };
+      }
       return { ...draft, protocol: setNumber(protocol, edit.field, value), problems: withProblem(problems, key, null) };
     }
     case 'date': {

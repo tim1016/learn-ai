@@ -139,6 +139,14 @@ describe('applyPlanEdit', () => {
     expect(dated.finalSessionsCut).toBeUndefined();
   });
 
+  it("a new final-month count drops the old count's cut until the server lays out the new dates", () => {
+    const laidOut: PlanDraft = { ...draft(), finalMonths: 3, finalSessionsCut: 3 };
+    const recounted = applyPlanEdit(laidOut, { kind: 'number', field: 'final_months', raw: '4' }, emaCapability());
+
+    expect(recounted.finalMonths).toBe(4);
+    expect(recounted.finalSessionsCut).toBeUndefined();
+  });
+
   it('forgets an unreadable value once its input is no longer shown, so no problem points at a hidden field', () => {
     const blankStep = applyPlanEdit(draft(), { kind: 'knob-number', name: 'fast_period', field: 'step', raw: '' }, emaCapability());
     const single = applyPlanEdit(applyPlanEdit(blankStep, { kind: 'knob-number', name: 'fast_period', field: 'low', raw: '5' }, emaCapability()), { kind: 'knob-number', name: 'fast_period', field: 'high', raw: '5' }, emaCapability());

@@ -296,6 +296,19 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(screen.getByRole('rowheader', { name: /Hold time/ }).closest('tr')?.textContent).toContain('starts at 5');
   });
 
+  it('a registry benchmark with an edited held value is the benchmark, without the qualification sentence', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    expect(screen.getByText(/Start and benchmark · Registry validated settings/)).not.toBeNull();
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Vary Fast EMA length' }));
+    fireEvent.input(screen.getByLabelText('Fast EMA length held value'), { target: { value: '6' } });
+
+    await waitFor(() => expect(screen.getByText(/Benchmark · Registry validated settings/)).not.toBeNull());
+    expect(screen.queryByText(/Searches start from the registry settings/)).toBeNull();
+  });
+
   it("shows a knob's refusal on its row, and the footer's link takes the trader to the field", async () => {
     const service = fakeService();
     const { view } = await renderForm(service);

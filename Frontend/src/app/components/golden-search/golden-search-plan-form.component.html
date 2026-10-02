@@ -26,7 +26,10 @@
           <span>{{ startDiffers() ? 'Benchmark' : 'Start and benchmark' }} · {{ label }}</span>
           @if (incumbentSentence(); as sentence) { <strong class="start__sentence">{{ sentence }}</strong> }
           <small>
-            @if (startDiffers()) { Searches start from the registry settings, so they never lean on data this benchmark was chosen on; the Golden column shows where each knob starts. }
+            @if (startDiffers()) {
+              @if (qualifiedBenchmark()) { Searches start from the registry settings, so they never lean on data this benchmark was chosen on. }
+              The Golden column shows where each knob starts.
+            }
             Frozen when you lock the plan.
           </small>
         </div>
