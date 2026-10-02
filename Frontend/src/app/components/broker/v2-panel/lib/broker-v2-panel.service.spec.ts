@@ -102,6 +102,14 @@ describe('BrokerV2PanelService run evidence', () => {
     await expect(prefill).resolves.toMatchObject({ source_strategy_instance_id: 'sid/1' });
   });
 
+  it('reads one bot’s strategy view through its clerk, account and escaped identity (#2639)', async () => {
+    const view = service.getStrategyView(target('PA9'), 'sid/1');
+    const read = http.expectOne('/api/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid%2F1/strategy-view');
+    expect(read.request.method).toBe('GET');
+    read.flush({ strategy_key: 'ema_crossover_signal', candles: [] });
+    await expect(view).resolves.toMatchObject({ strategy_key: 'ema_crossover_signal' });
+  });
+
   it('loads the current run from the clerk-scoped run endpoint', async () => {
     const response = service.getCurrentRun(
       resourceTarget('alpaca paper', CLERK, { accountId: 'account/1', entityId: 'sid/001' }),

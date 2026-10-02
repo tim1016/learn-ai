@@ -1,0 +1,68 @@
+@let strategy = view();
+@if (failure(); as failed) {
+  <div class="strategy-view__failure" role="alert">
+    <p class="strategy-view__failure-message">{{ failed.message }}</p>
+    @if (failed.why) {
+      <p>{{ failed.why }}</p>
+    }
+    <button type="button" (click)="retry.emit()">Retry strategy view</button>
+  </div>
+} @else if (strategy === null) {
+  <p class="strategy-view__state" role="status">
+    {{ loading() ? 'Loading the strategy view…' : 'The strategy view has not loaded.' }}
+  </p>
+} @else {
+  @if (notices().length > 0) {
+    <ul class="strategy-view__notices" aria-label="Strategy view notices">
+      @for (notice of notices(); track notice) {
+        <li>{{ notice }}</li>
+      }
+    </ul>
+  }
+  @if (strategy.candles.length === 0) {
+    <p class="strategy-view__state" role="status">
+      No decision bars yet. The first appears when the bot’s first {{ timeframe() }} bar closes.
+    </p>
+  } @else {
+    <ul class="strategy-view__legend" aria-label="Chart legend">
+      <li class="strategy-view__legend-source">Bot’s decision bars ·</li>
+      <li>
+        <span class="swatch" aria-hidden="true" [style.background]="colors.upBright"></span>
+        <span class="swatch" aria-hidden="true" [style.background]="colors.downBright"></span>
+        gate holds
+      </li>
+      <li>
+        <span class="swatch" aria-hidden="true" [style.background]="colors.upDark" [style.border-color]="colors.upDarkEdge"></span>
+        <span class="swatch" aria-hidden="true" [style.background]="colors.downDark" [style.border-color]="colors.downDarkEdge"></span>
+        gate fails or no result
+      </li>
+      @for (line of legendLines(); track line.key) {
+        <li><span class="line-swatch" aria-hidden="true" [style.background]="line.color"></span>{{ line.label }}</li>
+      }
+      @for (line of chartComputed(); track line.id) {
+        <li class="strategy-view__legend-computed">
+          <span class="line-swatch line-swatch--thin" aria-hidden="true" [style.background]="line.color"></span>{{ line.label }} <small>chart</small>
+        </li>
+      }
+      <li><span aria-hidden="true">▲▼</span> decision</li>
+      <li class="strategy-view__legend-hint">Click a candle for its checks</li>
+    </ul>
+    <app-strategy-chart
+      class="strategy-view__chart"
+      [view]="strategy"
+      [gateId]="gate()?.gate_id ?? null"
+      [selectedBarCloseMs]="selectedBarCloseMs()"
+      [indicatorPlans]="indicatorPlans()"
+      (candleClicked)="onCandleClicked($event)"
+      (candleSelected)="selectedBarCloseMs.set($event)"
+    />
+    @if (openCandle(); as open) {
+      <app-strategy-candle-popover
+        [candle]="open.candle"
+        [gate]="gate()"
+        [anchor]="open.anchor"
+        (closed)="onPopoverClosed()"
+      />
+    }
+  }
+}

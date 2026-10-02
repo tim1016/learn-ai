@@ -13,7 +13,9 @@ from app.services.strategy_gates import (
     DRAFT_GATE_ID,
     GateExpressionError,
     VariableSource,
+    compile_gate,
     evaluate_gates,
+    gate_catalogue,
     parse_linear,
     resolve_variable,
 )
@@ -91,6 +93,11 @@ def test_a_linear_expression_reads_as_terms_plus_a_constant(text: str, terms: tu
         ("(EMA5 - EMA10", "never closed"),
         ("EMA5 $ 2", "cannot appear"),
         ("EMA5 -", "ends too soon"),
+        # A number past float range would be saved as null and break every strategy's gates.
+        ("1" + "0" * 330 + " * EMA5", "too large to judge"),
+        ("EMA5 / 0." + "0" * 309 + "1", "too large to judge"),
+        # Only ASCII digits are numbers.
+        ("\u0663 * EMA5", "cannot appear"),
     ],
 )
 def test_an_invalid_gate_is_refused_with_a_plain_reason(text: str, reason: str) -> None:
@@ -126,6 +133,11 @@ def test_a_catalogue_name_the_bot_records_is_the_bots_own_value_only_at_its_leng
         ("VWAP14", "takes no length"),
         ("EMA9999", "length must be between"),
         ("symbol", "not a number"),
+        # Each draws more than one line, so there is no one number to read.
+        ("AROON25", "more than one line"),
+        ("STOCHRSI14", "more than one line"),
+        ("FISHER9", "more than one line"),
+        ("ADX14", "more than one line"),
     ],
 )
 def test_an_unknown_variable_is_refused_with_a_plain_reason(name: str, reason: str) -> None:
@@ -193,3 +205,24 @@ def test_a_saved_gate_that_no_longer_resolves_is_reported_not_raised(candles: li
     assert notices == [
         "A saved gate could not be judged for these settings: 'FOO' is not a value, a setting, a candle field or a catalogue indicator."
     ]
+
+
+def test_names_that_read_the_same_number_are_one_term() -> None:
+    view = _ema_view()
+
+    def compiled(expression: str) -> list[tuple[float, str]]:
+        terms, _constant = compile_gate(view, CustomGateInput(label="t", expression=expression, sign="gt"))
+        return [(term.coefficient, term.variable) for term in terms]
+
+    assert compiled("EMA5 - ema5 + close") == [(1.0, "close")]
+    assert compiled("EMA20 + ema20") == [(2.0, "EMA20")]
+    with pytest.raises(GateExpressionError, match="cancel out"):
+        compiled("EMA5 - ema5")
+
+
+def test_the_gate_catalogue_offers_only_one_line_indicators_with_no_setting_or_a_length() -> None:
+    offered = {indicator.variable for indicator in gate_catalogue()}
+
+    assert {"EMA10", "SMA20", "RSI14", "VWAP", "OBV"} <= offered
+    assert not offered & {"AROON25", "STOCHRSI14", "FISHER9", "ADX14"}
+    assert not any(variable.startswith("MACD") for variable in offered)

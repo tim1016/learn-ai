@@ -1,0 +1,50 @@
+// Shared look for the strategy view's chips and popovers (#2639).
+
+// A small header control that opens a popover: the gate and indicators chips.
+@mixin chip-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+
+  &:hover { background: var(--bg-hover); color: var(--text-primary); }
+  &:focus-visible { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+
+  small { color: var(--accent-text); font-size: var(--fs-xxs); }
+}
+
+// A native `[popover]` placed beside what opened it (see popover-placement.ts):
+// the UA centres popovers with `inset: 0; margin: auto`, so both are reset.
+@mixin anchored-popover($width: 27rem) {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  width: min(#{$width}, calc(100vw - 2rem));
+  max-height: min(70vh, 35rem);
+  overflow: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-pop);
+
+  h3 { margin: 0 0 var(--space-2); font-size: var(--fs-md); }
+}
+
+// "STRATEGY'S OWN · BOT'S VALUES": a popover's section label.
+@mixin popover-section-label {
+  margin: var(--space-2) 0 var(--space-1);
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-semi);
+  letter-spacing: var(--ls-caps);
+  text-transform: uppercase;
+}

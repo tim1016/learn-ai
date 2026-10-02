@@ -1,0 +1,94 @@
+<section class="chart-panel" [attr.aria-label]="'Chart for ' + symbol()">
+  <header class="chart-panel__head">
+    <app-asset-identity [symbol]="symbol()" size="sm" />
+    <div class="chart-panel__tabs" role="tablist" aria-label="Chart view">
+      <button
+        #tab
+        [id]="ids.strategyTab"
+        type="button"
+        role="tab"
+        data-chart-tab="strategy"
+        [attr.aria-selected]="activeTab() === 'strategy'"
+        [attr.tabindex]="activeTab() === 'strategy' ? 0 : -1"
+        [attr.aria-controls]="ids.strategyPanel"
+        (click)="selectTab('strategy')"
+        (keydown)="onTabKeydown($event)"
+      >{{ strategyTabLabel() }}</button>
+      <button
+        #tab
+        [id]="ids.tapeTab"
+        type="button"
+        role="tab"
+        data-chart-tab="tape"
+        [attr.aria-selected]="activeTab() === 'tape'"
+        [attr.tabindex]="activeTab() === 'tape' ? 0 : -1"
+        [attr.aria-controls]="ids.tapePanel"
+        (click)="selectTab('tape')"
+        (keydown)="onTabKeydown($event)"
+      >Tape</button>
+    </div>
+    @if (activeTab() === 'strategy') {
+      @if (shownView(); as shown) {
+        @if (activeGate(); as gate) {
+          <app-strategy-gate-picker
+            [gates]="shown.declaration.gates"
+            [activeGate]="gate"
+            [savedGates]="gates.saved()"
+            [strategyName]="shown.strategy_name"
+            [variables]="gateVariables()"
+            [draftRefusal]="gates.draftRefusal()"
+            [previewing]="gates.previewing()"
+            [save]="saveGate"
+            [remove]="removeGate"
+            (gateChange)="chooseGate($event)"
+            (previewDraft)="gates.preview($event)"
+            (editorClosed)="gates.clearDraft()"
+          />
+        }
+        <app-strategy-indicators
+          [values]="shown.declaration.values"
+          [chartComputed]="indicators.chips()"
+          [chartComputedKeys]="indicators.keys()"
+          [categories]="indicators.catalog.categories()"
+          [catalogLoading]="indicators.catalog.loading()"
+          [catalogLoadFailed]="indicators.catalog.loadFailed()"
+          [calculating]="indicators.calculating()"
+          [error]="indicators.error()"
+          (indicatorAdded)="indicators.add($event)"
+          (indicatorRemoved)="indicators.remove($event)"
+        />
+      }
+    }
+  </header>
+
+  <div
+    [id]="ids.strategyPanel"
+    class="chart-panel__body"
+    role="tabpanel"
+    [attr.aria-labelledby]="ids.strategyTab"
+    [hidden]="activeTab() !== 'strategy'"
+  >
+    <app-strategy-view
+      [view]="shownView()"
+      [loading]="loading()"
+      [failure]="failure()"
+      [gate]="activeGate()"
+      [(selectedBarCloseMs)]="selectedBarCloseMs"
+      [indicatorPlans]="indicators.plans()"
+      [chartComputed]="indicators.chips()"
+      (retry)="retry.emit()"
+    />
+  </div>
+
+  <div
+    [id]="ids.tapePanel"
+    class="chart-panel__body"
+    role="tabpanel"
+    [attr.aria-labelledby]="ids.tapeTab"
+    [hidden]="activeTab() !== 'tape'"
+  >
+    @if (tapeOpened()) {
+      <ng-container [ngTemplateOutlet]="tape()" />
+    }
+  </div>
+</section>

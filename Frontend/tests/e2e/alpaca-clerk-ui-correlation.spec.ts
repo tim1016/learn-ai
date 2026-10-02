@@ -349,9 +349,11 @@ test.describe('Alpaca Clerk #1413 browser correlation campaign', () => {
         return;
       }
       if (path.endsWith(`/bots/${STRATEGY_INSTANCE_ID}/budget`)
-        || path.endsWith(`/bots/${STRATEGY_INSTANCE_ID}/chart/history`)) {
-        // The one view always shows the bot's money and its delayed history;
-        // both are reads outside this campaign, answered and not counted.
+        || path.endsWith(`/bots/${STRATEGY_INSTANCE_ID}/chart/history`)
+        || path.endsWith(`/bots/${STRATEGY_INSTANCE_ID}/strategy-view`)) {
+        // The one view always shows the bot's money, its delayed history and
+        // its strategy view (#2639); all are reads outside this campaign,
+        // answered and not counted.
         await route.fulfill({ status: 503, json: { detail: 'Outside this campaign.' } });
         return;
       }

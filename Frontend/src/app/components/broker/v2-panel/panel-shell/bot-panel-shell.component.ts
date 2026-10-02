@@ -12,6 +12,7 @@ import {
   linkedSignal,
   resource,
   signal,
+  untracked,
   viewChild,
 } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
@@ -78,6 +79,8 @@ import { BotDayChartComponent } from '../bot-page/bot-day-chart.component';
 import { BotDetailsComponent } from '../bot-page/bot-details.component';
 import { BotEndCardComponent } from '../bot-page/bot-end-card.component';
 import { StrandedPositionWarningComponent } from '../bot-page/stranded-position-warning.component';
+import { BotChartPanelComponent } from '../strategy-view/bot-chart-panel.component';
+import type { StrategyViewFailure } from '../strategy-view/strategy-view-model';
 import {
   flattenUnderway,
   initialFlattenSteps,
@@ -168,13 +171,15 @@ const FLATTEN_STEP_ACTIONS: Readonly<Record<FlattenStepId, PanelAction['action_i
  * Top to bottom: the header with the backend's one primary action; the last
  * action's outcome, which takes the keyboard when it lands (story 48); for a
  * stopped bot that still holds shares, the warning with Flatten beside it
- * (stories 44–45); the day's chart beside "This bot's money"; fills and
- * recent decisions; and the audit depth folded under Details (story 47).
+ * (stories 44–45); the chart panel — the strategy's own decision candles,
+ * the market tape one tab away — beside "This bot's money"; fills and recent
+ * decisions, which share the chart's candle selection; and the audit depth
+ * folded under Details (story 47).
  *
  * ## Shell responsibilities
  * - Route parameter extraction (broker, clerk, account, sid).
  * - Data loading: the live panel snapshot, the current run, the delayed
- *   history chart.
+ *   history chart, the strategy view (re-read on each new decision).
  * - Action execution, each command owned by the bot it was sent to (#2471),
  *   including the one-confirmation Flatten sequence (hurdle H30).
  */
@@ -188,6 +193,7 @@ const FLATTEN_STEP_ACTIONS: Readonly<Record<FlattenStepId, PanelAction['action_i
     SafeFlattenPlanComponent,
     TypedHaltConfirmComponent,
     BotBannerComponent,
+    BotChartPanelComponent,
     BotDayChartComponent,
     BotDetailsComponent,
     BotEndCardComponent,
@@ -430,6 +436,59 @@ export class BotPanelShellComponent {
       ),
   });
 
+  /** The decision bar the owner selected, by its close: one selection the
+   * strategy chart and the decisions list share (#2639). */
+  protected readonly selectedDecisionBarMs = linkedSignal({
+    source: this.routeIdentity,
+    computation: (): number | null => null,
+  });
+
+  private readonly panelLoaded = computed(() => this.panel() !== null);
+  /** What the strategy view reflects from the live panel: its newest decision
+   * and the bot's status, so a run that stops without deciding again still
+   * gets its "Ended" line. */
+  private readonly strategyViewKey = computed(() => {
+    const panel = this.panel();
+    const newestSeq = (panel?.recent_decisions ?? []).reduce<number | null>(
+      (newest, decision) => (newest === null || decision.seq > newest ? decision.seq : newest),
+      null,
+    );
+    return `${newestSeq}|${panel?.status ?? ''}`;
+  });
+  /** The panel's key when the last strategy-view read began. */
+  private strategyViewReadKey: string | null = null;
+
+  /** The bot's strategy view (#2639). Keyed like the history read: the lane's
+   * binding generation fences commands, not reads. Waits for the panel so its
+   * first read already covers the decisions the panel lists. */
+  protected readonly strategyView = resource({
+    params: () => (this.panelLoaded() ? {
+      broker: this.broker(),
+      clerkId: this.clerkId(),
+      accountId: this.accountId(),
+      sid: this.sid(),
+    } : undefined),
+    loader: ({ params }) => {
+      this.strategyViewReadKey = untracked(this.strategyViewKey);
+      return this.panelSvc.getStrategyView(
+        resourceTarget(params.broker, params.clerkId, { accountId: params.accountId }),
+        params.sid,
+      );
+    },
+  });
+
+  protected readonly strategyViewValue = computed(() =>
+    this.strategyView.hasValue() ? this.strategyView.value() : null,
+  );
+
+  /** A failed read in the backend's words; the rest of the page is untouched. */
+  protected readonly strategyViewFailure = computed((): StrategyViewFailure | null => {
+    const error = this.strategyView.error();
+    if (error === undefined) return null;
+    const rejection = deriveActionRejection(error, 'The strategy view could not be read.');
+    return { message: rejection.message, why: rejection.why };
+  });
+
   /** Settled-error presentation for the delayed pane (#2202 FR-002/FR-005): a
    * boolean the leaf components can render without ever touching the raw
    * `ResourceRef.error()`/`HttpErrorResponse`. */
@@ -456,6 +515,15 @@ export class BotPanelShellComponent {
       }
     }, CURRENT_RUN_POLL_MS);
     this.destroyRef.onDestroy(() => clearInterval(runPollTimer));
+    // A new decision or a change of status (the run stopped) re-reads the
+    // strategy view — `reload`, not new params, so the chart keeps the last
+    // read on screen while the next one lands. A read already on its way
+    // began after the change or catches it here once it settles.
+    effect(() => {
+      const key = this.strategyViewKey();
+      if (this.strategyView.isLoading() || key === this.strategyViewReadKey) return;
+      untracked(() => this.strategyView.reload());
+    });
     effect(() => {
       const target = this.target();
       void this.liveStore.start({

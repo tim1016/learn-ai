@@ -1,0 +1,35 @@
+<button #trigger type="button" class="indicators-chip" [attr.popovertarget]="popoverId" aria-haspopup="dialog">
+  <span aria-hidden="true">+</span> Indicators
+</button>
+
+<div #panel [id]="popoverId" class="indicators-popover" popover role="dialog" [attr.aria-labelledby]="titleId" (toggle)="onToggle($event)">
+  <h3 [id]="titleId">Indicators</h3>
+  <h4 class="indicators-popover__section">Strategy’s own · bot’s values</h4>
+  <ul class="indicators-list">
+    @for (value of drawn(); track value.key) {
+      <li>
+        <span>
+          {{ value.label }}
+          @if (value.band; as band) { · {{ band[0] }}–{{ band[1] }} band }
+        </span>
+        <span class="indicators-list__tag">always on</span>
+      </li>
+    }
+  </ul>
+  <h4 class="indicators-popover__section">Catalogue · chart-computed from these candles</h4>
+  <app-chart-indicator-rail
+    class="indicators-popover__rail"
+    [landmark]="false"
+    [searchable]="true"
+    [activeIndicators]="chartComputed()"
+    [activeKeys]="chartComputedKeys()"
+    [categories]="categories()"
+    [catalogLoading]="catalogLoading()"
+    [catalogLoadFailed]="catalogLoadFailed()"
+    [calculationLoading]="calculating()"
+    [error]="error()"
+    [allowAdditionalInstances]="true"
+    (indicatorAdded)="indicatorAdded.emit($event)"
+    (indicatorRemoved)="indicatorRemoved.emit($event)"
+  />
+</div>

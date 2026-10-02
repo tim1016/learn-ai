@@ -5758,6 +5758,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/strategy-gates/catalogue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Catalogue
+         * @description The catalogue indicators a gate can read, so the editor offers no name the data plane would refuse.
+         */
+        get: operations["catalogue_api_strategy_gates_catalogue_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/strategy-gates/{strategy_key}": {
         parameters: {
             query?: never;
@@ -12852,6 +12872,32 @@ export interface components {
             volume: number;
         };
         /**
+         * GateCatalogue
+         * @description Every catalogue indicator a gate can read: one line, no setting or only a length.
+         */
+        GateCatalogue: {
+            /** Indicators */
+            indicators: components["schemas"]["GateCatalogueEntry"][];
+        };
+        /**
+         * GateCatalogueEntry
+         * @description A catalogue indicator a gate can read, and how a gate writes it.
+         */
+        GateCatalogueEntry: {
+            /** Default Length */
+            default_length: number | null;
+            /** Description */
+            description: string;
+            /** Max Length */
+            max_length: number | null;
+            /** Min Length */
+            min_length: number | null;
+            /** Name */
+            name: string;
+            /** Variable */
+            variable: string;
+        };
+        /**
          * GateEvaluationRequest
          * @description Judge a strategy's saved gates (and an unsaved draft) on these candles.
          *
@@ -12898,7 +12944,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "GATE_EXPRESSION_REFUSED" | "GATE_NOT_FOUND" | "STRATEGY_VIEW_UNAVAILABLE";
+            code: "GATE_EXPRESSION_REFUSED" | "GATE_NOT_FOUND" | "GATE_STORE_UNAVAILABLE" | "STRATEGY_VIEW_UNAVAILABLE";
             /** Message */
             message: string;
         };
@@ -12908,6 +12954,14 @@ export interface components {
          */
         GateRefusalBody: {
             detail: components["schemas"]["GateRefusal"];
+        };
+        /**
+         * GateRequestInvalidBody
+         * @description A request body that failed validation, as FastAPI reports it.
+         */
+        GateRequestInvalidBody: {
+            /** Detail */
+            detail: Record<string, never>[];
         };
         /**
          * GateTerm
@@ -34220,6 +34274,37 @@ export interface operations {
             };
         };
     };
+    catalogue_api_strategy_gates_catalogue_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GateCatalogue"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_gates_api_strategy_gates__strategy_key__get: {
         parameters: {
             query?: never;
@@ -34257,7 +34342,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusalBody"];
+                    "application/json": components["schemas"]["GateRefusalBody"] | components["schemas"]["GateRequestInvalidBody"];
                 };
             };
             /** @description Service Unavailable */
@@ -34312,7 +34397,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusalBody"];
+                    "application/json": components["schemas"]["GateRefusalBody"] | components["schemas"]["GateRequestInvalidBody"];
                 };
             };
             /** @description Service Unavailable */
@@ -34367,7 +34452,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusalBody"];
+                    "application/json": components["schemas"]["GateRefusalBody"] | components["schemas"]["GateRequestInvalidBody"];
                 };
             };
             /** @description Service Unavailable */
@@ -34423,7 +34508,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusalBody"];
+                    "application/json": components["schemas"]["GateRefusalBody"] | components["schemas"]["GateRequestInvalidBody"];
                 };
             };
             /** @description Service Unavailable */
@@ -34473,7 +34558,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GateRefusalBody"];
+                    "application/json": components["schemas"]["GateRefusalBody"] | components["schemas"]["GateRequestInvalidBody"];
                 };
             };
             /** @description Service Unavailable */

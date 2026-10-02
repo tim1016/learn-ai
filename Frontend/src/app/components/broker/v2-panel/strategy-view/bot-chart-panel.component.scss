@@ -1,0 +1,54 @@
+// The panel sits in a grid row beside the money card, which lends it no
+// height, so it holds the floor the market tape always held.
+:host { display: block; min-width: 0; height: 100%; min-height: 30rem; }
+
+.chart-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.chart-panel__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.chart-panel__tabs {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+
+  button {
+    padding: 0.2rem 0.6rem;
+    border: 0;
+    background: transparent;
+    color: var(--text-subtle);
+    font: inherit;
+    font-size: var(--fs-xs);
+    cursor: pointer;
+
+    &[aria-selected='true'] { background: var(--bg-hover); color: var(--text-primary); }
+    &:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+  }
+}
+
+.chart-panel__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+
+  &[hidden] { display: none; }
+
+  > * { flex: 1; min-height: 0; }
+}
