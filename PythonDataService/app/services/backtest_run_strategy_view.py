@@ -46,6 +46,8 @@ _PRICE_ATOL = 1e-9
 
 def build_backtest_run_strategy_view(run: RunDetail) -> StrategyViewResponse:
     """The run's strategy view, or ``SavedRunNotReplayable`` naming why it cannot be shown. Blocking."""
+    if run.trades_truncated:
+        raise ValueError("This run was read with only its newest trades; its replay must be checked against every one.")
     if run.source != "engine":
         raise SavedRunNotReplayable(
             "This is a LEAN run. Its decisions are LEAN's own, and this view replays the Python engine."
