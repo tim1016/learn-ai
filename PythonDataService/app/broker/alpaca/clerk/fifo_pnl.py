@@ -168,7 +168,7 @@ class PnLResult:
 
     ``closed_lots``:
         Chronological list of realized lot closures, smallest-first by
-        ``closed_at_ms``.  Feeds the trades-today list.
+        ``closed_at_ms``.  Feeds realized P&L for a session window.
 
     ``open_lots``:
         Remaining open lots (FIFO remainder).  Feeds the open-P&L valuation.

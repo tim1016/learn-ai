@@ -35,8 +35,10 @@ export class BotHealthGroupsComponent {
   /** How the run ended, and what it left at the broker, as the runner recorded it. */
   readonly dutyOutcome = input<BotHealthCard['duty_outcome']>(null);
 
-  protected readonly groups = computed((): readonly { title: string; lines: readonly HealthLineView[] }[] => [
-    { title: 'During this run', lines: this.health().run },
-    { title: 'Account right now', lines: this.health().account },
-  ]);
+  protected readonly groups = computed(
+    (): readonly { key: 'run' | 'account'; title: string; lines: readonly HealthLineView[] }[] => [
+      { key: 'run', title: 'During this run', lines: this.health().run },
+      { key: 'account', title: 'Account right now', lines: this.health().account },
+    ],
+  );
 }
