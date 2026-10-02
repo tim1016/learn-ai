@@ -79,7 +79,11 @@ def test_recent_activity_uses_the_recent_windows_own_floor_and_says_when_nothing
 
     assert row(stop_reason="no_improvement", metrics=_metrics(trades=RECENT_FLOOR))["status"] == "meets"
     assert row(stop_reason="no_improvement", metrics=_metrics(trades=RECENT_FLOOR - 1))["status"] == "concern"
-    assert row(stop_reason="no_eligible", metrics=_metrics(trades=1))["text"].startswith(f"No setting met the recent window's minimum of {RECENT_FLOOR} trades")
+    # Nothing passing every rule (say, none made money) is judged on the starting point's own trade count.
+    busy_seed = row(stop_reason="no_eligible", metrics=_metrics(trades=RECENT_FLOOR + 5, net=-1.0))
+    assert busy_seed["status"] == "meets"
+    assert busy_seed["text"] == f"{RECENT_FLOOR + 5} trades over the recent window; its minimum is {RECENT_FLOOR}. No setting met every rule there, so this candidate is its starting point."
+    assert row(stop_reason="no_eligible", metrics=_metrics(trades=1))["status"] == "concern"
     assert row(stop_reason="budget", metrics=None)["status"] == "missing"
     # Only the recent candidate carries the row.
     assert "recent_activity" not in _rows(_results(_candidate()))
@@ -121,6 +125,17 @@ def test_stress_names_the_scenario_that_turns_a_loss_and_never_passes_an_unrecor
     assert _rows(_results(_candidate(stress=stressed(10.0, None))))["stress"]["status"] == "missing"
     assert _rows(_results(_candidate(stress=[])))["stress"]["status"] == "missing"
     assert _rows(_results(_candidate(development_metrics=_metrics(net=-5.0))))["stress"]["status"] == "concern"
+
+
+def test_stress_calls_a_zero_result_break_even_not_a_loss() -> None:
+    def stressed(*nets: float) -> list[dict[str, Any]]:
+        return [{"scenario": f"s{i}", "label": f"Stress {i}", "metrics": _metrics(net=net)} for i, net in enumerate(nets)]
+
+    zero = _rows(_results(_candidate(stress=stressed(0.0))))["stress"]
+    assert (zero["status"], zero["text"]) == ("concern", "Stress 0 leaves it at break-even.")
+    assert _rows(_results(_candidate(stress=stressed(-1.0, 0.0))))["stress"]["text"] == "Stress 0 turns the result into a loss. Stress 1 leaves it at break-even."
+    flat = _rows(_results(_candidate(development_metrics=_metrics(net=0.0), stress=stressed(5.0))))["stress"]
+    assert (flat["status"], flat["text"]) == ("concern", "It only breaks even before any cost stress.")
 
 
 def test_concentration_is_not_measured_so_it_is_always_missing() -> None:

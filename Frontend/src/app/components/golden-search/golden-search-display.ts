@@ -41,6 +41,12 @@ export const EXPOSURE_PREVIEW_LABELS: Readonly<Record<ExposureState, string>> = 
   history_unknown: `${EXPOSURE_LABELS.history_unknown} · exploratory only`,
 };
 
+/** What opening the final test would record, when the server previewed it (while a candidate is being chosen or locked). */
+export function exposurePreview(study: StudyDetail): { readonly label: string; readonly explanation: string } | null {
+  const preview = study.exposure_preview;
+  return preview === null ? null : { label: EXPOSURE_PREVIEW_LABELS[preview.state], explanation: preview.explanation };
+}
+
 /** What each exposure state allows the final test to claim. */
 export const EXPOSURE_CLAIMS: Readonly<Record<ExposureState, string>> = {
   not_opened: 'The final test can count as a fresh, confirmatory look.',

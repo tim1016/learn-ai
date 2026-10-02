@@ -96,6 +96,12 @@ describe('GoldenSearchDecisionStepComponent — before the final test', () => {
     expect(screen.getByText('Another study is opening this interval.')).not.toBeNull();
   });
 
+  it('before a candidate is locked shows the final interval’s recorded exposure, the evidence Compare links to', async () => {
+    await renderStep(studyDetail('awaiting_candidate'));
+
+    expect(screen.getByText(/Recorded exposure:/).closest('p')?.textContent).toMatch(/Recorded exposure: Not opened in recorded research\.\s+\S/);
+  });
+
   it('without a locked candidate points back to Compare', async () => {
     const { steps } = await renderStep(studyDetail('awaiting_candidate'));
     fireEvent.click(screen.getByRole('button', { name: 'Return to candidates' }));

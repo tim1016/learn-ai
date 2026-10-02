@@ -3,7 +3,7 @@ import { ButtonModule } from 'primeng/button';
 
 import { GoldenSearchCandidateAsideComponent } from './golden-search-candidate-aside.component';
 import { GoldenSearchCandidateTableComponent } from './golden-search-candidate-table.component';
-import { candidateRows, initialRowKey, rowKeyFor, selectedCaption, type CandidateRow } from './golden-search-compare';
+import { candidateRows, initialRowKey, rowKeyFor, rowSummary, selectedCaption, type CandidateRow } from './golden-search-compare';
 import { GoldenSearchDecisionSummaryComponent } from './golden-search-decision-summary.component';
 import { EVIDENCE_TABS, GoldenSearchEvidenceTabsComponent, type EvidenceTab } from './golden-search-evidence-tabs.component';
 import { GoldenSearchRetainComponent, type RetainDecision } from './golden-search-retain.component';
@@ -61,10 +61,10 @@ export class GoldenSearchCompareStepComponent {
     return rowKeyFor(rows, picked?.studyId === study.id ? picked.key : null) ?? initialRowKey(rows, study.candidate_key);
   });
   protected readonly selectedRow = computed(() => this.rows().find((row) => row.key === this.selectedKey()) ?? null);
-  /** The server's decision summary for the selected candidate; none before the evidence exists. */
+  /** The server's decision summary for the selected row and every candidate folded into it; none before the evidence exists. */
   protected readonly summary = computed(() => {
     const row = this.selectedRow();
-    return row === null ? null : (this.study().decision_summaries.find((item) => item.candidate_key === row.candidate.key)?.rows ?? null);
+    return row === null ? null : rowSummary(row, this.study().decision_summaries);
   });
   private readonly tabs = viewChild(GoldenSearchEvidenceTabsComponent);
   protected readonly caption = computed(() => {

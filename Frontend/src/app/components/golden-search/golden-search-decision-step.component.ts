@@ -4,6 +4,7 @@ import { ButtonModule } from 'primeng/button';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { GoldenSearchApprovalComponent } from './golden-search-approval.component';
+import { exposurePreview } from './golden-search-display';
 import { GoldenSearchExamResultComponent } from './golden-search-exam-result.component';
 import { GoldenSearchLockboxComponent } from './golden-search-lockbox.component';
 import { RETAIN_KINDS } from './golden-search-retain.component';
@@ -60,6 +61,8 @@ export class GoldenSearchDecisionStepComponent {
     return this.candidates().find((candidate) => candidate.key === key) ?? null;
   });
   protected readonly incumbent = computed(() => this.candidates().find((candidate) => candidate.key === 'incumbent') ?? null);
+  /** The final interval's recorded use, shown before a candidate is locked so Compare's exposure row has evidence to point at. */
+  protected readonly exposure = computed(() => exposurePreview(this.study()));
   protected readonly candidateLabel = computed(() => this.candidate()?.label ?? 'Locked candidate');
   protected readonly decisionLabel = computed(() => {
     const kind = this.study().decision?.kind;

@@ -7,7 +7,7 @@
  */
 
 import { knobsByName, metricTexts, pointEntries, signedPercentText, type MetricTexts } from './golden-search-display';
-import type { CandidateKey, CapabilityKnob, EvidenceCandidate, Finding, Metrics, PairMap, PairMapCell, Point, PointValue, StrategyCapability } from './golden-search.types';
+import type { CandidateKey, CapabilityKnob, DecisionSummary, DecisionSummaryRow, EvidenceCandidate, Finding, Metrics, PairMap, PairMapCell, Point, PointValue, StrategyCapability } from './golden-search.types';
 
 /** Candidates read the searches first and the frozen incumbent last. */
 const CANDIDATE_ORDER: readonly CandidateKey[] = ['all_period', 'recent', 'incumbent'];
@@ -31,6 +31,11 @@ export interface CandidateRow extends MetricTexts {
   readonly members: readonly CandidateKey[];
   /** The labels of other candidates that are exactly these settings, folded into this row. */
   readonly sameAs: readonly string[];
+  /**
+   * The member whose neighbor audit this row shows: the representative when
+   * it has one, else a folded fit of the same settings (the incumbent has none).
+   */
+  readonly neighborSource: EvidenceCandidate;
   readonly drawdownFlags: readonly Finding[];
   readonly tradeFlags: readonly Finding[];
   readonly otherFlags: readonly Finding[];
@@ -55,12 +60,14 @@ export function candidateRows(candidates: readonly EvidenceCandidate[]): Candida
     const representative = group.has('incumbent') ? 'incumbent' : members[0];
     const candidate = byKey.get(representative);
     if (candidate === undefined) continue;
+    const audited = members.map((member) => byKey.get(member)).find((member) => member !== undefined && member.neighbors.length > 0);
     rows.push({
       key: representative,
       candidate,
       origin: CANDIDATE_ORIGINS[representative],
       members,
       sameAs: members.filter((member) => member !== representative).map((member) => byKey.get(member)?.label ?? member),
+      neighborSource: candidate.neighbors.length > 0 ? candidate : (audited ?? candidate),
       ...metricTexts(candidate.development_metrics),
       drawdownFlags: candidate.flags.filter((flag) => DRAWDOWN_FLAGS.has(flag.code)),
       tradeFlags: candidate.flags.filter((flag) => TRADE_FLAGS.has(flag.code)),
@@ -81,6 +88,34 @@ export function rowKeyFor(rows: readonly CandidateRow[], key: CandidateKey | nul
 /** The candidate a study opens Compare on: its locked pick, else the all-period fit, else the first row. */
 export function initialRowKey(rows: readonly CandidateRow[], locked: CandidateKey | null): CandidateKey | null {
   return rowKeyFor(rows, locked) ?? rowKeyFor(rows, 'all_period') ?? rows[0]?.key ?? null;
+}
+
+/**
+ * A row's decision summary. A folded row shows its representative's rows,
+ * plus any row only a folded member has (the recent fit's own activity, a
+ * fit's test over time under the incumbent's row). Where members report the
+ * same row, recorded evidence wins over missing: the incumbent has no
+ * neighbor audit, the identical fit does.
+ */
+export function rowSummary(row: CandidateRow, summaries: readonly DecisionSummary[]): DecisionSummaryRow[] | null {
+  const byKey = new Map(summaries.map((summary) => [summary.candidate_key, summary.rows]));
+  const lists = [row.key, ...row.members.filter((member) => member !== row.key)]
+    .map((member) => byKey.get(member))
+    .filter((rows): rows is DecisionSummaryRow[] => rows !== undefined);
+  if (lists.length === 0) return null;
+  const merged = [...lists[0]];
+  for (const rows of lists.slice(1)) {
+    rows.forEach((item, index) => {
+      const at = merged.findIndex((existing) => existing.key === item.key);
+      if (at === -1) {
+        const previous = index === 0 ? -1 : merged.findIndex((existing) => existing.key === rows[index - 1].key);
+        merged.splice(previous + 1, 0, item);
+      } else if (merged[at].status === 'missing' && item.status !== 'missing') {
+        merged[at] = item;
+      }
+    });
+  }
+  return merged;
 }
 
 /** `Selected: <label>. <params>. <fixed>.` — the server's sentences, joined. */
