@@ -64,11 +64,21 @@ export class PanelActionButtonComponent {
    * that silently does nothing, matching the account-desk posture card.
    */
   readonly moveIsSupported = input<(move: OperatorMove) => boolean>(isSelfDispatchable);
+  /** The bot page's toolbar (#2794): a PrimeIcons name drawn before the label. */
+  readonly icon = input<string | null>(null);
+  /** The page's plain name for the action, in place of the backend's system label. */
+  readonly label = input<string | null>(null);
+  /** When false the label is for screen readers and the tooltip only: an icon button. */
+  readonly showLabel = input(true);
+  /** When false a blocker's cure is not offered beside the button; the toolbar lists it elsewhere. */
+  readonly showMoves = input(true);
 
   readonly triggered = output<PanelActionTrigger>();
   readonly moveRequested = output<OperatorMove>();
   protected readonly confirmationOpen = signal(false);
   protected readonly blockerDescriptionId = `panel-action-blocker-${nextBlockerDescriptionId++}`;
+
+  protected readonly shownLabel = computed(() => this.label() ?? this.action().label);
 
   protected readonly visibleBlockers = computed(() => {
     const suppressedBlockerId = this.suppressedBlockerId();
@@ -98,6 +108,7 @@ export class PanelActionButtonComponent {
    * keeps the disposition contract — `wait` yields nothing, by design.
    */
   protected readonly blockerMoves = computed<readonly OperatorMove[]>(() => {
+    if (!this.showMoves()) return [];
     const isSupported = this.moveIsSupported();
     return this.action().blockers.flatMap((blocker: OperatorBlocker) =>
       movesForBlocker(blocker).filter(isSupported),
