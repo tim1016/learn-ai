@@ -2,7 +2,7 @@
  * data plane, and catalogue indicators the chart computes from the decision
  * candles — through the chart panel, as the bot page and Strategy Lab use it. */
 import { HttpErrorResponse } from '@angular/common/http';
-import { ChangeDetectionStrategy, Component } from '@angular/core';
+import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
 import { render, screen, waitFor, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
@@ -12,11 +12,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeStrategyChartFactory, type FakeSeries } from '../../../../testing/strategy-chart-fake';
 import { fakeStrategyViewDataPlane } from '../../../../testing/strategy-view-data-plane-fakes';
 import {
+  FAKE_GATE_CATALOGUE,
   FAKE_INDICATOR_CATALOGUE,
   barCloseMs,
   fakeCustomGate,
   fakeStrategyView,
 } from '../../../../testing/strategy-view-fixtures';
+import type { GateEvaluationResponse } from '../lib/broker-v2-panel.types';
 import { BotChartPanelComponent } from './bot-chart-panel.component';
 import { STRATEGY_CHART_FACTORY } from './strategy-chart.component';
 import { GATE_CANDLE_COLORS } from './strategy-view-model';
@@ -31,18 +33,18 @@ vi.mock('lightweight-charts', () => ({
 
 const GATE_PREFERENCE_KEY = 'broker-v2.strategy-view.gate.v1:foo_cross';
 const charts = fakeStrategyChartFactory(vi);
-let dataPlane = fakeStrategyViewDataPlane(vi, FAKE_INDICATOR_CATALOGUE);
+let dataPlane = fakeStrategyViewDataPlane(vi, FAKE_INDICATOR_CATALOGUE, FAKE_GATE_CATALOGUE);
 
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [BotChartPanelComponent],
   template: `
-    <app-bot-chart-panel symbol="SPY" [view]="view" [tape]="tape" />
+    <app-bot-chart-panel symbol="SPY" [view]="view()" [tape]="tape" />
     <ng-template #tape><p>Tape stand-in</p></ng-template>
   `,
 })
 class PanelHost {
-  readonly view = fakeStrategyView();
+  readonly view = signal(fakeStrategyView());
 }
 
 async function renderPanel() {
@@ -69,6 +71,8 @@ function refused(message: string, status = 422): HttpErrorResponse {
 async function writeDraft(user: ReturnType<typeof userEvent.setup>, label: string, rest: string): Promise<HTMLElement> {
   await user.click(within(gateDialog()).getByRole('button', { name: '+ New gate' }));
   const editor = within(gateDialog()).getByRole('form', { name: 'New gate' });
+  // The editor replaced the button that opened it; focus starts at its name.
+  await waitFor(() => expect(document.activeElement).toBe(within(editor).getByLabelText('Name')));
   await user.type(within(editor).getByLabelText('Name'), label);
   await user.click(within(editor).getByRole('button', { name: 'FOO7' }));
   await user.type(within(editor).getByLabelText('Expression'), rest);
@@ -80,7 +84,7 @@ const { upBright, upDark, downBright, downDark } = GATE_CANDLE_COLORS;
 describe('BotChartPanelComponent — custom gates and catalogue indicators (#2639)', () => {
   beforeEach(() => {
     charts.created.length = 0;
-    dataPlane = fakeStrategyViewDataPlane(vi, FAKE_INDICATOR_CATALOGUE);
+    dataPlane = fakeStrategyViewDataPlane(vi, FAKE_INDICATOR_CATALOGUE, FAKE_GATE_CATALOGUE);
     localStorage.clear();
   });
 
@@ -125,10 +129,33 @@ describe('BotChartPanelComponent — custom gates and catalogue indicators (#263
 
     expect((await within(editor).findByRole('alert')).textContent)
       .toContain('A gate must be linear: it cannot multiply one variable by another.');
+    // Edited after that preview: its refusal no longer speaks for what is typed.
+    await user.type(expression, ' + 1');
+    expect(within(editor).queryByRole('alert')).toBeNull();
+    expect(within(editor).getByRole('status').textContent).toContain('Changed since the preview');
 
     await user.click(within(editor).getByRole('button', { name: 'Cancel' }));
     expect(screen.getByRole('button', { name: /^Gate: Bar 3 in 20–80 Strategy/ })).toBeTruthy();
     expect(within(gateDialog()).queryByRole('form')).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(within(gateDialog()).getByRole('button', { name: '+ New gate' })));
+  });
+
+  it('keeps a saved gate’s shading while a newer read is judged, then shows the new answer', async () => {
+    const gate = fakeCustomGate();
+    localStorage.setItem(GATE_PREFERENCE_KEY, gate.gate_id);
+    dataPlane.gates.list.mockResolvedValue({ strategy_key: 'foo_cross', gates: [gate] });
+    dataPlane.gates.evaluate.mockResolvedValue({ results: { [gate.gate_id]: [false, true, true, null] }, chart_computed: [], notices: [] });
+    const { fixture } = await renderPanel();
+    await waitFor(() => expect(candleColors()).toEqual([upDark, downBright, upBright, downDark]));
+
+    let answer: (response: GateEvaluationResponse) => void = () => undefined;
+    dataPlane.gates.evaluate.mockReturnValue(new Promise<GateEvaluationResponse>((resolve) => { answer = resolve; }));
+    fixture.componentInstance.view.set(fakeStrategyView({ notices: ['A newer read.'] }));
+    await screen.findByText('A newer read.');
+    expect(candleColors()).toEqual([upDark, downBright, upBright, downDark]);
+
+    answer({ results: { [gate.gate_id]: [true, true, true, true] }, chart_computed: [], notices: [] });
+    await waitFor(() => expect(candleColors()).toEqual([upBright, downBright, upBright, downBright]));
   });
 
   it('saves a gate on the strategy and shades by it from then on', async () => {
@@ -181,10 +208,21 @@ describe('BotChartPanelComponent — custom gates and catalogue indicators (#263
       'foo_cross', gate.gate_id, { label: 'Foo well above close', expression: 'FOO7 - close', sign: 'gt' },
     );
 
+    // Closing the editor returns focus to the Edit it came from.
+    await waitFor(() => expect(document.activeElement).toBe(within(gateDialog()).getByRole('button', { name: 'Edit Foo above close' })));
+
     await user.click(within(gateDialog()).getByRole('button', { name: 'Delete Foo above close' }));
     expect(dataPlane.gates.remove).not.toHaveBeenCalled();
+    const confirm = within(gateDialog()).getByRole('button', { name: 'Delete “Foo above close”' });
+    await waitFor(() => expect(document.activeElement).toBe(confirm));
+    await user.click(within(gateDialog()).getByRole('button', { name: 'Keep' }));
+    await waitFor(() => expect(document.activeElement).toBe(within(gateDialog()).getByRole('button', { name: 'Delete Foo above close' })));
+
+    await user.click(within(gateDialog()).getByRole('button', { name: 'Delete Foo above close' }));
+    dataPlane.gates.list.mockResolvedValue({ strategy_key: 'foo_cross', gates: [] });
     await user.click(within(gateDialog()).getByRole('button', { name: 'Delete “Foo above close”' }));
     expect(dataPlane.gates.remove).toHaveBeenCalledWith('foo_cross', gate.gate_id);
+    await waitFor(() => expect(document.activeElement).toBe(within(gateDialog()).getByRole('button', { name: '+ New gate' })));
   });
 
   it('says so beside the chart when the saved gates cannot be loaded, and still draws the strategy’s rule', async () => {

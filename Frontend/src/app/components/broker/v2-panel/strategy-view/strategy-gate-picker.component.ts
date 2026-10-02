@@ -2,7 +2,10 @@ import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
+  Injector,
+  afterNextRender,
   computed,
+  inject,
   input,
   output,
   signal,
@@ -27,6 +30,11 @@ let nextGatePickerId = 0;
  * "+ New gate" and Edit open the editor in place of the list, and Delete
  * asks once more. The host owns the choice, the saved list and every call
  * to the data plane; this emits the picked gate id and the draft to preview.
+ *
+ * Each of those swaps out the focused button, so focus is moved on purpose:
+ * into the editor when it opens, back to the button that opened it when it
+ * closes, onto the confirmation when Delete asks, and to "+ New gate" once a
+ * gate is gone.
  */
 @Component({
   selector: 'app-strategy-gate-picker',
@@ -65,6 +73,7 @@ export class StrategyGatePickerComponent {
 
   private readonly trigger = viewChild.required<ElementRef<HTMLButtonElement>>('trigger');
   private readonly panel = viewChild.required<ElementRef<HTMLElement>>('panel');
+  private readonly injector = inject(Injector);
 
   protected savedGate(gateId: string): CustomGate | null {
     return this.savedGates().find((gate) => gate.gate_id === gateId) ?? null;
@@ -83,8 +92,20 @@ export class StrategyGatePickerComponent {
   }
 
   protected closeEditor(): void {
+    const gateId = this.editing()?.gate?.gate_id;
     this.editing.set(null);
     this.editorClosed.emit();
+    this.focusAfterRender(gateId === undefined ? '[data-gate-new]' : `[data-gate-edit="${gateId}"]`);
+  }
+
+  protected askToDelete(gateId: string): void {
+    this.confirmingDelete.set(gateId);
+    this.focusAfterRender(`[data-gate-confirm="${gateId}"]`);
+  }
+
+  protected keep(gateId: string): void {
+    this.confirmingDelete.set(null);
+    this.focusAfterRender(`[data-gate-delete="${gateId}"]`);
   }
 
   protected async confirmDelete(gate: CustomGate): Promise<void> {
@@ -92,9 +113,19 @@ export class StrategyGatePickerComponent {
     try {
       await this.remove()(gate.gate_id);
       this.confirmingDelete.set(null);
+      this.focusAfterRender('[data-gate-new]');
     } catch (error) {
       this.removeError.set(error instanceof Error ? error.message : 'The gate could not be deleted.');
     }
+  }
+
+  /** Focuses the control `selector` names once the swap has rendered, else "+ New gate". */
+  private focusAfterRender(selector: string): void {
+    afterNextRender(() => {
+      const panel = this.panel().nativeElement;
+      const target = panel.querySelector<HTMLElement>(selector) ?? panel.querySelector<HTMLElement>('[data-gate-new]');
+      target?.focus();
+    }, { injector: this.injector });
   }
 
   protected onToggle(event: Event): void {

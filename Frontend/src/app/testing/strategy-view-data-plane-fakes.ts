@@ -3,7 +3,12 @@ import { of } from 'rxjs';
 import type { Mock, VitestUtils } from 'vitest';
 
 import { BotChartIndicatorService } from '../components/broker/v2-panel/dual-pane-chart/bot-chart-indicator.service';
-import type { GateEvaluationResponse, StrategyGateList } from '../components/broker/v2-panel/lib/broker-v2-panel.types';
+import type {
+  GateCatalogue,
+  GateCatalogueEntry,
+  GateEvaluationResponse,
+  StrategyGateList,
+} from '../components/broker/v2-panel/lib/broker-v2-panel.types';
 import { StrategyGatesService } from '../components/broker/v2-panel/strategy-view/strategy-gates.service';
 import {
   IndicatorCatalogService,
@@ -22,6 +27,7 @@ import {
 export interface StrategyViewDataPlaneFakes {
   readonly providers: Provider[];
   readonly gates: {
+    readonly catalogue: Mock<() => Promise<GateCatalogue>>;
     readonly list: Mock<(strategyKey: string) => Promise<StrategyGateList>>;
     readonly create: Mock;
     readonly replace: Mock;
@@ -46,8 +52,10 @@ export const NO_GATE_RESULTS: GateEvaluationResponse = { results: {}, chart_comp
 export function fakeStrategyViewDataPlane(
   vi: VitestUtils,
   catalogue: IndicatorCategory[] = [],
+  gateCatalogue: GateCatalogueEntry[] = [],
 ): StrategyViewDataPlaneFakes {
   const gates = {
+    catalogue: vi.fn(() => Promise.resolve<GateCatalogue>({ indicators: gateCatalogue })),
     list: vi.fn((strategyKey: string) => Promise.resolve<StrategyGateList>({ strategy_key: strategyKey, gates: [] })),
     create: vi.fn(),
     replace: vi.fn(),

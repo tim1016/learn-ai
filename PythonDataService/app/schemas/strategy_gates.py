@@ -7,13 +7,16 @@ Strategy Lab, and it only shades candles; it never trades.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 GateSign = Literal["gt", "lt"]
+# A gate's numbers are finite: an infinite coefficient would be written to the
+# shared gate file as null and break every strategy's gates.
+FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 
 
 class GateTerm(BaseModel):
@@ -21,7 +24,7 @@ class GateTerm(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    coefficient: float
+    coefficient: FiniteFloat
     variable: str = Field(min_length=1)
 
 
@@ -46,7 +49,7 @@ class CustomGate(BaseModel):
     expression: str = Field(min_length=1, max_length=400)
     sign: GateSign
     terms: list[GateTerm]
-    constant: float
+    constant: FiniteFloat
     created_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
     updated_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
@@ -66,12 +69,12 @@ class GateCandle(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     bar_close_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float = Field(ge=0)
-    values: dict[str, float | None] = Field(default_factory=dict)
+    open: FiniteFloat
+    high: FiniteFloat
+    low: FiniteFloat
+    close: FiniteFloat
+    volume: FiniteFloat = Field(ge=0)
+    values: dict[str, FiniteFloat | None] = Field(default_factory=dict)
 
 
 class GateEvaluationRequest(BaseModel):
@@ -84,7 +87,7 @@ class GateEvaluationRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     symbol: str = Field(min_length=1, max_length=20)
-    settings: dict[str, float | int | str | bool | None] = Field(default_factory=dict)
+    settings: dict[str, FiniteFloat | int | str | bool | None] = Field(default_factory=dict)
     candles: list[GateCandle] = Field(max_length=20_000)
     draft: CustomGateInput | None = None
 
@@ -106,12 +109,34 @@ class GateEvaluationResponse(BaseModel):
     notices: list[str] = Field(default_factory=list)
 
 
+class GateCatalogueEntry(BaseModel):
+    """A catalogue indicator a gate can read, and how a gate writes it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    description: str
+    # ``EMA10``: the name at its default length, or the bare name when it takes none.
+    variable: str
+    default_length: int | None
+    min_length: int | None
+    max_length: int | None
+
+
+class GateCatalogue(BaseModel):
+    """Every catalogue indicator a gate can read: one line, no setting or only a length."""
+
+    model_config = ConfigDict(frozen=True)
+
+    indicators: list[GateCatalogueEntry]
+
+
 class GateRefusal(BaseModel):
     """Why a gate was not saved or judged, in the owner's words."""
 
     model_config = ConfigDict(frozen=True)
 
-    code: Literal["GATE_EXPRESSION_REFUSED", "GATE_NOT_FOUND", "STRATEGY_VIEW_UNAVAILABLE"]
+    code: Literal["GATE_EXPRESSION_REFUSED", "GATE_NOT_FOUND", "GATE_STORE_UNAVAILABLE", "STRATEGY_VIEW_UNAVAILABLE"]
     message: str
 
 
@@ -123,14 +148,25 @@ class GateRefusalBody(BaseModel):
     detail: GateRefusal
 
 
+class GateRequestInvalidBody(BaseModel):
+    """A request body that failed validation, as FastAPI reports it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    detail: list[dict[str, Any]]
+
+
 __all__ = [
     "CustomGate",
     "CustomGateInput",
     "GateCandle",
+    "GateCatalogue",
+    "GateCatalogueEntry",
     "GateEvaluationRequest",
     "GateEvaluationResponse",
     "GateRefusal",
     "GateRefusalBody",
+    "GateRequestInvalidBody",
     "GateSign",
     "GateTerm",
     "StrategyGateList",

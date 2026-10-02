@@ -171,6 +171,9 @@ export type GateCandle = components['schemas']['GateCandle'];
 export type GateEvaluationRequest = components['schemas']['GateEvaluationRequest'];
 /** Each gate's result per candle, in candle order: `true` bright, `false` dark, `null` unjudged. */
 export type GateEvaluationResponse = components['schemas']['GateEvaluationResponse'];
+/** A catalogue indicator a gate can read, as the data plane offers it (`EMA10`, `VWAP`). */
+export type GateCatalogueEntry = components['schemas']['GateCatalogueEntry'];
+export type GateCatalogue = components['schemas']['GateCatalogue'];
 
 export type BotPanelLiveSnapshot = components['schemas']['BotPanelLiveSnapshot'];
 /** Why the live snapshot is withheld; `PRODUCER_STALLED` is the typed stale state (#2353). */

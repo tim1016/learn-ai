@@ -3,6 +3,7 @@
 
   <label class="gate-editor__field" [for]="ids.name">Name</label>
   <input
+    #nameInput
     [id]="ids.name"
     type="text"
     maxlength="60"
@@ -55,10 +56,14 @@
     </section>
   }
 
-  @if (refusal(); as reason) {
-    <p class="gate-editor__refusal" role="alert">{{ reason }}</p>
-  } @else if (previewing()) {
-    <p class="gate-editor__status" role="status">Previewing on the chart: bright where this gate holds.</p>
+  @if (previewState() === 'current') {
+    @if (refusal(); as reason) {
+      <p class="gate-editor__refusal" role="alert">{{ reason }}</p>
+    } @else if (previewing()) {
+      <p class="gate-editor__status" role="status">Previewing on the chart: bright where this gate holds.</p>
+    }
+  } @else if (previewState() === 'changed') {
+    <p class="gate-editor__hint" role="status">Changed since the preview. Preview again to see it on the chart.</p>
   }
   @if (saveError(); as reason) {
     <p class="gate-editor__refusal" role="alert">{{ reason }}</p>

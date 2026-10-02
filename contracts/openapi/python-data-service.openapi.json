@@ -17151,6 +17151,83 @@
         "title": "GateCandle",
         "type": "object"
       },
+      "GateCatalogue": {
+        "description": "Every catalogue indicator a gate can read: one line, no setting or only a length.",
+        "properties": {
+          "indicators": {
+            "items": {
+              "$ref": "#/components/schemas/GateCatalogueEntry"
+            },
+            "title": "Indicators",
+            "type": "array"
+          }
+        },
+        "required": [
+          "indicators"
+        ],
+        "title": "GateCatalogue",
+        "type": "object"
+      },
+      "GateCatalogueEntry": {
+        "description": "A catalogue indicator a gate can read, and how a gate writes it.",
+        "properties": {
+          "default_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Length"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "max_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Length"
+          },
+          "min_length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Length"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "variable": {
+            "title": "Variable",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "variable",
+          "default_length",
+          "min_length",
+          "max_length"
+        ],
+        "title": "GateCatalogueEntry",
+        "type": "object"
+      },
       "GateEvaluationRequest": {
         "additionalProperties": false,
         "description": "Judge a strategy's saved gates (and an unsaved draft) on these candles.\n\n``settings`` are the deployed settings the candles were decided under; a\ngate naming a setting reads it from here.",
@@ -17259,6 +17336,7 @@
             "enum": [
               "GATE_EXPRESSION_REFUSED",
               "GATE_NOT_FOUND",
+              "GATE_STORE_UNAVAILABLE",
               "STRATEGY_VIEW_UNAVAILABLE"
             ],
             "title": "Code",
@@ -17287,6 +17365,23 @@
           "detail"
         ],
         "title": "GateRefusalBody",
+        "type": "object"
+      },
+      "GateRequestInvalidBody": {
+        "description": "A request body that failed validation, as FastAPI reports it.",
+        "properties": {
+          "detail": {
+            "items": {
+              "type": "object"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "GateRequestInvalidBody",
         "type": "object"
       },
       "GateTerm": {
@@ -65481,6 +65576,56 @@
         ]
       }
     },
+    "/api/strategy-gates/catalogue": {
+      "get": {
+        "description": "The catalogue indicators a gate can read, so the editor offers no name the data plane would refuse.",
+        "operationId": "catalogue_api_strategy_gates_catalogue_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GateCatalogue"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Catalogue",
+        "tags": [
+          "strategy-gates"
+        ]
+      }
+    },
     "/api/strategy-gates/{strategy_key}": {
       "get": {
         "operationId": "list_gates_api_strategy_gates__strategy_key__get",
@@ -65536,7 +65681,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusalBody"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GateRefusalBody"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GateRequestInvalidBody"
+                    }
+                  ],
+                  "title": "Response 422 List Gates Api Strategy Gates  Strategy Key  Get"
                 }
               }
             },
@@ -65622,7 +65775,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusalBody"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GateRefusalBody"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GateRequestInvalidBody"
+                    }
+                  ],
+                  "title": "Response 422 Create Gate Api Strategy Gates  Strategy Key  Post"
                 }
               }
             },
@@ -65711,7 +65872,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusalBody"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GateRefusalBody"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GateRequestInvalidBody"
+                    }
+                  ],
+                  "title": "Response 422 Evaluate Api Strategy Gates  Strategy Key  Evaluate Post"
                 }
               }
             },
@@ -65791,7 +65960,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusalBody"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GateRefusalBody"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GateRequestInvalidBody"
+                    }
+                  ],
+                  "title": "Response 422 Delete Gate Api Strategy Gates  Strategy Key   Gate Id  Delete"
                 }
               }
             },
@@ -65886,7 +66063,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateRefusalBody"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GateRefusalBody"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GateRequestInvalidBody"
+                    }
+                  ],
+                  "title": "Response 422 Replace Gate Api Strategy Gates  Strategy Key   Gate Id  Put"
                 }
               }
             },

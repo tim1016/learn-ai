@@ -68,6 +68,56 @@ async def test_an_invalid_gate_is_never_saved(client: httpx.AsyncClient, express
     assert reason in detail["message"]
 
 
+async def test_a_number_too_large_to_judge_is_refused_and_leaves_the_store_readable(client: httpx.AsyncClient) -> None:
+    async with client:
+        refused = await client.post(
+            _EMA, json={"label": "huge", "expression": "1" + "0" * 330 + " * EMA5", "sign": "gt"}
+        )
+        listed = await client.get("/api/strategy-gates/sma_crossover")
+
+    assert (refused.status_code, refused.json()["detail"]["code"]) == (422, "GATE_EXPRESSION_REFUSED")
+    assert (listed.status_code, listed.json()["gates"]) == (200, [])
+
+
+@pytest.mark.parametrize("expression", ["AROON25 - 50", "STOCHRSI14 - 50", "FISHER9"])
+async def test_a_multi_line_indicator_is_refused_when_saved_and_when_judged(
+    client: httpx.AsyncClient, expression: str
+) -> None:
+    async with client:
+        saved = await client.post(_EMA, json={"label": "multi", "expression": expression, "sign": "gt"})
+        judged = await client.post(
+            f"{_EMA}/evaluate",
+            json={
+                "symbol": "SPY",
+                "candles": [_candle(1_790_700_000_000, 100.0, 50.0)],
+                "draft": {"label": "multi", "expression": expression, "sign": "gt"},
+            },
+        )
+
+    assert (saved.status_code, saved.json()["detail"]["code"]) == (422, "GATE_EXPRESSION_REFUSED")
+    assert (judged.status_code, judged.json()["detail"]["code"]) == (422, "GATE_EXPRESSION_REFUSED")
+
+
+async def test_an_unreadable_gate_store_is_a_503_naming_the_store(client: httpx.AsyncClient, tmp_path: Path) -> None:
+    (tmp_path / "gates.json").write_text("{not json", encoding="utf-8")
+    async with client:
+        listed = await client.get(_EMA)
+
+    assert (listed.status_code, listed.json()["detail"]["code"]) == (503, "GATE_STORE_UNAVAILABLE")
+
+
+async def test_the_catalogue_lists_what_a_gate_can_read_as_it_is_written(client: httpx.AsyncClient) -> None:
+    async with client:
+        listed = await client.get("/api/strategy-gates/catalogue")
+
+    assert listed.status_code == 200, listed.text
+    by_name = {entry["name"]: entry for entry in listed.json()["indicators"]}
+    assert by_name["ema"]["variable"] == "EMA10"
+    assert (by_name["ema"]["min_length"], by_name["ema"]["max_length"]) == (1, 500)
+    assert by_name["vwap"]["variable"] == "VWAP"
+    assert "aroon" not in by_name
+
+
 async def test_an_unknown_strategy_or_gate_is_a_plain_404(client: httpx.AsyncClient) -> None:
     async with client:
         strategy = await client.get("/api/strategy-gates/retired_strategy")

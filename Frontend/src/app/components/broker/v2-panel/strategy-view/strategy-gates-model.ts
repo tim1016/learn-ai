@@ -1,9 +1,9 @@
 import { refusalBody } from '../../../../shared/errors/refusal-body';
-import type { IndicatorCategory } from '../../../../shared/indicator-catalog/indicator-catalog.service';
 import type {
   CustomGate,
   CustomGateInput,
   GateCandle,
+  GateCatalogueEntry,
   GateEvaluationRequest,
   GateEvaluationResponse,
   StrategyViewGateView,
@@ -125,30 +125,20 @@ export interface GateVariableGroup {
 
 /**
  * The names a gate can use, in the order the data plane resolves them: the
- * bot's recorded values, its deployed settings, the candle, then catalogue
- * indicators the chart computes from the candles. Only catalogue indicators
- * with no setting or a single length are offered, written with their default
- * length; the owner edits the number. A catalogue name the bot already
- * records is left out: the data plane reads it as the bot's own value, so it
- * would not be chart-computed.
+ * bot's recorded values, its deployed settings, the candle, then the
+ * catalogue indicators the data plane says a gate can read, computed by the
+ * chart from these candles. A catalogue name the bot already records is left
+ * out: the data plane reads it as the bot's own value, so it would not be
+ * chart-computed.
  */
 export function gateVariableGroups(
   view: StrategyViewResponse,
-  catalogue: readonly IndicatorCategory[],
+  catalogue: readonly GateCatalogueEntry[],
 ): GateVariableGroup[] {
   const settings = Object.entries(view.settings ?? {}).flatMap(([name, value]): GateVariableChip[] =>
     typeof value === 'number' ? [{ name, hint: String(value) }] : [],
   );
   const recorded = new Set(view.declaration.values.map((value) => value.variable.toUpperCase()));
-  const indicators = catalogue.flatMap((category) => category.indicators).flatMap((indicator): GateVariableChip[] => {
-    const params = indicator.configurable_params;
-    const name = indicator.name.toUpperCase();
-    if (params.length === 0) return [{ name, hint: indicator.description }];
-    if (params.length === 1 && params[0].name === 'length') {
-      return [{ name: `${name}${params[0].default}`, hint: indicator.description }];
-    }
-    return [];
-  });
   return [
     {
       title: 'Bot’s values',
@@ -160,7 +150,9 @@ export function gateVariableGroups(
     {
       title: 'Catalogue',
       note: 'chart-computed from these candles',
-      chips: indicators.filter((chip) => !recorded.has(chip.name.toUpperCase())),
+      chips: catalogue
+        .filter((indicator) => !recorded.has(indicator.variable.toUpperCase()))
+        .map((indicator) => ({ name: indicator.variable, hint: indicator.description })),
     },
   ].filter((group) => group.chips.length > 0);
 }

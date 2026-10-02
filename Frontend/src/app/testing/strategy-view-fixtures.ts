@@ -14,6 +14,7 @@
 import type {
   CustomGate,
   DecisionExplanationView,
+  GateCatalogueEntry,
   RecentDecisionView,
   StrategyViewCandle,
   StrategyViewResponse,
@@ -189,5 +190,17 @@ export const FAKE_INDICATOR_CATALOGUE: IndicatorCategory[] = [
         ],
       },
     ],
+  },
+];
+
+/** What the data plane says a gate can read from the catalogue above: EMA at its default length, and VWAP. */
+export const FAKE_GATE_CATALOGUE: GateCatalogueEntry[] = [
+  {
+    name: 'ema', description: 'Exponential moving average', variable: 'EMA10',
+    default_length: 10, min_length: 1, max_length: 500,
+  },
+  {
+    name: 'vwap', description: 'Volume-weighted average price', variable: 'VWAP',
+    default_length: null, min_length: null, max_length: null,
   },
 ];

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  FAKE_INDICATOR_CATALOGUE,
+  FAKE_GATE_CATALOGUE,
   barCloseMs,
   fakeCustomGate,
   fakeStrategyView,
@@ -57,15 +57,14 @@ describe('strategy gates model (#2639)', () => {
     expect(shown.notices).toEqual(['Saw it.', 'A notice of the page’s own.']);
   });
 
-  it('offers names in the order the data plane resolves them, and only catalogue indicators a gate can use', () => {
-    const groups = gateVariableGroups(fakeStrategyView(), FAKE_INDICATOR_CATALOGUE);
+  it('offers names in the order the data plane resolves them, the catalogue as the data plane offers it', () => {
+    const groups = gateVariableGroups(fakeStrategyView(), FAKE_GATE_CATALOGUE);
 
     expect(groups.map((group) => [group.title, group.chips.map((chip) => chip.name)])).toEqual([
       ['Bot’s values', ['FOO7', 'BAR3', 'BAZ1']],
       // A setting that is not a number cannot be read by a linear gate.
       ['Settings', ['foo_length', 'bar_low']],
       ['Candle', ['open', 'high', 'low', 'close', 'volume']],
-      // A length-only indicator at its default length, one with no setting as is; MACD has two settings.
       ['Catalogue', ['EMA10', 'VWAP']],
     ]);
     expect(groups.find((group) => group.title === 'Catalogue')?.note).toBe('chart-computed from these candles');
@@ -83,7 +82,7 @@ describe('strategy gates model (#2639)', () => {
       },
     });
 
-    const catalogue = gateVariableGroups(recordsEma, FAKE_INDICATOR_CATALOGUE).find((group) => group.title === 'Catalogue');
+    const catalogue = gateVariableGroups(recordsEma, FAKE_GATE_CATALOGUE).find((group) => group.title === 'Catalogue');
     expect(catalogue?.chips.map((chip) => chip.name)).toEqual(['VWAP']);
   });
 });

@@ -93,7 +93,7 @@ export class BotChartPanelComponent {
   protected readonly declaration = computed(() => this.shownView()?.declaration ?? null);
   protected readonly gateVariables = computed(() => {
     const view = this.shownView();
-    return view === null ? [] : gateVariableGroups(view, this.indicators.catalog.categories());
+    return view === null ? [] : gateVariableGroups(view, this.gates.catalogue());
   });
 
   protected readonly strategyTabLabel = computed(() => {

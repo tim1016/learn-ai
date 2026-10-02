@@ -15,21 +15,25 @@ A variable resolves in this order (D9):
    candles and marked chart-computed.
 
 So a catalogue name the strategy already records is always the bot's own
-value: one number never has two sources.
+value: one number never has two sources. A catalogue indicator is computed on
+the decision candles the caller sends, with no history before them, so it has
+no value until its own warmup has passed within those candles.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import cache
 from typing import Any
 
 from app.schemas.strategy_gates import CustomGate, CustomGateInput, GateCandle, GateSign, GateTerm
 from app.services.chart_indicator_service import CHART_INDICATOR_NAMES, ChartIndicatorService
-from app.services.dataset_service import INDICATOR_CONFIGS
+from app.services.dataset_service import INDICATOR_CONFIGS, list_available_indicators
 from app.services.strategy_view import ResolvedStrategyView
 
 logger = logging.getLogger(__name__)
@@ -37,7 +41,7 @@ logger = logging.getLogger(__name__)
 DRAFT_GATE_ID = "draft"
 CANDLE_FIELDS = ("open", "high", "low", "close", "volume")
 
-_TOKEN = re.compile(r"\s*(?:(?P<number>\d+(?:\.\d+)?|\.\d+)|(?P<name>[A-Za-z_][A-Za-z0-9_]*)|(?P<op>[-+*/()]))")
+_TOKEN = re.compile(r"\s*(?:(?P<number>[0-9]+(?:\.[0-9]+)?|\.[0-9]+)|(?P<name>[A-Za-z_][A-Za-z0-9_]*)|(?P<op>[-+*/()]))")
 _CATALOGUE_NAME = re.compile(r"^(?P<name>[A-Za-z]+?)(?P<length>\d+)?$")
 
 
@@ -65,6 +69,8 @@ def parse_linear(text: str) -> LinearExpression:
     coefficients, constant = parser.expression()
     if parser.position != len(tokens):
         raise GateExpressionError(f"Unexpected '{tokens[parser.position]}' in the expression.")
+    if not all(math.isfinite(number) for number in (*coefficients.values(), constant)):
+        raise GateExpressionError("A number in the expression is too large to judge.")
     terms = tuple((coefficient, name) for name, coefficient in coefficients.items() if coefficient != 0)
     if not terms:
         raise GateExpressionError("The expression uses no variable, so it would shade every candle the same.")
@@ -185,6 +191,91 @@ class GateVariable:
     key: str
     catalogue_params: tuple[tuple[str, int], ...] = ()
 
+    @property
+    def identity(self) -> tuple[object, ...]:
+        """What the variable reads, whatever it was called: ``ema5`` and ``EMA5`` are one."""
+        return (self.source, self.key, self.catalogue_params)
+
+
+@dataclass(frozen=True)
+class GateCatalogueIndicator:
+    """A catalogue indicator a gate can read: one line, and no setting or only a length."""
+
+    name: str
+    description: str
+    # The length's default and bounds; ``None`` for an indicator with no setting.
+    default_length: int | None
+    min_length: int | None
+    max_length: int | None
+
+    @property
+    def variable(self) -> str:
+        """How a gate writes it at its default: ``EMA10``, ``VWAP``."""
+        return f"{self.name.upper()}{self.default_length or ''}"
+
+
+# Bars the catalogue probe computes each indicator on: long enough for every
+# catalogue default to warm up.
+_PROBE_BARS = 600
+_PROBE_BAR_MS = 60_000
+_PROBE_START_MS = 1_700_000_000_000
+
+
+def _probe_bars() -> list[dict[str, float]]:
+    bars = []
+    for index in range(_PROBE_BARS):
+        close = 100.0 + 5.0 * math.sin(index / 17.0) + 0.01 * index
+        bars.append(
+            {
+                "t": _PROBE_START_MS + index * _PROBE_BAR_MS,
+                "o": close - 0.2,
+                "h": close + 0.5,
+                "l": close - 0.5,
+                "c": close,
+                "v": 1_000.0 + 10.0 * (index % 7),
+            }
+        )
+    return bars
+
+
+@cache
+def gate_catalogue() -> tuple[GateCatalogueIndicator, ...]:
+    """The catalogue indicators a gate can read, found by computing each once.
+
+    An indicator qualifies when it takes no setting or only a length, and
+    the canonical chart computation gives it exactly one line on a probe
+    of synthetic bars, so the list cannot drift from what judging does.
+    """
+    descriptions = {
+        item["name"]: item["description"] for items in list_available_indicators().values() for item in items
+    }
+    service = ChartIndicatorService()
+    bars = _probe_bars()
+    usable: list[GateCatalogueIndicator] = []
+    for name in sorted(CHART_INDICATOR_NAMES):
+        params = INDICATOR_CONFIGS[name]
+        if params and [definition["name"] for definition in params] != ["length"]:
+            continue
+        entry: dict[str, Any] = {"name": name, "params": {"length": params[0]["default"]} if params else {}}
+        try:
+            _symbol, series = service.compute("SPY", bars, [entry])
+        except ValueError:
+            logger.info("gate_catalogue_indicator_skipped", extra={"indicator": name})
+            continue
+        if len(series) != 1 or not isinstance(series[0]["data"], list):
+            continue
+        length = params[0] if params else None
+        usable.append(
+            GateCatalogueIndicator(
+                name=name,
+                description=descriptions.get(name, ""),
+                default_length=length["default"] if length else None,
+                min_length=length["min"] if length else None,
+                max_length=length["max"] if length else None,
+            )
+        )
+    return tuple(usable)
+
 
 def resolve_variable(view: ResolvedStrategyView, name: str) -> GateVariable:
     """Resolve ``name`` in D9's order, or refuse it as unknown."""
@@ -208,13 +299,15 @@ def _catalogue_variable(name: str) -> GateVariable:
     if not match or indicator not in CHART_INDICATOR_NAMES:
         raise GateExpressionError(f"'{name}' is not a value, a setting, a candle field or a catalogue indicator.")
     params = {definition["name"]: definition for definition in INDICATOR_CONFIGS[indicator]}
+    if params and set(params) != {"length"}:
+        raise GateExpressionError(f"{indicator.upper()} has more than one setting, so a gate cannot use it yet.")
+    if indicator not in {usable.name for usable in gate_catalogue()}:
+        raise GateExpressionError(f"{indicator.upper()} draws more than one line, so a gate cannot use it yet.")
     length = match.group("length")
     if not params:
         if length is not None:
             raise GateExpressionError(f"{indicator.upper()} takes no length; write it as {indicator.upper()}.")
         return GateVariable(name=name, source=VariableSource.CATALOGUE, key=indicator)
-    if set(params) != {"length"}:
-        raise GateExpressionError(f"{indicator.upper()} has more than one setting, so a gate cannot use it yet.")
     if length is None:
         raise GateExpressionError(f"{indicator.upper()} needs a length, e.g. {indicator.upper()}20.")
     bounds = params["length"]
@@ -226,11 +319,20 @@ def _catalogue_variable(name: str) -> GateVariable:
 
 
 def compile_gate(view: ResolvedStrategyView, draft: CustomGateInput) -> tuple[list[GateTerm], float]:
-    """Parse and resolve a gate for ``view``'s strategy, or refuse it with a plain reason."""
+    """Parse and resolve a gate for ``view``'s strategy, or refuse it with a plain reason.
+
+    Names that read the same number (``EMA5`` and ``ema5``) are one term,
+    written as first spelled; terms that cancel out are dropped.
+    """
     expression = parse_linear(draft.expression)
-    for _coefficient, name in expression.terms:
-        resolve_variable(view, name)
-    terms = [GateTerm(coefficient=coefficient, variable=name) for coefficient, name in expression.terms]
+    merged: dict[tuple[object, ...], tuple[str, float]] = {}
+    for coefficient, name in expression.terms:
+        identity = resolve_variable(view, name).identity
+        spelled, total = merged.get(identity, (name, 0.0))
+        merged[identity] = (spelled, total + coefficient)
+    terms = [GateTerm(coefficient=total, variable=spelled) for spelled, total in merged.values() if total != 0]
+    if not terms:
+        raise GateExpressionError("The expression's variables cancel out, so it would shade every candle the same.")
     return terms, expression.constant
 
 
@@ -286,7 +388,7 @@ def _judge(form: _GateForm, columns: dict[str, list[float | None]], index: int) 
     total = form.constant
     for term in form.terms:
         value = columns[term.variable][index]
-        if value is None:
+        if value is None or not math.isfinite(value):
             return None
         total += term.coefficient * value
     return total > 0 if form.sign == "gt" else total < 0
@@ -324,7 +426,7 @@ def _catalogue_column(variable: GateVariable, candles: Sequence[GateCandle], *, 
         _symbol, series = ChartIndicatorService().compute(symbol, bars, [entry])
     except ValueError as exc:
         raise GateExpressionError(f"{variable.name} could not be computed on these candles ({exc}).") from exc
-    if len(series) != 1:
+    if len(series) != 1 or not isinstance(series[0]["data"], list):
         raise GateExpressionError(f"{variable.name} draws more than one line, so a gate cannot use it yet.")
     by_close = {point["t"]: point["value"] for point in series[0]["data"]}
     return [by_close.get(candle.bar_close_ms) for candle in candles]
@@ -333,12 +435,14 @@ def _catalogue_column(variable: GateVariable, candles: Sequence[GateCandle], *, 
 __all__ = [
     "CANDLE_FIELDS",
     "DRAFT_GATE_ID",
+    "GateCatalogueIndicator",
     "GateExpressionError",
     "GateVariable",
     "LinearExpression",
     "VariableSource",
     "compile_gate",
     "evaluate_gates",
+    "gate_catalogue",
     "parse_linear",
     "resolve_variable",
 ]

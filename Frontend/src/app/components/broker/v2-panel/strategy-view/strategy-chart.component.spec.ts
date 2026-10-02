@@ -248,6 +248,10 @@ describe('StrategyChartComponent (#2639)', () => {
     await user.keyboard('{Enter}');
     // Placed where the candle is drawn: its close's coordinates inside the chart.
     expect(clicks).toEqual([{ barCloseMs: barCloseMs(2), clientX: 120, clientY: 40 }]);
+    // Each move is read out: the bar and what the active gate made of it (bar 2 has no result).
+    const barTwo = `${formatTimestampDisplay(barCloseMs(2), { mode: 'local', granularity: 'date' })} `
+      + formatTimestampDisplay(barCloseMs(2), { mode: 'local', granularity: 'minute' });
+    expect(screen.getByText(`${barTwo} bar: gate no result.`).getAttribute('aria-live')).toBe('polite');
     expect(mock.timeScale.timeToCoordinate).toHaveBeenLastCalledWith(toChartTime(barCloseMs(2)));
   });
 

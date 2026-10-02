@@ -6,6 +6,7 @@ import { environment } from '../../../../../environments/environment';
 import type {
   CustomGate,
   CustomGateInput,
+  GateCatalogue,
   GateEvaluationRequest,
   GateEvaluationResponse,
   StrategyGateList,
@@ -25,6 +26,11 @@ export class StrategyGatesService {
     return [`${environment.pythonServiceUrl}/api/strategy-gates`, strategyKey, ...rest]
       .map((part, index) => (index === 0 ? part : encodeURIComponent(part)))
       .join('/');
+  }
+
+  /** The catalogue indicators a gate can read, from the same rules that judge one. */
+  catalogue(): Promise<GateCatalogue> {
+    return firstValueFrom(this.http.get<GateCatalogue>(`${environment.pythonServiceUrl}/api/strategy-gates/catalogue`));
   }
 
   list(strategyKey: string): Promise<StrategyGateList> {

@@ -2,6 +2,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
+  afterNextRender,
   computed,
   input,
   linkedSignal,
@@ -57,15 +58,35 @@ export class StrategyGateEditorComponent {
   protected readonly expression = linkedSignal(() => this.gate()?.expression ?? '');
   protected readonly sign = linkedSignal<'gt' | 'lt'>(() => this.gate()?.sign ?? 'gt');
   protected readonly catalogueQuery = signal('');
+  /** The draft last sent to Preview: its answer is only shown while the fields still match it. */
+  private readonly previewed = signal<CustomGateInput | null>(null);
   protected readonly saving = signal(false);
   protected readonly saveError = signal<string | null>(null);
 
+  private readonly nameInput = viewChild.required<ElementRef<HTMLInputElement>>('nameInput');
   private readonly expressionInput = viewChild.required<ElementRef<HTMLInputElement>>('expressionInput');
+
+  constructor() {
+    // The editor replaces the button that opened it; focus starts at the name.
+    afterNextRender(() => this.nameInput().nativeElement.focus());
+  }
 
   protected readonly draft = computed((): CustomGateInput | null => {
     const label = this.label().trim();
     const expression = this.expression().trim();
     return label === '' || expression === '' ? null : { label, expression, sign: this.sign() };
+  });
+
+  /** `'current'` while the fields match the previewed draft, `'changed'` once edited after, else `null`. */
+  protected readonly previewState = computed((): 'current' | 'changed' | null => {
+    const previewed = this.previewed();
+    if (previewed === null) return null;
+    const draft = this.draft();
+    const same = draft !== null
+      && draft.label === previewed.label
+      && draft.expression === previewed.expression
+      && draft.sign === previewed.sign;
+    return same ? 'current' : 'changed';
   });
 
   /** Every group as given, the catalogue narrowed by the search. */
@@ -104,7 +125,9 @@ export class StrategyGateEditorComponent {
 
   protected preview(): void {
     const draft = this.draft();
-    if (draft !== null) this.previewRequested.emit(draft);
+    if (draft === null) return;
+    this.previewed.set(draft);
+    this.previewRequested.emit(draft);
   }
 
   protected async submit(): Promise<void> {

@@ -43,11 +43,23 @@
           @if (savedGate(gate.gate_id); as saved) {
             <div class="gate-row__actions">
               @if (confirmingDelete() === saved.gate_id) {
-                <button type="button" class="gate-row__danger" (click)="confirmDelete(saved)">Delete “{{ saved.label }}”</button>
-                <button type="button" (click)="confirmingDelete.set(null)">Keep</button>
+                <button type="button" class="gate-row__danger" [attr.data-gate-confirm]="saved.gate_id" (click)="confirmDelete(saved)">
+                  Delete “{{ saved.label }}”
+                </button>
+                <button type="button" (click)="keep(saved.gate_id)">Keep</button>
               } @else {
-                <button type="button" [attr.aria-label]="'Edit ' + saved.label" (click)="openEditor(saved)">Edit</button>
-                <button type="button" [attr.aria-label]="'Delete ' + saved.label" (click)="confirmingDelete.set(saved.gate_id)">Delete</button>
+                <button
+                  type="button"
+                  [attr.data-gate-edit]="saved.gate_id"
+                  [attr.aria-label]="'Edit ' + saved.label"
+                  (click)="openEditor(saved)"
+                >Edit</button>
+                <button
+                  type="button"
+                  [attr.data-gate-delete]="saved.gate_id"
+                  [attr.aria-label]="'Delete ' + saved.label"
+                  (click)="askToDelete(saved.gate_id)"
+                >Delete</button>
               }
             </div>
           }
@@ -57,6 +69,6 @@
     @if (removeError(); as reason) {
       <p class="gate-popover__error" role="alert">{{ reason }}</p>
     }
-    <button type="button" class="gate-popover__new" (click)="openEditor(null)">+ New gate</button>
+    <button type="button" class="gate-popover__new" data-gate-new (click)="openEditor(null)">+ New gate</button>
   }
 </div>

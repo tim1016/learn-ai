@@ -10,6 +10,7 @@ import {
   inject,
   input,
   output,
+  signal,
   untracked,
   viewChild,
 } from '@angular/core';
@@ -40,6 +41,8 @@ import {
 import {
   BAND_LINE_COLOR,
   decisionMarkers,
+  gateResult,
+  gateResultText,
   lineColorHex,
   openingRange,
   rangeRevealing,
@@ -66,6 +69,11 @@ const PRICE_PANE_STRETCH = 3;
 
 function minuteOf(ms: number): string {
   return formatTimestampDisplay(ms, { mode: 'local', granularity: 'minute' });
+}
+
+/** A bar's date and minute: a warmup bar can be from an earlier day. */
+function barOf(ms: number): string {
+  return `${formatTimestampDisplay(ms, { mode: 'local', granularity: 'date' })} ${minuteOf(ms)}`;
 }
 
 /**
@@ -96,9 +104,14 @@ function minuteOf(ms: number): string {
       [attr.aria-label]="ariaLabel()"
       (keydown)="onKeydown($event)"
     ></div>
+    <p class="strategy-chart__announcement" aria-live="polite">{{ announcement() }}</p>
   `,
   styles: `
-    :host { display: block; min-height: 0; }
+    :host { display: block; position: relative; min-height: 0; }
+    .strategy-chart__announcement {
+      position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+      overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+    }
     .strategy-chart { width: 100%; height: 100%; min-height: 22rem; cursor: pointer; }
     .strategy-chart:focus-visible { outline: 2px solid var(--accent-text); outline-offset: -2px; }
   `,
@@ -116,6 +129,8 @@ export class StrategyChartComponent implements AfterViewInit {
   readonly candleSelected = output<number>();
 
   private readonly chartContainer = viewChild.required<ElementRef<HTMLDivElement>>('chartContainer');
+  /** What a keyboard move selected, read out politely: the bar and what the gate made of it. */
+  protected readonly announcement = signal('');
   private readonly destroyRef = inject(DestroyRef);
   private readonly createChart = inject(STRATEGY_CHART_FACTORY);
 
@@ -371,7 +386,9 @@ export class StrategyChartComponent implements AfterViewInit {
         return;
     }
     event.preventDefault();
-    this.keyboardSelection = candles[next].bar_close_ms;
+    const candle = candles[next];
+    this.keyboardSelection = candle.bar_close_ms;
+    this.announcement.set(`${barOf(candle.bar_close_ms)} bar: gate ${gateResultText(gateResult(candle, this.gateId()))}.`);
     this.candleSelected.emit(this.keyboardSelection);
   }
 

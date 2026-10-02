@@ -1,4 +1,4 @@
-import { computed, inject, linkedSignal, type Signal } from '@angular/core';
+import { computed, effect, inject, linkedSignal, signal, type Signal } from '@angular/core';
 import { rxResource } from '@angular/core/rxjs-interop';
 import { catchError, map, of } from 'rxjs';
 
@@ -8,6 +8,7 @@ import { BotChartIndicatorService } from '../dual-pane-chart/bot-chart-indicator
 import { chartIndicatorCatalog, type ChartIndicatorCatalog } from '../dual-pane-chart/chart-indicator-catalog';
 import {
   indicatorSeriesPlans,
+  resultBelongsToIndicator,
   selectChartIndicator,
   toActiveIndicatorChips,
   type IndicatorSeriesPlan,
@@ -40,7 +41,8 @@ export interface StrategyCatalogueIndicators {
  * These lines are the chart's own computation on the decision candles, never
  * the bot's: the strategy's recorded values stay the only lines drawn from
  * what the bot saw. The choice lasts for the visit and resets with the
- * strategy.
+ * strategy. While a newer read is computed the last lines stay drawn; points
+ * are placed by bar close, so they never land on the wrong candle.
  */
 export function strategyCatalogueIndicators(view: Signal<StrategyViewResponse | null>): StrategyCatalogueIndicators {
   const indicators = inject(BotChartIndicatorService);
@@ -70,7 +72,19 @@ export function strategyCatalogueIndicators(view: Signal<StrategyViewResponse | 
       })),
     ),
   });
-  const results = computed(() => (calculation.hasValue() ? calculation.value().results : []));
+  // The last settled answer, kept while a newer read is computed: a resource
+  // clears its value when its params change.
+  const settled = signal<CalculatedIndicators | null>(null);
+  effect(() => {
+    const status = calculation.status();
+    if (status === 'resolved' || status === 'local') settled.set(calculation.value() ?? null);
+    else if (status === 'error' || status === 'idle') settled.set(null);
+  });
+  // Only what is still selected: a removed indicator's line goes at once.
+  const results = computed(() => {
+    const chosen = selected();
+    return (settled()?.results ?? []).filter((result) => chosen.some((entry) => resultBelongsToIndicator(result, entry)));
+  });
 
   return {
     catalog,
@@ -83,7 +97,7 @@ export function strategyCatalogueIndicators(view: Signal<StrategyViewResponse | 
     calculating: computed(() => selected().length > 0 && calculation.isLoading()),
     error: computed(() => {
       if (catalog.supportFailed()) return 'The chart indicator catalogue could not be loaded.';
-      return calculation.hasValue() ? calculation.value().error : null;
+      return settled()?.error ?? null;
     }),
     add: (entry) => selected.update((current) => selectChartIndicator(current, entry)),
     remove: (id) => selected.update((current) => current.filter((indicator) => indicator.id !== id)),
