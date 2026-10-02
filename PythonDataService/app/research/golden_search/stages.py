@@ -537,7 +537,7 @@ def run_exam(ctx: StageContext) -> tuple[str, dict[str, Any]]:
     judgement = judge_exam(
         candidate,
         incumbent,
-        policy=ctx.floors.policy(ctx.final),
+        policy=ctx.protocol.policy,
         exam_min_trades=ctx.floors.at(ctx.final, final=True),
         development_objective=None if development is None else objective_value(development, ctx.protocol.policy),
         frequency_policy=ctx.floors.frequency_based,

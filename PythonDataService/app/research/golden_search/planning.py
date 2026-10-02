@@ -385,6 +385,8 @@ def build_receipt(plan: PlanReview, *, snapshot_dict: Mapping[str, Any], snapsho
     """The immutable record every evaluation, resume and proof is checked against."""
     protocol = plan.protocol
     assert plan.review is not None and plan.review.estimate is not None and plan.run_up is not None
+    # A frequency plan's floors are frozen here or never; a stage refuses a receipt without them.
+    assert (plan.activity is None) == (protocol.expected_trades_per_year is None)
     registration = _STRATEGY_REGISTRY[protocol.strategy_key]
     contract = registration.signal_program_contract
     program_version = contract.program_version if contract is not None else None

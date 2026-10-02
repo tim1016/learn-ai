@@ -143,8 +143,8 @@ def test_an_unresolved_floor_never_reaches_selection() -> None:
 
 
 def test_stages_use_each_windows_floor_and_the_verdict_uses_all_forward_time(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Two folds whose windows are all distinct: training floors 9 and 8, one-month tests about 4 each, all forward time 8.
-    protocol = protocol_from_request(frequency_plan_request("SPY", training_months=2, development_start_ms=et_midnight_ms(date(2024, 12, 1))))
+    # Three folds with distinct windows: training floors 9, 9 and 8, one-month tests about 4 each, all forward time 12.
+    protocol = protocol_from_request(frequency_plan_request("SPY", training_months=2, development_start_ms=et_midnight_ms(date(2024, 11, 1))))
     declaration = declaration_for(protocol.strategy_key)
     assert declaration is not None
     row = cast(StudyRow, SimpleNamespace(id="frequency-study", receipt={"activity": activity_plan(protocol)}))
@@ -164,12 +164,12 @@ def test_stages_use_each_windows_floor_and_the_verdict_uses_all_forward_time(mon
     monkeypatch.setattr(StageContext, "trials", lambda *_args: None)
     monkeypatch.setattr(StageContext, "write", lambda self, patch: self.results.update(patch))
     verdict = _validation(ctx, cast(StudyEvaluator, Evaluator()))
-    # Every fold qualifies on its own training floor, yet 6 forward trades miss the all-forward floor of 8
-    # (a per-fold test floor of about 4 would have passed them).
+    # Every fold qualifies on its own training floor, yet 9 forward trades miss the all-forward floor of 12
+    # (any single fold's training or test floor would have passed them).
     assert all(fold["status"] == "completed" for fold in ctx.results["validation"]["folds"])
-    assert (verdict.label, verdict.oos_trade_count) == ("too few trades", 6)
-    assert verdict.reason.endswith("below the minimum of 8")
-    assert ctx.floors.policy(ctx.development).min_trades == 17
+    assert (verdict.label, verdict.oos_trade_count) == ("too few trades", 9)
+    assert verdict.reason.endswith("below the minimum of 12")
+    assert ctx.floors.policy(ctx.development).min_trades == 21
     assert ineligibility(metrics(1.5, trades=5), ctx.floors.policy(ctx.development)) == "TOO_FEW_TRADES"
 
     floor = ctx.floors.at(ctx.final, final=True)
