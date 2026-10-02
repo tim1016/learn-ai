@@ -437,12 +437,13 @@ class SavedRunNotReplayable(ValueError):
     """A saved run cannot be replayed exactly as it ran; the message says why."""
 
 
-def replay_availability_hash(request: EngineBacktestRequest) -> str:
-    """The lake state a saved run's window materializes against now, as the run recorded its own.
+def materialize_replay_bars(request: EngineBacktestRequest) -> None:
+    """Put a saved run's window on disk again before its replay reads it.
 
     The same materialization the run's own ``auto_fetch`` did
-    (``_materialize_missing_bars``): a day the lake has lost is fetched again,
-    and the hash says whether the bars are still the ones the run read.
+    (``_materialize_missing_bars``): a day the lake has lost is fetched again.
+    The lake's fingerprint is not compared with the run's: a replay turns on
+    the run's code, not its data receipt.
     """
     from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run
     from app.data_lake.types import polygon_mode_for
@@ -452,14 +453,14 @@ def replay_availability_hash(request: EngineBacktestRequest) -> str:
     if symbol is None or start is None or request.to_date is None:
         raise SavedRunNotReplayable("This run recorded no symbol or window, so its bars cannot be read again.")
     try:
-        return materialize_engine_run(
+        materialize_engine_run(
             symbol=symbol,
             start=_parse_iso_date(start, "start_date"),
             end=_parse_iso_date(request.to_date, "to_date"),
             resolution=request.resolution,
             price_adjustment_mode=polygon_mode_for(_policy_adjusted(request.data_policy)),
             requester=request.strategy_name,
-        ).availability_hash
+        )
     except LakeMaterializationError as exc:
         raise SavedRunNotReplayable(f"The lake could not read this run's bars again: {exc}") from exc
 
@@ -474,9 +475,9 @@ def replay_engine_run(
     The same reader, engine, fills, closing-bar rule and evaluation boundary
     as the run itself (#2639 D13): only what is recorded differs. Read-only
     -- nothing is fetched, persisted or dispatched -- so it reads the bars the
-    lake holds now; a compatibility run's fixture must still hash to the
-    receipt it recorded. Returns the replay's trades, for the caller to check
-    against the run's own. Blocking: call it in a thread.
+    lake holds now; a compatibility run's fixture is receipted again rather
+    than held to the receipt it recorded. Returns the replay's trades, for the
+    caller to check against the run's own. Blocking: call it in a thread.
     """
     registration = _STRATEGY_REGISTRY.get(request.strategy_name)
     if registration is None:
@@ -491,15 +492,10 @@ def replay_engine_run(
     data_roots = _resolve_lean_data_roots(adjusted=_policy_adjusted(request.data_policy))
     if not data_roots:
         raise SavedRunNotReplayable("No LEAN data roots are configured, so this run's bars cannot be read.")
-    recorded_fixture = None if request.data_policy is None else request.data_policy.fixture_sha256
     try:
         data_manifest = _pin_compatibility_fixture(request, data_roots)
     except (FileNotFoundError, OSError, ValueError) as exc:
         raise SavedRunNotReplayable(f"The bars this run read are no longer available: {exc}") from exc
-    if data_manifest is not None and request.data_policy is not None and (
-        request.data_policy.fixture_sha256 != recorded_fixture
-    ):
-        raise SavedRunNotReplayable("The bars this run read have changed since it ran.")
     strategy = registration.build(validated_params)
     if not hasattr(strategy, "evaluate_signal_bar"):
         raise SavedRunNotReplayable(f"Strategy '{request.strategy_name}' records no decisions to replay.")
