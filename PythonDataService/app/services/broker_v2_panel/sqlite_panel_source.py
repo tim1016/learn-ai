@@ -385,7 +385,7 @@ async def read_sqlite_panel_evidence(
     *,
     now_ms: int,
     facade: SqliteAlpacaClerkFacade | None = None,
-    run_window: tuple[int, int] | None = None,
+    run_started_at_ms: int | None = None,
 ) -> SqlitePanelEvidence | None:
     """Read one panel's custody and S2 economics at the same SQLite revision.
 
@@ -400,8 +400,8 @@ async def read_sqlite_panel_evidence(
     ``SqlitePanelBotNotFound``, which callers answer 404. Collapsing the two
     tells an operator to repair a healthy authority.
 
-    ``run_window`` (``[from_ms, to_ms)``) also reads the fills inside it, at
-    the same revision: the bot page lists its run's fills (#2794).
+    ``run_started_at_ms`` also reads the fills since that run started, at the
+    same revision: the bot page lists its run's fills (#2794).
     """
     facade = facade or active_sqlite_facade(broker)
     if facade is None:
@@ -419,7 +419,7 @@ async def read_sqlite_panel_evidence(
                 economics = economic_reader.bot_session_economic_projection(
                     strategy_instance_id,
                     session_window=session_window,
-                    run_window=run_window,
+                    run_started_at_ms=run_started_at_ms,
                 )
             finally:
                 custody_reader.close()

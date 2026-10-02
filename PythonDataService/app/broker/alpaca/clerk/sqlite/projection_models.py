@@ -230,6 +230,11 @@ class RecoveryCapability:
     execution_ref: str | None
     mutation: bool
     primary: bool
+    # False when the action has nothing to do now -- no run to stop, nothing
+    # held to sell or write off, no order that can still fill, no fill to
+    # settle -- rather than being needed and gated. Decided where the policy
+    # writes the reason (#2794).
+    needed: bool = True
 
 
 @dataclass(frozen=True)

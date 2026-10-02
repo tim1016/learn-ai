@@ -2031,6 +2031,7 @@ def _served_archive(*, token: str, blocker: str | None = None) -> dict[str, obje
         "revision": 17,
         "concurrency_token": token,
         "evidence_refs": [],
+        "needed": True,
     }
 
 

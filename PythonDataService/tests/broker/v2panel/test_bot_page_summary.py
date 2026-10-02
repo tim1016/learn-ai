@@ -58,6 +58,11 @@ def _facts(**overrides: object) -> RunSummaryFacts:
             "Ran Wed Sep 30 2026, 14:30 ET – Thu Oct 1 2026, 15:59 ET · ended on schedule · 5 decisions, "
             "no trades · $800.00 back to the account.",
         ),
+        (
+            # A run whose end recorded no outcome claims no cause.
+            {"ending": "ended"},
+            "Ran Wed Sep 30, 14:30–15:59 ET · ended · 5 decisions, no trades · $800.00 back to the account.",
+        ),
         ({"ending": "not_started", "started_at_ms": None, "ended_at_ms": None}, "Not started yet."),
     ],
 )

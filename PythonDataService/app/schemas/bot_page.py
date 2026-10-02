@@ -30,6 +30,7 @@ class BotOwnStatusView(BaseModel):
 RunEnding = Literal[
     "not_started",
     "running",
+    "ended",
     "on_schedule",
     "stopped",
     "halted",
@@ -38,7 +39,10 @@ RunEnding = Literal[
     "exited_unverified",
     "retired",
 ]
-"""How the bot's latest run ended, or that it has none yet or is still running."""
+"""How the bot's latest run ended, or that it has none yet or is still running.
+
+``ended`` is a run whose end recorded no outcome.
+"""
 
 
 class HeldPositionFact(BaseModel):

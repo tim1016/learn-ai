@@ -33,7 +33,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedOrder,
     RecoveryCapability,
 )
-from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES
+from app.broker.alpaca.clerk.sqlite.reads import NONTERMINAL_EFFECT_STATES, TERMINAL_BROKER_STATES
 from app.broker.alpaca.clerk.sqlite.recovery_policy import FRESH_EVIDENCE_MAX_AGE_MS, UNCONDITIONAL_RECOVERY_ACTION_IDS
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.v2panel.action_policy import archive_action
@@ -582,6 +582,7 @@ def _panel_action(
         revision=revision,
         concurrency_token=capability.concurrency_token,
         evidence_refs=[evidence.reference for evidence in capability.evidence],
+        needed=capability.needed,
     )
 
 
@@ -792,7 +793,6 @@ def _is_working(order: ProjectedOrder) -> bool:
     return order.broker_order_id is not None and (order.broker_state or "").lower() in _WORKING_BROKER_STATES
 
 
-_TERMINAL_BROKER_STATES = frozenset({"filled", "canceled", "expired", "rejected", "replaced", "done_for_day"})
 
 
 def _may_still_fill(order: ProjectedOrder) -> bool:
@@ -802,7 +802,7 @@ def _may_still_fill(order: ProjectedOrder) -> bool:
     ``accepted_for_bidding`` and an order captured but not yet acknowledged can
     all still fill into a position the refused run will not manage.
     """
-    return (order.broker_state or "").lower() not in _TERMINAL_BROKER_STATES
+    return (order.broker_state or "").lower() not in TERMINAL_BROKER_STATES
 
 
 def _with_terminal_exposure_notices(panel: BotPanelView, projection: ClerkProjection) -> BotHealthCard:

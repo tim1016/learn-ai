@@ -124,6 +124,8 @@ class BotEndView(BaseModel):
     explanation: str
     notice: str | None = None
     editable: bool
+    # Why the end cannot change now, in the refusal's own words; ``None`` while it can.
+    edit_refusal: str | None = None
     default_end_at_ms: int | None = Field(ge=0, le=MAX_TIMESTAMP_MS)
 
 
