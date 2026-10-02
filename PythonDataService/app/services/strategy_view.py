@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 
@@ -29,14 +29,17 @@ from app.schemas.strategy_view import (
     DecisionExplanationView,
     ExplainedCheckView,
     ExplainedValueView,
+    StrategyViewCandle,
     StrategyViewDeclarationView,
     StrategyViewGateView,
+    StrategyViewResponse,
     StrategyViewValueSpec,
 )
 
 logger = logging.getLogger(__name__)
 
 _NOT_AVAILABLE = "not available"
+BEFORE_START_TEXT = "Before start · not acted on"
 
 
 class StrategyViewUnavailableError(ValueError):
@@ -143,6 +146,64 @@ class ResolvedStrategyView:
             )
             return None
 
+    def candle(
+        self,
+        record: DecisionExplanationRecord,
+        *,
+        phase: Literal["before_start", "decision"],
+        outcome: str | None = None,
+        reason_code: str | None = None,
+        decision_seq: int | None = None,
+    ) -> StrategyViewCandle | None:
+        """One decision candle from what the strategy recorded on it; ``None`` when this build cannot word it."""
+        rendered = self.render_or_none(record)
+        if rendered is None:
+            return None
+        bar = record.bar
+        return StrategyViewCandle(
+            bar_start_ms=bar.start_ms,
+            bar_close_ms=bar.end_ms,
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            volume=bar.volume,
+            phase=phase,
+            phase_text=BEFORE_START_TEXT if phase == "before_start" else None,
+            outcome=outcome,
+            reason_code=reason_code,
+            decision_seq=decision_seq,
+            explanation=rendered,
+            gates=self.gate_results(record),
+        )
+
+    def response(
+        self,
+        *,
+        symbol: str,
+        run_id: str,
+        run_started_at_ms: int | None,
+        run_stopped_at_ms: int | None,
+        candles: list[StrategyViewCandle],
+        notices: list[str],
+        unexplained_decision_count: int = 0,
+    ) -> StrategyViewResponse:
+        """The strategy view for these candles, in bar order, with this view's declaration and settings."""
+        return StrategyViewResponse(
+            strategy_key=self.strategy_key,
+            strategy_name=self.registration.display_name,
+            symbol=symbol,
+            decision_timeframe_ms=self.decision_timeframe_ms,
+            run_id=run_id,
+            run_started_at_ms=run_started_at_ms,
+            run_stopped_at_ms=run_stopped_at_ms,
+            declaration=self.declaration(),
+            settings=self.scalar_settings,
+            candles=sorted(candles, key=lambda candle: candle.bar_close_ms),
+            unexplained_decision_count=unexplained_decision_count,
+            notices=notices,
+        )
+
     def gate_results(self, record: DecisionExplanationRecord) -> dict[str, bool | None]:
         """Whether each gate held on this bar; ``None`` when the bar recorded no such rule."""
         gate = self.view.default_gate
@@ -238,4 +299,4 @@ def _needs(comparison: str, threshold: int | float | list[float] | None, wording
     return f"{_OPERATOR_TEXT[comparison]} {_bound(threshold, wording)}{wording.unit}"
 
 
-__all__ = ["ResolvedStrategyView", "StrategyViewUnavailableError"]
+__all__ = ["BEFORE_START_TEXT", "ResolvedStrategyView", "StrategyViewUnavailableError"]

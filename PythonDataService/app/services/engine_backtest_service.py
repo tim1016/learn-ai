@@ -48,6 +48,7 @@ from app.engine.strategy.registry import (
     StrategyRegistration,
     hidden_params_present,
 )
+from app.engine.strategy.signal_program import SignalDecision
 from app.jobs.phases import friendly
 from app.models.responses import (
     LeanPortfolioStatsResponse,
@@ -80,6 +81,7 @@ from app.services.parity_companion import (
     new_parity_group_id,
 )
 from app.services.run_verdict_service import compute_run_verdict
+from app.services.strategy_view_replay import record_staged_decisions
 from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
 
 logger = logging.getLogger(__name__)
@@ -380,6 +382,134 @@ def _build_backtest_engine(
     )
 
 
+def _reader_and_engine(
+    request: EngineBacktestRequest,
+    *,
+    fill_mode: FillMode,
+    data_roots: list[Path],
+    data_manifest: Mapping[str, str] | None,
+) -> tuple[LeanMinuteDataReader | LeanDailyDataReader, BacktestEngine]:
+    """The bar reader and engine a run reads and executes with."""
+    reader: LeanMinuteDataReader | LeanDailyDataReader
+    if request.resolution == "daily":
+        reader = (
+            LeanDailyDataReader(data_roots)
+            if data_manifest is None
+            else ManifestBoundDailyReader(data_roots, data_manifest)
+        )
+    else:
+        # Honor the request's ``data_policy.session`` so the reader drops
+        # extended-hours bars when the operator asked for the regular session.
+        # Before this was wired, the policy value round-tripped through the
+        # response but never reached the reader, and Polygon-sourced caches
+        # (which retain pre/post-market by design) silently fed 04:00-20:00 ET
+        # bars to the consolidator. See ADR 0069 §6
+        # → ``DECISION_MISMATCH`` and the divergence trace at
+        # ``StrategyExecutions`` rows 41/42 (run on 2026-05-21).
+        session_mode = "regular"
+        if request.data_policy is not None:
+            session_mode = request.data_policy.session
+        reader = (
+            LeanMinuteDataReader(data_roots, session=session_mode)
+            if data_manifest is None
+            else ManifestBoundMinuteReader(data_roots, data_manifest, session=session_mode)
+        )
+    execution_config = ExecutionConfig(
+        fill_mode=fill_mode,
+        commission_per_order=Decimal(str(request.commission_per_order)),
+        slippage_per_share=Decimal(str(request.slippage_per_share)),
+    )
+    return reader, _build_backtest_engine(reader=reader, execution_config=execution_config, request=request)
+
+
+def _override_after_initialize(strategy: Strategy, request: EngineBacktestRequest) -> None:
+    """Apply the request's overrides once the strategy's own ``initialize`` has run."""
+    original_initialize = strategy.initialize
+
+    def _wrapped_initialize() -> None:
+        original_initialize()
+        _apply_overrides(strategy, request)
+
+    strategy.initialize = _wrapped_initialize  # type: ignore[assignment]
+
+
+class SavedRunNotReplayable(ValueError):
+    """A saved run cannot be replayed exactly as it ran; the message says why."""
+
+
+def replay_availability_hash(request: EngineBacktestRequest) -> str:
+    """The lake state a saved run's window materializes against now, as the run recorded its own.
+
+    The same materialization the run's own ``auto_fetch`` did
+    (``_materialize_missing_bars``): a day the lake has lost is fetched again,
+    and the hash says whether the bars are still the ones the run read.
+    """
+    from app.data_lake.run_materialization import LakeMaterializationError, materialize_engine_run
+    from app.data_lake.types import polygon_mode_for
+
+    symbol = None if request.data_policy is None else request.data_policy.symbol
+    start = request.warmup_from_date or request.from_date
+    if symbol is None or start is None or request.to_date is None:
+        raise SavedRunNotReplayable("This run recorded no symbol or window, so its bars cannot be read again.")
+    try:
+        return materialize_engine_run(
+            symbol=symbol,
+            start=_parse_iso_date(start, "start_date"),
+            end=_parse_iso_date(request.to_date, "to_date"),
+            resolution=request.resolution,
+            price_adjustment_mode=polygon_mode_for(_policy_adjusted(request.data_policy)),
+            requester=request.strategy_name,
+        ).availability_hash
+    except LakeMaterializationError as exc:
+        raise SavedRunNotReplayable(f"The lake could not read this run's bars again: {exc}") from exc
+
+
+def replay_engine_run(
+    request: EngineBacktestRequest,
+    *,
+    record: Callable[[TradeBar, SignalDecision], None],
+) -> list[LoggedTrade]:
+    """Run a saved engine run again exactly as it ran, handing ``record`` each decision it stages.
+
+    The same reader, engine, fills, closing-bar rule and evaluation boundary
+    as the run itself (#2639 D13): only what is recorded differs. Read-only
+    -- nothing is fetched, persisted or dispatched -- so it reads the bars the
+    lake holds now; a compatibility run's fixture must still hash to the
+    receipt it recorded. Returns the replay's trades, for the caller to check
+    against the run's own. Blocking: call it in a thread.
+    """
+    registration = _STRATEGY_REGISTRY.get(request.strategy_name)
+    if registration is None:
+        raise SavedRunNotReplayable(f"Strategy '{request.strategy_name}' is not registered in this build.")
+    try:
+        validated_params = registration.param_schema.model_validate(request.params)
+        fill_mode = _parse_fill_mode(request.fill_mode)
+    except (ValidationError, HTTPException) as exc:
+        raise SavedRunNotReplayable(f"This run's saved settings no longer fit the strategy: {exc}") from exc
+    _resolve_legacy_data_policy(request, validated_params)
+    request.fill_mode = fill_mode.value
+    data_roots = _resolve_lean_data_roots(adjusted=_policy_adjusted(request.data_policy))
+    if not data_roots:
+        raise SavedRunNotReplayable("No LEAN data roots are configured, so this run's bars cannot be read.")
+    recorded_fixture = None if request.data_policy is None else request.data_policy.fixture_sha256
+    try:
+        data_manifest = _pin_compatibility_fixture(request, data_roots)
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        raise SavedRunNotReplayable(f"The bars this run read are no longer available: {exc}") from exc
+    if data_manifest is not None and request.data_policy is not None and (
+        request.data_policy.fixture_sha256 != recorded_fixture
+    ):
+        raise SavedRunNotReplayable("The bars this run read have changed since it ran.")
+    strategy = registration.build(validated_params)
+    if not hasattr(strategy, "evaluate_signal_bar"):
+        raise SavedRunNotReplayable(f"Strategy '{request.strategy_name}' records no decisions to replay.")
+    _reader, engine = _reader_and_engine(request, fill_mode=fill_mode, data_roots=data_roots, data_manifest=data_manifest)
+    _override_after_initialize(strategy, request)
+    record_staged_decisions(strategy, record)
+    engine.run(strategy, evaluation_start_ms=_evaluation_start_ms(request), retain_bars=False)
+    return list(getattr(strategy, "trade_log", []) or [])
+
+
 def _pin_compatibility_fixture(
     request: EngineBacktestRequest,
     data_roots: list[Path],
@@ -649,48 +779,8 @@ def _execute_engine_backtest_core(
             detail=f"compatibility_fixture_unavailable: {exc}",
         ) from exc
 
-    reader: LeanMinuteDataReader | LeanDailyDataReader
-    if request.resolution == "daily":
-        reader = (
-            LeanDailyDataReader(data_roots)
-            if data_manifest is None
-            else ManifestBoundDailyReader(data_roots, data_manifest)
-        )
-    else:
-        # Honor the request's ``data_policy.session`` so the reader drops
-        # extended-hours bars when the operator asked for the regular session.
-        # Before this was wired, the policy value round-tripped through the
-        # response but never reached the reader, and Polygon-sourced caches
-        # (which retain pre/post-market by design) silently fed 04:00-20:00 ET
-        # bars to the consolidator. See ADR 0069 §6
-        # → ``DECISION_MISMATCH`` and the divergence trace at
-        # ``StrategyExecutions`` rows 41/42 (run on 2026-05-21).
-        session_mode = "regular"
-        if request.data_policy is not None:
-            session_mode = request.data_policy.session
-        reader = (
-            LeanMinuteDataReader(data_roots, session=session_mode)
-            if data_manifest is None
-            else ManifestBoundMinuteReader(data_roots, data_manifest, session=session_mode)
-        )
-    execution_config = ExecutionConfig(
-        fill_mode=fill_mode,
-        commission_per_order=Decimal(str(request.commission_per_order)),
-        slippage_per_share=Decimal(str(request.slippage_per_share)),
-    )
-    engine = _build_backtest_engine(
-        reader=reader,
-        execution_config=execution_config,
-        request=request,
-    )
-
-    original_initialize = strategy.initialize
-
-    def _wrapped_initialize() -> None:
-        original_initialize()
-        _apply_overrides(strategy, request)
-
-    strategy.initialize = _wrapped_initialize  # type: ignore[assignment]
+    reader, engine = _reader_and_engine(request, fill_mode=fill_mode, data_roots=data_roots, data_manifest=data_manifest)
+    _override_after_initialize(strategy, request)
 
     # Decompose the old monolithic "simulating" phase into the two stages
     # the engine walks through during ``engine.run``. The engine itself
