@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.strategy_gates import (
     CustomGate,
-    CustomGateInput,
+    CustomGateSave,
     GateCatalogue,
     GateEvaluationRequest,
     GateEvaluationResponse,
@@ -62,9 +62,11 @@ def _strategy_view(
         _refuse(status.HTTP_404_NOT_FOUND, "STRATEGY_VIEW_UNAVAILABLE", str(exc))
 
 
-def _compiled(strategy_key: str, draft: CustomGateInput) -> tuple[list, float]:
+def _compiled(strategy_key: str, draft: CustomGateSave) -> tuple[list, float]:
+    """Check a gate against the deployed settings it was previewed under, as the preview did."""
+    view = _strategy_view(strategy_key, dict(draft.settings))
     try:
-        return compile_gate(_strategy_view(strategy_key), draft)
+        return compile_gate(view, draft)
     except GateExpressionError as exc:
         _refuse(status.HTTP_422_UNPROCESSABLE_ENTITY, "GATE_EXPRESSION_REFUSED", str(exc))
 
@@ -86,7 +88,7 @@ def list_gates(strategy_key: str, store: StrategyGateStore = Depends(get_gate_st
 
 @router.post("/{strategy_key}", response_model=CustomGate, status_code=status.HTTP_201_CREATED, responses=_REFUSALS)
 def create_gate(
-    strategy_key: str, draft: CustomGateInput, store: StrategyGateStore = Depends(get_gate_store)
+    strategy_key: str, draft: CustomGateSave, store: StrategyGateStore = Depends(get_gate_store)
 ) -> CustomGate:
     terms, constant = _compiled(strategy_key, draft)
     now_ms = now_ms_utc()
@@ -110,7 +112,7 @@ def create_gate(
 
 @router.put("/{strategy_key}/{gate_id}", response_model=CustomGate, responses=_REFUSALS)
 def replace_gate(
-    strategy_key: str, gate_id: str, draft: CustomGateInput, store: StrategyGateStore = Depends(get_gate_store)
+    strategy_key: str, gate_id: str, draft: CustomGateSave, store: StrategyGateStore = Depends(get_gate_store)
 ) -> CustomGate:
     terms, constant = _compiled(strategy_key, draft)
     try:

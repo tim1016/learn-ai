@@ -1,4 +1,4 @@
-import { computed, inject, resource, signal, type Signal } from '@angular/core';
+import { computed, inject, linkedSignal, resource, type Signal } from '@angular/core';
 
 import type {
   CustomGate,
@@ -86,7 +86,12 @@ export function strategyGatesState(source: Signal<StrategyViewResponse | null>):
     }),
   });
 
-  const draft = signal<CustomGateInput | null>(null);
+  // A draft belongs to the strategy it was written on: another strategy shown
+  // in this panel starts with none. Kept while the same strategy is re-read.
+  const draft = linkedSignal<string | undefined, CustomGateInput | null>({
+    source: strategyKey,
+    computation: (key, previous) => (previous !== undefined && previous.source === key ? previous.value : null),
+  });
   const draftJudged = resource({
     params: () => {
       const view = source();
@@ -172,10 +177,13 @@ export function strategyGatesState(source: Signal<StrategyViewResponse | null>):
     preview: (pending) => draft.set({ ...pending }),
     clearDraft: () => draft.set(null),
     save: async (pending, gateId) => {
-      const key = strategyKey();
-      if (key === undefined) throw new Error('No strategy is shown, so there is nothing to save the gate on.');
+      const shown = source();
+      if (shown === null) throw new Error('No strategy is shown, so there is nothing to save the gate on.');
+      const key = shown.strategy_key;
+      // Checked under the settings it was previewed under: a recorded name follows them.
+      const toSave = { ...pending, settings: { ...(shown.settings ?? {}) } };
       try {
-        const gate = gateId === null ? await api.create(key, pending) : await api.replace(key, gateId, pending);
+        const gate = gateId === null ? await api.create(key, toSave) : await api.replace(key, gateId, toSave);
         draft.set(null);
         savedRead.reload();
         return gate;

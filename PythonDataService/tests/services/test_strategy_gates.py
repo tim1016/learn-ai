@@ -205,6 +205,19 @@ def test_a_sum_too_large_to_judge_is_no_result_never_a_dark_candle(candles: list
     assert set(results[huge.gate_id]) == {None}
 
 
+def test_a_catalogue_variable_is_judged_unrounded_not_at_the_charts_six_decimals() -> None:
+    # SMA3 on the last candle is 1 + 1e-7/3: above 1, though rounded for the chart it reads 1.0.
+    closes = [1.0, 1.0, 1.0000001]
+    flat = [
+        GateCandle(bar_close_ms=1_700_000_060_000 + i * 60_000, open=c, high=c, low=c, close=c, volume=100.0)
+        for i, c in enumerate(closes)
+    ]
+
+    results, _, _ = evaluate_gates(_ema_view(), [_saved("SMA3 - 1")], flat, symbol="SPY")
+
+    assert results["g-000000000001"][-1] is True
+
+
 def test_a_saved_gate_that_no_longer_resolves_is_reported_not_raised(candles: list[GateCandle]) -> None:
     stale = _saved("EMA5 - FOO")
 

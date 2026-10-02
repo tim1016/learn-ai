@@ -18,6 +18,14 @@ So a catalogue name the strategy already records is always the bot's own
 value: one number never has two sources. A catalogue indicator is computed on
 the decision candles the caller sends, with no history before them, so it has
 no value until its own warmup has passed within those candles.
+
+Formula: g = Σ aᵢ·Xᵢ + c; bright where g > 0 (``gt``) or g < 0 (``lt``); no
+  result where any Xᵢ is missing or a value is not finite.
+Reference: the owner's gate definition, #2639 D8–D9 (no outside source).
+  Catalogue Xᵢ come from ``dataset_service.calculate_dynamic_indicators``,
+  unrounded.
+Canonical implementation: this file.
+Validated against: tests/services/test_strategy_gates.py
 """
 
 from __future__ import annotations
@@ -434,7 +442,8 @@ def _catalogue_column(variable: GateVariable, candles: Sequence[GateCandle], *, 
         for candle in candles
     ]
     try:
-        _symbol, series = ChartIndicatorService().compute(symbol, bars, [entry])
+        # Unrounded: the chart's six-decimal rounding could flip a gate at zero.
+        _symbol, series = ChartIndicatorService().compute(symbol, bars, [entry], value_digits=None)
     except ValueError as exc:
         raise GateExpressionError(f"{variable.name} could not be computed on these candles ({exc}).") from exc
     if len(series) != 1 or not isinstance(series[0]["data"], list):

@@ -202,7 +202,10 @@ describe('BotChartPanelComponent — custom gates and catalogue indicators (#263
     dataPlane.gates.evaluate.mockResolvedValue({ results: { [gate.gate_id]: [true, false, false, true] }, chart_computed: [], notices: [] });
     await user.click(within(editor).getByRole('button', { name: 'Save on strategy' }));
 
-    expect(dataPlane.gates.create).toHaveBeenCalledWith('foo_cross', { label: 'Foo falling', expression: 'FOO7 - close', sign: 'lt' });
+    // Checked under the settings it was previewed under: FOO7 is FOO7 because foo_length is 7.
+    expect(dataPlane.gates.create).toHaveBeenCalledWith('foo_cross', {
+      label: 'Foo falling', expression: 'FOO7 - close', sign: 'lt', settings: { foo_length: 7, bar_low: 20, fast: true },
+    });
     expect(await screen.findByRole('button', { name: /^Gate: Foo falling Mine/ })).toBeTruthy();
     await waitFor(() => expect(candleColors()).toEqual([upBright, downDark, upDark, downBright]));
     expect(localStorage.getItem(GATE_PREFERENCE_KEY)).toBe(gate.gate_id);
@@ -237,7 +240,8 @@ describe('BotChartPanelComponent — custom gates and catalogue indicators (#263
     await user.type(name, 'Foo well above close');
     await user.click(within(editor).getByRole('button', { name: 'Save on strategy' }));
     expect(dataPlane.gates.replace).toHaveBeenCalledWith(
-      'foo_cross', gate.gate_id, { label: 'Foo well above close', expression: 'FOO7 - close', sign: 'gt' },
+      'foo_cross', gate.gate_id,
+      { label: 'Foo well above close', expression: 'FOO7 - close', sign: 'gt', settings: { foo_length: 7, bar_low: 20, fast: true } },
     );
 
     // Closing the editor returns focus to the Edit it came from.
@@ -255,6 +259,24 @@ describe('BotChartPanelComponent — custom gates and catalogue indicators (#263
     await user.click(within(gateDialog()).getByRole('button', { name: 'Delete “Foo above close”' }));
     expect(dataPlane.gates.remove).toHaveBeenCalledWith('foo_cross', gate.gate_id);
     await waitFor(() => expect(document.activeElement).toBe(within(gateDialog()).getByRole('button', { name: '+ New gate' })));
+  });
+
+  it('closes an open editor and drops its previewed draft when the panel shows another strategy', async () => {
+    const user = userEvent.setup();
+    const { fixture } = await renderPanel();
+    const editor = await writeDraft(user, 'Foo rising', '- close');
+    dataPlane.gates.evaluate.mockResolvedValue({ results: { draft: [true, true, false, false] }, chart_computed: [], notices: [] });
+    await user.click(within(editor).getByRole('button', { name: 'Preview on chart' }));
+    expect(await screen.findByRole('button', { name: /^Gate: Preview · Foo rising/ })).toBeTruthy();
+
+    dataPlane.gates.evaluate.mockClear();
+    fixture.componentInstance.view.set(fakeStrategyView({ strategy_key: 'bar_cross', strategy_name: 'Bar Cross' }));
+    await screen.findByRole('group', { name: /Bar Cross decision candles/ });
+
+    expect(within(gateDialog()).queryByRole('form')).toBeNull();
+    expect(screen.getByRole('button', { name: /^Gate: Bar 3 in 20–80 Strategy/ })).toBeTruthy();
+    // Foo Cross's draft is never judged, or saved, against Bar Cross.
+    expect(dataPlane.gates.evaluate).not.toHaveBeenCalled();
   });
 
   it('says so beside the chart when the saved gates cannot be loaded, and still draws the strategy’s rule', async () => {

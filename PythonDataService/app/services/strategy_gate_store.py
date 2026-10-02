@@ -80,10 +80,17 @@ class StrategyGateStore:
 
     @contextmanager
     def _locked(self) -> Iterator[_GateFile]:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
         lock_path = self._path.with_suffix(f"{self._path.suffix}.lock")
-        with lock_path.open("a+", encoding="utf-8") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            lock_file = lock_path.open("a+", encoding="utf-8")
+        except OSError as exc:
+            raise GateStoreError(f"The saved gates at {self._path.name} could not be locked: {exc}") from exc
+        with lock_file:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            except OSError as exc:
+                raise GateStoreError(f"The saved gates at {self._path.name} could not be locked: {exc}") from exc
             try:
                 yield self._read()
             finally:

@@ -60,6 +60,8 @@ class ChartIndicatorService:
         symbol: str,
         bars: list[dict[str, int | float]],
         indicators: list[dict[str, Any]],
+        *,
+        value_digits: int | None = 6,
     ) -> tuple[str, list[dict[str, Any]]]:
         safe_symbol = validate_symbol(symbol)
         canonical_bars = [
@@ -86,7 +88,7 @@ class ChartIndicatorService:
             }
         )
         frame.index = pd.to_datetime(frame["timestamp"], unit="ms", utc=True)
-        results = compute_indicator_results(frame, validated_indicators)
+        results = compute_indicator_results(frame, validated_indicators, value_digits=value_digits)
         missing = [
             entry["name"]
             for entry in validated_indicators
