@@ -31,6 +31,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.indicators.macd import MovingAverageConvergenceDivergence
 from app.engine.indicators.supertrend import Supertrend
 from app.engine.strategy.algorithms._rsi_range_base import RsiRangeStrategy
+from app.engine.strategy.decision_explanation import CheckRole, Comparison, ExplainedCheck
 
 
 class SpyStrategyBAlgorithm(RsiRangeStrategy):
@@ -84,18 +85,37 @@ class SpyStrategyBAlgorithm(RsiRangeStrategy):
         assert self._macd is not None
         return self._supertrend.is_ready and self._macd.is_ready
 
-    def _entry_extra_gate_passes(self, bar: TradeBar) -> bool:
+    def _entry_extra_checks(self, bar: TradeBar) -> tuple[ExplainedCheck, ...]:
         assert self._supertrend is not None
         assert self._macd is not None
         assert self._adx is not None
         adx_val = self._adx.current_value
         macd_val = self._macd.macd
+        trend_long = bool(self._supertrend.is_long)
         return (
-            bool(self._supertrend.is_long)
-            and adx_val is not None
-            and adx_val > self.adx_entry_threshold
-            and macd_val is not None
-            and macd_val > Decimal(0)
+            ExplainedCheck(
+                check_id="supertrend_long",
+                role=CheckRole.ENTRY,
+                comparison=Comparison.STATE,
+                passed=trend_long,
+                observed="long" if trend_long else "short",
+            ),
+            ExplainedCheck(
+                check_id="adx_entry",
+                role=CheckRole.ENTRY,
+                comparison=Comparison.GT,
+                passed=adx_val is not None and adx_val > self.adx_entry_threshold,
+                observed=adx_val,
+                threshold=self.adx_entry_threshold,
+            ),
+            ExplainedCheck(
+                check_id="macd_positive",
+                role=CheckRole.ENTRY,
+                comparison=Comparison.GT,
+                passed=macd_val is not None and macd_val > Decimal(0),
+                observed=macd_val,
+                threshold=Decimal(0),
+            ),
         )
 
     def _indicator_snapshot(self, bar: TradeBar) -> dict[str, Decimal]:

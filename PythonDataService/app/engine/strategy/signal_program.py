@@ -22,6 +22,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from app.engine.data.trade_bar import TradeBar
+from app.engine.strategy.decision_explanation import DecisionExplanation
 from app.engine.strategy.signal_intent import SignalIntent
 
 
@@ -120,6 +121,9 @@ class SignalDecision:
     signal_facts: dict[str, str]
     reason_evidence: dict[str, str | int | bool]
     action_plan_request: dict[str, str] | None
+    # What this decision saw, for the owner (#2639). ``_build_trace`` never
+    # copies it, so it can grow without moving any trace digest or root.
+    explanation: DecisionExplanation | None = None
 
 
 class SignalProgramStrategy(Protocol):

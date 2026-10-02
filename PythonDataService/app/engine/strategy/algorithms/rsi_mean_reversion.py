@@ -30,6 +30,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import LoggedTrade, Strategy
+from app.engine.strategy.decision_explanation import CheckRole, Comparison, DecisionExplanation, ExplainedCheck
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.utils.timestamps import display_time
@@ -176,14 +177,33 @@ class RsiMeanReversionAlgorithm(Strategy):
                 signal_facts={"decision": "HOLD", "timeframe": timeframe},
                 reason_evidence={"rsi": "UNREADY"},
                 action_plan_request=None,
+                explanation=DecisionExplanation(values={"rsi": None}, holding=self._in_position),
             )
 
         rsi_val = self._rsi.current_value
         assert rsi_val is not None
 
         prior_in_position = self._in_position
-        below_oversold = rsi_val < self._oversold
-        above_overbought = rsi_val > self._overbought
+        # Both rules are read on every ready bar (#2639); only the side the
+        # position is on acts. "Below oversold" is the default Dark Bright Gate.
+        oversold_check = ExplainedCheck(
+            check_id="rsi_below_oversold",
+            role=CheckRole.ENTRY,
+            comparison=Comparison.LT,
+            passed=rsi_val < self._oversold,
+            observed=rsi_val,
+            threshold=self._oversold,
+        )
+        overbought_check = ExplainedCheck(
+            check_id="rsi_above_overbought",
+            role=CheckRole.EXIT,
+            comparison=Comparison.GT,
+            passed=rsi_val > self._overbought,
+            observed=rsi_val,
+            threshold=self._overbought,
+        )
+        below_oversold = oversold_check.passed
+        above_overbought = overbought_check.passed
 
         bar_signal = "HOLD"
         intent: SignalIntent | None = None
@@ -209,6 +229,11 @@ class RsiMeanReversionAlgorithm(Strategy):
             reason_evidence={"rsi": str(rsi_val)},
             action_plan_request=(
                 {"contract": "single_long_stock", "intent": intent.kind.value} if intent is not None else None
+            ),
+            explanation=DecisionExplanation(
+                values={"rsi": rsi_val},
+                checks=(oversold_check, overbought_check) if prior_in_position else (oversold_check,),
+                holding=prior_in_position,
             ),
         )
 

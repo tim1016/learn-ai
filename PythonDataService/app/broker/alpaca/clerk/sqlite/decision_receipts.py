@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
+from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 if TYPE_CHECKING:
@@ -72,7 +73,15 @@ class DecisionReceipt(BaseModel):
     reason_code: str
     intent_id: str = ""
     order_ref: str = ""
-    indicator_snapshot: dict[str, float | int | str | None] = Field(default_factory=dict)
+    # The run this decision belongs to, as its facts name it: a lifecycle run
+    # id on runner-written rows, ``<sid>:<lifecycle>`` on Clerk effect rows.
+    run_id: str | None = None
+    decision_bar_close_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    # #2639: the decision bar, the bot's own values and each rule's
+    # pass/fail. ``None`` on a row written before decisions recorded them,
+    # or -- with ``explanation_unreadable`` -- on one this build cannot read.
+    explanation: DecisionExplanationRecord | None = None
+    explanation_unreadable: bool = False
     # Stored causal identity, written by
     # ``append_atomic_decision_receipt_row`` in this same module
     # (``decision_id`` == ``evaluation_id``). It belongs on the receipt row

@@ -15,7 +15,7 @@ lets the idempotency key make double-clicks safe.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from decimal import Decimal
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
@@ -47,11 +47,13 @@ from app.schemas.broker_v2_panel import (
     TransactionRail,
     WorkingOrderView,
 )
+from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.schemas.run_admission import (
     ProgramBuildAdmissionFact,
     proven_build_copy,
 )
 from app.schemas.signal_program_seal import SealedBotProgram
+from app.schemas.strategy_view import DecisionExplanationView
 from app.services.bot_binding_repository import ProgramBuildRunEvidence
 from app.services.bot_dry_run import DryRunActivity
 from app.services.broker_v2_panel.channel_health import (
@@ -211,6 +213,11 @@ def build_clerk_card(clerk_status: ClerkStatus, now_ms: int) -> ClerkCard:
 
 _TERMINAL_ORDER_EVENTS = frozenset({"fill", "canceled", "rejected", "expired"})
 
+# Words one recorded decision explanation for the owner: the bot's strategy
+# view bound to its deployed settings (``app.services.strategy_view``).
+# ``None`` for a row the renderer cannot word ("values not shown").
+ExplanationRenderer = Callable[[DecisionExplanationRecord], DecisionExplanationView | None]
+
 
 def _working_orders(sid: str, entries: list[OrderJournalEntry]) -> list[WorkingOrderView]:
     """Return Clerk-owned submitted orders without a terminal lifecycle event."""
@@ -255,6 +262,7 @@ def _recent_decision_views(
     simulated: bool = False,
     authority_account_id: str | None = None,
     authority_kind: AuthorityKind | None = None,
+    render_explanation: ExplanationRenderer | None = None,
 ) -> list[RecentDecisionView]:
     return [
         RecentDecisionView(
@@ -269,6 +277,12 @@ def _recent_decision_views(
             simulated=simulated,
             authority_account_id=authority_account_id,
             authority_kind=authority_kind,
+            decision_bar_close_ms=receipt.decision_bar_close_ms,
+            explanation=(
+                None
+                if receipt.explanation is None or render_explanation is None
+                else render_explanation(receipt.explanation)
+            ),
         )
         for receipt in reversed(receipts[-limit:])
     ]
@@ -428,6 +442,7 @@ def _recent_activity_views(
     *,
     authority_account_id: str,
     authority_kind: AuthorityKind,
+    render_explanation: ExplanationRenderer | None = None,
 ) -> tuple[list[RecentDecisionView], list[RecentFillView]]:
     """Project real or simulated activity behind one explicit mode boundary.
 
@@ -468,6 +483,7 @@ def _recent_activity_views(
                     simulated=True,
                     authority_account_id=authority_account_id,
                     authority_kind=authority_kind,
+                    render_explanation=render_explanation,
                 ),
                 _dry_run_fill_views(dry_run_activity),
             )
@@ -488,6 +504,7 @@ def _recent_activity_views(
                 simulated=simulated,
                 authority_account_id=authority_account_id,
                 authority_kind=authority_kind,
+                render_explanation=render_explanation,
             ),
             _recent_fill_views(
                 status.strategy_instance_id,
@@ -666,6 +683,7 @@ def build_panel(
     warmup_join: RetainedWarmupJoin | None = None,
     startup_join: RetainedStartupJoin | None = None,
     end: BotEndView | None = None,
+    render_explanation: ExplanationRenderer | None = None,
 ) -> BotPanelView:
     """Build the full panel view for one bot.
 
@@ -757,6 +775,7 @@ def build_panel(
         activity,
         authority_account_id=resolved_authority_account_id,
         authority_kind=authority_kind_for_account(resolved_authority_account_id),
+        render_explanation=render_explanation,
     )
 
     return BotPanelView(

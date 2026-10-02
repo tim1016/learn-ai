@@ -44,6 +44,7 @@ from app.schemas.exit_terms import ExitTerms
 from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 from app.schemas.run_admission import ProgramBuildAdmissionFact
 from app.schemas.signal_program_seal import SealedBotProgram
+from app.schemas.strategy_view import DecisionExplanationView
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
@@ -536,6 +537,12 @@ class RecentDecisionView(BaseModel):
     simulated: bool = False
     authority_account_id: str | None = None
     authority_kind: AuthorityKind | None = None
+    # #2639: the decision bar's close, which links this row to its candle on
+    # the strategy view, and what the bot saw on it, worded by the backend.
+    # ``explanation`` is ``None`` on a row written before decisions recorded
+    # their values ("values not recorded").
+    decision_bar_close_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    explanation: DecisionExplanationView | None = None
 
     @model_validator(mode="after")
     def simulated_row_names_its_synthesized_authority(self) -> RecentDecisionView:

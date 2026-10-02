@@ -27,33 +27,6 @@ if TYPE_CHECKING:
     from app.engine.strategy.signal_program import SignalProgram
 
 
-@dataclass(frozen=True)
-class DecisionSnapshot:
-    """One per-bar decision-time snapshot a Strategy may publish.
-
-    Observation only: strategies that opt in stash this on
-    ``Strategy.last_decision_snapshot`` after each consolidated bar fires,
-    and no app code reads it. Tests that need each bar's decision without
-    driving a Signal Program read it -- the LEAN-vs-engine parity test
-    compares it with LEAN's ``state.csv``. Strategies that don't publish
-    leave ``last_decision_snapshot=None``; backtest paths are unaffected.
-
-    ``signal`` is the per-bar action the strategy took:
-    ``ENTER`` if it newly entered a position on this bar, ``EXIT`` if
-    it newly liquidated, ``HOLD`` for any other state (warmup-skip,
-    bars-until-exit countdown, no signal fired). The strategy is
-    responsible for computing this — see ``EmaCrossoverSignalAlgorithm``
-    for the canonical pattern.
-    """
-
-    bar_close_ms: int
-    ema5: float
-    ema10: float
-    rsi: float
-    signal: str
-    intended_price: float
-
-
 @dataclass
 class LoggedTrade:
     """A completed round-trip trade captured by a strategy.
@@ -222,9 +195,6 @@ class Strategy(ABC):
         self.start_date: datetime | None = None
         self.end_date: datetime | None = None
         self.initial_cash: Decimal = Decimal(100000)
-        # Optional per-bar snapshot a subclass may publish from inside its
-        # bar handler; see DecisionSnapshot. Default None.
-        self.last_decision_snapshot: DecisionSnapshot | None = None
 
     # ------------------------------------------------------------------
     # Declarative configuration (called in initialize)

@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.synthetic_broker import (
 )
 from app.broker.contract.models import BrokerOrderLeg
 from app.marketdata.feed import ContinuityPolicy, FeedContinuityEvent, MarketDataBar
+from app.schemas.decision_explanation import DecisionBarRecord, DecisionExplanationRecord
 from app.services import source_bar_ledger
 from app.services.bot_trade_strategy import _RetainedSourceBarFeed
 from app.services.decision_session import RunDecisionSession
@@ -649,3 +650,28 @@ def test_a_read_only_ledger_refuses_a_database_that_does_not_exist(tmp_path: Pat
         )
 
     assert not (tmp_path / "accounts" / "alpaca" / "shadow-evidence:absent").exists()
+
+
+def _before_start(end_ms: int, *, rsi: float) -> DecisionExplanationRecord:
+    return DecisionExplanationRecord(
+        bar=DecisionBarRecord(start_ms=end_ms - 900_000, end_ms=end_ms, open=1.0, high=1.0, low=1.0, close=1.0, volume=1.0),
+        ready=True,
+        holding=False,
+        signal="HOLD",
+        values={"rsi": rsi},
+    )
+
+
+def test_before_start_evaluations_round_trip_in_bar_order_and_keep_the_first_pass(tmp_path: Path) -> None:
+    """#2639: a re-entered run's second warmup never rewrites what its first recorded."""
+    ledger = SourceBarLedger(artifacts_root=tmp_path, account_id="sim:ema-1")
+    ledger.record_before_start_evaluations(
+        run_id="run-1", records=[_before_start(2_000_000, rsi=48.0), _before_start(1_100_000, rsi=47.0)]
+    )
+    ledger.record_before_start_evaluations(run_id="run-1", records=[_before_start(2_000_000, rsi=99.0)])
+    ledger.record_before_start_evaluations(run_id="run-2", records=[_before_start(3_000_000, rsi=50.0)])
+
+    stored = ledger.before_start_evaluations(run_id="run-1")
+
+    assert [(record.bar.end_ms, record.values["rsi"]) for record in stored] == [(1_100_000, 47.0), (2_000_000, 48.0)]
+    assert ledger.before_start_evaluations(run_id="no-such-run") == []

@@ -300,3 +300,25 @@ about what it is:
 
 Moving this evidence into SQLite would mean a new table and a Start write
 path. That is a new decision, not a clean-up.
+
+## Amendment — 2026-10-01: decision explanations ride beside the trace, never in it (#2639)
+
+Each Signal Program decision now carries a **decision explanation**: the
+indicator values it read and every entry or exit rule it applied, with the
+threshold, the observed value and pass/fail. The strategy builds it in the
+same `evaluate_signal_bar` call that decides, from the same locals, so a
+check the owner sees cannot disagree with the decision.
+
+- It is a field of `SignalDecision`, and `SignalSession._build_trace` never
+  copies it. The Evaluation Trace, every live `trace_digest` and every golden
+  trace root stay byte-identical, so bots sealed earlier keep their seals.
+- It is not golden-validated. A test over each program's golden replay cells
+  pins it instead: a flat bar stages ENTER exactly when every entry check
+  passed, a held bar stages EXIT exactly when an exit check passed.
+- Editing a strategy to emit it changes the program's artifact digest, so the
+  build receipts are re-issued at unchanged golden roots. Running clerks must
+  restart after the deploy (Decision 2's drift check refuses until they do).
+- It is display evidence. Receipts store it in `facts_json` (outside the
+  custody hash chain, like `trace_digest`); warmup's evaluations are stored
+  per run as **before-start evaluations** in the source-bar ledger and are
+  never receipts, because FR-016 reads receipts as decisions a run took.

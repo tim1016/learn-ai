@@ -32,7 +32,7 @@ Subclasses override the small extension surface:
     _init_extra_indicators()
     _extra_indicators_ready() -> bool
     _update_extra_indicators(bar)
-    _entry_extra_gate_passes(bar) -> bool
+    _entry_extra_checks(bar) -> tuple[ExplainedCheck, ...]  (joined by AND)
     _indicator_snapshot(bar) -> dict[str, Decimal]
     _extra_signal_program_settings() -> dict[str, str]
 """
@@ -48,6 +48,7 @@ from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.adx import AverageDirectionalIndex
 from app.engine.indicators.rsi import RelativeStrengthIndex
 from app.engine.strategy.base import LoggedTrade, Strategy
+from app.engine.strategy.decision_explanation import CheckRole, Comparison, DecisionExplanation, ExplainedCheck
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.utils.timestamps import display_time
@@ -165,7 +166,13 @@ class RsiRangeStrategy(Strategy):
 
         timeframe = f"{self._resolution_minutes}m"
         prior_in_position = self._in_position
-        reason_evidence = {name: str(value) for name, value in self._indicator_snapshot(bar).items()}
+        snapshot = self._indicator_snapshot(bar)
+        reason_evidence = {name: str(value) for name, value in snapshot.items()}
+        rsi_val = self._rsi.current_value
+        # The entry rules, read on every bar RSI is ready (#2639): only a flat
+        # bar acts on them, but the RSI range is the default Dark Bright Gate
+        # and shades held bars too.
+        entry_checks = self._entry_checks(bar, rsi_val)
 
         # --- Exit: any existing position exits on ADX < threshold.
         if prior_in_position:
@@ -176,6 +183,14 @@ class RsiRangeStrategy(Strategy):
                 if below_exit
                 else None
             )
+            exit_check = ExplainedCheck(
+                check_id="adx_exit",
+                role=CheckRole.EXIT,
+                comparison=Comparison.LT,
+                passed=below_exit,
+                observed=adx_val,
+                threshold=self.adx_exit_threshold,
+            )
             return SignalDecision(
                 intent=intent,
                 ready=adx_val is not None,
@@ -185,11 +200,13 @@ class RsiRangeStrategy(Strategy):
                 action_plan_request=(
                     {"contract": "single_long_stock", "intent": intent.kind.value} if intent is not None else None
                 ),
+                explanation=DecisionExplanation(
+                    values=dict(snapshot), checks=(*entry_checks, exit_check), holding=True
+                ),
             )
 
         # --- Entry: all indicators ready?
         indicators_ready = self._rsi.is_ready and self._adx.is_ready and self._extra_indicators_ready()
-        rsi_val = self._rsi.current_value
         if not indicators_ready or rsi_val is None:
             return SignalDecision(
                 intent=None,
@@ -198,11 +215,13 @@ class RsiRangeStrategy(Strategy):
                 signal_facts={"decision": "HOLD", "timeframe": timeframe},
                 reason_evidence=reason_evidence,
                 action_plan_request=None,
+                explanation=DecisionExplanation(values=dict(snapshot), holding=False),
             )
 
         # --- RSI range filter + strategy-specific gates.
-        rsi_in_range = self.rsi_low_gate <= rsi_val <= self.rsi_high_gate
-        extra_gate_passes = self._entry_extra_gate_passes(bar)
+        rsi_band, *extra_checks = entry_checks
+        rsi_in_range = rsi_band.passed
+        extra_gate_passes = all(check.passed for check in extra_checks)
         intent = (
             SignalIntent(kind=SignalIntentKind.ENTER, bar_close_ms=bar.end_ms, intended_price=bar.close)
             if rsi_in_range and extra_gate_passes
@@ -222,7 +241,22 @@ class RsiRangeStrategy(Strategy):
             action_plan_request=(
                 {"contract": "single_long_stock", "intent": intent.kind.value} if intent is not None else None
             ),
+            explanation=DecisionExplanation(values=dict(snapshot), checks=entry_checks, holding=False),
         )
+
+    def _entry_checks(self, bar: TradeBar, rsi_val: Decimal | None) -> tuple[ExplainedCheck, ...]:
+        """The RSI range then each strategy-specific gate; none until RSI is ready."""
+        if rsi_val is None:
+            return ()
+        rsi_band = ExplainedCheck(
+            check_id="rsi_band",
+            role=CheckRole.ENTRY,
+            comparison=Comparison.BAND,
+            passed=self.rsi_low_gate <= rsi_val <= self.rsi_high_gate,
+            observed=rsi_val,
+            threshold=(self.rsi_low_gate, self.rsi_high_gate),
+        )
+        return (rsi_band, *self._entry_extra_checks(bar))
 
     def commit_signal_decision(self, bar: TradeBar, intent: SignalIntent) -> None:
         """Apply one session-committed signal through the bound executor."""
@@ -337,8 +371,9 @@ class RsiRangeStrategy(Strategy):
 
     def _update_extra_indicators(self, bar: TradeBar) -> None: ...
 
-    def _entry_extra_gate_passes(self, bar: TradeBar) -> bool:
-        return True
+    def _entry_extra_checks(self, bar: TradeBar) -> tuple[ExplainedCheck, ...]:
+        """The strategy-specific entry gates, one check each, joined by AND."""
+        return ()
 
     def _indicator_snapshot(self, bar: TradeBar) -> dict[str, Decimal]:
         assert self._rsi is not None

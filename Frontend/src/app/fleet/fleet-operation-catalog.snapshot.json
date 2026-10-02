@@ -122,6 +122,11 @@
       "path_template": "/accounts/{account_id}/bots/{sid}/runs/current",
       "requires_account": true
     },
+    "bot_strategy_view": {
+      "method": "GET",
+      "path_template": "/accounts/{account_id}/bots/{sid}/strategy-view",
+      "requires_account": true
+    },
     "bots_catalog_read": {
       "method": "GET",
       "path_template": "/accounts/{account_id}/bots/catalog",

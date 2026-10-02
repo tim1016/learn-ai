@@ -428,3 +428,70 @@ def test_captured_decision_outcomes_sees_decisions_older_than_the_presentation_c
 
     assert captured["0:ENTER"] == "entered"
     assert len(captured) == MAX_DECISION_RECEIPT_READ + 1
+
+
+_EXP_001_INPUT = (
+    Path(__file__).resolve().parents[1] / "fixtures/golden/strategy-explanation/EXP-001/v1/input.json"
+)
+
+
+class _HistoryOnlyFeed:
+    """A feed whose warmup window is the 2026-09-29 bot's own minutes and whose live stream is empty."""
+
+    feed_id = "ibkr"
+
+    def __init__(self, bars: list[MarketDataBar]) -> None:
+        self._bars = bars
+
+    async def recent_closed_bars(self, symbol: str, *, use_rth: bool = True, lookback_days: int = 5) -> list[MarketDataBar]:
+        del symbol, use_rth, lookback_days
+        return self._bars
+
+    async def stream_bars(self, symbol: str, *, use_rth: bool = True):  # type: ignore[no-untyped-def]
+        del symbol, use_rth
+        return
+        yield  # pragma: no cover - makes this an async generator
+
+
+@pytest.mark.asyncio
+async def test_warmup_hands_its_evaluations_to_the_run_as_before_start_evaluations() -> None:
+    """#2639: every replayed bucket becomes a before-start evaluation, and none becomes a decision."""
+    import json
+
+    from app.services.bot_trade_strategy import strategy_evaluations
+
+    minutes = json.loads(_EXP_001_INPUT.read_text(encoding="utf-8"))["minutes"]
+    bars = [
+        MarketDataBar(
+            symbol="SPY",
+            start_ms=row["start_ms"],
+            end_ms=row["end_ms"],
+            open=Decimal(row["open"]),
+            high=Decimal(row["high"]),
+            low=Decimal(row["low"]),
+            close=Decimal(row["close"]),
+            volume=int(row["volume"]),
+            fetched_at_ms=row["end_ms"],
+            feed_id="ibkr",
+            session_phase="RTH",
+            provenance="history",
+        )
+        for row in minutes
+    ]
+    recorded: list = []
+
+    evaluations = [
+        evaluation
+        async for evaluation in strategy_evaluations(
+            _binding(strategy_key="ema_crossover_signal"),
+            _HistoryOnlyFeed(bars),  # type: ignore[arg-type]
+            record_before_start=recorded.extend,
+        )
+    ]
+
+    assert evaluations == []
+    # 5 sessions of 26 fifteen-minute buckets each.
+    assert len(recorded) == 5 * 26
+    by_close = {record.bar.end_ms: record for record in recorded}
+    at_1430 = {check.check_id: check.passed for check in by_close[1_790_706_600_000].checks}
+    assert at_1430 == {"fresh_cross": True, "gap": False, "rsi_band": False}

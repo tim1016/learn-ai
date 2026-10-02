@@ -16,6 +16,7 @@ from app.engine.engine import BacktestEngine, pin_strategy_window
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.strategy.base import LoggedTrade, Strategy
+from app.engine.strategy.signal_program import SignalDecision
 from app.services.spec_strategy_runner import InMemoryDataReader
 from app.utils.timestamps import ny_datetime
 
@@ -39,3 +40,29 @@ def run_strategy_over_bars(strategy: Strategy, bars: list[TradeBar]) -> list[Log
     )
     engine.run(strategy)
     return list(getattr(strategy, "trade_log", []))
+
+
+def staged_decisions(strategy: Strategy, bars: list[TradeBar]) -> list[tuple[TradeBar, SignalDecision]]:
+    """Replay ``bars`` and return every (decision bar, decision) the strategy staged, in order.
+
+    The decision-identity protocol (``BacktestEngine.for_decision_identity``)
+    the golden trace corpora replay with, over the bar series' own dates.
+    Recording wraps ``evaluate_signal_bar`` on the instance, which is the
+    method the Signal Session calls, so nothing about the decision changes.
+    """
+    staged: list[tuple[TradeBar, SignalDecision]] = []
+    evaluate = strategy.evaluate_signal_bar  # type: ignore[attr-defined]
+
+    def recording_evaluate(bar: TradeBar) -> SignalDecision:
+        decision = evaluate(bar)
+        staged.append((bar, decision))
+        return decision
+
+    strategy.evaluate_signal_bar = recording_evaluate  # type: ignore[attr-defined]
+    pin_strategy_window(
+        strategy,
+        ny_datetime(min(bar.start_ms for bar in bars)).date(),
+        ny_datetime(max(bar.end_ms for bar in bars)).date(),
+    )
+    BacktestEngine.for_decision_identity(InMemoryDataReader(bars)).run(strategy)  # type: ignore[arg-type]
+    return staged

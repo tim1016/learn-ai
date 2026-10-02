@@ -74,7 +74,7 @@ def build_engine_chart(request: EngineChartRequest) -> EngineChartResponse:
 
     excluded = set(request.excluded_strategy_indicator_ids)
     default_specs: list[tuple[str, dict[str, int | float]]] = []
-    for template in registration.chart_indicators:
+    for template in registration.strategy_view.chart_indicators if registration.strategy_view else ():
         params = {name: _resolve_param(value, validated) for name, value in template.params.items()}
         if indicator_id(template.name, params) not in excluded:
             default_specs.append((template.name, params))

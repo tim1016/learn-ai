@@ -1,0 +1,104 @@
+{
+  "decision_closes_ms": [
+    1790706600000,
+    1790707500000
+  ],
+  "explanations": [
+    {
+      "bar": {
+        "start_ms": 1790705700000,
+        "end_ms": 1790706600000,
+        "open": 763.75,
+        "high": 764.39,
+        "low": 763.66,
+        "close": 763.97,
+        "volume": 602194.0
+      },
+      "ready": true,
+      "holding": false,
+      "signal": "HOLD",
+      "values": {
+        "ema_fast": 763.4646644335828,
+        "ema_slow": 763.4384789305246,
+        "rsi": 47.25604678886895
+      },
+      "checks": [
+        {
+          "check_id": "fresh_cross",
+          "role": "entry",
+          "comparison": "state",
+          "passed": true,
+          "observed": "crossed_up",
+          "threshold": null
+        },
+        {
+          "check_id": "gap",
+          "role": "entry",
+          "comparison": "ge",
+          "passed": false,
+          "observed": 0.02618550305818874,
+          "threshold": 0.2
+        },
+        {
+          "check_id": "rsi_band",
+          "role": "entry",
+          "comparison": "band",
+          "passed": false,
+          "observed": 47.25604678886895,
+          "threshold": [
+            50.0,
+            70.0
+          ]
+        }
+      ]
+    },
+    {
+      "bar": {
+        "start_ms": 1790706600000,
+        "end_ms": 1790707500000,
+        "open": 763.97,
+        "high": 765.3,
+        "low": 763.57,
+        "close": 764.85,
+        "volume": 1145816.0
+      },
+      "ready": true,
+      "holding": false,
+      "signal": "HOLD",
+      "values": {
+        "ema_fast": 763.9264429557219,
+        "ema_slow": 763.6951191249748,
+        "rsi": 53.286520828736336
+      },
+      "checks": [
+        {
+          "check_id": "fresh_cross",
+          "role": "entry",
+          "comparison": "state",
+          "passed": false,
+          "observed": "already_above",
+          "threshold": null
+        },
+        {
+          "check_id": "gap",
+          "role": "entry",
+          "comparison": "ge",
+          "passed": true,
+          "observed": 0.23132383074717608,
+          "threshold": 0.2
+        },
+        {
+          "check_id": "rsi_band",
+          "role": "entry",
+          "comparison": "band",
+          "passed": true,
+          "observed": 53.286520828736336,
+          "threshold": [
+            50.0,
+            70.0
+          ]
+        }
+      ]
+    }
+  ]
+}

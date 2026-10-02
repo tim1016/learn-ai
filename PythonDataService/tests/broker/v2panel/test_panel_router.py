@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
@@ -45,6 +46,7 @@ from app.schemas.broker_v2_panel import (
     ChartLiveResponse,
     LiveSnapshotUnavailableDetail,
 )
+from app.schemas.decision_explanation import DecisionBarRecord, DecisionExplanationRecord, ExplainedCheckRecord
 from app.schemas.run_admission import RunAdmissionDecision
 from app.services import broker_account_snapshot, surface_hub
 from app.services.bot_end import bot_end_view
@@ -188,6 +190,7 @@ class _FakeRegistry:
             symbol="SPY",
             use_rth=True,
             strategy_key="deployment_validation",
+            strategy_params=None,
             sealed_program=None,
             exit_terms=None,
             mode="trade",
@@ -1611,3 +1614,107 @@ async def test_dry_run_panel_pulse_uses_selected_clerk_window_without_primary(ap
             registry=registry, binding=binding, facade=selected,
         )
     assert panel.market_pulse.session == "PRE_MARKET"
+
+
+def _dv_explanation(end_ms: int) -> dict:
+    """A Deployment Validation decision explanation, as the runner stores it (#2639)."""
+    return DecisionExplanationRecord(
+        bar=DecisionBarRecord(
+            start_ms=end_ms - 60_000, end_ms=end_ms, open=100.0, high=101.0, low=99.5, close=100.5, volume=900.0
+        ),
+        ready=True,
+        holding=False,
+        signal="HOLD",
+        values={},
+        checks=[
+            ExplainedCheckRecord(
+                check_id="in_window", role="entry", comparison="state", passed=True, observed="inside"
+            ),
+            ExplainedCheckRecord(
+                check_id="green_streak", role="entry", comparison="ge", passed=False, observed=1, threshold=2
+            ),
+        ],
+    ).model_dump(mode="json")
+
+
+def _append_no_action(repo: ClerkSqliteRepository, seq_ms: int, *, explanation: dict | None) -> None:
+    journal = SqliteDecisionReceipts(repo, strategy_instance_id=SID)
+    facts: dict = {
+        "bar_ref": f"decision-bar:ibkr:SPY:{seq_ms}",
+        "decision_id": f"{seq_ms:064x}"[-64:],
+        "run_id": _run_id(SID),
+        "reason_code": "NO_ACTION",
+        "decision_bar_close_ms": seq_ms,
+    }
+    if explanation is not None:
+        facts["explanation"] = explanation
+    journal.append(outcome="no_action", symbol="SPY", observed_at_ms=seq_ms + 5, facts=facts)
+
+
+async def test_strategy_view_draws_the_bots_own_decisions(api) -> None:
+    app, repo = api
+    _append_no_action(repo, _T0, explanation=None)
+    _append_no_action(repo, _T0 + 60_000, explanation=_dv_explanation(_T0 + 60_000))
+
+    async with _client(app) as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/strategy-view")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["strategy_key"] == "deployment_validation"
+    assert body["declaration"]["gates"] == [
+        {
+            "gate_id": "in_window",
+            "label": "Inside its trading window",
+            "expression": "open + 15 min ≤ bar close < close − 15 min",
+            "source": "strategy",
+        }
+    ]
+    [candle] = body["candles"]
+    assert (candle["bar_close_ms"], candle["phase"], candle["outcome"]) == (_T0 + 60_000, "decision", "no_action")
+    assert candle["gates"] == {"in_window": True}
+    assert [(c["label"], c["observed_text"], c["needs"], c["passed"]) for c in candle["explanation"]["checks"]] == [
+        ("Trading window", "inside", "open + 15 min to close − 15 min", True),
+        ("Green bars in a row", "1", "≥ 2", False),
+    ]
+    # The decision recorded before values were saved is counted, never drawn.
+    assert body["unexplained_decision_count"] == 1
+
+
+async def test_panel_decision_rows_explain_themselves(api) -> None:
+    app, repo = api
+    _append_no_action(repo, _T0, explanation=None)
+    _append_no_action(repo, _T0 + 60_000, explanation=_dv_explanation(_T0 + 60_000))
+
+    async with _client(app) as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")
+
+    assert response.status_code == 200, response.text
+    newest, older = response.json()["recent_decisions"][:2]
+    assert newest["decision_bar_close_ms"] == _T0 + 60_000
+    assert [chip["chip"] for chip in newest["explanation"]["checks"]] == ["window", "green 1"]
+    # "values not recorded": a row from before decisions saved them.
+    assert older["explanation"] is None
+
+
+async def test_saved_settings_that_no_longer_validate_never_take_the_panel_down(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2639: the panel is the operator's control surface; the strategy view is a display add-on."""
+    app, repo = api
+    _append_no_action(repo, _T0 + 60_000, explanation=_dv_explanation(_T0 + 60_000))
+    registry = get_bot_task_registry()
+    binding_for_control = registry.binding_for_control  # type: ignore[union-attr]
+
+    def stale_binding(broker: str, sid: str) -> SimpleNamespace:
+        return SimpleNamespace(**{**vars(binding_for_control(broker, sid)), "strategy_params": {"trade_symbol": 7}})
+
+    monkeypatch.setattr(registry, "binding_for_control", stale_binding)
+
+    async with _client(app) as client:
+        panel = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")
+        view = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/strategy-view")
+
+    assert panel.status_code == 200, panel.text
+    assert panel.json()["recent_decisions"][0]["explanation"] is None
+    assert view.status_code == 503, view.text

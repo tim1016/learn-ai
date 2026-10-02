@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
@@ -40,6 +41,10 @@ class EffectDecisionEvidence(BaseModel):
     # EXIT, which never waits for a reading, and from callers that set none:
     # such an ENTER is dropped at once.
     decision_valid_until_ms: int | None = Field(default=None, ge=0, le=MAX_TIMESTAMP_MS)
+    # #2639: the decision bar, the bot's own indicator values and each rule's
+    # pass/fail, saved on the receipt for the owner. Display evidence only:
+    # nothing in custody reads it. ``None`` from callers that have none.
+    explanation: DecisionExplanationRecord | None = None
 
     @property
     def reason_code(self) -> str:

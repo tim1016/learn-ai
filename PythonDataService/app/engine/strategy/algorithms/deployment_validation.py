@@ -34,6 +34,7 @@ from decimal import Decimal
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.strategy.base import LoggedTrade, Strategy
+from app.engine.strategy.decision_explanation import CheckRole, Comparison, DecisionExplanation, ExplainedCheck
 from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
@@ -66,13 +67,6 @@ class _OpenTrade:
     signal_time_ms: int
 
 
-@dataclass(frozen=True)
-class _DeploymentDecisionSnapshot:
-    bar_close_ms: int
-    signal: str
-    intended_price: float
-
-
 class DeploymentValidationConsecutiveGreen(Strategy):
     """Deterministic minute-bar strategy for validating deployment plumbing."""
 
@@ -99,13 +93,6 @@ class DeploymentValidationConsecutiveGreen(Strategy):
         # construction stays a compatibility surface for historical tests and
         # ledgers; public Backtest construction goes through this program.
         self.signal_program: SignalProgram | None = None
-
-    def _publish_decision(self, bar: TradeBar, signal: str) -> None:
-        self.last_decision_snapshot = _DeploymentDecisionSnapshot(
-            bar_close_ms=bar.end_ms,
-            signal=signal,
-            intended_price=float(bar.close),
-        )
 
     def signal_program_settings(self) -> dict[str, str]:
         """Stable signal/trade-symbol settings which participate in evaluation identity."""
@@ -200,8 +187,32 @@ class DeploymentValidationConsecutiveGreen(Strategy):
 
         prior_in_position = self._in_position
         timeframe = "1m"
+        # The trading window is the default Dark Bright Gate (#2639); the
+        # session-end barrier is an exit rule while a position is held.
+        reached_session_end = bar.end_ms >= self._stop_and_flatten_ms
+        if reached_session_end or self._stopped_for_day:
+            window_state = "after_window"
+        elif bar.end_ms < self._detection_start_ms:
+            window_state = "before_window"
+        else:
+            window_state = "inside"
+        window_check = ExplainedCheck(
+            check_id="in_window",
+            role=CheckRole.ENTRY,
+            comparison=Comparison.STATE,
+            passed=window_state == "inside",
+            observed=window_state,
+        )
+        session_end_check = ExplainedCheck(
+            check_id="session_end",
+            role=CheckRole.EXIT,
+            comparison=Comparison.STATE,
+            passed=reached_session_end,
+            observed="reached" if reached_session_end else "not_reached",
+        )
+        held_checks = (session_end_check,) if prior_in_position else ()
 
-        if bar.end_ms >= self._stop_and_flatten_ms:
+        if session_end_check.passed:
             self._stopped_for_day = True
             self._green_streak = 0
             # Reading only ``prior_in_position`` is complete, not a
@@ -222,7 +233,6 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             else:
                 intent = None
                 bar_signal = "HOLD"
-            self._publish_decision(bar, bar_signal)
             return SignalDecision(
                 intent=intent,
                 ready=True,
@@ -232,11 +242,13 @@ class DeploymentValidationConsecutiveGreen(Strategy):
                 action_plan_request=(
                     {"contract": "single_long_stock", "intent": intent.kind.value} if intent is not None else None
                 ),
+                explanation=DecisionExplanation(
+                    values={}, checks=(window_check, *held_checks), holding=prior_in_position
+                ),
             )
 
-        if self._stopped_for_day or bar.end_ms < self._detection_start_ms:
+        if not window_check.passed:
             self._green_streak = 0
-            self._publish_decision(bar, "HOLD")
             return SignalDecision(
                 intent=None,
                 ready=True,
@@ -247,12 +259,23 @@ class DeploymentValidationConsecutiveGreen(Strategy):
                     "stopped_for_day": self._stopped_for_day,
                 },
                 action_plan_request=None,
+                explanation=DecisionExplanation(
+                    values={}, checks=(window_check, *held_checks), holding=prior_in_position
+                ),
             )
 
         if prior_in_position:
             prior_countdown = self._bars_until_exit_signal
             next_countdown = prior_countdown - 1
-            if next_countdown <= 0:
+            countdown_check = ExplainedCheck(
+                check_id="exit_countdown",
+                role=CheckRole.EXIT,
+                comparison=Comparison.LE,
+                passed=next_countdown <= 0,
+                observed=next_countdown,
+                threshold=0,
+            )
+            if countdown_check.passed:
                 intent = SignalIntent(kind=SignalIntentKind.EXIT, bar_close_ms=bar.end_ms, intended_price=bar.close)
                 bar_signal = "EXIT"
             else:
@@ -263,7 +286,6 @@ class DeploymentValidationConsecutiveGreen(Strategy):
                 self._bars_until_exit_signal = next_countdown
                 intent = None
                 bar_signal = "HOLD"
-            self._publish_decision(bar, bar_signal)
             return SignalDecision(
                 intent=intent,
                 ready=True,
@@ -272,6 +294,9 @@ class DeploymentValidationConsecutiveGreen(Strategy):
                 reason_evidence={"prior_countdown": prior_countdown},
                 action_plan_request=(
                     {"contract": "single_long_stock", "intent": intent.kind.value} if intent is not None else None
+                ),
+                explanation=DecisionExplanation(
+                    values={}, checks=(window_check, *held_checks, countdown_check), holding=True
                 ),
             )
 
@@ -286,8 +311,16 @@ class DeploymentValidationConsecutiveGreen(Strategy):
 
         prior_streak = self._green_streak
         candidate_streak = prior_streak + 1 if bar.close > bar.open else 0
+        streak_check = ExplainedCheck(
+            check_id="green_streak",
+            role=CheckRole.ENTRY,
+            comparison=Comparison.GE,
+            passed=candidate_streak >= 2,
+            observed=candidate_streak,
+            threshold=2,
+        )
 
-        if candidate_streak >= 2:
+        if streak_check.passed:
             # Preserve the completed streak until a stage commits, mirroring
             # the exit countdown above: a discarded ENTER re-evaluates from
             # the same completed streak on a later bar instead of losing
@@ -299,7 +332,6 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             intent = None
             bar_signal = "HOLD"
 
-        self._publish_decision(bar, bar_signal)
         return SignalDecision(
             intent=intent,
             ready=True,
@@ -313,6 +345,7 @@ class DeploymentValidationConsecutiveGreen(Strategy):
             action_plan_request=(
                 {"contract": "single_long_stock", "intent": intent.kind.value} if intent is not None else None
             ),
+            explanation=DecisionExplanation(values={}, checks=(window_check, streak_check), holding=False),
         )
 
     def commit_signal_decision(self, bar: TradeBar, intent: SignalIntent) -> None:

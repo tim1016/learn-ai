@@ -75,6 +75,7 @@ from app.schemas.deployment_budget import (
 )
 from app.schemas.exit_terms import ExitTermsInput
 from app.schemas.run_admission import RunAdmissionDecision
+from app.schemas.strategy_view import StrategyViewResponse
 from app.services.broker_v2_panel import (
     bot_clear,
     bot_end_panel,
@@ -112,6 +113,7 @@ from app.services.broker_v2_panel.paper_access_service import (
     confirm_paper_access,
     prepare_paper_access,
 )
+from app.services.broker_v2_panel.strategy_view_source import get_strategy_view
 from app.services.canary_admission import CanaryActivationRefused, CanaryAdmissionLedgerError
 from app.services.surface_hub import (
     SnapshotStalledError,
@@ -913,6 +915,22 @@ async def get_history_chart_scoped(
     timeframe: ChartHistoryTimeframe = Query(...),
 ) -> ChartHistoryResponse:
     return await _history_chart(broker, account_id, sid, timeframe)
+
+
+@router.get(
+    "/{broker}/accounts/{account_id}/bots/{sid}/strategy-view",
+    response_model=StrategyViewResponse,
+    summary="Strategy view: the bot's own decision candles, values, checks and gates (#2639)",
+)
+async def get_strategy_view_scoped(
+    broker: str,
+    account_id: str,
+    sid: str,
+) -> StrategyViewResponse:
+    try:
+        return await get_strategy_view(broker, account_id, sid)
+    except panel_errors.PanelDataError as error:
+        _raise_panel_error(error)
 
 
 # ── Operator-gated evidence (account-scoped) ─────────────────────────────────

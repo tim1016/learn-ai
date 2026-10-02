@@ -33,6 +33,7 @@ from app.marketdata.feed import (
     MarketDataBar,
     WarmupRefusalReason,
 )
+from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.services.decision_session import RunDecisionSession
 from app.services.source_bar_store_schema import (
     LEGACY_SOURCE_BAR_LEDGER_FILENAME,
@@ -588,6 +589,66 @@ class SourceBarLedger:
                 "SELECT * FROM source_run_warmup_join WHERE run_id = ?", (run_id,)
             ).fetchone()
         return None if row is None else RetainedWarmupJoin.model_validate(dict(row))
+
+    def record_before_start_evaluations(
+        self, *, run_id: str, records: Sequence[DecisionExplanationRecord]
+    ) -> None:
+        """Save the run's warmup evaluations, keep-first per decision bar (#2639).
+
+        A re-entered run replays warmup again over a window that now reaches
+        into bars it already decided live; keep-first leaves its first pass's
+        record of each bar, and the strategy view prefers a live receipt over
+        any before-start row for the same bar anyway.
+        """
+        rows = [
+            (run_id, record.bar.end_ms, record.model_dump_json())
+            for record in records
+        ]
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._conn.executemany(
+                    """
+                    INSERT INTO source_run_before_start_evaluations (run_id, bar_close_ms, explanation_json)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(run_id, bar_close_ms) DO NOTHING
+                    """,
+                    rows,
+                )
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
+
+    def before_start_evaluations(self, *, run_id: str) -> list[DecisionExplanationRecord]:
+        """The run's before-start evaluations in bar order; none for a pre-#2639 file.
+
+        Display evidence: a row this build cannot read (one a newer build
+        wrote) is logged and left out rather than failing the whole read.
+        """
+        with self._lock:
+            if not self._has_table("source_run_before_start_evaluations"):
+                return []
+            rows = self._conn.execute(
+                "SELECT bar_close_ms, explanation_json FROM source_run_before_start_evaluations "
+                "WHERE run_id = ? ORDER BY bar_close_ms ASC",
+                (run_id,),
+            ).fetchall()
+        records: list[DecisionExplanationRecord] = []
+        for row in rows:
+            try:
+                records.append(DecisionExplanationRecord.model_validate_json(row["explanation_json"]))
+            except ValueError as exc:
+                logger.warning(
+                    "A before-start evaluation could not be read",
+                    extra={
+                        "action": "before_start_evaluation_unreadable",
+                        "run_id": run_id,
+                        "bar_close_ms": row["bar_close_ms"],
+                        "reason": str(exc),
+                    },
+                )
+        return records
 
     def record_startup_opened(self, *, run_id: str, at_ms: int) -> None:
         """Record that a run subscribed and is preparing, keep-first (#2410)."""

@@ -1074,7 +1074,7 @@ def test_sqlite_decision_receipts_adapt_durable_s1_rows_without_jsonl(
         order_ref="order-ref-3",
         observed_at_ms=1_700_000_180_000,
         facts_json=(
-            '{"bar_ref":"SPY@1700000180000","indicator_snapshot":{"fast":12.0},'
+            '{"bar_ref":"SPY@1700000180000",'
             '"reason_code":"STRATEGY_ENTER","decision_id":"deadbeef","'
             'effect_operation_id":"effect-op-3"}'
         ),
@@ -1100,6 +1100,9 @@ def test_sqlite_decision_receipts_adapt_durable_s1_rows_without_jsonl(
     # proximity.
     assert receipts[0].decision_id == "deadbeef"
     assert receipts[0].effect_operation_id == "effect-op-3"
+    # A row written before decisions recorded their values reads back with
+    # no explanation, which the page states as "values not recorded" (#2639).
+    assert receipts[0].explanation is None
 
 
 @pytest.mark.asyncio

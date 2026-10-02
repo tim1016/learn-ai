@@ -8,7 +8,7 @@ indicator tests (``test_adx.py``, ``test_macd.py``,
 So the remaining risk is the gate wiring per strategy. We drive each
 gate by instantiating the strategy, calling ``initialize`` against a
 fake ``StrategyContext``, manually advancing the indicators to the
-desired state, and asserting on ``_entry_extra_gate_passes``.
+desired state, and asserting on ``_entry_extra_checks`` (every gate passing).
 """
 
 from __future__ import annotations
@@ -68,6 +68,11 @@ def _wire_live(strategy) -> StrategyContext:
     return ctx
 
 
+def _gates_pass(strategy: SpyStrategyAAlgorithm | SpyStrategyBAlgorithm | SpyStrategyCAlgorithm, bar: TradeBar) -> bool:
+    """Whether every strategy-specific entry gate passes -- they are joined by AND."""
+    return all(check.passed for check in strategy._entry_extra_checks(bar))
+
+
 def _bar(ts: datetime, close: str, high: str | None = None, low: str | None = None) -> TradeBar:
     c = Decimal(close)
     h = Decimal(high) if high is not None else c + Decimal("0.5")
@@ -97,7 +102,7 @@ def test_strategy_a_gate_rejects_when_ema_gap_below_threshold():
     for i in range(50):
         s._update_extra_indicators(_bar(t + timedelta(minutes=15 * i), "100"))
     assert s._extra_indicators_ready()
-    assert not s._entry_extra_gate_passes(_bar(t + timedelta(minutes=15 * 50), "100"))
+    assert not _gates_pass(s, _bar(t + timedelta(minutes=15 * 50), "100"))
 
 
 def test_strategy_a_gate_passes_with_large_gap_and_positive_macd():
@@ -108,7 +113,7 @@ def test_strategy_a_gate_passes_with_large_gap_and_positive_macd():
     for i in range(50):
         s._update_extra_indicators(_bar(t + timedelta(minutes=15 * i), str(100 + i * 0.5)))
     assert s._extra_indicators_ready()
-    assert s._entry_extra_gate_passes(_bar(t + timedelta(minutes=15 * 50), "125"))
+    assert _gates_pass(s, _bar(t + timedelta(minutes=15 * 50), "125"))
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +139,7 @@ def test_strategy_b_gate_rejects_when_supertrend_short():
     s._update_extra_indicators(crash)
     s._adx.update(crash)
     assert s._supertrend.is_long is False
-    assert not s._entry_extra_gate_passes(crash)
+    assert not _gates_pass(s, crash)
 
 
 def test_strategy_b_gate_rejects_when_macd_nonpositive():
@@ -148,7 +153,7 @@ def test_strategy_b_gate_rejects_when_macd_nonpositive():
         s._adx.update(b)
     last = _bar(t + timedelta(minutes=15 * 60), "100")
     # MACD line ≈ 0 so gate should fail (macd > 0 required, not >= 0).
-    assert not s._entry_extra_gate_passes(last)
+    assert not _gates_pass(s, last)
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +171,7 @@ def test_strategy_c_gate_rejects_when_adx_not_rising():
         s._adx.update(b)
     assert s._adx.is_ready
     # ADX not rising because all bars identical.
-    assert not s._entry_extra_gate_passes(_bar(t + timedelta(minutes=15 * 40), "100"))
+    assert not _gates_pass(s, _bar(t + timedelta(minutes=15 * 40), "100"))
 
 
 def test_strategy_c_gate_passes_when_adx_rising_above_threshold():
@@ -183,7 +188,7 @@ def test_strategy_c_gate_passes_when_adx_rising_above_threshold():
     # check directly against the public properties.
     if s._adx.current_value is not None and s._adx.previous_value is not None:
         rising = s._adx.current_value > s._adx.previous_value
-        assert s._entry_extra_gate_passes(_bar(t + timedelta(minutes=15 * 60), "130")) is rising
+        assert _gates_pass(s, _bar(t + timedelta(minutes=15 * 60), "130")) is rising
 
 
 # ---------------------------------------------------------------------------

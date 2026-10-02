@@ -7254,6 +7254,28 @@
         "title": "CaptureReceiptModel",
         "type": "object"
       },
+      "CatalogueIndicatorRef": {
+        "description": "A catalogue indicator with its parameters resolved for these settings.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Params",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "params"
+        ],
+        "title": "CatalogueIndicatorRef",
+        "type": "object"
+      },
       "ChannelHealth": {
         "additionalProperties": false,
         "description": "One submission-affecting stream's health fact, with its age (P7).\n\n``observed_at_ms`` is mandatory: no health fact is rendered without an\nobservation time. ``reason`` is empty when healthy.\n\n``connected`` and ``healthy`` are deliberately separate facts. A channel\ncan be connected but not yet usable \u2014 a market-data subscription that\nhas not produced its first closed bar is warming up, not down. Submission\ngates require ``healthy``; account-level surfaces that must not be\nrefused by one symbol's warm-up read ``connected`` (#1777, finding S6).\n``healthy`` implies ``connected``.",
@@ -12301,7 +12323,7 @@
       },
       "DecisionColumnSpec": {
         "additionalProperties": false,
-        "description": "One strategy-specific column of a spec's per-bar decision row.\n\nEach entry declares the column ``name``, its ``dtype``, whether it is\n``nullable``, and a free-text ``semantic`` description. No app code\nreads it; it stays because the sealed ``*.spec.json`` fixtures carry it.\n\n``name`` names an attribute the strategy publishes on its\n``DecisionSnapshot``. For the SPY EMA strategy these are ``ema5`` /\n``ema10`` / ``rsi``.",
+        "description": "One strategy-specific column of a spec's per-bar decision row.\n\nEach entry declares the column ``name``, its ``dtype``, whether it is\n``nullable``, and a free-text ``semantic`` description. No app code\nreads it; it stays because the sealed ``*.spec.json`` fixtures carry it\n(their bytes are pinned by the strategy-validation manifest). A\nstrategy's per-bar values are its decision explanation now (#2639).",
         "properties": {
           "dtype": {
             "default": "float64",
@@ -12339,6 +12361,51 @@
           "name"
         ],
         "title": "DecisionColumnSpec",
+        "type": "object"
+      },
+      "DecisionExplanationView": {
+        "description": "What one decision bar saw, ready to show.",
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ExplainedCheckView"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "holding": {
+            "title": "Holding",
+            "type": "boolean"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "signal": {
+            "enum": [
+              "ENTER",
+              "EXIT",
+              "HOLD"
+            ],
+            "title": "Signal",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "$ref": "#/components/schemas/ExplainedValueView"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ready",
+          "holding",
+          "signal",
+          "values",
+          "checks"
+        ],
+        "title": "DecisionExplanationView",
         "type": "object"
       },
       "DeploySubmissionUncommitted": {
@@ -15122,6 +15189,95 @@
           "exit_allowance_bps"
         ],
         "title": "ExitTermsInput",
+        "type": "object"
+      },
+      "ExplainedCheckView": {
+        "description": "One rule as the decision applied it, worded by the backend.\n\n``applies`` says whether this rule could act on the bar: entry rules act\nwhile flat, exit rules while holding. A rule that did not apply is still\nshown, because a gate may shade by it.",
+        "properties": {
+          "applies": {
+            "title": "Applies",
+            "type": "boolean"
+          },
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "chip": {
+            "title": "Chip",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "needs": {
+            "title": "Needs",
+            "type": "string"
+          },
+          "observed_text": {
+            "title": "Observed Text",
+            "type": "string"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "role": {
+            "enum": [
+              "entry",
+              "exit"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "check_id",
+          "role",
+          "label",
+          "chip",
+          "observed_text",
+          "needs",
+          "passed",
+          "applies"
+        ],
+        "title": "ExplainedCheckView",
+        "type": "object"
+      },
+      "ExplainedValueView": {
+        "description": "One recorded indicator value, labelled for the bot's settings.",
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "value",
+          "text"
+        ],
+        "title": "ExplainedValueView",
         "type": "object"
       },
       "ExposureNoticeView": {
@@ -32834,6 +32990,19 @@
             "title": "Bar Ref",
             "type": "string"
           },
+          "decision_bar_close_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Bar Close Ms"
+          },
           "decision_id": {
             "anyOf": [
               {
@@ -32855,6 +33024,16 @@
               }
             ],
             "title": "Effect Operation Id"
+          },
+          "explanation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionExplanationView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "order_ref": {
             "anyOf": [
@@ -39401,6 +39580,342 @@
           "detail"
         ],
         "title": "StrategyValidationRefreshResult",
+        "type": "object"
+      },
+      "StrategyViewCandle": {
+        "description": "One decision bar, labelled by its close.\n\n``phase`` is ``before_start`` for a warmup bar the bot evaluated but\nnever acted on; ``phase_text`` says so in the owner's words. ``gates``\nmaps each gate id to whether it held on this bar (``None`` when the\nbar could not be judged, e.g. indicators not ready).",
+        "properties": {
+          "bar_close_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Bar Close Ms",
+            "type": "integer"
+          },
+          "bar_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Bar Start Ms",
+            "type": "integer"
+          },
+          "close": {
+            "title": "Close",
+            "type": "number"
+          },
+          "decision_seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Seq"
+          },
+          "explanation": {
+            "$ref": "#/components/schemas/DecisionExplanationView"
+          },
+          "gates": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Gates",
+            "type": "object"
+          },
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "open": {
+            "title": "Open",
+            "type": "number"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "phase": {
+            "enum": [
+              "before_start",
+              "decision"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "phase_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase Text"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "volume": {
+            "title": "Volume",
+            "type": "number"
+          }
+        },
+        "required": [
+          "bar_start_ms",
+          "bar_close_ms",
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume",
+          "phase",
+          "explanation",
+          "gates"
+        ],
+        "title": "StrategyViewCandle",
+        "type": "object"
+      },
+      "StrategyViewDeclarationView": {
+        "description": "The strategy's view resolved against one set of deployed settings.",
+        "properties": {
+          "default_gate_id": {
+            "title": "Default Gate Id",
+            "type": "string"
+          },
+          "gates": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyViewGateView"
+            },
+            "title": "Gates",
+            "type": "array"
+          },
+          "values": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyViewValueSpec"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "values",
+          "gates",
+          "default_gate_id"
+        ],
+        "title": "StrategyViewDeclarationView",
+        "type": "object"
+      },
+      "StrategyViewGateView": {
+        "description": "One Dark Bright Gate the view can shade by.",
+        "properties": {
+          "expression": {
+            "title": "Expression",
+            "type": "string"
+          },
+          "gate_id": {
+            "title": "Gate Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "strategy",
+              "mine"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "gate_id",
+          "label",
+          "expression",
+          "source"
+        ],
+        "title": "StrategyViewGateView",
+        "type": "object"
+      },
+      "StrategyViewResponse": {
+        "description": "Everything one bot's strategy view draws, in one read.",
+        "properties": {
+          "candles": {
+            "items": {
+              "$ref": "#/components/schemas/StrategyViewCandle"
+            },
+            "title": "Candles",
+            "type": "array"
+          },
+          "decision_timeframe_ms": {
+            "exclusiveMinimum": 0.0,
+            "title": "Decision Timeframe Ms",
+            "type": "integer"
+          },
+          "declaration": {
+            "$ref": "#/components/schemas/StrategyViewDeclarationView"
+          },
+          "notices": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "run_started_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Started At Ms"
+          },
+          "run_stopped_at_ms": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Stopped At Ms"
+          },
+          "strategy_key": {
+            "title": "Strategy Key",
+            "type": "string"
+          },
+          "strategy_name": {
+            "title": "Strategy Name",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "unexplained_decision_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Unexplained Decision Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "strategy_key",
+          "strategy_name",
+          "symbol",
+          "decision_timeframe_ms",
+          "run_id",
+          "declaration",
+          "candles"
+        ],
+        "title": "StrategyViewResponse",
+        "type": "object"
+      },
+      "StrategyViewValueSpec": {
+        "description": "Where and how one recorded value is drawn.\n\n``pane`` is ``\"price\"`` for an overlay on the candles, another id for a\npane of its own, or ``None`` for a value listed but not drawn.",
+        "properties": {
+          "band": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band"
+          },
+          "catalogue": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogueIndicatorRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "decimals": {
+            "title": "Decimals",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "pane": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pane"
+          },
+          "variable": {
+            "title": "Variable",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "variable",
+          "pane",
+          "band",
+          "decimals",
+          "catalogue"
+        ],
+        "title": "StrategyViewValueSpec",
         "type": "object"
       },
       "Subtract-Input": {
@@ -49146,6 +49661,82 @@
         ]
       }
     },
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/strategy-view": {
+      "get": {
+        "operationId": "get_strategy_view_scoped_api_brokers__broker__accounts__account_id__bots__sid__strategy_view_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyViewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Strategy view: the bot's own decision candles, values, checks and gates (#2639)",
+        "tags": [
+          "broker-v2-panel"
+        ]
+      }
+    },
     "/api/brokers/{broker}/accounts/{account_id}/bots/{strategy_instance_id}/runs/current": {
       "get": {
         "description": "Validate the durable account binding before reading the current run.",
@@ -51974,6 +52565,90 @@
           }
         },
         "summary": "Fleet Bot Run Current Read",
+        "tags": [
+          "broker-clerks"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/strategy-view": {
+      "get": {
+        "description": "Fleet-routed GET /accounts/{account_id}/bots/{sid}/strategy-view (bot_panel_read).",
+        "operationId": "fleet_bot_strategy_view_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__strategy_view_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "clerk_id",
+            "required": true,
+            "schema": {
+              "title": "Clerk Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sid",
+            "required": true,
+            "schema": {
+              "title": "Sid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fleet Bot Strategy View",
         "tags": [
           "broker-clerks"
         ]

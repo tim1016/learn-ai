@@ -56,6 +56,7 @@ from app.schemas.broker_v2_panel import (
     PanelActionRequest,
     PanelActionResult,
 )
+from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     ActionOutcomeUnknownError,
@@ -599,6 +600,7 @@ def _decision_receipt_from_resource(
         raise SqlitePanelDecisionUnavailable(
             f"SQLite decision receipt {resource.seq} facts must be an object."
         )
+    explanation = _facts_explanation(resource.seq, facts)
     try:
         # `decision_id` == `evaluation_id` (ADR 0043 decision 5), and the atomic
         # writer stamps both keys to that one value, so reading either is
@@ -614,7 +616,10 @@ def _decision_receipt_from_resource(
                 "reason_code": facts["reason_code"],
                 "intent_id": resource.intent_id or "",
                 "order_ref": resource.order_ref or "",
-                "indicator_snapshot": facts.get("indicator_snapshot", {}),
+                "run_id": _facts_optional_str(facts, "run_id"),
+                "decision_bar_close_ms": facts.get("decision_bar_close_ms"),
+                "explanation": explanation,
+                "explanation_unreadable": explanation is None and facts.get("explanation") is not None,
                 "decision_id": (
                     _facts_optional_str(facts, "decision_id")
                     or _facts_optional_str(facts, "evaluation_id")
@@ -626,6 +631,26 @@ def _decision_receipt_from_resource(
         raise SqlitePanelDecisionUnavailable(
             f"SQLite decision receipt {resource.seq} does not satisfy the panel evidence contract."
         ) from exc
+
+
+def _facts_explanation(seq: int, facts: dict) -> DecisionExplanationRecord | None:
+    """Read a receipt's decision explanation (#2639); ``None`` when it has none.
+
+    The explanation is display evidence, never a custody fact, so one this
+    build cannot read (a row from a newer schema) is reported and left out
+    rather than taking the whole decision record down with it.
+    """
+    raw = facts.get("explanation")
+    if raw is None:
+        return None
+    try:
+        return DecisionExplanationRecord.model_validate(raw)
+    except ValueError as exc:
+        logger.warning(
+            "A decision receipt's explanation could not be read",
+            extra={"action": "decision_explanation_unreadable", "receipt_seq": seq, "reason": str(exc)},
+        )
+        return None
 
 
 def _facts_optional_str(facts: dict, key: str) -> str | None:

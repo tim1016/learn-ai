@@ -100,14 +100,14 @@ def test_build_threads_configured_gates_into_algorithm() -> None:
     algorithm = registration.build(
         registration.param_schema(gap=0.5, rsi_min=55, rsi_max=65)
     )
-    assert algorithm._gap_is_sufficient(Decimal("100.30"), Decimal("100.00")) is False
+    assert [check.passed for check in algorithm._gap_checks(Decimal("100.30"), Decimal("100.00"))] == [False]
     assert algorithm._rsi_gate_bounds() == (Decimal(55), Decimal(65))
 
 
 def test_entry_check_honors_a_configured_gap_the_default_would_reject() -> None:
     """A gap below the hardcoded 0.20 default must still enter when the
     strategy is configured with a looser threshold — proves the entry
-    check reads self._gap_is_sufficient(), not a literal ``0.20``."""
+    check reads self._gap_checks(), not a literal ``0.20``."""
     intents = _entry_check(
         gap=Decimal("0.01"),
         rsi_min=Decimal(50),

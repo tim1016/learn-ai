@@ -8,7 +8,8 @@ stream, and routes only its semantic ENTER/EXIT intents to the Clerk.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+import sqlite3
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
@@ -48,6 +49,7 @@ from app.marketdata.feed import (
     MarketDataBar,
     MarketDataFeed,
 )
+from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
 from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, replay_warmup_bars
@@ -74,6 +76,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _MINUTE_MS = 60_000
+
+BeforeStartSink = Callable[[Sequence[DecisionExplanationRecord]], None]
 
 _EFFECT_PURPOSE_BY_INTENT = {
     SignalIntentKind.ENTER: EffectPurpose.ENTER,
@@ -114,6 +118,10 @@ class StrategyEvaluation:
     # record `CANDIDATE_UNCAPTURED_AT_CRASH` and discard; it must never be
     # routed through the ordinary no-action/blocked/effect branches.
     crash_recovered: bool = False
+    # The decision bar and what the strategy saw on it (#2639), saved on
+    # every receipt this evaluation produces. ``None`` only for a strategy
+    # that reports no explanation.
+    explanation: DecisionExplanationRecord | None = None
 
 
 class _EffectReceipt(Protocol):
@@ -564,6 +572,7 @@ async def _warm_up_signal_strategy(
     binding: BrokerBotBinding,
     *,
     captured_decisions: Mapping[str, str] | None,
+    record_before_start: BeforeStartSink | None = None,
 ) -> StrategyEvaluation | None:
     """Replay recent closed bars so indicators are ready before live
     decisions begin, reapplying each bucket's own known Clerk disposition
@@ -579,7 +588,12 @@ async def _warm_up_signal_strategy(
     ``bot_trade_strategy_warmup``).
     """
     uncaptured = await replay_warmup_bars(
-        runtime, context, feed, binding, captured_decisions=captured_decisions
+        runtime,
+        context,
+        feed,
+        binding,
+        captured_decisions=captured_decisions,
+        record_before_start=record_before_start,
     )
     if uncaptured is None:
         return None
@@ -602,6 +616,7 @@ async def _warm_up_signal_strategy(
         # this bucket came from a registered Signal Program, so its crash-window
         # decision content stays content-verifiable rather than digest-less.
         trace=candidate_stage.trace,
+        explanation=DecisionExplanationRecord.from_decision(candidate_stage.bar, candidate_stage.decision),
     )
 
 
@@ -610,6 +625,7 @@ async def _signal_strategy_evaluations(
     feed: MarketDataFeed,
     captured_decisions: Mapping[str, str] | None,
     quarantine_receipts: QuarantineReceiptSink | None,
+    record_before_start: BeforeStartSink | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Run one canonical signal-intent strategy on the production minute stream."""
     runtime = _build_signal_strategy(
@@ -626,6 +642,7 @@ async def _signal_strategy_evaluations(
         feed,
         binding,
         captured_decisions=captured_decisions,
+        record_before_start=record_before_start,
     )
     # Warmup replays backfilled buckets through the same entrypoint, so it is
     # the first place a mis-shaped decision clock shows up. Drain here too, or
@@ -685,6 +702,7 @@ def _evaluation_from_active_stage(
         ),
         evaluation_mode=stage.trace.evaluation_mode,
         trace=stage.trace,
+        explanation=DecisionExplanationRecord.from_decision(stage.bar, stage.decision),
     )
 
 
@@ -726,6 +744,7 @@ async def strategy_evaluations(
     captured_decisions: Mapping[str, str] | None = None,
     quarantine_receipts: QuarantineReceiptSink | None = None,
     session: RunDecisionSession | None = None,
+    record_before_start: BeforeStartSink | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Stream one strategy's evaluations.
 
@@ -752,12 +771,17 @@ async def strategy_evaluations(
     declares no window", which a regular-hours binding resolves fine and an
     extended one refuses loudly (``_validate_decision_session``) rather than
     deciding on bars no session filtered.
+
+    ``record_before_start`` is where warmup's evaluations go once replay ends
+    (#2639): a custody runner passes its run's source-bar ledger, so the
+    strategy view can show bars from before the bot started. Read-only
+    callers omit it.
     """
     if binding.strategy_key not in supported_alpaca_paper_strategy_keys():
         raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}")
     _validate_decision_session(binding, session)
     async for evaluation in _signal_strategy_evaluations(
-        binding, feed, captured_decisions, quarantine_receipts
+        binding, feed, captured_decisions, quarantine_receipts, record_before_start
     ):
         yield evaluation
 
@@ -877,6 +901,7 @@ async def run_trade_bot(
             captured_decisions=captured_decision_outcomes(decision_receipts),
             quarantine_receipts=decision_receipts,
             session=session,
+            record_before_start=_before_start_recorder(source_bars, binding),
         ):
             if len(evaluation.intents) > 1:
                 raise RuntimeError("A supported trade strategy emitted multiple intents for one closed bar.")
@@ -1017,6 +1042,36 @@ async def run_trade_bot(
             )
 
 
+def _before_start_recorder(
+    source_bars: SourceBarLedger | None, binding: BrokerBotBinding
+) -> BeforeStartSink | None:
+    """Save warmup's evaluations as this run's before-start evaluations (#2639).
+
+    They are display evidence -- the bars behind the strategy view's "bot
+    started" line -- so a ledger that cannot take them is logged and the run
+    goes on: losing them must never cost the bot a decision.
+    """
+    if source_bars is None:
+        return None
+
+    def record(records: Sequence[DecisionExplanationRecord]) -> None:
+        try:
+            source_bars.record_before_start_evaluations(run_id=binding.run_id, records=records)
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning(
+                "Before-start evaluations were not saved",
+                extra={
+                    "action": "bot_before_start_evaluations_unsaved",
+                    "strategy_instance_id": binding.strategy_instance_id,
+                    "run_id": binding.run_id,
+                    "count": len(records),
+                    "reason": str(exc),
+                },
+            )
+
+    return record
+
+
 _PROTECTED_RETENTION_CLASS_BY_OUTCOME: dict[str, str] = {
     "blocked": "protected_refusal",
     # FR-016 / AC #9: crash-window evidence must survive the tail
@@ -1063,6 +1118,8 @@ def _append_decision_receipt(
     # `run_replay_proof` still reads for when it may fall back to
     # intent-kind comparison.
     facts["trace_digest"] = _evaluation_trace_digest(evaluation)
+    if evaluation.explanation is not None:
+        facts["explanation"] = evaluation.explanation.model_dump(mode="json")
     if liveness is not None:
         facts["market_liveness"] = liveness.model_dump(mode="json")
     receipts.append(
@@ -1269,6 +1326,7 @@ def _decision_bar_evidence(
             if intent.kind is SignalIntentKind.ENTER
             else None
         ),
+        explanation=evaluation.explanation,
     )
     return retained, evidence
 
@@ -1312,6 +1370,7 @@ async def run_dry_run_bot(
             captured_decisions=captured_decision_outcomes(decision_receipts),
             quarantine_receipts=decision_receipts,
             session=session,
+            record_before_start=_before_start_recorder(source_bars, binding),
         ):
             if len(evaluation.intents) > 1:
                 raise RuntimeError("A supported Dry Run strategy emitted multiple intents for one closed bar.")

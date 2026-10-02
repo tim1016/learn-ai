@@ -1751,6 +1751,52 @@
       "validated_by": [
         "tests/fixtures/test_alpaca_account_day_pnl_fixture.py::test_account_day_pnl_matches_the_hand_computed_alpaca_fixture"
       ]
+    },
+    {
+      "id": "EXP-001",
+      "name": "EMA decision explanations on the 2026-09-29 SPY bars",
+      "category": "strategy-explanation",
+      "canonical_module": "PythonDataService/app/engine/strategy/algorithms/ema_crossover_signal.py",
+      "canonical_callable": "EmaCrossoverSignalAlgorithm",
+      "reference": {
+        "kind": "internal_regression",
+        "oracle": "the canonical EMA Signal Program itself, replayed over the live bot's own retained bars",
+        "citation": "Issue #2639: the 2026-09-29 terminal replay found a 14:30 ET gap of 0.0262-0.0263 and RSI 47.19-47.31; see this fixture's attribution.md."
+      },
+      "market_input": {
+        "source": "vendored",
+        "vendor": "Interactive Brokers (the bot's retained live one-minute bars)",
+        "generated_by": "PythonDataService/scripts/fixture_generators/ema_decision_explanation_2026_09_29.py"
+      },
+      "units": null,
+      "tolerance": {
+        "atol": 1e-09,
+        "rtol": 0.0,
+        "note": "Values are float64 conversions of exact Decimal indicator math; pass/fail and state tokens compare exactly."
+      },
+      "active_version": 1,
+      "versions": {
+        "1": {
+          "input": "input.json",
+          "output": "output.json",
+          "attribution": "attribution.md",
+          "generated": "2026-10-01",
+          "justification": "Initial fixture for #2639's decision explanation",
+          "content_sha256": {
+            "input.json": "6e6717dd189c1500f3a6a896515f6fdda29d26659d973238fa1455b16d72bbbb",
+            "output.json": "6dc9c9a8222faccc43f5b93871b8b1055e4f19c7255b36c7fd8d1a8b15a493ff"
+          },
+          "file_sha256": {
+            "input.json": "cd1c48b7ec8fe0e6802b7eea992e9e6900d672dd49cb7cb80a68bd7c71fafc5c",
+            "output.json": "17adfc45131851f1b952376eb7db93eb155c2c6ac7cc6226f034b16f4bb775aa",
+            "attribution.md": "5e1ee59aaa58b1cc00134f004b0b2715fc9fd12962c478da1fecd0a8235fb5d7"
+          }
+        }
+      },
+      "status": "active",
+      "validated_by": [
+        "tests/engine/strategy/algorithms/test_ema_decision_explanation_2026_09_29.py"
+      ]
     }
   ]
 }

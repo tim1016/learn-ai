@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Literal, NoReturn
@@ -93,6 +93,7 @@ from app.services.broker_v2_panel.panel_errors import (
     UnknownBotError,
 )
 from app.services.broker_v2_panel.panel_projection_service import (
+    ExplanationRenderer,
     build_panel,
     program_build_view_from_run_evidence,
 )
@@ -127,6 +128,7 @@ from app.services.sqlite_clerk_compat import (
     active_sqlite_facade,
     custody_account_id_for_route,
 )
+from app.services.strategy_view import ResolvedStrategyView, StrategyViewUnavailableError
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -154,7 +156,7 @@ async def _panel_authority_for_binding(
 
 
 @asynccontextmanager
-async def _selected_panel_authority(
+async def selected_panel_authority(
     broker: str, account_id: str, sid: str,
 ) -> AsyncIterator[tuple[str, BotTaskRegistry, BrokerBotBinding, SqliteAlpacaClerkFacade | None]]:
     """Authorize the route account, then hold the bot's one custody selection open.
@@ -215,6 +217,32 @@ def _program_build_for_display(
     return prove_running_program_build(binding, verified_at_ms=verified_at_ms)
 
 
+def _explanation_renderer(binding: BrokerBotBinding) -> ExplanationRenderer | None:
+    """Word this bot's recorded decisions with its strategy view and deployed settings (#2639).
+
+    ``None`` -- rows render without wording -- for a strategy this build no
+    longer registers, declares no view, or whose saved settings no longer
+    validate. The panel is the operator's control surface; a display add-on
+    must never take it down.
+    """
+    try:
+        view = ResolvedStrategyView.for_settings(
+            binding.strategy_key, binding.strategy_params, symbol=binding.symbol
+        )
+    except StrategyViewUnavailableError as exc:
+        logger.warning(
+            "Bot decision rows are shown without their explanations",
+            extra={
+                "action": "panel_explanations_unavailable",
+                "strategy_instance_id": binding.strategy_instance_id,
+                "strategy_key": binding.strategy_key,
+                "reason": str(exc),
+            },
+        )
+        return None
+    return view.render_or_none
+
+
 @dataclass(frozen=True)
 class RunSourceEvidence:
     """One run's source-stream facts the panel shows, read at one open of its ledger."""
@@ -240,6 +268,30 @@ def _run_source_evidence_for(binding: BrokerBotBinding) -> RunSourceEvidence | N
     documented ``None`` instead of raising ``StartAdmissionUnavailable`` —
     a missing authority must not take down an otherwise-servable panel.
     """
+    return read_run_ledger(
+        binding,
+        lambda ledger: RunSourceEvidence(
+            events=ledger.events(run_id=binding.run_id),
+            warmup_join=ledger.warmup_join(run_id=binding.run_id),
+            startup_join=ledger.startup_join(run_id=binding.run_id),
+        ),
+        unavailable_action="panel_feed_continuity_unavailable",
+    )
+
+
+def read_run_ledger[T](
+    binding: BrokerBotBinding,
+    read: Callable[[SourceBarLedger], T],
+    *,
+    unavailable_action: str,
+) -> T | None:
+    """Run one read against this binding's source-bar ledger, opened read-only.
+
+    ``None`` is the explicit unavailable state: the mode retains no source
+    bars, the ledger is absent or unreadable, or no primary custody authority
+    is installed to resolve its evidence namespace. An unreadable ledger is
+    logged under ``unavailable_action``.
+    """
     if binding.mode not in {"dry_run", "trade"}:
         return None
     if binding.mode == "dry_run":
@@ -260,20 +312,16 @@ def _run_source_evidence_for(binding: BrokerBotBinding) -> RunSourceEvidence | N
             read_only=True,
         )
         try:
-            return RunSourceEvidence(
-                events=ledger.events(run_id=binding.run_id),
-                warmup_join=ledger.warmup_join(run_id=binding.run_id),
-                startup_join=ledger.startup_join(run_id=binding.run_id),
-            )
+            return read(ledger)
         finally:
             ledger.close(checkpoint=False)
     except SourceBarLedgerMissingError:
         return None
     except (SourceBarLedgerCorruptError, sqlite3.Error, OSError) as exc:
         logger.warning(
-            "Bot panel continuity evidence is unavailable",
+            "Bot source-bar evidence is unavailable",
             extra={
-                "action": "panel_feed_continuity_unavailable",
+                "action": unavailable_action,
                 "strategy_instance_id": binding.strategy_instance_id,
                 "run_id": binding.run_id,
                 "reason": str(exc),
@@ -478,6 +526,7 @@ async def _get_panel_with_entries_from_authority(
         feed_continuity_run_id=binding.run_id,
         warmup_join=None if source_evidence is None else source_evidence.warmup_join,
         startup_join=None if source_evidence is None else source_evidence.startup_join,
+        render_explanation=_explanation_renderer(binding),
     )
     # The rail reads the same binding-selected repository and send policy.
     panel = adapt_sqlite_panel(
@@ -514,7 +563,7 @@ async def _get_panel_with_entries(
 ) -> tuple[BotPanelView, list[OrderJournalEntry], tuple[FillRecord, ...] | None]:
     """Build one SQLite-backed panel and return its exact chart fill set."""
     captured_now_ms = now_ms if now_ms is not None else now_ms_utc()
-    async with _selected_panel_authority(broker, account_id, sid) as (resolved, registry, binding, facade):
+    async with selected_panel_authority(broker, account_id, sid) as (resolved, registry, binding, facade):
         return await _get_panel_with_entries_from_authority(
             broker,
             account_id,
@@ -846,7 +895,7 @@ async def _run_action_under_live_authority(
     panel and the action now share one selection, held open across both, so
     a Dry Run recovers inside its simulator and never reaches Alpaca.
     """
-    async with _selected_panel_authority(broker, account_id, sid) as (resolved, registry, binding, facade):
+    async with selected_panel_authority(broker, account_id, sid) as (resolved, registry, binding, facade):
         panel, _entries, _session_fills = await _get_panel_with_entries_from_authority(
             broker, account_id, sid, resolved=resolved, captured_now_ms=now_ms_utc(),
             registry=registry, binding=binding, facade=facade,
