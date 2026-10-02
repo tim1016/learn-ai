@@ -35,7 +35,7 @@
           <app-exposure-notices [notices]="outcome.exposure_notices ?? []" />
         </div>
       }
-    } @else if (clerkGuidance(); as guidance) {
+    } @else if (group.key === 'account' && clerkGuidance(); as guidance) {
       <div class="health__guidance">
         @if (guidanceExplanation(); as explanation) {
           <span class="health__note">{{ explanation }}</span>
