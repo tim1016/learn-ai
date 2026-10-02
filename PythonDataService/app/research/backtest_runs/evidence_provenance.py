@@ -79,7 +79,7 @@ def assess_evidence_provenance(provenance: object) -> EvidenceApplicability:
             requires_manual_override=True,
         )
     current = (
-        values.get("data_contract") in {"lake_complete_sessions/v1", "fixture_identity/v1"}
+        values.get("data_contract") in {"lake_complete_sessions/v1", "lake_receipted_snapshot/v1", "fixture_identity/v1"}
         and values.get("statistics_basis") == "marked_equity_curve/v1"
         and values.get("daily_return_convention") == "initial_capital_first_session/v1"
         and values.get("closing_bar_convention") in {convention.value for convention in ClosingBarConvention}

@@ -119,12 +119,14 @@ class SignalProgramContract:
     surface (issue #1728 sibling finding: the v2 seal was materially
     incomplete because half of it had no declared source at all).
     ``app.services.signal_program_admission.build_start_program_seal``
-    copies the ``signals``/``decision_streams``/``bar_integrity``/
-    ``exit_eligibility``/``numerical_provenance`` values straight from this
-    contract into ``ConfiguredSignalProgramSeal`` — the same objects, not a
-    re-derived or hand-duplicated copy — so a semantic field added here is
-    automatically part of the sealed identity rather than a second list that
-    can silently fall out of sync.
+    copies the ``decision_streams``/``bar_integrity``/
+    ``numerical_provenance`` values straight from this contract into
+    ``ConfiguredSignalProgramSeal`` — the same objects, not a re-derived or
+    hand-duplicated copy — so a semantic field added here is automatically
+    part of the sealed identity rather than a second list that can silently
+    fall out of sync. ``signals`` and ``exit_eligibility`` are sealed through
+    ``resolved_signals``/``resolved_exit_eligibility``: the static value,
+    unless the program declares how its parameters change them.
     """
 
     program_version: str
@@ -157,6 +159,41 @@ class SignalProgramContract:
     # drift (always fails closed) from a wiring-only drift (warns while the
     # toggle is off). Issue #1735.
     wiring_artifact_paths: tuple[str, ...]
+    # How validated parameters change the sealed series and exit countdown,
+    # for a program whose lengths or hold are parameters (#2696). ``None``
+    # means the static ``signals``/``exit_eligibility`` hold for every
+    # parameter set; when set, the static values describe the default point.
+    signals_for: Callable[[StrategyParamsBase], tuple[SignalSeriesContract, ...]] | None = None
+    exit_eligibility_for: Callable[[StrategyParamsBase], ExitEligibilityContract] | None = None
+    # Likewise the parameter-schema version and numerical provenance a seal
+    # records: an extension that keeps the default point byte-identical
+    # resolves the static (default-point) values there and its own elsewhere.
+    parameter_schema_version_for: Callable[[StrategyParamsBase], str] | None = None
+    numerical_provenance_for: Callable[[StrategyParamsBase], NumericalProvenanceContract] | None = None
+
+    def resolved_signals(self, params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
+        """The signal series a program built from ``params`` constructs."""
+        if self.signals_for is None:
+            return self.signals
+        return self.signals_for(params)
+
+    def resolved_exit_eligibility(self, params: StrategyParamsBase) -> ExitEligibilityContract:
+        """The exit rule a program built from ``params`` follows."""
+        if self.exit_eligibility_for is None:
+            return self.exit_eligibility
+        return self.exit_eligibility_for(params)
+
+    def resolved_parameter_schema_version(self, params: StrategyParamsBase) -> str:
+        """The parameter-schema version a seal of ``params`` records."""
+        if self.parameter_schema_version_for is None:
+            return self.parameter_schema_version
+        return self.parameter_schema_version_for(params)
+
+    def resolved_numerical_provenance(self, params: StrategyParamsBase) -> NumericalProvenanceContract:
+        """The numerical provenance a seal of ``params`` records."""
+        if self.numerical_provenance_for is None:
+            return self.numerical_provenance
+        return self.numerical_provenance_for(params)
 
     def __post_init__(self) -> None:
         # An empty wiring list is the dangerous shape, not a harmless one: it
@@ -308,6 +345,107 @@ def hidden_params_present(
     return sorted(hidden.intersection(params))
 
 
+def _ema_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
+    """The series ``EmaCrossoverSignalAlgorithm.initialize()`` builds for these lengths.
+
+    An EMA's ``warmup_bars`` is its period (``samples >= period``); RSI(14)
+    is fixed in this program version and stays at ``period + 1``.
+    """
+    assert isinstance(params, EmaCrossoverSignalParams)
+    return (
+        SignalSeriesContract(
+            name="ema_fast", indicator="ema", field="close", period=params.fast_period, warmup_bars=params.fast_period
+        ),
+        SignalSeriesContract(
+            name="ema_slow", indicator="ema", field="close", period=params.slow_period, warmup_bars=params.slow_period
+        ),
+        SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
+    )
+
+
+def _ema_exit_eligibility_for(params: StrategyParamsBase) -> ExitEligibilityContract:
+    """The countdown ``commit_signal_decision`` arms at entry: ``hold_bars`` decision clocks."""
+    assert isinstance(params, EmaCrossoverSignalParams)
+    return ExitEligibilityContract(countdown_decision_clocks=params.hold_bars, countdown_state_persistable=False)
+
+
+_EMA_LENGTHS_PROVENANCE = NumericalProvenanceContract(
+    formula=(
+        "Long-only EMA(fast)/EMA(slow) crossover on 15-minute signal bars with an "
+        "RSI(14) filter; fast/slow default to 5/10. Entry: fresh EMA(fast) > "
+        "EMA(slow) crossover AND (EMA(fast) - EMA(slow)) >= gap (default 0.20) AND "
+        "the normalized gap >= gap_bps (default 0) AND rsi_min <= RSI <= rsi_max "
+        "(default 50-70). Exit: hold_bars consolidated decision bars after entry "
+        "(default 5, 75 minutes)."
+    ),
+    reference=(
+        "Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs (Apr 2026 revision); "
+        "TradingView Pine validation docs/validation/SPY_EMA_Crossover_RSI.pine; "
+        "validation report docs/validation/SPY_EMA_Crossover_Validation_Report.pdf"
+    ),
+    canonical_implementation=(
+        "app/engine/strategy/algorithms/ema_crossover_signal.py::EmaCrossoverSignalAlgorithm"
+    ),
+    validated_against=(
+        "tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py; "
+        "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+        "[ema_crossover_signal]; "
+        "docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md; "
+        "tests/engine/strategy/algorithms/test_ema_crossover_signal_lengths.py"
+    ),
+    # The trace/decision identity is Decimal-exact and
+    # SHA-256-compared (signal_program.py), not
+    # tolerance-compared — see test_validated_ema_settings_corpus_
+    # has_a_pinned_trace_root's byte-exact trace_root assertion.
+    equivalence_level="bit_exact",
+    # One level down (the EMA/RSI *value* parity against LEAN,
+    # not the trace-identity hash above): documented absolute
+    # tolerance from the reconciliation report.
+    tolerance_atol=1e-9,
+    tolerance_rtol=0.0,
+    parity_fixture_ids=(
+        "tests/fixtures/golden/ema-signal-session/v1/trace-corpus.json",
+        "tests/fixtures/golden/cross-engine-studies/cells/SPY_W3mo_2026-02-02_to_2026-04-30",
+        "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W3mo_2026-02-02_to_2026-04-30",
+        "tests/fixtures/golden/cross-engine-studies/cells/SPY_W6mo_2025-11-03_to_2026-04-30",
+        "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W6mo_2025-11-03_to_2026-04-30",
+    ),
+)
+
+# The reference's own provenance: every seal minted before the lengths became
+# parameters (#2696) records exactly this, and a seal at 5/10/5 still does.
+_EMA_REFERENCE_PROVENANCE = _EMA_LENGTHS_PROVENANCE.model_copy(
+    update={
+        "formula": (
+            "Long-only EMA(5)/EMA(10) crossover on 15-minute signal bars with an "
+            "RSI(14) filter. Entry: fresh EMA5 > EMA10 crossover AND "
+            "(EMA5 - EMA10) >= 0.20 AND 50 <= RSI <= 70. Exit: 5 consolidated bars "
+            "(75 minutes) after entry."
+        ),
+        "validated_against": (
+            "tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py; "
+            "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+            "[ema_crossover_signal]; "
+            "docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md"
+        ),
+    }
+)
+
+
+def _ema_numerical_provenance_for(params: StrategyParamsBase) -> NumericalProvenanceContract:
+    """The reference's provenance at its 5/10/5 lengths and hold; the extended program's elsewhere."""
+    assert isinstance(params, EmaCrossoverSignalParams)
+    return _EMA_REFERENCE_PROVENANCE if params.at_reference_lengths() else _EMA_LENGTHS_PROVENANCE
+
+
+def _ema_parameter_schema_version_for(params: StrategyParamsBase) -> str:
+    """v2 for a parameter set at the reference lengths (it dumps exactly as v2 did), v3 otherwise."""
+    assert isinstance(params, EmaCrossoverSignalParams)
+    if params.at_reference_lengths():
+        return params.REFERENCE_PARAMETER_SCHEMA_VERSION
+    return params.PARAMETER_SCHEMA_VERSION
+
+
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     EMA_SIGNAL_PROGRAM_KEY: StrategyRegistration(
         display_name="EMA Crossover Signal",
@@ -315,18 +453,21 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         signal_program_contract=SignalProgramContract(
             program_version=EMA_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
-            parameter_schema_version=EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION,
+            # The default point's version; `parameter_schema_version_for` resolves a seal's own.
+            parameter_schema_version=EmaCrossoverSignalParams.REFERENCE_PARAMETER_SCHEMA_VERSION,
+            parameter_schema_version_for=_ema_parameter_schema_version_for,
             golden_trace_root="16044218d7505ab73b632318def91596fae29e9c1d6c4e58c655e9efa4dbf184",
             provider="polygon",
             base_timeframe_ms=60_000,
             decision_timeframe_ms=15 * 60_000,
             warmup_lookback_days=5,
             # EmaCrossoverSignalAlgorithm.initialize() constructs exactly
-            # these three named series (EMA5, EMA10, RSI14), each fed
-            # bar.close at bar.end_ms. Periods are fixed at construction, not
-            # parameterized, so they are facts about this program version,
-            # not user-configurable settings. warmup_bars mirrors each
-            # indicator's own is_ready threshold
+            # these three named series (EMA(fast), EMA(slow), RSI14), each fed
+            # bar.close at bar.end_ms. These static values are the 5/10
+            # default point; the EMA lengths are parameters (#2696), so a seal
+            # records `signals_for` resolved against its own parameters.
+            # RSI(14) is fixed in this program version. warmup_bars mirrors
+            # each indicator's own is_ready threshold
             # (app/engine/indicators/base.py: samples >= period; RSI
             # overrides to period + 1 for its first delta) — any drift
             # between these constants and the real indicators would already
@@ -349,60 +490,29 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # schema default so a future program that needs a different
             # policy must set its own value, not silently inherit this one.
             bar_integrity=SignalBarIntegrityContract(),
-            # EmaCrossoverSignalAlgorithm.commit_signal_decision hardcodes
-            # self._bars_until_exit = 5 at entry (75 minutes on 15-minute
-            # bars). countdown_state_persistable=False: no strategy persists
-            # its state, so a mid-countdown position cannot survive a
-            # restart.
+            # EmaCrossoverSignalAlgorithm.commit_signal_decision arms
+            # self._bars_until_exit = hold_bars at entry; this static value is
+            # the default five (75 minutes on 15-minute bars), and
+            # `exit_eligibility_for` resolves a seal's own hold.
+            # countdown_state_persistable=False: no strategy persists its
+            # state, so a mid-countdown position cannot survive a restart.
             exit_eligibility=ExitEligibilityContract(
                 countdown_decision_clocks=5,
                 countdown_state_persistable=False,
             ),
-            numerical_provenance=NumericalProvenanceContract(
-                formula=(
-                    "Long-only EMA(5)/EMA(10) crossover on 15-minute signal bars with an "
-                    "RSI(14) filter. Entry: fresh EMA5 > EMA10 crossover AND "
-                    "(EMA5 - EMA10) >= 0.20 AND 50 <= RSI <= 70. Exit: 5 consolidated bars "
-                    "(75 minutes) after entry."
-                ),
-                reference=(
-                    "Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs (Apr 2026 revision); "
-                    "TradingView Pine validation docs/validation/SPY_EMA_Crossover_RSI.pine; "
-                    "validation report docs/validation/SPY_EMA_Crossover_Validation_Report.pdf"
-                ),
-                canonical_implementation=(
-                    "app/engine/strategy/algorithms/ema_crossover_signal.py::EmaCrossoverSignalAlgorithm"
-                ),
-                validated_against=(
-                    "tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py; "
-                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
-                    "[ema_crossover_signal]; "
-                    "docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md"
-                ),
-                # The trace/decision identity is Decimal-exact and
-                # SHA-256-compared (signal_program.py), not
-                # tolerance-compared — see test_validated_ema_settings_corpus_
-                # has_a_pinned_trace_root's byte-exact trace_root assertion.
-                equivalence_level="bit_exact",
-                # One level down (the EMA/RSI *value* parity against LEAN,
-                # not the trace-identity hash above): documented absolute
-                # tolerance from the reconciliation report.
-                tolerance_atol=1e-9,
-                tolerance_rtol=0.0,
-                parity_fixture_ids=(
-                    "tests/fixtures/golden/ema-signal-session/v1/trace-corpus.json",
-                    "tests/fixtures/golden/cross-engine-studies/cells/SPY_W3mo_2026-02-02_to_2026-04-30",
-                    "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W3mo_2026-02-02_to_2026-04-30",
-                    "tests/fixtures/golden/cross-engine-studies/cells/SPY_W6mo_2025-11-03_to_2026-04-30",
-                    "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W6mo_2025-11-03_to_2026-04-30",
-                ),
-            ),
+            signals_for=_ema_signals_for,
+            exit_eligibility_for=_ema_exit_eligibility_for,
+            numerical_provenance=_EMA_REFERENCE_PROVENANCE,
+            numerical_provenance_for=_ema_numerical_provenance_for,
             parameter_units={
                 "symbol": "ticker",
                 "gap": "quote_currency",
                 "gap_bps": "basis_points",
                 "rsi_min": "rsi_points",
                 "rsi_max": "rsi_points",
+                "fast_period": "decision_bars",
+                "slow_period": "decision_bars",
+                "hold_bars": "decision_bars",
             },
             # ``gap_bps: 0.0`` is part of the validated point: the corpus was
             # qualified with no normalized floor. A non-zero ``gap_bps`` deploy
@@ -415,11 +525,17 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # same exact parameter point. See ADR 0054 and
             # tests/fixtures/golden/ema-signal-session/v1/attribution.md
             # ("Regeneration 2026-09-17") for the reconciliation record.
+            # The 5/10/5 lengths are the qualified point too (#2696); a
+            # parameter dump omits them while they sit there, which
+            # `registry_point_matches` reads as that default.
             validated_settings={
                 "gap": 0.20,
                 "gap_bps": 0.0,
                 "rsi_min": 50.0,
                 "rsi_max": 70.0,
+                "fast_period": 5,
+                "slow_period": 10,
+                "hold_bars": 5,
             },
             validated_symbols=("AAPL", "QQQ", "SPY", "TSLA"),
             # Declared source closure lives in program_sources.py so the
@@ -434,10 +550,13 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "without changing the strategy.\n"
             "\n"
             "The strategy reads minute signal bars, consolidates them into "
-            "15-minute bars, tracks EMA(5), EMA(10) and Wilders RSI(14), "
-            "and goes long for exactly five 15-minute bars (75 min) every "
-            "time a fresh fast-over-slow crossover lines up with a 0.20 "
-            "minimum gap and an RSI in the 50–70 trend-confirmation band. "
+            "15-minute bars, tracks a fast and a slow EMA (5 and 10 by "
+            "default) and Wilders RSI(14), and goes long for a fixed number "
+            "of 15-minute bars (five, 75 min, by default) every time a fresh "
+            "fast-over-slow crossover lines up with a minimum gap (0.20 by "
+            "default) and an RSI inside its trend-confirmation band (50–70 "
+            "by default). The hold counts session bars only, so a hold that "
+            "outlasts the session finishes on the next session's bars. "
             "There is no stop, no target, no scaling, and at most one "
             "position lifecycle open at a time. In live runs, the Action Plan "
             "selects the stock to trade; the strategy does not."
@@ -448,32 +567,33 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    resolution = 15-minute bars consolidated from minute data\n"
             "\n"
             "Indicators (Alpha — updated each 15m bar close at bar.end_time)\n"
-            "    EMA_fast = ExponentialMovingAverage(5)\n"
-            "    EMA_slow = ExponentialMovingAverage(10)\n"
+            "    EMA_fast = ExponentialMovingAverage(fast_period)   # default 5\n"
+            "    EMA_slow = ExponentialMovingAverage(slow_period)   # default 10\n"
             "    RSI      = RelativeStrengthIndex(14, Wilders smoothing)\n"
             "\n"
             "Warmup\n"
             "    no signals fire until EMA_fast.is_ready and EMA_slow.is_ready\n"
-            "    and RSI.is_ready (at least 14 closes for RSI; EMAs are\n"
+            "    and RSI.is_ready (at least 15 closes for RSI; EMAs are\n"
             "    SMA-seeded over their period). The crossover-state flag is\n"
             "    primed during warmup so the first eligible bar is not a\n"
-            "    spurious 'fresh' cross.\n"
+            "    spurious 'fresh' cross; when the slow EMA turns ready on\n"
+            "    that same bar, it cannot be fresh and does not enter.\n"
             "\n"
             "Alpha — bar entry conditions (evaluated while flat)\n"
             "    fresh_cross = EMA_fast > EMA_slow\n"
             "                  AND EMA_fast[-1] <= EMA_slow[-1]\n"
-            "    gap_ok      = (EMA_fast - EMA_slow) >= 0.20\n"
-            "    rsi_ok      = 50 <= RSI <= 70\n"
-            "    ⇒ if all three: emit Insight(UP, period=5 bars); emit ENTER\n"
+            "    gap_ok      = (EMA_fast - EMA_slow) >= gap        # default 0.20\n"
+            "    rsi_ok      = rsi_min <= RSI <= rsi_max          # default 50..70\n"
+            "    ⇒ if all three: emit Insight(UP, period=hold_bars bars); emit ENTER\n"
             "\n"
             "Alpha — bar exit conditions (evaluated while in trade)\n"
-            "    bars_held += 1 each new bar\n"
-            "    ⇒ when bars_held == 5: emit EXIT\n"
+            "    bars_held += 1 each new 15m decision bar (never wall-clock time)\n"
+            "    ⇒ when bars_held == hold_bars (default 5): emit EXIT\n"
             "\n"
             "Risk Management — position survival rules\n"
             "    none — no stop-loss, no take-profit, no signal-flip exit.\n"
             "    A losing trade is held to the time-stop. A reversed crossover\n"
-            "    inside the 5-bar window is ignored.\n"
+            "    inside the hold window is ignored.\n"
             "\n"
             "Action Plan / Portfolio Construction\n"
             "    live execution selects the stock from its Action Plan\n"
@@ -503,6 +623,11 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "on warmup bars too — LEAN's C# sets it before the early return. "
             "Skipping warmup updates produces a spurious cross on the first "
             "post-warmup bar.",
+            "Fast/slow EMA lengths and the hold are configurable (defaults "
+            "5/10/5). Only the defaults have a LEAN twin: any other length "
+            "or hold makes the parity companion honestly unavailable. The "
+            "hold counts 15-minute decision bars across sessions, never "
+            "wall-clock time.",
             "15-min consolidator must be wall-clock / epoch-anchored (bars "
             "landing on :00 :15 :30 :45). A first-bar-anchored consolidator "
             "phase-shifts every bar and ruins parity.",
@@ -525,8 +650,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ],
         param_schema=EmaCrossoverSignalParams,
         chart_indicators=(
-            StrategyChartIndicator("ema", {"length": 5}),
-            StrategyChartIndicator("ema", {"length": 10}),
+            StrategyChartIndicator("ema", {"length": ChartParamRef("fast_period")}),
+            StrategyChartIndicator("ema", {"length": ChartParamRef("slow_period")}),
             StrategyChartIndicator("rsi", {"length": 14}),
         ),
         strategy_bars=StrategyBarCadence("minute", 15),
@@ -536,6 +661,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         action_plan_contract="single_long_stock",
         signal_intent_binding="action_plan_stock",
         lean_twin="ema_crossover_signal",
+        # The twin hardcodes EMA 5/10 and the five-bar hold, so those three are
+        # deliberately absent: a non-default value makes the companion
+        # unavailable rather than comparing two different strategies (#2696).
         lean_parameter_names=("gap", "gap_bps", "rsi_min", "rsi_max"),
     ),
     "sma_crossover": StrategyRegistration(

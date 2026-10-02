@@ -1,0 +1,13 @@
+<fieldset class="methods" [disabled]="readonly()">
+  <legend>Search method</legend>
+  @for (option of methods; track option.id) {
+    <label class="method" [class.method--chosen]="option.id === method()">
+      <input type="radio" name="golden-search-method" [value]="option.id" [checked]="option.id === method()" (change)="methodChange.emit(option.id)" />
+      <span class="method__body">
+        <strong>{{ option.title }}</strong>
+        <span>{{ option.question }}</span>
+        <small>{{ option.limitation }}</small>
+      </span>
+    </label>
+  }
+</fieldset>

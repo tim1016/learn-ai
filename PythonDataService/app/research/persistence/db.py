@@ -11,6 +11,7 @@ is ensured once per loop on first use.
 from __future__ import annotations
 
 import asyncio
+import logging
 import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
@@ -21,6 +22,8 @@ import asyncpg
 from app.data_lake import catalog_client
 from app.research.persistence.schema import ensure_schema
 from app.utils.background_loop import run_on_background_loop
+
+logger = logging.getLogger(__name__)
 
 # Weak-keyed like catalog_client's pools: a loop that is garbage collected must
 # not leave a stale "ready" mark behind for whatever loop reuses its id.
@@ -49,3 +52,26 @@ async def with_connection[T](fn: Callable[..., Awaitable[T]], /, *args: Any, **k
 def run_sync[T](coroutine: Coroutine[Any, Any, T]) -> T:
     """Run a repository coroutine from a worker thread on the shared writer loop."""
     return run_on_background_loop(coroutine, timeout=DB_CALL_TIMEOUT_SECONDS)
+
+
+async def ensure_schema_at_startup() -> None:
+    """Apply every pending research schema version once, as the data plane starts (#2696).
+
+    A clerk reads research tables (Golden Search qualifications and defaults)
+    but cannot apply DDL, so the data plane applies them at startup rather
+    than on its first research request. Runs as a background task: a failure
+    is logged and absorbed, never delays or aborts startup, and every research
+    route still ensures the schema on its own first use.
+    """
+    try:
+        async with connection():
+            # Opening this loop's first pooled connection applies every pending version.
+            pass
+    except Exception:
+        logger.warning(
+            "research schema could not be ensured at startup; research routes retry on first use",
+            extra={"action": "research_schema_ensure_failed"},
+            exc_info=True,
+        )
+        return
+    logger.info("research schema ensured", extra={"action": "research_schema_ensured"})

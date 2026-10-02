@@ -1,7 +1,10 @@
 import { ChangeDetectionStrategy, Component, input, output, signal } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 
-/** A delete button that asks once before emitting `confirmed`; the confirm state is its own. */
+/**
+ * A delete button that asks once before emitting `confirmed`; the confirm state is its own.
+ * A removal that is not a deletion (hiding a record) names itself through the label inputs.
+ */
 @Component({
   selector: 'app-confirm-delete',
   imports: [ButtonModule],
@@ -10,9 +13,9 @@ import { ButtonModule } from 'primeng/button';
     @if (!confirming()) {
       <button pButton type="button" size="small" severity="danger" [text]="!outlined()" [outlined]="outlined()" [disabled]="busy()" [attr.aria-label]="ariaLabel()" (click)="confirming.set(true)">{{ label() }}</button>
     } @else {
-      <span class="confirm" role="group" aria-label="Confirm deletion">
+      <span class="confirm" role="group" [attr.aria-label]="groupLabel()">
         @if (prompt(); as text) { <span>{{ text }}</span> }
-        <button pButton type="button" size="small" severity="danger" [disabled]="busy()" (click)="confirm()">Confirm delete</button>
+        <button pButton type="button" size="small" severity="danger" [disabled]="busy()" (click)="confirm()">{{ confirmLabel() }}</button>
         <button pButton type="button" size="small" severity="secondary" [text]="true" (click)="confirming.set(false)">Keep</button>
       </span>
     }
@@ -21,6 +24,8 @@ import { ButtonModule } from 'primeng/button';
 })
 export class ConfirmDeleteComponent {
   readonly label = input('Delete');
+  readonly confirmLabel = input('Confirm delete');
+  readonly groupLabel = input('Confirm deletion');
   readonly ariaLabel = input<string | null>(null);
   readonly prompt = input<string | null>(null);
   readonly busy = input(false);

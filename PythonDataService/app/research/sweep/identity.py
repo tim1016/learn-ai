@@ -70,6 +70,27 @@ IDENTITY_SOURCE_PATHS: tuple[str, ...] = (
     "app/research/sweep",
     "app/research/grid_search",
     "app/research/walk_forward_study",
+    # Golden Search's procedures, evaluator and rules decide which points a stage scores, how a run is
+    # recorded and what its evidence concludes (#2696). Its copy, read models, persistence and approval
+    # do not, so a wording fix never strands a resumable study.
+    *(
+        f"app/research/golden_search/{module}.py"
+        for module in (
+            "budget",
+            "declarations",
+            "evaluator",
+            "evidence",
+            "exam_rules",
+            "exposure_rules",
+            "grid_procedure",
+            "planning",
+            "procedure_history",
+            "protocol",
+            "selection",
+            "stages",
+            "zoom",
+        )
+    ),
     "app/routers/engine.py",
     "app/schemas/engine_backtest.py",
     "app/services/engine_backtest_service.py",

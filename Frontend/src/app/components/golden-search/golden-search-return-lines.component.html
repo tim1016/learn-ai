@@ -1,0 +1,32 @@
+<p class="legend">
+  @for (line of series(); track line.key) { <span><i class="swatch" [attr.data-tone]="line.tone" aria-hidden="true"></i>{{ line.label }}</span> }
+</p>
+@if (plot(); as p) {
+  <svg [attr.viewBox]="'0 0 ' + width + ' ' + height" role="img" [attr.aria-label]="chartLabel() + ' — ends at ' + summary()">
+    <title>{{ chartLabel() }}</title>
+    <desc>Ends at {{ summary() }}.</desc>
+    @for (tick of p.ticks; track $index) {
+      <line class="grid" [attr.x1]="left" [attr.x2]="right" [attr.y1]="tick.y" [attr.y2]="tick.y" />
+      <text class="axis" [attr.x]="left - 6" [attr.y]="tick.y + 4" text-anchor="end">{{ tick.label }}</text>
+    }
+    @for (line of p.lines; track line.key) { <path [attr.class]="'line line--' + line.tone" [attr.d]="line.d" /> }
+    <text class="axis" [attr.x]="left" [attr.y]="height - 8">{{ p.firstMs | timestampDisplay: 'date-et' }}</text>
+    <text class="axis" [attr.x]="right" [attr.y]="height - 8" text-anchor="end">{{ p.lastMs | timestampDisplay: 'date-et' }}</text>
+  </svg>
+  <button type="button" class="link" [attr.aria-expanded]="showTable()" (click)="toggleTable()">{{ showTable() ? 'Hide' : 'Show' }} the daily values as a table</button>
+  @if (showTable()) {
+    <div class="table-wrap" role="region" tabindex="0" [attr.aria-label]="chartLabel() + ' as a table'">
+      <table>
+        <caption>{{ chartLabel() }} by session (ET)</caption>
+        <thead><tr><th scope="col">Session</th>@for (line of series(); track line.key) { <th scope="col" class="num">{{ line.label }}</th> }</tr></thead>
+        <tbody>
+          @for (row of table(); track row.ms) {
+            <tr><th scope="row">{{ row.ms | timestampDisplay: 'date-et' }}</th>@for (value of row.values; track $index) { <td class="num">{{ value }}</td> }</tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+} @else {
+  <p class="muted">No daily values were recorded for these runs.</p>
+}

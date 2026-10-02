@@ -1,0 +1,22 @@
+<button pButton type="button" severity="secondary" [outlined]="true" [attr.aria-expanded]="open()" aria-controls="gs-retain-panel" (click)="toggle()">
+  <span>Keep current settings</span>
+</button>
+@if (open()) {
+  <fieldset id="gs-retain-panel" class="panel">
+    <legend>Finish without a new golden configuration</legend>
+    @for (option of kinds; track option.kind) {
+      <label class="choice">
+        <input type="radio" name="gs-retain-kind" [value]="option.kind" [checked]="option.kind === kind()" (change)="onKind(option.kind)" />
+        <span><strong>{{ option.label }}</strong> <small>{{ option.hint }}</small></span>
+      </label>
+    }
+    <label class="field"><span>Reason (recorded with the study)</span>
+      <textarea rows="2" [value]="note()" (input)="onNote($event)"></textarea>
+    </label>
+    <p class="hint">The study, its trials and any opened final test stay recorded.</p>
+    <div class="actions">
+      <button pButton type="button" size="small" [disabled]="busy()" (click)="record()"><span>Record decision</span></button>
+      <button pButton type="button" size="small" severity="secondary" [text]="true" (click)="toggle()"><span>Cancel</span></button>
+    </div>
+  </fieldset>
+}

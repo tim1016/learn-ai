@@ -207,6 +207,21 @@ async def test_delete_cascades_and_fences_a_stale_writer(conn: asyncpg.Connectio
     assert await repo.delete_search(conn, sid) is False
 
 
+async def test_a_deleted_search_leaves_its_window_on_record_as_exposure(conn: asyncpg.Connection, unique: str) -> None:
+    """Golden Search reads Grid windows as prior use of a final interval; deleting the search must not erase it (#2696)."""
+    from app.research.golden_search.repository import exposure_overlaps
+
+    sid = f"s-{unique}"
+    await repo.create_search(conn, _new_search(sid, symbol=unique))
+    inside = {"symbol": unique.upper(), "start_ms": 1_740_000_000_000, "end_ms": 1_741_000_000_000}
+    assert (await exposure_overlaps(conn, **inside)).outside == 1
+
+    assert await repo.delete_search(conn, sid) is True
+
+    assert (await exposure_overlaps(conn, **inside)).outside == 1
+    assert (await exposure_overlaps(conn, **{**inside, "start_ms": 1_744_000_000_000, "end_ms": 1_745_000_000_000})).outside == 0
+
+
 async def test_cells_page_and_sort_on_the_server_with_nulls_last(conn: asyncpg.Connection, unique: str) -> None:
     sid = f"s-{unique}"
     await repo.create_search(conn, _new_search(sid, symbol=unique, expected=5))

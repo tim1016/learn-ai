@@ -69,17 +69,30 @@ REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM fleet_lake_catalog;
 REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM fleet_lake_catalog;
 
 -- 5. Lane-served lake evidence, read-only. This is the exact set the
---    lane-served deploy path resolves — panel_deploy's golden-validation
---    scopes (app/services/broker_v2_panel/panel_deploy.py ->
---    app/research/golden_validation/service.py's
---    list_latest_accepted_dossiers, whose repository reads these tables
---    and nothing else) plus the migration ledger above. Adding or removing
---    a table is a deliberate edit to both this list and the contract that
---    pins it (test_fleet_lake_catalog_role_grants.py).
+--    lane-served deploy and Start paths resolve, plus the migration ledger
+--    above:
+--    * panel_deploy's golden-validation scopes
+--      (app/services/broker_v2_panel/panel_deploy.py ->
+--      app/research/golden_validation/service.py's
+--      list_latest_accepted_dossiers, whose repository reads the Golden
+--      Validation runs and reviews, the parity verdicts and the backtest
+--      runs they key into);
+--    * Golden Search qualified versions (#2696): Deploy's READY stock
+--      defaults (panel_deploy -> app/research/golden_search/
+--      qualification_service.py's ready_defaults) and Start admission's
+--      coverage check (app/services/signal_program_admission.py ->
+--      app/research/golden_search/qualifications.py's
+--      load_qualification_evidence), which read the qualifications, their
+--      re-proof/revocation events and the default pointers.
+--    Adding or removing a table is a deliberate edit to both this list and
+--    the contract that pins it (test_fleet_lake_catalog_role_grants.py).
 GRANT SELECT ON TABLE
     public.research_validation_golden_runs,
     public.research_golden_validation_reviews,
     public.research_parity_verdicts,
     public.research_backtest_runs,
+    public.research_golden_qualifications,
+    public.research_golden_qualification_events,
+    public.research_golden_defaults,
     public.research_schema_migrations
 TO fleet_lake_catalog;

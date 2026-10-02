@@ -1,0 +1,50 @@
+@let row = selected();
+<div class="tabs" role="group" aria-label="Candidate evidence">
+  @for (tab of tabs; track tab.id) {
+    <button type="button" [attr.aria-pressed]="tab.id === active()" (click)="open(tab.id)">{{ tab.label }}</button>
+  }
+</div>
+
+@switch (active()) {
+  @case ('map') {
+    @if (pairMaps().length > 0) {
+      <app-golden-search-pair-map [maps]="pairMaps()" [capability]="capability()" [center]="mapCenter()" [centerLabel]="mapCenterLabel()" headingId="gs-compare-map" />
+    } @else {
+      <p class="muted">No pair audit was recorded for this study.</p>
+    }
+  }
+  @case ('neighbors') {
+    <app-golden-search-neighborhood view="neighbors" [neighbors]="row.candidate.neighbors" [stress]="row.candidate.stress" [capability]="capability()" [candidateLabel]="row.candidate.label" />
+  }
+  @case ('stress') {
+    <app-golden-search-neighborhood view="stress" [neighbors]="row.candidate.neighbors" [stress]="row.candidate.stress" [capability]="capability()" [candidateLabel]="row.candidate.label" />
+  }
+  @default {
+    @if (detailsError(); as message) {
+      <div role="alert" class="failed">
+        <p>{{ message }}</p>
+        <button type="button" class="link" (click)="retry()">Try again</button>
+      </div>
+    } @else if (!details.hasValue()) {
+      <p class="muted" role="status">Loading the candidates' detail runs…</p>
+    } @else if (active() === 'equity') {
+      <app-golden-search-return-lines [series]="equitySeries()" chartLabel="Development cumulative return" />
+      <p class="caption">All curves use data involved in selection. These are not the walk-forward procedure's test returns.</p>
+      <details>
+        <summary>Drawdown and assumptions</summary>
+        <dl class="rules">
+          @for (candidate of rows(); track candidate.key) { <div><dt>{{ candidate.candidate.label }} — largest fall from a peak</dt><dd>{{ candidate.worstFall }}</dd></div> }
+        </dl>
+        <p class="caption">${{ scope().capital | number: '1.0-0' }} starting capital · {{ scope().costs_sentence }}</p>
+      </details>
+    } @else if (selectedRun(); as run) {
+      @if (active() === 'months') {
+        <app-golden-search-monthly [monthly]="run.monthly" [candidateLabel]="row.candidate.label" />
+      } @else {
+        <app-golden-search-trades [trades]="run.trades" [candidateLabel]="row.candidate.label" />
+      }
+    } @else {
+      <p class="muted">No development detail run is recorded for {{ row.candidate.label }}.</p>
+    }
+  }
+}

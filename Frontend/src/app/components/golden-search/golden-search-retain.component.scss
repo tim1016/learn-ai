@@ -1,0 +1,10 @@
+:host { display: grid; gap: var(--space-2); justify-items: start; min-width: 0; }
+.panel { display: grid; gap: var(--space-2); border: 1px solid var(--border-light); border-radius: var(--radius); margin: 0; padding: var(--space-3); min-width: min(100%, 22rem); }
+legend { font-size: var(--fs-sm); font-weight: var(--fw-semi); padding: 0 var(--space-1); }
+.choice { display: flex; gap: var(--space-2); align-items: baseline; font-size: var(--fs-xs); }
+.choice small { color: var(--text-secondary); }
+.field { display: grid; gap: var(--space-1); font-size: var(--fs-xs); color: var(--text-secondary); }
+textarea { width: 100%; min-height: 3rem; border: 1px solid var(--border-light); border-radius: var(--radius-sm); background: var(--bg-canvas); color: var(--text-primary); padding: var(--space-2); font: inherit; }
+textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hint { margin: 0; color: var(--text-secondary); font-size: var(--fs-xxs); }
+.actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }

@@ -55,6 +55,7 @@ import {
 } from '../../../fleet/lane-fence';
 import {
   DEPLOY_AGAIN_QUERY_PARAM,
+  GOLDEN_QUALIFICATION_QUERY_PARAM,
   accountWorkspaceBotRoute,
   accountWorkspaceTabRoute,
   type AccountWorkspaceLink,
@@ -99,9 +100,28 @@ import { SymbolPickerComponent } from '../../../shared/symbol-picker/symbol-pick
 import { mediaQuerySignal } from '../../../shared/media-query';
 
 import { sameAlpacaAccount } from '../../../services/alpaca-account-identity';
+import { GoldenSearchService } from '../../golden-search/golden-search.service';
+import type { QualificationDeployOffer } from '../../golden-search/golden-search.types';
 
 /** A bot id as the backend's path-safe validator admits it (Deploy again's `?from=`). */
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+/** A Golden Search qualification id as a path segment may carry it (`?golden_qualification=`, #2696). */
+const QUALIFICATION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+
+/** What a Golden Search handoff did to the form (#2696). */
+type GoldenHandoff =
+  | { readonly kind: 'applied'; readonly offer: QualificationDeployOffer }
+  | { readonly kind: 'refused'; readonly id: string; readonly reason: string };
+
+/** A handoff's answer (Deploy again's settings, a golden offer), with this
+ * form's Deploy activity at the moment it was asked for (#2696). */
+interface HandoffAnswer<T> {
+  readonly answer: T;
+  readonly askedAt: number;
+}
+
+/** Why a handoff that answered after a Deploy went out is not applied (#2696). */
+const SENT_BEFORE_HANDOFF = 'A Deploy was already sent from this form; nothing was applied.';
 /** A submission key exactly as the backend admits it (`SUBMISSION_KEY_PATTERN`,
  * pinned to the OpenAPI contract by the spec). A `?submission=` outside it is
  * ignored: the backend would refuse every read and Deploy under it (422). */
@@ -270,7 +290,10 @@ type EndCheckAnswer =
  * settles it, so a retry — a double click, a lost response, a reload, an
  * edit — never starts a second bot. The form is kept per
  * account for the session (H9); Deploy again (`?from=<sid>`) pre-fills
- * everything but money and consent.
+ * everything but money and consent. A Golden Search handoff
+ * (`?golden_qualification=<id>`, #2696) applies an approved qualification's
+ * strategy, symbol and exact settings the same way, once, and only while
+ * the qualification is ready.
  */
 @Component({
   selector: 'app-alpaca-deploy-workflow',
@@ -803,9 +826,12 @@ export class AlpacaDeployWorkflowComponent {
       const sid = this.deployAgainSid();
       return sid === null ? undefined : { sid, accountId: this.accountId().trim() };
     },
-    loader: ({ params }) => this.panelService.getDeployPrefill(this.deployTarget(params.accountId), params.sid),
+    loader: ({ params }) => this.askHandoff(this.panelService.getDeployPrefill(this.deployTarget(params.accountId), params.sid)),
   });
+  /** Deploy again's settings answered after a Deploy went out from this form, so they were not applied. */
+  private readonly prefillRefused = signal(false);
   protected readonly prefillError = computed(() => {
+    if (this.prefillRefused()) return SENT_BEFORE_HANDOFF;
     const error = this.prefill.error();
     return error === undefined
       ? null
@@ -815,9 +841,58 @@ export class AlpacaDeployWorkflowComponent {
   protected readonly prefillStrategyMissing = computed(() => {
     const view = this.currentView();
     if (view === null || this.replaces() === null || !this.prefill.hasValue()) return false;
-    const key = this.prefill.value().strategy_key;
+    const key = this.prefill.value().answer.strategy_key;
     return !view.strategies.some((strategy) => strategy.strategy_key === key);
   });
+
+  // ── Golden Search handoff (#2696) ───────────────────────────────────────
+
+  /** `?golden_qualification=` as it arrived, valid or not; it is cleared once handled. */
+  private readonly goldenParam = computed(() => this.queryParams().get(GOLDEN_QUALIFICATION_QUERY_PARAM));
+  private readonly goldenQualificationId = computed(() => {
+    const id = this.goldenParam();
+    return id !== null && QUALIFICATION_ID_RE.test(id) ? id : null;
+  });
+
+  /** The approved qualification's deploy offer. The research client is resolved
+   * only when a handoff arrives; a Deploy without one never constructs it. */
+  protected readonly goldenOffer = resource({
+    params: () => this.goldenQualificationId() ?? undefined,
+    loader: ({ params }) => this.askHandoff(this.injector.get(GoldenSearchService).deployOffer(params)),
+  });
+  /** The golden offer is still being read. */
+  protected readonly goldenPending = computed(() => this.goldenQualificationId() !== null && this.goldenOffer.isLoading());
+
+  /** What the last handoff did; kept after its parameter is cleared. */
+  protected readonly goldenHandoff = signal<GoldenHandoff | null>(null);
+
+  /** The applied golden settings are still exactly what the form holds, its strategy among them. */
+  protected readonly goldenStillApplied = computed(() => {
+    const handoff = this.goldenHandoff();
+    if (handoff?.kind !== 'applied' || this.goldenStrategyMissing()) return false;
+    const ticket = this.ticket();
+    return ticket.strategyKey === handoff.offer.program_key && ticket.symbol === handoff.offer.symbol.trim().toUpperCase()
+      && sameParameterValues(ticket.parameters, handoff.offer.parameters);
+  });
+
+  /** The golden configuration's strategy is not one this account offers. */
+  protected readonly goldenStrategyMissing = computed(() => {
+    const handoff = this.goldenHandoff();
+    const view = this.currentView();
+    return handoff?.kind === 'applied' && view !== null && !view.strategies.some((strategy) => strategy.strategy_key === handoff.offer.program_key);
+  });
+
+  /** A handoff still being read: Deploy waits for it, so what it sends is
+   * never a form the handoff is about to replace (#2696). */
+  private readonly handoffPending = computed(() => {
+    if (this.goldenPending()) return 'Reading the golden configuration…';
+    if (this.deployAgainSid() !== null && this.prefill.isLoading()) return 'Reading the earlier bot’s settings…';
+    return null;
+  });
+
+  /** Bumped when a Deploy starts and when it ends: a handoff asked for at the
+   * same count as it answers saw no Deploy go out while it loaded (#2696). */
+  private deployActivity = 0;
 
   // ── Submission ────────────────────────────────────────────────────────────
 
@@ -837,6 +912,10 @@ export class AlpacaDeployWorkflowComponent {
         canSubmit: false,
         guidance: 'The account changed. Nothing was sent. Review the refreshed account before deploying.',
       };
+    }
+    const pending = this.handoffPending();
+    if (pending !== null) {
+      return { canSubmit: false, guidance: pending };
     }
     const selectedStrategy = this.selectedStrategy();
     if (selectedStrategy === null) {
@@ -1245,12 +1324,45 @@ export class AlpacaDeployWorkflowComponent {
     });
 
     // Deploy again pre-fills once per earlier bot; a draft that already came
-    // from it keeps the owner's edits.
+    // from it keeps the owner's edits. Settings that answer after a Deploy
+    // went out from this form are refused out loud instead.
     effect(() => {
       if (!this.prefill.hasValue()) return;
-      const prefill = this.prefill.value();
+      const { answer: prefill, askedAt } = this.prefill.value();
       untracked(() => {
-        if (this.replaces() !== prefill.source_strategy_instance_id) this.applyPrefill(prefill);
+        if (this.replaces() === prefill.source_strategy_instance_id) return;
+        if (this.handoffMayApply(askedAt)) this.applyPrefill(prefill);
+        else this.prefillRefused.set(true);
+      });
+    });
+
+    // A Golden Search handoff applies once: a ready qualification's exact
+    // settings, or the reason a qualification is not offered. Either way the
+    // parameter is cleared, so a reload never re-applies it.
+    effect(() => {
+      const raw = this.goldenParam();
+      if (raw === null) return;
+      const id = this.goldenQualificationId();
+      const error = this.goldenOffer.error();
+      const asked = this.goldenOffer.hasValue() ? this.goldenOffer.value() : null;
+      untracked(() => {
+        if (id === null) {
+          this.goldenHandoff.set({ kind: 'refused', id: raw, reason: 'This link does not name a golden configuration. Nothing was applied.' });
+        } else if (error !== undefined) {
+          this.goldenHandoff.set({ kind: 'refused', id, reason: extractServerMessage(error, 'The golden configuration could not be read. Nothing was applied.') });
+        } else if (asked === null) {
+          return;
+        } else if (asked.answer.qualification_id !== id) {
+          // An answer about another qualification is never applied, and never left waiting in silence.
+          this.goldenHandoff.set({ kind: 'refused', id, reason: 'The answer named a different golden configuration. Nothing was applied.' });
+        } else if (asked.answer.status !== 'ready') {
+          this.goldenHandoff.set({ kind: 'refused', id, reason: asked.answer.explanation });
+        } else if (!this.handoffMayApply(asked.askedAt)) {
+          this.goldenHandoff.set({ kind: 'refused', id, reason: SENT_BEFORE_HANDOFF });
+        } else {
+          this.applyGoldenOffer(asked.answer);
+        }
+        void this.clearGoldenParam();
       });
     });
 
@@ -1297,10 +1409,26 @@ export class AlpacaDeployWorkflowComponent {
       : fresh;
   }
 
+  /** Asks for a handoff, noting this form's Deploy activity at that moment. */
+  private askHandoff<T>(request: Promise<T>): Promise<HandoffAnswer<T>> {
+    const askedAt = this.deployActivity;
+    return request.then((answer) => ({ answer, askedAt }));
+  }
+
+  /**
+   * A handoff replaces the form only when nothing was sent from it since the
+   * handoff was asked for: no Deploy in flight, none started or answered
+   * while it loaded, and no receipt it would wipe. A Deploy whose outcome was
+   * already unknown when it was asked keeps its key through the fresh draft.
+   */
+  private handoffMayApply(askedAt: number): boolean {
+    return !this.submitting() && this.receipt() === null && this.deployActivity === askedAt;
+  }
+
   /** Deploy again: a fresh draft from the earlier bot's sealed settings. Its
    * money and consent are never copied, and it gets its own submission key. */
   private applyPrefill(prefill: BotDeployPrefill): void {
-    this.receipt.set(null);
+    this.prefillRefused.set(false);
     this.frozenCommand.set(null);
     this.clearAdmission();
     this.submitError.set(null);
@@ -1323,6 +1451,7 @@ export class AlpacaDeployWorkflowComponent {
   /** Clear: back to a fresh form on this account's default strategy and
    * its defaults for new bots, and the earlier bot is no longer named. */
   protected async clearPrefill(): Promise<void> {
+    this.prefillRefused.set(false);
     this.restoreDraft(this.freshDraft({
       ...EMPTY_DEPLOY_SETTINGS,
       ...exitTermSettings(this.currentView()?.default_exit_terms),
@@ -1336,6 +1465,43 @@ export class AlpacaDeployWorkflowComponent {
       queryParamsHandling: 'merge',
       replaceUrl: true,
     });
+  }
+
+  /** A ready golden qualification: a fresh draft with its strategy, symbol and
+   * exact parameters, applied together as Deploy again's prefill is. A knob
+   * the canonical parameters leave out is the strategy's schema default, which
+   * the form shows and the Deploy request leaves out the same way. */
+  private applyGoldenOffer(offer: QualificationDeployOffer): void {
+    this.frozenCommand.set(null);
+    this.clearAdmission();
+    this.submitError.set(null);
+    this.restoreDraft(this.freshDraft({
+      ...EMPTY_DEPLOY_SETTINGS,
+      strategyKey: offer.program_key,
+      symbol: offer.symbol.trim().toUpperCase(),
+      parameters: { ...offer.parameters },
+      ...exitTermSettings(this.currentView()?.default_exit_terms),
+    }));
+    this.goldenHandoff.set({ kind: 'applied', offer });
+  }
+
+  private async clearGoldenParam(): Promise<void> {
+    await this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { [GOLDEN_QUALIFICATION_QUERY_PARAM]: null },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
+  }
+
+  /** Clear: the golden settings leave the form, which starts fresh. */
+  protected async clearGolden(): Promise<void> {
+    this.goldenHandoff.set(null);
+    await this.clearPrefill();
+  }
+
+  protected dismissGolden(): void {
+    this.goldenHandoff.set(null);
   }
 
   /** A changed account abandons the attempt and refreshes the page context. */
@@ -1557,6 +1723,7 @@ export class AlpacaDeployWorkflowComponent {
     if (!view || !strategy || mode === null || settings === null || !this.canSubmit()) return;
 
     this.submitting.set(true);
+    this.deployActivity += 1;
     this.submitError.set(null);
     this.admissionDecision.set(null);
     const submission = this.submissionFor(settings);
@@ -1601,6 +1768,7 @@ export class AlpacaDeployWorkflowComponent {
       }
     } finally {
       this.submitting.set(false);
+      this.deployActivity += 1;
       if (refused) this.focusAfterRender(() => this.confirmStep()?.focusRefusal());
     }
   }

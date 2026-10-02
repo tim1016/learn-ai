@@ -5,6 +5,8 @@
     "/api/broker",
     "/api/brokers",
     "/api/data-lake",
+    "/api/research/golden-qualifications",
+    "/api/research/golden-search",
     "/api/research/golden-validations",
     "/api/strategy-validation"
   ],

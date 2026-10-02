@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic import JsonValue, ValidationError
@@ -112,6 +112,10 @@ class GoldenValidationScope:
 
     symbol: str
     parameters: Mapping[str, object]
+    # The Golden Validation run this scope is, so a stock's Golden Search
+    # default can lead its own case (#2696). Provenance, not identity: two
+    # scopes of one configuration are the same choice.
+    golden_run_id: int | None = field(default=None, compare=False)
 
 
 def _is_catalog_visible(strategy_key: str) -> bool:
@@ -383,7 +387,7 @@ def _representable_golden_scope(
             continue
         if not all(isinstance(value, str | int | float | bool) for value in public_parameters.values()):
             continue
-        return GoldenValidationScope(symbol=normalized_symbol, parameters=expected)
+        return GoldenValidationScope(symbol=normalized_symbol, parameters=expected, golden_run_id=scope.golden_run_id)
     return None
 
 

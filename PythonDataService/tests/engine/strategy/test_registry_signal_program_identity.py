@@ -161,7 +161,10 @@ def test_registry_protocol_and_parameter_schema_versions_mirror_their_one_declar
     assert contract is not None
 
     assert contract.protocol_version == SignalSession.PROTOCOL_VERSION
-    assert contract.parameter_schema_version == EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION
+    # The static value is the reference point's (#2696); any other lengths seal the full schema's version.
+    assert contract.parameter_schema_version == EmaCrossoverSignalParams.REFERENCE_PARAMETER_SCHEMA_VERSION
+    extended = EmaCrossoverSignalParams.model_validate({"symbol": "SPY", "fast_period": 7})
+    assert contract.resolved_parameter_schema_version(extended) == EmaCrossoverSignalParams.PARAMETER_SCHEMA_VERSION
 
 
 def test_registry_signal_series_periods_match_the_constructed_indicators() -> None:
@@ -177,9 +180,10 @@ def test_registry_signal_series_periods_match_the_constructed_indicators() -> No
     warmup_by_name = {series.name: series.warmup_bars for series in contract.signals}
 
     # Constructed the exact same way EmaCrossoverSignalAlgorithm.initialize()
-    # builds them ("EMA5", 5), ("EMA10", 10), ("RSI14", 14) — a narrow check
-    # of the period constants rather than a duplicate of the engine
-    # integration tests that run the full strategy lifecycle.
+    # builds them at the default point ("EMA5", 5), ("EMA10", 10),
+    # ("RSI14", 14) — a narrow check of the static period constants. The
+    # parameter-resolved series are checked against real constructed
+    # indicators in test_ema_crossover_signal_lengths.py (#2696).
     ema_fast = ExponentialMovingAverage("EMA5", 5)
     ema_slow = ExponentialMovingAverage("EMA10", 10)
     rsi = RelativeStrengthIndex("RSI14", 14)
@@ -192,6 +196,50 @@ def test_registry_signal_series_periods_match_the_constructed_indicators() -> No
     assert warmup_by_name["ema_fast"] == ema_fast.period
     assert warmup_by_name["ema_slow"] == ema_slow.period
     assert warmup_by_name["rsi"] == rsi.period + 1
+
+
+def test_static_series_and_exit_rule_describe_each_program_s_default_point() -> None:
+    """A contract's static ``signals``/``exit_eligibility`` are its default point.
+
+    A program whose lengths or hold are parameters resolves them per seal
+    (#2696); its static values must still be what the default parameters
+    resolve to, so a seal at the default point is byte-identical to one made
+    before the parameters existed.
+    """
+    for key, registration in _STRATEGY_REGISTRY.items():
+        contract = registration.signal_program_contract
+        if contract is None:
+            continue
+        defaults = registration.param_schema()
+
+        assert contract.resolved_signals(defaults) == contract.signals, key
+        assert contract.resolved_exit_eligibility(defaults) == contract.exit_eligibility, key
+
+
+def test_validated_settings_a_dump_omits_are_their_schema_defaults() -> None:
+    """``registry_point_matches`` reads a name absent from a dump as its validated value.
+
+    That is sound only while every validated setting a canonical dump can omit
+    (an identity-neutral default, #2696) equals the schema default the omitted
+    name runs at. A validated point off the default would otherwise be claimed
+    as covered by every default deploy.
+    """
+    checked = 0
+    for key, registration in _STRATEGY_REGISTRY.items():
+        contract = registration.signal_program_contract
+        if contract is None:
+            continue
+        symbol = contract.validated_symbols[0] if contract.validated_symbols else registration.param_schema().symbol
+        dumped = registration.param_schema.model_validate({**contract.validated_settings, "symbol": symbol}).model_dump(
+            mode="json"
+        )
+        fields = registration.param_schema.model_fields
+        for name, value in contract.validated_settings.items():
+            if name not in dumped:
+                checked += 1
+                assert value == fields[name].default, (key, name)
+
+    assert checked, "expected at least one identity-neutral validated setting (EMA's lengths)"
 
 
 def test_validated_against_only_names_evidence_that_actually_exists() -> None:

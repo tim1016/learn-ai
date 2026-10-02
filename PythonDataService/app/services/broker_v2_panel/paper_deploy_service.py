@@ -17,6 +17,7 @@ from app.engine.strategy.registry import (
     strategy_experimental_notice,
 )
 from app.lean_sidecar.trading_calendar import next_trading_day
+from app.research.golden_search.qualification_service import JudgedQualification, public_parameters
 from app.schemas.account_authority import CustodyWorld, world_admits_account_mode
 from app.schemas.broker_bots import (
     AlpacaPaperDeployEligibility,
@@ -390,10 +391,36 @@ def _admissible_modes(
     return ()
 
 
-def _qualified_configuration(strategy_key: str, requested_symbol: str | None) -> QualifiedDeployConfiguration | None:
+#: The (program, stock) defaults Deploy offers first: Golden Search
+#: qualified versions judged READY for the running build (#2696).
+GoldenDefaults = Mapping[tuple[str, str], JudgedQualification]
+
+
+def _qualified_configuration(
+    strategy_key: str,
+    requested_symbol: str | None,
+    golden_defaults: GoldenDefaults | None = None,
+) -> QualifiedDeployConfiguration | None:
+    """The exact corpus-covered preset Deploy offers for one strategy.
+
+    The stock's active Golden Search default comes first when it is READY
+    (#2696): its exact approved tuple, named by approval date and study.
+    Otherwise the registry's validated point, unchanged.
+    """
     registration = _STRATEGY_REGISTRY.get(strategy_key)
     contract = registration.signal_program_contract if registration is not None else None
-    if contract is None or not contract.validated_symbols:
+    if contract is None:
+        return None
+    lookup_symbol = requested_symbol or (contract.validated_symbols[0] if contract.validated_symbols else None)
+    golden = (golden_defaults or {}).get((strategy_key, lookup_symbol.upper())) if lookup_symbol else None
+    if golden is not None and golden.status == "ready":
+        return QualifiedDeployConfiguration(
+            symbol=golden.qualification.symbol,
+            parameters=public_parameters(golden.qualification),
+            explanation=golden.explanation,
+            golden_qualification_id=golden.qualification.id,
+        )
+    if not contract.validated_symbols:
         return None
     symbol = requested_symbol if requested_symbol in contract.validated_symbols else contract.validated_symbols[0]
     parameters = registration.param_schema.model_validate(
@@ -417,6 +444,7 @@ def _strategy_views(
     custody_world: CustodyWorld,
     golden_validation_scopes: Mapping[str, tuple[GoldenValidationScope, ...]] | None = None,
     requested_symbol: str | None = None,
+    golden_defaults: GoldenDefaults | None = None,
 ) -> tuple[AlpacaPaperDeployStrategy, ...]:
     """Project the composed strategy catalog into deploy-wire rows.
 
@@ -430,7 +458,7 @@ def _strategy_views(
     return tuple(
         AlpacaPaperDeployStrategy(
             strategy_key=entry.strategy_key,
-            qualified_configuration=_qualified_configuration(entry.strategy_key, requested_symbol),
+            qualified_configuration=_qualified_configuration(entry.strategy_key, requested_symbol, golden_defaults),
             label=entry.label,
             explanation=entry.explanation,
             validation_case_symbol=entry.validation_case_symbol,
@@ -788,6 +816,7 @@ def build_alpaca_paper_deploy_view(
     custody_world: CustodyWorld,
     golden_validation_scopes: Mapping[str, tuple[GoldenValidationScope, ...]] | None = None,
     default_exit_terms: ExitTermsInput | None = None,
+    golden_defaults: GoldenDefaults | None = None,
 ) -> AlpacaPaperDeployView:
     """Author the closed form choices and current launch verdict.
 
@@ -805,6 +834,7 @@ def build_alpaca_paper_deploy_view(
         custody_world=custody_world,
         golden_validation_scopes=golden_validation_scopes,
         requested_symbol=symbol,
+        golden_defaults=golden_defaults,
     )
     copy = _deploy_view_copy(account, custody_world)
     readiness_checks = _readiness_checks(

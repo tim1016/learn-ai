@@ -97,6 +97,17 @@ def test_new_parity_group_id_is_run_id_safe():
             None,
         ),
         ("ema_crossover_signal", {}, None),
+        # The twin hardcodes EMA 5/10 and the five-bar hold (#2696): the
+        # defaults, posted explicitly, stay comparable; any other length or
+        # hold is honestly unavailable, never a companion run at 5/10/5.
+        (
+            "ema_crossover_signal",
+            {"params": {"symbol": "SPY", "fast_period": 5, "slow_period": 10, "hold_bars": 5}},
+            None,
+        ),
+        ("ema_crossover_signal", {"params": {"symbol": "SPY", "fast_period": 7}}, REASON_PARAMETERS_UNREPRESENTABLE),
+        ("ema_crossover_signal", {"params": {"symbol": "SPY", "slow_period": 20}}, REASON_PARAMETERS_UNREPRESENTABLE),
+        ("ema_crossover_signal", {"params": {"symbol": "SPY", "hold_bars": 6}}, REASON_PARAMETERS_UNREPRESENTABLE),
         # A changed cadence is representable for rsi_mean_reversion, whose
         # template consolidates at whatever bar_minutes the forwarded data
         # policy carries; the policy carries the executed period, so both

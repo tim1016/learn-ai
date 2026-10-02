@@ -263,8 +263,12 @@ def no_golden_validations(monkeypatch: pytest.MonkeyPatch) -> None:
     async def no_golden_validations(_symbol: str | None) -> dict[str, tuple[object, ...]]:
         return {}
 
+    async def no_golden_defaults() -> dict[tuple[str, str], object]:
+        return {}
+
     monkeypatch.setattr(
         panel_deploy,
         "_current_golden_validation_scopes",
         no_golden_validations,
     )
+    monkeypatch.setattr(panel_deploy, "_ready_golden_defaults", no_golden_defaults)

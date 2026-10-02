@@ -1,0 +1,29 @@
+@let s = study();
+<section class="tuple" aria-labelledby="gs-tuple-title">
+  <header>
+    <div>
+      <h3 id="gs-tuple-title">{{ approved() ? 'Your golden settings' : 'The exact settings you are approving' }}</h3>
+      <p class="muted">{{ capability()?.display_name ?? (s.strategy_key | receiptLabel) }} · <app-asset-identity [symbol]="s.symbol" size="sm" /> · program version {{ programVersion() ?? 'not versioned' }}</p>
+    </div>
+    <span class="badge" [class.badge--good]="approved()">{{ approved() ? 'Golden configuration' : 'Candidate · not yet qualified' }}</span>
+  </header>
+  @if (candidate(); as c) { <p class="sentence"><strong>{{ c.params_sentence }}</strong></p> }
+  <dl class="params" aria-label="Every parameter">
+    @for (entry of entries(); track entry.name) {
+      <div><dt>{{ entry.label }}@if (entry.unit) { <small>{{ entry.unit }}</small> }</dt><dd>{{ entry.value ?? '—' }}@if (entry.isDefault) { <small>default</small> }</dd></div>
+    }
+  </dl>
+  @if (fixedChips().length > 0) {
+    <ul class="chips" aria-label="Fixed values">
+      @for (chip of fixedChips(); track chip) { <li>{{ chip }}</li> }
+    </ul>
+  }
+  <p class="caption">
+    @if (approved()) {
+      Qualification <code>{{ qualificationId() }}</code> · the new default for this strategy and instrument.
+    } @else if (incumbent(); as current) {
+      Replaces the default: {{ current.params_sentence }}; fixed values unchanged.
+    }
+    No bot starts on approval.
+  </p>
+</section>

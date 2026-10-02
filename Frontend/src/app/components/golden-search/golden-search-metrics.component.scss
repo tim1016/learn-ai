@@ -1,0 +1,7 @@
+:host { display: block; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: var(--space-2); margin: 0; }
+.metrics--compact { grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: var(--space-1); }
+dt { font-size: var(--fs-xxs); color: var(--text-secondary); }
+dd { margin: 0; font-variant-numeric: tabular-nums; font-size: var(--fs-sm); }
+.failed { margin: 0; color: var(--bear); font-size: var(--fs-xs); }
+.muted { margin: 0; color: var(--text-secondary); font-size: var(--fs-xs); }

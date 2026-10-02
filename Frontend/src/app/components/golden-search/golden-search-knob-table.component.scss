@@ -1,0 +1,29 @@
+:host { display: grid; gap: var(--space-3); min-width: 0; }
+.table-wrap { overflow-x: auto; }
+.knobs { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+.knobs caption { text-align: left; color: var(--text-secondary); padding-bottom: var(--space-2); }
+.knobs caption small { display: block; }
+.knobs th, .knobs td { padding: var(--space-2); border-bottom: 1px solid var(--border-light); text-align: left; vertical-align: top; }
+.knobs thead th { color: var(--text-secondary); font-weight: var(--fw-medium); white-space: nowrap; }
+.order { white-space: nowrap; display: flex; align-items: center; gap: var(--space-1); }
+.knobs th[scope='row'] { font-weight: var(--fw-regular); }
+.knob { display: grid; gap: 2px; min-width: 12rem; }
+.knob code { font-family: var(--font-mono); color: var(--text-secondary); margin-inline-start: var(--space-1); }
+.knob small { color: var(--text-secondary); }
+.values { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: flex-end; }
+.values label { display: grid; gap: 2px; color: var(--text-secondary); }
+.values input, td > input { width: 7rem; }
+.values small { flex-basis: 100%; color: var(--text-secondary); }
+.values .problem, .problem { color: var(--bear); }
+.values .start-note { color: var(--warn); }
+.tag { justify-self: start; border: 1px solid var(--border-light); border-radius: var(--radius-pill); padding: 0 var(--space-2); }
+.icon { all: unset; cursor: pointer; padding: 2px; border-radius: var(--radius-sm); color: var(--text-secondary); }
+.icon:focus-visible { outline: 2px solid var(--accent); }
+.icon:disabled { cursor: default; opacity: 0.35; }
+.fixed-row .values { color: var(--text-secondary); }
+.constraints { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font-size: var(--fs-xs); color: var(--text-secondary); }
+.fixed-controls { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: var(--space-2); font-size: var(--fs-xxs); }
+.fixed-controls li { padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); background: var(--bg-elevated); color: var(--text-secondary); }
+.fixed-controls strong { color: var(--text-primary); font-weight: var(--fw-medium); }
+.muted { color: var(--text-secondary); }
+.table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

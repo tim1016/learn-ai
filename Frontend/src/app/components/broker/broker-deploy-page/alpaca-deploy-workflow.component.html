@@ -54,6 +54,33 @@
         <button type="button" (click)="clearPrefill()">Start from a fresh form</button>
       </section>
     }
+    @if (goldenPending()) {
+      <section class="deploy-again" role="status" aria-label="Reading the golden configuration">
+        <p>Reading the golden configuration…</p>
+      </section>
+    } @else if (goldenHandoff(); as golden) {
+      @if (golden.kind === 'applied') {
+        <section class="deploy-again" role="status" aria-label="Golden configuration">
+          <p>
+            <strong>Golden configuration <code>{{ golden.offer.qualification_id.slice(0, 8) }}</code> from Golden Search.</strong>
+            @if (goldenStillApplied()) {
+              Its strategy, symbol and exact settings are applied; a setting it leaves out is the strategy's default. Choose where it trades, fresh money and confirm.
+            } @else if (!goldenStrategyMissing()) {
+              The form was edited since: it no longer holds the exact golden settings.
+            }
+          </p>
+          @if (goldenStrategyMissing()) {
+            <p role="alert">Its strategy is not offered on this account now. Choose one in What.</p>
+          }
+          <button type="button" aria-label="Clear the golden configuration" (click)="clearGolden()">Clear</button>
+        </section>
+      } @else {
+        <section class="deploy-again" role="alert" aria-label="Golden configuration">
+          <p><strong>Golden configuration <code>{{ golden.id.slice(0, 8) }}</code> was not applied.</strong> {{ golden.reason }}</p>
+          <button type="button" (click)="dismissGolden()">Dismiss</button>
+        </section>
+      }
+    }
 
     <ol class="deploy-steps" [class.deploy-steps--columns]="columnsLayout()">
       <li>

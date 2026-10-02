@@ -1,0 +1,146 @@
+{
+ "action_plan": {
+  "on_enter": [
+   {
+    "instrument": {
+     "kind": "stock",
+     "underlying": "SPY"
+    },
+    "leg_id": "primary",
+    "position": "long",
+    "qty_ratio": 1
+   }
+  ],
+  "on_exit": [
+   {
+    "entry_leg_id": "primary",
+    "kind": "close_leg"
+   }
+  ]
+ },
+ "bot_configuration_hash": "ff5b87fdd4f73e511d20bfad7e9c2ebc595d4b6de076ca8983580f9303552806",
+ "broker": "alpaca",
+ "carryover_policy": "FORBID",
+ "configured_signal": {
+  "bar_integrity": {
+   "duplicate_policy": "reject_conflicting_payload_else_idempotent",
+   "gap_policy": "tolerated_not_filled",
+   "history_live_watermark_policy": "history_before_live_monotonic_seam",
+   "out_of_order_policy": "reject_non_monotonic_end_ms",
+   "session_close_ownership": "single_router_forced_flush_at_session_close"
+  },
+  "clock": {
+   "calendar": "XNYS",
+   "early_close_policy": "calendar_session_close",
+   "evaluation_modes": [
+    "DECIDE",
+    "OBSERVE_ONLY"
+   ],
+   "pause_policy": "OBSERVE_ONLY",
+   "replay_protocol": "retained_source_bars_in_decision_clock_order",
+   "session_timezone": "America/New_York",
+   "use_rth": true,
+   "warmup_lookback_days": 5
+  },
+  "data": {
+   "bar_semantics": "closed_end_exclusive",
+   "base_timeframe_ms": 60000,
+   "decision_timeframe_ms": 900000,
+   "provider": "polygon",
+   "revision_policy": "exact_retained_source_bar",
+   "symbol": "SPY",
+   "timestamp_contract": "int64_ms_utc"
+  },
+  "decision_streams": [
+   "ENTER",
+   "EXIT"
+  ],
+  "exit_eligibility": {
+   "countdown_decision_clocks": 5,
+   "countdown_state_persistable": false,
+   "rule": "fixed_bar_count_countdown"
+  },
+  "golden_trace_root": "16044218d7505ab73b632318def91596fae29e9c1d6c4e58c655e9efa4dbf184",
+  "numerical_provenance": {
+   "canonical_implementation": "app/engine/strategy/algorithms/ema_crossover_signal.py::EmaCrossoverSignalAlgorithm",
+   "equivalence_level": "bit_exact",
+   "formula": "Long-only EMA(5)/EMA(10) crossover on 15-minute signal bars with an RSI(14) filter. Entry: fresh EMA5 > EMA10 crossover AND (EMA5 - EMA10) >= 0.20 AND 50 <= RSI <= 70. Exit: 5 consolidated bars (75 minutes) after entry.",
+   "parity_fixture_ids": [
+    "tests/fixtures/golden/ema-signal-session/v1/trace-corpus.json",
+    "tests/fixtures/golden/cross-engine-studies/cells/SPY_W3mo_2026-02-02_to_2026-04-30",
+    "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W3mo_2026-02-02_to_2026-04-30",
+    "tests/fixtures/golden/cross-engine-studies/cells/SPY_W6mo_2025-11-03_to_2026-04-30",
+    "tests/fixtures/golden/cross-engine-studies/cells/QQQ_W6mo_2025-11-03_to_2026-04-30"
+   ],
+   "reference": "Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs (Apr 2026 revision); TradingView Pine validation docs/validation/SPY_EMA_Crossover_RSI.pine; validation report docs/validation/SPY_EMA_Crossover_Validation_Report.pdf",
+   "tolerance_atol": 1e-09,
+   "tolerance_rtol": 0.0,
+   "validated_against": "tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py; tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root[ema_crossover_signal]; docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md"
+  },
+  "parameter_schema_version": "ema-crossover-signal-params/v2",
+  "parameters": {
+   "gap": {
+    "origin": "deploy_override",
+    "unit": "quote_currency",
+    "value": 0.2
+   },
+   "gap_bps": {
+    "origin": "deploy_override",
+    "unit": "basis_points",
+    "value": 0.0
+   },
+   "rsi_max": {
+    "origin": "registered_default",
+    "unit": "rsi_points",
+    "value": 70.0
+   },
+   "rsi_min": {
+    "origin": "registered_default",
+    "unit": "rsi_points",
+    "value": 50.0
+   },
+   "symbol": {
+    "origin": "deployment_symbol",
+    "unit": "ticker",
+    "value": "SPY"
+   }
+  },
+  "parameters_match_validated_settings": true,
+  "program_key": "ema_crossover_signal",
+  "program_version": "ema-crossover-signal/v1",
+  "protocol_version": "signal-session-protocol/v1",
+  "schema_version": 2,
+  "signals": [
+   {
+    "field": "close",
+    "indicator": "ema",
+    "name": "ema_fast",
+    "period": 5,
+    "warmup_bars": 5
+   },
+   {
+    "field": "close",
+    "indicator": "ema",
+    "name": "ema_slow",
+    "period": 10,
+    "warmup_bars": 10
+   },
+   {
+    "field": "close",
+    "indicator": "rsi_wilders",
+    "name": "rsi",
+    "period": 14,
+    "warmup_bars": 15
+   }
+  ]
+ },
+ "configured_signal_hash": "6fa414a391cb8bf282fbc778aab771a9d8ea1854aea9e2f1aaf01f45b394b954",
+ "mode": "dry_run",
+ "quantity": 1,
+ "schema_version": 2,
+ "sealed_account_id": "sim:sealed-ema-1",
+ "sealed_at_ms": 1787356800000,
+ "strategy_instance_id": "sealed-ema-1",
+ "validation_event_id": "validation-ema-1",
+ "validation_snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

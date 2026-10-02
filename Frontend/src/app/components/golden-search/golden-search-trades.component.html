@@ -1,0 +1,22 @@
+<h3>Inspect the decisions behind the result</h3>
+<p class="muted">{{ candidateLabel() }} · {{ trades().length }} development trades</p>
+@if (rows().length > 0) {
+  <div class="table-wrap" role="region" tabindex="0" [attr.aria-label]="'Trades of ' + candidateLabel()">
+    <table>
+      <caption class="sr-only">Development trades of {{ candidateLabel() }}</caption>
+      <thead><tr><th scope="col">Session date (ET)</th><th scope="col">Entry decision</th><th scope="col">Exit decision</th><th scope="col" class="num">P&amp;L before fees</th></tr></thead>
+      <tbody>
+        @for (row of rows(); track row.key) {
+          <tr>
+            <th scope="row"><app-timestamp-display [value]="row.trade.entry_ms" mode="date-et" /></th>
+            <td>Entry at {{ price(row.trade.entry_price) }}@if (row.rsi) { · RSI {{ row.rsi }}}</td>
+            <td>@if (row.trade.exit_reason; as reason) { {{ reason | receiptLabel }} · }Exit at {{ price(row.trade.exit_price) }}</td>
+            <td class="num" [class.loss]="row.loss">{{ row.pnlText }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+} @else {
+  <p class="muted">This candidate made no trade in the development run.</p>
+}

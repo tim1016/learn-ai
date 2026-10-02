@@ -17,6 +17,7 @@ import asyncpg
 from app.research.grid_search import repository as sweeps
 from app.research.persistence import fence
 from app.research.walk_forward_study.models import FoldRecord, NewStudy, StudyRow, StudyStatus
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
 STUDIES = "research_walk_forward_studies"
@@ -164,5 +165,20 @@ async def delete_study(conn: asyncpg.Connection, study_id: str) -> bool:
     """Remove the study and every sweep it owns."""
     async with conn.transaction():
         await sweeps.delete_owned_searches(conn, owner_kind="walk_forward", owner_id=study_id)
+        # The study's window stays on record, as its sweeps' do (#2696).
+        await conn.execute(
+            f"""
+            INSERT INTO research_retired_research_windows (
+                symbol, interval_start_ms, interval_end_ms, source, source_id, retired_at_ms
+            )
+            SELECT upper(symbol),
+                   COALESCE((request_json ->> 'start_ms')::bigint, 0),
+                   COALESCE((request_json ->> 'end_ms')::bigint, {MAX_TIMESTAMP_MS}),
+                   'walk_forward_study', id, $2
+              FROM research_walk_forward_studies WHERE id = $1
+            """,
+            study_id,
+            now_ms_utc(),
+        )
         result = await conn.execute("DELETE FROM research_walk_forward_studies WHERE id = $1", study_id)
     return result.endswith(" 1")

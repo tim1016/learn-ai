@@ -4394,6 +4394,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs-internal/golden-search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Golden Search Job
+         * @description Run the stage a guarded command authorized, on a worker thread. 202 once the job is bound to it.
+         *
+         *     A token the study did not issue, or a stage another job already holds,
+         *     is refused (409); nothing runs without the matching token.
+         */
+        post: operations["start_golden_search_job_api_jobs_internal_golden_search_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs-internal/grid-search": {
         parameters: {
             query?: never;
@@ -4752,6 +4775,277 @@ export interface paths {
         head?: never;
         /** Update Backtest Run Notes */
         patch: operations["update_backtest_run_notes_api_research_backtest_runs__run_id__notes_patch"];
+        trace?: never;
+    };
+    "/api/research/golden-qualifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Golden Qualifications */
+        get: operations["list_golden_qualifications_api_research_golden_qualifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-qualifications/defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Golden Defaults */
+        get: operations["list_golden_defaults_api_research_golden_qualifications_defaults_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-qualifications/{qualification_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Golden Qualification */
+        get: operations["get_golden_qualification_api_research_golden_qualifications__qualification_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-qualifications/{qualification_id}/deploy-offer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Golden Qualification Deploy Offer
+         * @description The exact tuple for Deploy. Answered whatever the status; Deploy applies only a ready one.
+         */
+        get: operations["get_golden_qualification_deploy_offer_api_research_golden_qualifications__qualification_id__deploy_offer_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-qualifications/{qualification_id}/reprove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reprove Golden Qualification */
+        post: operations["reprove_golden_qualification_api_research_golden_qualifications__qualification_id__reprove_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-qualifications/{qualification_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Golden Qualification */
+        post: operations["revoke_golden_qualification_api_research_golden_qualifications__qualification_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-search/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Capabilities
+         * @description Every registered strategy: its Golden Search knobs, fixed controls and constraints, or why it has none.
+         */
+        get: operations["get_capabilities_api_research_golden_search_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-search/defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Defaults
+         * @description A complete starting plan whose intervals the server computes from the calendar and the lake.
+         */
+        get: operations["get_defaults_api_research_golden_search_defaults_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-search/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preflight Plan
+         * @description Review a plan without side effects. Every problem a well-formed plan can have is a refusal in a 200.
+         */
+        post: operations["preflight_plan_api_research_golden_search_preflight_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-search/studies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Studies
+         * @description History, newest first; hidden studies only when asked for.
+         */
+        get: operations["list_studies_api_research_golden_search_studies_get"];
+        put?: never;
+        /**
+         * Lock Study
+         * @description Lock a reviewed plan into a new study; the same key and plan return the study it already locked.
+         */
+        post: operations["lock_study_api_research_golden_search_studies_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-search/studies/{study_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Study */
+        get: operations["get_study_api_research_golden_search_studies__study_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Hide Study
+         * @description Hide a study from history; refused while a stage runs. Its rows, trials and exposures stay recorded.
+         */
+        delete: operations["hide_study_api_research_golden_search_studies__study_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-search/studies/{study_id}/candidates/{candidate_key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Candidate
+         * @description A candidate's development detail run (equity, drawdown, months, trades), and its final-test run once scored.
+         */
+        get: operations["get_candidate_api_research_golden_search_studies__study_id__candidates__candidate_key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-search/studies/{study_id}/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Command
+         * @description Apply one lifecycle command under its expected revision.
+         *
+         *     A command that authorizes a stage answers with its ``dispatch``; the
+         *     client starts that stage through the jobs boundary. ``revise`` answers
+         *     with the new study it created.
+         */
+        post: operations["run_command_api_research_golden_search_studies__study_id__commands_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/research/golden-search/studies/{study_id}/evaluations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Evaluations */
+        get: operations["list_evaluations_api_research_golden_search_studies__study_id__evaluations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/research/golden-validations": {
@@ -9660,6 +9954,8 @@ export interface components {
             program_version: string;
             /** Protocol Version */
             protocol_version: string;
+            /** Qualification Id */
+            qualification_id?: string | null;
             /**
              * Schema Version
              * @default 2
@@ -11583,8 +11879,8 @@ export interface components {
          *     * ``"fixed_bar_count_countdown"`` — ``ema_crossover_signal`` exits on a
          *       fixed decision-clock countdown
          *       (``EmaCrossoverSignalAlgorithm.commit_signal_decision`` sets
-         *       ``_bars_until_exit = 5`` at entry); ``countdown_decision_clocks`` is
-         *       required.
+         *       ``_bars_until_exit`` to its ``hold_bars`` parameter, default 5, at
+         *       entry); ``countdown_decision_clocks`` is required.
          *     * ``"level_true"`` — ``sma_crossover`` exits the instant its exit
          *       relation (a fresh death cross) is true on a decision clock, with no
          *       hold period or counter at all
@@ -12294,11 +12590,208 @@ export interface components {
             /** Written At Ms */
             written_at_ms: number;
         };
+        /**
+         * GoldenDefaultView
+         * @description One stock's current default for one program: the version Deploy offers first.
+         */
+        GoldenDefaultView: {
+            /** Program Key */
+            program_key: string;
+            /** Qualification Id */
+            qualification_id: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "stale" | "revoked" | "unverifiable";
+            /** Status Explanation */
+            status_explanation: string;
+            /** Symbol */
+            symbol: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
         /** GoldenFixturesCatalog */
         GoldenFixturesCatalog: {
             /** Fixtures */
             fixtures: components["schemas"]["FixtureSummary"][];
             validation?: components["schemas"]["ValidationSummary"] | null;
+        };
+        /**
+         * GoldenQualificationDeployOffer
+         * @description The exact tuple Deploy applies when the owner chooses "Use in Deploy"; never applied unless ready.
+         */
+        GoldenQualificationDeployOffer: {
+            /** Explanation */
+            explanation: string;
+            /** Is Default */
+            is_default: boolean;
+            /** Parameters */
+            parameters: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Program Key */
+            program_key: string;
+            /** Program Version */
+            program_version: string;
+            /** Qualification Id */
+            qualification_id: string;
+            research: components["schemas"]["GoldenQualificationResearch"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "stale" | "revoked" | "unverifiable";
+            /** Symbol */
+            symbol: string;
+        };
+        /** GoldenQualificationDetail */
+        GoldenQualificationDetail: {
+            /** Approved By */
+            approved_by: string;
+            /** Artifact Digest */
+            artifact_digest: string;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Events */
+            events: components["schemas"]["GoldenQualificationEventView"][];
+            /** Golden Review Id */
+            golden_review_id: number;
+            /** Golden Run Id */
+            golden_run_id: number;
+            /** Id */
+            id: string;
+            /** Is Default */
+            is_default: boolean;
+            /** Note */
+            note: string;
+            /** Parameter Schema Version */
+            parameter_schema_version: string;
+            /** Parameters */
+            parameters: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Params Sha256 */
+            params_sha256: string;
+            /** Program Key */
+            program_key: string;
+            /** Program Version */
+            program_version: string;
+            proof: components["schemas"]["GoldenQualificationProofView"];
+            /** Proof Sha256 */
+            proof_sha256: string;
+            research: components["schemas"]["GoldenQualificationResearch"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "stale" | "revoked" | "unverifiable";
+            /** Status Explanation */
+            status_explanation: string;
+            /** Study Id */
+            study_id: string;
+            /** Symbol */
+            symbol: string;
+            /** Wiring Digest */
+            wiring_digest: string;
+        };
+        /** GoldenQualificationEventView */
+        GoldenQualificationEventView: {
+            /** Actor */
+            actor: string;
+            /** Artifact Digest */
+            artifact_digest: string | null;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Id */
+            id: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "reproved" | "revoked";
+            /** Reason */
+            reason: string | null;
+            /** Wiring Digest */
+            wiring_digest: string | null;
+        };
+        /**
+         * GoldenQualificationProofView
+         * @description The approval proof's identity: what was replayed, over which window, to which trace root.
+         */
+        GoldenQualificationProofView: {
+            /** Input Count */
+            input_count: number;
+            /** Lake Trace Root */
+            lake_trace_root: string | null;
+            /** Restored Trace Root */
+            restored_trace_root: string | null;
+            /** Trace Count */
+            trace_count: number | null;
+            /** Warmup From Ms */
+            warmup_from_ms: number | null;
+            /** Window End Ms */
+            window_end_ms: number | null;
+            /** Window Start Ms */
+            window_start_ms: number | null;
+        };
+        /**
+         * GoldenQualificationResearch
+         * @description What the research said when the version was approved; preserved forever, never upgraded by approval.
+         */
+        GoldenQualificationResearch: {
+            /** Claim */
+            claim?: string | null;
+            /** Exam Outcome */
+            exam_outcome?: string | null;
+            /** Exposure State */
+            exposure_state?: string | null;
+            /**
+             * Research Override
+             * @default false
+             */
+            research_override?: boolean;
+            /** Validation Verdict Label */
+            validation_verdict_label?: string | null;
+            /** Weakness */
+            weakness?: string[];
+        };
+        /** GoldenQualificationSummary */
+        GoldenQualificationSummary: {
+            /** Approved By */
+            approved_by: string;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Golden Run Id */
+            golden_run_id: number;
+            /** Id */
+            id: string;
+            /** Is Default */
+            is_default: boolean;
+            /** Note */
+            note: string;
+            /** Parameters */
+            parameters: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Program Key */
+            program_key: string;
+            /** Program Version */
+            program_version: string;
+            research: components["schemas"]["GoldenQualificationResearch"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ready" | "stale" | "revoked" | "unverifiable";
+            /** Status Explanation */
+            status_explanation: string;
+            /** Study Id */
+            study_id: string;
+            /** Symbol */
+            symbol: string;
         };
         /** GoldenReviewResponse */
         GoldenReviewResponse: {
@@ -12325,6 +12818,1505 @@ export interface components {
             reviewed_at_ms: number;
             /** Reviewed By */
             reviewed_by: string;
+        };
+        /** GoldenSearchCandidateDetail */
+        GoldenSearchCandidateDetail: {
+            /**
+             * Candidate Key
+             * @enum {string}
+             */
+            candidate_key: "incumbent" | "all_period" | "recent";
+            development: components["schemas"]["GoldenSearchRunDetail"] | null;
+            exam: components["schemas"]["GoldenSearchRunDetail"] | null;
+            /** Point */
+            point: Record<string, never>;
+        };
+        /** GoldenSearchCandidateGuidance */
+        GoldenSearchCandidateGuidance: {
+            /** Text */
+            text: string;
+            /** Title */
+            title: string;
+        };
+        /** GoldenSearchCapability */
+        GoldenSearchCapability: {
+            /** Available */
+            available: boolean;
+            /** Constraints */
+            constraints: components["schemas"]["GoldenSearchConstraint"][];
+            /** Default Pair Audits */
+            default_pair_audits: [
+                string,
+                string
+            ][];
+            /** Display Name */
+            display_name: string;
+            /** Fixed */
+            fixed: components["schemas"]["GoldenSearchFixedControl"][];
+            /** Knobs */
+            knobs: components["schemas"]["GoldenSearchCapabilityKnob"][];
+            /** Reason */
+            reason: string | null;
+            /** Strategy Key */
+            strategy_key: string;
+        };
+        /** GoldenSearchCapabilityKnob */
+        GoldenSearchCapabilityKnob: {
+            /** Default High */
+            default_high: number;
+            /** Default Low */
+            default_low: number;
+            /** Default Step */
+            default_step: number;
+            /** Default Value */
+            default_value: number;
+            /** Domain High */
+            domain_high: number;
+            /** Domain Low */
+            domain_low: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "integer" | "decimal";
+            /** Label */
+            label: string;
+            /** Name */
+            name: string;
+            /** Neighbor Step */
+            neighbor_step: number;
+            /** Note */
+            note: string;
+            /** Quantum */
+            quantum: number;
+            /** Searchable By Default */
+            searchable_by_default: boolean;
+            /** Unit */
+            unit: string;
+            /** Warmup Dependent */
+            warmup_dependent: boolean;
+        };
+        /** GoldenSearchCodeIdentity */
+        GoldenSearchCodeIdentity: {
+            /** Git Revision */
+            git_revision: string;
+            /**
+             * Tree State
+             * @enum {string}
+             */
+            tree_state: "clean" | "dirty" | "unknown";
+        };
+        /**
+         * GoldenSearchCommandRequest
+         * @description One lifecycle command. The study service validates each command's payload and refuses it with a code.
+         *
+         *     ``revise`` carries a whole plan, so its payload is read through the same
+         *     schema as a lock and normalized before the idempotency digest is taken.
+         */
+        GoldenSearchCommandRequest: {
+            /**
+             * Command
+             * @enum {string}
+             */
+            command: "continue" | "select_candidate" | "open_exam" | "approve" | "retain" | "close" | "cancel" | "finish" | "revise";
+            /** Expectedrevision */
+            expectedRevision: number;
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Payload */
+            payload?: Record<string, never>;
+        };
+        /** GoldenSearchConstraint */
+        GoldenSearchConstraint: {
+            /** Left */
+            left: string;
+            /** Message */
+            message: string;
+            /**
+             * Op
+             * @constant
+             */
+            op: "<";
+            /** Right */
+            right: string;
+        };
+        /** GoldenSearchCosts */
+        GoldenSearchCosts: {
+            /** Commission Per Order */
+            commission_per_order: number;
+            /**
+             * Fill Mode
+             * @enum {string}
+             */
+            fill_mode: "signal_bar_close" | "next_bar_open" | "decision_minute_open";
+            /** Slippage Per Share */
+            slippage_per_share: number;
+        };
+        /** GoldenSearchCreateStudyRequest */
+        GoldenSearchCreateStudyRequest: {
+            /** Idempotencykey */
+            idempotencyKey: string;
+            protocol: components["schemas"]["GoldenSearchProtocolRequest"];
+        };
+        /** GoldenSearchCumulativeReturnPoint */
+        GoldenSearchCumulativeReturnPoint: {
+            /** Ms */
+            ms: number;
+            /**
+             * Value
+             * @description A fraction of starting capital.
+             */
+            value: number;
+        };
+        /** GoldenSearchDecision */
+        GoldenSearchDecision: {
+            /** At Ms */
+            at_ms: number;
+            /** Kind */
+            kind: string;
+            /** Note */
+            note: string;
+        };
+        /**
+         * GoldenSearchDefaults
+         * @description A complete starting plan with server-computed intervals, the incumbent's name and the final interval's exposure.
+         */
+        GoldenSearchDefaults: {
+            /** Budget Cap */
+            budget_cap: number;
+            /** Development End Ms */
+            development_end_ms: number;
+            /** Development Start Ms */
+            development_start_ms: number;
+            /** Exam Min Trades */
+            exam_min_trades: number;
+            execution: components["schemas"]["GoldenSearchExecution"];
+            exposure: components["schemas"]["GoldenSearchExposure"];
+            /** Final End Ms */
+            final_end_ms: number;
+            /**
+             * Final Months
+             * @description The final interval's length in whole months, as laid out.
+             */
+            final_months: number;
+            /** Final Start Ms */
+            final_start_ms: number;
+            incumbent: components["schemas"]["GoldenSearchIncumbent"];
+            /** Incumbent Label */
+            incumbent_label: string;
+            /** Knobs */
+            knobs: components["schemas"]["GoldenSearchKnobPlan"][];
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "zoom" | "grid";
+            /** Neighbor Audit */
+            neighbor_audit: boolean;
+            /** Pair Audits */
+            pair_audits: [
+                string,
+                string
+            ][];
+            policy: components["schemas"]["GoldenSearchSelectionPolicy"];
+            /** Recent Window */
+            recent_window: boolean;
+            /** Seed */
+            seed: Record<string, never>;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Stress */
+            stress: components["schemas"]["GoldenSearchStressScenario"][];
+            /** Symbol */
+            symbol: string;
+            /** Test Months */
+            test_months: number;
+            /** Training Months */
+            training_months: number;
+            zoom: components["schemas"]["GoldenSearchZoomSettings"];
+        };
+        /** GoldenSearchDeployHandoff */
+        GoldenSearchDeployHandoff: {
+            /**
+             * Parameters
+             * @description The canonical point without symbol.
+             */
+            parameters: Record<string, never>;
+            /** Program Key */
+            program_key: string;
+            /** Program Version */
+            program_version: string | null;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * GoldenSearchDispatch
+         * @description What the client hands the jobs boundary to start the stage a command authorized.
+         */
+        GoldenSearchDispatch: {
+            /**
+             * Job Type
+             * @constant
+             */
+            job_type: "golden_search";
+            payload: components["schemas"]["GoldenSearchDispatchPayload"];
+        };
+        /** GoldenSearchDispatchPayload */
+        GoldenSearchDispatchPayload: {
+            /** Stage Token */
+            stage_token: string;
+            /** Study Id */
+            study_id: string;
+        };
+        /** GoldenSearchDrawdownPoint */
+        GoldenSearchDrawdownPoint: {
+            /** Drawdown */
+            drawdown: number;
+            /** Ms */
+            ms: number;
+        };
+        /** GoldenSearchEquityPoint */
+        GoldenSearchEquityPoint: {
+            /** Equity */
+            equity: number;
+            /** Ms */
+            ms: number;
+        };
+        /** GoldenSearchEstimate */
+        GoldenSearchEstimate: {
+            /** Budget Cap */
+            budget_cap: number;
+            /** Reserved For Exam And Proof */
+            reserved_for_exam_and_proof: number;
+            /**
+             * Serial Seconds High
+             * @description An estimate, not a promise.
+             */
+            serial_seconds_high: number;
+            /**
+             * Serial Seconds Low
+             * @description An estimate, not a promise.
+             */
+            serial_seconds_low: number;
+            /** Stages */
+            stages: components["schemas"]["GoldenSearchStageEstimate"][];
+            /** Total Max */
+            total_max: number;
+        };
+        /** GoldenSearchEvaluationPage */
+        GoldenSearchEvaluationPage: {
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Rows */
+            rows: components["schemas"]["GoldenSearchEvaluationRow"][];
+            /** Total */
+            total: number;
+        };
+        /** GoldenSearchEvaluationRow */
+        GoldenSearchEvaluationRow: {
+            /** Attempt */
+            attempt: number;
+            /** Completed At Ms */
+            completed_at_ms: number | null;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Detail */
+            detail: boolean;
+            /** Error */
+            error: string | null;
+            /** Evaluation Key */
+            evaluation_key: string;
+            /** Fold Index */
+            fold_index: number | null;
+            /** Max Drawdown Pct */
+            max_drawdown_pct: number | null;
+            /** Net Profit */
+            net_profit: number | null;
+            /** Point */
+            point: Record<string, never>;
+            /** Point Hash */
+            point_hash: string;
+            /** Retries */
+            retries: number;
+            /** Scenario */
+            scenario: string;
+            /** Sharpe Ratio */
+            sharpe_ratio: number | null;
+            /** Stage */
+            stage: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "completed" | "failed";
+            /** Total Return Pct */
+            total_return_pct: number | null;
+            /** Total Trades */
+            total_trades: number | null;
+            /** Win Rate */
+            win_rate: number | null;
+            /** Window End Ms */
+            window_end_ms: number;
+            /** Window Start Ms */
+            window_start_ms: number;
+        };
+        /** GoldenSearchEvidenceCandidate */
+        GoldenSearchEvidenceCandidate: {
+            development_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+            /** Edge Hits */
+            edge_hits: string[];
+            /** Eligible */
+            eligible: boolean;
+            /** Exam Eligible */
+            exam_eligible: boolean;
+            /** Fixed Sentence */
+            fixed_sentence: string;
+            /** Flags */
+            flags: components["schemas"]["GoldenSearchFinding"][];
+            guidance: components["schemas"]["GoldenSearchCandidateGuidance"];
+            /** Ineligibility */
+            ineligibility: string | null;
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "incumbent" | "all_period" | "recent";
+            /** Label */
+            label: string;
+            /** Neighbors */
+            neighbors: components["schemas"]["GoldenSearchNeighborhood"][];
+            /** Params Sentence */
+            params_sentence: string;
+            /** Point */
+            point: Record<string, never>;
+            /** Point Hash */
+            point_hash: string;
+            /** Same As */
+            same_as: ("incumbent" | "all_period" | "recent")[];
+            /** Stress */
+            stress: components["schemas"]["GoldenSearchStressResult"][];
+        };
+        /** GoldenSearchEvidenceScope */
+        GoldenSearchEvidenceScope: {
+            /** Capital */
+            capital: number;
+            costs: components["schemas"]["GoldenSearchCosts"];
+            window: components["schemas"]["GoldenSearchWindow"];
+        };
+        /** GoldenSearchEvidenceView */
+        GoldenSearchEvidenceView: {
+            /** Candidates */
+            candidates: components["schemas"]["GoldenSearchEvidenceCandidate"][];
+            /** Incomplete */
+            incomplete: boolean;
+            /** Pair Maps */
+            pair_maps: components["schemas"]["GoldenSearchPairMap"][];
+            recommendation: components["schemas"]["GoldenSearchRecommendation"];
+            scope: components["schemas"]["GoldenSearchEvidenceScope"];
+        };
+        /** GoldenSearchExamCheck */
+        GoldenSearchExamCheck: {
+            /** Code */
+            code: string;
+            /** Detail */
+            detail: string;
+            /** Label */
+            label: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pass" | "fail" | "not_available";
+        };
+        /** GoldenSearchExamView */
+        GoldenSearchExamView: {
+            /**
+             * Candidate Key
+             * @enum {string}
+             */
+            candidate_key: "incumbent" | "all_period" | "recent";
+            candidate_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+            /** Candidate Point */
+            candidate_point: Record<string, never>;
+            /** Checks */
+            checks: components["schemas"]["GoldenSearchExamCheck"][];
+            /**
+             * Claim
+             * @enum {string}
+             */
+            claim: "confirmatory" | "exploratory";
+            /**
+             * Exposure State
+             * @enum {string}
+             */
+            exposure_state: "not_opened" | "previously_used" | "history_unknown";
+            incumbent_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+            /** Outcome */
+            outcome: ("meets_rules" | "does_not_meet_rules" | "not_enough_evidence" | "could_not_evaluate") | null;
+            /**
+             * Retention
+             * @description Descriptive only, never a check.
+             */
+            retention: number | null;
+            /**
+             * Weakness
+             * @description What approving needs the owner to acknowledge as weak; empty when the evidence meets the rules.
+             */
+            weakness: components["schemas"]["GoldenSearchFinding"][];
+            window: components["schemas"]["GoldenSearchWindow"];
+        };
+        /** GoldenSearchExecution */
+        GoldenSearchExecution: {
+            /** Commission Per Order */
+            commission_per_order: number;
+            /**
+             * Fill Mode
+             * @enum {string}
+             */
+            fill_mode: "signal_bar_close" | "next_bar_open" | "decision_minute_open";
+            /** Initial Cash */
+            initial_cash: number;
+            /** Slippage Per Share */
+            slippage_per_share: number;
+        };
+        /** GoldenSearchExecutionRequest */
+        GoldenSearchExecutionRequest: {
+            /**
+             * Commissionperorder
+             * @description Flat fee per order. 0, the default, charges no fees: Alpaca charges no commission, and its regulatory fees are not modelled (#2601).
+             * @default 0
+             */
+            commissionPerOrder?: number;
+            /**
+             * Fillmode
+             * @default decision_minute_open
+             * @enum {string}
+             */
+            fillMode?: "signal_bar_close" | "next_bar_open" | "decision_minute_open";
+            /**
+             * Initialcash
+             * @default 100000
+             */
+            initialCash?: number;
+            /**
+             * Slippagepershare
+             * @default 0
+             */
+            slippagePerShare?: number;
+        };
+        /** GoldenSearchExposure */
+        GoldenSearchExposure: {
+            /** Explanation */
+            explanation: string;
+            /** Ledger Overlaps */
+            ledger_overlaps: number;
+            /** Outside Activity Overlaps */
+            outside_activity_overlaps: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "not_opened" | "previously_used" | "history_unknown";
+        };
+        /** GoldenSearchFinding */
+        GoldenSearchFinding: {
+            /** Code */
+            code: string;
+            /** Text */
+            text: string;
+        };
+        /** GoldenSearchFixedControl */
+        GoldenSearchFixedControl: {
+            /** Label */
+            label: string;
+            /** Reason */
+            reason: string;
+            /** Value */
+            value: string;
+        };
+        /** GoldenSearchFold */
+        GoldenSearchFold: {
+            /** Fold Index */
+            fold_index: number;
+            /** Test End Ms */
+            test_end_ms: number;
+            /** Test Start Ms */
+            test_start_ms: number;
+            /** Train End Ms */
+            train_end_ms: number;
+            /** Train Start Ms */
+            train_start_ms: number;
+        };
+        /** GoldenSearchGuidance */
+        GoldenSearchGuidance: {
+            /** Detail */
+            detail: string;
+            /** Headline */
+            headline: string;
+        };
+        /** GoldenSearchIncumbent */
+        GoldenSearchIncumbent: {
+            /** Params */
+            params: Record<string, never>;
+            /** Qualification Id */
+            qualification_id: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "registry" | "qualification";
+        };
+        /** GoldenSearchIncumbentRequest */
+        GoldenSearchIncumbentRequest: {
+            /** Params */
+            params: Record<string, never>;
+            /** Qualificationid */
+            qualificationId: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "registry" | "qualification";
+        };
+        /** GoldenSearchJobAccepted */
+        GoldenSearchJobAccepted: {
+            /** Job Id */
+            job_id: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "queued";
+            /** Study Id */
+            study_id: string;
+        };
+        /**
+         * GoldenSearchJobRequest
+         * @description Body of POST /api/jobs-internal/golden-search: the dispatch a guarded command returned, plus the minted job id.
+         */
+        GoldenSearchJobRequest: {
+            /** Jobid */
+            jobId: string;
+            /** Stagetoken */
+            stageToken: string;
+            /** Studyid */
+            studyId: string;
+        };
+        /** GoldenSearchKnobPlan */
+        GoldenSearchKnobPlan: {
+            /** Fixed Value */
+            fixed_value: number;
+            /** High */
+            high: number;
+            /** Low */
+            low: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "search" | "fixed";
+            /** Name */
+            name: string;
+            /** Step */
+            step: number | null;
+        };
+        /**
+         * GoldenSearchKnobPlanRequest
+         * @description One declared knob: searched over ``[low, high]`` at ``step``, or held at ``fixed_value``.
+         */
+        GoldenSearchKnobPlanRequest: {
+            /** Fixedvalue */
+            fixedValue: number;
+            /** High */
+            high: number;
+            /** Low */
+            low: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "search" | "fixed";
+            /** Name */
+            name: string;
+            /** Step */
+            step?: number | null;
+        };
+        /** GoldenSearchKnobSummary */
+        GoldenSearchKnobSummary: {
+            /** Knob */
+            knob: string;
+            /** Label */
+            label: string;
+            /** Moved */
+            moved: boolean;
+            /** Retained Value */
+            retained_value: number;
+            /** Start Value */
+            start_value: number;
+            /** Stop Explanation */
+            stop_explanation: string;
+            /**
+             * Stop Reason
+             * @enum {string}
+             */
+            stop_reason: "no_improvement" | "pass_limit" | "budget" | "quantization_limit" | "no_eligible";
+            /** Unit */
+            unit: string;
+        };
+        /** GoldenSearchLinkedReturn */
+        GoldenSearchLinkedReturn: {
+            /** Fold Index */
+            fold_index: number;
+            /**
+             * Fold Missing
+             * @description This fold has no test return of its own (a null linked_return after it is the broken line).
+             */
+            fold_missing: boolean;
+            /**
+             * Linked Return
+             * @description Growth of 1 linked across test folds, minus 1; null once a fold is missing.
+             */
+            linked_return: number | null;
+            /** Test End Ms */
+            test_end_ms: number;
+        };
+        /** GoldenSearchMetrics */
+        GoldenSearchMetrics: {
+            /** Error */
+            error: string | null;
+            /**
+             * Max Drawdown Pct
+             * @description A fraction of peak equity, as the engine reports it.
+             */
+            max_drawdown_pct: number | null;
+            /** Net Profit */
+            net_profit: number | null;
+            /** Sharpe Ratio */
+            sharpe_ratio: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "failed";
+            /**
+             * Total Return Pct
+             * @description A fraction, as the engine reports it.
+             */
+            total_return_pct: number | null;
+            /** Total Trades */
+            total_trades: number;
+            /** Win Rate */
+            win_rate: number | null;
+        };
+        /** GoldenSearchMonthlyResult */
+        GoldenSearchMonthlyResult: {
+            /** Month Start Ms */
+            month_start_ms: number;
+            /** Net Profit */
+            net_profit: number;
+            /** Return Fraction */
+            return_fraction: number | null;
+            /** Trades */
+            trades: number;
+        };
+        /** GoldenSearchNeighborRow */
+        GoldenSearchNeighborRow: {
+            metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+            /** Reason */
+            reason: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "center" | "tested" | "failed" | "untested" | "invalid" | "outside_domain";
+            /** Value */
+            value: number;
+        };
+        /** GoldenSearchNeighborhood */
+        GoldenSearchNeighborhood: {
+            /** Knob */
+            knob: string;
+            /** One Sided */
+            one_sided: boolean;
+            /** Rows */
+            rows: components["schemas"]["GoldenSearchNeighborRow"][];
+        };
+        /** GoldenSearchPairCell */
+        GoldenSearchPairCell: {
+            metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+            /** Reason */
+            reason: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "center" | "tested" | "failed" | "untested" | "invalid" | "outside_domain";
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        };
+        /**
+         * GoldenSearchPairMap
+         * @description A predeclared pair's landscape: rows are ``y_knob``, columns ``x_knob``, cells row-major.
+         */
+        GoldenSearchPairMap: {
+            /** Cells */
+            cells: components["schemas"]["GoldenSearchPairCell"][];
+            /** X Knob */
+            x_knob: string;
+            /** X Values */
+            x_values: number[];
+            /** Y Knob */
+            y_knob: string;
+            /** Y Values */
+            y_values: number[];
+        };
+        /**
+         * GoldenSearchPreflight
+         * @description A plan's review: refusals are data in a 200, never a 400.
+         */
+        GoldenSearchPreflight: {
+            estimate: components["schemas"]["GoldenSearchEstimate"] | null;
+            exposure: components["schemas"]["GoldenSearchExposure"] | null;
+            /** Folds */
+            folds: components["schemas"]["GoldenSearchFold"][];
+            /** Refusals */
+            refusals: components["schemas"]["GoldenSearchProtocolRefusal"][];
+            run_up: components["schemas"]["GoldenSearchRunUp"] | null;
+        };
+        /** GoldenSearchProcedureCounts */
+        GoldenSearchProcedureCounts: {
+            /** Cached */
+            cached: number;
+            /** Evaluated */
+            evaluated: number;
+            /** Invalid */
+            invalid: number;
+        };
+        /** GoldenSearchProcedureView */
+        GoldenSearchProcedureView: {
+            counts: components["schemas"]["GoldenSearchProcedureCounts"];
+            /** Edge Hits */
+            edge_hits: string[];
+            /** Evaluations */
+            evaluations: number;
+            /** Incomplete */
+            incomplete: boolean;
+            /** Knob Summary */
+            knob_summary: components["schemas"]["GoldenSearchKnobSummary"][];
+            /** Passes Completed */
+            passes_completed: number;
+            /** Rounds */
+            rounds: components["schemas"]["GoldenSearchZoomRound"][];
+            /** Stop Explanation */
+            stop_explanation: string;
+            /**
+             * Stop Reason
+             * @enum {string}
+             */
+            stop_reason: "no_improvement" | "pass_limit" | "budget" | "quantization_limit" | "no_eligible";
+            window: components["schemas"]["GoldenSearchWindow"];
+            /** Winner */
+            winner: Record<string, never>;
+            /** Winner Hash */
+            winner_hash: string;
+            winner_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+        };
+        /** GoldenSearchProgress */
+        GoldenSearchProgress: {
+            /** Completed */
+            completed: number;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "search" | "validation" | "exam" | "qualification";
+            /** Total Max */
+            total_max: number;
+        };
+        /** GoldenSearchProtocol */
+        GoldenSearchProtocol: {
+            /** Budget Cap */
+            budget_cap: number;
+            /** Development End Ms */
+            development_end_ms: number;
+            /** Development Start Ms */
+            development_start_ms: number;
+            /** Exam Min Trades */
+            exam_min_trades: number;
+            execution: components["schemas"]["GoldenSearchExecution"];
+            /** Final End Ms */
+            final_end_ms: number;
+            /** Final Start Ms */
+            final_start_ms: number;
+            incumbent: components["schemas"]["GoldenSearchIncumbent"];
+            /** Knobs */
+            knobs: components["schemas"]["GoldenSearchKnobPlan"][];
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "zoom" | "grid";
+            /** Neighbor Audit */
+            neighbor_audit: boolean;
+            /** Pair Audits */
+            pair_audits: [
+                string,
+                string
+            ][];
+            policy: components["schemas"]["GoldenSearchSelectionPolicy"];
+            /** Recent Window */
+            recent_window: boolean;
+            /** Seed */
+            seed: Record<string, never>;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Stress */
+            stress: components["schemas"]["GoldenSearchStressScenario"][];
+            /** Symbol */
+            symbol: string;
+            /** Test Months */
+            test_months: number;
+            /** Training Months */
+            training_months: number;
+            zoom: components["schemas"]["GoldenSearchZoomSettings"];
+        };
+        /** GoldenSearchProtocolRefusal */
+        GoldenSearchProtocolRefusal: {
+            /** Code */
+            code: string;
+            /** Field */
+            field: string | null;
+            /** Message */
+            message: string;
+        };
+        /**
+         * GoldenSearchProtocolRequest
+         * @description The plan, field for field ``GoldenSearchProtocol``; ``seed`` omitted or null starts from the incumbent.
+         */
+        GoldenSearchProtocolRequest: {
+            /**
+             * Budgetcap
+             * @default 5000
+             */
+            budgetCap?: number;
+            /** Developmentendms */
+            developmentEndMs: number;
+            /** Developmentstartms */
+            developmentStartMs: number;
+            /**
+             * Exammintrades
+             * @default 30
+             */
+            examMinTrades?: number;
+            execution?: components["schemas"]["GoldenSearchExecutionRequest"];
+            /** Finalendms */
+            finalEndMs: number;
+            /** Finalstartms */
+            finalStartMs: number;
+            incumbent: components["schemas"]["GoldenSearchIncumbentRequest"];
+            /**
+             * Knobs
+             * @description Every declared knob, in search order.
+             */
+            knobs: components["schemas"]["GoldenSearchKnobPlanRequest"][];
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "zoom" | "grid";
+            /**
+             * Neighboraudit
+             * @default true
+             */
+            neighborAudit?: boolean;
+            /** Pairaudits */
+            pairAudits?: [
+                string,
+                string
+            ][];
+            policy?: components["schemas"]["GoldenSearchSelectionPolicyRequest"];
+            /**
+             * Recentwindow
+             * @default true
+             */
+            recentWindow?: boolean;
+            /** Seed */
+            seed?: Record<string, never> | null;
+            /** Strategykey */
+            strategyKey: string;
+            /** Stress */
+            stress?: components["schemas"]["GoldenSearchStressScenarioRequest"][];
+            /** Symbol */
+            symbol: string;
+            /**
+             * Testmonths
+             * @default 2
+             */
+            testMonths?: number;
+            /**
+             * Trainingmonths
+             * @default 6
+             */
+            trainingMonths?: number;
+            zoom?: components["schemas"]["GoldenSearchZoomSettingsRequest"];
+        };
+        /** GoldenSearchQualificationView */
+        GoldenSearchQualificationView: {
+            deploy: components["schemas"]["GoldenSearchDeployHandoff"] | null;
+            /** Failure Reason */
+            failure_reason: string | null;
+            /** Qualification Id */
+            qualification_id: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "ready" | "failed";
+        };
+        /** GoldenSearchReceiptSummary */
+        GoldenSearchReceiptSummary: {
+            code: components["schemas"]["GoldenSearchCodeIdentity"];
+            /** Data Start Ms */
+            data_start_ms: number;
+            /** Development End Ms */
+            development_end_ms: number;
+            /** Development Start Ms */
+            development_start_ms: number;
+            /** Final End Ms */
+            final_end_ms: number;
+            /** Final Start Ms */
+            final_start_ms: number;
+            /** Program Version */
+            program_version: string | null;
+            /** Run Up Sessions */
+            run_up_sessions: number;
+            /** Snapshot Digest */
+            snapshot_digest: string;
+        };
+        /** GoldenSearchRecommendation */
+        GoldenSearchRecommendation: {
+            /** Findings */
+            findings: components["schemas"]["GoldenSearchFinding"][];
+            /** Headline */
+            headline: string;
+        };
+        /** GoldenSearchRefusalBody */
+        GoldenSearchRefusalBody: {
+            detail: components["schemas"]["GoldenSearchRefusalDetail"];
+        };
+        /**
+         * GoldenSearchRefusalDetail
+         * @description Why a request was refused, under one shape for every refusal status (400, 404, 409, 503).
+         */
+        GoldenSearchRefusalDetail: {
+            /** Code */
+            code: string;
+            /** Field */
+            field: string | null;
+            /** Message */
+            message: string;
+            /**
+             * Refusals
+             * @description Every plan refusal when a lock is refused for more than one reason.
+             */
+            refusals: components["schemas"]["GoldenSearchProtocolRefusal"][];
+            /**
+             * Study
+             * @description On a 409 about a study: its GoldenSearchStudyDetail as it now stands.
+             */
+            study: Record<string, never> | null;
+        };
+        /** GoldenSearchResults */
+        GoldenSearchResults: {
+            evidence: components["schemas"]["GoldenSearchEvidenceView"] | null;
+            exam: components["schemas"]["GoldenSearchExamView"] | null;
+            qualification: components["schemas"]["GoldenSearchQualificationView"] | null;
+            recent: components["schemas"]["GoldenSearchProcedureView"] | null;
+            search: components["schemas"]["GoldenSearchSearchView"] | null;
+            validation: components["schemas"]["GoldenSearchValidationView"] | null;
+        };
+        /** GoldenSearchRunDetail */
+        GoldenSearchRunDetail: {
+            /** Cumulative Return */
+            cumulative_return: components["schemas"]["GoldenSearchCumulativeReturnPoint"][];
+            /** Daily Equity */
+            daily_equity: components["schemas"]["GoldenSearchEquityPoint"][];
+            /** Drawdown */
+            drawdown: components["schemas"]["GoldenSearchDrawdownPoint"][];
+            metrics: components["schemas"]["GoldenSearchMetrics"];
+            /** Monthly */
+            monthly: components["schemas"]["GoldenSearchMonthlyResult"][];
+            /** Trades */
+            trades: components["schemas"]["GoldenSearchTrade"][];
+            window: components["schemas"]["GoldenSearchWindow"];
+        };
+        /** GoldenSearchRunUp */
+        GoldenSearchRunUp: {
+            /** Data Start Ms */
+            data_start_ms: number;
+            /** Required Samples */
+            required_samples: number;
+            /** Run Up Sessions */
+            run_up_sessions: number;
+        };
+        /** GoldenSearchScope */
+        GoldenSearchScope: {
+            /** Capital */
+            capital: number;
+            /** Costs Sentence */
+            costs_sentence: string;
+            /** Data Source */
+            data_source: string;
+            /** Development End Ms */
+            development_end_ms: number;
+            /** Development Label Start Ms */
+            development_label_start_ms: number;
+            /** Final End Ms */
+            final_end_ms: number;
+            /** Final Start Ms */
+            final_start_ms: number;
+            /**
+             * Final State
+             * @enum {string}
+             */
+            final_state: "locked" | "opened_once";
+        };
+        /**
+         * GoldenSearchSearchView
+         * @description The all-period procedure, with the pair landscapes centered on its winner.
+         */
+        GoldenSearchSearchView: {
+            counts: components["schemas"]["GoldenSearchProcedureCounts"];
+            /** Edge Hits */
+            edge_hits: string[];
+            /** Evaluations */
+            evaluations: number;
+            /** Incomplete */
+            incomplete: boolean;
+            /** Knob Summary */
+            knob_summary: components["schemas"]["GoldenSearchKnobSummary"][];
+            /** Pair Maps */
+            pair_maps: components["schemas"]["GoldenSearchPairMap"][];
+            /** Pair Maps Incomplete */
+            pair_maps_incomplete: boolean;
+            /** Passes Completed */
+            passes_completed: number;
+            /** Rounds */
+            rounds: components["schemas"]["GoldenSearchZoomRound"][];
+            /** Stop Explanation */
+            stop_explanation: string;
+            /**
+             * Stop Reason
+             * @enum {string}
+             */
+            stop_reason: "no_improvement" | "pass_limit" | "budget" | "quantization_limit" | "no_eligible";
+            window: components["schemas"]["GoldenSearchWindow"];
+            /** Winner */
+            winner: Record<string, never>;
+            /** Winner Hash */
+            winner_hash: string;
+            winner_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+        };
+        /** GoldenSearchSelectionPolicy */
+        GoldenSearchSelectionPolicy: {
+            /** Max Drawdown Ceiling */
+            max_drawdown_ceiling: number;
+            /** Min Trades */
+            min_trades: number;
+            /**
+             * Objective
+             * @enum {string}
+             */
+            objective: "sharpe_ratio" | "total_return_pct" | "net_profit";
+            /** Require Positive Net */
+            require_positive_net: boolean;
+        };
+        /** GoldenSearchSelectionPolicyRequest */
+        GoldenSearchSelectionPolicyRequest: {
+            /**
+             * Maxdrawdownceiling
+             * @description A fraction of peak equity, in (0, 1].
+             * @default 0.2
+             */
+            maxDrawdownCeiling?: number;
+            /**
+             * Mintrades
+             * @default 30
+             */
+            minTrades?: number;
+            /**
+             * Objective
+             * @default sharpe_ratio
+             * @enum {string}
+             */
+            objective?: "sharpe_ratio" | "total_return_pct" | "net_profit";
+            /**
+             * Requirepositivenet
+             * @default true
+             */
+            requirePositiveNet?: boolean;
+        };
+        /** GoldenSearchStageEstimate */
+        GoldenSearchStageEstimate: {
+            /** Label */
+            label: string;
+            /** Max Evaluations */
+            max_evaluations: number;
+            /** Stage */
+            stage: string;
+        };
+        /** GoldenSearchStressResult */
+        GoldenSearchStressResult: {
+            /** Label */
+            label: string;
+            metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+            /** Scenario */
+            scenario: string;
+        };
+        /** GoldenSearchStressScenario */
+        GoldenSearchStressScenario: {
+            /** Commission Add */
+            commission_add: number;
+            /** Fill Mode */
+            fill_mode: ("signal_bar_close" | "next_bar_open" | "decision_minute_open") | null;
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Slippage Add */
+            slippage_add: number;
+        };
+        /** GoldenSearchStressScenarioRequest */
+        GoldenSearchStressScenarioRequest: {
+            /**
+             * Commissionadd
+             * @default 0
+             */
+            commissionAdd?: number;
+            /** Fillmode */
+            fillMode?: ("signal_bar_close" | "next_bar_open" | "decision_minute_open") | null;
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /**
+             * Slippageadd
+             * @default 0
+             */
+            slippageAdd?: number;
+        };
+        /** GoldenSearchStudyDetail */
+        GoldenSearchStudyDetail: {
+            /** Action Refusals */
+            action_refusals: {
+                [key: string]: string;
+            };
+            /** Budget Cap */
+            budget_cap: number;
+            /** Cache Hits */
+            cache_hits: number;
+            /** Candidate Key */
+            candidate_key: ("incumbent" | "all_period" | "recent") | null;
+            /** Consumed Evaluations */
+            consumed_evaluations: number;
+            /** Created At Ms */
+            created_at_ms: number;
+            decision: components["schemas"]["GoldenSearchDecision"] | null;
+            dispatch: components["schemas"]["GoldenSearchDispatch"] | null;
+            /** Exam Locked */
+            exam_locked: boolean;
+            /** Exam Outcome */
+            exam_outcome: ("meets_rules" | "does_not_meet_rules" | "not_enough_evidence" | "could_not_evaluate") | null;
+            /** Exposure Claim */
+            exposure_claim: ("confirmatory" | "exploratory") | null;
+            /** @description What opening the final test would record, while a candidate is chosen; null otherwise. */
+            exposure_preview: components["schemas"]["GoldenSearchExposure"] | null;
+            /** Failure Reason */
+            failure_reason: string | null;
+            guidance: components["schemas"]["GoldenSearchGuidance"];
+            /** Hidden */
+            hidden: boolean;
+            /** Id */
+            id: string;
+            /** Incomplete */
+            incomplete: boolean;
+            /** Invalid Points */
+            invalid_points: number;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "zoom" | "grid";
+            /** Parent Study Id */
+            parent_study_id: string | null;
+            /** Permitted Actions */
+            permitted_actions: ("continue" | "select_candidate" | "open_exam" | "approve" | "retain" | "close" | "cancel" | "finish" | "revise")[];
+            /**
+             * Presented Status
+             * @enum {string}
+             */
+            presented_status: "idle" | "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+            progress: components["schemas"]["GoldenSearchProgress"] | null;
+            protocol: components["schemas"]["GoldenSearchProtocol"];
+            /** Protocol Hash */
+            protocol_hash: string;
+            /** Qualification Id */
+            qualification_id: string | null;
+            receipt: components["schemas"]["GoldenSearchReceiptSummary"];
+            results: components["schemas"]["GoldenSearchResults"];
+            /** Revision */
+            revision: number;
+            scope: components["schemas"]["GoldenSearchScope"];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "locked" | "search_running" | "awaiting_validation" | "validation_running" | "awaiting_candidate" | "candidate_locked" | "exam_running" | "awaiting_review" | "qualification_pending" | "approved" | "qualification_failed" | "retained" | "closed";
+            /** Strategy Key */
+            strategy_key: string;
+            /** Symbol */
+            symbol: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
+        /** GoldenSearchStudySummary */
+        GoldenSearchStudySummary: {
+            /** Budget Cap */
+            budget_cap: number;
+            /** Cache Hits */
+            cache_hits: number;
+            /** Consumed Evaluations */
+            consumed_evaluations: number;
+            /** Created At Ms */
+            created_at_ms: number;
+            /** Exam Outcome */
+            exam_outcome: ("meets_rules" | "does_not_meet_rules" | "not_enough_evidence" | "could_not_evaluate") | null;
+            /** Exposure Claim */
+            exposure_claim: ("confirmatory" | "exploratory") | null;
+            /** Failure Reason */
+            failure_reason: string | null;
+            /** Hidden */
+            hidden: boolean;
+            /** Id */
+            id: string;
+            /** Incomplete */
+            incomplete: boolean;
+            /** Invalid Points */
+            invalid_points: number;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "zoom" | "grid";
+            /** Parent Study Id */
+            parent_study_id: string | null;
+            /**
+             * Presented Status
+             * @enum {string}
+             */
+            presented_status: "idle" | "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
+            /** Protocol Hash */
+            protocol_hash: string;
+            /** Qualification Id */
+            qualification_id: string | null;
+            /** Revision */
+            revision: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "locked" | "search_running" | "awaiting_validation" | "validation_running" | "awaiting_candidate" | "candidate_locked" | "exam_running" | "awaiting_review" | "qualification_pending" | "approved" | "qualification_failed" | "retained" | "closed";
+            /** Strategy Key */
+            strategy_key: string;
+            /** Symbol */
+            symbol: string;
+            /** Updated At Ms */
+            updated_at_ms: number;
+        };
+        /** GoldenSearchSummaryPills */
+        GoldenSearchSummaryPills: {
+            /** Judged */
+            judged: string;
+            /** Median Retention */
+            median_retention: number | null;
+            /** Test Trades */
+            test_trades: number;
+        };
+        /** GoldenSearchTrade */
+        GoldenSearchTrade: {
+            /** Entry Ms */
+            entry_ms: number;
+            /** Entry Price */
+            entry_price: number;
+            /** Exit Ms */
+            exit_ms: number;
+            /** Exit Price */
+            exit_price: number;
+            /** Exit Reason */
+            exit_reason: string | null;
+            /** Indicators */
+            indicators: {
+                [key: string]: number | null;
+            };
+            /**
+             * Pnl
+             * @description Price change times filled quantity, before fees.
+             */
+            pnl: number;
+            /** Pnl Pct */
+            pnl_pct: number;
+            /** Quantity */
+            quantity: number;
+        };
+        /** GoldenSearchValidationFold */
+        GoldenSearchValidationFold: {
+            /** Failure Code */
+            failure_code: string | null;
+            /** Failure Reason */
+            failure_reason: string | null;
+            /** Fold Index */
+            fold_index: number;
+            incumbent_test_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "completed" | "failed";
+            /** Test End Ms */
+            test_end_ms: number;
+            test_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+            /** Test Start Ms */
+            test_start_ms: number;
+            /** Train End Ms */
+            train_end_ms: number;
+            train_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+            /** Train Start Ms */
+            train_start_ms: number;
+            /** Winner */
+            winner: Record<string, never> | null;
+            /** Winner Hash */
+            winner_hash: string | null;
+        };
+        /** GoldenSearchValidationView */
+        GoldenSearchValidationView: {
+            /** Explanation */
+            explanation: string;
+            /** Folds */
+            folds: components["schemas"]["GoldenSearchValidationFold"][];
+            /** Incomplete */
+            incomplete: boolean;
+            /** Incumbent Linked */
+            incumbent_linked: components["schemas"]["GoldenSearchLinkedReturn"][];
+            /** Linked */
+            linked: components["schemas"]["GoldenSearchLinkedReturn"][];
+            summary_pills: components["schemas"]["GoldenSearchSummaryPills"];
+            verdict: components["schemas"]["GoldenSearchVerdict"] | null;
+        };
+        /** GoldenSearchVerdict */
+        GoldenSearchVerdict: {
+            /** Based On */
+            based_on: string;
+            /** Defined Folds */
+            defined_folds: number;
+            /**
+             * Label
+             * @enum {string}
+             */
+            label: "still worked" | "got worse" | "stopped working" | "too few trades" | "could not be judged";
+            /** Median Test Sharpe */
+            median_test_sharpe: number | null;
+            /** Oos Trade Count */
+            oos_trade_count: number;
+            /** Reason */
+            reason: string;
+            /** Retention Threshold */
+            retention_threshold: number;
+            /** Study Retention */
+            study_retention: number | null;
+            /** Successful Folds */
+            successful_folds: number;
+        };
+        /** GoldenSearchWindow */
+        GoldenSearchWindow: {
+            /** End Ms */
+            end_ms: number;
+            /** Start Ms */
+            start_ms: number;
+        };
+        /** GoldenSearchZoomRound */
+        GoldenSearchZoomRound: {
+            /** Chosen */
+            chosen: number;
+            /** Current Before */
+            current_before: number;
+            /** High */
+            high: number;
+            /**
+             * Invalid
+             * @description Constraint-skipped values, never evaluated: [value, reason].
+             */
+            invalid: [
+                number,
+                string
+            ][];
+            /** Knob */
+            knob: string;
+            /** Low */
+            low: number;
+            /** Moved */
+            moved: boolean;
+            /** Objectives */
+            objectives: [
+                number,
+                number | null
+            ][];
+            /** Pass Index */
+            pass_index: number;
+            /** Quantization Limit */
+            quantization_limit: boolean;
+            /**
+             * Results
+             * @description [value, ineligibility code or null when eligible].
+             */
+            results: [
+                number,
+                string | null
+            ][];
+            /** Round Index */
+            round_index: number;
+            /** Values */
+            values: number[];
+        };
+        /** GoldenSearchZoomSettings */
+        GoldenSearchZoomSettings: {
+            /** Passes */
+            passes: number;
+            /** Points */
+            points: number;
+            /** Refinements */
+            refinements: number;
+        };
+        /** GoldenSearchZoomSettingsRequest */
+        GoldenSearchZoomSettingsRequest: {
+            /**
+             * Passes
+             * @default 2
+             */
+            passes?: number;
+            /**
+             * Points
+             * @default 5
+             */
+            points?: number;
+            /**
+             * Refinements
+             * @default 2
+             */
+            refinements?: number;
         };
         /** GoldenValidationResponse */
         GoldenValidationResponse: {
@@ -16556,11 +18548,13 @@ export interface components {
         };
         /**
          * QualifiedDeployConfiguration
-         * @description An exact corpus-covered preset, authored from the program's registry contract.
+         * @description An exact corpus-covered preset: the stock's ready Golden Search default, else the registry's validated point.
          */
         QualifiedDeployConfiguration: {
             /** Explanation */
             explanation: string;
+            /** Golden Qualification Id */
+            golden_qualification_id?: string | null;
             /** Parameters */
             parameters: {
                 [key: string]: components["schemas"]["JsonValue"];
@@ -17279,6 +19273,11 @@ export interface components {
              */
             kind: "remove";
         };
+        /** ReproveQualificationRequest */
+        ReproveQualificationRequest: {
+            /** Idempotencykey */
+            idempotencyKey: string;
+        };
         /** Resolution */
         Resolution: {
             /** Period Minutes */
@@ -17466,6 +19465,13 @@ export interface components {
             revision: number;
             /** Schema Version */
             schema_version: number;
+        };
+        /** RevokeQualificationRequest */
+        RevokeQualificationRequest: {
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Reason */
+            reason: string;
         };
         /**
          * RollingSplitPolicySpec
@@ -28897,6 +30903,39 @@ export interface operations {
             };
         };
     };
+    start_golden_search_job_api_jobs_internal_golden_search_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoldenSearchJobRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchJobAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     start_grid_search_job_api_jobs_internal_grid_search_post: {
         parameters: {
             query?: never;
@@ -29423,6 +31462,851 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_golden_qualifications_api_research_golden_qualifications_get: {
+        parameters: {
+            query?: {
+                program_key?: string | null;
+                symbol?: string | null;
+                limit?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenQualificationSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_golden_defaults_api_research_golden_qualifications_defaults_get: {
+        parameters: {
+            query?: {
+                program_key?: string | null;
+                symbol?: string | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenDefaultView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_golden_qualification_api_research_golden_qualifications__qualification_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                qualification_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenQualificationDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_golden_qualification_deploy_offer_api_research_golden_qualifications__qualification_id__deploy_offer_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                qualification_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenQualificationDeployOffer"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reprove_golden_qualification_api_research_golden_qualifications__qualification_id__reprove_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                qualification_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReproveQualificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenQualificationDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_golden_qualification_api_research_golden_qualifications__qualification_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                qualification_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevokeQualificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenQualificationDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_capabilities_api_research_golden_search_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchCapability"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_defaults_api_research_golden_search_defaults_get: {
+        parameters: {
+            query: {
+                strategy_key: string;
+                symbol: string;
+                final_months?: number;
+                training_months?: number;
+                test_months?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchDefaults"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+        };
+    };
+    preflight_plan_api_research_golden_search_preflight_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoldenSearchProtocolRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchPreflight"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+        };
+    };
+    list_studies_api_research_golden_search_studies_get: {
+        parameters: {
+            query?: {
+                strategy_key?: string | null;
+                symbol?: string | null;
+                include_hidden?: boolean;
+                limit?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchStudySummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lock_study_api_research_golden_search_studies_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoldenSearchCreateStudyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchStudyDetail"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+        };
+    };
+    get_study_api_research_golden_search_studies__study_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchStudyDetail"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+        };
+    };
+    hide_study_api_research_golden_search_studies__study_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+        };
+    };
+    get_candidate_api_research_golden_search_studies__study_id__candidates__candidate_key__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                candidate_key: "incumbent" | "all_period" | "recent";
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchCandidateDetail"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+        };
+    };
+    run_command_api_research_golden_search_studies__study_id__commands_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoldenSearchCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchStudyDetail"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+        };
+    };
+    list_evaluations_api_research_golden_search_studies__study_id__evaluations_get: {
+        parameters: {
+            query?: {
+                /** @description The step that asked for the evaluation, e.g. search or validation. */
+                stage?: string | null;
+                fold_index?: number | null;
+                page?: number;
+                page_size?: number;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchEvaluationPage"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
                 };
             };
         };

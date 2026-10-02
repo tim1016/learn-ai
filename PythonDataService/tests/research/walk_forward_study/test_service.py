@@ -172,9 +172,14 @@ async def test_a_study_sweeps_each_fold_selects_per_fold_winners_and_reaches_a_v
     assert windows[(1, "test")] == (row.folds[1].test_start_ms, row.folds[1].test_end_ms)
     assert any("winner" in line for line in logs)
 
-    # Deleting the study takes its sweeps with it.
+    # Deleting the study takes its sweeps with it, but not the record that it read its window (#2696).
+    from app.research.golden_search.repository import exposure_overlaps
+
+    window = {"symbol": row.symbol.upper(), "start_ms": row.folds[0].train_start_ms, "end_ms": row.folds[1].test_end_ms}
+    used = (await exposure_overlaps(conn, **window)).outside
     assert await repo.delete_study(conn, study_id) is True
     assert await sweep_repo.list_searches(conn, owner_kind="walk_forward", owner_id=study_id) == []
+    assert (await exposure_overlaps(conn, **window)).outside == used
 
 
 async def test_a_failed_winner_test_run_fails_the_fold_and_the_verdict_cannot_be_judged(conn, lake: Path) -> None:

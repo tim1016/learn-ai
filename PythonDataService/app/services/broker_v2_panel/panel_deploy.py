@@ -27,7 +27,9 @@ from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.sqlite.idempotency import DurableConflictError
 from app.broker.alpaca.clerk.sqlite.runtime import StrategyRegistrationConflictError
 from app.broker.alpaca.clerk.sqlite.uncertainty import AdmissionBlockedError
+from app.data_lake.catalog_client import CatalogUnavailableError
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.research.golden_search import qualification_service
 from app.research.golden_validation import service as golden_validation_service
 from app.research.persistence.db import with_connection
 from app.schemas.account_authority import world_admits_account_mode
@@ -71,6 +73,7 @@ from app.services.broker_v2_panel.panel_scope import (
     validate_account_scope,
 )
 from app.services.broker_v2_panel.paper_deploy_service import (
+    GoldenDefaults,
     ResolvedDeployParams,
     broker_mode_for,
     build_alpaca_paper_deploy_receipt,
@@ -89,6 +92,71 @@ from app.utils.timestamps import now_ms_utc
 logger = logging.getLogger(__name__)
 
 
+#: A research-store read that failed, on either Golden read Deploy makes: the
+#: form then offers the registry's validated point, as it did before either existed.
+_RESEARCH_READ_ERRORS: tuple[type[BaseException], ...] = (
+    asyncpg.PostgresError,
+    asyncpg.InterfaceError,
+    CatalogUnavailableError,
+    KeyError,
+    OSError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
+
+async def _ready_golden_defaults() -> GoldenDefaults:
+    """Every (program, stock) Golden Search default that is READY for the running build (#2696).
+
+    Unreadable research records degrade to no defaults, so Deploy offers the
+    registry's validated point exactly as before; the failure is logged.
+    """
+    try:
+        return await qualification_service.ready_defaults()
+    except _RESEARCH_READ_ERRORS as exc:
+        logger.warning(
+            "Golden Search defaults unavailable; Deploy offers the registry's validated point",
+            extra={"action": "golden_search_defaults_unavailable", "error": type(exc).__name__},
+        )
+        return {}
+
+
+def _prefer_default_scopes(
+    scopes_by_strategy: dict[str, tuple[GoldenValidationScope, ...]],
+    golden_defaults: GoldenDefaults,
+) -> dict[str, tuple[GoldenValidationScope, ...]]:
+    """Let each stock's READY Golden Search default lead that stock's Golden scopes (#2696).
+
+    Scopes arrive newest accepted review first, and the catalog offers the
+    first representable one. The case a READY default qualification cites
+    (its Golden Validation run) moves to the front of its own stock's
+    scopes; every other order is kept, so a stock without a ready default
+    still offers its newest accepted case.
+    """
+    preferred = {
+        (strategy_key, symbol): judged.qualification.golden_run_id
+        for (strategy_key, symbol), judged in golden_defaults.items()
+        if judged.status == "ready"
+    }
+    ordered_by_strategy: dict[str, tuple[GoldenValidationScope, ...]] = {}
+    for strategy_key, scopes in scopes_by_strategy.items():
+        ordered = list(scopes)
+        for (default_strategy, symbol), golden_run_id in preferred.items():
+            if default_strategy != strategy_key:
+                continue
+            index = next(
+                (i for i, scope in enumerate(ordered) if scope.golden_run_id == golden_run_id and scope.symbol == symbol),
+                None,
+            )
+            if index is None:
+                continue
+            first = next(i for i, scope in enumerate(ordered) if scope.symbol == symbol)
+            ordered.insert(first, ordered.pop(index))
+        ordered_by_strategy[strategy_key] = tuple(ordered)
+    return ordered_by_strategy
+
+
 async def _current_golden_validation_scopes(
     symbol: str | None,
 ) -> dict[str, tuple[GoldenValidationScope, ...]]:
@@ -105,15 +173,7 @@ async def _current_golden_validation_scopes(
             golden_validation_service.list_latest_accepted_dossiers,
             symbol=None,
         )
-    except (
-        asyncpg.PostgresError,
-        golden_validation_service.GoldenValidationError,
-        KeyError,
-        OSError,
-        TimeoutError,
-        TypeError,
-        ValueError,
-    ) as exc:
+    except (*_RESEARCH_READ_ERRORS, golden_validation_service.GoldenValidationError) as exc:
         logger.warning("Golden Validation catalog projection unavailable: %s", type(exc).__name__)
         return {}
 
@@ -144,7 +204,11 @@ async def _current_golden_validation_scopes(
         ):
             continue
         current.setdefault(strategy_name, []).append(
-            GoldenValidationScope(symbol=case_symbol.upper(), parameters=case_parameters)
+            GoldenValidationScope(
+                symbol=case_symbol.upper(),
+                parameters=case_parameters,
+                golden_run_id=dossier.golden_run.id,
+            )
         )
     return {strategy_key: tuple(scopes) for strategy_key, scopes in current.items()}
 
@@ -197,6 +261,7 @@ async def get_alpaca_paper_deploy_view(
             next_action="Restore the validation manifest and evidence artifacts, then refresh.",
         ) from exc
     context = get_active_alpaca_binding()
+    golden_defaults = await _ready_golden_defaults()
     return build_alpaca_paper_deploy_view(
         account,
         clerk,
@@ -204,7 +269,10 @@ async def get_alpaca_paper_deploy_view(
         default_exit_terms=exit_terms or (None if context is None else context.default_exit_terms),
         symbol=symbol,
         custody_world=custody_world,
-        golden_validation_scopes=await _current_golden_validation_scopes(symbol),
+        golden_validation_scopes=_prefer_default_scopes(
+            await _current_golden_validation_scopes(symbol), golden_defaults
+        ),
+        golden_defaults=golden_defaults,
     )
 
 

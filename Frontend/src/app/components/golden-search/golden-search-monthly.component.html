@@ -1,0 +1,22 @@
+<h3>Performance by month</h3>
+<p class="muted">{{ candidateLabel() }} · development months</p>
+@if (rows().length > 0) {
+  <table>
+    <caption class="sr-only">Net result by month for {{ candidateLabel() }}</caption>
+    <thead><tr><th scope="col">Month from (ET)</th><th scope="col"><span class="sr-only">Bar</span></th><th scope="col" class="num">Net return</th><th scope="col" class="num">Net P&amp;L</th><th scope="col" class="num">Trades</th></tr></thead>
+    <tbody>
+      @for (row of rows(); track row.month_start_ms) {
+        <tr>
+          <th scope="row"><app-timestamp-display [value]="row.month_start_ms" mode="date-et" /></th>
+          <td class="bar-cell" aria-hidden="true"><span class="track"><span class="bar" [class.bar--loss]="row.loss" [style.width.%]="row.barPercent"></span></span></td>
+          <td class="num">{{ row.returnText }}</td>
+          <td class="num">{{ row.profitText }}</td>
+          <td class="num">{{ row.trades }}</td>
+        </tr>
+      }
+    </tbody>
+  </table>
+} @else {
+  <p class="muted">No month closed inside this run.</p>
+}
+<p class="caption">Net monthly returns. This describes changing performance; no alpha model or causal decay claim is implied.</p>

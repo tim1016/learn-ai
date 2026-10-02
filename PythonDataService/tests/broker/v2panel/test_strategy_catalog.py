@@ -144,6 +144,7 @@ async def test_panel_golden_catalog_uses_uncapped_accepted_lookup(
     registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
     assert registration.signal_program_contract is not None
     old_but_current = SimpleNamespace(
+        golden_run=SimpleNamespace(id=11),
         latest_review=SimpleNamespace(
             decision="accept",
             authorized_program_version=None,
@@ -179,6 +180,7 @@ async def test_panel_golden_catalog_keeps_other_symbol_scopes_for_fail_closed_se
     registration = _STRATEGY_REGISTRY["ema_crossover_signal"]
     assert registration.signal_program_contract is not None
     tsla_dossier = SimpleNamespace(
+        golden_run=SimpleNamespace(id=12),
         latest_review=SimpleNamespace(
             decision="accept",
             authorized_program_version=None,

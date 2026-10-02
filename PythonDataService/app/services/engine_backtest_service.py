@@ -12,6 +12,8 @@ request validation, response shape and HTTP error translation.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import time
 from collections.abc import Callable, Mapping
@@ -25,6 +27,7 @@ import pandas as pd
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ValidationError
 
+from app.data_lake.path_policy import lake_root_for
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.data.trade_bar import TradeBar
@@ -403,6 +406,11 @@ def _pin_compatibility_fixture(
     return {item["path"]: item["sha256"] for item in receipt["files"]}
 
 
+def _snapshot_availability_hash(manifest: Mapping[str, str]) -> str:
+    """Fingerprint of a receipted snapshot: every artifact path it binds, with its digest."""
+    return hashlib.sha256(json.dumps(sorted(manifest.items()), separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
 def _materialize_missing_bars(
     *,
     request: EngineBacktestRequest,
@@ -589,6 +597,14 @@ def _execute_engine_backtest_core(
     # the lake is off, or when nothing was materialized — the run then has
     # nothing to claim about which bytes it read.
     lake_manifest: str | None = None
+    # A caller that binds the run to a receipted lake snapshot read exactly its
+    # admitted bytes, one artifact per expected session: its own data contract,
+    # fingerprinted by the snapshot rather than the lake's availability hash (#2696).
+    snapshot_manifest = (
+        _snapshot_availability_hash(data_manifest)
+        if data_manifest is not None and all(lake_root_for(root / "equity") is not None for root in data_roots)
+        else None
+    )
 
     if request.auto_fetch:
         symbol = getattr(validated_params, "symbol", None)
@@ -702,6 +718,7 @@ def _execute_engine_backtest_core(
         request=request,
         strategy=strategy,
         lake_manifest=lake_manifest,
+        snapshot_manifest=snapshot_manifest,
         on_phase=on_phase,
         on_log=on_log,
     )
@@ -920,6 +937,7 @@ def _aggregate_backtest_response(
     lake_manifest: str | None,
     on_phase: PhaseCallback,
     on_log: LogCallback,
+    snapshot_manifest: str | None = None,
 ) -> EngineBacktestResponse:
     """Everything between the engine returning and the row being written.
 
@@ -1048,12 +1066,13 @@ def _aggregate_backtest_response(
         evidence_provenance=RunEvidenceProvenance(
             data_contract=(
                 "lake_complete_sessions/v1" if lake_manifest else
+                "lake_receipted_snapshot/v1" if snapshot_manifest else
                 "fixture_identity/v1" if request.data_policy and request.data_policy.provider_kind == "fixture" else
                 "unrecorded"
             ),
             statistics_basis="marked_equity_curve/v1",
             daily_return_convention="initial_capital_first_session/v1",
-            data_availability_hash=lake_manifest,
+            data_availability_hash=lake_manifest or snapshot_manifest,
             closing_bar_convention=result.closing_bar_convention,
             closing_bar_skips=tuple(
                 ClosingBarSkipRecord(

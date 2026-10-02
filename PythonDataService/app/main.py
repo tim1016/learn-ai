@@ -59,6 +59,8 @@ from app.routers import (
     engine,
     fleet_compatibility_reads,
     golden_fixtures,
+    golden_qualifications,
+    golden_search,
     golden_validation,
     grid_search,
     indicator_reliability,
@@ -1030,6 +1032,15 @@ async def _service_lifespan(
     # Start the shared fleet snapshot before serving its REST/SSE readers.
     # Per-bot state is owned by the Alpaca Broker V2 projection runtime above.
 
+    # A clerk reads the Golden Search qualifications but cannot apply DDL, so
+    # the data plane applies the research schema as it starts (#2696). In the
+    # background: it logs its outcome and never holds startup on Postgres.
+    research_schema_task: asyncio.Task[None] | None = None
+    if _ROLE_RUNS_DATA_PLANE_CORE:
+        from app.research.persistence.db import ensure_schema_at_startup
+
+        research_schema_task = asyncio.create_task(ensure_schema_at_startup(), name="research-schema-ensure")
+
     # Last, so it measures the loop that is about to serve requests: one timer
     # wakeup a second, reporting any that arrives late. A stall on this loop
     # used to reach an operator only as a healthcheck streak, an expiring
@@ -1054,6 +1065,10 @@ async def _service_lifespan(
         loop_lag_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await loop_lag_task
+        if research_schema_task is not None:
+            research_schema_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await research_schema_task
         # A reconnect still in flight ends before custody comes down; an
         # attempt it interrupts closes whatever it opened (#2582).
         if alpaca_reconnect_task is not None:
@@ -1224,12 +1239,28 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
         tags=["research-golden-validation"],
         dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
     )
+    # Golden Search qualified versions (#2696): list, Deploy offer, revoke, re-proof.
+    app.include_router(
+        golden_qualifications.router,
+        prefix="/api/research/golden-qualifications",
+        tags=["research-golden-qualifications"],
+        dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+    )
     # Parameter Grid Search (PRD #1926): the research surface plus its jobs-boundary entry.
     app.include_router(grid_search.router, prefix="/api/research/grid-search", tags=["research-grid-search"])
     app.include_router(grid_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
     # Walk-Forward Study (PRD #1925): folds of Grid Search sweeps plus the frozen verdict.
     app.include_router(walk_forward_study.router, prefix="/api/research/walk-forward-studies", tags=["research-walk-forward-study"])
     app.include_router(walk_forward_study.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
+    # Golden Search (#2696): guarded study commands authorize each stage; the
+    # jobs entry runs only a stage whose token a command issued.
+    app.include_router(
+        golden_search.router,
+        prefix="/api/research/golden-search",
+        tags=["research-golden-search"],
+        dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+    )
+    app.include_router(golden_search.jobs_router, prefix="/api/jobs-internal", tags=["jobs-internal"])
     app.include_router(indicator_reliability.router, prefix="/api/research", tags=["research"])
     app.include_router(return_distribution.router, prefix="/api/research", tags=["research"])
     # Research-pipeline walk-forward (Phase C). Registered BEFORE

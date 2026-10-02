@@ -255,12 +255,14 @@ class AlpacaPaperDeployEligibility(BaseModel):
 
 
 class QualifiedDeployConfiguration(BaseModel):
-    """An exact corpus-covered preset, authored from the program's registry contract."""
+    """An exact corpus-covered preset: the stock's ready Golden Search default, else the registry's validated point."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     symbol: str
     parameters: dict[str, JsonValue]
     explanation: str
+    # The Golden Search qualified version this preset is (#2696); unset for the registry's validated point.
+    golden_qualification_id: str | None = None
 
 
 class AlpacaPaperDeployStrategy(BaseModel):

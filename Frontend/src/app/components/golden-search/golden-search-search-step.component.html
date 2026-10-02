@@ -1,0 +1,52 @@
+@let s = study();
+<div class="step">
+  @if (s.results.search; as search) {
+    <app-golden-search-procedure
+      headingId="gs-search-all-period"
+      heading="All-period search"
+      description="Fit on the whole development interval from the frozen starting point. In-sample: these numbers chose the settings."
+      [procedure]="search"
+      [method]="s.method"
+      [capability]="capability()"
+    />
+
+    @if (search.pair_maps_incomplete) {
+      <p class="note" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+        <span>The pair audit stopped at its evaluation budget, so some cells are missing and are shown as untested.</span></p>
+    }
+    @if (pairMaps().length > 0) {
+      <div class="columns">
+        <section class="panel" aria-label="Pair landscape">
+          <app-golden-search-pair-map [maps]="pairMaps()" [capability]="capability()" [center]="search.winner" centerLabel="the all-period result" headingId="gs-search-map" />
+        </section>
+        <aside class="aside" aria-labelledby="gs-pair-aside-title">
+          <h3 id="gs-pair-aside-title">{{ s.method === 'zoom' ? 'Use Grid to challenge Zoom' : 'Read the pair landscape' }}</h3>
+          <p>{{ s.method === 'zoom' ? 'Two knobs can change each other’s effect. A small pair grid checks combinations the one-knob path did not visit.' : 'Each map holds every other setting at the all-period result: a slice of the search space, not all of it.' }}</p>
+          <dl class="rules">
+            @for (audit of audits(); track audit.id) { <div><dt>Pair audit · {{ audit.title }}</dt><dd>{{ audit.valid }} valid / {{ audit.invalid }} invalid</dd></div> }
+            <div><dt>Other settings</dt><dd>Held fixed</dd></div>
+            <div><dt>Global optimum</dt><dd>Not established</dd></div>
+          </dl>
+        </aside>
+      </div>
+    }
+
+    @if (s.protocol.recent_window) {
+      @if (s.results.recent; as recent) {
+        <app-golden-search-procedure headingId="gs-search-recent" heading="Recent window" [description]="recentDescription()" [procedure]="recent" [method]="s.method" [capability]="capability()" />
+      } @else {
+        <p class="muted">The recent-window procedure has no result yet.</p>
+      }
+    }
+  } @else {
+    <p class="pending" role="status">{{ pending() }}</p>
+  }
+
+  <section aria-label="Engine runs for this study">
+    <dl class="counts">
+      <div><dt>Engine runs used</dt><dd>{{ s.consumed_evaluations | number }} of {{ s.budget_cap | number }}</dd></div>
+      <div><dt>Answered from cache</dt><dd>{{ s.cache_hits | number }}</dd></div>
+      <div><dt>Skipped as invalid</dt><dd>{{ s.invalid_points | number }}</dd></div>
+    </dl>
+  </section>
+</div>

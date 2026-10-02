@@ -180,6 +180,14 @@ def test_the_actual_producer_records_conventions_and_preserves_unknown_data_iden
     assert with_manifest.evidence_provenance.data_contract == "lake_complete_sessions/v1"
     assert with_manifest.evidence_provenance.data_availability_hash == "a" * 64
 
+    # A run bound to a receipted lake snapshot read exactly those bytes (#2696).
+    bound = _aggregate_backtest_response(
+        result=_result(), request=_request(), strategy=_strategy(), lake_manifest=None, snapshot_manifest="b" * 64,
+        on_phase=lambda _phase: None, on_log=lambda _line: None,
+    )
+    assert bound.evidence_provenance.data_contract == "lake_receipted_snapshot/v1"
+    assert bound.evidence_provenance.data_availability_hash == "b" * 64
+
 
 def test_the_producer_records_its_closing_bar_convention_and_every_decision_it_set_aside() -> None:
     """#2607: a run records how it settled closing-bar decisions, and which it set aside."""

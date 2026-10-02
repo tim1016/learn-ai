@@ -21,6 +21,7 @@ from app.schemas.signal_program_seal import (
     SignalSeriesContract,
     seal_bot_program,
     semantic_payload_hash,
+    strip_absent_qualification,
 )
 
 _TRACE_ROOT = "a" * 64
@@ -247,7 +248,7 @@ def test_mutating_any_semantic_leaf_changes_the_configured_signal_hash() -> None
     and updated in lockstep.
     """
     baseline = _configured_signal()
-    baseline_payload = baseline.model_dump(mode="json")
+    baseline_payload = strip_absent_qualification(baseline.model_dump(mode="json"))
     baseline_hash = semantic_payload_hash(baseline_payload)
     assert baseline_hash == baseline.semantic_hash()
 
@@ -267,7 +268,7 @@ def test_mutating_any_bot_program_leaf_changes_the_bot_configuration_hash() -> N
     hashed payload, again driven off the model's own dumped field set.
     """
     sealed = _sealed_bot_program(action_plan=_action_plan())
-    baseline_payload = sealed.model_dump(mode="json", exclude={"bot_configuration_hash"})
+    baseline_payload = strip_absent_qualification(sealed.model_dump(mode="json", exclude={"bot_configuration_hash"}))
     baseline_hash = semantic_payload_hash(baseline_payload)
     assert baseline_hash == sealed.bot_configuration_hash
 
@@ -278,3 +279,63 @@ def test_mutating_any_bot_program_leaf_changes_the_bot_configuration_hash() -> N
         mutated_payload = _with_mutated_leaf(baseline_payload, path)
         mutated_hash = semantic_payload_hash(mutated_payload)
         assert mutated_hash != baseline_hash, f"mutating leaf {path!r} did not change bot_configuration_hash"
+
+
+# Golden Search qualification pin (#2696). The digests were computed from this
+# file's fixture by the seal module as it stood before ``qualification_id``
+# existed: a seal that pins no qualification must keep hashing to them.
+_PRE_QUALIFICATION_CONFIGURED_HASH = "585137e1f48e425dba378c539c4e06467a0e3a85dd80fb74148ee730d80781c6"
+_PRE_QUALIFICATION_BOT_HASH = "1144baa51c6e0337d6d2f002dcc7d4ae856d0f2203c386dbef59f697c0088764"
+
+
+def test_seal_without_a_qualification_hashes_exactly_as_before_the_field_existed() -> None:
+    sealed = _sealed_bot_program(action_plan=_action_plan())
+
+    assert sealed.configured_signal.qualification_id is None
+    assert sealed.configured_signal_hash == _PRE_QUALIFICATION_CONFIGURED_HASH
+    assert sealed.bot_configuration_hash == _PRE_QUALIFICATION_BOT_HASH
+
+
+def test_seal_persisted_before_the_field_existed_still_validates() -> None:
+    persisted = _sealed_bot_program(action_plan=_action_plan()).model_dump(mode="json")
+    del persisted["configured_signal"]["qualification_id"]
+
+    restored = SealedBotProgram.model_validate(persisted)
+
+    assert restored.bot_configuration_hash == _PRE_QUALIFICATION_BOT_HASH
+    assert restored.configured_signal.semantic_hash() == _PRE_QUALIFICATION_CONFIGURED_HASH
+
+
+def _qualified_seal(qualification_id: str) -> SealedBotProgram:
+    configured = _configured_signal().model_copy(update={"qualification_id": qualification_id})
+    return seal_bot_program(
+        strategy_instance_id="sealed-test-1",
+        configured_signal=configured,
+        configured_signal_hash=configured.semantic_hash(),
+        broker="alpaca",
+        sealed_account_id="sim:sealed-test-1",
+        mode="dry_run",
+        action_plan=_action_plan(),
+        quantity=1,
+        carryover_policy="FORBID",
+        validation_event_id="validation-1",
+        validation_snapshot_sha256=_SNAPSHOT_SHA,
+        sealed_at_ms=1_787_356_800_000,
+    )
+
+
+def test_a_pinned_qualification_is_part_of_both_seal_hashes() -> None:
+    first = _qualified_seal("gq-first")
+    second = _qualified_seal("gq-second")
+
+    assert first.configured_signal_hash not in {_PRE_QUALIFICATION_CONFIGURED_HASH, second.configured_signal_hash}
+    assert first.bot_configuration_hash not in {_PRE_QUALIFICATION_BOT_HASH, second.bot_configuration_hash}
+    assert SealedBotProgram.model_validate_json(first.model_dump_json()) == first
+
+
+def test_a_seal_whose_pinned_qualification_was_edited_fails_its_hash() -> None:
+    persisted = _qualified_seal("gq-first").model_dump(mode="json")
+    persisted["configured_signal"]["qualification_id"] = "gq-other"
+
+    with pytest.raises(ValueError, match="configured signal hash"):
+        SealedBotProgram.model_validate(persisted)

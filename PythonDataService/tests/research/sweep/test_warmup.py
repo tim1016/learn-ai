@@ -45,11 +45,36 @@ def test_probe_reproduces_the_reviewed_readiness_thresholds(strategy_key: str, p
 
 
 def test_a_fixed_period_program_declares_a_constant_requirement_and_stays_sweepable() -> None:
-    # EMA5 / EMA10 / RSI14 are fixed at construction; RSI14 governs at 15 samples.
+    # At the default EMA5 / EMA10 lengths the fixed RSI14 governs at 15 samples.
     probe = probe_warmup_samples("ema_crossover_signal", {"symbol": "SPY"})
 
     assert probe.first_ready_sample == 15
     assert probe.bar_span_ms == FIFTEEN_MIN_MS
+
+
+@pytest.mark.parametrize(
+    ("lengths", "first_ready"),
+    [
+        ({"fast_period": 5, "slow_period": 10}, 15),  # the default point, stated explicitly
+        ({"fast_period": 2, "slow_period": 14}, 15),  # RSI(14) still governs below 15
+        ({"fast_period": 5, "slow_period": 15}, 15),  # EMA(15) and RSI(14) ready together
+        ({"fast_period": 20, "slow_period": 30}, 30),
+        ({"fast_period": 30, "slow_period": 40}, 40),  # the slowest legal EMA governs
+    ],
+)
+def test_probe_measures_the_configured_ema_lengths(lengths: dict[str, int], first_ready: int) -> None:
+    # The EMA lengths are parameters (#2696): EMA(n) is ready at n samples, RSI(14) at 15.
+    probe = probe_warmup_samples("ema_crossover_signal", {"symbol": "SPY", **lengths})
+
+    assert probe.first_ready_sample == first_ready
+    assert probe.required_samples == first_ready + 1
+    assert probe.bar_span_ms == FIFTEEN_MIN_MS
+
+
+def test_probe_ignores_the_hold_which_never_delays_readiness() -> None:
+    held = probe_warmup_samples("ema_crossover_signal", {"symbol": "SPY", "hold_bars": 26})
+
+    assert held.required_samples == probe_warmup_samples("ema_crossover_signal", {"symbol": "SPY"}).required_samples
 
 
 def test_probe_reads_the_decision_cadence_from_the_program() -> None:

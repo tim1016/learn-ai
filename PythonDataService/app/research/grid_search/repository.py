@@ -36,6 +36,7 @@ from app.research.grid_search.models import (
     SearchStatus,
 )
 from app.research.persistence import fence
+from app.utils.session_anchors import MAX_TIMESTAMP_MS
 from app.utils.timestamps import now_ms_utc
 
 SEARCHES = "research_grid_searches"
@@ -296,14 +297,32 @@ async def record_evidence_winner(conn: asyncpg.Connection, search_id: str, *, pa
         )
 
 
+# The window a deleted sweep read stays on record (#2696): a Golden Search final
+# test over it must never read as fresh. An unreadable window covers everything.
+_RETIRE_WINDOWS = f"""
+    INSERT INTO research_retired_research_windows (
+        symbol, interval_start_ms, interval_end_ms, source, source_id, retired_at_ms
+    )
+    SELECT upper(symbol),
+           COALESCE((request_json ->> 'start_ms')::bigint, 0),
+           COALESCE((request_json ->> 'end_ms')::bigint, {MAX_TIMESTAMP_MS}),
+           'grid_search', id, $1
+      FROM research_grid_searches
+"""
+
+
 async def delete_search(conn: asyncpg.Connection, search_id: str) -> bool:
-    result = await conn.execute("DELETE FROM research_grid_searches WHERE id = $1", search_id)
+    async with conn.transaction():
+        await conn.execute(_RETIRE_WINDOWS + " WHERE id = $2", now_ms_utc(), search_id)
+        result = await conn.execute("DELETE FROM research_grid_searches WHERE id = $1", search_id)
     return result.endswith(" 1")
 
 
 async def delete_owned_searches(conn: asyncpg.Connection, *, owner_kind: str, owner_id: str) -> None:
-    """Remove every sweep an owner (a walk-forward study) launched; cells cascade."""
-    await conn.execute("DELETE FROM research_grid_searches WHERE owner_kind = $1 AND owner_id = $2", owner_kind, owner_id)
+    """Remove every sweep an owner (a walk-forward study) launched; cells cascade, their windows stay on record."""
+    async with conn.transaction():
+        await conn.execute(_RETIRE_WINDOWS + " WHERE owner_kind = $2 AND owner_id = $3", now_ms_utc(), owner_kind, owner_id)
+        await conn.execute("DELETE FROM research_grid_searches WHERE owner_kind = $1 AND owner_id = $2", owner_kind, owner_id)
 
 
 async def existing_params_hashes(conn: asyncpg.Connection, search_id: str) -> set[str]:

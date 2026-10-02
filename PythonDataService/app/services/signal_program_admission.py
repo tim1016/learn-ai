@@ -14,7 +14,8 @@ v2 seal is append-only evidence and never rewrites v1 identity bytes.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -22,9 +23,21 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.config import settings
-from app.engine.strategy.params import decision_timeframe_ms_for
-from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
+from app.engine.strategy.params import StrategyParamsBase, decision_timeframe_ms_for
+from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract, StrategyRegistration
+from app.research.golden_search.qualifications import (
+    Coverage,
+    QualificationLookup,
+    load_qualification_evidence,
+    params_sha256,
+    registry_point_matches,
+    resolve_coverage,
+)
 from app.schemas.run_admission import (
+    QUALIFICATION_COVERED,
+    QUALIFICATION_NOT_REVERIFIED,
+    QUALIFICATION_UNJUDGEABLE,
+    REGISTRY_POINT_COVERED,
     ProgramBuildAdmissionFact,
     StrategyValidationAdmissionFact,
     proven_build_copy,
@@ -47,6 +60,8 @@ from app.services.program_source_anchor import (
     record_imported_program_sources,
 )
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
+
+logger = logging.getLogger(__name__)
 
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_QUALIFICATION_MANIFEST = _SERVICE_ROOT / "app/data/signal_program_build_receipts.json"
@@ -111,6 +126,7 @@ def build_start_program_seal(
     *,
     parameter_origins: dict[str, ParameterOrigin]
     | None = None,
+    coverage: Coverage | None = None,
 ) -> SealedBotProgram | None:
     """Author a new v2 seal for a registered Signal Program.
 
@@ -137,6 +153,12 @@ def build_start_program_seal(
     Fresh deploys through ``paper_deploy_service`` always supply a complete
     ``parameter_origins`` mapping. Historical seals remain readable; new
     deployment always seals a fresh identity with current explicit choices.
+
+    ``coverage`` is :func:`resolve_admission_coverage`'s answer for this
+    binding, read before this synchronous call (#2696). When the registry's
+    validated point does not cover the parameters but a ready Golden Search
+    qualification does, the seal pins that qualification's id; the proof
+    re-verifies exactly that id, never whichever version is default later.
     """
     registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
     if registration is None or registration.signal_program_factory is None:
@@ -187,14 +209,20 @@ def build_start_program_seal(
         validated, qualified_ms=contract.decision_timeframe_ms
     )
 
+    registry_point = registry_point_matches(contract, effective)
+    qualification_id = (
+        coverage.qualification_id
+        if not registry_point and coverage is not None and coverage.state == "COVERED"
+        else None
+    )
     configured = ConfiguredSignalProgramSeal(
         program_key=binding.strategy_key,
         program_version=contract.program_version,
         protocol_version=contract.protocol_version,
-        parameter_schema_version=contract.parameter_schema_version,
+        parameter_schema_version=contract.resolved_parameter_schema_version(validated),
         golden_trace_root=contract.golden_trace_root,
         parameters=parameters,
-        parameters_match_validated_settings=_parameters_match(contract, effective),
+        parameters_match_validated_settings=registry_point,
         data=SignalDataContract(
             provider=contract.provider,
             symbol=binding.symbol.upper(),
@@ -207,11 +235,15 @@ def build_start_program_seal(
         ),
         # Copied straight from the registry contract — the same objects, not
         # a re-derivation — so these can never fall out of sync with it.
-        signals=contract.signals,
+        # Series, exit rule, parameter-schema version and provenance are
+        # resolved for these parameters: an EMA length or hold is a parameter,
+        # and a seal at the reference lengths stays byte-identical (#2696).
+        signals=contract.resolved_signals(validated),
         decision_streams=contract.decision_streams,
         bar_integrity=contract.bar_integrity,
-        exit_eligibility=contract.exit_eligibility,
-        numerical_provenance=contract.numerical_provenance,
+        exit_eligibility=contract.resolved_exit_eligibility(validated),
+        numerical_provenance=contract.resolved_numerical_provenance(validated),
+        qualification_id=qualification_id,
     )
     configured_hash = configured.semantic_hash()
     return seal_bot_program(
@@ -254,8 +286,18 @@ def prove_running_program_build(
     *,
     verified_at_ms: int,
     manifest_path: Path = DEFAULT_QUALIFICATION_MANIFEST,
+    coverage: Coverage | None = None,
 ) -> ProgramBuildAdmissionFact:
-    """Re-hash loaded artifacts and compare one closed qualification receipt."""
+    """Re-hash loaded artifacts and compare one closed qualification receipt.
+
+    Corpus coverage is the registry's validated point, or the Golden Search
+    qualification the seal pins (#2696): ``coverage`` is
+    :func:`resolve_admission_coverage`'s answer, read before this synchronous
+    call, and it covers only when it judged exactly that pinned id ready
+    under the very artifact digest this proof computes. Anything else —
+    absent, stale, revoked, unreadable, or judged against other bytes — is
+    UNCOVERED with the reason.
+    """
     registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
     if registration is None or registration.signal_program_factory is None:
         return ProgramBuildAdmissionFact(
@@ -365,17 +407,25 @@ def prove_running_program_build(
     # not describe this configuration -- a fact about the *evidence*, not the
     # *bytes*, so it is stamped here rather than refusing the proof; the pure
     # admission policy decides whether an uncovered point may start (ADR 0054).
-    coverage: Literal["COVERED", "UNCOVERED"] = (
-        "COVERED" if configured.parameters_match_validated_settings else "UNCOVERED"
+    # A Golden Search qualification extends that corpus to one exact tuple
+    # (#2696), only while it stays ready for these running bytes.
+    corpus_coverage, coverage_note = _corpus_coverage(
+        configured, coverage, running_digest, _sealed_tuple_sha256(registration, configured)
     )
     explanation, next_step = proven_build_copy(
         wiring=wiring,
-        corpus_coverage=coverage,
+        corpus_coverage=corpus_coverage,
         matched="The running Signal Program build matches its golden qualification receipt.",
         drifted=(
             "The running Signal Program math matches its golden qualification receipt, but "
             "the strategy wiring has changed since that receipt was minted."
         ),
+        coverage_note=coverage_note,
+    )
+    qualification_refs = (
+        (f"golden-qualification:{configured.qualification_id}",)
+        if corpus_coverage == "COVERED" and configured.qualification_id is not None
+        else ()
     )
     return ProgramBuildAdmissionFact(
         state="PROVEN",
@@ -386,16 +436,148 @@ def prove_running_program_build(
         qualification_receipt_hash=receipt.receipt_hash,
         verified_at_ms=verified_at_ms,
         wiring=wiring,
-        corpus_coverage=coverage,
+        corpus_coverage=corpus_coverage,
         evidence_refs=(
             f"signal-program-seal:{seal.bot_configuration_hash}",
             f"program-build-receipt:{receipt.receipt_hash}",
             f"program-build-digest:{running_digest}",
             f"program-wiring-digest:{running_wiring}",
-            f"program-corpus-coverage:{coverage}",
+            f"program-corpus-coverage:{corpus_coverage}",
+            *qualification_refs,
         ),
         explanation=explanation,
         next_step=next_step,
+    )
+
+
+def _corpus_coverage(
+    configured: ConfiguredSignalProgramSeal,
+    coverage: Coverage | None,
+    running_digest: str,
+    sealed_tuple_sha256: str | None,
+) -> tuple[Literal["COVERED", "UNCOVERED"], str | None]:
+    """The coverage stamp for a proven build, and the qualification sentence behind it if one decided it.
+
+    A qualification covers only when the answer judged the pinned id ready
+    for these running bytes AND for this seal's own canonical tuple: an
+    answer resolved for any other parameter set or stock never vouches for it.
+    """
+    if configured.parameters_match_validated_settings:
+        return "COVERED", None
+    pinned = configured.qualification_id
+    if pinned is None:
+        return "UNCOVERED", None
+    if (
+        coverage is not None
+        and coverage.artifact_digest == running_digest
+        and sealed_tuple_sha256 is not None
+        and coverage.params_sha256 == sealed_tuple_sha256
+    ):
+        if coverage.state == "COVERED" and coverage.qualification_id == pinned:
+            return "COVERED", QUALIFICATION_COVERED
+        if coverage.state == "UNCOVERED":
+            return "UNCOVERED", coverage.explanation
+    if coverage is not None and coverage.artifact_digest is None and coverage.state == "UNCOVERED":
+        # Its evidence could not be read: say so, never "not on record".
+        return "UNCOVERED", coverage.explanation
+    return "UNCOVERED", QUALIFICATION_NOT_REVERIFIED
+
+
+def _canonical_tuple(
+    registration: StrategyRegistration, values: Mapping[str, Any], symbol: str
+) -> dict[str, Any] | None:
+    """A configuration as a qualification stores it: the schema's canonical dump, stock upper-cased.
+
+    ``None`` when the values no longer validate; the seal and the proof
+    refuse such a configuration on their own.
+    """
+    try:
+        return registration.param_schema.model_validate({**values, "symbol": symbol.upper()}).model_dump(mode="json")
+    except ValidationError:
+        return None
+
+
+def _sealed_tuple_sha256(registration: StrategyRegistration, configured: ConfiguredSignalProgramSeal) -> str | None:
+    """The canonical tuple a seal attests to, as the coverage it pins must have judged it."""
+    values = {name: parameter.value for name, parameter in configured.parameters.items()}
+    canonical = _canonical_tuple(registration, values, configured.data.symbol)
+    return None if canonical is None else params_sha256(canonical)
+
+
+class RestartNeededError(RuntimeError):
+    """The code on disk is not the code this process imported, so no digest can name the running build (#2450)."""
+
+
+def running_build_digests(contract: SignalProgramContract) -> tuple[str, str]:
+    """The (artifact, wiring) digests of the Signal Program build this process is running.
+
+    Read off disk only after confirming disk still holds the bytes this
+    process imported (#2450); a drift raises :class:`RestartNeededError`.
+    An unreadable or invalid source raises ``OSError`` / ``ValueError``.
+    """
+    record_imported_program_sources()
+    drifted = imported_source_drift(contract)
+    if drifted is not None:
+        raise RestartNeededError(
+            f"The code on disk differs from the code this process is running ({drifted} sources changed "
+            "after import). Restart the service so the running code is the code on disk."
+        )
+    return running_artifact_digest(contract), running_wiring_digest(contract)
+
+
+async def resolve_admission_coverage(
+    binding: BrokerBotBinding,
+    *,
+    lookup: QualificationLookup = load_qualification_evidence,
+) -> Coverage | None:
+    """Golden Search coverage for the configuration a Start seals, read before its synchronous seal and proof.
+
+    An unsealed binding asks which ready qualification, if any, covers its
+    exact canonical tuple (stock upper-cased, the form qualifications
+    store). A sealed one re-verifies only the qualification it pins. The
+    research store is read through the same pooled connection as Golden
+    Validation admission; the resolver turns any read failure into an
+    UNCOVERED "cannot verify" answer rather than raising. ``None`` means
+    there is nothing to resolve: not a registered Signal Program, a seal
+    that pins no qualification, or parameters the seal and proof will
+    refuse on their own.
+    """
+    registration = _STRATEGY_REGISTRY.get(binding.strategy_key)
+    contract = registration.signal_program_contract if registration is not None else None
+    if registration is None or registration.signal_program_factory is None or contract is None:
+        return None
+    seal = binding.sealed_program
+    pinned = seal.configured_signal.qualification_id if seal is not None else None
+    if seal is not None and pinned is None:
+        return None
+    values = (
+        {name: parameter.value for name, parameter in seal.configured_signal.parameters.items()}
+        if seal is not None
+        else dict(binding.strategy_params or {})
+    )
+    symbol = seal.configured_signal.data.symbol if seal is not None else binding.symbol
+    params = _canonical_tuple(registration, values, symbol)
+    if params is None:
+        return None
+    if registry_point_matches(contract, params):
+        return Coverage(state="COVERED", qualification_id=None, explanation=REGISTRY_POINT_COVERED)
+    try:
+        artifact_digest, _wiring_digest = running_build_digests(contract)
+    except (RestartNeededError, OSError, ValueError):
+        # The proof refuses this build on its own; nothing can be judged ready for it.
+        logger.warning(
+            "Golden Search coverage could not name the running build",
+            extra={"action": "golden_coverage_build_unnamed", "strategy_key": binding.strategy_key},
+            exc_info=True,
+        )
+        return Coverage(state="UNCOVERED", qualification_id=None, explanation=QUALIFICATION_UNJUDGEABLE)
+    return await resolve_coverage(
+        program_key=binding.strategy_key,
+        contract=contract,
+        params=params,
+        running_artifact_digest=artifact_digest,
+        lookup=lookup,
+        qualification_id=pinned,
     )
 
 
@@ -521,6 +703,9 @@ def _seal_checks(
     seal without ever being gated.
     """
     configured = seal.configured_signal
+    # The series and exit rule a seal attests to depend on its own parameters
+    # (#2696), so they are compared against the contract resolved for them.
+    sealed_params = _sealed_parameters(binding.strategy_key, configured)
     return (
         _SealCheck(
             "strategy_instance_id",
@@ -569,14 +754,22 @@ def _seal_checks(
             configured.protocol_version == contract.protocol_version,
             "The registered session protocol has moved since this instance was sealed.",
         ),
+        # The parameters come first: the rows after them compare against the
+        # contract resolved for the seal's own parameters.
+        _SealCheck(
+            "parameters",
+            sealed_params is not None,
+            "The sealed parameters no longer validate against the registered parameter schema.",
+        ),
         _SealCheck(
             "parameter_schema_version",
-            configured.parameter_schema_version == contract.parameter_schema_version,
+            sealed_params is not None
+            and configured.parameter_schema_version == contract.resolved_parameter_schema_version(sealed_params),
             "The registered parameter schema has moved since this instance was sealed.",
         ),
         _SealCheck(
             "signals",
-            configured.signals == contract.signals,
+            sealed_params is not None and configured.signals == contract.resolved_signals(sealed_params),
             "The registered signal semantics have moved since this instance was sealed.",
         ),
         _SealCheck(
@@ -591,12 +784,14 @@ def _seal_checks(
         ),
         _SealCheck(
             "exit_eligibility",
-            configured.exit_eligibility == contract.exit_eligibility,
+            sealed_params is not None
+            and configured.exit_eligibility == contract.resolved_exit_eligibility(sealed_params),
             "The registered exit-eligibility rule has moved since this instance was sealed.",
         ),
         _SealCheck(
             "numerical_provenance",
-            configured.numerical_provenance == contract.numerical_provenance,
+            sealed_params is not None
+            and configured.numerical_provenance == contract.resolved_numerical_provenance(sealed_params),
             "The registered numerical provenance has moved since this instance was sealed.",
         ),
         _SealCheck(
@@ -617,11 +812,14 @@ def _seal_checks(
     )
 
 
-def _parameters_match(contract: SignalProgramContract, effective: dict[str, Any]) -> bool:
-    return (
-        str(effective.get("symbol", "")).upper() in contract.validated_symbols
-        and all(effective.get(name) == value for name, value in contract.validated_settings.items())
-    )
+def _sealed_parameters(program_key: str, configured: ConfiguredSignalProgramSeal) -> StrategyParamsBase | None:
+    """The parameter model a seal's own values build, or ``None`` when they no longer validate."""
+    try:
+        return _STRATEGY_REGISTRY[program_key].param_schema.model_validate(
+            {name: parameter.value for name, parameter in configured.parameters.items()}
+        )
+    except ValidationError:
+        return None
 
 
 def _unproven(
@@ -646,13 +844,16 @@ __all__ = [
     "DEFAULT_QUALIFICATION_MANIFEST",
     "ProgramBuildQualificationManifest",
     "ProgramBuildQualificationReceipt",
+    "RestartNeededError",
     "SignalProgramSealError",
     "build_start_program_seal",
     "imported_source_drift",
     "prove_running_program_build",
     "qualification_receipt_payload",
     "record_imported_program_sources",
+    "resolve_admission_coverage",
     "running_artifact_digest",
+    "running_build_digests",
     "running_wiring_digest",
     "unsealed_program_build",
 ]
