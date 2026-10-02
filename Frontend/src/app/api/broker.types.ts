@@ -1366,7 +1366,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Polygon chart: bounded timeframe window (§8) */
+        /**
+         * Polygon chart: bounded timeframe window (§8), or a window of the bot's latest run (#2794)
+         * @description The newest bars for ``timeframe``; with ``from_ms`` and ``to_ms``, that window of the bot's latest run.
+         */
         get: operations["get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get"];
         put?: never;
         post?: never;
@@ -26142,6 +26145,8 @@ export interface operations {
         parameters: {
             query: {
                 timeframe: "1m" | "15m" | "30m" | "1h" | "1d";
+                from_ms?: number | null;
+                to_ms?: number | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;

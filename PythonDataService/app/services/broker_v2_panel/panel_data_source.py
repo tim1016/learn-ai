@@ -631,13 +631,14 @@ async def get_history_chart(
     account_id: str,
     sid: str,
     timeframe: ChartHistoryTimeframe,
+    window: tuple[int, int] | None = None,
 ) -> ChartHistoryResponse:
-    """Build the bounded HISTORY chart pane for one bot."""
+    """Build the bounded HISTORY chart pane for one bot, or a window of its latest run (#2794)."""
     from app.services.broker_v2_panel.panel_chart_data_source import (
         get_history_chart as build_history_chart_response,
     )
 
-    return await build_history_chart_response(broker, account_id, sid, timeframe)
+    return await build_history_chart_response(broker, account_id, sid, timeframe, window)
 
 
 def _action_performers(

@@ -213,6 +213,12 @@ class _FakeRegistry:
         """No durable dry-run bindings — the catalog is the plain SQLite roster."""
         return []
 
+    def current_run(self, broker: str, sid: str) -> SimpleNamespace:
+        """The run each bot started at ``_T0``; a stopped one ended a minute later."""
+        self.status(broker, sid)
+        terminal = None if self._running else SimpleNamespace(recorded_at_ms=_T0 + 60_000)
+        return SimpleNamespace(run_id=_run_id(sid), started_at_ms=_T0, terminal_outcome=terminal)
+
     async def cancel_end(self, sid: str, *, lifecycle_run_id: str, updated_by: str) -> None:
         """The panel's Stop cancels the bot's end before its STOP commits (#2607); this fleet has no end."""
         self.status("alpaca", sid)
@@ -1202,6 +1208,46 @@ async def test_chart_contract_rejects_unknown_timeframe(api) -> None:
         )
 
     assert history.status_code == 422
+
+
+async def test_a_finished_runs_tape_reads_that_runs_window_and_refuses_another(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2794: a finished run's Tape · 1m shows that run, never today's newest bars."""
+    from app.schemas.broker_v2_panel import ChartBar
+    from app.schemas.fleet_history_batch import HistoryBatchQuery, HistoryBatchResponse
+
+    app, _repo = api
+    get_bot_task_registry()._running = False  # type: ignore[union-attr]
+    asked: list[HistoryBatchQuery] = []
+
+    async def provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
+        asked.append(query)
+        bars = [
+            ChartBar(start_ms=start, end_ms=start + 60_000, open="1", high="1", low="1", close="1", volume=1,
+                     source="polygon")
+            for start in range(query.as_of_ms - query.required_bar_count * 60_000, query.as_of_ms, 60_000)
+        ]
+        return HistoryBatchResponse(bars=bars, source="polygon", overlay_notices=[], effective_as_of_ms=query.as_of_ms)
+
+    monkeypatch.setattr(panel_chart_data_source, "build_history_batch_provider", lambda: provider)
+    url = f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/chart/history"
+    async with _client(app) as client:
+        run = await client.get(url, params={"timeframe": "1m", "from_ms": _T0 - 600_000, "to_ms": _T0 + 120_000})
+        elsewhere = await client.get(url, params={"timeframe": "1m", "from_ms": _T0 - 86_400_000, "to_ms": _T0})
+        half = await client.get(url, params={"timeframe": "1m", "from_ms": _T0})
+
+    assert run.status_code == 200, run.text
+    body = run.json()
+    assert (body["from_ms"], body["to_ms"]) == (_T0 - 600_000, _T0 + 120_000)
+    starts = [bar["start_ms"] for bar in body["bars"]]
+    assert starts == sorted(set(starts)) and starts[0] == _T0 - 600_000 and len(starts) == 12
+    assert asked[0].as_of_ms == _T0 + 120_000
+    assert elsewhere.status_code == 422
+    assert elsewhere.json()["detail"]["message"] == (
+        "The window must lie within this bot's latest run, give or take 30 minutes."
+    )
+    assert (half.status_code, half.json()["detail"]["message"]) == (422, "A run window needs both from_ms and to_ms.")
 
 
 async def test_lost_execution_lease_is_an_authored_blocker_not_a_raw_500(

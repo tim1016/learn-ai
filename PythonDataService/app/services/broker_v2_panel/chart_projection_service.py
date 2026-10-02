@@ -101,6 +101,14 @@ class ChartTimeframeError(ValueError):
     """Raised when a Polygon timeframe is outside the closed selector set."""
 
 
+class ChartWindowError(ValueError):
+    """A requested chart window the bot's run cannot answer; the message says why."""
+
+
+#: How far either side of its run a bot's tape may reach (#2794): the run, with some context.
+RUN_WINDOW_PADDING_MS = 30 * 60_000
+
+
 class _PolygonFailure(Protocol):
     """Structural type shared by ``PolygonNotice`` and ``ChartOverlayNotice``.
 
@@ -359,11 +367,7 @@ class _HistoryPlan:
 def _plan_history(timeframe: ChartHistoryTimeframe, now_ms: int) -> _HistoryPlan:
     spec = HISTORY_TIMEFRAME_SPECS[timeframe]
     indicator_bars = spec.display_bars + _INDICATOR_WARMUP_BARS
-    span_ms = {
-        "minute": spec.multiplier * 60_000,
-        "hour": spec.multiplier * 3_600_000,
-        "day": spec.multiplier * MS_PER_DAY,
-    }[spec.timespan]
+    span_ms = _bar_span_ms(spec)
     display_start = session_start_for_bar_count(
         now_ms,
         target_bars=spec.display_bars,
@@ -381,6 +385,78 @@ def history_fill_window(timeframe: ChartHistoryTimeframe, now_ms: int) -> tuple[
     """Return the display-bounded fill interval for one history request."""
     plan = _plan_history(timeframe, now_ms)
     return plan.display_from_ms, plan.to_ms
+
+
+def run_chart_window(
+    from_ms: int,
+    to_ms: int,
+    *,
+    run_started_at_ms: int | None,
+    run_ended_at_ms: int | None,
+    now_ms: int,
+) -> tuple[int, int]:
+    """The requested window, held to the bot's latest run (#2794), and ended no later than now.
+
+    A finished run's tape shows that run, not today's after-hours: the window
+    may reach ``RUN_WINDOW_PADDING_MS`` either side of the run, never further.
+    """
+    if run_started_at_ms is None:
+        raise ChartWindowError("This bot has not started a run, so it has no run window.")
+    if to_ms <= from_ms:
+        raise ChartWindowError("A chart window must end after it starts.")
+    run_end_ms = now_ms if run_ended_at_ms is None else run_ended_at_ms
+    if from_ms < run_started_at_ms - RUN_WINDOW_PADDING_MS or to_ms > run_end_ms + RUN_WINDOW_PADDING_MS:
+        raise ChartWindowError("The window must lie within this bot's latest run, give or take 30 minutes.")
+    return from_ms, min(to_ms, now_ms)
+
+
+async def build_run_window_chart(
+    timeframe: ChartHistoryTimeframe,
+    fills: Sequence[FillRecord],
+    *,
+    strategy_instance_id: str,
+    symbol: str,
+    batch_provider: HistoryBatchProvider,
+    window: tuple[int, int],
+    now_ms: int,
+) -> ChartHistoryResponse:
+    """A plain tape of one run's window (#2794): its bars and fills, no indicator warmup.
+
+    One batch is asked for, ending at the window's end and long enough to
+    reach its start; a window longer than the batch bound shows its latest
+    bars and says it was truncated.
+    """
+    from_ms, to_ms = window
+    span_ms = _bar_span_ms(HISTORY_TIMEFRAME_SPECS[timeframe])
+    required = min(MAX_HISTORY_REQUIRED_BAR_COUNT, max(1, -(-(to_ms - from_ms) // span_ms)))
+    batch = await batch_provider(
+        HistoryBatchQuery(symbol=symbol, timeframe=timeframe, required_bar_count=required, as_of_ms=to_ms)
+    )
+    bars = [bar for bar in batch.bars if bar.start_ms >= from_ms and bar.end_ms <= to_ms]
+    reached_start = len(batch.bars) < required or (bool(batch.bars) and batch.bars[0].start_ms <= from_ms)
+    return ChartHistoryResponse(
+        strategy_instance_id=strategy_instance_id,
+        symbol=symbol,
+        timeframe=timeframe,
+        from_ms=from_ms,
+        to_ms=to_ms,
+        bars=bars,
+        indicator_bars=bars,
+        indicator_bar_budget=0,
+        indicator_bar_budget_satisfied=True,
+        fill_markers=markers_in_window(fills, from_ms=from_ms, to_ms=to_ms),
+        truncated=not reached_start,
+        overlay_notices=list(batch.overlay_notices),
+        as_of_ms=now_ms,
+    )
+
+
+def _bar_span_ms(spec: _HistoryTimeframeSpec) -> int:
+    return {
+        "minute": spec.multiplier * 60_000,
+        "hour": spec.multiplier * 3_600_000,
+        "day": spec.multiplier * MS_PER_DAY,
+    }[spec.timespan]
 
 
 async def build_history_chart(
