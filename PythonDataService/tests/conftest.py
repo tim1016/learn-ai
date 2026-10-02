@@ -1,7 +1,7 @@
 """Shared test fixtures and helpers"""
 
 import os
-from collections.abc import Iterable, Iterator
+from collections.abc import AsyncIterator, Iterable, Iterator
 from pathlib import Path
 
 import pytest
@@ -220,6 +220,33 @@ def _isolate_retired_alpaca_environment(monkeypatch: pytest.MonkeyPatch) -> None
         "current_retired_settings",
         lambda: legacy_environment.LegacyEnvironmentPresence(_env_file=None),
     )
+
+
+@pytest.fixture(autouse=True)
+async def _close_catalog_pool_per_test() -> AsyncIterator[None]:
+    """Close this test's loop-bound catalog pool when the test ends (#2809).
+
+    ``app.data_lake.catalog_client`` keys an asyncpg pool per event loop, and
+    only a live loop can close its own pool. pytest-asyncio hands each test a
+    fresh loop, so every live-Postgres test otherwise leaves its pool's
+    connections open until the dead loop is garbage collected — which, under
+    the daily full suite's allocation pressure, it reliably is not: pools
+    accumulated monotonically and crossed Postgres' default max_connections
+    (100) partway through tests/routers once the golden-search suites (#2696)
+    added ~150 live-DB tests, and every Postgres-backed test after that point
+    failed with TooManyConnectionsError. Teardown here still runs on the
+    test's loop, before pytest-asyncio closes it, so the whole suite is
+    bounded at one pool per running test. The process-wide background loop's
+    pool is deliberately untouched: that loop outlives every test, and its
+    single pool is already a bound. Data-lake suites that close their pools
+    through their own per-file fixtures stay correct — close_pool is
+    idempotent per loop. The stub-based proof lives in
+    tests/unit/test_catalog_pool_teardown.py, which fails without this fixture.
+    """
+    yield
+    from app.data_lake import catalog_client
+
+    await catalog_client.close_pool()
 
 
 _CATALOG_TRUNCATING_FIXTURE_PREFIX = "clean_artifacts"
