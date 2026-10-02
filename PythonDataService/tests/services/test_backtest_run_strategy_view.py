@@ -170,22 +170,20 @@ def test_a_replay_that_does_not_reproduce_the_runs_trades_is_refused(saved_run: 
         build_backtest_run_strategy_view(moved)
 
 
-def test_bars_that_changed_since_the_run_or_a_run_with_no_receipt_are_refused(
+def test_a_run_replays_on_its_code_whatever_data_receipt_it_or_the_lake_holds(
     saved_run: RunDetail, lake_receipt: dict[str, str]
 ) -> None:
+    # The lake's fingerprint moved on -- a re-fetch, or days refreshed outside the window.
+    lake_receipt["hash"] = "b" * 64
+    assert build_backtest_run_strategy_view(saved_run).run_id == "backtest-run:7"
+
     unreceipted = replace(
         saved_run,
         evidence_provenance_json=_with_receipt(
             RunEvidenceProvenance.model_validate_json(saved_run.evidence_provenance_json or ""), None
         ),
     )
-    with pytest.raises(SavedRunNotReplayable, match="recorded no data receipt"):
-        build_backtest_run_strategy_view(unreceipted)
-
-    # Zero trades or not, a run read on other bars is not its own evidence.
-    lake_receipt["hash"] = "b" * 64
-    with pytest.raises(SavedRunNotReplayable, match="bars for this run have changed"):
-        build_backtest_run_strategy_view(saved_run)
+    assert build_backtest_run_strategy_view(unreceipted).run_id == "backtest-run:7"
 
 
 def test_a_compatibility_run_is_rebuilt_without_the_flat_commission_it_never_charged(saved_run: RunDetail) -> None:

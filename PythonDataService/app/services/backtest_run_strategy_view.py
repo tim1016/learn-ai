@@ -2,11 +2,14 @@
 
 The run is run again exactly as it ran -- its engine, fills, closing-bar rule,
 evaluation boundary, settings and bars (``replay_engine_run``) -- and each
-decision it stages is kept. The replay is shown as the run's own only when its
-bars still match the data receipt the run recorded and it reproduces the run's
-stored trades; otherwise, and for a run that cannot be replayed exactly at all
-(a LEAN run, or one whose strategy has changed since), the view refuses and
-says why. Nothing about the decisions is stored with the run.
+decision it stages is kept. Whether a run can be replayed turns on its code
+alone: its program version must be this build's. Its data receipt is not
+compared, so a lake whose bytes or catalog moved on (a re-fetch, days refreshed
+outside the window) still replays the run. The replay is shown as the run's
+own only when it reproduces the run's stored trades; otherwise, and for a run
+that cannot be replayed exactly at all (a LEAN run, or one whose strategy has
+changed since), the view refuses and says why. Nothing about the decisions is
+stored with the run.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ from app.schemas.engine_backtest import EngineBacktestRequest
 from app.schemas.strategy_view import StrategyViewCandle, StrategyViewResponse
 from app.services.engine_backtest_service import (
     SavedRunNotReplayable,
-    replay_availability_hash,
+    materialize_replay_bars,
     replay_engine_run,
 )
 from app.services.strategy_view import ResolvedStrategyView, StrategyViewUnavailableError
@@ -60,7 +63,7 @@ def build_backtest_run_strategy_view(run: RunDetail) -> StrategyViewResponse:
     except StrategyViewUnavailableError as exc:
         raise SavedRunNotReplayable(str(exc)) from exc
 
-    _require_the_runs_bars(run, request)
+    materialize_replay_bars(request)
     kept: deque[tuple[TradeBar, SignalDecision]] = deque(maxlen=MAX_STRATEGY_VIEW_CANDLES)
     staged_count = 0
 
@@ -141,23 +144,6 @@ def _provenance(run: RunDetail) -> RunEvidenceProvenance | None:
     if run.evidence_provenance_json is None:
         return None
     return RunEvidenceProvenance.model_validate_json(run.evidence_provenance_json)
-
-
-def _require_the_runs_bars(run: RunDetail, request: EngineBacktestRequest) -> None:
-    """Refuse a replay whose bars cannot be shown to be the ones the run read.
-
-    The run recorded the lake state it ran against (``data_availability_hash``);
-    the same window is materialized again and must hash the same. A run that
-    recorded none cannot prove its bars, so it is not replayed.
-    """
-    provenance = _provenance(run)
-    receipt = None if provenance is None else provenance.data_availability_hash
-    if receipt is None:
-        raise SavedRunNotReplayable(
-            "This run recorded no data receipt, so its bars cannot be shown to be the ones it read."
-        )
-    if replay_availability_hash(request) != receipt:
-        raise SavedRunNotReplayable("The lake's bars for this run have changed since it ran.")
 
 
 def _require_the_runs_trades(run: RunDetail, trades: list[LoggedTrade]) -> None:
