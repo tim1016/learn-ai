@@ -44,7 +44,6 @@ import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-d
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import { createAppChart, formatChartAxisTick } from '../../../../shared/charts/chart-utils';
-import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
 import {
   ChartIndicatorRailComponent,
   type ChartIndicatorColorChange,
@@ -54,6 +53,7 @@ import {
 import type { IndicatorPickerAdd } from '../../../../shared/indicator-picker/indicator-picker.component';
 import { PanelInstrumentQuoteComponent } from '../instrument-quote/panel-instrument-quote.component';
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
+import { chartIndicatorCatalog } from './chart-indicator-catalog';
 import {
   type SelectedChartIndicator,
   resultBelongsToIndicator,
@@ -281,7 +281,6 @@ export class DualPaneChartComponent implements AfterViewInit {
     viewChild.required<ElementRef<HTMLDivElement>>('chartContainer');
   private readonly destroyRef = inject(DestroyRef);
   private readonly createChart = inject(DUAL_PANE_CHART_FACTORY);
-  private readonly indicatorCatalog = inject(IndicatorCatalogService);
   private readonly indicatorService = inject(BotChartIndicatorService);
 
   protected readonly activePane = signal<ChartPane>('live');
@@ -291,36 +290,12 @@ export class DualPaneChartComponent implements AfterViewInit {
   private readonly indicatorColorOverrides = signal<Readonly<Record<string, string>>>({});
   protected readonly polygonTimeframes = POLYGON_TIMEFRAMES;
   protected readonly liveResolutions = LIVE_RESOLUTIONS;
-  private readonly supportedIndicatorResource = rxResource({
-    params: () => 'chart-indicator-catalog',
-    stream: () => this.indicatorService.supportedIndicators(),
-  });
-  /** Guarded read (#2202): `supportedIndicatorResource.value()` throws
-   * `ResourceValueError` while the catalog fetch is in its error state — the
-   * same defect class as the `histChart`/`journalPage` freeze this issue
-   * fixed elsewhere. Left unguarded, opening the indicator rail
-   * (`[categories]="indicatorCategories()"`, gated by `@if (fullscreen())`)
-   * would abort this component's whole render pass the moment the user
-   * clicks Expand while the catalog call has failed. */
-  protected readonly indicatorCategories = computed(() => {
-    const supported = new Set(
-      this.supportedIndicatorResource.hasValue()
-        ? this.supportedIndicatorResource.value()?.names ?? []
-        : [],
-    );
-    return this.indicatorCatalog.categories()
-      .map((category) => ({
-        ...category,
-        indicators: category.indicators.filter((indicator) => supported.has(indicator.name)),
-      }))
-      .filter((category) => category.indicators.length > 0);
-  });
-  protected readonly indicatorCatalogLoading = computed(() =>
-    this.indicatorCatalog.loading() || this.supportedIndicatorResource.isLoading(),
-  );
+  private readonly indicatorCatalog = chartIndicatorCatalog();
+  protected readonly indicatorCategories = this.indicatorCatalog.categories;
+  protected readonly indicatorCatalogLoading = this.indicatorCatalog.loading;
   /** The shared catalog (`/api/dataset/available`) failed. The supported-set
    * failure is reported separately through `indicatorError`. */
-  protected readonly indicatorCatalogLoadFailed = this.indicatorCatalog.failed;
+  protected readonly indicatorCatalogLoadFailed = this.indicatorCatalog.loadFailed;
 
   /** The delayed pane is unavailable (#2211) either because the request was
    * rejected (`historyFailed`) or because it settled successfully with zero
@@ -409,7 +384,7 @@ export class DualPaneChartComponent implements AfterViewInit {
     this.selectedIndicators().length > 0 && this.indicatorResource.isLoading(),
   );
   protected readonly indicatorError = computed(() => {
-    if (this.supportedIndicatorResource.error()) {
+    if (this.indicatorCatalog.supportFailed()) {
       return 'The chart indicator catalog could not be loaded.';
     }
     return this.indicatorResource.hasValue() ? this.indicatorResource.value().error : null;
@@ -436,7 +411,6 @@ export class DualPaneChartComponent implements AfterViewInit {
   private renderedBars: readonly ChartBar[] = [];
 
   constructor() {
-    void this.indicatorCatalog.load();
     effect(() => this.renderActivePane());
     effect(() => {
       const selected = this.selectedIndicators();

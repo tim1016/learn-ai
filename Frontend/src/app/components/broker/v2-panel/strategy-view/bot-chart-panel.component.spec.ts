@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import { fakeStrategyChartFactory } from '../../../../testing/strategy-chart-fake';
+import { fakeStrategyViewDataPlane } from '../../../../testing/strategy-view-data-plane-fakes';
 import {
   BEFORE_START_TEXT,
   barCloseMs,
@@ -36,7 +37,8 @@ function candleColors(): string[] {
 const minute = (ms: number) => formatTimestampDisplay(ms, { mode: 'local', granularity: 'minute' });
 /** A bar's date and minute, as the candle popover titles it: warmup bars come from earlier days. */
 const barTitle = (ms: number) => `${formatTimestampDisplay(ms, { mode: 'local', granularity: 'date' })} ${minute(ms)}`;
-const providers = [{ provide: STRATEGY_CHART_FACTORY, useValue: charts.create }];
+let dataPlane = fakeStrategyViewDataPlane(vi);
+const providers = () => [{ provide: STRATEGY_CHART_FACTORY, useValue: charts.create }, ...dataPlane.providers];
 
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -70,7 +72,7 @@ class LinkedHost {
 }
 
 async function renderPanel(setup: (host: PanelHost) => void = () => undefined) {
-  const rendered = await render(PanelHost, { providers });
+  const rendered = await render(PanelHost, { providers: providers() });
   setup(rendered.fixture.componentInstance);
   await rendered.fixture.whenStable();
   return rendered;
@@ -86,6 +88,7 @@ function decisionRow(barIndex: number): HTMLElement {
 describe('BotChartPanelComponent (#2639)', () => {
   beforeEach(() => {
     charts.created.length = 0;
+    dataPlane = fakeStrategyViewDataPlane(vi);
     localStorage.clear();
   });
 
@@ -182,7 +185,7 @@ describe('BotChartPanelComponent (#2639)', () => {
 
     expect(within(screen.getByRole('list', { name: 'Strategy view notices' }))
       .getByText('Bars from before the bot started are unavailable for this run.')).toBeTruthy();
-    expect(screen.getByRole('status').textContent).toContain(
+    expect(within(screen.getByRole('tabpanel', { name: 'Strategy · 15m' })).getByRole('status').textContent).toContain(
       'No decision bars yet. The first appears when the bot’s first 15m bar closes.',
     );
     expect(screen.queryByRole('img', { name: /decision candles/ })).toBeNull();
@@ -207,7 +210,7 @@ describe('BotChartPanelComponent (#2639)', () => {
   describe('beside the decisions list', () => {
     it('passes AXE with a candle’s popover open and a decision expanded', async () => {
       const user = userEvent.setup();
-      await render(LinkedHost, { providers });
+      await render(LinkedHost, { providers: providers() });
 
       charts.current().click(barCloseMs(2) / 1000);
       await screen.findByRole('dialog', { name: /bar · No Action/ });
@@ -220,7 +223,7 @@ describe('BotChartPanelComponent (#2639)', () => {
 
     it('shows a candle’s checks and its decision row’s checks from one table', async () => {
       const user = userEvent.setup();
-      await render(LinkedHost, { providers });
+      await render(LinkedHost, { providers: providers() });
 
       charts.current().click(barCloseMs(2) / 1000);
       const popover = await screen.findByRole('dialog', { name: /bar · No Action/ });

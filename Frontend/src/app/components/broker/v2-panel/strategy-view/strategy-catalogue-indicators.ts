@@ -1,0 +1,91 @@
+import { computed, inject, linkedSignal, type Signal } from '@angular/core';
+import { rxResource } from '@angular/core/rxjs-interop';
+import { catchError, map, of } from 'rxjs';
+
+import type { IndicatorPickerAdd } from '../../../../shared/indicator-picker/indicator-picker.component';
+import type { ChartIndicatorResult, TradingIndicatorChip } from '../../../../shared/trading-chart';
+import { BotChartIndicatorService } from '../dual-pane-chart/bot-chart-indicator.service';
+import { chartIndicatorCatalog, type ChartIndicatorCatalog } from '../dual-pane-chart/chart-indicator-catalog';
+import {
+  indicatorSeriesPlans,
+  selectChartIndicator,
+  toActiveIndicatorChips,
+  type IndicatorSeriesPlan,
+  type SelectedChartIndicator,
+} from '../dual-pane-chart/dual-pane-chart-indicators';
+import type { StrategyViewResponse } from '../lib/broker-v2-panel.types';
+import { strategyChartTimes, strategyIndicatorBars } from './strategy-view-model';
+
+interface CalculatedIndicators {
+  readonly results: readonly ChartIndicatorResult[];
+  readonly error: string | null;
+}
+
+/** The catalogue indicators a viewer put on a strategy view, computed on its decision candles. */
+export interface StrategyCatalogueIndicators {
+  readonly catalog: ChartIndicatorCatalog;
+  readonly chips: Signal<readonly TradingIndicatorChip[]>;
+  readonly keys: Signal<readonly string[]>;
+  readonly plans: Signal<readonly IndicatorSeriesPlan[]>;
+  readonly calculating: Signal<boolean>;
+  readonly error: Signal<string | null>;
+  add(entry: IndicatorPickerAdd): void;
+  remove(id: string): void;
+}
+
+/**
+ * Catalogue indicators on a strategy view (#2639 D12). Call it in an
+ * injection context, with the view the host read.
+ *
+ * These lines are the chart's own computation on the decision candles, never
+ * the bot's: the strategy's recorded values stay the only lines drawn from
+ * what the bot saw. The choice lasts for the visit and resets with the
+ * strategy.
+ */
+export function strategyCatalogueIndicators(view: Signal<StrategyViewResponse | null>): StrategyCatalogueIndicators {
+  const indicators = inject(BotChartIndicatorService);
+  const catalog = chartIndicatorCatalog();
+  const selected = linkedSignal<string | null, readonly SelectedChartIndicator[]>({
+    source: () => view()?.strategy_key ?? null,
+    computation: () => [],
+  });
+
+  const calculation = rxResource<CalculatedIndicators, {
+    symbol: string;
+    view: StrategyViewResponse;
+    selected: readonly SelectedChartIndicator[];
+  } | undefined>({
+    params: () => {
+      const read = view();
+      const chosen = selected();
+      return read === null || chosen.length === 0 || read.candles.length === 0
+        ? undefined
+        : { symbol: read.symbol, view: read, selected: chosen };
+    },
+    stream: ({ params }) => indicators.calculateBars(params.symbol, strategyIndicatorBars(params.view.candles), params.selected).pipe(
+      map((response): CalculatedIndicators => ({ results: response.indicators, error: null })),
+      catchError(() => of<CalculatedIndicators>({
+        results: [],
+        error: 'Indicators could not be calculated on these candles.',
+      })),
+    ),
+  });
+  const results = computed(() => (calculation.hasValue() ? calculation.value().results : []));
+
+  return {
+    catalog,
+    chips: computed(() => toActiveIndicatorChips(selected(), results())),
+    keys: computed(() => selected().map((indicator) => indicator.name)),
+    plans: computed(() => {
+      const read = view();
+      return read === null ? [] : indicatorSeriesPlans(results(), strategyChartTimes(read.candles), selected());
+    }),
+    calculating: computed(() => selected().length > 0 && calculation.isLoading()),
+    error: computed(() => {
+      if (catalog.supportFailed()) return 'The chart indicator catalogue could not be loaded.';
+      return calculation.hasValue() ? calculation.value().error : null;
+    }),
+    add: (entry) => selected.update((current) => selectChartIndicator(current, entry)),
+    remove: (id) => selected.update((current) => current.filter((indicator) => indicator.id !== id)),
+  };
+}

@@ -1,0 +1,77 @@
+<form class="gate-editor" [attr.aria-labelledby]="ids.title" (submit)="$event.preventDefault(); submit()">
+  <h4 [id]="ids.title">{{ gate() ? 'Edit gate' : 'New gate' }}</h4>
+
+  <label class="gate-editor__field" [for]="ids.name">Name</label>
+  <input
+    [id]="ids.name"
+    type="text"
+    maxlength="60"
+    autocomplete="off"
+    placeholder="e.g. EMA 5 above close"
+    [value]="label()"
+    (input)="label.set(textOf($event))"
+  />
+
+  <label class="gate-editor__field" [for]="ids.expression">Expression</label>
+  <div class="gate-editor__expression">
+    <input
+      #expressionInput
+      [id]="ids.expression"
+      type="text"
+      maxlength="400"
+      autocomplete="off"
+      spellcheck="false"
+      placeholder="e.g. EMA5 − close"
+      [value]="expression()"
+      (input)="expression.set(textOf($event))"
+    />
+    <div class="gate-editor__sign" role="radiogroup" aria-label="Bright where the expression is">
+      <label><input type="radio" [name]="ids.sign" value="gt" [checked]="sign() === 'gt'" (change)="sign.set('gt')" /> &gt; 0</label>
+      <label><input type="radio" [name]="ids.sign" value="lt" [checked]="sign() === 'lt'" (change)="sign.set('lt')" /> &lt; 0</label>
+    </div>
+  </div>
+  <p class="gate-editor__hint">One linear sum: numbers times names, plus or minus. Click a name to add it.</p>
+
+  @for (group of groups(); track group.title) {
+    <section class="gate-editor__group" [attr.aria-label]="group.title">
+      <h5>{{ group.title }} @if (group.note) { <small>· {{ group.note }}</small> }</h5>
+      @if (group.searchable) {
+        <input
+          class="gate-editor__search"
+          type="search"
+          aria-label="Search the catalogue"
+          placeholder="Search the catalogue"
+          [value]="catalogueQuery()"
+          (input)="catalogueQuery.set(textOf($event))"
+        />
+      }
+      <div class="gate-editor__chips">
+        @for (chip of group.chips; track chip.name) {
+          <button type="button" class="gate-editor__chip" [title]="chip.hint" (click)="insert(chip.name)">{{ chip.name }}</button>
+        } @empty {
+          <span class="gate-editor__none">No match.</span>
+        }
+      </div>
+    </section>
+  }
+
+  @if (refusal(); as reason) {
+    <p class="gate-editor__refusal" role="alert">{{ reason }}</p>
+  } @else if (previewing()) {
+    <p class="gate-editor__status" role="status">Previewing on the chart: bright where this gate holds.</p>
+  }
+  @if (saveError(); as reason) {
+    <p class="gate-editor__refusal" role="alert">{{ reason }}</p>
+  }
+  <p class="gate-editor__note">
+    Saved on {{ strategyName() }}: every bot running it and Strategy Lab see it. Gates only shade; they never trade.
+  </p>
+
+  <div class="gate-editor__actions">
+    <button type="button" [disabled]="draft() === null" (click)="preview()">Preview on chart</button>
+    <button type="submit" class="gate-editor__save" [disabled]="draft() === null || saving()">
+      {{ saving() ? 'Saving…' : 'Save on strategy' }}
+    </button>
+    <button type="button" (click)="closed.emit()">Cancel</button>
+  </div>
+</form>

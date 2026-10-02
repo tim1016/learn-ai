@@ -39,7 +39,11 @@
   height: 2px;
   margin-right: 4px;
   vertical-align: 3px;
+
+  &--thin { height: 1px; }
 }
+
+.strategy-view__legend-computed small { color: var(--text-subtle); font-size: var(--fs-xxs); }
 
 .strategy-view__chart { flex: 1; min-height: 22rem; }
 

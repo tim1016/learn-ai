@@ -12,11 +12,13 @@
  */
 
 import type {
+  CustomGate,
   DecisionExplanationView,
   RecentDecisionView,
   StrategyViewCandle,
   StrategyViewResponse,
 } from '../components/broker/v2-panel/lib/broker-v2-panel.types';
+import type { IndicatorCategory } from '../shared/indicator-catalog/indicator-catalog.service';
 
 export const STRATEGY_BAR_MS = 15 * 60_000;
 /** 18:00 UTC on Wed 2026-09-30: the first fixture bar opens here. */
@@ -121,6 +123,7 @@ export function fakeStrategyView(overrides: Partial<StrategyViewResponse> = {}):
     ],
     unexplained_decision_count: 0,
     notices: [],
+    settings: { foo_length: 7, bar_low: 20, fast: true },
     ...overrides,
   };
 }
@@ -146,3 +149,45 @@ export function fakeRecentDecision(
     ...overrides,
   };
 }
+
+/** A custom gate the viewer saved on the fixture's strategy. */
+export function fakeCustomGate(overrides: Partial<CustomGate> = {}): CustomGate {
+  return {
+    gate_id: 'g-0123456789ab',
+    strategy_key: 'foo_cross',
+    label: 'Foo above close',
+    expression: 'FOO7 - close',
+    sign: 'gt',
+    terms: [{ coefficient: 1, variable: 'FOO7' }, { coefficient: -1, variable: 'close' }],
+    constant: 0,
+    created_at_ms: STRATEGY_FIRST_BAR_START_MS,
+    updated_at_ms: STRATEGY_FIRST_BAR_START_MS,
+    ...overrides,
+  };
+}
+
+/** A small chart catalogue: one length-only indicator, one with no setting, one a gate cannot use. */
+export const FAKE_INDICATOR_CATALOGUE: IndicatorCategory[] = [
+  {
+    name: 'Overlap',
+    indicators: [
+      {
+        name: 'ema', category: 'Overlap', description: 'Exponential moving average',
+        configurable_params: [{ name: 'length', type: 'int', default: 10, min: 1, max: 500, description: 'Bars' }],
+      },
+      { name: 'vwap', category: 'Overlap', description: 'Volume-weighted average price', configurable_params: [] },
+    ],
+  },
+  {
+    name: 'Momentum',
+    indicators: [
+      {
+        name: 'macd', category: 'Momentum', description: 'Moving average convergence divergence',
+        configurable_params: [
+          { name: 'fast', type: 'int', default: 12, min: 1, max: 100, description: 'Fast' },
+          { name: 'slow', type: 'int', default: 26, min: 1, max: 200, description: 'Slow' },
+        ],
+      },
+    ],
+  },
+];

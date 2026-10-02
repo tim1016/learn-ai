@@ -7,26 +7,56 @@
 
 <div #panel [id]="popoverId" class="gate-popover" popover role="dialog" [attr.aria-labelledby]="titleId" (toggle)="onToggle($event)">
   <h3 [id]="titleId">Dark Bright Gate</h3>
-  <p class="gate-popover__note">
-    Shades the strategy candles: bright where the gate holds, dark where it fails.
-    One gate at a time. Gates only shade; they never trade.
-  </p>
-  <div class="gate-list" role="radiogroup" [attr.aria-labelledby]="titleId">
-    @for (gate of orderedGates(); track gate.gate_id) {
-      <label class="gate-option">
-        <input
-          type="radio"
-          [name]="popoverId"
-          [value]="gate.gate_id"
-          [checked]="gate.gate_id === activeGate().gate_id"
-          (change)="choose(gate.gate_id)"
-        />
-        <span class="gate-option__label">{{ gate.label }}</span>
-        <span class="gate-option__source" [class.gate-option__source--strategy]="gate.source === 'strategy'">
-          {{ gate.source | receiptLabel }}
-        </span>
-        <code class="gate-option__expression">{{ gate.expression }}</code>
-      </label>
+  @if (editing(); as edit) {
+    <app-strategy-gate-editor
+      [gate]="edit.gate"
+      [strategyName]="strategyName()"
+      [variables]="variables()"
+      [refusal]="draftRefusal()"
+      [previewing]="previewing()"
+      [save]="save()"
+      (previewRequested)="previewDraft.emit($event)"
+      (closed)="closeEditor()"
+    />
+  } @else {
+    <p class="gate-popover__note">
+      Shades the strategy candles: bright where the gate holds, dark where it fails.
+      One gate at a time. Gates only shade; they never trade.
+    </p>
+    <div class="gate-list" role="radiogroup" [attr.aria-labelledby]="titleId">
+      @for (gate of orderedGates(); track gate.gate_id) {
+        <div class="gate-row">
+          <label class="gate-option">
+            <input
+              type="radio"
+              [name]="popoverId"
+              [value]="gate.gate_id"
+              [checked]="gate.gate_id === activeGate().gate_id"
+              (change)="choose(gate.gate_id)"
+            />
+            <span class="gate-option__label">{{ gate.label }}</span>
+            <span class="gate-option__source" [class.gate-option__source--strategy]="gate.source === 'strategy'">
+              {{ gate.source | receiptLabel }}
+            </span>
+            <code class="gate-option__expression">{{ gate.expression }}</code>
+          </label>
+          @if (savedGate(gate.gate_id); as saved) {
+            <div class="gate-row__actions">
+              @if (confirmingDelete() === saved.gate_id) {
+                <button type="button" class="gate-row__danger" (click)="confirmDelete(saved)">Delete “{{ saved.label }}”</button>
+                <button type="button" (click)="confirmingDelete.set(null)">Keep</button>
+              } @else {
+                <button type="button" [attr.aria-label]="'Edit ' + saved.label" (click)="openEditor(saved)">Edit</button>
+                <button type="button" [attr.aria-label]="'Delete ' + saved.label" (click)="confirmingDelete.set(saved.gate_id)">Delete</button>
+              }
+            </div>
+          }
+        </div>
+      }
+    </div>
+    @if (removeError(); as reason) {
+      <p class="gate-popover__error" role="alert">{{ reason }}</p>
     }
-  </div>
+    <button type="button" class="gate-popover__new" (click)="openEditor(null)">+ New gate</button>
+  }
 </div>

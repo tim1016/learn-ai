@@ -16,4 +16,20 @@
       </li>
     }
   </ul>
+  <h4 class="indicators-popover__section">Catalogue · chart-computed from these candles</h4>
+  <app-chart-indicator-rail
+    class="indicators-popover__rail"
+    [landmark]="false"
+    [searchable]="true"
+    [activeIndicators]="chartComputed()"
+    [activeKeys]="chartComputedKeys()"
+    [categories]="categories()"
+    [catalogLoading]="catalogLoading()"
+    [catalogLoadFailed]="catalogLoadFailed()"
+    [calculationLoading]="calculating()"
+    [error]="error()"
+    [allowAdditionalInstances]="true"
+    (indicatorAdded)="indicatorAdded.emit($event)"
+    (indicatorRemoved)="indicatorRemoved.emit($event)"
+  />
 </div>

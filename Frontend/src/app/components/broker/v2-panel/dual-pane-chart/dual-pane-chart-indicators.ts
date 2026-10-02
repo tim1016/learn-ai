@@ -103,6 +103,20 @@ export function toIndicatorSeriesPlans(
   colorOverrides: Readonly<Record<string, string>> = {},
 ): IndicatorSeriesPlan[] {
   const chartTimes = new Map(bars.map((bar) => [bar.end_ms, toCandle(bar).time]));
+  return indicatorSeriesPlans(results, chartTimes, selected, colorOverrides);
+}
+
+/**
+ * Indicator results as drawable series, each point placed at the chart time
+ * `chartTimes` gives its bar (keyed by the request bar's `t`); a point with
+ * no value or no bar is left out, never drawn as zero.
+ */
+export function indicatorSeriesPlans(
+  results: readonly ChartIndicatorResult[],
+  chartTimes: ReadonlyMap<number, UTCTimestamp>,
+  selected: readonly SelectedChartIndicator[] = [],
+  colorOverrides: Readonly<Record<string, string>> = {},
+): IndicatorSeriesPlan[] {
   return results.flatMap((result) => {
     const overrideColor = colorOverrideForResult(result, selected, colorOverrides);
     if (Array.isArray(result.data)) {

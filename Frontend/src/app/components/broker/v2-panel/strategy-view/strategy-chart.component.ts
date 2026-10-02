@@ -15,6 +15,7 @@ import {
 } from '@angular/core';
 import {
   CandlestickSeries,
+  HistogramSeries,
   LineSeries,
   createSeriesMarkers,
   type IChartApi,
@@ -29,6 +30,7 @@ import {
 import { createAppChart, formatChartAxisTick } from '../../../../shared/charts/chart-utils';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import { formatChartCrosshairTime } from '../dual-pane-chart/dual-pane-chart.component';
+import type { IndicatorSeriesPlan } from '../dual-pane-chart/dual-pane-chart-indicators';
 import type { StrategyViewResponse } from '../lib/broker-v2-panel.types';
 import {
   StrategyChartOverlay,
@@ -72,9 +74,11 @@ function minuteOf(ms: number): string {
  * Candles are the strategy view's bars, placed at their close and shaded by
  * the active gate's result as the backend recorded it. Each declared value
  * with a pane is a line from the bot's recorded values; a band draws two
- * dashed levels on its pane. The before-start shade, the run's start and end
- * lines and the selected candle's band are one overlay primitive per pane.
- * Clicking a candle reports it; the host owns selection.
+ * dashed levels on its pane. Catalogue indicators the viewer adds are drawn
+ * thinner, from the chart's own computation on these candles, on the price
+ * pane or on panes after the strategy's. The before-start shade, the run's
+ * start and end lines and the selected candle's band are one overlay
+ * primitive per pane. Clicking a candle reports it; the host owns selection.
  */
 @Component({
   selector: 'app-strategy-chart',
@@ -90,6 +94,8 @@ export class StrategyChartComponent implements AfterViewInit {
   /** The active gate; `null` shades every candle dark. */
   readonly gateId = input.required<string | null>();
   readonly selectedBarCloseMs = input<number | null>(null);
+  /** Chart-computed catalogue lines, placed at each candle's close. */
+  readonly indicatorPlans = input<readonly IndicatorSeriesPlan[]>([]);
 
   readonly candleClicked = output<StrategyCandleClick>();
 
@@ -131,6 +137,7 @@ export class StrategyChartComponent implements AfterViewInit {
   private priceOverlay: StrategyChartOverlay | null = null;
   private paneOverlays: StrategyChartOverlay[] = [];
   private lineSeries = new Map<string, ISeriesApi<SeriesType>>();
+  private computedSeries: ISeriesApi<SeriesType>[] = [];
   private lineSignature: string | null = null;
   /** The run whose bars were last fitted to the width; a new run fits again. */
   private fittedRunId: string | null = null;
@@ -139,6 +146,10 @@ export class StrategyChartComponent implements AfterViewInit {
   constructor() {
     effect(() => this.renderCandles());
     effect(() => this.renderLines());
+    effect(() => {
+      const plans = this.indicatorPlans();
+      untracked(() => this.renderComputed(plans));
+    });
     effect(() => this.renderOverlays());
     effect(() => {
       const selected = this.selectedBarCloseMs();
@@ -188,9 +199,11 @@ export class StrategyChartComponent implements AfterViewInit {
       this.priceOverlay = null;
       this.paneOverlays = [];
       this.lineSeries.clear();
+      this.computedSeries = [];
     });
     this.renderCandles();
     this.renderLines();
+    this.renderComputed(this.indicatorPlans());
     this.renderOverlays();
   }
 
@@ -244,6 +257,8 @@ export class StrategyChartComponent implements AfterViewInit {
   }
 
   private rebuildLines(chart: IChartApi, plans: readonly StrategyLinePlan[]): void {
+    // The catalogue's panes come after the strategy's, so they go first and return last.
+    this.clearComputed(chart);
     for (const series of this.lineSeries.values()) chart.removeSeries(series);
     this.lineSeries.clear();
     this.paneOverlays = [];
@@ -270,7 +285,41 @@ export class StrategyChartComponent implements AfterViewInit {
     const panes = chart.panes();
     panes[0]?.setStretchFactor(PRICE_PANE_STRETCH);
     for (const pane of panes.slice(1)) pane.setStretchFactor(1);
-    untracked(() => this.renderOverlays());
+    untracked(() => {
+      this.renderComputed(this.indicatorPlans());
+      this.renderOverlays();
+    });
+  }
+
+  /** Redraws the catalogue lines: overlays on the price pane, the rest on
+   * panes of their own after the strategy's (one pane per indicator panel). */
+  private renderComputed(plans: readonly IndicatorSeriesPlan[]): void {
+    const chart = this.chart;
+    if (chart === null) return;
+    this.clearComputed(chart);
+    const firstFreePane = Math.max(0, ...this.linePlans().map((plan) => plan.paneIndex)) + 1;
+    const paneIndices = new Map<string, number>();
+    for (const plan of plans) {
+      let paneIndex = 0;
+      if (plan.pane !== 'main') {
+        paneIndex = paneIndices.get(plan.pane) ?? firstFreePane + paneIndices.size;
+        paneIndices.set(plan.pane, paneIndex);
+      }
+      const options = { color: plan.color, priceLineVisible: false, lastValueVisible: false };
+      const series = plan.type === 'histogram'
+        ? chart.addSeries(HistogramSeries, options, paneIndex)
+        : chart.addSeries(LineSeries, { ...options, lineWidth: 1, crosshairMarkerVisible: false }, paneIndex);
+      series.setData(plan.points.map((point) => ({ time: point.time, value: point.value })));
+      for (const price of plan.referenceLevels) {
+        series.createPriceLine({ price, color: BAND_LINE_COLOR, lineWidth: 1, lineStyle: 2, axisLabelVisible: true });
+      }
+      this.computedSeries.push(series);
+    }
+  }
+
+  private clearComputed(chart: IChartApi): void {
+    for (const series of this.computedSeries) chart.removeSeries(series);
+    this.computedSeries = [];
   }
 
   private renderOverlays(): void {

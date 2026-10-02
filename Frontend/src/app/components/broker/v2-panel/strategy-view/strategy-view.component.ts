@@ -8,6 +8,8 @@ import {
   signal,
 } from '@angular/core';
 
+import type { TradingIndicatorChip } from '../../../../shared/trading-chart';
+import type { IndicatorSeriesPlan } from '../dual-pane-chart/dual-pane-chart-indicators';
 import type { StrategyViewGateView, StrategyViewResponse } from '../lib/broker-v2-panel.types';
 import type { PopoverAnchor } from './popover-placement';
 import { StrategyCandlePopoverComponent } from './strategy-candle-popover.component';
@@ -42,6 +44,9 @@ export class StrategyViewComponent {
   readonly failure = input<StrategyViewFailure | null>(null);
   readonly gate = input<StrategyViewGateView | null>(null);
   readonly selectedBarCloseMs = model<number | null>(null);
+  /** Catalogue lines the chart computed from these candles, and their legend chips. */
+  readonly indicatorPlans = input<readonly IndicatorSeriesPlan[]>([]);
+  readonly chartComputed = input<readonly TradingIndicatorChip[]>([]);
 
   readonly retry = output();
 

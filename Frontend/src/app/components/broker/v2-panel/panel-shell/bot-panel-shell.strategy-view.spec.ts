@@ -15,6 +15,7 @@ import { BrokersService } from '../../../../services/brokers.service';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import { fakeBotPanelView, fakeChartFeed, panelRefusalBody } from '../../../../testing/bot-panel-fixtures';
 import { fakeStrategyChartFactory } from '../../../../testing/strategy-chart-fake';
+import { fakeStrategyViewDataPlane } from '../../../../testing/strategy-view-data-plane-fakes';
 import { barCloseMs, fakeRecentDecision, fakeStrategyView } from '../../../../testing/strategy-view-fixtures';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { BotPanelLiveSnapshot, BotPanelView, RecentDecisionView } from '../lib/broker-v2-panel.types';
@@ -102,6 +103,7 @@ async function renderPage(getStrategyView: ReturnType<typeof vi.fn>) {
       provideRouter([]),
       provideFleetDirectory({ observed_at_ms: 1_757_000_000_000, clerks: [testLane({ clerk_id: 'clrk_spec' })] }),
       { provide: STRATEGY_CHART_FACTORY, useValue: charts.create },
+      ...fakeStrategyViewDataPlane(vi).providers,
       { provide: BrokerV2PanelService, useValue: service(getStrategyView) },
       { provide: BrokersService, useValue: { checkSqliteRecoveryAction: vi.fn() } },
       { provide: MessageService, useValue: { add: vi.fn() } },

@@ -39,6 +39,11 @@
       @for (line of legendLines(); track line.key) {
         <li><span class="line-swatch" aria-hidden="true" [style.background]="line.color"></span>{{ line.label }}</li>
       }
+      @for (line of chartComputed(); track line.id) {
+        <li class="strategy-view__legend-computed">
+          <span class="line-swatch line-swatch--thin" aria-hidden="true" [style.background]="line.color"></span>{{ line.label }} <small>chart</small>
+        </li>
+      }
       <li><span aria-hidden="true">▲▼</span> decision</li>
       <li class="strategy-view__legend-hint">Click a candle for its checks</li>
     </ul>
@@ -47,6 +52,7 @@
       [view]="strategy"
       [gateId]="gate()?.gate_id ?? null"
       [selectedBarCloseMs]="selectedBarCloseMs()"
+      [indicatorPlans]="indicatorPlans()"
       (candleClicked)="onCandleClicked($event)"
     />
     @if (openCandle(); as open) {

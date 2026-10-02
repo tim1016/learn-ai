@@ -14,13 +14,14 @@ import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-d
 import type { StrategyViewResponse } from '../lib/broker-v2-panel.types';
 import type { StrategyChartOverlay } from './strategy-chart-overlay';
 import { STRATEGY_CHART_FACTORY, StrategyChartComponent, type StrategyCandleClick } from './strategy-chart.component';
-import { GATE_CANDLE_COLORS } from './strategy-view-model';
+import { GATE_CANDLE_COLORS, toChartTime } from './strategy-view-model';
 
 const markers = vi.hoisted(() => ({ setMarkers: vi.fn() }));
 
 vi.mock('lightweight-charts', () => ({
   createSeriesMarkers: vi.fn().mockReturnValue(markers),
   CandlestickSeries: 'CandlestickSeries',
+  HistogramSeries: 'HistogramSeries',
   LineSeries: 'LineSeries',
   TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
 }));
@@ -131,6 +132,36 @@ describe('StrategyChartComponent (#2639)', () => {
     expect(chart.addSeries).not.toHaveBeenCalled();
     expect(chart.removeSeries).not.toHaveBeenCalled();
     expect(lastData(foo).at(-1)).toEqual({ time: barCloseMs(4) / 1000, value: 104 });
+  });
+
+  it('draws catalogue lines thinner, on the price pane or on panes after the strategy’s, never rebuilding its own', async () => {
+    const { chart, series, fixture } = await renderChart();
+    const [ownFoo, ownBar] = series.filter((each) => each.type === 'LineSeries');
+    chart.removeSeries.mockClear();
+
+    fixture.componentRef.setInput('indicatorPlans', [
+      { id: 'vwap', pane: 'main', type: 'line', color: '#e0c050', points: [{ time: toChartTime(barCloseMs(3)), value: 499 }], referenceLevels: [] },
+      { id: 'rsi_20', pane: 'rsi', type: 'line', color: '#a0a0ff', points: [], referenceLevels: [30, 70] },
+      { id: 'macd-hist', pane: 'macd', type: 'histogram', color: '#888888', points: [], referenceLevels: [] },
+    ]);
+    await fixture.whenStable();
+
+    const computed = series.slice(-3);
+    // The strategy's own lines hold panes 0 and 1, so the catalogue's own panes start at 2.
+    expect(computed.map((each) => [each.type, each.pane, each.options['lineWidth']])).toEqual([
+      ['LineSeries', 0, 1],
+      ['LineSeries', 2, 1],
+      ['HistogramSeries', 3, undefined],
+    ]);
+    expect(computed[0].setData).toHaveBeenLastCalledWith([{ time: toChartTime(barCloseMs(3)), value: 499 }]);
+    expect(computed[1].createPriceLine.mock.calls.map(([line]) => line.price)).toEqual([30, 70]);
+    expect(chart.removeSeries).not.toHaveBeenCalled();
+
+    fixture.componentRef.setInput('indicatorPlans', []);
+    await fixture.whenStable();
+    expect(chart.removeSeries.mock.calls.map(([removed]) => removed)).toEqual(computed);
+    expect(chart.removeSeries).not.toHaveBeenCalledWith(ownFoo);
+    expect(chart.removeSeries).not.toHaveBeenCalledWith(ownBar);
   });
 
   it('opens on the run once the chart has measured its width, and keeps the viewer’s zoom after', async () => {
