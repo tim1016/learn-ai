@@ -45,12 +45,16 @@ export function stepForState(state: StudyState): StudyStep {
 
 export type StepProgress = 'done' | 'current' | 'upcoming';
 
+/** A recorded decision ends the study: its decision step is done, not waiting. */
+const FINISHED_STATES: ReadonlySet<StudyState> = new Set(['approved', 'retained', 'closed']);
+
 export function stepProgress(step: StudyStep, state: StudyState): StepProgress {
   const order = STUDY_STEPS.map((s) => s.id);
   const current = order.indexOf(stepForState(state));
   const index = order.indexOf(step);
   if (index < current) return 'done';
-  return index === current ? 'current' : 'upcoming';
+  if (index > current) return 'upcoming';
+  return FINISHED_STATES.has(state) ? 'done' : 'current';
 }
 
 export type PrimaryAction =

@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, injec
 import { ButtonModule } from 'primeng/button';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
+import { extractServerMessage } from '../broker/operation-error';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
 import type { GridSearchRefusal } from '../grid-search/grid-search.types';
@@ -187,7 +188,7 @@ export class GoldenSearchPlanFormComponent {
       this.lockError.set(error.message);
     } else {
       // No answer: a retry of the same plan reuses the key, so it cannot lock twice.
-      this.lockError.set('The plan was not confirmed as locked. Check the service and press Lock again; the retry cannot create a second study.');
+      this.lockError.set(extractServerMessage(error, 'The plan was not confirmed as locked. Check the service and press Lock again; the retry cannot create a second study.'));
     }
   }
 
@@ -219,8 +220,10 @@ export class GoldenSearchPlanFormComponent {
       this.incumbentLabel.set(incumbentLabel);
       this.draft.set(draft);
       this.scheduleCheck();
-    } catch {
-      if (generation === this.defaultsGeneration) this.defaultsError.set('The study defaults could not be loaded for this strategy and instrument. Check the service and pick again.');
+    } catch (error) {
+      if (generation === this.defaultsGeneration) {
+        this.defaultsError.set(extractServerMessage(error, 'The study defaults could not be loaded for this strategy and instrument. Check the service and pick again.'));
+      }
     } finally {
       if (generation === this.defaultsGeneration) this.loadingDefaults.set(false);
     }
@@ -247,10 +250,10 @@ export class GoldenSearchPlanFormComponent {
       this.layingDates.set(false);
       this.draft.set(withServerDates(draft, laidOut));
       this.scheduleCheck();
-    } catch {
+    } catch (error) {
       if (generation !== this.datesGeneration) return;
       this.layingDates.set(false);
-      this.datesError.set('The dates could not be laid out for these months. Change a month count to try again.');
+      this.datesError.set(extractServerMessage(error, 'The dates could not be laid out for these months. Change a month count to try again.'));
       this.invalidateCheck();
     }
   }
@@ -294,8 +297,8 @@ export class GoldenSearchPlanFormComponent {
       const plan = await this.service.preflight(draft.protocol);
       if (generation !== this.preflightGeneration) return;
       this.preflight.set(plan);
-    } catch {
-      if (generation === this.preflightGeneration) this.preflightError.set('The plan could not be checked. Check the service and edit again to retry.');
+    } catch (error) {
+      if (generation === this.preflightGeneration) this.preflightError.set(extractServerMessage(error, 'The plan could not be checked. Check the service and edit again to retry.'));
     } finally {
       if (generation === this.preflightGeneration) this.checking.set(false);
     }

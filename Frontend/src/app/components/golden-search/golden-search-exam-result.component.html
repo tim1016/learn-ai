@@ -21,7 +21,7 @@
       </tbody>
     </table>
   </div>
-  <p class="caption">${{ s.scope.capital | number: '1.0-0' }} frozen starting capital · {{ s.scope.costs_sentence }}.</p>
+  <p class="caption">${{ s.scope.capital | number: '1.0-0' }} frozen starting capital · {{ s.scope.costs_sentence }}</p>
   @if (e.checks.length > 0) {
     <ul class="checks" aria-label="Final-test checks">
       @for (check of e.checks; track check.code) {

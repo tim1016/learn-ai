@@ -6,6 +6,7 @@ import { ButtonModule } from 'primeng/button';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { ConfirmDeleteComponent } from '../../shared/research-record/confirm-delete.component';
 import { RecordPoller } from '../../shared/research-record/record-poller';
+import { extractServerMessage } from '../broker/operation-error';
 import type { GridSearchRefusal } from '../grid-search/grid-search.types';
 import { GoldenSearchCompareStepComponent } from './golden-search-compare-step.component';
 import { GoldenSearchDecisionStepComponent } from './golden-search-decision-step.component';
@@ -38,7 +39,8 @@ const PROGRESS_TEXT: Readonly<Record<StepProgress, string>> = {
  * where the final test and the current default stand. Every stage change is a command
  * carrying the study's revision and an idempotency key; a command that
  * authorizes a stage starts its job through the jobs boundary. Polls while a
- * stage runs.
+ * stage runs; a failed poll keeps the study shown and tries again, and an
+ * answer older than the revision on screen is dropped.
  */
 @Component({
   selector: 'app-golden-search-study',
@@ -72,6 +74,8 @@ export class GoldenSearchStudyComponent {
 
   readonly detail = signal<StudyDetail | null>(null);
   readonly loadError = signal<string | null>(null);
+  /** A refresh of the study on screen failed; it stays shown (#2696). */
+  readonly refreshNotice = signal<string | null>(null);
   readonly actionMessage = signal<string | null>(null);
   readonly actionRefusal = signal<GridSearchRefusal | null>(null);
   readonly busy = signal(false);
@@ -141,6 +145,7 @@ export class GoldenSearchStudyComponent {
       const id = this.studyId();
       untracked(() => {
         this.detail.set(null);
+        this.refreshNotice.set(null);
         this.announcement.set('');
         this.stateStep = null;
         this.awaitingClaimPolls = 0;
@@ -155,9 +160,17 @@ export class GoldenSearchStudyComponent {
       const detail = await this.service.get(id);
       if (generation !== this.loadGeneration) return;
       this.loadError.set(null);
+      this.refreshNotice.set(null);
       this.apply(detail);
-    } catch {
-      if (generation === this.loadGeneration) this.loadError.set('This study could not be loaded.');
+    } catch (error) {
+      if (generation !== this.loadGeneration) return;
+      const shown = this.detail();
+      if (shown?.id !== id) {
+        this.loadError.set(extractServerMessage(error, 'This study could not be loaded.'));
+        return;
+      }
+      // One failed refresh of a study on screen is not the end of it.
+      this.refreshNotice.set(this.schedulePoll(shown) ? 'This study could not be refreshed; retrying.' : 'This study could not be refreshed.');
     }
   }
 
@@ -189,7 +202,7 @@ export class GoldenSearchStudyComponent {
     } catch (error) {
       if (error instanceof GoldenSearchRefusedError) this.actionRefusal.set(error.refusal);
       else if (error instanceof StudyConflictError) this.actionMessage.set(error.message);
-      else this.actionMessage.set('The study could not be hidden. Try again.');
+      else this.actionMessage.set(extractServerMessage(error, 'The study could not be hidden. Try again.'));
     } finally {
       this.busy.set(false);
     }
@@ -240,7 +253,7 @@ export class GoldenSearchStudyComponent {
       this.keys.settle();
       this.actionRefusal.set(error.refusal);
     } else {
-      this.actionMessage.set('The command got no answer. Press it again: the retry is recognised and cannot act twice.');
+      this.actionMessage.set(extractServerMessage(error, 'The command got no answer. Press it again: the retry is recognised and cannot act twice.'));
     }
   }
 
@@ -259,9 +272,13 @@ export class GoldenSearchStudyComponent {
     this.apply(detail);
   }
 
-  /** Shows a study; moves to the step holding its decision whenever that step changes. */
+  /** Shows a study; moves to the step holding its decision whenever that step changes. An answer older than the one shown is dropped. */
   private apply(detail: StudyDetail): void {
     const previous = this.detail();
+    if (previous !== null && previous.id === detail.id && detail.revision < previous.revision) {
+      this.schedulePoll(previous);
+      return;
+    }
     if (previous !== null && previous.id === detail.id && previous.state !== detail.state) {
       this.announcement.set(`${detail.guidance.headline}. ${detail.guidance.detail}`);
     }
@@ -275,14 +292,18 @@ export class GoldenSearchStudyComponent {
     this.schedulePoll(detail);
   }
 
-  private schedulePoll(detail: StudyDetail): void {
+  /** Arms the next poll while the study's stage runs or its claim is awaited; true when one was armed. */
+  private schedulePoll(detail: StudyDetail): boolean {
     if (isLive(detail.presented_status)) {
       this.poller.schedule(this.pollMs(), () => void this.reload());
-    } else if (this.awaitingClaimPolls > 0) {
+      return true;
+    }
+    if (this.awaitingClaimPolls > 0) {
       this.awaitingClaimPolls -= 1;
       this.poller.schedule(this.pollMs(), () => void this.reload());
-    } else {
-      this.poller.stop();
+      return true;
     }
+    this.poller.stop();
+    return false;
   }
 }

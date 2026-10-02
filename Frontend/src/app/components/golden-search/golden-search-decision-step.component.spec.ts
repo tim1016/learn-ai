@@ -178,6 +178,21 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     ]);
   });
 
+  it('asks for the weakness the server names, in its words, even when the outcome alone reads as a pass', async () => {
+    const { commands } = await renderStep(reviewWith({ weakness: [{ code: 'EXPOSURE_HISTORY_UNKNOWN', text: 'the unknown history of this test interval' }] }));
+
+    expect(reason().value).toBe('');
+    fireEvent.input(reason(), { target: { value: 'Owner accepts the unknown history.' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /missing independent engine agreement/i }));
+    expect(approveButton().disabled).toBe(true);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'I approve despite the unknown history of this test interval. Preserve this evidence warning and my written reason.' }));
+    fireEvent.click(approveButton());
+
+    expect(commands).toEqual([
+      { command: 'approve', payload: { note: 'Owner accepts the unknown history.', acknowledge_missing_parity: true, acknowledge_research_weakness: true, expected_default_qualification_id: null } },
+    ]);
+  });
+
   it('approval the server does not offer stays disabled even with every acknowledgement, and says why', async () => {
     const { commands } = await renderStep(
       reviewWith({}, { permitted_actions: ['retain', 'revise'], action_refusals: { approve: 'Approval follows the final test.' } }),

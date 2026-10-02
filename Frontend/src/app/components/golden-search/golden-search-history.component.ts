@@ -3,6 +3,7 @@ import { RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
+import { extractServerMessage } from '../broker/operation-error';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
 import type { TickerOption } from '../../shared/ticker-range-picker/ticker-range-picker.types';
@@ -54,8 +55,8 @@ export class GoldenSearchHistoryComponent {
       this.rows.set(rows);
       this.seenSymbols.update((seen) => [...new Set([...seen, ...rows.map((row) => row.symbol)])].sort());
       this.error.set(null);
-    } catch {
-      if (generation === this.generation) this.error.set('History could not be loaded.');
+    } catch (error) {
+      if (generation === this.generation) this.error.set(extractServerMessage(error, 'History could not be loaded.'));
     } finally {
       if (generation === this.generation) this.loading.set(false);
     }

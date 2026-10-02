@@ -165,7 +165,11 @@ export type EvidenceCandidate = Omit<Schemas['GoldenSearchEvidenceCandidate'], '
 export type EvidenceView = Omit<Schemas['GoldenSearchEvidenceView'], 'candidates'> & { candidates: EvidenceCandidate[] };
 
 export type ExamCheck = Schemas['GoldenSearchExamCheck'];
-/** `retention` is descriptive only, never a check. */
+/**
+ * `retention` is descriptive only, never a check; `weakness` is what approving
+ * needs the owner to acknowledge, in the acknowledgement's words — empty
+ * before an outcome and when the evidence meets the rules.
+ */
 export type ExamView = Omit<Schemas['GoldenSearchExamView'], 'candidate_point'> & { candidate_point: Point };
 
 /** The canonical point Deploy applies, without `symbol`. */

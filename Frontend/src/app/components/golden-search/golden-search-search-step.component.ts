@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 
-import { pairMapView } from './golden-search-compare';
+import { pairAudit } from './golden-search-compare';
 import { GoldenSearchPairMapComponent } from './golden-search-pair-map.component';
 import { GoldenSearchProcedureComponent } from './golden-search-procedure.component';
 import type { StrategyCapability, StudyDetail } from './golden-search.types';
@@ -35,8 +35,5 @@ export class GoldenSearchSearchStepComponent {
   );
   protected readonly pairMaps = computed(() => this.study().results.search?.pair_maps ?? []);
   /** Each landscape's valid and invalid cells, counted from the server's cells. */
-  protected readonly audits = computed(() => {
-    const center = this.study().results.search?.winner ?? null;
-    return this.pairMaps().map((map) => pairMapView(map, this.capability(), center));
-  });
+  protected readonly audits = computed(() => this.pairMaps().map((map) => pairAudit(map, this.capability())));
 }

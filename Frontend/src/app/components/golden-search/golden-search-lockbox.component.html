@@ -27,7 +27,7 @@
 
     @if (c && c.flags.length > 0) {
       <p class="note" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
-        <span>Development warning: @for (flag of c.flags; track flag.code) { {{ flag.text }}. }Keeping the incumbent may be the better decision.</span></p>
+        <span>Development warning: @for (flag of c.flags; track $index) { {{ flag.text }}. }Keeping the incumbent may be the better decision.</span></p>
     }
 
     <label class="check"><input type="checkbox" [checked]="acknowledged()" (change)="onAcknowledge($event)" /><span>I understand this locks my candidate and consumes this test interval.</span></label>

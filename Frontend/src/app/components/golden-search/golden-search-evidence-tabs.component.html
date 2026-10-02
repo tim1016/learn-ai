@@ -20,9 +20,9 @@
     <app-golden-search-neighborhood view="stress" [neighbors]="row.candidate.neighbors" [stress]="row.candidate.stress" [capability]="capability()" [candidateLabel]="row.candidate.label" />
   }
   @default {
-    @if (details.error()) {
+    @if (detailsError(); as message) {
       <div role="alert" class="failed">
-        <p>The candidates' detail runs could not be loaded.</p>
+        <p>{{ message }}</p>
         <button type="button" class="link" (click)="retry()">Try again</button>
       </div>
     } @else if (!details.hasValue()) {
@@ -35,7 +35,7 @@
         <dl class="rules">
           @for (candidate of rows(); track candidate.key) { <div><dt>{{ candidate.candidate.label }} — largest fall from a peak</dt><dd>{{ candidate.worstFall }}</dd></div> }
         </dl>
-        <p class="caption">${{ scope().capital | number: '1.0-0' }} starting capital · {{ scope().costs_sentence }}. Historical broker fees are not modeled.</p>
+        <p class="caption">${{ scope().capital | number: '1.0-0' }} starting capital · {{ scope().costs_sentence }}</p>
       </details>
     } @else if (selectedRun(); as run) {
       @if (active() === 'months') {

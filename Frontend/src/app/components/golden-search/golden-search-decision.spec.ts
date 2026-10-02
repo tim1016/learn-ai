@@ -1,28 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
-import { evidenceRows, expectedDefault, factualNote, researchRow, weaknesses, weaknessRequired } from './golden-search-decision';
+import { evidenceRows, expectedDefault, factualNote, researchRow } from './golden-search-decision';
 import { examView, protocol } from './testing/fixtures';
 
 describe('golden-search-decision', () => {
-  it('only a confirmatory final test that met the rules needs no weak-evidence acknowledgement', () => {
-    expect(weaknessRequired(examView())).toBe(false);
-    expect(weaknesses(examView())).toEqual([]);
+  it('prefills the factual reason only for a judged final test the server names no weakness in', () => {
     expect(factualNote(examView())).toContain('meets the stated rules on a confirmatory final test');
+    expect(factualNote(examView({ outcome: null, checks: [] }))).toBe('');
   });
 
-  it.each([
-    [{ outcome: 'does_not_meet_rules' as const, checks: [] }, ['failing the stated rules']],
-    [{ outcome: 'not_enough_evidence' as const }, ['not enough final-test evidence']],
-    [{ outcome: 'could_not_evaluate' as const }, ['a final test that could not be evaluated']],
-    [{ outcome: null }, ['a final test without an outcome']],
-    [{ claim: 'exploratory' as const, exposure_state: 'history_unknown' as const }, ['the unknown history of this test interval']],
-    [{ claim: 'exploratory' as const, exposure_state: 'not_opened' as const }, ['an exploratory, not confirmatory, final test']],
-  ])('names the weakness and asks for the separate acknowledgement: %o', (overrides, expected) => {
-    const exam = examView(overrides);
+  it('a weakness the server names reads as weak evidence, even beside a passing outcome', () => {
+    const exam = examView({ weakness: [{ code: 'EXPOSURE_HISTORY_UNKNOWN', text: 'the unknown history of this test interval' }] });
 
-    expect(weaknessRequired(exam)).toBe(true);
-    expect(weaknesses(exam)).toEqual(expected);
     expect(factualNote(exam)).toBe('');
+    expect(researchRow(exam).tone).toBe('warn');
   });
 
   it('a missing outcome is never read as a pass, even on an untouched interval', () => {

@@ -4,8 +4,11 @@ import type {
   CandidateKey,
   EvidenceCandidate,
   EvidenceView,
+  ExamOutcome,
   ExamView,
+  ExposureState,
   ExposureView,
+  Finding,
   GoldenSearchDefaults,
   GoldenSearchPreflight,
   Metrics,
@@ -412,8 +415,35 @@ export function candidateDetail(key: CandidateKey, overrides: Partial<CandidateD
   };
 }
 
+/** The server's weakness copy (`guidance.weakness_items`) for an outcome short of the rules, beside a failed rule. */
+const EXAM_WEAKNESS: Readonly<Record<Exclude<ExamOutcome, 'meets_rules' | 'does_not_meet_rules'>, string>> = {
+  not_enough_evidence: 'not enough final-test evidence',
+  could_not_evaluate: 'a final test that could not be evaluated',
+};
+/** The same for a test interval that can only be exploratory. */
+const EXPOSURE_WEAKNESS: Readonly<Record<ExposureState, string>> = {
+  not_opened: 'an exploratory, not confirmatory, final test',
+  previously_used: 'the previously used test interval',
+  history_unknown: 'the unknown history of this test interval',
+};
+
+/** What the server names as weak about an exam: nothing before an outcome, or when the evidence meets the rules. */
+function weaknessOf(exam: Omit<ExamView, 'weakness'>): Finding[] {
+  if (exam.outcome === null) return [];
+  const found: Finding[] = [];
+  if (exam.outcome === 'does_not_meet_rules') {
+    const failed = exam.checks.filter((check) => check.status === 'fail').map((check) => check.label.toLowerCase());
+    found.push({ code: 'EXAM_DOES_NOT_MEET_RULES', text: failed.length > 0 ? `failing the stated rules (${failed.join(', ')})` : 'failing the stated rules' });
+  } else if (exam.outcome !== 'meets_rules') {
+    found.push({ code: `EXAM_${exam.outcome.toUpperCase()}`, text: EXAM_WEAKNESS[exam.outcome] });
+  }
+  if (exam.claim !== 'confirmatory') found.push({ code: `EXPOSURE_${exam.exposure_state.toUpperCase()}`, text: EXPOSURE_WEAKNESS[exam.exposure_state] });
+  return found;
+}
+
+/** A final test; its `weakness` follows its outcome, claim and exposure as the server's does, unless an override names it. */
 export function examView(overrides: Partial<ExamView> = {}): ExamView {
-  return {
+  const exam: Omit<ExamView, 'weakness'> = {
     candidate_key: 'all_period',
     candidate_point: { ...ALL_PERIOD_POINT },
     window: { start_ms: FINAL_START_MS, end_ms: FINAL_END_MS },
@@ -431,6 +461,7 @@ export function examView(overrides: Partial<ExamView> = {}): ExamView {
     incumbent_metrics: metrics({ total_return_pct: 0.009, max_drawdown_pct: 0.042, total_trades: 39, sharpe_ratio: 0.54 }),
     ...overrides,
   };
+  return { ...exam, weakness: overrides.weakness ?? weaknessOf(exam) };
 }
 
 export function qualificationView(overrides: Partial<QualificationView> = {}): QualificationView {

@@ -3,7 +3,7 @@
  * values the server computed — no metric, return or estimate is derived here.
  */
 
-import type { CapabilityKnob, ExposureState, IncumbentRef, Point, PointValue, StrategyCapability } from './golden-search.types';
+import type { CapabilityKnob, ExposureState, IncumbentRef, Metrics, Point, PointValue, StrategyCapability } from './golden-search.types';
 
 export interface PointEntry {
   readonly name: string;
@@ -141,4 +141,35 @@ export function ratioText(value: number | null | undefined): string {
 /** A dollar result with its sign (`+$186`, `−$92`). */
 export function signedUsdText(value: number | null | undefined): string {
   return value === null || value === undefined ? '—' : SIGNED_USD.format(value);
+}
+
+/** A run's four comparison figures as text, and why they read "—" when its run failed. */
+export interface MetricTexts {
+  /** Net return with its sign, e.g. `+8.7%`. */
+  readonly netReturn: string;
+  /** Worst fall from peak, unsigned. */
+  readonly worstFall: string;
+  readonly trades: string;
+  readonly sharpe: string;
+  /** A failed run's error ("The run failed." when it gave none); null for a completed run or no result. */
+  readonly failure: string | null;
+}
+
+const NO_FIGURES = { netReturn: '—', worstFall: '—', trades: '—', sharpe: '—' } as const;
+
+/**
+ * The net return, worst fall, trades and Sharpe every Golden Search comparison
+ * shows for one run. A failed run or a missing result reads "—" in every
+ * figure, as does any statistic the engine left undefined — never zero.
+ */
+export function metricTexts(metrics: Metrics | null): MetricTexts {
+  if (metrics === null) return { ...NO_FIGURES, failure: null };
+  if (metrics.status === 'failed') return { ...NO_FIGURES, failure: metrics.error ?? 'The run failed.' };
+  return {
+    netReturn: signedPercentText(metrics.total_return_pct),
+    worstFall: percentText(metrics.max_drawdown_pct),
+    trades: String(metrics.total_trades),
+    sharpe: ratioText(metrics.sharpe_ratio),
+    failure: null,
+  };
 }
