@@ -165,6 +165,19 @@ class BacktestRunDetailResponse(_RunResponse):
         return [skip.model_dump() for skip in provenance.closing_bar_skips]
 
 
+class BacktestRunViewRefusal(BaseModel):
+    """Why a saved run's strategy view cannot be shown (#2639 D13)."""
+
+    code: Literal["STRATEGY_VIEW_NOT_REPLAYABLE"]
+    message: str
+
+
+class BacktestRunViewRefusalBody(BaseModel):
+    """The 409 body: FastAPI wraps an ``HTTPException`` detail as ``{"detail": ...}``."""
+
+    detail: BacktestRunViewRefusal
+
+
 class BacktestRunNotesRequest(BaseModel):
     notes: str | None = None
 

@@ -26,7 +26,7 @@ from app.lean_sidecar.trading_calendar import (
     session_start_for_bar_count,
 )
 from app.schemas.broker_bots import BotStatusView
-from app.schemas.broker_v2_panel import ChartOverlayNoticeView
+from app.schemas.broker_v2_panel import ChartBar, ChartOverlayNoticeView
 from app.schemas.fleet_history_batch import HistoryBatchQuery, HistoryBatchResponse
 from app.services.broker_v2_panel import (
     chart_projection_service,
@@ -35,13 +35,16 @@ from app.services.broker_v2_panel import (
 )
 from app.services.broker_v2_panel.chart_projection_service import (
     ChartTimeframeError,
+    ChartWindowError,
     aggregator_bars_to_chart_bars,
     build_history_chart,
     build_live_chart,
+    build_run_window_chart,
     chart_feed_view,
     coerce_history_timeframe,
     history_fill_window,
     live_window,
+    run_chart_window,
 )
 from app.services.chart_indicator_service import ChartIndicatorService
 from app.services.live_chart_window import (
@@ -997,3 +1000,88 @@ async def test_history_chart_forwards_coordinator_unavailable_from_the_batch_pro
 
     assert result.bars == []
     assert [notice.code for notice in result.overlay_notices] == ["coordinator_unavailable"]
+
+
+# ── A finished run's tape (#2794) ────────────────────────────────────────────
+
+_RUN_START = session_open_ms_utc(date(2026, 9, 30)) + 5 * 3_600_000  # 14:30 ET
+_RUN_END = _RUN_START + 89 * 60_000  # 15:59 ET
+
+
+async def test_a_run_window_tape_shows_that_runs_minutes_and_fills_only() -> None:
+    window = (_RUN_START - 10 * 60_000, _RUN_END + 60_000)
+    asked: list[HistoryBatchQuery] = []
+    # The batch reaches back past the window's start, as a backward walk does.
+    minutes = [
+        ChartBar(
+            start_ms=start, end_ms=start + 60_000, open="1", high="2", low="0.5", close="1.5", volume=10,
+            source="polygon",
+        )
+        for start in range(_RUN_START - 20 * 60_000, _RUN_END + 60_000, 60_000)
+    ]
+
+    async def _provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
+        asked.append(query)
+        return HistoryBatchResponse(bars=minutes, source="polygon", overlay_notices=[], effective_as_of_ms=query.as_of_ms)
+
+    fills = [
+        _sqlite_fill(event_key="in-run", filled_at_ms=_RUN_START + 30 * 60_000),
+        _sqlite_fill(event_key="yesterday", filled_at_ms=_RUN_START - 86_400_000),
+    ]
+    result = await build_run_window_chart(
+        "1m", fills, strategy_instance_id=SID, symbol="SPY", batch_provider=_provider,
+        window=window, now_ms=_RUN_END + 3_600_000,
+    )
+
+    [query] = asked
+    assert query.as_of_ms == window[1]
+    assert query.required_bar_count == 100
+    assert result.bars[0].start_ms == window[0]
+    assert all(window[0] <= bar.start_ms and bar.end_ms <= window[1] for bar in result.bars)
+    assert result.indicator_bars == result.bars
+    assert [marker.filled_at_ms for marker in result.fill_markers] == [_RUN_START + 30 * 60_000]
+    assert result.truncated is False
+
+
+def test_a_run_window_is_held_to_the_run_give_or_take_half_an_hour() -> None:
+    later = _RUN_END + 3_600_000
+    assert run_chart_window(
+        _RUN_START - 30 * 60_000, _RUN_END + 30 * 60_000,
+        run_started_at_ms=_RUN_START, run_ended_at_ms=_RUN_END, now_ms=later,
+    ) == (_RUN_START - 30 * 60_000, _RUN_END + 30 * 60_000)
+    # A running bot's run ends now; the window ends no later than now.
+    assert run_chart_window(
+        _RUN_START, _RUN_START + 20 * 60_000,
+        run_started_at_ms=_RUN_START, run_ended_at_ms=None, now_ms=_RUN_START + 60_000,
+    ) == (_RUN_START, _RUN_START + 60_000)
+    with pytest.raises(ChartWindowError, match="within this bot's latest run"):
+        run_chart_window(
+            _RUN_START - 31 * 60_000, _RUN_END,
+            run_started_at_ms=_RUN_START, run_ended_at_ms=_RUN_END, now_ms=later,
+        )
+    with pytest.raises(ChartWindowError, match="has not started a run"):
+        run_chart_window(_RUN_START, _RUN_END, run_started_at_ms=None, run_ended_at_ms=None, now_ms=later)
+    # A running bot's window wholly in its next half hour would end before it starts.
+    with pytest.raises(ChartWindowError, match="must start before now"):
+        run_chart_window(
+            _RUN_START + 10 * 60_000, _RUN_START + 20 * 60_000,
+            run_started_at_ms=_RUN_START, run_ended_at_ms=None, now_ms=_RUN_START,
+        )
+
+
+async def test_a_run_window_tape_says_when_the_batch_did_not_reach_its_start() -> None:
+    """Fewer bars than asked for is not proof the start was reached: history can end first."""
+    window = (_RUN_START - 10 * 60_000, _RUN_END)
+    late = [
+        ChartBar(start_ms=start, end_ms=start + 60_000, open="1", high="1", low="1", close="1", volume=1, source="polygon")
+        for start in range(_RUN_START + 30 * 60_000, _RUN_END, 60_000)
+    ]
+
+    async def _provider(query: HistoryBatchQuery) -> HistoryBatchResponse:
+        return HistoryBatchResponse(bars=late, source="polygon", overlay_notices=[], effective_as_of_ms=query.as_of_ms)
+
+    result = await build_run_window_chart(
+        "1m", [], strategy_instance_id=SID, symbol="SPY", batch_provider=_provider, window=window, now_ms=_RUN_END,
+    )
+
+    assert result.truncated is True

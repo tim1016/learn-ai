@@ -3513,6 +3513,38 @@
         "title": "BacktestRunTradeResponse",
         "type": "object"
       },
+      "BacktestRunViewRefusal": {
+        "description": "Why a saved run's strategy view cannot be shown (#2639 D13).",
+        "properties": {
+          "code": {
+            "const": "STRATEGY_VIEW_NOT_REPLAYABLE",
+            "title": "Code"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "BacktestRunViewRefusal",
+        "type": "object"
+      },
+      "BacktestRunViewRefusalBody": {
+        "description": "The 409 body: FastAPI wraps an ``HTTPException`` detail as ``{\"detail\": ...}``.",
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/BacktestRunViewRefusal"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "BacktestRunViewRefusalBody",
+        "type": "object"
+      },
       "BarPayload": {
         "description": "Inline OHLCV bar.",
         "properties": {
@@ -49938,6 +49970,7 @@
     },
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/chart/history": {
       "get": {
+        "description": "The newest bars for ``timeframe``; with ``from_ms`` and ``to_ms``, that window of the bot's latest run.",
         "operationId": "get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get",
         "parameters": [
           {
@@ -49984,6 +50017,42 @@
             }
           },
           {
+            "in": "query",
+            "name": "from_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799999,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From Ms"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799999,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To Ms"
+            }
+          },
+          {
             "in": "header",
             "name": "X-Data-Plane-Control-Secret",
             "required": false,
@@ -50022,7 +50091,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Polygon chart: bounded timeframe window (\u00a78)",
+        "summary": "Polygon chart: bounded timeframe window (\u00a78), or a window of the bot's latest run (#2794)",
         "tags": [
           "broker-v2-panel"
         ]
@@ -62175,6 +62244,59 @@
           }
         },
         "summary": "Update Backtest Run Notes",
+        "tags": [
+          "research-backtest-runs"
+        ]
+      }
+    },
+    "/api/research/backtest-runs/{run_id}/strategy-view": {
+      "get": {
+        "description": "The run's strategy view, replayed from its own record; 409 says why when it cannot be replayed exactly.",
+        "operationId": "get_backtest_run_strategy_view_api_research_backtest_runs__run_id__strategy_view_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyViewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestRunViewRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Backtest Run Strategy View",
         "tags": [
           "research-backtest-runs"
         ]

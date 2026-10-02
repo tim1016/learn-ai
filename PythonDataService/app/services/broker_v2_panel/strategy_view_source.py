@@ -23,9 +23,7 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
     SqlitePanelDecisionUnavailable,
     read_sqlite_decision_receipts,
 )
-from app.services.strategy_view import ResolvedStrategyView, StrategyViewUnavailableError
-
-BEFORE_START_TEXT = "Before start · not acted on"
+from app.services.strategy_view import BEFORE_START_TEXT, ResolvedStrategyView, StrategyViewUnavailableError
 
 
 async def get_strategy_view(broker: str, account_id: str, sid: str) -> StrategyViewResponse:
@@ -100,50 +98,32 @@ def build_strategy_view(
                 unexplained += 1
             continue
         decided_closes.add(record.bar.end_ms)
-        rendered = view.render_or_none(record)
-        if rendered is None:
-            unshown += 1
-            continue
-        candles.append(
-            StrategyViewCandle(
-                **_bar_fields(record),
-                phase="decision",
-                outcome=receipt.outcome,
-                reason_code=receipt.reason_code,
-                decision_seq=receipt.seq,
-                explanation=rendered,
-                gates=view.gate_results(record),
-            )
+        candle = view.candle(
+            record,
+            phase="decision",
+            outcome=receipt.outcome,
+            reason_code=receipt.reason_code,
+            decision_seq=receipt.seq,
         )
+        if candle is None:
+            unshown += 1
+        else:
+            candles.append(candle)
     for record in before_start or ():
         close_ms = record.bar.end_ms
         if close_ms in decided_closes or (run_started_at_ms is not None and close_ms > run_started_at_ms):
             continue
-        rendered = view.render_or_none(record)
-        if rendered is not None:
-            candles.append(
-                StrategyViewCandle(
-                    **_bar_fields(record),
-                    phase="before_start",
-                    phase_text=BEFORE_START_TEXT,
-                    explanation=rendered,
-                    gates=view.gate_results(record),
-                )
-            )
-    candles.sort(key=lambda candle: candle.bar_close_ms)
-    return StrategyViewResponse(
-        strategy_key=view.strategy_key,
-        strategy_name=view.registration.display_name,
+        candle = view.candle(record, phase="before_start")
+        if candle is not None:
+            candles.append(candle)
+    return view.response(
         symbol=symbol,
-        decision_timeframe_ms=view.decision_timeframe_ms,
         run_id=run_id,
         run_started_at_ms=run_started_at_ms,
         run_stopped_at_ms=run_stopped_at_ms,
-        declaration=view.declaration(),
-        settings=view.scalar_settings,
         candles=candles,
-        unexplained_decision_count=unexplained,
         notices=_notices(before_start, unexplained=unexplained, unshown=unshown),
+        unexplained_decision_count=unexplained,
     )
 
 
@@ -163,19 +143,6 @@ def _notices(before_start: Sequence[DecisionExplanationRecord] | None, *, unexpl
         noun = "decision's values" if unshown == 1 else "decisions' values"
         notices.append(f"{unshown} {noun} could not be shown by this build.")
     return notices
-
-
-def _bar_fields(record: DecisionExplanationRecord) -> dict[str, float | int]:
-    bar = record.bar
-    return {
-        "bar_start_ms": bar.start_ms,
-        "bar_close_ms": bar.end_ms,
-        "open": bar.open,
-        "high": bar.high,
-        "low": bar.low,
-        "close": bar.close,
-        "volume": bar.volume,
-    }
 
 
 __all__ = ["BEFORE_START_TEXT", "build_strategy_view", "get_strategy_view"]

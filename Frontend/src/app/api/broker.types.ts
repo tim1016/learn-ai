@@ -1366,7 +1366,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Polygon chart: bounded timeframe window (§8) */
+        /**
+         * Polygon chart: bounded timeframe window (§8), or a window of the bot's latest run (#2794)
+         * @description The newest bars for ``timeframe``; with ``from_ms`` and ``to_ms``, that window of the bot's latest run.
+         */
         get: operations["get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get"];
         put?: never;
         post?: never;
@@ -4814,6 +4817,26 @@ export interface paths {
         patch: operations["update_backtest_run_notes_api_research_backtest_runs__run_id__notes_patch"];
         trace?: never;
     };
+    "/api/research/backtest-runs/{run_id}/strategy-view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Backtest Run Strategy View
+         * @description The run's strategy view, replayed from its own record; 409 says why when it cannot be replayed exactly.
+         */
+        get: operations["get_backtest_run_strategy_view_api_research_backtest_runs__run_id__strategy_view_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/golden-qualifications": {
         parameters: {
             query?: never;
@@ -7349,6 +7372,26 @@ export interface components {
             quantity: number;
             /** Signalreason */
             signalReason: string;
+        };
+        /**
+         * BacktestRunViewRefusal
+         * @description Why a saved run's strategy view cannot be shown (#2639 D13).
+         */
+        BacktestRunViewRefusal: {
+            /**
+             * Code
+             * @constant
+             */
+            code: "STRATEGY_VIEW_NOT_REPLAYABLE";
+            /** Message */
+            message: string;
+        };
+        /**
+         * BacktestRunViewRefusalBody
+         * @description The 409 body: FastAPI wraps an ``HTTPException`` detail as ``{"detail": ...}``.
+         */
+        BacktestRunViewRefusalBody: {
+            detail: components["schemas"]["BacktestRunViewRefusal"];
         };
         /**
          * BarPayload
@@ -26306,6 +26349,8 @@ export interface operations {
         parameters: {
             query: {
                 timeframe: "1m" | "15m" | "30m" | "1h" | "1d";
+                from_ms?: number | null;
+                to_ms?: number | null;
             };
             header?: {
                 "X-Data-Plane-Control-Secret"?: string | null;
@@ -32224,6 +32269,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BacktestRunNotesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_backtest_run_strategy_view_api_research_backtest_runs__run_id__strategy_view_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyViewResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BacktestRunViewRefusalBody"];
                 };
             };
             /** @description Validation Error */

@@ -4,17 +4,18 @@ import type { FillModeName } from "../../../models/fill-mode";
 import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
 import type { TradingMarker, TradingPoint } from "../../../shared/trading-chart";
 import { ValidationStagePlaceholderComponent } from "../../lean-engine/validation-stage-placeholder/validation-stage-placeholder.component";
-import { StrategyLabChartComponent } from "../strategy-lab-chart/strategy-lab-chart.component";
+import { StrategyLabStrategyViewComponent } from "../strategy-lab-strategy-view/strategy-lab-strategy-view.component";
 
 /**
- * The workbench's evidence column. A run in flight never destroys the chart it
- * is about to replace: the previous run stays mounted and is dimmed under a
- * progress overlay, so nothing is removed before its replacement exists and a
- * stale chart cannot read as live.
+ * The workbench's evidence column: the run's strategy view, as the bot page
+ * shows a bot's (#2639 D13), with its price-and-trades chart one tab away. A
+ * run in flight never destroys the chart it is about to replace: the previous
+ * run stays mounted and is dimmed under a progress overlay, so nothing is
+ * removed before its replacement exists and a stale chart cannot read as live.
  */
 @Component({
   selector: "app-strategy-lab-stage",
-  imports: [ValidationStagePlaceholderComponent, StrategyLabChartComponent],
+  imports: [ValidationStagePlaceholderComponent, StrategyLabStrategyViewComponent],
   templateUrl: "./strategy-lab-stage.component.html",
   styleUrl: "./strategy-lab-stage.component.scss",
   changeDetection: ChangeDetectionStrategy.OnPush,
