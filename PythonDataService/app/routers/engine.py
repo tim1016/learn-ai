@@ -24,10 +24,11 @@ from app.engine.strategy.registry import (
 )
 from app.research.sweep.eligibility import sweep_eligibility
 from app.schemas.engine_backtest import EngineBacktestRequest, EngineBacktestResponse
-from app.schemas.engine_chart import EngineChartRequest, EngineChartResponse
+from app.schemas.engine_chart import EngineChartRequest, EngineChartResponse, EngineStrategyViewRequest
 from app.schemas.strategy_lean_source import StrategyLeanSourceResponse
+from app.schemas.strategy_view import StrategyViewResponse
 from app.services.engine_backtest_service import execute_engine_backtest
-from app.services.engine_chart_service import build_engine_chart
+from app.services.engine_chart_service import build_engine_chart, build_engine_strategy_view
 from app.services.strategy_lean_source_service import (
     StrategyLeanSourceNotFoundError,
     resolve_strategy_lean_source,
@@ -162,6 +163,16 @@ async def get_engine_chart(request: EngineChartRequest) -> EngineChartResponse:
     try:
         require_schedulable_end(request.to_ms_utc)
         return await asyncio.to_thread(build_engine_chart, request)
+    except (ValueError, OverflowError, ValidationError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.post("/strategy-view", response_model=StrategyViewResponse)
+async def get_engine_strategy_view(request: EngineStrategyViewRequest) -> StrategyViewResponse:
+    """A backtest's strategy view: its own decision candles, values, checks and default gate (#2639)."""
+    try:
+        require_schedulable_end(request.to_ms_utc)
+        return await asyncio.to_thread(build_engine_strategy_view, request)
     except (ValueError, OverflowError, ValidationError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from app.engine.data.lean_format import LeanMinuteDataReader
 from app.engine.data.policy_store import policy_key, resolve_data_roots
 from app.engine.data.trade_bar import TradeBar
 from app.engine.indicators.macd import MovingAverageConvergenceDivergence
@@ -23,15 +24,20 @@ from app.engine.strategy.spec.indicators import build_indicator, is_bar_indicato
 from app.engine.strategy.spec.schema import IndicatorBlock
 from app.lean_sidecar.trading_calendar import SessionWindow, session_windows_ms_utc
 from app.schemas.chart import ChartIndicatorResult
+from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.schemas.engine_chart import (
     EngineChartBar,
     EngineChartCoverage,
     EngineChartRequest,
     EngineChartResponse,
+    EngineStrategyViewRequest,
     ResolvedChartIndicator,
 )
+from app.schemas.strategy_view import StrategyViewCandle, StrategyViewResponse
 from app.services.chart_service import compute_indicator_results, indicator_presentation
 from app.services.engine_bars_service import read_consolidated_bars
+from app.services.strategy_view import ResolvedStrategyView
+from app.services.strategy_view_replay import staged_decisions
 
 _ET = ZoneInfo("America/New_York")
 
@@ -185,6 +191,63 @@ def compute_strategy_indicator_results(
             )
         )
     return results
+
+
+# A display read must stay a size a browser can draw; longer runs show their latest candles.
+MAX_STRATEGY_VIEW_CANDLES = 10_000
+_BACKTEST_OUTCOME = {"ENTER": "enter_intent", "EXIT": "exit_intent", "HOLD": "no_action"}
+
+
+def build_engine_strategy_view(request: EngineStrategyViewRequest) -> StrategyViewResponse:
+    """A backtest's strategy view, from its own decisions (#2639 D13).
+
+    The registered program is replayed with the run's settings over the
+    run's bars (warmup included), which stages exactly the decisions the
+    backtest staged; bars before the window are its warmup, drawn behind the
+    start line as the bot page draws a bot's. Blocking: call it in a thread.
+    """
+    from app.lean_sidecar.workspace import validate_symbol
+
+    registration = _STRATEGY_REGISTRY.get(request.strategy_name)
+    if registration is None:
+        raise ValueError(f"unknown strategy: {request.strategy_name}")
+    hidden = registration.hidden_params.intersection(request.parameters)
+    if hidden:
+        raise ValueError(f"hidden strategy parameters are not accepted: {', '.join(sorted(hidden))}")
+    safe_symbol = validate_symbol(request.symbol)
+    view = ResolvedStrategyView.for_settings(request.strategy_name, dict(request.parameters), symbol=safe_symbol)
+    data_from_ms = request.warmup_from_ms_utc if request.warmup_from_ms_utc is not None else request.from_ms_utc
+    start, end, _sessions = _resolve_window(data_from_ms, request.to_ms_utc)
+    reader = LeanMinuteDataReader(
+        resolve_data_roots(source="polygon", adjusted=request.adjusted), session=request.session
+    )
+    candles: list[StrategyViewCandle] = []
+    for bar, decision in staged_decisions(registration.build(view.params), reader, start=start, end=end):
+        record = DecisionExplanationRecord.from_decision(bar, decision)
+        if record is None or bar.end_ms > request.to_ms_utc:
+            continue
+        warmup = bar.end_ms <= request.from_ms_utc
+        candle = view.candle(
+            record,
+            phase="before_start" if warmup else "decision",
+            outcome=None if warmup else _BACKTEST_OUTCOME[record.signal],
+        )
+        if candle is not None:
+            candles.append(candle)
+    notices: list[str] = []
+    if not candles:
+        notices.append("No decision bars were found for this window.")
+    elif len(candles) > MAX_STRATEGY_VIEW_CANDLES:
+        notices.append(f"This run has {len(candles)} decision bars; the latest {MAX_STRATEGY_VIEW_CANDLES} are shown.")
+        candles = candles[-MAX_STRATEGY_VIEW_CANDLES:]
+    return view.response(
+        symbol=safe_symbol,
+        run_id=f"backtest:{request.strategy_name}:{safe_symbol}:{request.from_ms_utc}:{request.to_ms_utc}",
+        run_started_at_ms=request.from_ms_utc,
+        run_stopped_at_ms=request.to_ms_utc,
+        candles=candles,
+        notices=notices,
+    )
 
 
 def indicator_id(name: str, params: dict[str, int | float]) -> str:

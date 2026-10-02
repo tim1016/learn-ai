@@ -14338,6 +14338,76 @@
         "title": "EngineEvaluationWindowResponse",
         "type": "object"
       },
+      "EngineStrategyViewRequest": {
+        "description": "One backtest's strategy view (#2639 D13): its settings, its window and its warmup.\n\nThe window and warmup are NYSE session-open anchors, as on the engine\nchart: ``from_ms_utc`` opens the first evaluated session, ``to_ms_utc``\nthe session after the last, ``warmup_from_ms_utc`` the run's warmup start\nwhen it read history before its window.",
+        "properties": {
+          "adjusted": {
+            "default": true,
+            "title": "Adjusted",
+            "type": "boolean"
+          },
+          "from_ms_utc": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "From Ms Utc",
+            "type": "integer"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
+          "session": {
+            "default": "regular",
+            "enum": [
+              "regular",
+              "extended"
+            ],
+            "title": "Session",
+            "type": "string"
+          },
+          "strategy_name": {
+            "minLength": 1,
+            "title": "Strategy Name",
+            "type": "string"
+          },
+          "symbol": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "to_ms_utc": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "To Ms Utc",
+            "type": "integer"
+          },
+          "warmup_from_ms_utc": {
+            "anyOf": [
+              {
+                "maximum": 253402300799999.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warmup From Ms Utc"
+          }
+        },
+        "required": [
+          "strategy_name",
+          "symbol",
+          "from_ms_utc",
+          "to_ms_utc"
+        ],
+        "title": "EngineStrategyViewRequest",
+        "type": "object"
+      },
       "EngineTradeResponse": {
         "properties": {
           "entry_price": {
@@ -60360,6 +60430,48 @@
           }
         },
         "summary": "Get Strategy Lean Source",
+        "tags": [
+          "engine"
+        ]
+      }
+    },
+    "/api/engine/strategy-view": {
+      "post": {
+        "description": "A backtest's strategy view: its own decision candles, values, checks and default gate (#2639).",
+        "operationId": "get_engine_strategy_view_api_engine_strategy_view_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineStrategyViewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyViewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Engine Strategy View",
         "tags": [
           "engine"
         ]

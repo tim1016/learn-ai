@@ -4273,6 +4273,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/engine/strategy-view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Get Engine Strategy View
+         * @description A backtest's strategy view: its own decision candles, values, checks and default gate (#2639).
+         */
+        post: operations["get_engine_strategy_view_api_engine_strategy_view_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/golden-fixtures": {
         parameters: {
             query?: never;
@@ -11788,6 +11808,42 @@ export interface components {
             evaluation_start_ms: number;
             /** Warmup Primed */
             warmup_primed: boolean;
+        };
+        /**
+         * EngineStrategyViewRequest
+         * @description One backtest's strategy view (#2639 D13): its settings, its window and its warmup.
+         *
+         *     The window and warmup are NYSE session-open anchors, as on the engine
+         *     chart: ``from_ms_utc`` opens the first evaluated session, ``to_ms_utc``
+         *     the session after the last, ``warmup_from_ms_utc`` the run's warmup start
+         *     when it read history before its window.
+         */
+        EngineStrategyViewRequest: {
+            /**
+             * Adjusted
+             * @default true
+             */
+            adjusted?: boolean;
+            /** From Ms Utc */
+            from_ms_utc: number;
+            /** Parameters */
+            parameters?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /**
+             * Session
+             * @default regular
+             * @enum {string}
+             */
+            session?: "regular" | "extended";
+            /** Strategy Name */
+            strategy_name: string;
+            /** Symbol */
+            symbol: string;
+            /** To Ms Utc */
+            to_ms_utc: number;
+            /** Warmup From Ms Utc */
+            warmup_from_ms_utc?: number | null;
         };
         /** EngineTradeResponse */
         EngineTradeResponse: {
@@ -31230,6 +31286,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_engine_strategy_view_api_engine_strategy_view_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EngineStrategyViewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyViewResponse"];
+                };
             };
             /** @description Validation Error */
             422: {
