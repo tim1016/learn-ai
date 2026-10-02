@@ -161,6 +161,7 @@ from app.data_lake.atomic import (
     publish_artifact,
 )
 from app.data_lake.data_contract import data_contract_hash as _dch
+from app.data_lake.lean_writer import parse_volume
 from app.data_lake.path_policy import (
     LeanMinuteBarPath,
     ensure_lean_readable_layout,
@@ -579,9 +580,9 @@ def verify_and_read_zip(zip_path: Path, symbol: str, trading_date: date) -> Veri
         try:
             ms_since_midnight = int(parts[0])
             ohlc = [int(p) for p in parts[1:5]]
-            int(parts[5])  # volume; parseability only, matching the canonical writer
+            parse_volume(parts[5])  # parseability only, matching the canonical writer
         except ValueError as exc:
-            raise CorruptCacheZipError(f"{zip_path}: line {line_no} has a non-integer field: {line!r}") from exc
+            raise CorruptCacheZipError(f"{zip_path}: line {line_no} has a malformed field: {line!r}") from exc
         if any(p < 0 for p in ohlc):
             raise CorruptCacheZipError(
                 f"{zip_path}: line {line_no} has a negative price field: {line!r} -- refused as "

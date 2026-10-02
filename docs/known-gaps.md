@@ -79,6 +79,15 @@ previously tracked items (issues #1655, #1671, #1672, #1674, #1677, #1664,
   `session_entry_cutoff` under #2607, so three remain. Group migrations
   by one source contract at a time; do not create another cross-stack duplicate.
   The live Alpaca V2 wire/storage path is not in this cluster.
+- **`TradeBar.volume` is annotated `int` but lake bars carry `Decimal`
+  (P2, 2026-10-01).** Since the lake stores Polygon's fractional-share volume
+  exactly, `app/engine/data/lean_format.py` builds engine bars with `Decimal`
+  volume. `app/engine/data/trade_bar.py` keeps `volume: int` because it is in
+  the sealed Signal Program set, and any byte change invalidates every
+  program's qualification receipt. Nothing sealed does more than sum volume
+  or `str()` it, and both are exact for `Decimal`. But a future
+  `bar.volume * <float>` raises `TypeError` only on lake bars. Fix the
+  annotation, to `Decimal | int`, at the next seal re-qualification.
 - **Frontend naive `new Date(string)` — Tier 2 (medium).** Eighteen production
   calls still parse date-only or local-wall strings across validation,
   option-expiry, Options Lab, Strategy Builder, ticker ranges, Data Lab, Past

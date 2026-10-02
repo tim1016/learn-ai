@@ -376,7 +376,7 @@ def test_import_minute_trade_dch_raw_differs_from_ensure_data_fetch_dch():
     from app.data_lake.cache_import import import_minute_trade_dch
     from app.data_lake.ensure_data import _minute_trade_dch
 
-    assert import_minute_trade_dch(adjusted=False) != _minute_trade_dch("raw")
+    assert import_minute_trade_dch(adjusted=False) != _minute_trade_dch("raw", trading_date=date(2024, 5, 20))
 
 
 @respx.mock
@@ -408,6 +408,44 @@ async def test_a_raw_capture_reuses_imported_days_without_a_provider_call(
     assert result.overall_status == "complete", result.failures
     reused_minutes = [a for a in result.artifacts if a.resolution == "minute" and a.trading_date in days]
     assert len(reused_minutes) == len(days)
+
+
+@respx.mock
+async def test_an_imported_day_with_fractional_volume_refetches_its_exact_volume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Polygon reports fractional shares from 2026-02-23 on, and a lean-cache
+    day from then holds whole shares rounded down. Reusing it would keep the
+    lost fraction, so that day re-fetches; the session before it is reused."""
+    install_fake_catalog(monkeypatch)
+    write_root = point_lake_writer_at_tmp(tmp_path, monkeypatch)
+    mock_launcher()
+    before, first_fractional = date(2026, 2, 20), date(2026, 2, 23)
+    open_ms = session_open_ms_utc(first_fractional)
+    polygon = respx.route(host="api.polygon.io", path__regex=r"/minute/2026-02-23/").respond(
+        200,
+        json={"ticker": "SPY", "status": "OK", "results": [
+            {"t": open_ms, "o": 500.0, "h": 500.1, "l": 499.9, "c": 500.05, "v": 9238.22128, "vw": 500.0, "n": 10},
+        ]},
+    )
+    cache_root = tmp_path / "cache"
+    for day in (before, first_fractional):
+        _write_valid_zip(cache_root, "SPY", day)
+    _write_provenance(cache_root, "SPY", adjusted=False, fetches=[{
+        "resolution": "minute", "from_date": "2026-02-20", "to_date": "2026-02-23",
+        "fetched_at_ms": 1_770_000_000_000,
+    }])
+    report = await import_cache_root(cache_root=cache_root, lake_root=write_root)
+    assert len(report.imported) == 2, report
+
+    result = await ensure_data(_build_engine_run_spec(symbol="SPY", start=before, end=first_fractional))
+
+    assert result.overall_status == "complete", result.failures
+    assert polygon.call_count == 1, "only the fractional-volume day may be refetched"
+    refetched = write_root / lake_subpath("raw") / "equity/usa/minute/spy/20260223_trade.zip"
+    with zipfile.ZipFile(refetched) as zf:
+        [row] = zf.read(zf.namelist()[0]).decode().splitlines()
+    assert row.split(",")[5] == "9238.22128"
 
 
 # ---------------------------------------------------------------------------
