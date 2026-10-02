@@ -346,6 +346,37 @@ describe('BotChartPanelComponent — custom gates and catalogue indicators (#263
     expect(remaining?.setData.mock.calls.at(-1)?.[0]?.[0]?.value).toBe(9_000);
   });
 
+  it('never draws one strategy’s catalogue line on another strategy’s candles', async () => {
+    const user = userEvent.setup();
+    const addVwap = async () => {
+      const indicators = screen.getByRole('dialog', { name: 'Indicators' });
+      const search = within(indicators).getByRole('combobox', { name: 'Search indicators' });
+      await user.clear(search);
+      await user.type(search, 'vwap');
+      const row = within(indicators).getAllByRole('option', { hidden: true }).find((option) => option.dataset['name'] === 'vwap');
+      if (row === undefined) throw new Error('The catalogue lists no VWAP.');
+      await user.click(within(row).getByRole('button', { name: 'Add', hidden: true }));
+    };
+    const computedLines = () => charts.current().series
+      .filter((series: FakeSeries) => series.type === 'LineSeries' && series.options['lineWidth'] === 1);
+    dataPlane.indicators.calculateBars.mockReturnValue(of({
+      symbol: 'SPY',
+      indicators: [{ id: 'vwap', color: '#e0c050', panel: 'main', type: 'line', data: [{ t: barCloseMs(2), value: 500 }] }],
+    }));
+    const { fixture } = await renderPanel();
+    await addVwap();
+    expect(computedLines()).toHaveLength(1);
+
+    // Another strategy on the same bars: its own VWAP is still computing.
+    dataPlane.indicators.calculateBars.mockReturnValue(NEVER);
+    fixture.componentInstance.view.set(fakeStrategyView({ strategy_key: 'bar_cross', strategy_name: 'Bar Cross' }));
+    await screen.findByRole('group', { name: /Bar Cross decision candles/ });
+    await addVwap();
+
+    expect(computedLines()).toHaveLength(1);
+    expect(charts.current().chart.removeSeries).toHaveBeenCalledWith(computedLines()[0]);
+  });
+
   it('passes AXE with the gate editor open', async () => {
     const user = userEvent.setup();
     await renderPanel();

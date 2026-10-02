@@ -2,11 +2,13 @@
 
 Transport only: parsing, resolving and judging live in
 ``app.services.strategy_gates``; storage in ``app.services.strategy_gate_store``.
+The handlers are plain functions, so FastAPI runs them in its threadpool:
+the store's locked file I/O, the catalogue probe and catalogue columns never
+block the data plane's event loop.
 """
 
 from __future__ import annotations
 
-import asyncio
 from typing import NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -68,13 +70,13 @@ def _compiled(strategy_key: str, draft: CustomGateInput) -> tuple[list, float]:
 
 
 @router.get("/catalogue", response_model=GateCatalogue)
-async def catalogue() -> GateCatalogue:
+def catalogue() -> GateCatalogue:
     """The catalogue indicators a gate can read, so the editor offers no name the data plane would refuse."""
-    return GateCatalogue(indicators=list(await asyncio.to_thread(gate_catalogue)))
+    return GateCatalogue(indicators=list(gate_catalogue()))
 
 
 @router.get("/{strategy_key}", response_model=StrategyGateList, responses=_REFUSALS)
-async def list_gates(strategy_key: str, store: StrategyGateStore = Depends(get_gate_store)) -> StrategyGateList:
+def list_gates(strategy_key: str, store: StrategyGateStore = Depends(get_gate_store)) -> StrategyGateList:
     _strategy_view(strategy_key)
     try:
         return StrategyGateList(strategy_key=strategy_key, gates=store.for_strategy(strategy_key))
@@ -83,11 +85,10 @@ async def list_gates(strategy_key: str, store: StrategyGateStore = Depends(get_g
 
 
 @router.post("/{strategy_key}", response_model=CustomGate, status_code=status.HTTP_201_CREATED, responses=_REFUSALS)
-async def create_gate(
+def create_gate(
     strategy_key: str, draft: CustomGateInput, store: StrategyGateStore = Depends(get_gate_store)
 ) -> CustomGate:
-    # Resolving a catalogue name may compute the catalogue probe once; keep it off the event loop.
-    terms, constant = await asyncio.to_thread(_compiled, strategy_key, draft)
+    terms, constant = _compiled(strategy_key, draft)
     now_ms = now_ms_utc()
     try:
         return store.create(
@@ -108,11 +109,10 @@ async def create_gate(
 
 
 @router.put("/{strategy_key}/{gate_id}", response_model=CustomGate, responses=_REFUSALS)
-async def replace_gate(
+def replace_gate(
     strategy_key: str, gate_id: str, draft: CustomGateInput, store: StrategyGateStore = Depends(get_gate_store)
 ) -> CustomGate:
-    # Resolving a catalogue name may compute the catalogue probe once; keep it off the event loop.
-    terms, constant = await asyncio.to_thread(_compiled, strategy_key, draft)
+    terms, constant = _compiled(strategy_key, draft)
     try:
         existing = store.get(strategy_key, gate_id)
         return store.replace(
@@ -134,7 +134,7 @@ async def replace_gate(
 
 
 @router.delete("/{strategy_key}/{gate_id}", status_code=status.HTTP_204_NO_CONTENT, responses=_REFUSALS)
-async def delete_gate(strategy_key: str, gate_id: str, store: StrategyGateStore = Depends(get_gate_store)) -> Response:
+def delete_gate(strategy_key: str, gate_id: str, store: StrategyGateStore = Depends(get_gate_store)) -> Response:
     try:
         store.delete(strategy_key, gate_id)
     except GateNotFoundError as exc:
@@ -145,16 +145,15 @@ async def delete_gate(strategy_key: str, gate_id: str, store: StrategyGateStore 
 
 
 @router.post("/{strategy_key}/evaluate", response_model=GateEvaluationResponse, responses=_REFUSALS)
-async def evaluate(
+def evaluate(
     strategy_key: str, request: GateEvaluationRequest, store: StrategyGateStore = Depends(get_gate_store)
 ) -> GateEvaluationResponse:
     """Judge the strategy's saved gates, and an unsaved draft, on the caller's decision candles."""
     view = _strategy_view(strategy_key, dict(request.settings), symbol=request.symbol)
     try:
         gates = store.for_strategy(strategy_key)
-        # Catalogue columns are computed here; keep that off the data plane's event loop.
-        results, chart_computed, notices = await asyncio.to_thread(
-            evaluate_gates, view, gates, request.candles, symbol=request.symbol, draft=request.draft
+        results, chart_computed, notices = evaluate_gates(
+            view, gates, request.candles, symbol=request.symbol, draft=request.draft
         )
     except GateExpressionError as exc:
         _refuse(status.HTTP_422_UNPROCESSABLE_ENTITY, "GATE_EXPRESSION_REFUSED", str(exc))
