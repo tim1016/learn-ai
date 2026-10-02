@@ -162,6 +162,8 @@ export interface BacktestRunDetail {
   parityVerdicts: BacktestRunParityVerdict[];
   /** Empty for a run that recorded none, including every run from before #2607. */
   closingBarSkips: BacktestRunClosingBarSkip[];
+  /** Where the run's warmup began, an ET-midnight anchor like `startDate`; `null` when it read no history before its window. */
+  warmupFromDate: number | null;
 }
 
 export function toRunHistoryRow(run: BacktestRunSummary): RunHistoryRow {

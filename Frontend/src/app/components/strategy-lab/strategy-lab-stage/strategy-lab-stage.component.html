@@ -10,7 +10,7 @@
 
   <div class="stage__evidence" [class.stage__evidence--stale]="running() && run() !== null">
     @if (run(); as currentRun) {
-      <app-strategy-lab-chart
+      <app-strategy-lab-strategy-view
         [run]="currentRun"
         [markers]="markers()"
         [equityPoints]="equityPoints()"

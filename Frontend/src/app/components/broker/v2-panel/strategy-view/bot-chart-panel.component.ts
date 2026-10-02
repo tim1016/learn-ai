@@ -68,6 +68,8 @@ export class BotChartPanelComponent {
   readonly failure = input<StrategyViewFailure | null>(null);
   /** The market tape, created when its tab first opens. */
   readonly tape = input.required<TemplateRef<unknown>>();
+  /** The second tab's name: the bot page's market tape, or Strategy Lab's price-and-trades chart. */
+  readonly tapeLabel = input('Tape');
   readonly selectedBarCloseMs = model<number | null>(null);
 
   readonly retry = output();

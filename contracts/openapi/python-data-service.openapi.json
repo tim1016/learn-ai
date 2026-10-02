@@ -3080,6 +3080,17 @@
             ],
             "title": "Verdictversion"
           },
+          "warmupFromDate": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warmupfromdate"
+          },
           "winRate": {
             "title": "Winrate",
             "type": "number"
@@ -3133,7 +3144,8 @@
           "trades",
           "tradesTruncated",
           "parityVerdicts",
-          "closingBarSkips"
+          "closingBarSkips",
+          "warmupFromDate"
         ],
         "title": "BacktestRunDetailResponse",
         "type": "object"

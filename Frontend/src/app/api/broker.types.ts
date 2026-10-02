@@ -7240,6 +7240,8 @@ export interface components {
             verdictSignal: string | null;
             /** Verdictversion */
             verdictVersion: number | null;
+            /** Warmupfromdate */
+            warmupFromDate: number | null;
             /** Winrate */
             winRate: number;
             /** Winningtrades */

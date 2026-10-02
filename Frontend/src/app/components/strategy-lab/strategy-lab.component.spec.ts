@@ -83,6 +83,7 @@ function run(overrides: Partial<BacktestRunDetail> = {}): BacktestRunDetail {
     trades: [],
     tradesTruncated: false,
     closingBarSkips: [],
+    warmupFromDate: null,
     metricDocumentation: [],
     notes: null,
     parityVerdicts: [],
@@ -128,22 +129,29 @@ function strategyCatalog() {
 }
 
 /**
- * Once a run loads, the workbench mounts the real chart, which pulls in
- * auxiliary data this suite never asserts on: the indicator catalog, a
- * stock snapshot, and the run's chart bars. Short-circuiting those requests
+ * Once a run loads, the workbench mounts the real strategy view and chart,
+ * which pull in auxiliary data this suite never asserts on: the indicator
+ * catalogs, a stock snapshot, the run's strategy view and its chart bars.
+ * Short-circuiting those requests
  * keeps `HttpTestingController` scoped to what each test manages explicitly
  * (`/api/engine/strategies`, the LEAN source fetch) and keeps zoneless
  * `whenStable()` from hanging on a request nothing in the test ever flushes.
- * The chart bars fetch is answered with an error, not a fabricated payload,
- * so the chart's own `catchError` path handles it the way a real outage
- * would — a fabricated 200 with no `coverage`/`bars` would crash the chart's
- * own computed signals instead.
+ * The strategy-view and chart-bars fetches are answered with an error, not a
+ * fabricated payload, so each surface's own failure path handles it the way a
+ * real outage would — a fabricated 200 with no `coverage`/`bars` would crash
+ * the chart's own computed signals instead.
  */
 const bypassAuxiliaryChartRequests: HttpInterceptorFn = (request, next) => {
   if (request.url.endsWith("/api/dataset/available") || request.url.endsWith("/graphql")) {
     return of(new HttpResponse({ status: 200, body: null }));
   }
-  if (request.url.endsWith("/api/engine/chart")) {
+  if (request.url.endsWith("/api/strategy-gates/catalogue")) {
+    return of(new HttpResponse({ status: 200, body: { indicators: [] } }));
+  }
+  if (request.url.endsWith("/api/chart/indicators/supported")) {
+    return of(new HttpResponse({ status: 200, body: { names: [] } }));
+  }
+  if (request.url.endsWith("/api/engine/chart") || request.url.endsWith("/api/engine/strategy-view")) {
     return throwError(() => new HttpErrorResponse({ status: 503, url: request.url }));
   }
   return next(request);

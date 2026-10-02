@@ -4,10 +4,11 @@ import { describe, expect, it } from "vitest";
 
 import type { BacktestRunDetail } from "../../../services/backtest-runs.types";
 import { makeRun } from "../testing/run-fixtures";
-import { StrategyLabChartComponent } from "../strategy-lab-chart/strategy-lab-chart.component";
+import { StrategyLabStrategyViewComponent } from "../strategy-lab-strategy-view/strategy-lab-strategy-view.component";
 import { StrategyLabStageComponent } from "./strategy-lab-stage.component";
 
-@Component({ selector: "app-strategy-lab-chart", template: `<div data-testid="chart">chart</div>` })
+/** The run's evidence (its strategy view, with the price-and-trades chart a tab away). */
+@Component({ selector: "app-strategy-lab-strategy-view", template: `<div data-testid="chart">chart</div>` })
 class ChartStubComponent {
   readonly run = input.required<BacktestRunDetail>();
   readonly markers = input<unknown[]>([]);
@@ -19,7 +20,7 @@ async function createStageFixture(): Promise<ComponentFixture<StrategyLabStageCo
     imports: [StrategyLabStageComponent],
     providers: [provideZonelessChangeDetection()],
   }).overrideComponent(StrategyLabStageComponent, {
-    remove: { imports: [StrategyLabChartComponent] },
+    remove: { imports: [StrategyLabStrategyViewComponent] },
     add: { imports: [ChartStubComponent] },
   }).compileComponents();
 
