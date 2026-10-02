@@ -14,6 +14,7 @@ import { provideFleetDirectory, testLane } from '../../../../fleet/fleet-directo
 import { BrokersService } from '../../../../services/brokers.service';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import { fakeBotPanelView, fakeChartFeed, panelRefusalBody } from '../../../../testing/bot-panel-fixtures';
+import { fakeStrategyChartFactory } from '../../../../testing/strategy-chart-fake';
 import { barCloseMs, fakeRecentDecision, fakeStrategyView } from '../../../../testing/strategy-view-fixtures';
 import { BrokerV2PanelService } from '../lib/broker-v2-panel.service';
 import type { BotPanelLiveSnapshot, BotPanelView, RecentDecisionView } from '../lib/broker-v2-panel.types';
@@ -28,33 +29,7 @@ vi.mock('lightweight-charts', () => ({
   TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
 }));
 
-interface MockChart {
-  readonly candles: { setData: ReturnType<typeof vi.fn>; attachPrimitive: ReturnType<typeof vi.fn> };
-  readonly click: (time: number) => void;
-}
-
-const charts: MockChart[] = [];
-
-function createMockChart(): object {
-  let onClick: ((param: unknown) => void) | null = null;
-  const candles = { setData: vi.fn(), attachPrimitive: vi.fn() };
-  charts.push({ candles, click: (time) => onClick?.({ time, point: { x: 1, y: 1 } }) });
-  return {
-    addSeries: vi.fn((type: string) => (type === 'CandlestickSeries'
-      ? candles
-      : { setData: vi.fn(), attachPrimitive: vi.fn(), createPriceLine: vi.fn() })),
-    removeSeries: vi.fn(),
-    timeScale: () => ({
-      fitContent: vi.fn(), logicalToCoordinate: vi.fn(), width: () => 800,
-      subscribeSizeChange: vi.fn(), unsubscribeSizeChange: vi.fn(),
-    }),
-    panes: () => [{ setStretchFactor: vi.fn() }, { setStretchFactor: vi.fn() }],
-    applyOptions: vi.fn(),
-    subscribeClick: vi.fn((handler: (param: unknown) => void) => { onClick = handler; }),
-    unsubscribeClick: vi.fn(),
-    remove: vi.fn(),
-  };
-}
+const charts = fakeStrategyChartFactory(vi);
 
 class StubEventSource {
   static latest: StubEventSource | null = null;
@@ -126,7 +101,7 @@ async function renderPage(getStrategyView: ReturnType<typeof vi.fn>) {
     providers: [
       provideRouter([]),
       provideFleetDirectory({ observed_at_ms: 1_757_000_000_000, clerks: [testLane({ clerk_id: 'clrk_spec' })] }),
-      { provide: STRATEGY_CHART_FACTORY, useValue: createMockChart },
+      { provide: STRATEGY_CHART_FACTORY, useValue: charts.create },
       { provide: BrokerV2PanelService, useValue: service(getStrategyView) },
       { provide: BrokersService, useValue: { checkSqliteRecoveryAction: vi.fn() } },
       { provide: MessageService, useValue: { add: vi.fn() } },
@@ -146,7 +121,7 @@ function decisionRow(barIndex: number): HTMLElement {
 
 describe('BotPanelShellComponent — strategy view (#2639)', () => {
   beforeEach(() => {
-    charts.length = 0;
+    charts.created.length = 0;
     localStorage.clear();
   });
 
@@ -174,8 +149,8 @@ describe('BotPanelShellComponent — strategy view (#2639)', () => {
     await settle(fixture);
     expect(getStrategyView).toHaveBeenCalledTimes(2);
     // The same chart redrew the new read; it was never torn down for a blank one.
-    expect(charts).toHaveLength(1);
-    expect(charts[0].candles.setData.mock.calls.length).toBeGreaterThan(1);
+    expect(charts.created).toHaveLength(1);
+    expect(charts.created[0].candles().setData.mock.calls.length).toBeGreaterThan(1);
   });
 
   it('keeps a failed read to the chart panel, in the backend’s words, and retries on request', async () => {
@@ -209,9 +184,9 @@ describe('BotPanelShellComponent — strategy view (#2639)', () => {
   it('shares one candle selection between the strategy chart and the decisions list', async () => {
     const user = userEvent.setup();
     const fixture = await renderPage(vi.fn().mockResolvedValue(fakeStrategyView()));
-    const overlay = charts[0].candles.attachPrimitive.mock.calls[0][0] as StrategyChartOverlay;
+    const overlay = charts.current().candles().attachPrimitive.mock.calls[0][0] as StrategyChartOverlay;
 
-    charts[0].click(barCloseMs(2) / 1000);
+    charts.current().click(barCloseMs(2) / 1000);
     await settle(fixture);
     expect(decisionRow(2).getAttribute('aria-current')).toBe('true');
 

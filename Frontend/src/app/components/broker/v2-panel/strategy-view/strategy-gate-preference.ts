@@ -16,13 +16,11 @@ export function readGatePreference(strategyKey: string): string | null {
   }
 }
 
-/** Remember a choice; `false` when this browser would not store it. */
-export function writeGatePreference(strategyKey: string, gateId: string): boolean {
+/** Remember a choice, when this browser will store it. */
+export function writeGatePreference(strategyKey: string, gateId: string): void {
   try {
     localStorage.setItem(`${STORAGE_PREFIX}${strategyKey}`, gateId);
-    return true;
   } catch {
     // Storage full or blocked: the choice applies for this visit only.
-    return false;
   }
 }

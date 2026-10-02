@@ -37,9 +37,9 @@ let nextChartPanelId = 0;
  * hands it the strategy view read, the read's state and a template for the
  * tape, and shares candle selection two-way with whatever lists the same
  * decisions. The panel owns the tab, the gate the viewer picked (remembered
- * per strategy in this browser) and the header chips. The tape is created
- * the first time its tab opens and then kept, so its own state survives a
- * trip to the strategy tab.
+ * per strategy in this browser) and the header chips. Both tabs keep their
+ * content once created, so zoom, scroll and an open popover survive a trip
+ * to the other tab; the tape is created the first time its tab opens.
  */
 @Component({
   selector: 'app-bot-chart-panel',
@@ -60,7 +60,7 @@ export class BotChartPanelComponent {
   readonly loading = input(false);
   readonly failure = input<StrategyViewFailure | null>(null);
   /** The market tape, created when its tab first opens. */
-  readonly tape = input<TemplateRef<unknown> | null>(null);
+  readonly tape = input.required<TemplateRef<unknown>>();
   readonly selectedBarCloseMs = model<number | null>(null);
 
   readonly retry = output();

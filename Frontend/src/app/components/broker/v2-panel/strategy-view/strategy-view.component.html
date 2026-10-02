@@ -45,7 +45,7 @@
     <app-strategy-chart
       class="strategy-view__chart"
       [view]="strategy"
-      [gateId]="gate()?.gate_id ?? ''"
+      [gateId]="gate()?.gate_id ?? null"
       [selectedBarCloseMs]="selectedBarCloseMs()"
       (candleClicked)="onCandleClicked($event)"
     />

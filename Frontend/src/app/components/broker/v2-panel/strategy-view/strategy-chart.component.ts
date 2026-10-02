@@ -87,7 +87,8 @@ function minuteOf(ms: number): string {
 })
 export class StrategyChartComponent implements AfterViewInit {
   readonly view = input.required<StrategyViewResponse>();
-  readonly gateId = input.required<string>();
+  /** The active gate; `null` shades every candle dark. */
+  readonly gateId = input.required<string | null>();
   readonly selectedBarCloseMs = input<number | null>(null);
 
   readonly candleClicked = output<StrategyCandleClick>();

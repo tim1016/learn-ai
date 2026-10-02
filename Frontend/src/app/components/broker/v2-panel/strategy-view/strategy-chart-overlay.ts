@@ -55,6 +55,8 @@ const COLORS = {
 } as const;
 const LABEL_FONT = '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
 const STRONG_LABEL_FONT = `600 ${LABEL_FONT}`;
+/** Gap between a label and the line or edge it reads from. */
+const LABEL_INSET = 4;
 
 /**
  * Where an instant sits on the chart's logical (bar-index) axis.
@@ -64,13 +66,15 @@ const STRONG_LABEL_FONT = `600 ${LABEL_FONT}`;
  * instant inside a bar lands proportionally inside its candle, a bar's close
  * on the candle's right edge. An instant in a gap between bars (a missing
  * bar, overnight) lands on the boundary between them; one beyond either end
- * extends at that end bar's length. `null` when there are no bars.
+ * extends at that end bar's length, at most one bar out, so a run stopped
+ * hours after its last bar keeps its "Ended" line beside it. `null` when there
+ * are no bars.
  */
 export function logicalIndexAt(bars: readonly OverlayBar[], atMs: number): number | null {
   if (bars.length === 0) return null;
   const length = (bar: OverlayBar): number => Math.max(1, bar.closeMs - bar.startMs);
   const first = bars[0];
-  if (atMs < first.startMs) return -0.5 - (first.startMs - atMs) / length(first);
+  if (atMs < first.startMs) return -0.5 - Math.min(1, (first.startMs - atMs) / length(first));
   let lo = 0;
   let hi = bars.length - 1;
   while (lo < hi) {
@@ -80,7 +84,7 @@ export function logicalIndexAt(bars: readonly OverlayBar[], atMs: number): numbe
   }
   const bar = bars[lo];
   if (atMs <= bar.closeMs) return lo - 0.5 + (atMs - bar.startMs) / length(bar);
-  if (lo === bars.length - 1) return lo + 0.5 + (atMs - bar.closeMs) / length(bar);
+  if (lo === bars.length - 1) return lo + 0.5 + Math.min(1, (atMs - bar.closeMs) / length(bar));
   return lo + 0.5;
 }
 
@@ -152,13 +156,18 @@ export class StrategyChartOverlay implements ISeriesPrimitive<Time> {
     target.useMediaCoordinateSpace(({ context, mediaSize }) => {
       const shadeEnd = shadeBeforeMs === null ? null : this.xAt(shadeBeforeMs);
       if (shadeEnd !== null && shadeEnd > 0) {
+        const shadeWidth = Math.min(shadeEnd, mediaSize.width);
         context.fillStyle = COLORS.shade;
-        context.fillRect(0, 0, Math.min(shadeEnd, mediaSize.width), mediaSize.height);
+        context.fillRect(0, 0, shadeWidth, mediaSize.height);
         if (this.withLabels && shadeLabel !== null) {
+          // Ends at the start line, whose own label reads rightwards from it;
+          // left out when the shaded strip is too narrow to hold it.
           context.font = LABEL_FONT;
-          context.fillStyle = COLORS.shadeLabel;
-          context.textAlign = 'left';
-          context.fillText(shadeLabel, 4, 12);
+          if (context.measureText(shadeLabel).width + 2 * LABEL_INSET <= shadeWidth) {
+            context.fillStyle = COLORS.shadeLabel;
+            context.textAlign = 'right';
+            context.fillText(shadeLabel, shadeWidth - LABEL_INSET, 12);
+          }
         }
       }
       const index = highlightCloseMs === null ? -1 : bars.findIndex((bar) => bar.closeMs === highlightCloseMs);
@@ -192,7 +201,7 @@ export class StrategyChartOverlay implements ISeriesPrimitive<Time> {
         context.font = start ? STRONG_LABEL_FONT : LABEL_FONT;
         context.fillStyle = start ? COLORS.start : COLORS.endLabel;
         context.textAlign = start ? 'left' : 'right';
-        context.fillText(line.label, start ? x + 4 : x - 4, start ? 12 : 25);
+        context.fillText(line.label, start ? x + LABEL_INSET : x - LABEL_INSET, start ? 12 : 25);
       }
       context.setLineDash([]);
     });

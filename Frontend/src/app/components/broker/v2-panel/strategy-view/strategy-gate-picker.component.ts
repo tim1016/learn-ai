@@ -10,7 +10,7 @@ import {
 
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import type { StrategyViewGateView } from '../lib/broker-v2-panel.types';
-import { anchorBelow, closePopover, placePopover } from './popover-placement';
+import { anchorBelow, placePopover } from './popover-placement';
 import { gatesStrategyFirst } from './strategy-view-model';
 
 let nextGatePickerId = 0;
@@ -43,9 +43,10 @@ export class StrategyGatePickerComponent {
   private readonly trigger = viewChild.required<ElementRef<HTMLButtonElement>>('trigger');
   private readonly panel = viewChild.required<ElementRef<HTMLElement>>('panel');
 
+  /** Applies the pick and leaves the picker open: arrow keys step through
+   * the radio group one change at a time, and Escape or a click outside close it. */
   protected choose(gateId: string): void {
     this.gateChange.emit(gateId);
-    closePopover(this.panel().nativeElement);
   }
 
   protected onToggle(event: Event): void {

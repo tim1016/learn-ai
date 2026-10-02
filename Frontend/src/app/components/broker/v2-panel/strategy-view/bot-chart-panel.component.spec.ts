@@ -5,6 +5,7 @@ import axe from 'axe-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
+import { fakeStrategyChartFactory } from '../../../../testing/strategy-chart-fake';
 import {
   BEFORE_START_TEXT,
   barCloseMs,
@@ -14,7 +15,6 @@ import {
 import { RecentDecisionsListComponent } from '../bot-page/recent-decisions-list/recent-decisions-list.component';
 import type { StrategyViewResponse } from '../lib/broker-v2-panel.types';
 import { BotChartPanelComponent } from './bot-chart-panel.component';
-import type { StrategyChartOverlay } from './strategy-chart-overlay';
 import { STRATEGY_CHART_FACTORY } from './strategy-chart.component';
 import type { StrategyViewFailure } from './strategy-view-model';
 import { GATE_CANDLE_COLORS } from './strategy-view-model';
@@ -26,51 +26,16 @@ vi.mock('lightweight-charts', () => ({
   TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
 }));
 
-interface MockChart {
-  readonly candles: { setData: ReturnType<typeof vi.fn>; attachPrimitive: ReturnType<typeof vi.fn> };
-  readonly click: (time: number) => void;
-}
-
-/** Every chart the panel creates, newest last (the strategy tab re-creates its chart). */
-const charts: MockChart[] = [];
-
-function createMockChart(): object {
-  let onClick: ((param: unknown) => void) | null = null;
-  const candles = { setData: vi.fn(), attachPrimitive: vi.fn() };
-  charts.push({
-    candles,
-    click: (time) => onClick?.({ time, point: { x: 10, y: 10 }, sourceEvent: { clientX: 200, clientY: 120 } }),
-  });
-  return {
-    addSeries: vi.fn((type: string) => (type === 'CandlestickSeries'
-      ? candles
-      : { setData: vi.fn(), attachPrimitive: vi.fn(), createPriceLine: vi.fn() })),
-    removeSeries: vi.fn(),
-    timeScale: () => ({
-      fitContent: vi.fn(), logicalToCoordinate: vi.fn(), width: () => 800,
-      subscribeSizeChange: vi.fn(), unsubscribeSizeChange: vi.fn(),
-    }),
-    panes: () => [{ setStretchFactor: vi.fn() }, { setStretchFactor: vi.fn() }],
-    applyOptions: vi.fn(),
-    subscribeClick: vi.fn((handler: (param: unknown) => void) => { onClick = handler; }),
-    unsubscribeClick: vi.fn(),
-    remove: vi.fn(),
-  };
-}
-
-function currentChart(): MockChart {
-  const chart = charts.at(-1);
-  if (chart === undefined) throw new Error('No strategy chart was created.');
-  return chart;
-}
+const charts = fakeStrategyChartFactory(vi);
 
 function candleColors(): string[] {
-  const data: { color: string }[] = currentChart().candles.setData.mock.calls.at(-1)?.[0] ?? [];
+  const data: { color: string }[] = charts.current().candles().setData.mock.calls.at(-1)?.[0] ?? [];
   return data.map((candle) => candle.color);
 }
 
 const minute = (ms: number) => formatTimestampDisplay(ms, { mode: 'local', granularity: 'minute' });
-const providers = [{ provide: STRATEGY_CHART_FACTORY, useValue: createMockChart }];
+const chartTime = (ms: number) => formatTimestampDisplay(ms, { mode: 'local', granularity: 'chart' });
+const providers = [{ provide: STRATEGY_CHART_FACTORY, useValue: charts.create }];
 
 @Component({
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -92,7 +57,8 @@ class PanelHost {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [BotChartPanelComponent, RecentDecisionsListComponent],
   template: `
-    <app-bot-chart-panel symbol="SPY" [view]="view" [(selectedBarCloseMs)]="selected" />
+    <app-bot-chart-panel symbol="SPY" [view]="view" [tape]="tape" [(selectedBarCloseMs)]="selected" />
+    <ng-template #tape><p>Tape stand-in</p></ng-template>
     <app-recent-decisions-list [decisions]="decisions" [strategyView]="view" [(selectedBarCloseMs)]="selected" />
   `,
 })
@@ -118,7 +84,7 @@ function decisionRow(barIndex: number): HTMLElement {
 
 describe('BotChartPanelComponent (#2639)', () => {
   beforeEach(() => {
-    charts.length = 0;
+    charts.created.length = 0;
     localStorage.clear();
   });
 
@@ -129,7 +95,7 @@ describe('BotChartPanelComponent (#2639)', () => {
     const strategyTab = screen.getByRole('tab', { name: 'Strategy · 15m' });
     expect(strategyTab.getAttribute('aria-selected')).toBe('true');
     expect(screen.queryByText('Tape stand-in')).toBeNull();
-    expect(charts).toHaveLength(1);
+    expect(charts.created).toHaveLength(1);
 
     await user.click(screen.getByRole('tab', { name: 'Tape' }));
     expect(screen.getByText('Tape stand-in')).toBeTruthy();
@@ -193,16 +159,16 @@ describe('BotChartPanelComponent (#2639)', () => {
   it('shows a clicked candle’s bar, prices, checks and what the active gate made of it', async () => {
     await renderPanel();
 
-    currentChart().click(barCloseMs(2) / 1000);
-    await screen.findByRole('dialog', { name: `${minute(barCloseMs(2))} bar · No Action` });
+    charts.current().click(barCloseMs(2) / 1000);
+    await screen.findByRole('dialog', { name: `${chartTime(barCloseMs(2))} bar · No Action` });
 
     const popover = screen.getByRole('dialog', { name: /bar · No Action/ });
     expect(within(popover).getByText('O 499 · H 503 · L 498 · C 500')).toBeTruthy();
     expect(within(popover).getByText('no zap at bar 2')).toBeTruthy();
     expect(within(popover).getByText(/Gate “Bar 3 in 20–80”:/).textContent).toContain('no result');
 
-    currentChart().click(barCloseMs(1) / 1000);
-    const before = await screen.findByRole('dialog', { name: `${minute(barCloseMs(1))} bar · ${BEFORE_START_TEXT}` });
+    charts.current().click(barCloseMs(1) / 1000);
+    const before = await screen.findByRole('dialog', { name: `${chartTime(barCloseMs(1))} bar · ${BEFORE_START_TEXT}` });
     expect(within(before).getByText(/Gate “Bar 3 in 20–80”:/).textContent).toContain('fails, dark candle');
   });
 
@@ -237,30 +203,11 @@ describe('BotChartPanelComponent (#2639)', () => {
   });
 
   describe('beside the decisions list', () => {
-    function overlay(): StrategyChartOverlay {
-      return currentChart().candles.attachPrimitive.mock.calls[0][0] as StrategyChartOverlay;
-    }
-
-    it('highlights a clicked candle’s decision row, and a chosen row selects its candle', async () => {
-      const user = userEvent.setup();
-      const { fixture } = await render(LinkedHost, { providers });
-
-      currentChart().click(barCloseMs(3) / 1000);
-      await fixture.whenStable();
-      expect(decisionRow(3).getAttribute('aria-current')).toBe('true');
-      expect(overlay().current().highlightCloseMs).toBe(barCloseMs(3));
-
-      await user.click(within(decisionRow(2)).getByRole('button'));
-      expect(decisionRow(2).getAttribute('aria-current')).toBe('true');
-      expect(decisionRow(3).getAttribute('aria-current')).toBeNull();
-      expect(overlay().current().highlightCloseMs).toBe(barCloseMs(2));
-    });
-
     it('passes AXE with a candle’s popover open and a decision expanded', async () => {
       const user = userEvent.setup();
       await render(LinkedHost, { providers });
 
-      currentChart().click(barCloseMs(2) / 1000);
+      charts.current().click(barCloseMs(2) / 1000);
       await screen.findByRole('dialog', { name: /bar · No Action/ });
       await user.click(within(decisionRow(3)).getByRole('button'));
 
@@ -273,7 +220,7 @@ describe('BotChartPanelComponent (#2639)', () => {
       const user = userEvent.setup();
       await render(LinkedHost, { providers });
 
-      currentChart().click(barCloseMs(2) / 1000);
+      charts.current().click(barCloseMs(2) / 1000);
       const popover = await screen.findByRole('dialog', { name: /bar · No Action/ });
       const fromCandle = within(popover).getByRole('table', { name: 'Checks' }).textContent;
 

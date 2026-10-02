@@ -44,16 +44,14 @@
     [attr.aria-labelledby]="ids.strategyTab"
     [hidden]="activeTab() !== 'strategy'"
   >
-    @if (activeTab() === 'strategy') {
-      <app-strategy-view
-        [view]="view()"
-        [loading]="loading()"
-        [failure]="failure()"
-        [gate]="activeGate()"
-        [(selectedBarCloseMs)]="selectedBarCloseMs"
-        (retry)="retry.emit()"
-      />
-    }
+    <app-strategy-view
+      [view]="view()"
+      [loading]="loading()"
+      [failure]="failure()"
+      [gate]="activeGate()"
+      [(selectedBarCloseMs)]="selectedBarCloseMs"
+      (retry)="retry.emit()"
+    />
   </div>
 
   <div
@@ -63,8 +61,8 @@
     [attr.aria-labelledby]="ids.tapeTab"
     [hidden]="activeTab() !== 'tape'"
   >
-    @if (tapeOpened() && tape(); as tapeTemplate) {
-      <ng-container [ngTemplateOutlet]="tapeTemplate" />
+    @if (tapeOpened()) {
+      <ng-container [ngTemplateOutlet]="tape()" />
     }
   </div>
 </section>

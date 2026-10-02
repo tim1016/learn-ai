@@ -11,11 +11,7 @@ import type { RecentDecisionView, StrategyViewResponse } from '../../lib/broker-
 import { TimestampDisplayComponent } from '../../../../../shared/timestamp/timestamp-display.component';
 import { ReceiptLabelPipe } from '../../../../../shared/pipes/receipt-label.pipe';
 import { StrategyChecksComponent } from '../../strategy-view/strategy-checks.component';
-import {
-  decisionListEntries,
-  type DecisionListEntry,
-  type DecisionRowView,
-} from '../../strategy-view/strategy-view-model';
+import { decisionListEntries, type DecisionListEntry, type DecisionRowView } from './decision-list-entries';
 
 let nextDecisionsListId = 0;
 

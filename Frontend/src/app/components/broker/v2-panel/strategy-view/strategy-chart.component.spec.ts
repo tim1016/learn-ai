@@ -9,6 +9,7 @@ import {
   fakeStrategyCandle,
   fakeStrategyView,
 } from '../../../../testing/strategy-view-fixtures';
+import { fakeStrategyChart, type FakeSeries } from '../../../../testing/strategy-chart-fake';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
 import type { StrategyViewResponse } from '../lib/broker-v2-panel.types';
 import type { StrategyChartOverlay } from './strategy-chart-overlay';
@@ -24,63 +25,18 @@ vi.mock('lightweight-charts', () => ({
   TickMarkType: { Year: 0, Month: 1, DayOfMonth: 2, Time: 3, TimeWithSeconds: 4 },
 }));
 
-interface MockSeries {
-  readonly type: string;
-  readonly options: Record<string, unknown>;
-  readonly pane: number;
-  readonly setData: ReturnType<typeof vi.fn>;
-  readonly attachPrimitive: ReturnType<typeof vi.fn>;
-  readonly createPriceLine: ReturnType<typeof vi.fn>;
-}
-
-function mockChart(initialWidth = 800) {
-  const series: MockSeries[] = [];
-  let width = initialWidth;
-  const timeScale = {
-    fitContent: vi.fn(), logicalToCoordinate: vi.fn(), width: () => width,
-    setVisibleLogicalRange: vi.fn(),
-    getVisibleLogicalRange: vi.fn((): { from: number; to: number } | null => ({ from: 0, to: 3 })),
-    subscribeSizeChange: vi.fn(), unsubscribeSizeChange: vi.fn(),
-    /** The library measuring its auto-sized canvas, a frame after creation. */
-    resize: (next: number) => {
-      width = next;
-      for (const [handler] of timeScale.subscribeSizeChange.mock.calls) handler(next, 300);
-    },
-  };
-  const chart = {
-    addSeries: vi.fn((type: string, options: Record<string, unknown>, pane?: number) => {
-      const created: MockSeries = {
-        type, options, pane: pane ?? 0,
-        setData: vi.fn(), attachPrimitive: vi.fn(), createPriceLine: vi.fn(),
-      };
-      series.push(created);
-      return created;
-    }),
-    removeSeries: vi.fn(),
-    timeScale: () => timeScale,
-    panes: () => [{ setStretchFactor: vi.fn() }, { setStretchFactor: vi.fn() }],
-    applyOptions: vi.fn(),
-    subscribeClick: vi.fn(),
-    unsubscribeClick: vi.fn(),
-    remove: vi.fn(),
-  };
-  return { chart, series, timeScale };
-}
-
 async function renderChart(view: StrategyViewResponse = fakeStrategyView(), gateId = 'g_rule', initialWidth = 800) {
-  const mock = mockChart(initialWidth);
+  const mock = fakeStrategyChart(vi, initialWidth);
   const clicks: StrategyCandleClick[] = [];
   const rendered = await render(StrategyChartComponent, {
     inputs: { view, gateId },
     on: { candleClicked: (click: StrategyCandleClick) => clicks.push(click) },
     providers: [{ provide: STRATEGY_CHART_FACTORY, useValue: () => mock.chart }],
   });
-  const candles = mock.series.find((each) => each.type === 'CandlestickSeries');
-  if (candles === undefined) throw new Error('The chart drew no candles.');
-  return { ...rendered, ...mock, candles, clicks };
+  return { ...rendered, ...mock, candles: mock.candles(), clicks };
 }
 
-function lastData(series: MockSeries): Record<string, unknown>[] {
+function lastData(series: FakeSeries): Record<string, unknown>[] {
   return series.setData.mock.calls.at(-1)?.[0] ?? [];
 }
 
@@ -163,6 +119,20 @@ describe('StrategyChartComponent (#2639)', () => {
     expect(bar.createPriceLine.mock.calls[0][0]).toMatchObject({ lineStyle: 2 });
   });
 
+  it('re-reads the lines’ points on a refresh with the same declaration, never rebuilding the panes', async () => {
+    const { chart, series, fixture } = await renderChart();
+    const [foo] = series.filter((each) => each.type === 'LineSeries');
+    chart.addSeries.mockClear();
+
+    const view = fakeStrategyView();
+    fixture.componentRef.setInput('view', { ...view, candles: [...view.candles, fakeStrategyCandle(4)] });
+    await fixture.whenStable();
+
+    expect(chart.addSeries).not.toHaveBeenCalled();
+    expect(chart.removeSeries).not.toHaveBeenCalled();
+    expect(lastData(foo).at(-1)).toEqual({ time: barCloseMs(4) / 1000, value: 104 });
+  });
+
   it('opens on the run once the chart has measured its width, and keeps the viewer’s zoom after', async () => {
     const { timeScale, fixture } = await renderChart(fakeStrategyView(), 'g_rule', 0);
     expect(timeScale.setVisibleLogicalRange).not.toHaveBeenCalled();
@@ -212,11 +182,10 @@ describe('StrategyChartComponent (#2639)', () => {
   });
 
   it('reports a click on a candle by its bar close', async () => {
-    const { chart, clicks } = await renderChart();
-    const onClick = chart.subscribeClick.mock.calls[0][0];
+    const { click, clicks } = await renderChart();
 
-    onClick({ time: barCloseMs(2) / 1000, point: { x: 40, y: 12 }, sourceEvent: { clientX: 300, clientY: 200 } });
-    onClick({ time: undefined, point: { x: 900, y: 12 } });
+    click(barCloseMs(2) / 1000, { point: { x: 40, y: 12 }, sourceEvent: { clientX: 300, clientY: 200 } });
+    click(undefined, { point: { x: 900, y: 12 } });
 
     expect(clicks).toEqual([{ barCloseMs: barCloseMs(2), clientX: 300, clientY: 200 }]);
   });

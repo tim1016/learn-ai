@@ -31,5 +31,5 @@
 
   strong { color: var(--text-secondary); }
   .candle-popover__gate--holds { color: var(--bull); }
-  .candle-popover__gate--fails { color: #ff8a87; }
+  .candle-popover__gate--fails { color: var(--bear-text); }
 }
