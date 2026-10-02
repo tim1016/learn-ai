@@ -1478,6 +1478,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/strategy-view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Strategy view: the bot's own decision candles, values, checks and gates (#2639) */
+        get: operations["get_strategy_view_scoped_api_brokers__broker__accounts__account_id__bots__sid__strategy_view_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/accounts/{account_id}/bots/{strategy_instance_id}/runs/current": {
         parameters: {
             query?: never;
@@ -2162,6 +2179,26 @@ export interface paths {
          * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/runs/current (bot_panel_read).
          */
         get: operations["fleet_bot_run_current_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__runs_current_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clerks/{clerk_id}/accounts/{account_id}/bots/{sid}/strategy-view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fleet Bot Strategy View
+         * @description Fleet-routed GET /accounts/{account_id}/bots/{sid}/strategy-view (bot_panel_read).
+         */
+        get: operations["fleet_bot_strategy_view_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__strategy_view_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8662,6 +8699,18 @@ export interface components {
             status: "not_attempted" | "skipped" | "complete" | "partial" | "failed";
         };
         /**
+         * CatalogueIndicatorRef
+         * @description A catalogue indicator with its parameters resolved for these settings.
+         */
+        CatalogueIndicatorRef: {
+            /** Name */
+            name: string;
+            /** Params */
+            params: {
+                [key: string]: number;
+            };
+        };
+        /**
          * ChannelHealth
          * @description One submission-affecting stream's health fact, with its age (P7).
          *
@@ -10830,11 +10879,9 @@ export interface components {
          *
          *     Each entry declares the column ``name``, its ``dtype``, whether it is
          *     ``nullable``, and a free-text ``semantic`` description. No app code
-         *     reads it; it stays because the sealed ``*.spec.json`` fixtures carry it.
-         *
-         *     ``name`` names an attribute the strategy publishes on its
-         *     ``DecisionSnapshot``. For the SPY EMA strategy these are ``ema5`` /
-         *     ``ema10`` / ``rsi``.
+         *     reads it; it stays because the sealed ``*.spec.json`` fixtures carry it
+         *     (their bytes are pinned by the strategy-validation manifest). A
+         *     strategy's per-bar values are its decision explanation now (#2639).
          */
         DecisionColumnSpec: {
             /**
@@ -10852,6 +10899,25 @@ export interface components {
             nullable?: boolean;
             /** Semantic */
             semantic?: string | null;
+        };
+        /**
+         * DecisionExplanationView
+         * @description What one decision bar saw, ready to show.
+         */
+        DecisionExplanationView: {
+            /** Checks */
+            checks: components["schemas"]["ExplainedCheckView"][];
+            /** Holding */
+            holding: boolean;
+            /** Ready */
+            ready: boolean;
+            /**
+             * Signal
+             * @enum {string}
+             */
+            signal: "ENTER" | "EXIT" | "HOLD";
+            /** Values */
+            values: components["schemas"]["ExplainedValueView"][];
         };
         /**
          * DeploySubmissionUncommitted
@@ -11934,6 +12000,49 @@ export interface components {
             exit_allowance_bps: number;
             /** Spread Cap Bps */
             spread_cap_bps: number;
+        };
+        /**
+         * ExplainedCheckView
+         * @description One rule as the decision applied it, worded by the backend.
+         *
+         *     ``applies`` says whether this rule could act on the bar: entry rules act
+         *     while flat, exit rules while holding. A rule that did not apply is still
+         *     shown, because a gate may shade by it.
+         */
+        ExplainedCheckView: {
+            /** Applies */
+            applies: boolean;
+            /** Check Id */
+            check_id: string;
+            /** Chip */
+            chip: string;
+            /** Label */
+            label: string;
+            /** Needs */
+            needs: string;
+            /** Observed Text */
+            observed_text: string;
+            /** Passed */
+            passed: boolean;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "entry" | "exit";
+        };
+        /**
+         * ExplainedValueView
+         * @description One recorded indicator value, labelled for the bot's settings.
+         */
+        ExplainedValueView: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Text */
+            text: string;
+            /** Value */
+            value: number | null;
         };
         /**
          * ExposureNoticeView
@@ -18914,10 +19023,13 @@ export interface components {
             authority_kind?: ("real_paper" | "real_live" | "shadow" | "synthetic") | null;
             /** Bar Ref */
             bar_ref: string;
+            /** Decision Bar Close Ms */
+            decision_bar_close_ms?: number | null;
             /** Decision Id */
             decision_id?: string | null;
             /** Effect Operation Id */
             effect_operation_id?: string | null;
+            explanation?: components["schemas"]["DecisionExplanationView"] | null;
             /** Order Ref */
             order_ref: string | null;
             /**
@@ -21506,6 +21618,130 @@ export interface components {
             refresh_id: string;
             /** Refreshed At Ms */
             refreshed_at_ms: number;
+        };
+        /**
+         * StrategyViewCandle
+         * @description One decision bar, labelled by its close.
+         *
+         *     ``phase`` is ``before_start`` for a warmup bar the bot evaluated but
+         *     never acted on; ``phase_text`` says so in the owner's words. ``gates``
+         *     maps each gate id to whether it held on this bar (``None`` when the
+         *     bar could not be judged, e.g. indicators not ready).
+         */
+        StrategyViewCandle: {
+            /** Bar Close Ms */
+            bar_close_ms: number;
+            /** Bar Start Ms */
+            bar_start_ms: number;
+            /** Close */
+            close: number;
+            /** Decision Seq */
+            decision_seq?: number | null;
+            explanation: components["schemas"]["DecisionExplanationView"];
+            /** Gates */
+            gates: {
+                [key: string]: boolean | null;
+            };
+            /** High */
+            high: number;
+            /** Low */
+            low: number;
+            /** Open */
+            open: number;
+            /** Outcome */
+            outcome?: string | null;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "before_start" | "decision";
+            /** Phase Text */
+            phase_text?: string | null;
+            /** Reason Code */
+            reason_code?: string | null;
+            /** Volume */
+            volume: number;
+        };
+        /**
+         * StrategyViewDeclarationView
+         * @description The strategy's view resolved against one set of deployed settings.
+         */
+        StrategyViewDeclarationView: {
+            /** Default Gate Id */
+            default_gate_id: string;
+            /** Gates */
+            gates: components["schemas"]["StrategyViewGateView"][];
+            /** Values */
+            values: components["schemas"]["StrategyViewValueSpec"][];
+        };
+        /**
+         * StrategyViewGateView
+         * @description One Dark Bright Gate the view can shade by.
+         */
+        StrategyViewGateView: {
+            /** Expression */
+            expression: string;
+            /** Gate Id */
+            gate_id: string;
+            /** Label */
+            label: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "strategy" | "mine";
+        };
+        /**
+         * StrategyViewResponse
+         * @description Everything one bot's strategy view draws, in one read.
+         */
+        StrategyViewResponse: {
+            /** Candles */
+            candles: components["schemas"]["StrategyViewCandle"][];
+            /** Decision Timeframe Ms */
+            decision_timeframe_ms: number;
+            declaration: components["schemas"]["StrategyViewDeclarationView"];
+            /** Notices */
+            notices?: string[];
+            /** Run Id */
+            run_id: string;
+            /** Run Started At Ms */
+            run_started_at_ms?: number | null;
+            /** Run Stopped At Ms */
+            run_stopped_at_ms?: number | null;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Strategy Name */
+            strategy_name: string;
+            /** Symbol */
+            symbol: string;
+            /**
+             * Unexplained Decision Count
+             * @default 0
+             */
+            unexplained_decision_count?: number;
+        };
+        /**
+         * StrategyViewValueSpec
+         * @description Where and how one recorded value is drawn.
+         *
+         *     ``pane`` is ``"price"`` for an overlay on the candles, another id for a
+         *     pane of its own, or ``None`` for a value listed but not drawn.
+         */
+        StrategyViewValueSpec: {
+            /** Band */
+            band: number[] | null;
+            catalogue: components["schemas"]["CatalogueIndicatorRef"] | null;
+            /** Decimals */
+            decimals: number;
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Pane */
+            pane: string | null;
+            /** Variable */
+            variable: string;
         };
         /** Subtract */
         "Subtract-Input": {
@@ -25883,6 +26119,41 @@ export interface operations {
             };
         };
     };
+    get_strategy_view_scoped_api_brokers__broker__accounts__account_id__bots__sid__strategy_view_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyViewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_current_run_scoped_api_brokers__broker__accounts__account_id__bots__strategy_instance_id__runs_current_get: {
         parameters: {
             query?: never;
@@ -27118,6 +27389,42 @@ export interface operations {
         };
     };
     fleet_bot_run_current_read_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__runs_current_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+                clerk_id: string;
+                account_id: string;
+                sid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fleet_bot_strategy_view_api_brokers__broker__clerks__clerk_id__accounts__account_id__bots__sid__strategy_view_get: {
         parameters: {
             query?: never;
             header?: {

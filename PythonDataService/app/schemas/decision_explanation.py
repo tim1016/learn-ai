@@ -79,11 +79,7 @@ def _check_record(check: ExplainedCheck) -> ExplainedCheckRecord:
         role=check.role.value,
         passed=check.passed,
         observed=check.observed if isinstance(check.observed, str) else _number(check.observed),
-        threshold=(
-            [float(threshold[0]), float(threshold[1])]
-            if isinstance(threshold, tuple)
-            else _number(threshold)
-        ),
+        threshold=([float(threshold[0]), float(threshold[1])] if isinstance(threshold, tuple) else _number(threshold)),
     )
 
 

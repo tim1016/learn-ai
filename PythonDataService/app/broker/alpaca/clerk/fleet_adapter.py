@@ -471,6 +471,13 @@ ALPACA_OPERATIONS: frozenset[ProviderOperation] = frozenset(
             account=True,
         ),
         _op(
+            "bot_strategy_view",
+            "GET",
+            "/accounts/{account_id}/bots/{sid}/strategy-view",
+            capability=Capability.BOT_PANEL_READ,
+            account=True,
+        ),
+        _op(
             "bot_panel_action",
             "POST",
             "/accounts/{account_id}/bots/{sid}/actions",

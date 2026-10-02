@@ -182,6 +182,21 @@ async def test_sqlite_trade_bot_records_every_evaluated_bar_for_panel_health(
         assert [fact["decision_id"] for fact in facts] == expected_ids
         assert decisions[1].intent_id == expected_ids[1]
         assert decisions[1].order_ref is None
+        # #2639: a no-action receipt carries what its decision saw -- the
+        # decision bar and every rule the strategy applied, pass or fail --
+        # so "No action" explains itself.
+        explained = [fact["explanation"] for fact in (facts[0], facts[2])]
+        assert [explanation["bar"]["end_ms"] for explanation in explained] == [
+            _RTH_MS + 60_000,
+            _RTH_MS + 3 * 60_000,
+        ]
+        assert [
+            [(check["check_id"], check["passed"]) for check in explanation["checks"]]
+            for explanation in explained
+        ] == [
+            [("in_window", True), ("green_streak", False)],
+            [("in_window", True), ("session_end", False), ("exit_countdown", False)],
+        ]
         # Decision receipts are product evidence, not custody. The only new
         # authority transitions are the run's required duty boundaries.
         transition_kinds = [

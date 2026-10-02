@@ -733,7 +733,8 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
         def binding_for_control(self, _broker: str, sid: str):
             return SimpleNamespace(
                 strategy_instance_id=sid, run_id="run-1", symbol="SPY", use_rth=True,
-                mode="trade", strategy_key="deployment_validation", sealed_program=None,
+                mode="trade", strategy_key="deployment_validation", strategy_params=None,
+                sealed_program=None,
             )
 
     async def _account(*_args) -> str:

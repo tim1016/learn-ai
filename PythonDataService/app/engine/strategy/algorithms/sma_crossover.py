@@ -36,8 +36,8 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.indicators.sma import SimpleMovingAverage
 from app.engine.strategy.base import LoggedTrade, Strategy
-from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.decision_explanation import CheckRole, DecisionExplanation, ExplainedCheck
+from app.engine.strategy.signal_intent import SignalIntent, SignalIntentKind
 from app.engine.strategy.signal_program import SignalDecision, SignalProgram
 from app.utils.timestamps import display_time
 

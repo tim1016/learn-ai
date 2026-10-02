@@ -71,6 +71,10 @@ from app.engine.strategy.programs.spy_strategy_c import (
     build_spy_strategy_c_signal_program,
 )
 from app.engine.strategy.signal_intent import SignalIntentKind
+from app.engine.strategy.signal_program import (
+    SignalProgram,
+    SignalSession,
+)
 from app.engine.strategy.strategy_view import (
     ChartParamRef,
     StrategyChartIndicator,
@@ -78,10 +82,6 @@ from app.engine.strategy.strategy_view import (
     ViewCheck,
     ViewGate,
     ViewValue,
-)
-from app.engine.strategy.signal_program import (
-    SignalProgram,
-    SignalSession,
 )
 from app.schemas.signal_program_seal import (
     ExitEligibilityContract,

@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-
 from app.engine.engine import BacktestEngine
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_intent import SignalIntentKind
