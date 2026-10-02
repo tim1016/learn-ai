@@ -49512,6 +49512,7 @@
     },
     "/api/brokers/{broker}/accounts/{account_id}/bots/{sid}/chart/history": {
       "get": {
+        "description": "The newest bars for ``timeframe``; with ``from_ms`` and ``to_ms``, that window of the bot's latest run.",
         "operationId": "get_history_chart_scoped_api_brokers__broker__accounts__account_id__bots__sid__chart_history_get",
         "parameters": [
           {
@@ -49558,6 +49559,42 @@
             }
           },
           {
+            "in": "query",
+            "name": "from_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799999,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From Ms"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 253402300799999,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To Ms"
+            }
+          },
+          {
             "in": "header",
             "name": "X-Data-Plane-Control-Secret",
             "required": false,
@@ -49596,7 +49633,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Polygon chart: bounded timeframe window (\u00a78)",
+        "summary": "Polygon chart: bounded timeframe window (\u00a78), or a window of the bot's latest run (#2794)",
         "tags": [
           "broker-v2-panel"
         ]

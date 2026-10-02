@@ -17,11 +17,15 @@ from app.schemas.broker_v2_panel import (
     ChartHistoryTimeframe,
     ChartLiveResponse,
 )
+from app.services.bot_runner import get_bot_task_registry
+from app.services.bot_runner_errors import UnknownBotError as RunnerUnknownBotError
 from app.services.broker_v2_panel.chart_projection_service import (
     build_history_chart,
     build_live_chart,
+    build_run_window_chart,
     history_fill_window,
     live_window,
+    run_chart_window,
 )
 from app.services.broker_v2_panel.history_batch_client import build_history_batch_provider
 from app.services.broker_v2_panel.panel_data_source import get_panel_with_chart_fills
@@ -167,13 +171,33 @@ async def get_live_snapshot_parts(
     return panel, chart
 
 
+def _within_latest_run(broker: str, sid: str, window: tuple[int, int], *, now_ms: int) -> tuple[int, int]:
+    """The window held to the bot's latest run, as its run record dates it."""
+    try:
+        run = get_bot_task_registry().current_run(broker, sid)
+    except RunnerUnknownBotError:
+        run = None
+    terminal = None if run is None else run.terminal_outcome
+    return run_chart_window(
+        *window,
+        run_started_at_ms=None if run is None else run.started_at_ms,
+        run_ended_at_ms=None if terminal is None else terminal.recorded_at_ms,
+        now_ms=now_ms,
+    )
+
+
 async def get_history_chart(
     broker: str,
     account_id: str,
     sid: str,
     timeframe: ChartHistoryTimeframe,
+    window: tuple[int, int] | None = None,
 ) -> ChartHistoryResponse:
     """Build bounded history from SQLite facts.
+
+    With ``window`` (``from_ms``, ``to_ms``), the tape is that window of the
+    bot's latest run instead of the newest bars (#2794); a window outside the
+    run raises ``ChartWindowError``.
 
     Issue #2204: this Clerk-side assembly never calls Polygon directly —
     every Fleet Clerk boots with a present-but-empty ``POLYGON_API_KEY``
@@ -185,7 +209,10 @@ async def get_history_chart(
     """
     resolved = await validate_account(broker, account_id)
     observed_at_ms = now_ms_utc()
-    from_ms, to_ms = history_fill_window(timeframe, observed_at_ms)
+    if window is None:
+        from_ms, to_ms = history_fill_window(timeframe, observed_at_ms)
+    else:
+        from_ms, to_ms = _within_latest_run(broker, sid, window, now_ms=observed_at_ms)
     try:
         evidence = await read_sqlite_chart_evidence(
             broker,
@@ -207,6 +234,16 @@ async def get_history_chart(
     status = evidence.status
     fills = evidence.fills.fills
 
+    if window is not None:
+        return await build_run_window_chart(
+            timeframe,
+            fills,
+            strategy_instance_id=sid,
+            symbol=status.symbol,
+            batch_provider=build_history_batch_provider(),
+            window=(from_ms, to_ms),
+            now_ms=observed_at_ms,
+        )
     return await build_history_chart(
         timeframe,
         fills,
