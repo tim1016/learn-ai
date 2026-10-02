@@ -3,6 +3,9 @@
   @case ('before') {
     <div class="pending">
       <p role="status">The final decision follows Compare: lock one candidate there, then open its one final test here.</p>
+      @if (exposure(); as e) {
+        <p class="exposure"><strong>Recorded exposure: {{ e.label }}.</strong> {{ e.explanation }}</p>
+      }
       <button pButton type="button" severity="secondary" [outlined]="true" (click)="goTo.emit('compare')"><span>Return to candidates</span></button>
     </div>
   }

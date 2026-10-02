@@ -73,15 +73,15 @@ def _recent_activity(recent: Mapping[str, Any] | None, floors: TradeFloors) -> d
         return _row("recent_activity", label, "missing", "No recent-window fit was recorded.", link)
     floor = floors.at((int(recent["window"]["start_ms"]), int(recent["window"]["end_ms"])))
     procedure = recent["procedure"]
-    if procedure["stop_reason"] == "no_eligible":
-        return _row("recent_activity", label, "concern", f"No setting met the recent window's minimum of {floor} trades, so this candidate is its starting point.", link)
     metrics = procedure["winner_metrics"]
     if metrics is None or metrics["status"] != "completed":
         return _row("recent_activity", label, "missing", "The recent-window fit recorded no completed result.", link)
     trades = int(metrics["total_trades"])
     status: Status = "meets" if trades >= floor else "concern"
     relation = "its minimum is" if status == "meets" else "below its minimum of"
-    return _row("recent_activity", label, status, f"{trades} trades over the recent window; {relation} {floor}.", link)
+    # No setting passing every rule is not an activity finding; the trade count still is.
+    seed = " No setting met every rule there, so this candidate is its starting point." if procedure["stop_reason"] == "no_eligible" else ""
+    return _row("recent_activity", label, status, f"{trades} trades over the recent window; {relation} {floor}.{seed}", link)
 
 
 def _test_over_time(validation: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -124,13 +124,17 @@ def _stress(item: Mapping[str, Any]) -> dict[str, Any]:
         return _row("stress", label, "missing", "Not stressed: the development run has no completed result.", link)
     if not results:
         return _row("stress", label, "missing", "The plan stressed no costs.", link)
-    if base["net_profit"] <= 0:
+    if base["net_profit"] < 0:
         return _row("stress", label, "concern", "It loses money before any cost stress.", link)
+    if base["net_profit"] == 0:
+        return _row("stress", label, "concern", "It only breaks even before any cost stress.", link)
     nets = [(result["label"], _completed_net(result)) for result in results]
-    turned = [scenario for scenario, net in nets if net is not None and net <= 0]
+    losses = [scenario for scenario, net in nets if net is not None and net < 0]
+    even = [scenario for scenario, net in nets if net == 0]
     unrecorded = sum(1 for _, net in nets if net is None)
-    if turned:
-        return _row("stress", label, "concern", f"{'; '.join(turned)} turns the result into a loss.", link)
+    if losses or even:
+        parts = ([f"{'; '.join(losses)} turns the result into a loss"] if losses else []) + ([f"{'; '.join(even)} leaves it at break-even"] if even else [])
+        return _row("stress", label, "concern", f"{'. '.join(parts)}.", link)
     if unrecorded:
         return _row("stress", label, "missing", f"{unrecorded} stress {'run was' if unrecorded == 1 else 'runs were'} not recorded.", link)
     return _row("stress", label, "meets", "Every stressed run still makes money.", link)
