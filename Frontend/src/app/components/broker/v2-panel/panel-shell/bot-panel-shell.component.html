@@ -97,6 +97,7 @@
             [failure]="strategyViewFailure()"
             [tape]="tape"
             [tapeLabel]="panelData.health.running ? 'Tape · live' : 'Tape · 1m'"
+            [runContext]="runContext()"
             [(selectedBarCloseMs)]="selectedDecisionBarMs"
             (retry)="strategyView.reload()"
           />

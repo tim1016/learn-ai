@@ -53,6 +53,7 @@
       [gateId]="gate()?.gate_id ?? null"
       [selectedBarCloseMs]="selectedBarCloseMs()"
       [indicatorPlans]="indicatorPlans()"
+      [runContext]="runContext()"
       (candleClicked)="onCandleClicked($event)"
       (candleSelected)="selectedBarCloseMs.set($event)"
     />
