@@ -812,6 +812,20 @@ against a broker, so this vocabulary survives a broker change.
   clock: bar qualification, readiness, relation/signal facts, candidate, reason
   evidence, and the semantic Action Plan request. It is not a custody journal
   and does not prove an order was submitted.
+- **Decision explanation** — what one decision bar saw: the strategy's own
+  indicator values and each entry or exit rule it applied, with threshold,
+  observed value and pass/fail. Emitted by the code that decides, never
+  recomputed, and never part of the **Evaluation Trace** (ADR 0043, #2639).
+- **Before-start evaluation** — a decision explanation for a warmup bar a run
+  evaluated before it started deciding. Shown behind the strategy view's "bot
+  started" line as "before start · not acted on"; never a decision receipt.
+- **Strategy view** — a chart of a strategy's own decision candles, its
+  recorded values drawn as lines, and a **Dark Bright Gate**'s shading.
+  Declared once per strategy on its registration (`StrategyView`).
+- **Dark Bright Gate** — a condition that shades strategy-view candles: the
+  hue stays the candle's direction, bright where the gate holds and dark where
+  it fails. Each strategy's default gate is one of its own recorded rules, so
+  its edges are the bot's. Gates only shade; they never trade.
 - **Strategy Validation page** — the standalone surface that owns a strategy
   *becoming* validated and that displays the equivalence evidence. It is a
   **master-detail list** (a row per validated strategy, click through to detail),
