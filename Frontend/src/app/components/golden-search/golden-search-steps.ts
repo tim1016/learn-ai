@@ -82,12 +82,18 @@ const STEP_ACTIONS: Partial<Readonly<Record<StudyState, PrimaryAction>>> = {
  * take (a stage is running, or the study is finished). Cancel, Finish and
  * Hide are record controls, not the next step.
  */
-export function primaryAction(study: Pick<StudyDetail, 'state' | 'permitted_actions'>): PrimaryAction | null {
+export function primaryAction(study: Pick<StudyDetail, 'state' | 'permitted_actions' | 'presented_status'>): PrimaryAction | null {
   if (study.permitted_actions.includes('run_research')) {
-    return { kind: 'command', command: 'run_research', label: RESEARCH_STATES.has(study.state) ? 'Run research' : 'Resume research' };
+    return { kind: 'command', command: 'run_research', label: researchLabel(study) };
   }
   if (CONTINUE_LABELS[study.state] !== undefined) return null;
   return STEP_ACTIONS[study.state] ?? null;
+}
+
+/** Run research starts a waiting study, re-authorizes a stage no worker took, or resumes a stopped one. */
+function researchLabel(study: Pick<StudyDetail, 'state' | 'presented_status'>): string {
+  if (RESEARCH_STATES.has(study.state)) return 'Run research';
+  return study.presented_status === 'queued' ? 'Start research again' : 'Resume research';
 }
 
 /** Running only the next stage and pausing after it: the quieter alternative to Run research. */
