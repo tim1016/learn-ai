@@ -15,13 +15,14 @@ const QQQ = heldBounds('QQQ', '2024-09-03', '2026-09-18');
 
 @Component({
   imports: [DateRangePickerComponent],
-  template: `<app-date-range-picker [(from)]="from" [(to)]="to" [bounds]="bounds()" [ranges]="ranges()" />`,
+  template: `<app-date-range-picker [(from)]="from" [(to)]="to" [bounds]="bounds()" [ranges]="ranges()" [sessionsOnly]="sessionsOnly()" />`,
 })
 class HostComponent {
   readonly from = signal('2026-08-18');
   readonly to = signal('2026-09-18');
   readonly bounds = signal<DateBounds>(QQQ);
   readonly ranges = signal<readonly QuickRangeKey[]>(QUICK_RANGES);
+  readonly sessionsOnly = signal(true);
 }
 
 async function renderPicker(calendar: FakeTradingCalendar = fakeTradingCalendar(SESSIONS, '2026-10-02')) {
@@ -168,6 +169,16 @@ describe('DateRangePickerComponent', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(calendar.retry).toHaveBeenCalledTimes(1);
+  });
+
+  it('still says so, with the retry, on a page whose dates need not be sessions: its quick ranges need the calendar too', async () => {
+    const { view, host } = await renderPicker(fakeTradingCalendar(null, '2026-10-02', 'The data plane did not respond.'));
+
+    host.sessionsOnly.set(false);
+    await view.fixture.whenStable();
+
+    expect(screen.getByText(/The trading calendar could not be read: The data plane did not respond\./)).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Retry' })).not.toBeNull();
   });
 
   it('picks both ends in one calendar, where closed days cannot be picked', async () => {

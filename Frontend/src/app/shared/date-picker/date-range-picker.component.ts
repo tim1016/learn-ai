@@ -61,7 +61,8 @@ export class DateRangePickerComponent {
   });
 
   protected readonly sessions = computed(() => (this.sessionsOnly() ? this.calendar.sessions() : null));
-  protected readonly calendarProblem = computed(() => (this.sessionsOnly() ? this.calendar.problem() : null));
+  /** Why the calendar could not be read, wherever this picker needs it: to check sessions, or to offer quick ranges. */
+  protected readonly calendarProblem = computed(() => (this.sessionsOnly() || this.ranges().length > 0 ? this.calendar.problem() : null));
   protected readonly checked = computed(() => checkRange(this.fromText(), this.toText(), { bounds: this.bounds(), sessions: this.sessions() }));
   protected readonly problem = computed(() => this.checked().from.problem ?? this.checked().to.problem);
   protected readonly offers = computed(() => offerQuickRanges(this.ranges(), this.bounds(), this.calendar.sessions(), this.calendar.lastCompleted()));

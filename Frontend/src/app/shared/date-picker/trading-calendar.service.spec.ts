@@ -66,6 +66,26 @@ describe('TradingCalendarService', () => {
     expect(service.lastCompleted()).toBe('2026-10-02');
   });
 
+  it('catches up within a minute of waking when the machine slept through a close', async () => {
+    vi.setSystemTime(Date.UTC(2026, 9, 2, 16));
+    service.sessions();
+    TestBed.tick();
+    http.expectOne(isCalendarRead).flush({
+      session_open_ms: [Date.UTC(2026, 9, 1, 13, 30), Date.UTC(2026, 9, 2, 13, 30)],
+      session_close_ms: [Date.UTC(2026, 9, 1, 20), Date.UTC(2026, 9, 2, 20)],
+      holidays: [],
+    });
+    await settle();
+    expect(service.lastCompleted()).toBe('2026-10-01');
+
+    // Asleep for ten hours: the clock moves, the timers do not.
+    vi.setSystemTime(Date.UTC(2026, 9, 3, 2));
+    expect(service.lastCompleted()).toBe('2026-10-01');
+    vi.advanceTimersByTime(60_000);
+
+    expect(service.lastCompleted()).toBe('2026-10-02');
+  });
+
   it('says why the calendar could not be read, and reads it again on retry', async () => {
     service.sessions();
     TestBed.tick();
