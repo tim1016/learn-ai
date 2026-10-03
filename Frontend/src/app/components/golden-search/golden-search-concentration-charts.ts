@@ -15,10 +15,10 @@ import type { Concentration, ConcentrationCurve, EvidenceCandidate } from './gol
  */
 
 const DEVELOPMENT = 'Development data, used for choosing.';
-const RULE = 'Concern when the result without its best month or without its best 5% of trades is $0 or less.';
+const RULE = 'Concern at $0 or less.';
 const NET_OF_COMMISSION = 'Each trade counts its net profit: its P&L less its entry and exit commission.';
 /** How many removed trades a tooltip lists before it says how many more there are. */
-const LISTED_TRADES = 5;
+const LISTED_TRADES = 3;
 const WHOLE_PERCENT = new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 0 });
 const AXIS_USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 });
 
@@ -107,7 +107,7 @@ function curveOption(candidate: EvidenceCandidate, curve: ConcentrationCurve, th
         markLine: {
           silent: true,
           symbol: 'none',
-          label: { formatter: 'all net profit', position: 'insideEndTop', color: theme.textSecondary, fontSize: 11 },
+          label: { formatter: 'all net profit', position: 'insideEndBottom', color: theme.textSecondary, fontSize: 11 },
           lineStyle: { color: theme.textSecondary, type: 'dashed', width: 1 },
           data: [{ yAxis: 1 }],
         },
@@ -183,13 +183,12 @@ function withoutBestOption(candidate: EvidenceCandidate, measure: Concentration,
     id: `${bar.key}:result`,
     name: bar.label,
     type: 'bar' as const,
-    data: bars.map((other) =>
-      other.key !== bar.key || other.value === null ? '-' : { value: other.value, label: { position: other.value < 0 ? ('left' as const) : ('right' as const) } },
-    ),
+    data: bars.map((other) => (other.key !== bar.key || other.value === null ? '-' : other.value)),
     barMaxWidth: 22,
     barGap: '-100%',
     itemStyle: { color: colorOf(bar) },
-    label: { show: true, color: theme.text, fontSize: 11, formatter: () => signedUsdText(bar.value) },
+    // Right of the bar's end, which for a loss is $0, so the value never runs into the row's name.
+    label: { show: true, position: 'right' as const, color: theme.text, fontSize: 11, formatter: () => signedUsdText(bar.value) },
     emphasis: { focus: 'series' as const, blurScope: 'global' as const },
   }));
   return {
@@ -205,8 +204,8 @@ function withoutBestOption(candidate: EvidenceCandidate, measure: Concentration,
     },
     xAxis: {
       type: 'value',
-      splitNumber: 4,
-      min: (extent: { min: number }) => Math.min(extent.min, 0),
+      // A value axis keeps $0 in its rounded scale, so a bar is always drawn from $0.
+      splitNumber: 3,
       axisLabel: { color: theme.textSecondary, fontSize: 11, hideOverlap: true, formatter: (value: number) => AXIS_USD.format(value) },
       splitLine: { lineStyle: { color: theme.gridLine } },
     },
@@ -248,6 +247,6 @@ function withoutBestTooltip(bar: Bar, measure: Concentration, theme: ChartTheme)
     ...removed.slice(0, LISTED_TRADES).map((trade) => ({ label: `Entered ${formatTimestampDisplay(trade.entry_ms, { mode: 'local' })}`, values: [signedUsdText(trade.net_profit)] })),
   ];
   const more = removed.length > LISTED_TRADES ? [`${removed.length - LISTED_TRADES} more of the best trades are not listed.`] : [];
-  const which = `The best 5% of its ${measure.trades} trades, rounded up.`;
-  return tooltipHtml({ title: bar.label, columns: ['Value'], rows, notes: [...more, which, NET_OF_COMMISSION, RULE, DEVELOPMENT] }, theme);
+  const which = `The best 5% of its ${measure.trades} trades, rounded up, each net of its entry and exit commission.`;
+  return tooltipHtml({ title: bar.label, columns: ['Value'], rows, notes: [...more, which, RULE, DEVELOPMENT] }, theme);
 }
