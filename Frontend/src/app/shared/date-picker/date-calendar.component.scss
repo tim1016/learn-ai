@@ -1,0 +1,17 @@
+@use '../../styles/visually-hidden' as *;
+
+.date-calendar__unheld {
+  text-decoration: underline dotted var(--warn);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+.date-calendar__hidden {
+  @include visually-hidden;
+}
+
+.date-calendar__legend {
+  margin: 8px 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}

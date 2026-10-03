@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, input, model } from '@angular/core';
 
-import { DateRangePickerComponent, UNBOUNDED, type DateBounds } from '../../date-picker';
+import { DateRangePickerComponent, UNBOUNDED, type DataGaps, type DateBounds } from '../../date-picker';
 import type { TickerRange } from '../ticker-range-picker.types';
 
 /** The dates of a ``TickerRange``, picked with the shared date range picker inside the picker family's card frame. */
@@ -16,6 +16,8 @@ export class TimeWindowCardComponent {
   readonly appearance = input<'card' | 'flat'>('card');
   /** The days the host's run can read. */
   readonly bounds = input<DateBounds>(UNBOUNDED);
+  /** The sessions inside the bounds the host's data lacks. */
+  readonly gaps = input<DataGaps | null>(null);
   /** Whether both ends must be trading sessions. */
   readonly sessionsOnly = input(true);
 

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
-import { heldBounds, type DateBounds } from './date-bounds';
+import { heldBounds, type DataGaps, type DateBounds } from './date-bounds';
 import { DateRangePickerComponent } from './date-range-picker.component';
 import { QUICK_RANGES, type QuickRangeKey, type QuickRangeOffer } from './quick-ranges';
 import { fakeSessions, fakeTradingCalendar, type FakeTradingCalendar } from './testing/fake-trading-calendar';
@@ -22,10 +22,12 @@ const QQQ = heldBounds('QQQ', '2024-09-03', '2026-09-18');
     [ranges]="ranges()"
     [sessionsOnly]="sessionsOnly()"
     [hostOffers]="hostOffers()"
+    [gaps]="gaps()"
     (picked)="picked.set($event)"
   />`,
 })
 class HostComponent {
+  readonly gaps = signal<DataGaps | null>(null);
   readonly hostOffers = signal<readonly QuickRangeOffer[] | null>(null);
   readonly picked = signal<QuickRangeKey | null>(null);
   readonly from = signal('2026-08-19');
@@ -143,6 +145,34 @@ describe('DateRangePickerComponent', () => {
 
     expect([host.from(), host.to()]).toEqual(['2026-09-28', '2026-10-02']);
     expect(host.picked()).toBe('1W');
+  });
+
+  it('counts the sessions in the range that the data lacks, and underlines them in the calendar', async () => {
+    const { view, host } = await renderPicker();
+    // Two gaps inside 2026-08-19 to 2026-09-18, one before it.
+    host.gaps.set({ unheld: new Set(['2026-08-03', '2026-09-01', '2026-09-10']), problem: null });
+    await view.fixture.whenStable();
+
+    expect(screen.getByText(/^22 sessions, 2 not held/)).not.toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open the calendar' }));
+    const calendar = await screen.findByRole('dialog', { name: 'Calendar' });
+    const underlined = (date: string): boolean => calendar.querySelector(`span[data-date="${date}"] .date-calendar__unheld`) !== null;
+    // PrimeNG's months are zero-based: 2026-8-10 is September 10th.
+    expect([underlined('2026-8-10'), underlined('2026-8-11')]).toEqual([true, false]);
+    expect(within(calendar).getByText(/A session the lake does not hold/)).not.toBeNull();
+  });
+
+  it('says the range is all held when it has no gap, and says so when the gaps could not be checked', async () => {
+    const { view, host } = await renderPicker();
+    host.gaps.set({ unheld: new Set(['2026-08-03']), problem: null });
+    await view.fixture.whenStable();
+    expect(screen.getByText(/^22 sessions, all held/)).not.toBeNull();
+
+    host.gaps.set({ unheld: new Set(), problem: 'The data plane did not respond.' });
+    await view.fixture.whenStable();
+
+    expect(screen.getByText(/^22 sessions · .*Gaps could not be checked: The data plane did not respond\./)).not.toBeNull();
   });
 
   it('says when the held data stops short of the market', async () => {

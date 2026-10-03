@@ -33,8 +33,16 @@ const WEEKEND = [0, 6];
       [disabledDays]="sessions() === null ? [] : weekend"
       [disabledDates]="closedDates()"
       (onSelect)="onSelect()"
-    />
+    >
+      <ng-template #date let-date>
+        <span [class.date-calendar__unheld]="isMarked(date)">{{ date.day }}@if (isMarked(date)) {<span class="date-calendar__hidden">, not held</span>}</span>
+      </ng-template>
+    </p-datepicker>
+    @if ((marked()?.size ?? 0) > 0) {
+      <p class="date-calendar__legend"><span class="date-calendar__unheld">12</span> A session the lake does not hold.</p>
+    }
   `,
+  styleUrl: './date-calendar.component.scss',
 })
 export class DateCalendarComponent {
   readonly mode = input<'single' | 'range'>('single');
@@ -45,6 +53,8 @@ export class DateCalendarComponent {
   readonly bounds = input<DateBounds>(UNBOUNDED);
   /** The trading calendar when only sessions may be picked; null lets every day through. */
   readonly sessions = input<TradingSessions | null>(null);
+  /** Sessions the host's data lacks: still pickable, underlined so a gap is seen before it is picked across. */
+  readonly marked = input<ReadonlySet<IsoDate> | null>(null);
   /** A completed pick. A single date arrives with ``from`` equal to ``to``. */
   readonly picked = output<DateRange>();
 
@@ -86,6 +96,14 @@ export class DateCalendarComponent {
     picker.currentMonth = first.getMonth();
     picker.currentYear = first.getFullYear();
     picker.createMonths(picker.currentMonth, picker.currentYear);
+  }
+
+  /** Whether the day PrimeNG is drawing (its month is zero-based) is one the host's data lacks. */
+  protected isMarked(day: { readonly year: number; readonly month: number; readonly day: number }): boolean {
+    const marked = this.marked();
+    if (marked === null || marked.size === 0) return false;
+    const two = (value: number): string => String(value).padStart(2, '0');
+    return marked.has(`${day.year}-${two(day.month + 1)}-${two(day.day)}`);
   }
 
   protected onSelect(): void {

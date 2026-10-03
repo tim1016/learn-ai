@@ -2,13 +2,13 @@ import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, injec
 import { InputText } from 'primeng/inputtext';
 
 import { FILL_MODE_OPTIONS, RESEARCH_DEFAULT_FILL_MODE, isFillModeName, storedFillMode, type FillModeName } from '../../models/fill-mode';
-import { DateRangePickerComponent, type DateBounds } from '../../shared/date-picker';
+import { DateRangePickerComponent, type DataGaps, type DateBounds } from '../../shared/date-picker';
 import { etDayEndMs, etIsoDate, etMidnightMs, isoDateAfter, shiftIsoDateByMonths } from '../../shared/date/et-midnight';
 import { ParamRangeInputComponent } from '../../shared/param-range/param-range-input.component';
 import { defaultNumericValue, numericStrategyParams, rangeVaries, type ParamRange, rangeProblem } from '../../shared/param-range/param-range';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
-import { DEFAULT_ADJUSTMENT_MODE, TickerCatalogService, heldBoundsFor } from '../../shared/ticker-catalog';
+import { DEFAULT_ADJUSTMENT_MODE, HeldGapsService, TickerCatalogService, heldBoundsFor } from '../../shared/ticker-catalog';
 import type { ParamProperty, StrategyInfo } from '../strategy-lab/strategy-lab.models';
 import { RANKING_MEASURES, type GridSearchSpecRequest, type RankingMeasure } from './grid-search.types';
 
@@ -67,6 +67,7 @@ function defaultWindow(bounds: DateBounds): { from: string; to: string } | null 
 export class GridSearchSpecEditorComponent {
   private readonly destroyRef = inject(DestroyRef);
   private readonly catalog = inject(TickerCatalogService);
+  private readonly heldGaps = inject(HeldGapsService);
 
   readonly strategies = input.required<readonly StrategyInfo[]>();
   /** A spec to start from (a stored request); applied once its strategy is in the catalogue. */
@@ -105,6 +106,11 @@ export class GridSearchSpecEditorComponent {
     // `viewFor` may install a resource effect, which a reactive context forbids.
     return heldBoundsFor(untracked(() => this.catalog.viewFor(DEFAULT_ADJUSTMENT_MODE)), symbol);
   });
+
+  /** The sessions inside those days the tree lacks: a held span is only a first and a last day. */
+  protected readonly gaps = computed<DataGaps | null>(() =>
+    this.heldGaps.gapsFor(DEFAULT_ADJUSTMENT_MODE, this.symbol().trim().toUpperCase(), this.bounds()),
+  );
 
   private debounce: ReturnType<typeof setTimeout> | null = null;
   private appliedInitial: GridSearchSpecRequest | null = null;
