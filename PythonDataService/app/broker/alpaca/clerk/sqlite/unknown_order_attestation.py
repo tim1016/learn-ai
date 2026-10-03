@@ -52,12 +52,12 @@ order: it carries exactly the client order id the Clerk sent, and the
 symbol, side and quantity the order was created with. Then it is folded as
 the answer of the order's own exact lookup would be: a working order is
 followed, a fill is credited once, an order that ended unfilled fails the
-EXIT through ``EXIT_NOT_FLAT``. A wrong id, another bot's order, or an order
-under another client order id is refused. Taking up an order Alpaca booked
-under another client order id is not done here: while such an order works,
-neither attestation settles this one; once it has ended without selling
-anything, "no such order" does; and once it has sold anything, neither does,
-and the Clerk keeps the position held.
+EXIT through ``EXIT_NOT_FLAT``. A wrong id, another bot's order, an order
+Alpaca replaced, or an order under another client order id is refused.
+Taking up an order Alpaca booked under another client order id is not done
+here: while such an order works, neither attestation settles this one; once
+it has ended without selling anything, "no such order" does; and once it has
+sold anything, neither does, and the Clerk keeps the position held.
 
 A settlement runs under the EXIT's exclusive operation claim, the one
 ``resolve_exit`` takes: a pass of the Clerk that meets it defers the EXIT,
@@ -1235,6 +1235,11 @@ def _require_same_order(presented: ProjectedUnknownExitOrder, observed: BrokerOr
     An order the Clerk could not read in full is refused too, before
     anything is written: its fold would otherwise withhold it and record
     only that the outcome is still unknown.
+
+    So is this order once Alpaca has replaced it. It does nothing more under
+    its own id, and the order that replaced it is another order, which the
+    Clerk cannot take up: taken up, a replaced order would leave the EXIT
+    ``unknown`` for good, and no longer offered for settling.
     """
     order_id = observed.order_id
     named = all(value.strip() for value in (order_id, observed.status, observed.symbol, observed.side))
@@ -1276,6 +1281,18 @@ def _require_same_order(presented: ProjectedUnknownExitOrder, observed: BrokerOr
             f"{'an unstated number of' if quantity is None else format(quantity, 'g')} "
             f"{observed.symbol}, and this order is to {presented.side.lower()} "
             f"{presented.quantity:g} {presented.symbol}. Nothing was changed.",
+        )
+    if observed.status.lower() == "replaced":
+        replacement = (
+            f"with Alpaca order {observed.replaced_by!r}"
+            if (observed.replaced_by or "").strip()
+            else "and does not say with which order"
+        )
+        raise UnknownOrderSettlementRefused(
+            "ORDER_REPLACED",
+            f"Alpaca replaced order {order_id!r} {replacement}. A replaced order does nothing "
+            "more under its own id, and the Clerk cannot take up the order that replaced it "
+            "yet, so it keeps the position held. Nothing was changed.",
         )
     filled, price = observed.filled_quantity, observed.filled_avg_price
     if (

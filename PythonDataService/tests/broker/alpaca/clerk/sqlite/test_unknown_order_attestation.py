@@ -1171,6 +1171,49 @@ async def test_an_order_that_ended_unfilled_at_alpaca_fails_its_exit_and_the_pos
     assert len(alpaca.sent) == 1
 
 
+async def test_an_order_alpaca_replaced_is_not_taken_up_and_the_refusal_names_what_replaced_it(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The closing order reached Alpaca and was replaced there, with nothing filled.
+
+    Taken up, it left the EXIT ``unknown`` for good: a replaced order does
+    nothing more under its own id, and the order was no longer offered for
+    settling. It is refused instead, by the check and the settlement alike,
+    in words that name the order that replaced it. Nothing is written, and
+    the order is still offered.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("arrives_unanswered",))
+    exit_id, it_is_this_order = await _a_stopped_bot_whose_closing_order_alpaca_has_unseen(repo, alpaca)
+    closing = _closing_order(repo)
+    assert it_is_this_order.broker_order_id is not None
+    alpaca.by_broker_id[it_is_this_order.broker_order_id] = alpaca.at_alpaca(
+        closing.client_order_id
+    ).model_copy(update={"status": "replaced", "replaced_by": BY_HAND_ORDER_ID})
+    facade = _facade(repo, alpaca)
+    (order,) = repo.unknown_exit_orders(SID)
+    ledger = repo.custody_transitions()
+
+    checked = await facade.check_unknown_exit_order(
+        strategy_instance_id=SID, presented=order, attestation=it_is_this_order
+    )
+    with pytest.raises(RecoveryExecutionError) as refused:
+        await _settle(facade, _context_of(repo, SID), it_is_this_order)
+
+    assert (checked.would_settle, checked.refusal_reason_code) == (False, "ORDER_REPLACED")
+    assert checked.lines == (str(refused.value),)
+    assert str(refused.value) == (
+        f"Alpaca replaced order {it_is_this_order.broker_order_id!r} with Alpaca order "
+        f"{BY_HAND_ORDER_ID!r}. A replaced order does nothing more under its own id, and the Clerk "
+        "cannot take up the order that replaced it yet, so it keeps the position held. Nothing was "
+        "changed."
+    )
+    assert repo.custody_transitions() == ledger
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert repo.unknown_exit_orders(SID) == (order,), "the order is still offered for settling"
+    assert len(alpaca.sent) == 1
+
+
 def _no_order_has_that_id(_alpaca: _AlpacaAccount, _ours: BrokerOrder) -> str:
     return NO_SUCH_ORDER_ID
 
