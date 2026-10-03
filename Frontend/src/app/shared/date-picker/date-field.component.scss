@@ -14,6 +14,13 @@
   gap: 6px;
 }
 
+// The calendar opened in place, under the field.
+.date-field__inline {
+  align-self: start;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 // Among a form's filled fields the fill is the field: no outline until it has focus.
 :host(.date-field--filled) {
   .date-control__input {

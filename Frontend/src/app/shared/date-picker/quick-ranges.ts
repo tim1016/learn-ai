@@ -56,11 +56,13 @@ function calendarStart(key: QuickRangeKey, end: IsoDate): IsoDate | null {
  *
  * A range ends on the last day the page's run can read (``bounds.max``, else
  * ``lastCompleted``, the last session that has closed) and is exactly its
- * label, both ends included: 1Y ending 2026-09-18 starts 2025-09-19, and 1M
- * is one calendar month, not thirty days. A range is therefore a whole number
- * of months, which the fold planners require. With ``sessionsOnly`` the start
- * then moves forward to the next session, so a range never reaches past its
- * label. A range whose start falls before ``bounds.min`` is refused with the
+ * label on the calendar, both ends included: 1Y ending 2026-09-18 starts
+ * 2025-09-19, and 1M is one calendar month, not thirty days. That is a whole
+ * number of months as the fold planners count them, except where the start's
+ * month is shorter than the day asked for (6M ending 2026-10-30 starts
+ * 2026-04-30, a day more than six months); a planner refuses such a range in
+ * its own words. With ``sessionsOnly`` the start then moves forward to the
+ * next session, so a range never reaches past its label. A range whose start falls before ``bounds.min`` is refused with the
  * bound's own reason.
  */
 export function offerQuickRanges(

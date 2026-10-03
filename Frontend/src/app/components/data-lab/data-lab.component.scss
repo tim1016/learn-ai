@@ -96,10 +96,10 @@
   flex-direction: column;
   gap: 0.25rem;
   min-width: 0;
+  font-size: 0.8rem;
 
   // The dates: two fields, their calendar and the quick ranges need room.
   &--dates { flex: 1 1 22rem; }
-  font-size: 0.8rem;
 
   > span {
     color: $text-secondary;
