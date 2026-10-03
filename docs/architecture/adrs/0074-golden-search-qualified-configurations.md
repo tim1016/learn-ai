@@ -172,7 +172,8 @@ candidate's evidence. Compare's decision summary reads its Concentration row
 from it:
 
 - **concern** when the development net profit without its best month, or
-  without its best 5% of trades (rounded up, at least one), is $0 or less;
+  without its best 5% of trades (rounded up, at least one), is $0 or less,
+  judged to the cent so floating-point noise never decides it;
 - **meets** otherwise;
 - **missing** when the run was not evaluated, failed or made no trades, or
   when its trades, each net of its own entry and exit commission, do not add up
