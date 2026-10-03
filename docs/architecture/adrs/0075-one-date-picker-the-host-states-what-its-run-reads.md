@@ -60,6 +60,10 @@ Only the host knows what its run reads, so it hands the picker its bounds (`Date
 
 A held span is a first and a last day, not coverage. On pages bounded by one, the picker marks the sessions the lake lacks in the calendar and counts them under the dates (`GET /api/data-lake/coverage`). The range stays selectable; the page's run decides what a gap means.
 
+The route reports minute bars, so only a run on minute bars is shown gaps. A daily run reads the symbol's daily history, which no route reports on per session; it is shown none rather than the minute bars' gaps.
+
+The gaps are read again whenever the tree's holdings are read again.
+
 ### 8. Layout, and the instrument picker beside it
 
 The instrument and the dates are two controls. A page whose state is a `TickerRange` uses `app-ticker-range-picker`. Any other page puts the shared instrument picker first and the shared date control beside or under it.
