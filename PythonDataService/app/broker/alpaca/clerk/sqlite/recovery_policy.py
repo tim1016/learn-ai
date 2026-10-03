@@ -13,7 +13,7 @@ import json
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Final, Literal, NamedTuple, TypeGuard
+from typing import Literal, NamedTuple, TypeGuard
 
 from app.broker.alpaca.clerk.account_authority import (
     is_shadow_account_id,
@@ -1365,36 +1365,11 @@ def _build_safe_flatten_plan(
     )
 
 
-SETTLE_UNKNOWN_EXIT_ORDER_HAS_A_PAGE: Final[bool] = True
-"""Whether any operator page can run ``settle_unknown_exit_order`` (#2854). The bot's page can.
-
-The action needs the operator's attestation of what Alpaca shows, made after
-reading the Clerk's own findings. The bot's page collects it: its toolbar
-opens a ticket that asks, shows what the Clerk read, and confirms. So the
-action can be a catalog's primary action -- which is also what a roster
-row's command and a bot page's primary command are taken from -- and an
-account-scoped catalog lists it, never available there, saying the order is
-settled from its bot's page.
-
-A bot-scoped catalog always carries it: the Clerk's bot-scoped check and
-execute routes and the panel's execute route recheck a request against it.
-"""
-
-
-def _is_presented(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> bool:
-    """Whether ``ctx``'s catalog lists ``action_id`` at all."""
-    if action_id != "settle_unknown_exit_order":
-        return True
-    return ctx.strategy_instance_id is not None or SETTLE_UNKNOWN_EXIT_ORDER_HAS_A_PAGE
-
-
 def build_recovery_catalog(ctx: RecoveryPolicyContext) -> tuple[RecoveryCapability, ...]:
     """Author the complete capability set for the current authority posture."""
     descriptors = _DESCRIPTORS if ctx.authority_health == "healthy" else _FAILURE_DESCRIPTORS
     capabilities: list[RecoveryCapability] = []
     for descriptor in descriptors:
-        if not _is_presented(ctx, descriptor.action_id):
-            continue
         decision = _decision(ctx, descriptor.action_id)
         concurrency_token = _token(
             ctx,
@@ -1461,9 +1436,8 @@ def _primary_action_id(capabilities: list[RecoveryCapability]) -> str | None:
         "recover_exact_execution_evidence",
         "resolve_execution_coverage",
         "cancel_verified_working_orders",
-        # Above Reconcile now, which cannot settle an order no read shows
-        # (#2854) -- while a page can run it; without one, never primary.
-        *(("settle_unknown_exit_order",) if SETTLE_UNKNOWN_EXIT_ORDER_HAS_A_PAGE else ()),
+        # Above Reconcile now, which cannot settle an order no read shows (#2854).
+        "settle_unknown_exit_order",
         "reconcile_now",
         "stop_bot_decisions",
         "execute_safe_flatten",
