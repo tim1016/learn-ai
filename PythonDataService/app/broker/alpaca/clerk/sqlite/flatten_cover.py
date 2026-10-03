@@ -221,7 +221,7 @@ def flatten_cover_refusal(
     return LegRefusal(
         reason_code=FLATTEN_NOT_COVERED_AT_BROKER,
         explanation=(
-            f"Alpaca holds {_held_text(position, symbol)}{already_taken}, {short_of}; "
+            f"Alpaca holds {held_text(position, symbol)}{already_taken}, {short_of}; "
             "nothing was sent."
         ),
         next_step=FLATTEN_COVER_NEXT_STEPS[FLATTEN_NOT_COVERED_AT_BROKER],
@@ -263,8 +263,8 @@ def _unproven(explanation: str) -> LegRefusal:
     )
 
 
-def _held_text(position: float, symbol: str) -> str:
-    """The broker's signed position in plain words: ``10 SPY``, ``no SPY``, ``a short of 10 SPY``."""
+def held_text(position: float, symbol: str) -> str:
+    """A signed position in plain words: ``10 SPY``, ``no SPY``, ``a short of 10 SPY``."""
     if not position_quantity_is_nonzero(position):
         return f"no {symbol}"
     return f"{position:g} {symbol}" if position > 0 else f"a short of {abs(position):g} {symbol}"
@@ -278,4 +278,5 @@ __all__ = [
     "account_lists_order",
     "cover_after_open_orders",
     "flatten_cover_refusal",
+    "held_text",
 ]

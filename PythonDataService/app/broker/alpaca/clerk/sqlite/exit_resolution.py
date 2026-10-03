@@ -116,6 +116,7 @@ from app.broker.alpaca.clerk.sqlite.flatten_cover import (
     FLATTEN_COVER_NEXT_STEPS,
     account_lists_order,
     flatten_cover_refusal,
+    held_text,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
@@ -2438,8 +2439,10 @@ def attested_absent_exit_notice(
 
     The attributed quantity is never changed by this. When the broker's
     position in the symbol (``broker_qty``) does not equal the account-wide
-    attribution, the notice says both, and what to do about shares Alpaca
-    does not hold.
+    attribution, the notice says both, and what to do about a position
+    Alpaca does not hold. Each quantity is said by its own sign, a short as
+    a short, and what to do is said by the order's side: a closing sale is
+    made again by selling, a cover by buying back.
 
     ``None`` for an EXIT whose bot holds nothing in the symbol: it has
     nothing left to exit and ends attributed-flat instead, citing the same
@@ -2451,19 +2454,23 @@ def attested_absent_exit_notice(
     held = repo.position(effect.strategy_instance_id, created.symbol)
     if not position_quantity_is_nonzero(held):
         return None
+    symbol = created.symbol
     settled = (
         f"The Clerk could not confirm the order to {_the_reduction(created)}. An operator said "
         "Alpaca has no such order, the Clerk's own reads of Alpaca found no order under its "
-        f"client order id and none working on {created.symbol}, and the exit was ended as not "
-        f"sent; {held:g} {created.symbol} is still held."
+        f"client order id and none working on {symbol}, and the exit was ended as not "
+        f"sent; {held_text(held, symbol)} is still {'held' if held > 0 else 'open'}."
     )
     if position_quantity_is_nonzero(broker_qty - account_attributed_qty):
         explanation = (
-            f"{settled} Alpaca holds {broker_qty:g} {created.symbol}; the Clerk's records say "
-            f"{account_attributed_qty:g}."
+            f"{settled} Alpaca holds {held_text(broker_qty, symbol)}; the Clerk's records say "
+            f"{held_text(account_attributed_qty, symbol)}."
         )
         next_step = (
-            "Look at this account's position at Alpaca. If Alpaca does not hold these shares, "
+            "Look at this account's position at Alpaca. If Alpaca is not short these shares, "
+            "write off the short the Clerk records; otherwise buy back what is short."
+            if created.side.upper() == "BUY"
+            else "Look at this account's position at Alpaca. If Alpaca does not hold these shares, "
             "write off the missing shares; otherwise sell what is held."
         )
     else:
@@ -2471,7 +2478,7 @@ def attested_absent_exit_notice(
     return uncertainty_envelope(
         **_exit_not_flat_notice(
             order_ref=order_ref,
-            symbol=created.symbol,
+            symbol=symbol,
             attributed_qty=held,
             headline="A closing order was settled as not sent; the position is still open",
             explanation=explanation,

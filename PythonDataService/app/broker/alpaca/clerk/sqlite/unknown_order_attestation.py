@@ -109,6 +109,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     OrderSubmitUncertainFacts,
     UncertaintyRaisedFacts,
 )
+from app.broker.alpaca.clerk.sqlite.flatten_cover import held_text
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import CommittedTransition, TransitionInput
@@ -986,9 +987,10 @@ def _prove_absent(
     if not proof.account_agrees and not _open_drift_names(repo, symbol):
         raise UnknownOrderSettlementRefused(
             "POSITION_DIFFERENCE_NOT_RECORDED",
-            f"Alpaca holds {proof.broker_qty:g} {symbol} and the Clerk's records say "
-            f"{proof.account_attributed_qty:g}. The Clerk has not recorded that difference yet. "
-            "Check the account against Alpaca, then settle again. Nothing was changed.",
+            f"Alpaca holds {held_text(proof.broker_qty, symbol)} and the Clerk's records say "
+            f"{held_text(proof.account_attributed_qty, symbol)}. The Clerk has not recorded that "
+            "difference yet. Check the account against Alpaca, then settle again. Nothing was "
+            "changed.",
         )
     return proof
 
@@ -1153,15 +1155,24 @@ def _commit_absent(
 
 
 def _absence_lines(presented: ProjectedUnknownExitOrder, proof: _AbsenceProof) -> tuple[str, ...]:
-    """What the Clerk found, as the operator reads it before confirming."""
+    """What the Clerk found, as the operator reads it before confirming.
+
+    Each quantity is said by its own sign, a short as a short; what to write
+    off is said by the order's side, a cover's as a short.
+    """
     symbol, side = presented.symbol.upper(), presented.side.lower()
     position = (
-        f"Alpaca holds {proof.broker_qty:g} {symbol}, as the Clerk's records say."
+        f"Alpaca holds {held_text(proof.broker_qty, symbol)}, as the Clerk's records say."
         if proof.account_agrees
         else (
-            f"Alpaca holds {proof.broker_qty:g} {symbol} and the Clerk's records say "
-            f"{proof.account_attributed_qty:g}. That difference is already recorded. After "
-            "settling, write off the missing shares if Alpaca does not hold them."
+            f"Alpaca holds {held_text(proof.broker_qty, symbol)} and the Clerk's records say "
+            f"{held_text(proof.account_attributed_qty, symbol)}. That difference is already "
+            "recorded. After settling, "
+            + (
+                "write off the short the Clerk records if Alpaca is not short these shares."
+                if side == "buy"
+                else "write off the missing shares if Alpaca does not hold them."
+            )
         )
     )
     # The order Alpaca answered the send with has a line of its own; the

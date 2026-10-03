@@ -27,6 +27,7 @@ from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
 from app.broker.alpaca.clerk.sqlite.account_open_work import MAX_OPEN_ORDER_SNAPSHOT
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
+from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.facts import (
     AttributedResidueDischargedFacts,
     EndedForeignOrder,
@@ -572,7 +573,7 @@ async def test_a_position_alpaca_no_longer_holds_is_settled_only_under_a_recorde
     assert (recorded.broker_qty, recorded.account_attributed_qty) == (0.0, 10.0)
     notice = _open_episode(repo, EXIT_NOT_FLAT_REASON_CODE)
     assert notice is not None
-    assert "Alpaca holds 0 SPY; the Clerk's records say 10." in notice["explanation"]
+    assert "Alpaca holds no SPY; the Clerk's records say 10 SPY." in notice["explanation"]
     assert "write off the missing shares" in notice["next_step"]
     assert repo.position(SID, "SPY") == 10.0
     assert len(alpaca.sent) == 1
@@ -1096,6 +1097,156 @@ async def test_a_sale_that_fills_while_the_last_round_is_read_is_never_set_again
     assert repo.custody_transitions() == ledger
     assert _attested(repo) == []
     assert _exit_state(repo, exit_id) == "unknown"
+    assert len(alpaca.sent) == 1
+
+
+# ── A buy that covers a short: the same attestation, in words about a short ──
+
+
+async def _a_stopped_bot_whose_cover_was_lost(
+    repo: ClerkSqliteRepository, alpaca: _AlpacaAccount, *, wait_passed: bool = True
+) -> str:
+    """A bot short 10 SPY decided to exit, its buy to cover timed out, and it was stopped.
+
+    Returns the EXIT's effect, ``unknown``. Alpaca is short the same 10.
+    """
+    alpaca.holds = -10.0
+    entry_ref = await safe_flatten._held_position(repo, side="sell")
+    accepted = accept_exit(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, decision_id="program-exit-1",
+        lifecycle_run_id=RUN_ID, entry_order_ref=entry_ref,
+    )
+    exit_id = accepted.effect_operation_id
+    assert exit_id is not None
+    await resolve_exit(
+        repo, effect_operation_id=exit_id, trade=alpaca, pricing=UNPRICEABLE_RECOVERY, read=None
+    )
+    submit_stop_run(
+        repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
+        lifecycle_run_id=RUN_ID, operator_reason="operator_stop",
+    )
+    if wait_passed:
+        _walk_clock_to(repo, repo.clock() + WAIT_MS)
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert [(sent.leg.side, sent.leg.quantity) for sent in alpaca.sent] == [("buy", 10)]
+    assert repo.position(SID, "SPY") == -10.0
+    alpaca.reads.clear()
+    return exit_id
+
+
+async def test_a_lost_buy_that_covers_a_short_is_offered_checked_and_settled_in_words_about_a_short(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The regression (#2854 review): the uncertain closing order is a buy that covers a short of 10 SPY.
+
+    The choice said the shares stay with the bot and the Clerk may sell
+    again, the check said Alpaca holds -10 SPY, and the notice said -10 SPY
+    is still held. The choice, the check's lines and the notice the exit
+    ends under now speak of a short, and of buying it back.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
+    exit_id = await _a_stopped_bot_whose_cover_was_lost(repo, alpaca)
+    facade, current_context = _facade(repo, alpaca), _context_of(repo, SID)
+    (order,) = repo.unknown_exit_orders(SID)
+
+    settlement = (await _presented(current_context)).settlement
+    findings = await facade.check_unknown_exit_order(strategy_instance_id=SID, presented=order, attestation=ABSENT)
+    await _settle(facade, current_context, ABSENT)
+
+    assert settlement is not None and settlement.side == "buy"
+    assert settlement.ticket.startswith("The Clerk sent an order to buy 10 SPY on ")
+    assert settlement.choices[0].explanation == (
+        "The Clerk checks once more. If it finds nothing, it ends this exit as not sent. The short "
+        "position stays with the bot; the Clerk may try again to buy it back after checking the "
+        "account. This cannot be undone."
+    )
+    assert findings.lines == (
+        "Alpaca shows no order under this order's id.",
+        "No order is working on SPY.",
+        "Since this one was sent, Alpaca shows no order to buy SPY that the Clerk did not place.",
+        "Alpaca holds a short of 10 SPY, as the Clerk's records say.",
+    )
+    assert _exit_state(repo, exit_id) == "failed"
+    notice = _open_episode(repo, EXIT_NOT_FLAT_REASON_CODE)
+    assert notice is not None
+    assert notice["explanation"] == (
+        "The Clerk could not confirm the order to buy 10 SPY. An operator said Alpaca has no such "
+        "order, the Clerk's own reads of Alpaca found no order under its client order id and none "
+        "working on SPY, and the exit was ended as not sent; a short of 10 SPY is still open."
+    )
+    assert repo.position(SID, "SPY") == -10.0
+    assert len(alpaca.sent) == 1
+
+
+async def test_a_short_alpaca_does_not_show_is_refused_in_words_about_a_short_until_the_difference_is_recorded(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """Alpaca is short none of the bot's 10 SPY, and the Clerk has not recorded that difference yet."""
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
+    exit_id = await _a_stopped_bot_whose_cover_was_lost(repo, alpaca)
+    alpaca.holds = 0.0
+    (order,) = repo.unknown_exit_orders(SID)
+    ledger = repo.custody_transitions()
+
+    with pytest.raises(UnknownOrderSettlementRefused) as refused:
+        await _facade(repo, alpaca).settle_unknown_exit_order(
+            strategy_instance_id=SID, presented=order, attestation=ABSENT, operator=OPERATOR, reason=None,
+        )
+
+    assert refused.value.reason_code == "POSITION_DIFFERENCE_NOT_RECORDED"
+    assert str(refused.value) == (
+        "Alpaca holds no SPY and the Clerk's records say a short of 10 SPY. The Clerk has not "
+        "recorded that difference yet. Check the account against Alpaca, then settle again. "
+        "Nothing was changed."
+    )
+    assert repo.custody_transitions() == ledger
+    assert _exit_state(repo, exit_id) == "unknown"
+
+
+async def test_a_short_alpaca_does_not_show_is_settled_with_the_short_to_write_off_or_buy_back_never_to_sell(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The regression (#2854 review): the lost buy may have covered the short unseen, and a pass recorded the drift.
+
+    The notice told the operator to write off the missing shares or "sell
+    what is held", for a bot that holds no shares and is short 10. The check
+    and the notice now say what Alpaca holds and what the Clerk records as a
+    short, and what to do about it: write the short off, or buy it back.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
+    exit_id = await _a_stopped_bot_whose_cover_was_lost(repo, alpaca, wait_passed=False)
+    alpaca.holds = 0.0
+    await _passes(repo, _the_sweep(repo, alpaca), 1)
+    _walk_clock_to(repo, repo.clock() + WAIT_MS)
+    assert _exit_state(repo, exit_id) == "unknown" and len(alpaca.sent) == 1
+    assert _open_position_drift(repo) is not None
+    facade = _facade(repo, alpaca)
+    (order,) = repo.unknown_exit_orders(SID)
+
+    findings = await facade.check_unknown_exit_order(strategy_instance_id=SID, presented=order, attestation=ABSENT)
+    await _settle(facade, _context_of(repo, SID), ABSENT)
+
+    assert findings.would_settle is True
+    assert findings.lines[-1] == (
+        "Alpaca holds no SPY and the Clerk's records say a short of 10 SPY. That difference is "
+        "already recorded. After settling, write off the short the Clerk records if Alpaca is not "
+        "short these shares."
+    )
+    assert _exit_state(repo, exit_id) == "failed"
+    notice = _open_episode(repo, EXIT_NOT_FLAT_REASON_CODE)
+    assert notice is not None
+    assert notice["explanation"].endswith(
+        "and the exit was ended as not sent; a short of 10 SPY is still open. Alpaca holds no SPY; "
+        "the Clerk's records say a short of 10 SPY."
+    )
+    assert notice["next_step"] == (
+        "Look at this account's position at Alpaca. If Alpaca is not short these shares, write off "
+        "the short the Clerk records; otherwise buy back what is short."
+    )
+    assert repo.position(SID, "SPY") == -10.0
     assert len(alpaca.sent) == 1
 
 
