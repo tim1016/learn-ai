@@ -145,7 +145,7 @@ def record_stop_outcome(
     Shared by a Stop that reconciles for its proof (:func:`prove_stop_outcome`)
     and a stop at the bot's end, whose proof is the Clerk's own pass (#2607).
     """
-    if custody_unprovable(proof):
+    if proof.unprovable:
         outcome: StopCustodyOutcome = "STOPPED_CUSTODY_UNPROVABLE"
         approved = False
     elif not proof.exposure:
@@ -169,17 +169,3 @@ def record_stop_outcome(
     )
     _atomic_write_json(checkpoint_path, checkpoint.model_dump())
     return outcome
-
-
-def custody_unprovable(proof: InstanceCustodyProof) -> bool:
-    """Whether ``proof`` cannot vouch for what a stopped run holds.
-
-    A frozen or unclean account, or an order of the bot's still working or
-    unresolved. Otherwise the run holds exactly ``proof.exposure``.
-    """
-    return bool(
-        proof.freeze.active
-        or proof.reconciliation_verdict != "clean"
-        or proof.working_order_refs
-        or proof.unresolved_intent_refs
-    )

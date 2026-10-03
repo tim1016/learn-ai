@@ -116,7 +116,7 @@ export class AlpacaSqliteCustodyComponent {
   readonly projectionRefreshVersion = input(0);
   readonly timelineQuery = input<SqliteTimelineQuery | null>(null);
   /** The recovery action a link asked for (`?recover=…`): its button is
-   * scrolled to and focused once, when it first renders. */
+   * scrolled to and focused once, when it first renders enabled. */
   readonly focusAction = input<string | null>(null);
   readonly projectionInvalidated = output();
   private readonly brokers = inject(BrokersService);
@@ -167,11 +167,15 @@ export class AlpacaSqliteCustodyComponent {
     });
     afterRenderEffect(() => {
       const wanted = this.focusAction();
+      // A link without the parameter forgets the last one, so following it again focuses again.
+      if (wanted === null) this.focusedAction = null;
       if (wanted === null || wanted === this.focusedAction) return;
+      // Read here so a button disabled while another action works is focused once that ends.
+      const busy = this.busyActionId() !== null;
       const button = this.recoveryButtons().find(
         (ref) => ref.nativeElement.dataset['recoveryAction'] === wanted,
       )?.nativeElement;
-      if (button === undefined) return;
+      if (button === undefined || busy || button.disabled) return;
       this.focusedAction = wanted;
       button.scrollIntoView({ block: 'center' });
       button.focus();

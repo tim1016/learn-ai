@@ -67,6 +67,9 @@ export const DEPLOY_AGAIN_QUERY_PARAM = 'from';
  * opens the order records and recovery section at that action's button. */
 export const ACTIVITY_RECOVER_QUERY_PARAM = 'recover';
 
+/** The recovery action the `reconcile` fix opens at, checked against the contract. */
+const RECONCILE_NOW: components['schemas']['RecoveryCapabilityResponse']['action_id'] = 'reconcile_now';
+
 /** Golden Search's handoff (#2696): `?golden_qualification=<id>` carries an
  * approved qualification from "Use in Deploy" through the account list to
  * the chosen account's Deploy, which applies its exact settings. */
@@ -250,7 +253,7 @@ export function accountWorkspaceFixRoute(
     case 'reconcile':
       return {
         commands: [...workspaceRoute(account), 'activity'],
-        queryParams: { [ACTIVITY_RECOVER_QUERY_PARAM]: 'reconcile_now' },
+        queryParams: { [ACTIVITY_RECOVER_QUERY_PARAM]: RECONCILE_NOW },
       };
     case 'settings':
       return { commands: settingsRoute(account), queryParams: {} };

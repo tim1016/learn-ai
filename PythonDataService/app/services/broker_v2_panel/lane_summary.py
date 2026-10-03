@@ -72,7 +72,6 @@ from app.schemas.broker_v2_panel import (
     LaneAttentionKind,
     LaneAttentionRead,
 )
-from app.services.bot_carryover import custody_unprovable
 from app.services.bot_runner import get_bot_task_registry
 from app.services.broker_account_snapshot import cached_broker_account_snapshot
 from app.services.broker_v2_panel.budget_deploy import LEGACY_BUDGET_DETAIL
@@ -322,7 +321,7 @@ def _bot_items(
                     f"{sid}'s lifecycle could not be read, so what it holds is unknown. "
                     "Reconcile now to re-read the account at Alpaca."
                 ),
-                action=_ORDER_RECORDS,
+                action=_RECONCILE,
             ))
         elif bot.group == "holding" and sid not in already_named:
             items.append(_stopped_holding_item(repository, sid))
@@ -338,11 +337,11 @@ async def _latest_pass_vouches_flat(clerk: ActiveAlpacaClerk | None, sid: str) -
 
     The Clerk compares the whole account with Alpaca every 15 s. Once a pass
     saw the bot's every transition (``published_custody``, #2607) and finds
-    it flat with nothing working, that pass is the check the line asks for --
-    the proof a stop at the bot's end records as STOPPED_FLAT.
+    it flat with nothing working (``proves_flat``, what a stop at the bot's
+    end records as STOPPED_FLAT), that pass is the check the line asks for.
     """
     proof = None if clerk is None else await clerk.published_custody(sid)
-    return proof is not None and not custody_unprovable(proof) and not proof.exposure
+    return proof is not None and proof.proves_flat
 
 
 def _positions_unchecked_item(count: int) -> LaneAttentionItem:
@@ -350,8 +349,8 @@ def _positions_unchecked_item(count: int) -> LaneAttentionItem:
         condition_id="positions-unchecked", reason_code="POSITIONS_UNCHECKED_SINCE_UNCLEAN_EXIT",
         kind="out_of_sync", severity="warning",
         headline=(
-            f"{count} bot{'s' if count != 1 else ''} ended without a clean exit, and no check of this "
-            "account against Alpaca has yet confirmed that nothing is still held. Reconcile now to check it."
+            f"{count} bot{'s' if count != 1 else ''} ended without a clean exit, and the Clerk cannot yet "
+            "confirm against Alpaca that nothing is still held. Reconcile now to check the account."
         ),
         action=_RECONCILE,
     )

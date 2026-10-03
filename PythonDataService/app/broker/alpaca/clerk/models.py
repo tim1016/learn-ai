@@ -543,3 +543,22 @@ class InstanceCustodyProof(BaseModel):
     working_order_refs: tuple[str, ...] = ()
     unresolved_intent_refs: tuple[str, ...] = ()
     observed_at_ms: EpochMs
+
+    @property
+    def unprovable(self) -> bool:
+        """Whether this proof cannot vouch for what the bot holds.
+
+        A frozen or unclean account, or an order of the bot's still working or
+        unresolved. Otherwise the bot holds exactly ``exposure``.
+        """
+        return bool(
+            self.freeze.active
+            or self.reconciliation_verdict != "clean"
+            or self.working_order_refs
+            or self.unresolved_intent_refs
+        )
+
+    @property
+    def proves_flat(self) -> bool:
+        """Whether this proof shows the bot left nothing behind: a stop records it as STOPPED_FLAT."""
+        return not self.unprovable and not self.exposure
