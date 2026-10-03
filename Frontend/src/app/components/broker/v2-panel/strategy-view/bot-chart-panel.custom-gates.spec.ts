@@ -16,6 +16,7 @@ import {
   FAKE_INDICATOR_CATALOGUE,
   barCloseMs,
   fakeCustomGate,
+  fakeLeadInBar,
   fakeStrategyView,
 } from '../../../../testing/strategy-view-fixtures';
 import type { GateEvaluationResponse } from '../lib/broker-v2-panel.types';
@@ -326,6 +327,38 @@ describe('BotChartPanelComponent — custom gates and catalogue indicators (#263
 
     await user.click(within(indicators).getByRole('button', { name: 'Remove VWAP' }));
     expect(charts.current().chart.removeSeries).toHaveBeenCalledWith(computedLine);
+  });
+
+  it('computes a catalogue indicator on the view’s lead-in bars then its candles, and draws no lead-in point (#2800)', async () => {
+    const user = userEvent.setup();
+    // The data plane answers for every bar it was sent, lead-in included.
+    dataPlane.indicators.calculateBars.mockImplementation((_symbol: string, bars: { t: number }[]) => of({
+      symbol: 'SPY',
+      indicators: [{
+        id: 'vwap', color: '#e0c050', panel: 'main', type: 'line',
+        data: bars.map((bar, index) => ({ t: bar.t, value: 490 + index })),
+      }],
+    }));
+    const { fixture } = await renderPanel();
+    fixture.componentInstance.view.set(fakeStrategyView({ lead_in: [fakeLeadInBar(2), fakeLeadInBar(1)] }));
+    await fixture.whenStable();
+    const indicators = screen.getByRole('dialog', { name: 'Indicators' });
+    await user.type(within(indicators).getByRole('combobox', { name: 'Search indicators' }), 'vwap');
+    const row = within(indicators).getAllByRole('option', { hidden: true }).find((option) => option.dataset['name'] === 'vwap');
+    if (row === undefined) throw new Error('The catalogue lists no VWAP.');
+    await user.click(within(row).getByRole('button', { name: 'Add', hidden: true }));
+
+    const [, bars] = dataPlane.indicators.calculateBars.mock.calls.at(-1) ?? [];
+    expect(bars.map((bar: { t: number }) => bar.t)).toEqual([-2, -1, 0, 1, 2, 3].map(barCloseMs));
+    expect(bars[1]).toEqual({ t: barCloseMs(-1), o: 490, h: 493, l: 488, c: 491, v: 900 });
+    const computedLine = charts.current().series.find(
+      (series: FakeSeries) => series.type === 'LineSeries' && series.options['lineWidth'] === 1,
+    );
+    if (computedLine === undefined) throw new Error('The chart drew no catalogue line.');
+    // Only the four candles carry a point; the first already has a value.
+    expect(computedLine.setData.mock.calls.at(-1)?.[0]).toEqual(
+      [0, 1, 2, 3].map((index) => ({ time: barCloseMs(index) / 1000, value: 492 + index })),
+    );
   });
 
   it('keeps catalogue lines drawn through a re-read, and drops a removed one at once', async () => {

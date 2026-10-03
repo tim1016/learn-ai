@@ -5,14 +5,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.schemas.strategy_gates import CustomGate, CustomGateInput, GateCandle, GateTerm
+from app.schemas.strategy_view import LeadInBar
+from app.services.chart_indicator_service import ChartIndicatorService
 from app.services.strategy_gates import (
     DRAFT_GATE_ID,
     GateExpressionError,
     VariableSource,
+    _catalogue_column,
     compile_gate,
     evaluate_gates,
     gate_catalogue,
@@ -182,6 +186,58 @@ def test_a_catalogue_variable_is_computed_on_the_decision_candles_and_marked(can
     judged = results[gate.gate_id]
     assert judged[0] is None  # EMA20 not ready on the first candle
     assert {True, False} <= set(judged[25:])
+
+
+def _lead_in(bars: list[GateCandle]) -> list[LeadInBar]:
+    return [
+        LeadInBar(
+            bar_close_ms=bar.bar_close_ms, open=bar.open, high=bar.high, low=bar.low, close=bar.close, volume=bar.volume
+        )
+        for bar in bars
+    ]
+
+
+def test_a_catalogue_variable_warms_up_on_the_lead_in_and_is_read_only_on_the_candles(
+    candles: list[GateCandle],
+) -> None:
+    """EMA20 on each judged candle is the canonical EMA20 of the lead-in then the candles (#2800)."""
+    lead_in, judged = _lead_in(candles[:30]), candles[30:]
+    whole = [{"t": c.bar_close_ms, "o": c.open, "h": c.high, "l": c.low, "c": c.close, "v": c.volume} for c in candles]
+    _symbol, series = ChartIndicatorService().compute(
+        "SPY", whole, [{"name": "ema", "params": {"length": 20}}], value_digits=None
+    )
+    by_close = {point["t"]: point["value"] for point in series[0]["data"]}
+    reference = [by_close[candle.bar_close_ms] for candle in judged]
+
+    column = _catalogue_column(resolve_variable(_ema_view(), "EMA20"), judged, symbol="SPY", lead_in=lead_in)
+    gate = _saved("close - EMA20")
+    results, chart_computed, _ = evaluate_gates(_ema_view(), [gate], judged, symbol="SPY", lead_in=lead_in)
+
+    # One value per judged candle, none for a lead-in bar, and the first candle already has one.
+    assert len(column) == len(judged)
+    assert column[0] is not None
+    assert np.allclose(np.array(column, dtype=np.float64), np.array(reference, dtype=np.float64), atol=1e-9, rtol=0)
+    assert results[gate.gate_id] == [
+        candle.close - value > 0 for candle, value in zip(judged, reference, strict=True)
+    ]
+    assert chart_computed == ["EMA20"]
+    # Without the lead-in the same candles start cold, from another seed.
+    cold = _catalogue_column(resolve_variable(_ema_view(), "EMA20"), judged, symbol="SPY", lead_in=[])
+    assert cold[0] is None
+    assert cold[19] is not None and abs(cold[19] - column[19]) > 0.5
+
+
+def test_a_lead_in_shorter_than_the_warmup_leaves_the_first_candles_without_a_result(
+    candles: list[GateCandle],
+) -> None:
+    gate = _saved("close - EMA20")
+
+    results, _, _ = evaluate_gates(_ema_view(), [gate], candles[5:], symbol="SPY", lead_in=_lead_in(candles[:5]))
+
+    # EMA20 needs 19 earlier bars: the 5 of lead-in, then 14 candles.
+    judged = results[gate.gate_id]
+    assert judged[:14] == [None] * 14
+    assert judged[14] is not None
 
 
 def test_a_draft_is_judged_but_a_broken_draft_is_refused(candles: list[GateCandle]) -> None:

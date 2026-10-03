@@ -17447,7 +17447,7 @@
       },
       "GateEvaluationRequest": {
         "additionalProperties": false,
-        "description": "Judge a strategy's saved gates (and an unsaved draft) on these candles.\n\n``settings`` are the deployed settings the candles were decided under; a\ngate naming a setting reads it from here.",
+        "description": "Judge a strategy's saved gates (and an unsaved draft) on these candles.\n\n``settings`` are the deployed settings the candles were decided under; a\ngate naming a setting reads it from here. ``lead_in`` is the view's earlier\ndecision bars: a catalogue indicator warms up on them, and no gate is\njudged on them (#2800).",
         "properties": {
           "candles": {
             "items": {
@@ -17466,6 +17466,14 @@
                 "type": "null"
               }
             ]
+          },
+          "lead_in": {
+            "items": {
+              "$ref": "#/components/schemas/LeadInBar"
+            },
+            "maxItems": 1000,
+            "title": "Lead In",
+            "type": "array"
           },
           "settings": {
             "additionalProperties": {
@@ -29413,6 +29421,49 @@
           "fetched_at_ms"
         ],
         "title": "LauncherDiagnosticReport",
+        "type": "object"
+      },
+      "LeadInBar": {
+        "additionalProperties": false,
+        "description": "One decision bar from before the view's first candle, labelled by its close.\n\nA catalogue indicator is computed over these and then the candles, so it\nhas warmed up by the first candle. A lead-in bar is never drawn or judged.",
+        "properties": {
+          "bar_close_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Bar Close Ms",
+            "type": "integer"
+          },
+          "close": {
+            "title": "Close",
+            "type": "number"
+          },
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "open": {
+            "title": "Open",
+            "type": "number"
+          },
+          "volume": {
+            "minimum": 0.0,
+            "title": "Volume",
+            "type": "number"
+          }
+        },
+        "required": [
+          "bar_close_ms",
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume"
+        ],
+        "title": "LeadInBar",
         "type": "object"
       },
       "LeanEngineRunJobRequest": {
@@ -43528,6 +43579,14 @@
           },
           "declaration": {
             "$ref": "#/components/schemas/StrategyViewDeclarationView"
+          },
+          "lead_in": {
+            "items": {
+              "$ref": "#/components/schemas/LeadInBar"
+            },
+            "maxItems": 1000,
+            "title": "Lead In",
+            "type": "array"
           },
           "notices": {
             "items": {

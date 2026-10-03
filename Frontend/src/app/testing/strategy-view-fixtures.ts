@@ -15,6 +15,7 @@ import type {
   CustomGate,
   DecisionExplanationView,
   GateCatalogueEntry,
+  LeadInBar,
   RecentDecisionView,
   StrategyViewCandle,
   StrategyViewResponse,
@@ -80,6 +81,11 @@ export function fakeStrategyCandle(index: number, overrides: Partial<StrategyVie
   };
 }
 
+/** A decision bar from before the fixture's first candle: one bar before it closes where that candle opens. */
+export function fakeLeadInBar(barsBefore: number): LeadInBar {
+  return { bar_close_ms: barCloseMs(-barsBefore), open: 490, high: 493, low: 488, close: 491, volume: 900 };
+}
+
 export const BEFORE_START_TEXT = 'Before start · not acted on';
 
 export function fakeStrategyView(overrides: Partial<StrategyViewResponse> = {}): StrategyViewResponse {
@@ -122,6 +128,8 @@ export function fakeStrategyView(overrides: Partial<StrategyViewResponse> = {}):
         gates: { g_rule: true, g_mine: false },
       }),
     ],
+    // A bot's view carries no lead-in; a Strategy Lab one may (see `fakeLeadInBar`).
+    lead_in: [],
     unexplained_decision_count: 0,
     notices: [],
     settings: { foo_length: 7, bar_low: 20, fast: true },

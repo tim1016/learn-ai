@@ -28,6 +28,7 @@ from fastapi import HTTPException, status
 from pydantic import BaseModel, ValidationError
 
 from app.data_lake.path_policy import lake_root_for
+from app.engine.data.availability import check_availability
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
 from app.engine.data.policy_store import resolve_data_roots
 from app.engine.data.trade_bar import TradeBar
@@ -50,6 +51,7 @@ from app.engine.strategy.registry import (
 )
 from app.engine.strategy.signal_program import SignalDecision
 from app.jobs.phases import friendly
+from app.lean_sidecar.trading_calendar import session_start_for_bar_count
 from app.models.responses import (
     LeanPortfolioStatsResponse,
     LeanRuntimeStatsResponse,
@@ -69,6 +71,7 @@ from app.schemas.engine_backtest import (
     _EngineDataPolicyModel,
 )
 from app.schemas.engine_validation import EngineValidationAnalyticsResponse
+from app.services.engine_bars_service import read_consolidated_bars
 from app.services.engine_validation_analytics import (
     ValidationEquityPoint,
     ValidationTrade,
@@ -504,6 +507,46 @@ def replay_engine_run(
     record_staged_decisions(strategy, record)
     engine.run(strategy, evaluation_start_ms=_evaluation_start_ms(request), retain_bars=False)
     return list(getattr(strategy, "trade_log", []) or [])
+
+
+def read_replay_lead_in(request: EngineBacktestRequest, *, timeframe_ms: int, count: int) -> list[TradeBar]:
+    """Up to ``count`` decision bars from just before a saved run's data, oldest first (#2800).
+
+    Read as the replay reads its own bars -- the same roots, session filter
+    and consolidator -- and kept only where the Signal Session would accept
+    them: exactly ``timeframe_ms`` wide. Read-only: a session the lake cannot
+    read is never fetched, and the bars start after the latest such session,
+    so they run unbroken up to the run's first bar. A daily run gets none: its
+    bars are not consolidated minute bars.
+    """
+    policy = request.data_policy
+    data_start = request.warmup_from_date or request.from_date
+    if policy is None or data_start is None or request.resolution != "minute":
+        return []
+    first = _parse_iso_date(data_start, "data_start")
+    try:
+        start = session_start_for_bar_count(et_midnight_ms(first), target_bars=count, bar_span_ms=timeframe_ms)
+    except LookupError:
+        # No run of sessions holds that many bars: the bar is longer than a session.
+        return []
+    end = first - timedelta(days=1)
+    roots = _resolve_lean_data_roots(adjusted=_policy_adjusted(policy))
+    coverage = check_availability(roots, policy.symbol, start, end, resolution="minute", session=policy.session)
+    gaps = [*coverage.missing_days, *coverage.unreadable_days]
+    if gaps:
+        start = max(gaps) + timedelta(days=1)
+    if end < start:
+        return []
+    bars = read_consolidated_bars(
+        roots=roots,
+        symbol=policy.symbol,
+        start=start,
+        end=end,
+        session=policy.session,
+        timespan="minute",
+        multiplier=timeframe_ms // 60_000,
+    ).bars
+    return [bar for bar in bars if bar.end_ms - bar.start_ms == timeframe_ms][-count:]
 
 
 def _pin_compatibility_fixture(

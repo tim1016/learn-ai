@@ -12,15 +12,25 @@ A variable resolves in this order (D9):
 3. the candle's own ``open``/``high``/``low``/``close``/``volume``;
 4. a catalogue indicator written as name plus length (``EMA20``, ``ATR14``)
    or a parameterless one (``VWAP``, ``OBV``), computed on the decision
-   candles and marked chart-computed.
+   bars and marked chart-computed.
 
 So a catalogue name the strategy already records is always the bot's own
-value: one number never has two sources. A catalogue indicator is computed on
-the decision candles the caller sends, with no history before them, so it has
-no value until its own warmup has passed within those candles.
+value: one number never has two sources.
+
+A catalogue indicator is computed over the caller's lead-in bars followed by
+the candles, and only the candles' values are read (#2800). A candle with
+fewer earlier bars than the indicator's warmup (length − 1 for a moving
+average) still has no value. A recursive indicator still carries a share of
+its seed, smaller with every earlier bar: by ``indicator_warmup_policy``'s
+bound it is at most e⁻¹⁰ after five times the length for an EMA and ten times
+for Wilder's RMA; a cumulative sum such as OBV never forgets its start, and
+KAMA's memory follows a slow length the catalogue does not expose. Strategy
+Lab's lead-in comes from the lake; a bot sends none, because its before-start
+candles are already every earlier bar it kept.
 
 Formula: g = Σ aᵢ·Xᵢ + c; bright where g > 0 (``gt``) or g < 0 (``lt``); no
-  result where any Xᵢ is missing or a value is not finite.
+  result where any Xᵢ is missing or a value is not finite. A catalogue Xᵢ on
+  a candle is the indicator's value there over the lead-in then the candles.
 Reference: the owner's gate definition, #2639 D8–D9 (no outside source).
   Catalogue Xᵢ come from ``dataset_service.calculate_dynamic_indicators``,
   unrounded.
@@ -47,6 +57,7 @@ from app.schemas.strategy_gates import (
     GateSign,
     GateTerm,
 )
+from app.schemas.strategy_view import LeadInBar
 from app.services.chart_indicator_service import CHART_INDICATOR_NAMES, ChartIndicatorService
 from app.services.dataset_service import INDICATOR_CONFIGS, list_available_indicators
 from app.services.strategy_view import ResolvedStrategyView
@@ -368,12 +379,16 @@ def evaluate_gates(
     *,
     symbol: str,
     draft: CustomGateInput | None = None,
+    lead_in: Sequence[LeadInBar] = (),
 ) -> tuple[dict[str, list[bool | None]], list[str], list[str]]:
     """Judge each gate on every candle: ``(results by gate id, chart-computed names, notices)``.
 
     A saved gate whose variable no longer resolves for these settings is
     reported in a notice and judged nowhere (every entry ``None``); a draft
     that does not compile raises, because the owner is looking at it.
+    ``lead_in`` is the earlier decision bars a catalogue indicator warms up
+    on, oldest first and all closing before the first candle; no gate is
+    judged on them.
     """
     forms = [_GateForm(gate.gate_id, gate.terms, gate.constant, gate.sign) for gate in gates]
     if draft is not None:
@@ -388,7 +403,7 @@ def evaluate_gates(
             for term in form.terms:
                 if term.variable not in columns:
                     variable = resolve_variable(view, term.variable)
-                    columns[term.variable] = _column(view, variable, candles, symbol=symbol)
+                    columns[term.variable] = _column(view, variable, candles, symbol=symbol, lead_in=lead_in)
                     if variable.source is VariableSource.CATALOGUE:
                         chart_computed.append(term.variable)
         except GateExpressionError as exc:
@@ -414,7 +429,12 @@ def _judge(form: _GateForm, columns: dict[str, list[float | None]], index: int) 
 
 
 def _column(
-    view: ResolvedStrategyView, variable: GateVariable, candles: Sequence[GateCandle], *, symbol: str
+    view: ResolvedStrategyView,
+    variable: GateVariable,
+    candles: Sequence[GateCandle],
+    *,
+    symbol: str,
+    lead_in: Sequence[LeadInBar],
 ) -> list[float | None]:
     if variable.source is VariableSource.RECORDED:
         return [candle.values.get(variable.key) for candle in candles]
@@ -422,24 +442,26 @@ def _column(
         return [float(view.settings[variable.key])] * len(candles)
     if variable.source is VariableSource.CANDLE:
         return [float(getattr(candle, variable.key)) for candle in candles]
-    return _catalogue_column(variable, candles, symbol=symbol)
+    return _catalogue_column(variable, candles, symbol=symbol, lead_in=lead_in)
 
 
-def _catalogue_column(variable: GateVariable, candles: Sequence[GateCandle], *, symbol: str) -> list[float | None]:
-    """The catalogue indicator over the decision candles, aligned to them by close."""
+def _catalogue_column(
+    variable: GateVariable, candles: Sequence[GateCandle], *, symbol: str, lead_in: Sequence[LeadInBar]
+) -> list[float | None]:
+    """The catalogue indicator over the lead-in bars and then the candles: one value per candle, by close."""
     if not candles:
         return []
     entry: dict[str, Any] = {"name": variable.key, "params": dict(variable.catalogue_params)}
     bars = [
         {
-            "t": candle.bar_close_ms,
-            "o": candle.open,
-            "h": candle.high,
-            "l": candle.low,
-            "c": candle.close,
-            "v": candle.volume,
+            "t": bar.bar_close_ms,
+            "o": bar.open,
+            "h": bar.high,
+            "l": bar.low,
+            "c": bar.close,
+            "v": bar.volume,
         }
-        for candle in candles
+        for bar in (*lead_in, *candles)
     ]
     try:
         # Unrounded: the chart's six-decimal rounding could flip a gate at zero.

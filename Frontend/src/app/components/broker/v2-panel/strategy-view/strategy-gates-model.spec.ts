@@ -4,6 +4,7 @@ import {
   FAKE_GATE_CATALOGUE,
   barCloseMs,
   fakeCustomGate,
+  fakeLeadInBar,
   fakeStrategyView,
 } from '../../../../testing/strategy-view-fixtures';
 import { DRAFT_GATE_ID, gateEvaluationRequest, gateVariableGroups, withCustomGates } from './strategy-gates-model';
@@ -21,6 +22,18 @@ describe('strategy gates model (#2639)', () => {
       bar_close_ms: barCloseMs(1), open: 502, high: 503, low: 498, close: 499, volume: 1_000,
       values: { foo: 101, bar: 51, baz: 1 },
     });
+  });
+
+  it('sends the view’s lead-in bars beside the candles, for catalogue indicators to warm up on (#2800)', () => {
+    const leadIn = [fakeLeadInBar(2), fakeLeadInBar(1)];
+
+    const request = gateEvaluationRequest(fakeStrategyView({ lead_in: leadIn }));
+
+    expect(request.lead_in).toEqual(leadIn);
+    // The candles judged are still only the view's own.
+    expect(request.candles.map((candle) => candle.bar_close_ms)).toEqual([0, 1, 2, 3].map(barCloseMs));
+    // A bot's view carries none.
+    expect(gateEvaluationRequest(fakeStrategyView()).lead_in).toEqual([]);
   });
 
   it('lists saved gates and a draft after the strategy’s own, each recorded on the candle it was judged on', () => {

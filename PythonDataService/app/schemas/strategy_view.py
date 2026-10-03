@@ -16,6 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.decision_explanation import DecisionSignal
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
+# How many earlier decision bars a view may carry for catalogue indicators to warm up on (#2800).
+MAX_LEAD_IN_BARS = 1_000
+
 
 class ExplainedValueView(BaseModel):
     """One recorded indicator value, labelled for the bot's settings."""
@@ -135,6 +138,23 @@ class StrategyViewCandle(BaseModel):
     gates: dict[str, bool | None]
 
 
+class LeadInBar(BaseModel):
+    """One decision bar from before the view's first candle, labelled by its close.
+
+    A catalogue indicator is computed over these and then the candles, so it
+    has warmed up by the first candle. A lead-in bar is never drawn or judged.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    bar_close_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+    open: float = Field(allow_inf_nan=False)
+    high: float = Field(allow_inf_nan=False)
+    low: float = Field(allow_inf_nan=False)
+    close: float = Field(allow_inf_nan=False)
+    volume: float = Field(ge=0, allow_inf_nan=False)
+
+
 class StrategyViewResponse(BaseModel):
     """Everything one bot's strategy view draws, in one read."""
 
@@ -152,16 +172,21 @@ class StrategyViewResponse(BaseModel):
     # ``rsi_min`` as, echoed back when the page asks for its results.
     settings: dict[str, float | int | str | bool | None] = Field(default_factory=dict)
     candles: list[StrategyViewCandle]
+    # Earlier decision bars from the same source as the candles, oldest first,
+    # each closing before the first candle; empty when the source has none (#2800).
+    lead_in: list[LeadInBar] = Field(default_factory=list, max_length=MAX_LEAD_IN_BARS)
     # Decisions this run took before decisions recorded their values.
     unexplained_decision_count: int = Field(default=0, ge=0)
     notices: list[str] = Field(default_factory=list)
 
 
 __all__ = [
+    "MAX_LEAD_IN_BARS",
     "CatalogueIndicatorRef",
     "DecisionExplanationView",
     "ExplainedCheckView",
     "ExplainedValueView",
+    "LeadInBar",
     "StrategyViewCandle",
     "StrategyViewDeclarationView",
     "StrategyViewGateView",

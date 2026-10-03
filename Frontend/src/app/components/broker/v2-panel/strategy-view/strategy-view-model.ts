@@ -12,6 +12,7 @@ import type {
   StrategyViewCandle,
   StrategyViewDeclarationView,
   StrategyViewGateView,
+  StrategyViewResponse,
 } from '../lib/broker-v2-panel.types';
 
 /**
@@ -156,15 +157,22 @@ export function strategyLinePlans(
   return plans;
 }
 
-/** The decision candles as the chart-indicator service reads bars: each keyed by its close. */
-export function strategyIndicatorBars(candles: readonly StrategyViewCandle[]): ChartIndicatorRequestBar[] {
-  return candles.map((candle) => ({
-    t: candle.bar_close_ms,
-    o: candle.open,
-    h: candle.high,
-    l: candle.low,
-    c: candle.close,
-    v: candle.volume,
+/**
+ * The bars the chart-indicator service computes on, each keyed by its close:
+ * the view's lead-in bars, then its decision candles (#2800). An indicator
+ * warms up on the lead-in; a lead-in bar has no chart time, so no point is
+ * drawn on it.
+ */
+export function strategyIndicatorBars(
+  view: Pick<StrategyViewResponse, 'candles' | 'lead_in'>,
+): ChartIndicatorRequestBar[] {
+  return [...(view.lead_in ?? []), ...view.candles].map((bar) => ({
+    t: bar.bar_close_ms,
+    o: bar.open,
+    h: bar.high,
+    l: bar.low,
+    c: bar.close,
+    v: bar.volume,
   }));
 }
 

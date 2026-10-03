@@ -10,6 +10,11 @@ own only when it reproduces the run's stored trades; otherwise, and for a run
 that cannot be replayed exactly at all (a LEAN run, or one whose strategy has
 changed since), the view refuses and says why. Nothing about the decisions is
 stored with the run.
+
+The view also carries lead-in bars for catalogue indicators to warm up on
+(#2800): the decision bars just before its first candle, from the replay
+itself where the candle cap left some out, then from the lake as the replay
+reads it. The lake is only read: where it lacks a day the lead-in is shorter.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from __future__ import annotations
 import json
 import math
 from collections import deque
+from collections.abc import Sequence
 
 from pydantic import ValidationError
 
@@ -28,10 +34,11 @@ from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
 from app.research.backtest_runs.repository import RunDetail
 from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.schemas.engine_backtest import EngineBacktestRequest
-from app.schemas.strategy_view import StrategyViewCandle, StrategyViewResponse
+from app.schemas.strategy_view import MAX_LEAD_IN_BARS, LeadInBar, StrategyViewCandle, StrategyViewResponse
 from app.services.engine_backtest_service import (
     SavedRunNotReplayable,
     materialize_replay_bars,
+    read_replay_lead_in,
     replay_engine_run,
 )
 from app.services.strategy_view import ResolvedStrategyView, StrategyViewUnavailableError
@@ -66,7 +73,8 @@ def build_backtest_run_strategy_view(run: RunDetail) -> StrategyViewResponse:
         raise SavedRunNotReplayable(str(exc)) from exc
 
     materialize_replay_bars(request)
-    kept: deque[tuple[TradeBar, SignalDecision]] = deque(maxlen=MAX_STRATEGY_VIEW_CANDLES)
+    # The candles shown, and before them the bars the cap leaves out: lead-in at no cost.
+    kept: deque[tuple[TradeBar, SignalDecision]] = deque(maxlen=MAX_STRATEGY_VIEW_CANDLES + MAX_LEAD_IN_BARS)
     staged_count = 0
 
     def record(bar: TradeBar, decision: SignalDecision) -> None:
@@ -80,8 +88,9 @@ def build_backtest_run_strategy_view(run: RunDetail) -> StrategyViewResponse:
     provenance = _provenance(run)
     # Decisions the run's closing-bar rule set aside (#2607).
     skipped = set() if provenance is None else {skip.bar_close_ms for skip in provenance.closing_bar_skips}
+    shown = list(kept)[-MAX_STRATEGY_VIEW_CANDLES:]
     candles: list[StrategyViewCandle] = []
-    for bar, decision in kept:
+    for bar, decision in shown:
         explained = DecisionExplanationRecord.from_decision(bar, decision)
         if explained is None:
             continue
@@ -96,8 +105,8 @@ def build_backtest_run_strategy_view(run: RunDetail) -> StrategyViewResponse:
     notices: list[str] = []
     if not candles:
         notices.append("No decision bars were found for this run.")
-    elif staged_count > len(kept):
-        notices.append(f"This run has {staged_count} decision bars; the latest {len(kept)} are shown.")
+    elif staged_count > len(shown):
+        notices.append(f"This run has {staged_count} decision bars; the latest {len(shown)} are shown.")
     # The run's own first and last evaluated bars bound it, in whatever session it read.
     evaluated = [candle for candle in candles if candle.phase == "decision"]
     return view.response(
@@ -107,7 +116,40 @@ def build_backtest_run_strategy_view(run: RunDetail) -> StrategyViewResponse:
         run_stopped_at_ms=evaluated[-1].bar_close_ms if evaluated else run.end_ms,
         candles=candles,
         notices=notices,
+        lead_in=_lead_in(request, view, [bar for bar, _decision in kept], candles),
     )
+
+
+def _lead_in(
+    request: EngineBacktestRequest,
+    view: ResolvedStrategyView,
+    staged: Sequence[TradeBar],
+    candles: Sequence[StrategyViewCandle],
+) -> list[LeadInBar]:
+    """The latest decision bars that closed by the first candle's start, oldest first, at most ``MAX_LEAD_IN_BARS``.
+
+    ``staged`` are the bars the replay kept, in order. They fall short of the
+    cap only when they still start at the run's first bar, so the lake's bars,
+    which all end before it, join them without a gap.
+    """
+    if not candles:
+        return []
+    first_start_ms = candles[0].bar_start_ms
+    earlier = [bar for bar in staged if bar.end_ms <= first_start_ms]
+    missing = MAX_LEAD_IN_BARS - len(earlier)
+    if missing > 0:
+        earlier = [*read_replay_lead_in(request, timeframe_ms=view.decision_timeframe_ms, count=missing), *earlier]
+    return [
+        LeadInBar(
+            bar_close_ms=bar.end_ms,
+            open=float(bar.open),
+            high=float(bar.high),
+            low=float(bar.low),
+            close=float(bar.close),
+            volume=float(bar.volume),
+        )
+        for bar in earlier[-MAX_LEAD_IN_BARS:]
+    ]
 
 
 def _request_from_run(run: RunDetail) -> EngineBacktestRequest:
