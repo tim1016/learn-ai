@@ -61,7 +61,9 @@ fails the EXIT: an earlier send may have arrived, so custody is retained as an
 unknown outcome (:func:`_fold_send_refused`). And an order whose latest send
 the broker answered under another client order id is never sent again: the
 same client order id cannot protect a second send from an order that may exist
-under a different one (:func:`_retain_answered_as_another_order`).
+under a different one (:func:`_retain_answered_as_another_order`). In both of
+those the broker answered, so the open unknown-outcome notice says what it
+answered instead of that a response was lost (#2854).
 """
 
 from __future__ import annotations
@@ -100,6 +102,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     OrderCancelRequestedFacts,
     OrderSubmitFailedFacts,
     OrderSubmitUncertainFacts,
+    UnknownOutcomeNotice,
 )
 from app.broker.alpaca.clerk.sqlite.flatten_cover import (
     FLATTEN_COVER_HEADLINES,
@@ -2073,7 +2076,11 @@ def _retain_refused_resend(
     on the other side of the symbol that the watchdog's re-drive waits behind
     (#2622), and the episode it re-drives. The order still goes out once that
     side clears, on the first send after it.
+
+    The open notice says so, in Alpaca's own words (#2854): it was opened as
+    a lost answer, and this send was answered.
     """
+    created = _reducing_order_facts(repo, reducing.order_ref)
     logger.warning(
         "the broker refused a reducing order sent again; an earlier send may have arrived, so custody is kept",
         extra={
@@ -2094,6 +2101,18 @@ def _retain_refused_resend(
             "it may have reached the broker, so the refusal does not prove nothing is working "
             "there. Custody is kept, and the order is sent again under the same client order id "
             f"while its exact lookup still reads it absent. The broker's answer: {error}"
+        ),
+        notice=UnknownOutcomeNotice(
+            explanation=(
+                f"Alpaca refused the order to {_the_reduction(created)} when the Clerk sent it again. "
+                "An earlier send of this order may have reached Alpaca, so the Clerk keeps custody "
+                "of the position and sends the same order again, under the same client order id, "
+                f"for as long as Alpaca shows no order under that id. Alpaca's answer: {error}"
+            ),
+            next_step=(
+                "Look at this account's orders and position at Alpaca. The Clerk sends the order "
+                "again by itself, and takes it up as soon as Alpaca shows it."
+            ),
         ),
     )
 
@@ -2185,8 +2204,16 @@ def _fold_answered_as_another_order(
     and never taken as this order's: whose order it is is not known. An
     answer that names no client order id at all is recorded as the empty
     string: it does not name the one that was sent either.
+
+    The open notice says the order will not be sent again, and names the
+    order Alpaca answered with (#2854): the only thing an operator can do
+    about it today is look at that order at Alpaca.
     """
     answered_as = answer.client_order_id or ""
+    created = _reducing_order_facts(repo, reducing.order_ref)
+    answered_with = (
+        f"client order id {answered_as!r}" if answered_as else "no client order id"
+    ) + (f", Alpaca order id {answer.order_id!r}" if answer.order_id.strip() else "")
     logger.error(
         "the broker answered a reducing order's send under another client order id; the order will not be sent again",
         extra={
@@ -2207,6 +2234,20 @@ def _fold_answered_as_another_order(
             f"The answer's broker order id, {answer.order_id!r}, is not taken as this order's."
         ),
         answered_as_client_order_id=answered_as,
+        notice=UnknownOutcomeNotice(
+            explanation=(
+                f"The Clerk sent the order to {_the_reduction(created)} under client order id "
+                f"{reducing.client_order_id!r}, and Alpaca answered with an order under "
+                f"{answered_with}. An order may be at Alpaca under that other identity, and "
+                "sending the same client order id again could not guard against it, so the Clerk "
+                "will not send this order again. It keeps custody of the position."
+            ),
+            next_step=(
+                "Look at this account's orders at Alpaca for the order it answered with. The "
+                "Clerk takes this order up by itself only if Alpaca shows one under the client "
+                "order id that was sent."
+            ),
+        ),
     )
 
 
@@ -2425,6 +2466,11 @@ def _reducing_order_facts(repo: ClerkSqliteRepository, order_ref: str) -> ExitRe
     if transition is None:
         raise AssertionError(f"no reducing-order creation fact for {order_ref!r}")
     return ExitReducingOrderCreatedFacts.from_facts_json(transition["facts_json"])
+
+
+def _the_reduction(created: ExitReducingOrderCreatedFacts) -> str:
+    """A reducing order as a notice names it: its side, quantity and symbol."""
+    return f"{created.side.lower()} {created.quantity:g} {created.symbol}"
 
 
 def _absence_grace_elapsed(repo: ClerkSqliteRepository, order_ref: str) -> bool:

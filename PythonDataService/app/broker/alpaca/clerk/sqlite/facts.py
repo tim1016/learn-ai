@@ -237,6 +237,18 @@ class EnterAcceptedFacts:
 
 
 @dataclass(frozen=True)
+class UnknownOutcomeNotice:
+    """What the operator is told about an order whose outcome is unknown for a reason other than a lost answer (#2854).
+
+    The open ``ORDER_OUTCOME_UNKNOWN`` notice's explanation and next step, in
+    place of the text that says a broker response was lost or timed out.
+    """
+
+    explanation: str
+    next_step: str
+
+
+@dataclass(frozen=True)
 class OrderSubmitUncertainFacts:
     """A lost/timed-out broker response — R4's ``why`` explanation.
 
@@ -247,15 +259,35 @@ class OrderSubmitUncertainFacts:
     initiative. It is the empty string when that answer named no client order
     id at all. It is omitted from the canonical JSON when ``None``, so every
     other row -- and every row written before it existed -- hashes
-    identically (hash-chained schema evolution)."""
+    identically (hash-chained schema evolution).
+
+    ``notice_explanation`` and ``notice_next_step`` are recorded, together,
+    only when the broker did answer and the outcome is still unknown (#2854):
+    what the open notice says of this order from this row on
+    (:class:`UnknownOutcomeNotice`). Both are omitted when ``None``, by the
+    same rule."""
 
     why: str
     answered_as_client_order_id: str | None = None
+    notice_explanation: str | None = None
+    notice_next_step: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.notice_explanation is None) != (self.notice_next_step is None):
+            raise ValueError("An unknown outcome's notice records its explanation and its next step, or neither")
+
+    @property
+    def notice(self) -> UnknownOutcomeNotice | None:
+        """The notice this row records, or ``None`` for a row that records none."""
+        if self.notice_explanation is None or self.notice_next_step is None:
+            return None
+        return UnknownOutcomeNotice(explanation=self.notice_explanation, next_step=self.notice_next_step)
 
     def to_facts_json(self) -> str:
         facts = asdict(self)
-        if self.answered_as_client_order_id is None:
-            facts.pop("answered_as_client_order_id")
+        for key in ("answered_as_client_order_id", "notice_explanation", "notice_next_step"):
+            if facts[key] is None:
+                facts.pop(key)
         return canonicalize(facts)
 
     @classmethod

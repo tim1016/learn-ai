@@ -23,6 +23,9 @@ again under a new id; custody is kept and the same id goes out again.
 A send Alpaca answers with an order under another client order id is never
 sent again: the order may be at Alpaca under that other identity, and the
 same id cannot guard a second send against it.
+
+In both of those Alpaca answered, so the notice on the bot's page says what
+it answered instead of that a response was lost (#2854).
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
 
@@ -38,25 +42,39 @@ import pytest
 from alpaca.common.exceptions import APIError
 
 from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit, resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
 from app.broker.alpaca.clerk.sqlite.exit_resolution import flatten_send_refusal
-from app.broker.alpaca.clerk.sqlite.facts import OrderSubmitFailedFacts, OrderSubmitUncertainFacts
+from app.broker.alpaca.clerk.sqlite.facts import (
+    OrderSubmitFailedFacts,
+    OrderSubmitUncertainFacts,
+    UnknownOutcomeNotice,
+)
 from app.broker.alpaca.clerk.sqlite.flatten_cover import FLATTEN_NOT_COVERED_AT_BROKER
 from app.broker.alpaca.clerk.sqlite.idempotency import UnknownEntryOrderError
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import OrderResource
-from app.broker.alpaca.clerk.sqlite.order_evidence import submit_absence_grace_ms
+from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain, submit_absence_grace_ms
+from app.broker.alpaca.clerk.sqlite.projection_models import ProjectedUncertainty
+from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.uncertainty import ORDER_OUTCOME_UNKNOWN_REASON_CODE
 from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.alpaca.errors import AlpacaRequest, map_api_error
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderEvent, BrokerOrderLeg, BrokerPosition
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.utils.session_anchors import et_date_at_ms
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
-from tests.broker.alpaca.clerk.sqlite.conftest import _TestClock, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.conftest import (
+    FIXTURE_RTH_MS,
+    _clock_at,
+    _TestClock,
+    _walk_clock_to,
+)
 from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import (
     _Account,
     _exit_not_flat,
@@ -277,6 +295,30 @@ def _latest_unknown(repo: ClerkSqliteRepository, closing: OrderResource) -> Orde
     row = repo.last_order_transition(order_ref=closing.order_ref, transition_kind="ORDER_SUBMIT_UNCERTAIN")
     assert row is not None
     return OrderSubmitUncertainFacts.from_facts_json(row["facts_json"])
+
+
+def _the_open_notice(repo: ClerkSqliteRepository) -> ProjectedUncertainty | None:
+    """What the bot's page shows for an order whose outcome is unknown, or ``None`` when it shows no such notice."""
+    reader = SqliteClerkProjectionReader.from_repository(repo)
+    try:
+        snapshot = reader.bot_snapshot(SID)
+    finally:
+        reader.close()
+    assert snapshot is not None
+    notices = [item for item in snapshot.uncertainties if item.reason_code == ORDER_OUTCOME_UNKNOWN_REASON_CODE]
+    assert len(notices) <= 1
+    return notices[0] if notices else None
+
+
+async def _passes_until_sent(
+    repo: ClerkSqliteRepository, one_pass: Callable[[], Awaitable[object]], alpaca: _Alpaca, sends: int
+) -> None:
+    """Passes of the Clerk, each one sweep interval after the last, until ``sends`` submits have left it."""
+    for _ in range(4 * FIVE_MINUTES_OF_PASSES):
+        if len(alpaca.sent) >= sends:
+            return
+        await _passes(repo, one_pass, 1)
+    raise AssertionError(f"only {len(alpaca.sent)} of {sends} submits left the Clerk")
 
 
 def _a_second_exit_is_refused(repo: ClerkSqliteRepository) -> None:
@@ -734,6 +776,237 @@ def test_an_unknown_outcomes_facts_omit_the_other_identity_so_every_ordinary_row
     # An answer that named no client order id is recorded as the empty string, and is still recorded.
     assert names_none.to_facts_json() == '{"answered_as_client_order_id":"","why":"the submit timed out"}'
     assert OrderSubmitUncertainFacts.from_facts_json(names_none.to_facts_json()) == names_none
+
+
+LOST_ANSWER_EXPLANATION = "The broker response was lost or timed out."
+LOST_ANSWER_NEXT_STEP = "Reconcile now; cancellation and exact-identity lookup remain available."
+REFUSED_AGAIN_NEXT_STEP = (
+    "Look at this account's orders and position at Alpaca. The Clerk sends the order again by "
+    "itself, and takes it up as soon as Alpaca shows it."
+)
+
+
+def _refused_again_explanation(alpacas_answer: str) -> str:
+    return (
+        "Alpaca refused the order to sell 10 SPY when the Clerk sent it again. An earlier send of "
+        "this order may have reached Alpaca, so the Clerk keeps custody of the position and sends "
+        "the same order again, under the same client order id, for as long as Alpaca shows no "
+        f"order under that id. Alpaca's answer: {alpacas_answer}"
+    )
+
+
+async def test_a_send_made_again_that_alpaca_refuses_is_told_in_alpacas_own_words(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The open notice said a broker response "was lost or timed out" while Alpaca answered every send (#2854).
+
+    The first send's answer was lost, and the notice says so. Once the order
+    is sent again and Alpaca refuses it, the bot's page says that instead:
+    what Alpaca answered, that custody is kept and that the same order goes
+    out again. The passes that find the order still absent between two sends
+    leave that said, the next refusal replaces it with Alpaca's newer answer,
+    and the notice closes when Alpaca accepts the order.
+    """
+    repo, clock = crashed_with_exposure
+    no_shares = _Refused(403, "insufficient qty available for order (requested: 10, available: 0)")
+    throttled = _Refused(429, "rate limit exceeded")
+    alpaca = _Alpaca(repo, clock, submits=("never_arrives", no_shares, throttled))
+    exit_id = await _the_runner_sends_the_exit(repo, alpaca)
+
+    lost = _the_open_notice(repo)
+    assert lost is not None
+    assert (lost.explanation, lost.next_step) == (LOST_ANSWER_EXPLANATION, LOST_ANSWER_NEXT_STEP)
+
+    await _passes_until_sent(repo, _the_sweep(repo, alpaca), alpaca, sends=2)
+
+    refused = _the_open_notice(repo)
+    assert refused is not None
+    assert refused.uncertainty_id == lost.uncertainty_id
+    assert refused.headline == "A broker order outcome is unknown"
+    assert refused.explanation == _refused_again_explanation(f"Alpaca refused the order: {no_shares.message}")
+    assert refused.next_step == REFUSED_AGAIN_NEXT_STEP
+
+    # The next pass finds the order still absent, inside its wait: it sends nothing, and the notice stands.
+    await _passes(repo, _the_sweep(repo, alpaca), 1)
+    assert len(alpaca.sent) == 2
+    still = _the_open_notice(repo)
+    assert still is not None
+    assert (still.explanation, still.next_step) == (refused.explanation, refused.next_step)
+
+    await _passes_until_sent(repo, _the_sweep(repo, alpaca), alpaca, sends=3)
+
+    refused_again = _the_open_notice(repo)
+    assert refused_again is not None
+    assert refused_again.explanation == _refused_again_explanation(
+        f"Alpaca rate-limited the request: {throttled.message}"
+    )
+
+    await _passes_until_sent(repo, _the_sweep(repo, alpaca), alpaca, sends=4)
+
+    assert _exit_state(repo, exit_id) == "in_progress"
+    assert _the_open_notice(repo) is None
+
+
+@pytest.mark.parametrize(
+    ("submits", "answered_with"),
+    [
+        pytest.param(
+            (_AnsweredAs("an-id-the-clerk-never-sent"),),
+            f"client order id 'an-id-the-clerk-never-sent', Alpaca order id {ANOTHER_BROKER_ORDER_ID!r}",
+            id="the-first-send",
+        ),
+        pytest.param(
+            ("never_arrives", _AnsweredAs("an-id-the-clerk-never-sent")),
+            f"client order id 'an-id-the-clerk-never-sent', Alpaca order id {ANOTHER_BROKER_ORDER_ID!r}",
+            id="the-send-made-again",
+        ),
+        pytest.param(
+            (_AnsweredAs(None),),
+            f"no client order id, Alpaca order id {ANOTHER_BROKER_ORDER_ID!r}",
+            id="an-answer-that-names-no-id",
+        ),
+    ],
+)
+async def test_a_send_alpaca_answers_under_another_client_order_id_is_told_as_never_sent_again(
+    crashed_with_exposure,  # noqa: F811
+    submits: tuple[_SubmitFate, ...],
+    answered_with: str,
+) -> None:
+    """An order held for a human said "lost or timed out" and "Reconcile now", and neither was true (#2854).
+
+    Alpaca answered, and no pass sends the order again. The bot's page says
+    which two orders it is about, that this one will not be sent again, and
+    the one thing an operator can do today: look at the order at Alpaca. It
+    keeps saying so for as long as the order is held.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _Alpaca(repo, clock, submits=submits)
+    await _the_runner_sends_the_exit(repo, alpaca)
+    closing = _closing_order(repo)
+
+    await _passes_until_sent(repo, _the_sweep(repo, alpaca), alpaca, sends=len(submits))
+
+    held = _the_open_notice(repo)
+    assert held is not None
+    assert held.explanation == (
+        f"The Clerk sent the order to sell 10 SPY under client order id {closing.client_order_id!r}, "
+        f"and Alpaca answered with an order under {answered_with}. An order may be at Alpaca under "
+        "that other identity, and sending the same client order id again could not guard against "
+        "it, so the Clerk will not send this order again. It keeps custody of the position."
+    )
+    assert held.next_step == (
+        "Look at this account's orders at Alpaca for the order it answered with. The Clerk takes "
+        "this order up by itself only if Alpaca shows one under the client order id that was sent."
+    )
+
+    await _passes(repo, _the_sweep(repo, alpaca), FIVE_MINUTES_OF_PASSES)
+
+    assert len(alpaca.sent) == len(submits)
+    still = _the_open_notice(repo)
+    assert still is not None
+    assert (still.uncertainty_id, still.explanation, still.next_step) == (
+        held.uncertainty_id, held.explanation, held.next_step,
+    )
+
+
+async def test_a_refusal_is_no_longer_told_once_its_order_is_found_while_another_order_is_still_unknown(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """One notice covers every order of the bot whose outcome is unknown (#2854).
+
+    The refusal is told while its order is unknown, and still told when a
+    second order's answer is lost. Once Alpaca accepts the refused order, the
+    notice is about the second order alone and says nothing of a refusal.
+    """
+    repo, clock = crashed_with_exposure
+    refused = _Refused(403, "insufficient qty available for order (requested: 10, available: 0)")
+    alpaca = _Alpaca(repo, clock, submits=("never_arrives", refused))
+    exit_id = await _the_runner_sends_the_exit(repo, alpaca)
+    await _passes_until_sent(repo, _the_sweep(repo, alpaca), alpaca, sends=2)
+    (entry,) = repo.entry_orders_for_strategy(SID)
+
+    fold_uncertain(
+        repo, effect_operation_id=exit_id, order_ref=entry.order_ref,
+        why="The cancel response for the entry was lost.", transition_kind="ORDER_CANCEL_UNCERTAIN",
+    )
+
+    both_unknown = _the_open_notice(repo)
+    assert both_unknown is not None
+    assert both_unknown.explanation == _refused_again_explanation(f"Alpaca refused the order: {refused.message}")
+
+    await _passes_until_sent(repo, _the_sweep(repo, alpaca), alpaca, sends=3)
+
+    accepted = repo.order(_closing_order(repo).order_ref)
+    assert accepted is not None and accepted.broker_order_id is not None
+    one_unknown = _the_open_notice(repo)
+    assert one_unknown is not None
+    assert one_unknown.uncertainty_id == both_unknown.uncertainty_id
+    assert (one_unknown.explanation, one_unknown.next_step) == (
+        "One or more broker responses remain unknown.", LOST_ANSWER_NEXT_STEP,
+    )
+
+
+async def test_a_store_rebuilt_from_its_mirror_tells_the_same_refusal(tmp_path: Path) -> None:
+    """The notice's words are written by the fold of the row that records the refusal, never edited in place (#2854).
+
+    So a store replayed from its mirror shows the bot's page the same notice,
+    refreshed by the same later pass, as the store that lived through it.
+    """
+    clock = _clock_at(FIXTURE_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    repo.register_strategy_instance(
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1"
+    )
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    refused = _Refused(403, "insufficient qty available for order (requested: 10, available: 0)")
+    alpaca = _Alpaca(repo, clock, submits=("never_arrives", refused))
+    await _the_runner_sends_the_exit(repo, alpaca)
+    await _passes_until_sent(repo, _the_sweep(repo, alpaca), alpaca, sends=2)
+    await _passes(repo, _the_sweep(repo, alpaca), 1)
+    told = _the_open_notice(repo)
+    assert told is not None
+    assert told.explanation == _refused_again_explanation(f"Alpaca refused the order: {refused.message}")
+    db_path = repo.db_path
+    repo.close()
+    db_path.rename(db_path.with_suffix(".db.corrupt"))
+
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock
+    )
+    try:
+        assert _the_open_notice(rebuilt) == told
+    finally:
+        rebuilt.close()
+
+
+def test_an_unknown_outcomes_facts_omit_the_notice_so_every_ordinary_row_hashes_the_same() -> None:
+    """The notice joins the hash-chained facts only on a fold that records one (#2854).
+
+    Every ``ORDER_SUBMIT_UNCERTAIN`` written before it existed, and every
+    ordinary one after it, re-serializes byte-identically, so no sealed
+    receipt moves. A notice is its explanation and its next step together.
+    """
+    earlier_row = '{"why":"the submit timed out"}'
+    earlier_marked_row = '{"answered_as_client_order_id":"another-id","why":"the submit timed out"}'
+    plain = OrderSubmitUncertainFacts.from_facts_json(earlier_row)
+    marked = OrderSubmitUncertainFacts.from_facts_json(earlier_marked_row)
+    noticed = OrderSubmitUncertainFacts(
+        why="the submit timed out", notice_explanation="Alpaca refused it.", notice_next_step="Look at Alpaca."
+    )
+
+    assert plain.to_facts_json() == earlier_row
+    assert marked.to_facts_json() == earlier_marked_row
+    assert plain.notice is None and marked.notice is None
+    assert noticed.to_facts_json() == (
+        '{"notice_explanation":"Alpaca refused it.","notice_next_step":"Look at Alpaca.",'
+        '"why":"the submit timed out"}'
+    )
+    assert OrderSubmitUncertainFacts.from_facts_json(noticed.to_facts_json()) == noticed
+    assert noticed.notice == UnknownOutcomeNotice(explanation="Alpaca refused it.", next_step="Look at Alpaca.")
+    with pytest.raises(ValueError, match="its explanation and its next step, or neither"):
+        OrderSubmitUncertainFacts(why="the submit timed out", notice_explanation="Alpaca refused it.")
 
 
 async def test_a_clock_stepped_back_while_a_send_was_awaited_does_not_shorten_the_wait(

@@ -12,8 +12,10 @@ from app.broker.alpaca.clerk.money import recorded_dollars
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
 from app.broker.alpaca.clerk.sqlite.facts import (
     FACTS_SCHEMA_VERSION,
+    OrderSubmitUncertainFacts,
     UncertaintyRaisedFacts,
     UncertaintyResolvedFacts,
+    UnknownOutcomeNotice,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import (
@@ -36,19 +38,31 @@ def _transition_sequence(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT MAX(sequence) AS seq FROM custody_transitions").fetchone()["seq"]
 
 
-def _unknown_outcome_envelope(*, cause: OrderOutcomeUnknownCause, why: str) -> UncertaintyRaisedFacts:
+def _unknown_outcome_envelope(
+    *, cause: OrderOutcomeUnknownCause, why: str, notice: UnknownOutcomeNotice | None = None
+) -> UncertaintyRaisedFacts:
+    """The unknown-outcome episode's envelope.
+
+    ``why`` and the lost-answer next step are what it says unless the fold
+    being applied recorded a ``notice`` of its own (#2854): the broker did
+    answer, so "lost or timed out" would be false.
+    """
     return UncertaintyRaisedFacts(
         severity="error",
         blocks_new_exposure=True,
         allows_reduction=False,
         reason_code=ORDER_OUTCOME_UNKNOWN_REASON_CODE,
         headline="A broker order outcome is unknown",
-        explanation=why,
+        explanation=why if notice is None else notice.explanation,
         operator_impact=(
             "New exposure and new reducing orders are on hold for the bot or ticket that "
             "placed this order until its exact broker identities are recovered."
         ),
-        next_step="Reconcile now; cancellation and exact-identity lookup remain available.",
+        next_step=(
+            "Reconcile now; cancellation and exact-identity lookup remain available."
+            if notice is None
+            else notice.next_step
+        ),
         evidence_refs=[identity.order_ref for identity in cause.identities],
         cause_facts=cause.to_mapping(),
     )
@@ -253,7 +267,19 @@ def _uncertainty_custody(
 
 
 def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
-    """Atomically pair an UNKNOWN effect state with its fail-closed episode."""
+    """Atomically pair an UNKNOWN effect state with its fail-closed episode.
+
+    The episode says a broker response was lost or timed out, unless the
+    fold being applied records a notice of its own
+    (``OrderSubmitUncertainFacts.notice``, #2854). That notice becomes what
+    the open episode tells the operator -- its explanation and next step --
+    whether this fold opens the episode or refreshes it. A fold that records
+    none leaves an open episode's words as they are: each pass that finds the
+    order still absent refreshes the episode, and what the broker last
+    answered stays true until another answer or the order's proof replaces
+    it (:func:`resolve_unknown_outcome_if_proven`).
+    """
+    notice = OrderSubmitUncertainFacts.from_facts_json(payload["facts_json"]).notice
     effect_operation_id = payload["effect_operation_id"]
     order_ref = payload["order_ref"]
     owner = conn.execute(
@@ -273,7 +299,9 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
     identity = UnknownOrderIdentity(effect_operation_id=effect_operation_id, order_ref=order_ref)
     if active is None:
         cause = OrderOutcomeUnknownCause(identities=(identity,))
-        facts = _unknown_outcome_envelope(cause=cause, why="The broker response was lost or timed out.")
+        facts = _unknown_outcome_envelope(
+            cause=cause, why="The broker response was lost or timed out.", notice=notice
+        )
         conn.execute(
             "INSERT INTO uncertainties (uncertainty_id, scope, severity, "
             "blocks_new_exposure, allows_reduction, custody_owner, subject_id, strategy_instance_id, "
@@ -327,7 +355,9 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
             )
         )
     )
-    facts = _unknown_outcome_envelope(cause=cause, why="One or more broker responses were lost or timed out.")
+    facts = _unknown_outcome_envelope(
+        cause=cause, why="One or more broker responses were lost or timed out.", notice=notice
+    )
     conn.execute(
         "UPDATE uncertainties SET observed_at_ms = ?, evidence_refs_json = ?, facts_json = ? "
         "WHERE scope = 'CUSTODY_SUBJECT' AND subject_id = ? AND reason_code = ? "
@@ -340,6 +370,12 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
             ORDER_OUTCOME_UNKNOWN_REASON_CODE,
         ),
     )
+    if notice is not None:
+        conn.execute(
+            "UPDATE uncertainties SET explanation = ?, next_step = ? WHERE uncertainty_id = ? "
+            "AND resolved_at_ms IS NULL",
+            (facts.explanation, facts.next_step, active["uncertainty_id"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -398,13 +434,20 @@ def resolve_unknown_outcome_if_proven(conn: sqlite3.Connection, payload: dict[st
             cause=OrderOutcomeUnknownCause(identities=remaining),
             why="One or more broker responses remain unknown.",
         )
+        # The episode's words go back to this envelope's (#2854): a notice
+        # one fold recorded may be about the order just proven, and no row
+        # says which order it was about. The next fold that records one for
+        # an order still unknown puts it back.
         conn.execute(
             "UPDATE uncertainties SET observed_at_ms = ?, evidence_refs_json = ?, "
-            "facts_json = ? WHERE uncertainty_id = ? AND resolved_at_ms IS NULL",
+            "facts_json = ?, explanation = ?, next_step = ? "
+            "WHERE uncertainty_id = ? AND resolved_at_ms IS NULL",
             (
                 payload["recorded_at_ms"],
                 canonicalize(remaining_facts.evidence_refs),
                 remaining_facts.to_facts_json(),
+                remaining_facts.explanation,
+                remaining_facts.next_step,
                 active["uncertainty_id"],
             ),
         )
