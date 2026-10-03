@@ -176,15 +176,19 @@ class _TestDecisionReceiptRepository:
         *,
         strategy_instance_id: str,
         limit: int,
+        before_seq: int | None = None,
     ) -> list[DecisionReceiptResource]:
         """FR-016: warmup replay reads this to reapply known dispositions.
 
         Dict insertion order matches ascending ``seq`` order here (``seq``
         is assigned once at append), mirroring the real repository's
-        "bounded newest suffix in ascending sequence order".
+        "bounded newest suffix in ascending sequence order". ``before_seq``
+        reads the suffix older than that sequence, as the real one does.
         """
         matching = [
-            row for (sid, _bar_ref), row in self._rows.items() if sid == strategy_instance_id
+            row
+            for (sid, _bar_ref), row in self._rows.items()
+            if sid == strategy_instance_id and (before_seq is None or row.seq < before_seq)
         ]
         matching.sort(key=lambda row: row.seq)
         return matching[-limit:] if limit > 0 else []

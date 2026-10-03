@@ -337,11 +337,20 @@ def decision_receipt_tail(
     *,
     strategy_instance_id: str,
     limit: int,
+    before_seq: int | None = None,
 ) -> list[DecisionReceiptResource]:
+    """The newest ``limit`` receipts in ascending sequence order.
+
+    ``before_seq`` reads the newest ``limit`` rows older than that sequence
+    instead (#2859). Either way it is one bounded range walk down the primary
+    key, starting where the range does.
+    """
+    older_than = "" if before_seq is None else "AND seq < ? "
+    bounds = (limit,) if before_seq is None else (before_seq, limit)
     rows = conn.execute(
         f"SELECT {', '.join(_DECISION_RECEIPT_COLUMNS)} FROM decision_receipts "
-        "WHERE strategy_instance_id = ? ORDER BY seq DESC LIMIT ?",
-        (strategy_instance_id, limit),
+        f"WHERE strategy_instance_id = ? {older_than}ORDER BY seq DESC LIMIT ?",
+        (strategy_instance_id, *bounds),
     ).fetchall()
     return [DecisionReceiptResource(**dict(row)) for row in reversed(rows)]
 

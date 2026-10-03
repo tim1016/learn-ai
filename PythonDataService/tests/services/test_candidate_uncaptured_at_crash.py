@@ -281,14 +281,8 @@ _OLDEST_RETAINED_ENTER_MINUTE = _LATE_ENTER_MINUTE - MAX_DECISION_RECEIPTS_PER_S
 minutes have been decided: the tape holds one decision per bar."""
 
 
-def _red_tape(*, minutes: int, enter_minutes: Sequence[int]) -> list[MarketDataBar]:
-    """``minutes`` consecutive regular-session one-minute bars, red but for a
-    green pair ending at each of ``enter_minutes``.
-
-    ``deployment_validation`` decides on every minute and proposes an ENTER on
-    the second of two consecutive green minutes, so the tape holds one
-    decision per bar and stages an ENTER exactly at the named minutes.
-    """
+def _session_minute_starts(minutes: int) -> list[int]:
+    """The opens of ``minutes`` consecutive regular-session minutes, from the calendar."""
     first = anchor_session_date()
     starts = [
         start_ms
@@ -297,6 +291,18 @@ def _red_tape(*, minutes: int, enter_minutes: Sequence[int]) -> list[MarketDataB
         for start_ms in range(window.open_ms_utc, window.close_ms_utc, _MINUTE_MS)
     ][:minutes]
     assert len(starts) == minutes
+    return starts
+
+
+def _red_tape(*, minutes: int, enter_minutes: Sequence[int]) -> list[MarketDataBar]:
+    """``minutes`` consecutive regular-session one-minute bars, red but for a
+    green pair ending at each of ``enter_minutes``.
+
+    ``deployment_validation`` decides on every minute and proposes an ENTER on
+    the second of two consecutive green minutes, so the tape holds one
+    decision per bar and stages an ENTER exactly at the named minutes.
+    """
+    starts = _session_minute_starts(minutes)
     green = {minute for enter in enter_minutes for minute in (enter - 1, enter)}
     return [
         MarketDataBar(
@@ -586,6 +592,85 @@ async def test_resume_names_the_exit_a_later_run_left_staged_after_an_earlier_ru
 
         assert [call["purpose"] for call in clerk.calls] == ["ENTER", "ENTER"]
         assert _crash_evidence_closes(repo) == [tape[crash_minute].end_ms]
+        assert json.loads(_retained(repo)[-1].facts_json)["explanation"]["holding"] is True
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+_SMA = "sma_crossover"
+_SMA_ONE_MINUTE = {"short_window": 2, "long_window": 3, "resolution_minutes": 1}
+_SMA_ENTER_MINUTE = 5
+"""Minute whose close is the rising tape's fresh golden cross."""
+
+
+def _rising_tape_with_a_final_drop(*, minutes: int) -> list[MarketDataBar]:
+    """Flat, then rising from ``_SMA_ENTER_MINUTE`` on, then one falling minute.
+
+    ``sma_crossover`` at ``_SMA_ONE_MINUTE`` decides on every minute: the first
+    rising minute is a fresh golden cross (ENTER), every later rising minute
+    keeps the short average above the long one (hold), and the last minute's
+    fall puts it below (EXIT).
+    """
+    closes = [
+        Decimal("500") + Decimal("0.01") * max(0, minute - _SMA_ENTER_MINUTE + 1)
+        for minute in range(minutes - 1)
+    ]
+    closes.append(Decimal("400"))
+    return [
+        MarketDataBar(
+            symbol="SPY",
+            start_ms=start_ms,
+            end_ms=start_ms + _MINUTE_MS,
+            open=close,
+            high=close + 1,
+            low=Decimal("399"),
+            close=close,
+            volume=100,
+            fetched_at_ms=start_ms + _MINUTE_MS,
+            feed_id="fake-phase",
+            session_phase="RTH",
+        )
+        for start_ms, close in zip(_session_minute_starts(minutes), closes, strict=True)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resume_names_the_exit_a_crash_left_staged_when_its_enter_is_older_than_the_window(
+    tmp_path: Path,
+) -> None:
+    """#2859: the position a run still holds is replayed however old its ENTER is.
+
+    The run enters early and holds for more decisions than the receipt window
+    retains, so the read a Resume replays from no longer reaches its ENTER --
+    the receipt is protected and still stored, only older than the window. The
+    run then dies on the bar that stages its EXIT. Replayed flat, that bucket
+    staged nothing, and the crash went unnamed.
+    """
+    repo, clerk = _sqlite_clerk(tmp_path)
+    set_alpaca_clerk(clerk)
+    try:
+        minutes = _SMA_ENTER_MINUTE + MAX_DECISION_RECEIPTS_PER_STRATEGY + 50
+        bars = _rising_tape_with_a_final_drop(minutes=minutes)
+        crash_close_ms = bars[-1].end_ms
+        binding = _binding(run_id="run-1", strategy_key=_SMA).model_copy(
+            update={"strategy_params": _SMA_ONE_MINUTE}
+        )
+
+        await bot_trade_strategy.run_trade_bot(binding, _PhaseFeed(live_bars=bars[:-1]))
+        assert [call["purpose"] for call in clerk.calls] == ["ENTER"]
+        enter_close_ms = clerk.calls[0]["decision_evidence"].decision_bar_close_ms
+        assert enter_close_ms == bars[_SMA_ENTER_MINUTE].end_ms
+        # The window no longer reaches back to that ENTER.
+        before_resume = _retained(repo)
+        assert json.loads(before_resume[0].facts_json)["decision_bar_close_ms"] > enter_close_ms
+
+        await bot_trade_strategy.run_trade_bot(
+            binding.model_copy(update={"run_id": "run-2"}), _PhaseFeed(retained_bars=bars)
+        )
+
+        assert [call["purpose"] for call in clerk.calls] == ["ENTER"]
+        assert _crash_evidence_closes(repo) == [crash_close_ms]
         assert json.loads(_retained(repo)[-1].facts_json)["explanation"]["holding"] is True
     finally:
         set_alpaca_clerk(None)

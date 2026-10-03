@@ -403,12 +403,14 @@ class ClerkSqliteRepositoryReadApi:
         *,
         strategy_instance_id: str,
         limit: int,
+        before_seq: int | None = None,
     ) -> list[DecisionReceiptResource]:
         with self._write_lock:
             return reads.decision_receipt_tail(
                 self._conn,
                 strategy_instance_id=strategy_instance_id,
                 limit=limit,
+                before_seq=before_seq,
             )
 
     def external_order(

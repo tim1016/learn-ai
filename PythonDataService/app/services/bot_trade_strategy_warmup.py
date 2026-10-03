@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
+    ENTER_OUTCOMES,
+    EXIT_OUTCOMES,
     SqliteDecisionReceipts,
     rotated_out_before_ms,
     run_first_closes_ms,
@@ -57,9 +59,7 @@ program's own ``SignalProgramContract.warmup_lookback_days`` (see
 constant only floors it.
 """
 
-_COMMIT_WORTHY_OUTCOMES: frozenset[str] = frozenset(
-    {"enter_intent", "exit_intent", "entered", "exited"}
-)
+_COMMIT_WORTHY_OUTCOMES: frozenset[str] = ENTER_OUTCOMES | EXIT_OUTCOMES
 
 
 def _warmup_lookback_days_for(binding: BrokerBotBinding) -> int:
@@ -295,12 +295,21 @@ def captured_decision_outcomes(receipts: SqliteDecisionReceipts) -> CapturedDeci
     each later run in the window took over, so replay starts it flat, as
     the run itself did (#2859). An empty result means this instance has
     never captured a decision -- there is no crash to recover from.
+
+    One decision older than the window is read with it: the ENTER of a
+    position still open where the window starts
+    (:meth:`SqliteDecisionReceipts.entry_held_into`, #2859). Replay commits
+    it at its own bucket like any other, so the position's EXIT is restaged
+    however long it was held. Its bucket closed before
+    ``rotated_out_before_ms``, which is unchanged, so no bucket becomes a
+    crash candidate, or stops being one, because of it.
     """
     window = receipts.retained_window()
+    held_entry = receipts.entry_held_into(window)
     return CapturedDecisions(
         outcomes={
             receipt.intent_id: receipt.outcome
-            for receipt in window
+            for receipt in (*(() if held_entry is None else (held_entry,)), *window)
             if receipt.intent_id is not None
         },
         rotated_out_before_ms=rotated_out_before_ms(window),

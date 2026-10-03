@@ -246,6 +246,7 @@ def _receipt_bucket(
     outcome: DecisionOutcome = "no_action",
     records_close: bool = True,
     run_id: str | None = None,
+    retention_class: str | None = None,
 ) -> None:
     """Receipt the bucket that closed at ``minute``, the way a runner or the Clerk does.
 
@@ -258,6 +259,8 @@ def _receipt_bucket(
         facts["decision_bar_close_ms"] = _close_ms(minute)
     if run_id is not None:
         facts["run_id"] = run_id
+    if retention_class is not None:
+        facts["retention_class"] = retention_class
     receipts.append(
         outcome=outcome,
         symbol="SPY",
@@ -365,6 +368,110 @@ def test_a_run_starts_at_its_first_decision_not_at_the_crash_evidence_it_wrote(
     _receipt_bucket(receipts, 6, run_id="run-3")
 
     assert run_first_closes_ms(receipts.retained_window()) == frozenset({_close_ms(5)})
+
+
+# ---------------------------------------------------------------------------
+# The position still open where the retained window starts (#2859).
+# ---------------------------------------------------------------------------
+
+
+def _enter(receipts: SqliteDecisionReceipts, minute: int, *, run: str) -> None:
+    """The Clerk's receipt for an ENTER it admitted: protected, under its own run id."""
+    _receipt_bucket(
+        receipts,
+        minute,
+        outcome="enter_intent",
+        run_id=f"spy-bot:{run}",
+        retention_class="protected_effect",
+    )
+
+
+def _refusal(receipts: SqliteDecisionReceipts, minute: int, *, run: str) -> None:
+    _receipt_bucket(receipts, minute, outcome="blocked", run_id=run, retention_class="protected_refusal")
+
+
+@pytest.mark.usefixtures("short_window")
+def test_the_entry_still_held_where_the_window_starts_is_read_past_the_refusals_since(
+    receipts: SqliteDecisionReceipts,
+) -> None:
+    """An ENTER receipt is protected, so it is still stored once the window
+    has moved past it. The run that entered is the run that made the window's
+    oldest decision and nothing closed the position in between: it is still
+    open there, and the refusals written since do not hide it."""
+    _receipt_bucket(receipts, 0, run_id="run-1")
+    _enter(receipts, 1, run="run-1")
+    _refusal(receipts, 2, run="run-1")
+    for minute in (3, 4, 5):
+        _receipt_bucket(receipts, minute, run_id="run-1")
+
+    window = receipts.retained_window()
+    assert [receipt.seq for receipt in window] == [4, 5, 6]
+    held = receipts.entry_held_into(window)
+
+    assert held is not None
+    assert (held.seq, held.outcome, held.intent_id) == (2, "enter_intent", "evaluation-1")
+
+
+@pytest.mark.usefixtures("short_window")
+def test_no_entry_is_held_into_the_window_once_its_position_was_closed(
+    receipts: SqliteDecisionReceipts,
+) -> None:
+    """Only the last decision the position moved on says what it was at the
+    window's start. After an EXIT that is flat: replaying the older ENTER
+    there would hold a position the run had already closed."""
+    _enter(receipts, 0, run="run-1")
+    _receipt_bucket(
+        receipts, 1, outcome="exit_intent", run_id="spy-bot:run-1", retention_class="protected_effect"
+    )
+    for minute in (2, 3, 4):
+        _receipt_bucket(receipts, minute, run_id="run-1")
+
+    window = receipts.retained_window()
+    assert [receipt.seq for receipt in window] == [3, 4, 5]
+    assert receipts.entry_held_into(window) is None
+
+
+@pytest.mark.usefixtures("short_window")
+def test_no_entry_is_held_into_a_window_that_another_run_starts(
+    receipts: SqliteDecisionReceipts,
+) -> None:
+    """A run starts flat. An ENTER the run before it was stopped holding is
+    not the later run's position, however recently it was made."""
+    _enter(receipts, 0, run="run-1")
+    for minute in (1, 2, 3):
+        _receipt_bucket(receipts, minute, run_id="run-2")
+
+    window = receipts.retained_window()
+    assert [receipt.seq for receipt in window] == [2, 3, 4]
+    assert receipts.entry_held_into(window) is None
+
+
+@pytest.mark.usefixtures("short_window")
+def test_an_entry_held_through_more_refusals_than_the_read_reaches_is_not_found_and_says_so(
+    receipts: SqliteDecisionReceipts, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The read of rows older than the window is bounded. When it ends
+    without reaching any ENTER or EXIT, the position at the window's start is
+    unknown: nothing is replayed as held, and the log says the read fell
+    short rather than leaving a Resume to look flat for no stated reason."""
+    _enter(receipts, 0, run="run-1")
+    for minute in (1, 2, 3):
+        _refusal(receipts, minute, run="run-1")
+    for minute in (4, 5, 6):
+        _receipt_bucket(receipts, minute, run_id="run-1")
+
+    window = receipts.retained_window()
+    assert [receipt.seq for receipt in window] == [5, 6, 7]
+    with caplog.at_level(logging.WARNING, logger=decision_receipts_module.__name__):
+        held = receipts.entry_held_into(window)
+
+    assert held is None
+    [record] = [
+        record
+        for record in caplog.records
+        if getattr(record, "action", None) == "decision_receipt_held_entry_unknown"
+    ]
+    assert (record.first_read_seq, record.first_retained_seq) == (2, 5)
 
 
 def test_receipts_do_not_advance_custody_transition_or_control_revision(
