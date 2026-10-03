@@ -1,0 +1,47 @@
+<app-golden-search-panel chart="candidate-cards">
+  <ul class="cards" aria-label="Candidates to compare">
+    @for (row of rows(); track row.key) {
+      @let picked = row.key === selected();
+      <li class="card" [class.selected]="picked" [attr.data-key]="row.key">
+        <div class="top">
+          <button type="button" class="pick" [attr.aria-pressed]="picked" [disabled]="fixed()" (click)="pick.emit(row.key)">
+            <span class="radio" aria-hidden="true"></span>
+            <span class="name">
+              <strong>{{ row.candidate.label }}</strong>
+              <small>{{ row.origin }}@if (row.sameAs.length > 0) { · same settings as {{ row.sameAs.join(' and ') }}}</small>
+            </span>
+          </button>
+          @if (row.candidate.eligible) {
+            <span class="chip chip--ok"><i class="pi pi-check" aria-hidden="true"></i>Passes the rules</span>
+          } @else {
+            <span class="chip chip--warn"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i>Fails a rule</span>
+          }
+        </div>
+        <p class="settings">{{ row.candidate.params_sentence }}</p>
+        @for (flag of row.otherFlags; track $index) { <small class="flag">{{ flag.text }}</small> }
+        @if (row.failure; as failure) { <small class="flag flag--bad">Development run failed — {{ failure }}</small> }
+        <dl class="figures">
+          <div><dt>Net return</dt><dd>{{ row.netReturn }}</dd></div>
+          <div><dt>Sharpe</dt><dd>{{ row.sharpe }}</dd></div>
+          <div [class.warn]="row.drawdownFlags.length > 0">
+            <dt>Worst fall</dt>
+            <dd>{{ row.worstFall }}@for (flag of row.drawdownFlags; track $index) { <small>{{ flag.text }}</small> }</dd>
+          </div>
+          <div [class.warn]="row.tradeFlags.length > 0">
+            <dt>Trades</dt>
+            <dd>{{ row.trades }}@if (floor() !== null) { <small>minimum {{ floor() }}</small> }@for (flag of row.tradeFlags; track $index) { <small>{{ flag.text }}</small> }</dd>
+          </div>
+        </dl>
+        @if (lines().get(row.key); as line) {
+          <app-golden-search-chart [spec]="line" [height]="44" [offersTable]="false" />
+        } @else if (details() !== null) {
+          <small class="muted">No development run is recorded.</small>
+        }
+      </li>
+    }
+  </ul>
+  <div caption class="captions">
+    @if (caption(); as c) { <p class="caption"><strong>{{ c.label }}</strong> {{ c.detail }}</p> }
+    <p class="caption">Development replay · same dates, ${{ capital() | number: '1.0-0' }} starting capital and execution assumptions.</p>
+  </div>
+</app-golden-search-panel>

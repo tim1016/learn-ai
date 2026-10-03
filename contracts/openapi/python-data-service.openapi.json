@@ -19580,6 +19580,21 @@
             },
             "title": "Stress",
             "type": "array"
+          },
+          "stress_tally": {
+            "$ref": "#/components/schemas/GoldenSearchStressTally"
+          },
+          "trades_per_year": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Development trades per trading year of the development window; null when the development run has no completed result.",
+            "title": "Trades Per Year"
           }
         },
         "required": [
@@ -19593,6 +19608,8 @@
           "ineligibility",
           "neighbors",
           "stress",
+          "trades_per_year",
+          "stress_tally",
           "edge_hits",
           "guidance",
           "flags",
@@ -20590,6 +20607,18 @@
             ],
             "title": "Reason"
           },
+          "return_change": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This neighbor's net return less the candidate's, a fraction of starting capital; null for the candidate's own row or when either run has no completed result.",
+            "title": "Return Change"
+          },
           "status": {
             "enum": [
               "center",
@@ -20602,6 +20631,16 @@
             "title": "Status",
             "type": "string"
           },
+          "step": {
+            "description": "The row's step from the candidate on this knob: -1 below, 0 the candidate itself, +1 above.",
+            "enum": [
+              -1,
+              0,
+              1
+            ],
+            "title": "Step",
+            "type": "integer"
+          },
           "value": {
             "title": "Value",
             "type": "number"
@@ -20611,7 +20650,9 @@
           "value",
           "status",
           "metrics",
-          "reason"
+          "reason",
+          "step",
+          "return_change"
         ],
         "title": "GoldenSearchNeighborRow",
         "type": "object"
@@ -21991,6 +22032,18 @@
               }
             ]
           },
+          "return_change": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This stressed run's net return less the unstressed development run's, a fraction of starting capital; null when either run has no completed result.",
+            "title": "Return Change"
+          },
           "scenario": {
             "title": "Scenario",
             "type": "string"
@@ -21999,7 +22052,8 @@
         "required": [
           "scenario",
           "label",
-          "metrics"
+          "metrics",
+          "return_change"
         ],
         "title": "GoldenSearchStressResult",
         "type": "object"
@@ -22097,6 +22151,33 @@
           "label"
         ],
         "title": "GoldenSearchStressScenarioRequest",
+        "type": "object"
+      },
+      "GoldenSearchStressTally": {
+        "additionalProperties": false,
+        "properties": {
+          "in_profit": {
+            "description": "Stress runs that completed with a net profit above zero.",
+            "title": "In Profit",
+            "type": "integer"
+          },
+          "recorded": {
+            "description": "Stress runs that completed with a recorded net profit, of any sign.",
+            "title": "Recorded",
+            "type": "integer"
+          },
+          "scenarios": {
+            "description": "Stress scenarios the plan scheduled.",
+            "title": "Scenarios",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "in_profit",
+          "recorded",
+          "scenarios"
+        ],
+        "title": "GoldenSearchStressTally",
         "type": "object"
       },
       "GoldenSearchStudyDetail": {
@@ -22633,13 +22714,14 @@
           "kind": {
             "enum": [
               "tab",
+              "chart",
               "step"
             ],
             "title": "Kind",
             "type": "string"
           },
           "target": {
-            "description": "An evidence tab of the Compare step (trades, neighbors, stress, months) or a study step (search, test, decision).",
+            "description": "An evidence tab of the Compare step (trades, months), a Compare chart (neighbor-tornado, cost-stress) or a study step (search, test, decision).",
             "title": "Target",
             "type": "string"
           }

@@ -93,15 +93,20 @@ describe('GoldenSearchChartComponent', () => {
     expect(screen.queryByRole('table')).toBeNull();
   });
 
-  it('a chart that cannot draw says so and opens its table instead', async () => {
-    const spec = chartSpec({
+  it('a chart that cannot draw says so, clears the drawing it replaces and opens its table instead', async () => {
+    const fake = fakeCharts();
+    const view = await render(GoldenSearchChartComponent, { inputs: { spec: chartSpec() }, providers: fake.providers });
+    await waitFor(() => expect(fake.charts[0]?.options).toHaveLength(1));
+
+    const broken = chartSpec({
       option: () => {
         throw new Error('bad option');
       },
     });
-    await render(GoldenSearchChartComponent, { inputs: { spec }, providers: fakeCharts().providers });
+    view.fixture.componentRef.setInput('spec', broken);
 
     expect((await screen.findByRole('alert')).textContent).toContain('The chart could not be drawn. Every value is in the table below.');
+    expect(fake.charts[0].clears).toBe(1);
     expect(screen.getByRole('table', { name: 'Development cumulative return at each session close' })).not.toBeNull();
   });
 });

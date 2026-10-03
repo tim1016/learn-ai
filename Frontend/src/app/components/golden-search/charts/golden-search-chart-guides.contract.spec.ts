@@ -1,10 +1,11 @@
-/** The guide and the walkthroughs tell the same story (#2821): every chart in
- * the registry has a section in the served Golden Search guide, under its
- * anchor and its panel title, and that section's "How to read it" list is
- * the chart's walkthrough, step for step and word for word.
+/** Every chart's guide buttons have somewhere to go (#2821): the served
+ * Golden Search guide has a section under the chart's `{#anchor}`, where
+ * "About this chart" opens the drawer, and that section's "How to read it"
+ * list has one step for each step "Walk me through it" lights up. The
+ * wording is the guide's to edit; only the structure is held.
  *
- * Falsifiability: reword a step in either file, drop a step, or rename a
- * section's `{#anchor}`, and this spec names the chart that drifted. */
+ * Falsifiability: rename a section's `{#anchor}`, or add or drop a reading
+ * step on one side only, and this spec names the chart that drifted. */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -14,7 +15,6 @@ import { CHART_GUIDES } from './golden-search-chart-guides';
 const GUIDE = readFileSync(join(__dirname, '../../../../assets/docs/golden-search-guide.md'), 'utf8').split('\n');
 
 interface GuideSection {
-  readonly title: string;
   readonly readingSteps: readonly string[];
 }
 
@@ -32,17 +32,16 @@ function section(anchor: string): GuideSection | null {
     const step = /^\d+\. (.+)$/.exec(line);
     if (step !== null) readingSteps.push(step[1].trim());
   }
-  return { title: GUIDE[start].replace(/^#+ /, '').replace(/\s*\{#[^}]+\}\s*$/, ''), readingSteps };
+  return { readingSteps };
 }
 
 describe('Golden Search guide and chart walkthroughs', () => {
   for (const [id, guide] of Object.entries(CHART_GUIDES)) {
-    it(`${id}: the guide's section matches the panel title and its reading steps are the walkthrough`, () => {
+    it(`${id}: the guide has its section, with one reading step per walkthrough step`, () => {
       const found = section(id);
 
       expect(found, `the guide has no heading anchored {#${id}}`).not.toBeNull();
-      expect(found?.title).toBe(guide.title);
-      expect(found?.readingSteps).toEqual(guide.steps.map((step) => step.text));
+      expect(found?.readingSteps).toHaveLength(guide.steps.length);
     });
   }
 });

@@ -15,10 +15,8 @@
     }
 
     <app-golden-search-grid>
-      <section class="panel" aria-label="Candidates">
-        <app-golden-search-candidate-table [rows]="rows()" [selected]="selectedKey()" [fixed]="s.exam_locked" [capital]="e.scope.capital" (pick)="pick($event)" />
-        @if (caption(); as c) { <p class="caption"><strong>{{ c.label }}</strong> {{ c.detail }}</p> }
-      </section>
+      <app-golden-search-candidate-cards [rows]="rows()" [selected]="selectedKey()" [fixed]="s.exam_locked" [capital]="e.scope.capital" [floor]="floor()"
+        [details]="detailMap()" (pick)="pick($event)" />
 
       @if (selectedRow(); as row) {
         <app-golden-search-equity-chart data-span="8" [rows]="rows()" [details]="detailMap()" [error]="detailsError()" [selected]="row.key" [ceiling]="ceiling()"
@@ -27,6 +25,40 @@
           <app-golden-search-candidate-aside [candidate]="row.candidate" [study]="s" />
           @if (summary(); as rows) { <app-golden-search-decision-summary [rows]="rows" (follow)="follow($event)" /> }
         </div>
+
+        <app-golden-search-panel chart="side-by-side" data-span="4">
+          <ul legend class="legend" aria-label="Candidates">
+            @for (item of rows(); track item.key) {
+              <li [class.selected]="item.key === row.key"><i class="dot" [attr.data-key]="item.key" aria-hidden="true"></i>{{ item.candidate.label }}</li>
+            }
+          </ul>
+          @if (sideBySide(); as spec) { <app-golden-search-chart [spec]="spec" [height]="290" /> }
+          <p caption class="caption">Development data, used for choosing. Each row has its own scale; worst fall is drawn reversed, so a smaller fall sits further right.</p>
+        </app-golden-search-panel>
+
+        <app-golden-search-panel chart="neighbor-tornado" data-span="4">
+          <ul legend class="legend" aria-label="Bars">
+            <li><i class="bar" data-tone="below" aria-hidden="true"></i>One step below</li>
+            <li><i class="bar" data-tone="above" aria-hidden="true"></i>One step above</li>
+            <li><i class="bar" data-tone="loss" aria-hidden="true"></i>Loses money</li>
+          </ul>
+          @if (tornado(); as spec) {
+            <app-golden-search-chart [spec]="spec" [height]="tornadoHeight()" />
+          } @else {
+            <p class="muted">No neighbor audit was recorded for {{ row.neighborSource.label }}.</p>
+          }
+          <p caption class="caption">{{ row.neighborSource.label }} with one knob moved one step either side, everything else held. A good neighborhood is a local observation on development data, not a probability that the settings will keep working.</p>
+        </app-golden-search-panel>
+
+        <app-golden-search-panel chart="cost-stress" data-span="4">
+          @if (stress(); as spec) {
+            <app-golden-search-chart [spec]="spec" [height]="stressHeight()" />
+          } @else {
+            <p class="muted">No stress run was recorded for {{ row.candidate.label }}.</p>
+          }
+          <p caption class="caption">{{ row.candidate.label }} rerun in the engine under each cost scenario the plan declared. Base costs: {{ s.scope.costs_sentence }}</p>
+        </app-golden-search-panel>
+
         <section class="panel" aria-label="Candidate evidence">
           <app-golden-search-evidence-tabs [selected]="row" [details]="detailMap()" [detailsError]="detailsError()" [pairMaps]="pairMaps()" [mapCenter]="mapCenter()"
             [mapCenterLabel]="mapCenterLabel()" [capability]="capability()" (retry)="retryDetails()" />

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -31,10 +31,18 @@ async function renderStep(study: StudyDetail = studyDetail('awaiting_candidate')
   return { view, commands, steps, service, charts: charts.charts };
 }
 
-function candidateRow(name: RegExp): HTMLElement {
-  const row = screen.getByRole('button', { name }).closest('tr');
-  if (row === null) throw new Error(`no candidate row for ${name}`);
-  return row;
+function candidateCard(name: RegExp): HTMLElement {
+  const card = screen.getByRole('button', { name }).closest('li');
+  if (card === null) throw new Error(`no candidate card for ${name}`);
+  return card;
+}
+
+function cards(): HTMLElement[] {
+  return within(screen.getByRole('list', { name: 'Candidates to compare' })).getAllByRole('listitem');
+}
+
+function region(name: string): HTMLElement {
+  return screen.getByRole('region', { name });
 }
 
 function evidenceTab(name: string): HTMLElement {
@@ -42,16 +50,16 @@ function evidenceTab(name: string): HTMLElement {
 }
 
 describe('GoldenSearchCompareStepComponent', () => {
-  it('leads with the server recommendation, then every candidate on the same development scope, the incumbent last', async () => {
+  it('leads with the server recommendation, then a card for every candidate on the same development scope, the incumbent last', async () => {
     await renderStep();
 
     expect(screen.getAllByRole('note')[0].textContent).toContain('The recent fit earns more in this replay, but nearby settings lose money.');
-    const table = screen.getByRole('table', { name: /development replay · same dates, \$100,000 starting capital/i });
-    const rows = within(table).getAllByRole('row').slice(1);
-    expect(rows.map((row) => row.querySelector('strong')?.textContent)).toEqual(['All-period fit', 'Recent fit', 'Current settings']);
-    expect(rows[0].textContent).toMatch(/All-period search[\s\S]*\+8\.7%\s*6\.4%\s*146\s*1\.18/);
-    expect(rows[1].textContent).toMatch(/14\.8%\s*Above 12% limit/);
-    expect(rows[2].textContent).toContain('Frozen incumbent');
+    expect(region('Candidate cards').textContent).toContain('Development replay · same dates, $100,000 starting capital');
+    const [allPeriod, recent, incumbent] = cards();
+    expect(cards().map((card) => card.querySelector('strong')?.textContent)).toEqual(['All-period fit', 'Recent fit', 'Current settings']);
+    expect(allPeriod.textContent).toMatch(/All-period search[\s\S]*Passes the rules[\s\S]*Net return\s*\+8\.7%\s*Sharpe\s*1\.18\s*Worst fall\s*6\.4%\s*Trades\s*146\s*minimum 30/);
+    expect(recent.textContent).toMatch(/Fails a rule[\s\S]*14\.8%\s*Above 12% limit/);
+    expect(incumbent.textContent).toContain('Frozen incumbent');
   });
 
   it('candidate evidence cut short by the budget says some results read as untested; complete evidence says nothing', async () => {
@@ -85,7 +93,9 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(items.find((item) => item.includes('Neighbor sensitivity'))).toMatch(/^Concern/);
 
     fireEvent.click(within(summary).getByRole('button', { name: 'See the evidence for Neighbor sensitivity' }));
-    expect(evidenceTab('Neighborhood').getAttribute('aria-pressed')).toBe('true');
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Neighbor tornado' }));
+    fireEvent.click(within(summary).getByRole('button', { name: 'See the evidence for Development activity' }));
+    expect(evidenceTab('Trades').getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(within(summary).getByRole('button', { name: 'See the evidence for Test over time' }));
     expect(steps).toEqual(['test']);
   });
@@ -106,7 +116,7 @@ describe('GoldenSearchCompareStepComponent', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /recent fit/i }));
 
-    expect(candidateRow(/recent fit/i).className).toContain('selected');
+    expect(candidateCard(/recent fit/i).className).toContain('selected');
     expect(screen.getByRole('heading', { name: 'The extra return comes with a warning' })).not.toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Review final-test lock' }));
     expect(commands).toEqual([{ command: 'select_candidate', payload: { candidate_key: 'recent' } }]);
@@ -139,10 +149,10 @@ describe('GoldenSearchCompareStepComponent', () => {
     });
     await renderStep(study);
 
-    const rows = within(screen.getByRole('table', { name: /development replay/i })).getAllByRole('row').slice(1);
-    expect(rows).toHaveLength(2);
-    expect(rows[1].textContent).toContain('Current settings');
-    expect(rows[1].textContent).toContain('same settings as All-period fit');
+    const folded = cards();
+    expect(folded).toHaveLength(2);
+    expect(folded[1].textContent).toContain('Current settings');
+    expect(folded[1].textContent).toContain('same settings as All-period fit');
     expect(screen.getByRole('button', { name: /^current settings/i }).getAttribute('aria-pressed')).toBe('true');
     expect((screen.getByRole('button', { name: 'Review final-test lock' }) as HTMLButtonElement).disabled).toBe(true);
   });
@@ -224,12 +234,19 @@ describe('GoldenSearchCompareStepComponent', () => {
     fireEvent.click(evidenceTab('By month'));
     fireEvent.click(evidenceTab('Trades'));
     expect(service.candidate).toHaveBeenCalledTimes(3);
+    // Every candidate card draws its own return line, the same runs again.
+    expect(within(region('Candidate cards')).getAllByRole('img').map((img) => img.getAttribute('aria-label'))).toEqual([
+      'All-period fit development cumulative return. Ends at +8.7%.',
+      'Recent fit development cumulative return. Ends at +11.6%.',
+      'Current settings development cumulative return. Ends at +5.2%.',
+    ]);
 
-    // A study poll brings a new study object with the same runs: nothing is read or redrawn again.
+    // A study poll brings a new study object with the same runs and evidence: nothing is read or redrawn again.
+    await waitFor(() => expect(charts).toHaveLength(7));
     view.fixture.componentRef.setInput('study', { ...studyDetail('awaiting_candidate') });
     await view.fixture.whenStable();
     expect(service.candidate).toHaveBeenCalledTimes(3);
-    expect(charts[0].options).toHaveLength(1);
+    expect(charts.map((chart) => chart.options.length)).toEqual([1, 1, 1, 1, 1, 1, 1]);
   });
 
   it('About this chart opens the guide beside the chart, at that chart’s section', async () => {
@@ -306,18 +323,39 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(within(equity).queryByRole('alert')).toBeNull();
   });
 
-  it('Neighborhood and Stress keep tested, invalid and center values apart with their actual metrics', async () => {
+  it('lines the candidates up side by side, and charts the selected one’s neighbors and cost stresses with every value in a table', async () => {
     await renderStep();
 
-    fireEvent.click(evidenceTab('Neighborhood'));
-    const hood = screen.getByRole('table', { name: 'Fast EMA length' });
-    const rows = within(hood).getAllByRole('row').slice(1).map((row) => row.textContent ?? '');
-    expect(rows[0]).toMatch(/7\s*Tested\s*\+5\.2%/);
-    expect(rows[1]).toMatch(/8\s*This candidate\s*\+8\.7%/);
-    expect(rows[2]).toMatch(/9\s*Invalid\s*— untested: outside the legal domain\s*—/);
+    const side = region('Candidates side by side');
+    expect(within(side).getByRole('img').getAttribute('aria-label')).toContain('for All-period fit, Recent fit, Current settings, each measure on its own scale');
+    fireEvent.click(within(side).getByRole('button', { name: 'Show as table' }));
+    const measures = within(side).getAllByRole('row').map((row) => row.textContent ?? '');
+    expect(measures.find((row) => row.startsWith('Trades a year'))).toMatch(/73\.0\s*45\.5\s*79\.0/);
+    expect(measures.find((row) => row.startsWith('Stress runs in profit'))).toMatch(/1 of 1\s*—\s*—/);
 
-    fireEvent.click(evidenceTab('Stress'));
-    expect(screen.getByRole('table', { name: /cost stress for all-period fit/i }).textContent).toMatch(/Extra 1¢\/share slippage\s*\+4\.1%/);
+    const tornado = region('Neighbor tornado');
+    expect(within(tornado).getByRole('img').getAttribute('aria-label')).toContain('All-period fit with its one knob moved one step either side; no tested step loses money.');
+    fireEvent.click(within(tornado).getByRole('button', { name: 'Show as table' }));
+    const steps = within(tornado).getAllByRole('row').slice(1).map((row) => row.textContent ?? '');
+    expect(steps[0]).toMatch(/Fast EMA length\s*One below\s*7\s*Tested\s*\+5\.2%\s*-3\.5%/);
+    expect(steps[1]).toMatch(/Candidate\s*8\s*This candidate\s*\+8\.7%\s*—/);
+    expect(steps[2]).toMatch(/One above\s*9\s*Invalid — untested: outside the legal domain\s*—\s*—/);
+
+    const stress = region('Cost stress ladder');
+    fireEvent.click(within(stress).getByRole('button', { name: 'Show as table' }));
+    const rungs = within(stress).getAllByRole('row').slice(1).map((row) => row.textContent ?? '');
+    expect(rungs).toHaveLength(2);
+    expect(rungs[0]).toMatch(/Base costs\s*\+8\.7%\s*—/);
+    expect(rungs[1]).toMatch(/Extra 1¢\/share slippage\s*\+4\.1%\s*-4\.6%/);
+  });
+
+  it('a candidate without a neighbor audit or stress runs says so instead of drawing an empty chart', async () => {
+    await renderStep();
+
+    fireEvent.click(screen.getByRole('button', { name: /current settings frozen incumbent/i }));
+
+    expect(region('Neighbor tornado').textContent).toContain('No neighbor audit was recorded for Current settings.');
+    expect(region('Cost stress ladder').textContent).toContain('No stress run was recorded for Current settings.');
   });
 
   it('Keep current settings opens a deliberate second step and records the chosen finish with its reason', async () => {
@@ -338,7 +376,7 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(screen.queryByRole('table')).toBeNull();
   });
 
-  it('passes axe with the equity chart drawn and with its table open', async () => {
+  it('passes axe with every chart drawn and with their tables open', async () => {
     const { view } = await renderStep();
     const check = async (): Promise<string[]> => {
       const results = await axe.run(view.container, { rules: { 'color-contrast': { enabled: false } } });
@@ -347,7 +385,7 @@ describe('GoldenSearchCompareStepComponent', () => {
 
     await screen.findByRole('img', { name: /development cumulative return and fall from peak/i });
     expect(await check()).toEqual([]);
-    fireEvent.click(screen.getByRole('button', { name: 'Show as table' }));
+    for (const toggle of screen.getAllByRole('button', { name: 'Show as table' })) fireEvent.click(toggle);
     expect(await check()).toEqual([]);
   });
 });

@@ -9,7 +9,8 @@ computed in the browser.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Compare
   candidates and weaknesses"; the series math is
   ``app/research/golden_search/evidence.py``.
-Canonical implementation: this file (shapes); evidence.py (series math).
+Canonical implementation: this file (shapes); evidence.py (series math);
+  compare_measures.py (the Compare charts' measures).
 Validated against: tests/research/golden_search/test_views.py.
 """
 
@@ -20,6 +21,7 @@ from typing import Any
 
 from app.research.golden_search.actions import permitted
 from app.research.golden_search.activity import TradeFloors
+from app.research.golden_search.compare_measures import neighborhood_view, stress_tally, stress_view, trades_per_year
 from app.research.golden_search.decision_summary import decision_summaries
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, scalar
 from app.research.golden_search.evidence import CANDIDATE_LABELS, drawdown_series, monthly_results
@@ -316,7 +318,10 @@ def evidence_view(
     pair_maps: Sequence[Mapping[str, Any]],
     receipt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    policy = TradeFloors(protocol, receipt or {}).policy((protocol.development_start_ms, protocol.development_end_ms))
+    floors = TradeFloors(protocol, receipt or {})
+    development = (protocol.development_start_ms, protocol.development_end_ms)
+    policy = floors.policy(development)
+    years = floors.trading_years(development)
     candidates = stored["candidates"]
     incumbent_hash = next((item["point_hash"] for item in candidates if item["key"] == "incumbent"), None)
     findings: dict[str, list[str]] = {}
@@ -339,8 +344,10 @@ def evidence_view(
                 "development_metrics": item["development_metrics"],
                 "eligible": rule is None,
                 "ineligibility": rule,
-                "neighbors": list(item["neighbors"]),
-                "stress": list(item["stress"]),
+                "neighbors": [neighborhood_view(hood) for hood in item["neighbors"]],
+                "stress": [stress_view(result, item["development_metrics"]) for result in item["stress"]],
+                "trades_per_year": trades_per_year(item["development_metrics"], years),
+                "stress_tally": stress_tally(item["stress"]),
                 "edge_hits": list(item["edge_hits"]),
                 "guidance": candidate_guidance(
                     key=item["key"],

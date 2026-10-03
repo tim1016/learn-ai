@@ -1,0 +1,31 @@
+:host { display: block; min-width: 0; }
+p { margin: 0; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+.card { display: grid; gap: var(--space-2); align-content: start; min-width: 0; padding: var(--space-3); border: 1px solid var(--border-light); border-radius: var(--radius-sm); background: var(--bg-sunken); }
+.card.selected { border-color: var(--accent); background: var(--accent-soft); }
+.top { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-2); flex-wrap: wrap; }
+.pick { all: unset; display: flex; gap: var(--space-2); align-items: center; cursor: pointer; color: var(--text-primary); }
+.pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--radius-sm); }
+.pick:disabled { cursor: default; }
+.radio { width: 0.95rem; height: 0.95rem; border: 1px solid var(--text-secondary); border-radius: 50%; flex-shrink: 0; }
+.pick[aria-pressed='true'] .radio { border: 4px solid var(--accent); }
+.name { display: grid; }
+.name strong { font-size: var(--fs-sm); font-weight: var(--fw-semi); }
+.card[data-key='all_period'] .name strong { color: var(--chart-series-blue); }
+.card[data-key='recent'] .name strong { color: var(--chart-series-amber); }
+small { display: block; color: var(--text-secondary); font-size: var(--fs-xxs); }
+.chip { display: inline-flex; align-items: center; gap: var(--space-1); padding: 0 var(--space-2); border-radius: var(--radius-sm); font-size: var(--fs-xxs); line-height: 1.6; }
+.chip--ok { background: var(--bull-soft); color: var(--bull); }
+.chip--warn { background: var(--warn-soft); color: var(--warn); }
+.settings { color: var(--text-secondary); font-size: var(--fs-xs); }
+.flag { color: var(--warn); }
+.flag--bad { color: var(--bear-text); }
+.figures { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-2); margin: 0; }
+.figures div { min-width: 0; }
+dt { color: var(--text-secondary); font-size: var(--fs-xxs); }
+dd { margin: 0; color: var(--text-primary); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.warn dd, .warn small { color: var(--warn); }
+.muted { color: var(--text-secondary); }
+.captions { display: grid; gap: var(--space-1); }
+.caption { color: var(--text-secondary); font-size: var(--fs-xs); }
+.caption strong { color: var(--text-primary); }

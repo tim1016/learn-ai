@@ -12,6 +12,13 @@ export interface ChartTheme {
   readonly gridLine: string;
   readonly tooltipBackground: string;
   readonly warn: string;
+  /** A result that loses money. */
+  readonly loss: string;
+  /** One step below a candidate's value, and one step above it. */
+  readonly stepBelow: string;
+  readonly stepAbove: string;
+  /** A run under a cost stress. */
+  readonly stressed: string;
   /** Current settings grey, All-period fit blue, Recent fit amber. */
   readonly candidates: Readonly<Record<CandidateKey, string>>;
 }
@@ -24,6 +31,10 @@ export function chartTheme(element: HTMLElement): ChartTheme {
     gridLine: themeColor(element, '--border-light'),
     tooltipBackground: themeColor(element, '--bg-elevated'),
     warn: themeColor(element, '--warn'),
+    loss: themeColor(element, '--bear'),
+    stepBelow: themeColor(element, '--chart-series-sky'),
+    stepAbove: themeColor(element, '--chart-series-blue'),
+    stressed: themeColor(element, '--chart-series-teal'),
     candidates: {
       incumbent: themeColor(element, '--text-secondary'),
       all_period: themeColor(element, '--chart-series-blue'),
@@ -49,6 +60,24 @@ export function tooltipFrame(theme: ChartTheme): TooltipComponentOption {
     textStyle: { color: theme.text, fontSize: 12 },
     extraCssText: 'max-width: 22rem; white-space: normal;',
   };
+}
+
+/** How a tooltip, summary or table names a value the study did not record. */
+export const NOT_RECORDED = 'not recorded';
+
+/** The hovered index from an axis tooltip's parameters (an array) or an item tooltip's (one object). */
+export function dataIndexOf(params: unknown): number | null {
+  const first: unknown = Array.isArray(params) ? params[0] : params;
+  if (typeof first !== 'object' || first === null || !('dataIndex' in first)) return null;
+  const index = first.dataIndex;
+  return typeof index === 'number' ? index : null;
+}
+
+/** The hovered series' index from an item tooltip's parameters. */
+export function seriesIndexOf(params: unknown): number | null {
+  if (typeof params !== 'object' || params === null || !('seriesIndex' in params)) return null;
+  const index = params.seriesIndex;
+  return typeof index === 'number' ? index : null;
 }
 
 export interface TooltipRow {

@@ -1,6 +1,7 @@
 :host { display: grid; gap: var(--space-2); min-width: 0; }
 p { margin: 0; }
-.frame { overflow-x: auto; min-width: 0; }
+.frame { min-width: 0; }
+.frame.scrolls { overflow-x: auto; }
 .canvas { width: 100%; }
 .failed { color: var(--bear-text); font-size: var(--fs-xs); }
 .link { all: unset; justify-self: start; color: var(--accent-text); font-size: var(--fs-xs); cursor: pointer; }

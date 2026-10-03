@@ -1,12 +1,18 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, output, resource, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, output, resource, signal, viewChild, viewChildren } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 
 import { extractServerMessage } from '../broker/operation-error';
+import { GoldenSearchChartComponent } from './charts/golden-search-chart.component';
+import type { GoldenSearchChartId } from './charts/golden-search-chart-guides';
+import { sameChart } from './charts/golden-search-chart-spec';
 import { GoldenSearchGridComponent } from './charts/golden-search-grid.component';
+import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
 import { GoldenSearchCandidateAsideComponent } from './golden-search-candidate-aside.component';
-import { GoldenSearchCandidateTableComponent } from './golden-search-candidate-table.component';
-import { candidateRows, initialRowKey, rowKeyFor, rowSummary, selectedCaption, type CandidateRow } from './golden-search-compare';
+import { GoldenSearchCandidateCardsComponent } from './golden-search-candidate-cards.component';
+import { candidateRows, initialRowKey, rowKeyFor, rowSummary, type CandidateRow } from './golden-search-compare';
+import { sideBySideSpec, stressSpec, tornadoSpec } from './golden-search-compare-charts';
 import { GoldenSearchDecisionSummaryComponent } from './golden-search-decision-summary.component';
+import { studyTradeFloor } from './golden-search-display';
 import { GoldenSearchEquityChartComponent } from './golden-search-equity-chart.component';
 import { EVIDENCE_TABS, GoldenSearchEvidenceTabsComponent, type EvidenceTab } from './golden-search-evidence-tabs.component';
 import { GoldenSearchRetainComponent, type RetainDecision } from './golden-search-retain.component';
@@ -28,24 +34,27 @@ interface DetailRequest {
 const INCUMBENT_CAPTION = 'The incumbent is not a new candidate. Use “Keep current settings” to finish without consuming the test.';
 
 /**
- * The Compare step (#2696): the server's recommendation first, then every
- * candidate — the searches' fits and the frozen incumbent — on the same
- * development scope; every candidate's equity and fall from peak beside what
- * choosing the selected one implies; its evidence (the parameter landscape,
- * months, trades, neighborhood, stress); and the two ways forward: keep the current
- * settings, or lock the candidate for its one final test. Picking a row is a
- * local choice until "Review final-test lock" sends it.
+ * The Compare step (#2696): the server's recommendation first, then a card
+ * for every candidate — the searches' fits and the frozen incumbent — on the
+ * same development scope; every candidate's equity and fall from peak beside
+ * what choosing the selected one implies; the candidates side by side, the
+ * selected one's neighbors and cost stresses (#2821); its evidence (the
+ * parameter landscape, months, trades); and the two ways forward: keep the
+ * current settings, or lock the candidate for its one final test. Picking a
+ * card is a local choice until "Review final-test lock" sends it.
  */
 @Component({
   selector: 'app-golden-search-compare-step',
   imports: [
     ButtonModule,
     GoldenSearchCandidateAsideComponent,
-    GoldenSearchCandidateTableComponent,
+    GoldenSearchCandidateCardsComponent,
+    GoldenSearchChartComponent,
     GoldenSearchDecisionSummaryComponent,
     GoldenSearchEquityChartComponent,
     GoldenSearchEvidenceTabsComponent,
     GoldenSearchGridComponent,
+    GoldenSearchPanelComponent,
     GoldenSearchRetainComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -80,6 +89,7 @@ export class GoldenSearchCompareStepComponent {
     return row === null ? null : rowSummary(row, this.study().decision_summaries);
   });
   private readonly tabs = viewChild(GoldenSearchEvidenceTabsComponent);
+  private readonly panels = viewChildren(GoldenSearchPanelComponent);
 
   /** Each row's development detail run, read once per study and candidate set, not on every poll. */
   private readonly detailRequest = computed<DetailRequest | undefined>(
@@ -102,10 +112,33 @@ export class GoldenSearchCompareStepComponent {
     return error === undefined ? null : extractServerMessage(error, 'The candidates’ detail runs could not be loaded.');
   });
   protected readonly ceiling = computed(() => this.study().protocol.policy.max_drawdown_ceiling);
-  protected readonly caption = computed(() => {
-    const row = this.selectedRow();
-    return row === null ? null : selectedCaption(row.candidate);
-  });
+  protected readonly floor = computed(() => studyTradeFloor(this.study(), 'development'));
+
+  // Each chart is equal while it draws the same values, so a study poll does not redraw it.
+  protected readonly sideBySide = computed(
+    () => {
+      const row = this.selectedRow();
+      return row === null ? null : sideBySideSpec(this.rows(), row.key);
+    },
+    { equal: sameChart },
+  );
+  protected readonly tornado = computed(
+    () => {
+      const source = this.selectedRow()?.neighborSource;
+      return source === undefined || source.neighbors.length === 0 ? null : tornadoSpec(source, this.capability());
+    },
+    { equal: sameChart },
+  );
+  protected readonly stress = computed(
+    () => {
+      const candidate = this.selectedRow()?.candidate;
+      return candidate === undefined || candidate.stress.length === 0 ? null : stressSpec(candidate);
+    },
+    { equal: sameChart },
+  );
+  /** Room for each knob's two bars, and each stress's one. */
+  protected readonly tornadoHeight = computed(() => 72 + 40 * (this.selectedRow()?.neighborSource.neighbors.length ?? 0));
+  protected readonly stressHeight = computed(() => 44 + 42 * (1 + (this.selectedRow()?.candidate.stress.length ?? 0)));
   protected readonly pairMaps = computed(() => {
     const fromEvidence = this.evidence()?.pair_maps ?? [];
     return fromEvidence.length > 0 ? fromEvidence : (this.study().results.search?.pair_maps ?? []);
@@ -132,9 +165,10 @@ export class GoldenSearchCompareStepComponent {
     return { kind: 'none', label: 'Review final-test lock', reason: study.action_refusals.select_candidate ?? 'This study cannot lock a candidate now.' };
   });
 
-  /** A summary row's evidence: one of this step's tabs, or the study step that holds it. */
+  /** A summary row's evidence: one of this step's tabs or charts, or the study step that holds it. */
   protected follow(link: SummaryLink): void {
     if (link.kind === 'tab' && isEvidenceTab(link.target)) this.tabs()?.open(link.target);
+    else if (link.kind === 'chart' && isOwnPanel(link.target)) this.panels().find((panel) => panel.chart() === link.target)?.focusHeading();
     else if (link.kind === 'step' && isStudyStep(link.target)) this.goTo.emit(link.target);
   }
 
@@ -159,6 +193,13 @@ export class GoldenSearchCompareStepComponent {
 
 function isEvidenceTab(target: string): target is EvidenceTab {
   return EVIDENCE_TABS.some((tab) => tab.id === target);
+}
+
+/** The chart panels this step's own template holds, which a summary link can focus. */
+const OWN_PANELS: readonly GoldenSearchChartId[] = ['side-by-side', 'neighbor-tornado', 'cost-stress'];
+
+function isOwnPanel(target: string): target is GoldenSearchChartId {
+  return OWN_PANELS.some((chart) => chart === target);
 }
 
 function isStudyStep(target: string): target is StudyStep {

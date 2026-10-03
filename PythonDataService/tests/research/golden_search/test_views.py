@@ -11,6 +11,7 @@ import pytest
 
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.research.golden_search.actions import action_refusals, permitted, presented_status
+from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.declarations import declaration_for
 from app.research.golden_search.guidance import (
     WEAK_EVIDENCE_DETAIL,
@@ -266,7 +267,16 @@ def _candidate(key: str, point_hash: str, *, net: float | None = 1_000.0, drawdo
 
 def test_the_evidence_view_marks_duplicates_the_incumbent_and_ineligible_candidates() -> None:
     protocol = replace(protocol_from_request(plan_request("SPY")), policy=replace(protocol_from_request(plan_request("SPY")).policy, max_drawdown_ceiling=0.12))
-    losing = [{"knob": "gap", "one_sided": False, "rows": [{"value": 0.15, "status": "tested", "metrics": metrics(1.0, net=-5.0).as_dict(), "reason": None}]}]
+    losing = [
+        {
+            "knob": "gap",
+            "one_sided": True,
+            "rows": [
+                {"value": 0.15, "status": "tested", "metrics": metrics(1.0, net=-5.0).as_dict(), "reason": None},
+                {"value": 0.2, "status": "center", "metrics": metrics(1.0).as_dict(), "reason": None},
+            ],
+        }
+    ]
     stored = {
         "window": {"start_ms": 0, "end_ms": 1},
         "candidates": [_candidate("incumbent", "i"), _candidate("all_period", "a", neighbors=losing), _candidate("recent", "r", drawdown=0.15)],
@@ -275,9 +285,17 @@ def test_the_evidence_view_marks_duplicates_the_incumbent_and_ineligible_candida
         "incomplete": False,
     }
 
+    stored["candidates"][1]["stress"] = [{"scenario": "slip", "label": "Slippage x2", "metrics": metrics(1.0, total_return=0.004).as_dict()}]
+
     view = evidence_view(stored, protocol, EMA, pair_maps=[])
 
     incumbent, all_period, recent = view["candidates"]
+    # The Compare measures read the development window, and each stress against its own candidate's run.
+    years = TradeFloors(protocol, {}).trading_years((protocol.development_start_ms, protocol.development_end_ms))
+    assert all_period["trades_per_year"] == pytest.approx(50 / float(years), abs=1e-9, rel=0)
+    assert all_period["stress"][0]["return_change"] == pytest.approx(-0.006, abs=1e-12, rel=0)
+    assert all_period["stress_tally"] == {"in_profit": 1, "recorded": 1, "scenarios": 1}
+    assert [row["step"] for row in all_period["neighbors"][0]["rows"]] == [-1, 0]
     assert [item["exam_eligible"] for item in view["candidates"]] == [False, True, True]
     assert all_period["guidance"]["title"] == "Nearby settings lose money"
     assert all_period["flags"] == [{"code": "NEIGHBORS_LOSE_MONEY", "text": "Nearby settings lose money"}]

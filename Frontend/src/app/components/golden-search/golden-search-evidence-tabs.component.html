@@ -13,12 +13,6 @@
       <p class="muted">No pair audit was recorded for this study.</p>
     }
   }
-  @case ('neighbors') {
-    <app-golden-search-neighborhood view="neighbors" [neighbors]="row.neighborSource.neighbors" [stress]="row.candidate.stress" [capability]="capability()" [candidateLabel]="row.neighborSource.label" />
-  }
-  @case ('stress') {
-    <app-golden-search-neighborhood view="stress" [neighbors]="row.candidate.neighbors" [stress]="row.candidate.stress" [capability]="capability()" [candidateLabel]="row.candidate.label" />
-  }
   @default {
     @if (detailsError(); as message) {
       <div role="alert" class="failed">

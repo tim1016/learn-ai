@@ -4,7 +4,8 @@ import { highlightActions, type ChartSpec, type HighlightTarget } from './golden
 import { GOLDEN_SEARCH_CHART_THEME } from './golden-search-chart-theme';
 import { GOLDEN_SEARCH_CHARTS, type ChartInstance, type ChartOption } from './golden-search-echarts';
 
-const DRAW_FAILED = 'The chart could not be drawn. Every value is in the table below.';
+const DRAW_FAILED = 'The chart could not be drawn.';
+const SEE_TABLE = 'Every value is in the table below.';
 
 /**
  * The one ECharts host every Golden Search chart uses (#2821). It loads the
@@ -26,6 +27,8 @@ export class GoldenSearchChartComponent {
   readonly height = input(320);
   /** Below this width the chart scrolls inside its panel instead of squeezing. */
   readonly minWidth = input(0);
+  /** Offer "Show as table"; off for a chart whose values another chart's table already lists. */
+  readonly offersTable = input(true);
 
   private readonly load = inject(GOLDEN_SEARCH_CHARTS);
   private readonly theme = inject(GOLDEN_SEARCH_CHART_THEME);
@@ -90,6 +93,8 @@ export class GoldenSearchChartComponent {
       this.failure.set(null);
       if (this.target !== null) this.showTarget(chart, drawn);
     } catch (error: unknown) {
+      // The last spec's drawing must not stand beside the failure as if it were this one's.
+      chart.clear();
       this.fail(error);
     }
   }
@@ -101,7 +106,8 @@ export class GoldenSearchChartComponent {
   /** A chart that cannot draw says so and opens its table, which holds every value. */
   private fail(error: unknown): void {
     this.drawn = null;
-    this.failure.set(error instanceof Error && error.message.length > 0 ? `${DRAW_FAILED} (${error.message})` : DRAW_FAILED);
+    const reason = error instanceof Error && error.message.length > 0 ? ` (${error.message})` : '';
+    this.failure.set(this.offersTable() ? `${DRAW_FAILED} ${SEE_TABLE}${reason}` : `${DRAW_FAILED}${reason}`);
     this.showTable.set(true);
   }
 }
