@@ -23,7 +23,7 @@ import {
   fakeCatalogBot,
   fakeChartFeed,
 } from '../../src/app/testing/bot-panel-fixtures';
-import { withoutShellPolls } from './support/shell-polls';
+import { expectStatusReadOnlyFromOwnLane, withoutShellPolls } from './support/shell-polls';
 
 /**
  * The account-first walk (ADR 0064, #2187; PRD #2560): one way into Alpaca,
@@ -475,6 +475,9 @@ test.describe('Account-first Alpaca navigation', () => {
         entry.includes(`/clerks/${LIVE_CLERK}/`),
       ),
     ).toEqual([]);
+    // Counted over the whole walk: the workspace's own status read lands as
+    // it opens, before the choice is marked.
+    await expectStatusReadOnlyFromOwnLane(() => requests, { own: PAPER_CLERK, other: LIVE_CLERK });
   });
 
   test('switches accounts in place from the top-bar pills, keeping the tab', async ({ page }) => {

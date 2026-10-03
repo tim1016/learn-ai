@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 import { DEPLOY_VIEW } from '../../src/app/components/broker/broker-deploy-page/alpaca-deploy-workflow.fixtures';
 import { fakeAccountMoney } from '../../src/app/testing/account-money-fixtures';
 import { fakeCatalogBot } from '../../src/app/testing/bot-panel-fixtures';
-import { withoutShellPolls } from './support/shell-polls';
+import { expectStatusReadOnlyFromOwnLane, withoutShellPolls } from './support/shell-polls';
 
 const PAPER_CLERK = 'clrk-paper-0001';
 const PAPER_ACCOUNT = 'paper-account-0001';
@@ -11,6 +11,8 @@ const LIVE_ACCOUNT = 'live-account-0001';
 const PAPER_SCOPE = `/api/brokers/alpaca/clerks/${PAPER_CLERK}`;
 const PAPER_ACCOUNT_SCOPE = `${PAPER_SCOPE}/accounts/${PAPER_ACCOUNT}`;
 const PAPER_WORKSPACE = `/brokers/alpaca/clerks/${PAPER_CLERK}/accounts/${PAPER_ACCOUNT}`;
+/** Every workspace these tests open is the Paper lane's. */
+const OWN_PAPER_LANE = { own: PAPER_CLERK, other: LIVE_CLERK } as const;
 
 const directory = {
   observed_at_ms: 1_789_310_400_000,
@@ -265,6 +267,7 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     expect(withoutShellPolls(brokerRequests).filter(
       (entry) => !entry.includes(`/clerks/${PAPER_CLERK}/`),
     )).toEqual([]);
+    await expectStatusReadOnlyFromOwnLane(() => brokerRequests, OWN_PAPER_LANE);
   });
 
   test('turns a global Deploy intent into an explicit account choice', async ({ page }) => {
@@ -315,6 +318,7 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     expect(withoutShellPolls(brokerRequests).filter(
       (entry) => !entry.includes(`/clerks/${PAPER_CLERK}/`),
     )).toEqual([]);
+    await expectStatusReadOnlyFromOwnLane(() => brokerRequests, OWN_PAPER_LANE);
   });
 
   test('keeps Deploy on its own routed URL, surviving a reload', async ({ page }) => {
@@ -332,6 +336,7 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     expect(withoutShellPolls(brokerRequests).filter(
       (entry) => !entry.includes(`/clerks/${PAPER_CLERK}/`),
     )).toEqual([]);
+    await expectStatusReadOnlyFromOwnLane(() => brokerRequests, OWN_PAPER_LANE);
 
     // Leaving Deploy is switching tabs, like any other — not closing an
     // overlay (ADR 0064 Decision 1 extended).
@@ -368,6 +373,7 @@ test.describe('Alpaca multi-clerk frontend cutover', () => {
     expect(withoutShellPolls(brokerRequests).filter(
       (entry) => entry.includes(`/clerks/${LIVE_CLERK}/`),
     )).toEqual([]);
+    await expectStatusReadOnlyFromOwnLane(() => brokerRequests, OWN_PAPER_LANE);
   });
 
   test('fails unscoped operational links in place instead of choosing a lane', async ({ page }) => {
