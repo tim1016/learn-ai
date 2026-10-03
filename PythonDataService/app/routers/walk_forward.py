@@ -54,6 +54,7 @@ from app.routers.research_runs import (
     get_artifacts_root,
     get_data_source_factory,
 )
+from app.services.fill_mode_request import fill_mode_or_400
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, require_schedulable_end
 
 router = APIRouter()
@@ -104,15 +105,6 @@ class WalkForwardListResponse(BaseModel):
     walk_forwards: list[WalkForwardConfig]
 
 
-def _validate_fill_mode(s: str) -> None:
-    norm = s.lower().replace("-", "_")
-    if norm not in {"signal_bar_close", "next_bar_open"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"unknown fill_mode {s!r} — expected signal_bar_close or next_bar_open",
-        )
-
-
 # ---------------------------------------------------------------------------
 # Endpoints.
 # ---------------------------------------------------------------------------
@@ -123,7 +115,7 @@ async def create_walk_forward(
     artifacts_root: Path | None = Depends(get_artifacts_root),
 ) -> WalkForwardResponse:
     """Run a walk-forward analysis, persist, and return ``(config, result)``."""
-    _validate_fill_mode(request.fill_mode)
+    fill_mode = fill_mode_or_400(request.fill_mode)
     if request.start_ms >= request.end_ms:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -149,7 +141,9 @@ async def create_walk_forward(
         end_ms=request.end_ms,
         split_policy=split_policy,
         initial_cash=request.initial_cash,
-        fill_mode=request.fill_mode,
+        # The canonical name, not the request's spelling: the runner stores
+        # this string in the walk-forward config as it is (#2599).
+        fill_mode=fill_mode.value,
         commission_per_order=request.commission_per_order,
         slippage_per_share=request.slippage_per_share,
         random_seed=request.random_seed,

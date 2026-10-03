@@ -3,6 +3,7 @@ import { DecimalPipe, KeyValuePipe, PercentPipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 
+import { storedFillMode } from '../../models/fill-mode';
 import { JobsService } from '../../services/jobs.service';
 import { AssetIdentityComponent } from '../../shared/asset-identity/asset-identity.component';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
@@ -72,6 +73,11 @@ export class GridSearchResultComponent {
   protected readonly strategyName = computed(() => {
     const key = this.detail()?.strategy_key;
     return key ? (this.strategies().find((s) => s.name === key)?.display_name ?? null) : null;
+  });
+  /** The fill rule this search ran under, from its stored request — not what a new search would default to (#2599). */
+  protected readonly fillMode = computed(() => {
+    const detail = this.detail();
+    return detail ? storedFillMode(detail.request.fill_mode) : null;
   });
   protected readonly running = computed(() => {
     const status = this.detail()?.status;

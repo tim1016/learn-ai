@@ -217,6 +217,35 @@ def test_compatibility_profile_rejects_adjusted_input() -> None:
         )
 
 
+def _compatibility_request_kwargs() -> dict[str, object]:
+    return {
+        "strategy_name": "ema_crossover_signal",
+        "params": {"symbol": "SPY"},
+        "from_date": "2025-01-13",
+        "to_date": "2025-01-17",
+        "resolution": "minute",
+        "compatibility_profile": "us-equity-raw-ibkr-v1",
+        "data_policy": _raw_policy(),
+    }
+
+
+def test_compatibility_profile_fills_at_the_signal_bar_close_when_no_mode_is_sent() -> None:
+    """A paired run sends no fill mode; research's own default does not reach it (#2599)."""
+    from app.schemas.engine_backtest import EngineBacktestRequest
+
+    request = EngineBacktestRequest(**_compatibility_request_kwargs())
+
+    assert request.fill_mode == "signal_bar_close"
+
+
+@pytest.mark.parametrize("fill_mode", ["next_bar_open", "decision_minute_open"])
+def test_compatibility_profile_refuses_any_other_fill_mode(fill_mode: str) -> None:
+    from app.schemas.engine_backtest import EngineBacktestRequest
+
+    with pytest.raises(ValidationError, match="requires fill_mode=signal_bar_close"):
+        EngineBacktestRequest(**_compatibility_request_kwargs(), fill_mode=fill_mode)
+
+
 def test_compatibility_profile_wires_lean_sizing_fees_and_stale_fills(tmp_path) -> None:
     from app.engine.data.lean_format import LeanMinuteDataReader
     from app.engine.execution.commission import IbkrEquityCommissionModel

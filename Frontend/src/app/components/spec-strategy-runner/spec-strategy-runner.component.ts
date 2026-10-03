@@ -8,6 +8,7 @@ import {
 } from '@angular/core';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { FormsModule } from '@angular/forms';
+import { FILL_MODE_OPTIONS, type FillModeName } from '../../models/fill-mode';
 import { SpecStrategyService } from '../../services/spec-strategy.service';
 import {
   Condition,
@@ -136,7 +137,8 @@ export class SpecStrategyRunnerComponent {
 
   // ---- Run controls (orthogonal to the spec) ----------------------------
   readonly initialCash = signal<number>(100000);
-  readonly fillMode = signal<'signal_bar_close' | 'next_bar_open'>('signal_bar_close');
+  readonly fillMode = signal<FillModeName>('signal_bar_close');
+  readonly fillModes = FILL_MODE_OPTIONS;
 
   /** Form-owned picker state: dates + resolution only. Symbol is NOT
    *  stored here — it's derived from ``spec.symbols[0]`` via the

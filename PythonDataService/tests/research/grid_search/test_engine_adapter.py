@@ -127,6 +127,7 @@ async def test_a_cell_and_a_direct_engine_call_over_the_same_resolved_request_ar
             from_date=evaluation_start.isoformat(),
             to_date=evaluation_end.isoformat(),
             warmup_from_date=data_start.isoformat(),
+            fill_mode=created.receipt["execution_contract"]["fill_mode"],
             save_study=False,
         ),
         on_phase=_noop,
