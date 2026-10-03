@@ -20,6 +20,7 @@ import { SymbolCatalogService } from '../../symbol-catalog/symbol-catalog.servic
 import type { SymbolCatalogStatus } from '../../symbol-catalog/symbol-catalog.service';
 import { CoverageGateController } from '../../symbol-catalog/coverage-gate.controller';
 import { isHeldRow } from '../../symbol-catalog/symbol-catalog.types';
+import { matchSymbols } from '../../symbol-catalog/symbol-match';
 import {
   InstrumentDropdownComponent,
   type InstrumentDropdownView,
@@ -208,12 +209,9 @@ export class InstrumentCardComponent {
     return `${name} — primary listing venue for ${symbol}.`;
   });
 
-  readonly filteredTickers = computed<readonly PickerSymbol[]>(() => {
-    const q = this.query().trim().toUpperCase();
-    const pool = this.tickerPool();
-    if (!q) return pool;
-    return pool.filter((t) => t.symbol.includes(q) || t.name.toUpperCase().includes(q));
-  });
+  readonly filteredTickers = computed<readonly PickerSymbol[]>(() =>
+    matchSymbols(this.tickerPool(), this.query()),
+  );
 
   /**
    * The rows the dropdown actually renders. The joined universe runs to
