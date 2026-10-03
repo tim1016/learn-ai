@@ -1,40 +1,42 @@
-<header class="bot-header">
-  <span class="sr-only" role="status" aria-live="polite" aria-atomic="true" [attr.aria-label]="snapshotStatus()">{{ snapshotStatus() }}</span>
-  <div class="bot-header__lead">
-    <div class="bot-header__identity">
+<span class="sr-only" role="status" aria-live="polite" aria-atomic="true" [attr.aria-label]="snapshotStatus()">{{ snapshotStatus() }}</span>
+<div class="bot-header">
+  <div class="bot-header__identity">
+    <p class="bot-header__meta">
       <a class="bot-header__back" [routerLink]="backRoute()"><span aria-hidden="true">←</span> {{ backLabel() }}</a>
+      <span aria-hidden="true">·</span>
+      <span class="bot-header__strategy">{{ panel().strategy_label }}</span>
+      <span aria-hidden="true">·</span>
+      <app-asset-identity [symbol]="panel().symbol" size="sm" />
+    </p>
+    <div class="bot-header__title">
       <h2 class="bot-header__name">{{ panel().strategy_instance_id }}</h2>
-      <p class="bot-header__meta">
-        <span>{{ panel().strategy_label }}</span>
-        <span aria-hidden="true">·</span>
-        <app-asset-identity [symbol]="panel().symbol" size="sm" />
-      </p>
       @if (panel().mode === 'dry_run') {
         <app-alpaca-lane-mode-chip [chip]="dryRunChip" />
       }
       @if (page(); as lead) {
-        <span
-          class="bot-header__status"
-          [attr.data-state]="lead.status.state"
-          [attr.title]="lead.status.reason"
-        >{{ lead.status.label }}</span>
+        <div #statusAnchor class="bot-header__status-anchor">
+          <button
+            type="button"
+            class="bot-header__status"
+            [attr.data-state]="lead.status.state"
+            [attr.aria-expanded]="summaryOpen()"
+            [attr.aria-controls]="summaryOpen() ? summaryId : null"
+            (click)="summaryOpen.set(!summaryOpen())"
+          >{{ lead.status.label }} <i class="pi pi-chevron-down" aria-hidden="true"></i></button>
+          @if (summaryOpen()) {
+            <div #summary class="bot-header__summary" [id]="summaryId" role="region" aria-label="Run summary">
+              <p>{{ lead.summary.text }}</p>
+              @if (panel().health.running) {
+                <p class="bot-header__feed">
+                  {{ panel().feed_continuity.provider_label }} live · updated
+                  <app-timestamp-display [value]="panel().updated_at_ms" mode="local" granularity="time" />
+                </p>
+              }
+            </div>
+          }
+        </div>
       }
     </div>
-    @if (page(); as lead) {
-      <p class="bot-header__summary">{{ lead.summary.text }}</p>
-      @if (lead.status.reason; as reason) {
-        <p class="bot-header__reason">{{ reason }}</p>
-      }
-    }
-    @if (panel().experimental_notice; as notice) {
-      <app-experimental-notice [notice]="notice" />
-    }
-    @if (cleared()) {
-      <p class="bot-header__cleared" role="note">
-        Cleared: this bot will not run again, and its records here are read-only.
-        <a [routerLink]="history().commands" [queryParams]="history().queryParams">Every cleared bot is in History</a>.
-      </p>
-    }
   </div>
 
   <dl class="bot-header__figures">
@@ -59,4 +61,4 @@
       </dd>
     </div>
   </dl>
-</header>
+</div>

@@ -8,7 +8,7 @@ import {
   inject,
   viewChild,
 } from '@angular/core';
-import { DOCUMENT } from '@angular/common';
+import { DOCUMENT, NgTemplateOutlet } from '@angular/common';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, RouterLink, RouterOutlet } from '@angular/router';
 
@@ -28,6 +28,7 @@ import { CurrentUrlService } from '../../../shell/current-url.service';
 import { AuthoredUsdPipe } from '../../../shared/pipes/authored-usd.pipe';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
+import { WorkspaceHeaderSlot } from './workspace-header-slot.service';
 
 /** How often the header re-reads the account's money, its account read and
  * its Clerk status — the shared reads its tabs render too. Carried over from
@@ -80,6 +81,7 @@ type WorkspaceAccountStatus =
   imports: [
     AlpacaLaneModeChipComponent,
     AuthoredUsdPipe,
+    NgTemplateOutlet,
     ReceiptLabelPipe,
     RouterLink,
     RouterOutlet,
@@ -87,7 +89,7 @@ type WorkspaceAccountStatus =
   ],
   templateUrl: './alpaca-account-workspace.component.html',
   styleUrl: './alpaca-account-workspace.component.scss',
-  providers: [AlpacaDeskAccountDataService],
+  providers: [AlpacaDeskAccountDataService, WorkspaceHeaderSlot],
 })
 export class AlpacaAccountWorkspaceComponent {
   private readonly route = inject(ActivatedRoute);
@@ -97,6 +99,7 @@ export class AlpacaAccountWorkspaceComponent {
   private readonly currentUrl = inject(CurrentUrlService).url;
   private readonly document = inject(DOCUMENT);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly headerSlot = inject(WorkspaceHeaderSlot);
   private readonly routeParams = toSignal(this.route.paramMap, {
     initialValue: this.route.snapshot.paramMap,
   });
@@ -137,6 +140,16 @@ export class AlpacaAccountWorkspaceComponent {
   });
 
   protected readonly activeTab = computed<AccountWorkspaceTab>(() => this.location().tab);
+
+  /** A bot's page puts its name, figures and actions in this header, so the
+   * header makes room as soon as the URL names a bot: the account's name is
+   * left to screen readers, the mode badge stacks its words and the money
+   * figures tighten. Keyed on the URL rather than on the controls arriving, so
+   * the header does not reflow when the bot's panel loads. */
+  protected readonly onBotPage = computed(() => this.location().botSid !== null);
+
+  /** The open page's own controls (`WorkspaceHeaderSlot`), drawn beside Deploy a bot. */
+  protected readonly pageControls = this.headerSlot.content;
 
   /** The strip's tabs with the route each one links to, or `null` for a tab this
    * workspace has no address for. Built once per location rather than per

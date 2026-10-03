@@ -1,34 +1,17 @@
 :host { display: block; min-width: 0; position: relative; }
 
+// The groups go untitled in the header's row; a wider gap tells them apart.
 .toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2) var(--space-4);
+  gap: var(--space-2) var(--space-3);
 }
 
 .toolbar__group {
   display: flex;
   align-items: center;
   gap: var(--space-1);
-
-  & + & {
-    padding-left: var(--space-3);
-    border-left: 1px solid var(--border-light);
-  }
-}
-
-.toolbar__group--end {
-  margin-left: auto;
-  gap: var(--space-3);
-}
-
-.toolbar__group-label {
-  margin-right: var(--space-1);
-  color: var(--text-subtle);
-  font-size: var(--fs-xxs);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .toolbar__button {
@@ -61,6 +44,70 @@
   color: var(--text-on-accent, #fff);
 }
 
+.toolbar__more { position: relative; }
+
+.toolbar__more-toggle {
+  color: var(--text-secondary);
+
+  &[aria-expanded='true'] { border-color: var(--text-subtle); color: var(--text-primary); }
+}
+
+.toolbar__more-count {
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+}
+
+// More opens under its button, over the board.
+.toolbar__menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  display: grid;
+  gap: var(--space-2);
+  width: max-content;
+  min-width: 13rem;
+  // The window less both of keepInsideViewport's 8 px margins.
+  max-width: calc(100vw - 16px);
+  padding: var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-card);
+}
+
+.toolbar__menu-actions {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.toolbar__menu-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.toolbar__menu-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+
+  &:hover,
+  &:focus-visible { text-decoration: underline; }
+}
+
 .toolbar__labels {
   display: inline-flex;
   align-items: center;
@@ -69,19 +116,12 @@
   font-size: var(--fs-xs);
 }
 
-.toolbar__live {
-  color: var(--text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xxs);
-  white-space: nowrap;
-}
-
 .all-actions {
   position: absolute;
-  z-index: 20;
+  z-index: 30;
   top: calc(100% + var(--space-2));
-  left: 0;
-  width: min(36rem, 100%);
+  right: 0;
+  width: min(36rem, calc(100vw - 16px));
   max-height: 70vh;
   overflow: auto;
   padding: var(--space-3);

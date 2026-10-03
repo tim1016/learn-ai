@@ -27,7 +27,6 @@ export interface DecisionRowView {
   /** Raw codes, rendered through `receiptLabel`. */
   readonly outcome: string | null;
   readonly reasonCode: string | null;
-  readonly authorityKind: string | null;
   /** `null` ⇒ this decision was recorded before decisions saved their values. */
   readonly explanation: StrategyViewCandle['explanation'] | null;
   /** The explanation's checks, those that could act on the bar first. */
@@ -51,7 +50,6 @@ function decisionRow(decision: RecentDecisionView): DecisionRowView {
     // "No action · No action" says one thing twice; a reason that only
     // restates its outcome is left out.
     reasonCode: decision.reason_code.toUpperCase() === decision.outcome.toUpperCase() ? null : decision.reason_code,
-    authorityKind: decision.authority_kind ?? null,
     explanation: decision.explanation ?? null,
     checks: orderedChecks(decision.explanation?.checks ?? []),
   };
@@ -67,7 +65,6 @@ function beforeStartRow(candle: StrategyViewCandle): DecisionRowView {
     phaseText: candle.phase_text ?? null,
     outcome: candle.outcome ?? null,
     reasonCode: candle.reason_code ?? null,
-    authorityKind: null,
     explanation: candle.explanation,
     checks: orderedChecks(candle.explanation.checks),
   };

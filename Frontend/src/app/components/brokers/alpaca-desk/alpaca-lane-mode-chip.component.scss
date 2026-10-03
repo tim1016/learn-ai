@@ -76,3 +76,29 @@
   color: var(--bg-canvas);
   background: var(--lane-shadow);
 }
+
+/* The stacked badge on a bot's page: the world over its detail, in a box
+   rather than a pill so the two lines sit square. */
+.lane-mode-chip--stacked {
+  display: inline-grid;
+  justify-items: center;
+  gap: 0;
+  max-width: 9rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-sm);
+  line-height: 1.15;
+  text-align: center;
+  white-space: normal;
+}
+
+.lane-mode-chip__world {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  letter-spacing: 0.08em;
+}
+
+.lane-mode-chip__detail {
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0;
+}

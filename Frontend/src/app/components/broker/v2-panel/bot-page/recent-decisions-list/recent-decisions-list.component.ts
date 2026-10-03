@@ -20,10 +20,9 @@ let nextDecisionsListId = 0;
  * (issue #1729 AC #8, #2563), oldest first.
  *
  * This is the owner-visible record of what the strategy decided, whether or
- * not a decision became a broker order. `authority_kind` renders through the
- * shared `receiptLabel` pipe so a synthetic (Dry Run) decision stays visibly
- * distinguishable from a Paper or Live one rather than being an invisible
- * field on the wire contract.
+ * not a decision became a broker order. A row does not repeat the account's
+ * world: the workspace header names Paper or Live, and a Dry Run's banner
+ * says so.
  *
  * Each decision shows its checks as ✓/✗ chips and expands to the same table
  * the candle popover shows (#2639). Selecting a row selects its candle on the

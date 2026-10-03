@@ -1,8 +1,22 @@
-import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  Directive,
+  ElementRef,
+  Injector,
+  afterNextRender,
+  afterRenderEffect,
+  computed,
+  inject,
+  input,
+  output,
+  signal,
+  viewChild,
+} from '@angular/core';
 import { RouterLink } from '@angular/router';
 
 import type { AccountWorkspaceLink } from '../../../../fleet/account-workspace';
-import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import type { ManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
 import type {
   BotPanelView,
@@ -11,6 +25,7 @@ import type {
   ToolbarActionView,
 } from '../lib/broker-v2-panel.types';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
+import { keepInsideViewport } from '../strategy-view/popover-placement';
 
 type ToolbarGroupKey = ToolbarActionView['group'];
 type ToolbarActionId = ToolbarActionView['action_id'];
@@ -19,6 +34,22 @@ interface ToolbarGroup {
   readonly key: ToolbarGroupKey;
   readonly label: string;
   readonly entries: readonly ToolbarActionView[];
+}
+
+/** One action as the bar or More draws it, and whether its name shows. Named
+ * `entry`, not the implicit slot, whose `$`-prefixed key reads as a GraphQL
+ * variable to the contract scan of the Frontend's sources. */
+interface ActionControlContext {
+  readonly entry: ToolbarActionView;
+  readonly labelled: boolean;
+}
+
+/** Types the toolbar's one action template, which the bar and More share, so it is checked like the rest. */
+@Directive({ selector: 'ng-template[appBotToolbarAction]' })
+export class BotToolbarActionTemplateDirective {
+  static ngTemplateContextGuard(_directive: BotToolbarActionTemplateDirective, context: unknown): context is ActionControlContext {
+    return context !== null && typeof context === 'object';
+  }
 }
 
 const GROUP_LABELS: Readonly<Record<ToolbarGroupKey, string>> = { bot: 'Bot', fix: 'Fix', inspect: 'Inspect' };
@@ -42,6 +73,17 @@ const ICONS: Readonly<Record<ToolbarActionId, string>> = {
 
 /** Money moves keep their words, whatever the Labels setting (#2794 story 15). */
 const ALWAYS_LABELLED: ReadonlySet<ToolbarActionId> = new Set(['stop_bot_decisions', 'prepare_safe_flatten']);
+
+/** Bot's and Fix's actions sit on the bar; Inspect's wait under More, unless
+ * the backend makes one the primary. A place follows the action's group and
+ * that word alone, never which other actions are offered, so a poll cannot
+ * move a button -- and a confirmation open on it -- between the bar and More. */
+const GROUP_ORDER: readonly ToolbarGroupKey[] = ['bot', 'fix', 'inspect'];
+const BAR_GROUPS: ReadonlySet<ToolbarGroupKey> = new Set(['bot', 'fix']);
+
+function onBar(entry: ToolbarActionView): boolean {
+  return BAR_GROUPS.has(entry.group) || entry.primary === true;
+}
 
 const AVAILABILITY_WORDS: Readonly<Record<ToolbarActionView['availability'], string>> = {
   available: 'Available',
@@ -113,14 +155,17 @@ function storedLabels(): boolean {
 }
 
 /**
- * The bot page's toolbar (#2794 R2, R6): every action the owner can take on
- * this bot right now, as icon buttons in three groups -- Bot, Fix, Inspect --
- * in the backend's order, with its plain names, tones and primary.
+ * The bot page's toolbar (#2794 R2, R6), in the account workspace's header:
+ * every action the owner can take on this bot right now, as icon buttons in
+ * untitled groups -- Bot, Fix -- in the backend's order, with its plain
+ * names, tones and primary. Inspect's actions wait under More, named (a
+ * primary one stays on the bar), with
+ * All actions -- every action, its availability, the backend's reason and its
+ * system name -- and the Labels setting, which names every icon. Stop and Sell
+ * are always named.
  *
  * An action the backend says is not needed stays out of the row; a needed
- * one it blocks shows disabled with its reason. All actions lists every
- * action, its availability, the backend's reason and its system name. The
- * Labels setting names every icon; Stop and Sell are always named.
+ * one it blocks shows disabled with its reason.
  *
  * Custody actions run through the shared action button, so their
  * confirmations and blockers are the ones the backend presented; Deploy
@@ -130,11 +175,18 @@ function storedLabels(): boolean {
 @Component({
   selector: 'app-bot-toolbar',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PanelActionButtonComponent, RouterLink, TimestampDisplayComponent],
+  imports: [BotToolbarActionTemplateDirective, NgTemplateOutlet, PanelActionButtonComponent, RouterLink],
   templateUrl: './bot-toolbar.component.html',
   styleUrl: './bot-toolbar.component.scss',
+  host: {
+    '(document:mousedown)': 'onDocumentMousedown($event)',
+    '(keydown.escape)': 'onEscape()',
+  },
 })
 export class BotToolbarComponent {
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly injector = inject(Injector);
+
   readonly panel = input.required<BotPanelView>();
   readonly pending = input(false);
   readonly deployAgain = input.required<AccountWorkspaceLink>();
@@ -145,6 +197,7 @@ export class BotToolbarComponent {
   readonly buildProof = output();
 
   protected readonly labels = signal(storedLabels());
+  protected readonly moreOpen = signal(false);
   protected readonly allActionsOpen = signal(false);
   protected readonly icons = ICONS;
   /** A blocker's cure is a toolbar button of its own (Check against Alpaca, Sell), never a second one beside it. */
@@ -152,15 +205,39 @@ export class BotToolbarComponent {
   protected readonly availabilityWords = AVAILABILITY_WORDS;
 
   protected readonly entries = computed(() => this.panel().bot_page?.toolbar ?? legacyToolbar(this.panel()));
+  private readonly offered = computed(() => this.entries().filter((entry) => entry.availability !== 'not_needed'));
+
   protected readonly groups = computed((): readonly ToolbarGroup[] =>
-    (['bot', 'fix', 'inspect'] as const)
+    GROUP_ORDER
       .map((key) => ({
         key,
         label: GROUP_LABELS[key],
-        entries: this.entries().filter((entry) => entry.group === key && entry.availability !== 'not_needed'),
+        entries: this.offered().filter((entry) => entry.group === key && onBar(entry)),
       }))
       .filter((group) => group.entries.length > 0),
   );
+
+  /** Inspect's offered actions, named, under More. */
+  protected readonly more = computed(() => this.offered().filter((entry) => !onBar(entry)));
+
+  /** More's name says how many actions wait in it, not only its icon's count. */
+  protected readonly moreLabel = computed(() => {
+    const count = this.more().length;
+    return count === 0 ? 'More actions' : `More actions, ${count} not on the bar`;
+  });
+
+  private readonly moreToggle = viewChild.required<ElementRef<HTMLButtonElement>>('moreToggle');
+  private readonly moreMenu = viewChild<ElementRef<HTMLElement>>('moreMenu');
+  private readonly allActionsPanel = viewChild<ElementRef<HTMLElement>>('allActionsPanel');
+
+  constructor() {
+    // On a phone More and All actions open near the window's edge.
+    afterRenderEffect(() => {
+      for (const panel of [this.moreMenu(), this.allActionsPanel()]) {
+        if (panel !== undefined) keepInsideViewport(panel.nativeElement);
+      }
+    });
+  }
 
   private readonly actionsById = computed(
     () => new Map(this.panel().actions.map((action) => [action.action_id as string, action])),
@@ -185,11 +262,55 @@ export class BotToolbarComponent {
     return null;
   }
 
-  /** Change end and Build proof open the host's panels. */
+  /** Change end and Build proof open the host's panels; More closes behind them. */
   protected open(entry: ToolbarActionView): void {
     if (entry.availability !== 'available') return;
+    this.moreOpen.set(false);
     if (entry.action_id === 'change_end') this.changeEnd.emit();
     else if (entry.action_id === 'build_proof') this.buildProof.emit();
+  }
+
+  /** An action taken closes More; one that asks to confirm has done so by now. */
+  protected onTriggered(trigger: PanelActionTrigger): void {
+    this.moreOpen.set(false);
+    this.actionRequested.emit(trigger);
+  }
+
+  /** More and All actions are never open together: one would cover the other's confirmations. */
+  protected toggleMore(): void {
+    this.allActionsOpen.set(false);
+    this.moreOpen.set(!this.moreOpen());
+  }
+
+  /** All actions takes the keyboard when it opens, so Escape reaches it. */
+  protected openAllActions(): void {
+    this.moreOpen.set(false);
+    this.allActionsOpen.set(true);
+    afterNextRender(() => this.allActionsPanel()?.nativeElement.focus(), { injector: this.injector });
+  }
+
+  protected closeAllActions(): void {
+    this.allActionsOpen.set(false);
+    this.moreToggle().nativeElement.focus();
+  }
+
+  protected closeMenus(): void {
+    this.moreOpen.set(false);
+    this.allActionsOpen.set(false);
+  }
+
+  /** Escape closes More or All actions and puts the keyboard back on More. */
+  protected onEscape(): void {
+    if (!this.moreOpen() && !this.allActionsOpen()) return;
+    this.closeMenus();
+    this.moreToggle().nativeElement.focus();
+  }
+
+  /** A press outside the toolbar closes More and All actions; mousedown, so one press cannot both close and reopen one. */
+  protected onDocumentMousedown(event: MouseEvent): void {
+    if (!this.moreOpen() && !this.allActionsOpen()) return;
+    if (event.target instanceof Node && this.host.nativeElement.contains(event.target)) return;
+    this.closeMenus();
   }
 
   protected onLabelsChange(event: Event): void {

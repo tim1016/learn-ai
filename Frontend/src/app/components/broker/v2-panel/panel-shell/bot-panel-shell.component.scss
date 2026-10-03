@@ -1,8 +1,9 @@
+// The page fits the window below the workspace's header, so the header stays
+// in view; it scrolls inside itself only when the window is too short or narrow.
 :host {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
-  height: 100%;
+  height: var(--bot-page-height, 100%);
   overflow-y: auto;
   overflow-x: clip;
   background: var(--bg-canvas);
@@ -18,37 +19,76 @@
   padding: var(--space-2) var(--space-4) var(--space-3);
 }
 
-// #2794 R4: the board fills the screen under the banner -- chart 6 · money 3 ·
-// decisions 3, then orders 6 · health 3 · setup 3 -- and each panel scrolls
-// inside itself, so the page does not.
+// The bot's name, figures and actions in one row: in the workspace header
+// beside Deploy a bot, or here when the page stands alone.
+.bot-page__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2) var(--space-4);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--border-light);
+}
+
+// The board fills the page below whatever sits above it. The chart takes the
+// left half down to the window's bottom; the panels stack in two columns on
+// the right, each as tall as its content, so none scrolls inside itself --
+// the right half scrolls as one, and the chart stays where it is.
 .bot-board {
   display: grid;
-  height: var(--bot-board-height, auto);
+  flex: 1 1 auto;
   min-height: 26rem;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
   gap: var(--space-2);
+}
+
+.bot-board__side,
+.bot-board__column {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: var(--space-2);
+}
+
+.bot-board__side {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .bot-board__panel {
   min-width: 0;
-  min-height: 0;
-  overflow: auto;
+  overflow-x: auto;
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   background: var(--bg-surface);
 }
 
-.bot-board__chart { grid-column: span 6; padding: 0; overflow: hidden; }
+// A panel whose content draws its own card (money, decisions and fills)
+// adds no second frame around it.
+.bot-board__panel--bare {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: none;
+  overflow: visible;
+}
+
+.bot-board__chart {
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
 // The cell sets the chart's height; the charts' own floors would spill out of it.
 .bot-board__chart app-bot-chart-panel,
 .bot-board__chart app-bot-day-chart { min-height: 0; }
-.bot-board__money { grid-column: span 3; }
-.bot-board__decisions { grid-column: span 3; }
-.bot-board__orders { grid-column: span 6; }
-.bot-board__health { grid-column: span 3; }
-.bot-board__setup { grid-column: span 3; }
 
 .bot-board__title {
   margin: 0 0 var(--space-2);
@@ -66,7 +106,11 @@
 }
 
 .observation-note {
-  margin: var(--space-2) 0 0;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
   color: var(--text-secondary);
   font-size: var(--fs-sm);
 
@@ -118,6 +162,13 @@
   filter: grayscale(0.7);
 }
 
+// The bot's status and figures in the workspace header go grey with the page.
+// The toolbar keeps its colour: a filter around it would pin its typed
+// confirmations to the header strip instead of the window.
+.bot-page__controls.is-stale app-bot-page-header {
+  filter: grayscale(0.7);
+}
+
 .loading-state {
   display: grid;
   min-height: 22rem;
@@ -127,23 +178,21 @@
 
 .flatten-quote-error { margin: var(--space-2) 0 0; color: var(--bear); font-size: var(--fs-xs); }
 
-// Narrow windows: two columns, then one; the page scrolls instead of the panels.
+// Narrow windows: the chart across the top, then the two columns, then one,
+// and the page scrolls as a whole.
 @media (max-width: 1100px) {
   .bot-board {
-    height: auto;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    flex: none;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto;
   }
 
-  .bot-board__chart { grid-column: 1 / -1; min-height: 28rem; }
-  .bot-board__money,
-  .bot-board__decisions,
-  .bot-board__orders,
-  .bot-board__health,
-  .bot-board__setup { grid-column: span 1; max-height: 32rem; }
+  .bot-board__chart { height: 28rem; }
+  .bot-board__side { overflow-y: visible; }
 }
 
 @media (max-width: 720px) {
   .bot-page { padding-inline: var(--space-3); }
-  .bot-board { grid-template-columns: minmax(0, 1fr); }
+  .bot-board__side { grid-template-columns: minmax(0, 1fr); }
+  .bot-page__controls { justify-content: flex-start; padding-left: 0; border-left: 0; }
 }

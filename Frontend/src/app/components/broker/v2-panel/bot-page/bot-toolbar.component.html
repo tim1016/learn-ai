@@ -1,92 +1,116 @@
+<!-- One action, on the bar or under More: `labelled` says whether its name shows. -->
+<ng-template #actionControl appBotToolbarAction let-entry="entry" let-labelled="labelled">
+  @let action = panelAction(entry);
+  @if (action) {
+    <app-panel-action-button
+      [action]="action"
+      [label]="entry.label"
+      [icon]="icons[entry.action_id]"
+      [showLabel]="labelled"
+      [moveIsSupported]="noMoves"
+      [hint]="entry.reason"
+      [tone]="entry.tone"
+      [filled]="entry.primary === true"
+      [pending]="pending()"
+      (triggered)="onTriggered($event)"
+    />
+  } @else if (opensHostPanel(entry)) {
+    <!-- Change end and Build proof open the host's panels. -->
+    <button
+      type="button"
+      class="toolbar__button"
+      [attr.aria-label]="entry.label"
+      [attr.aria-disabled]="entry.availability !== 'available'"
+      [disabled]="pending()"
+      [title]="entry.reason"
+      (click)="open(entry)"
+    >
+      <i [class]="'pi ' + icons[entry.action_id]" aria-hidden="true"></i>
+      @if (labelled) { {{ entry.label }} }
+    </button>
+  } @else {
+    <!-- Deploy again and Manual order go to their pages; a blocked one stays put and says why. -->
+    @let link = linkFor(entry);
+    @if (entry.availability === 'available' && link !== null) {
+      <a
+        class="toolbar__button"
+        [class.toolbar__button--primary]="entry.primary"
+        [routerLink]="link.commands"
+        [queryParams]="link.queryParams"
+        [attr.aria-label]="entry.label"
+        [title]="entry.reason"
+      >
+        <i [class]="'pi ' + icons[entry.action_id]" aria-hidden="true"></i>
+        @if (labelled) { {{ entry.label }} }
+      </a>
+    } @else {
+      <button type="button" class="toolbar__button" aria-disabled="true" [attr.aria-label]="entry.label" [title]="entry.reason">
+        <i [class]="'pi ' + icons[entry.action_id]" aria-hidden="true"></i>
+        @if (labelled) { {{ entry.label }} }
+      </button>
+    }
+  }
+</ng-template>
+
 <div class="toolbar" role="toolbar" aria-label="Actions for this bot">
   @for (group of groups(); track group.key) {
     <div class="toolbar__group" role="group" [attr.aria-label]="group.label">
-      <span class="toolbar__group-label" aria-hidden="true">{{ group.label }}</span>
       @for (entry of group.entries; track entry.action_id) {
-        @let action = panelAction(entry);
-        @if (action) {
-          <app-panel-action-button
-            [action]="action"
-            [label]="entry.label"
-            [icon]="icons[entry.action_id]"
-            [showLabel]="showLabel(entry)"
-            [moveIsSupported]="noMoves"
-            [hint]="entry.reason"
-            [tone]="entry.tone"
-            [filled]="entry.primary === true"
-            [pending]="pending()"
-            (triggered)="actionRequested.emit($event)"
-          />
-        } @else if (opensHostPanel(entry)) {
-          <!-- Change end and Build proof open the host's panels. -->
-          <button
-            type="button"
-            class="toolbar__button"
-            [attr.aria-label]="entry.label"
-            [attr.aria-disabled]="entry.availability !== 'available'"
-            [disabled]="pending()"
-            [title]="entry.reason"
-            (click)="open(entry)"
-          >
-            <i [class]="'pi ' + icons[entry.action_id]" aria-hidden="true"></i>
-            @if (showLabel(entry)) { {{ entry.label }} }
-          </button>
-        } @else {
-          <!-- Deploy again and Manual order go to their pages; a blocked one stays put and says why. -->
-          @let link = linkFor(entry);
-          @if (entry.availability === 'available' && link !== null) {
-            <a
-              class="toolbar__button"
-              [class.toolbar__button--primary]="entry.primary"
-              [routerLink]="link.commands"
-              [queryParams]="link.queryParams"
-              [attr.aria-label]="entry.label"
-              [title]="entry.reason"
-            >
-              <i [class]="'pi ' + icons[entry.action_id]" aria-hidden="true"></i>
-              @if (showLabel(entry)) { {{ entry.label }} }
-            </a>
-          } @else {
-            <button type="button" class="toolbar__button" aria-disabled="true" [attr.aria-label]="entry.label" [title]="entry.reason">
-              <i [class]="'pi ' + icons[entry.action_id]" aria-hidden="true"></i>
-              @if (showLabel(entry)) { {{ entry.label }} }
-            </button>
-          }
-        }
+        <ng-container
+          [ngTemplateOutlet]="actionControl"
+          [ngTemplateOutletContext]="{ entry: entry, labelled: showLabel(entry) }"
+        />
       }
     </div>
   }
 
-  <div class="toolbar__group toolbar__group--end">
+  <div class="toolbar__more">
     <button
+      #moreToggle
       type="button"
-      class="toolbar__button"
-      aria-label="All actions"
-      title="Every action for this bot, and whether it is available"
-      [attr.aria-expanded]="allActionsOpen()"
-      (click)="allActionsOpen.set(!allActionsOpen())"
+      class="toolbar__button toolbar__more-toggle"
+      [attr.aria-label]="moreLabel()"
+      [title]="more().length > 0 ? more().length + ' more actions, All actions and Labels' : 'All actions and Labels'"
+      [attr.aria-expanded]="moreOpen()"
+      (click)="toggleMore()"
     >
-      <i class="pi pi-list-check" aria-hidden="true"></i>
-      @if (labels()) { All actions }
+      <i class="pi pi-ellipsis-h" aria-hidden="true"></i>
+      @if (more().length > 0) {
+        <span class="toolbar__more-count" aria-hidden="true">{{ more().length }}</span>
+      }
     </button>
-    <label class="toolbar__labels">
-      <input type="checkbox" [checked]="labels()" (change)="onLabelsChange($event)" />
-      Labels
-    </label>
-    @if (panel().health.running) {
-      <span class="toolbar__live">
-        {{ panel().feed_continuity.provider_label }} live · updated
-        <app-timestamp-display [value]="panel().updated_at_ms" mode="local" granularity="time" />
-      </span>
+
+    @if (moreOpen()) {
+      <div #moreMenu class="toolbar__menu" role="group" aria-label="More actions for this bot">
+        @if (more().length > 0) {
+          <div class="toolbar__menu-actions">
+            @for (entry of more(); track entry.action_id) {
+              <ng-container
+                [ngTemplateOutlet]="actionControl"
+                [ngTemplateOutletContext]="{ entry: entry, labelled: true }"
+              />
+            }
+          </div>
+        }
+        <div class="toolbar__menu-foot">
+          <button type="button" class="toolbar__menu-item" (click)="openAllActions()">
+            <i class="pi pi-list-check" aria-hidden="true"></i> All actions
+          </button>
+          <label class="toolbar__labels">
+            <input type="checkbox" [checked]="labels()" (change)="onLabelsChange($event)" />
+            Labels
+          </label>
+        </div>
+      </div>
     }
   </div>
 </div>
 
 @if (allActionsOpen()) {
-  <section class="all-actions" aria-labelledby="all-actions-title">
+  <section #allActionsPanel class="all-actions" aria-labelledby="all-actions-title" tabindex="-1">
     <header class="all-actions__head">
       <h3 id="all-actions-title">All actions for this bot</h3>
-      <button type="button" class="all-actions__close" aria-label="Close all actions" (click)="allActionsOpen.set(false)">×</button>
+      <button type="button" class="all-actions__close" aria-label="Close all actions" (click)="closeAllActions()">×</button>
     </header>
     <ul class="all-actions__list">
       @for (entry of entries(); track entry.action_id) {

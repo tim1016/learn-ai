@@ -1,6 +1,12 @@
 <span
   class="lane-mode-chip lane-mode-chip--{{ chip().tone }}"
-  [class.lane-mode-chip--badge]="variant() === 'badge'"
+  [class.lane-mode-chip--badge]="variant() !== 'chip'"
+  [class.lane-mode-chip--stacked]="stackedWords() !== null"
 >
-  {{ chip().mode }}
+  @if (stackedWords(); as words) {
+    <span class="lane-mode-chip__world">{{ words.world }}</span>
+    <span class="lane-mode-chip__detail">{{ words.detail }}</span>
+  } @else {
+    {{ chip().mode }}
+  }
 </span>
