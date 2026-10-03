@@ -1,0 +1,114 @@
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, linkedSignal, model, output, untracked } from '@angular/core';
+import { Popover } from 'primeng/popover';
+import { Tooltip } from 'primeng/tooltip';
+
+import { UNBOUNDED, type DateBounds } from './date-bounds';
+import { DateCalendarComponent } from './date-calendar.component';
+import { checkRange } from './date-check';
+import { QUICK_RANGES, activeQuickRange, offerQuickRanges, type DateRange, type QuickRangeKey, type QuickRangeOffer } from './quick-ranges';
+import { TradingCalendarService } from './trading-calendar.service';
+
+let nextNoteId = 0;
+
+/**
+ * The one way a page picks a range of dates (#2858).
+ *
+ * Two typed fields share one calendar popup, with quick ranges underneath.
+ * The dates are ET calendar dates (``YYYY-MM-DD``); the host converts them at
+ * its own HTTP call, because its endpoint owns the ms anchor.
+ *
+ * A typed date applies on Enter or on leaving the field. Text that is not a
+ * usable date stays in the field with the reason underneath, and the host
+ * receives an empty date for that end, so its run stays disabled. Nothing is
+ * corrected silently.
+ */
+@Component({
+  selector: 'app-date-range-picker',
+  imports: [Popover, Tooltip, DateCalendarComponent],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+  templateUrl: './date-range-picker.component.html',
+  styleUrl: './date-range-picker.component.scss',
+})
+export class DateRangePickerComponent {
+  private readonly calendar = inject(TradingCalendarService);
+
+  /** The range's first day; empty while the start field holds no usable date. */
+  readonly from = model.required<string>();
+  /** The range's last day, included; empty while the end field holds no usable date. */
+  readonly to = model.required<string>();
+  /** The days the host's run can read. */
+  readonly bounds = input<DateBounds>(UNBOUNDED);
+  /** The quick ranges offered, in ``QUICK_RANGES`` order. A host leaves out what makes no sense for it. */
+  readonly ranges = input<readonly QuickRangeKey[]>(QUICK_RANGES);
+  /** Whether both ends must be trading sessions. */
+  readonly sessionsOnly = input(true);
+  /** The group's accessible name. */
+  readonly label = input('Date range');
+  /** Both dates after any change, in one event, for a host that keeps them in one value. */
+  readonly changed = output<{ readonly from: string; readonly to: string }>();
+
+  protected readonly noteId = `date-range-note-${nextNoteId++}`;
+  /** What this picker last handed its host, so its own empty date is not read back as the host clearing the field. */
+  private emitted: { from: string | null; to: string | null } = { from: null, to: null };
+
+  protected readonly fromText = linkedSignal<string, string>({
+    source: this.from,
+    computation: (value, previous) => (previous !== undefined && value === this.emitted.from ? previous.value : value),
+  });
+  protected readonly toText = linkedSignal<string, string>({
+    source: this.to,
+    computation: (value, previous) => (previous !== undefined && value === this.emitted.to ? previous.value : value),
+  });
+
+  protected readonly sessions = computed(() => (this.sessionsOnly() ? this.calendar.sessions() : null));
+  /** Why the calendar could not be read, wherever this picker needs it: to check sessions, or to offer quick ranges. */
+  protected readonly calendarProblem = computed(() => (this.sessionsOnly() || this.ranges().length > 0 ? this.calendar.problem() : null));
+  protected readonly checked = computed(() => checkRange(this.fromText(), this.toText(), { bounds: this.bounds(), sessions: this.sessions() }));
+  protected readonly problem = computed(() => this.checked().from.problem ?? this.checked().to.problem);
+  protected readonly offers = computed(() => offerQuickRanges(this.ranges(), this.bounds(), this.calendar.sessions(), this.calendar.lastCompleted()));
+  protected readonly active = computed(() => activeQuickRange(this.offers(), this.checked().from.date, this.checked().to.date));
+
+  /** How many sessions the range holds, and whether the page's data stops short of the market. */
+  protected readonly summary = computed<string | null>(() => {
+    const sessions = this.calendar.sessions();
+    const { from, to } = this.checked();
+    const parts: string[] = [];
+    if (sessions !== null && from.date !== '' && to.date !== '') {
+      const count = sessions.count(from.date, to.date);
+      parts.push(`${count} ${count === 1 ? 'session' : 'sessions'}`);
+    }
+    const { max, maxReason } = this.bounds();
+    const market = this.calendar.lastCompleted();
+    if (max !== null && maxReason !== null && market !== null && max < market) parts.push(maxReason);
+    return parts.length === 0 ? null : parts.join(' · ');
+  });
+
+  constructor() {
+    // Reads the host's dates tracked: a host that puts back a date this
+    // picker has refused must be answered with the empty date again.
+    effect(() => {
+      const { from, to } = this.checked();
+      const held = { from: this.from(), to: this.to() };
+      this.emitted = { from: from.date, to: to.date };
+      if (held.from === from.date && held.to === to.date) return;
+      untracked(() => {
+        this.from.set(from.date);
+        this.to.set(to.date);
+        this.changed.emit({ from: from.date, to: to.date });
+      });
+    });
+  }
+
+  protected setRange(range: DateRange): void {
+    this.fromText.set(range.from);
+    this.toText.set(range.to);
+  }
+
+  protected applyOffer(offer: QuickRangeOffer): void {
+    if (offer.range !== null) this.setRange(offer.range);
+  }
+
+  protected retryCalendar(): void {
+    this.calendar.retry();
+  }
+}

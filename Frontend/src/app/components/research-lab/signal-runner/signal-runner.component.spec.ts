@@ -1,3 +1,4 @@
+import { provideFakeDateWorld } from '../../../shared/date-picker/testing/fake-trading-calendar';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import {
   HttpClientTestingModule,
@@ -63,6 +64,7 @@ describe('SignalRunnerComponent indicator catalog load', () => {
         // drives every request through HttpTestingController, so stub it to
         // keep `whenStable()` from hanging on an unflushed request.
         provideFakeVendorCatalog(fakeVendorCatalog([])),
+        ...provideFakeDateWorld(),
       ],
     }).compileComponents();
 

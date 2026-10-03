@@ -1,0 +1,81 @@
+<div class="date-range" role="group" [attr.aria-label]="label()">
+  <div class="date-range__fields" #anchor>
+    <input
+      #fromInput
+      type="text"
+      class="date-control__input mono"
+      inputmode="numeric"
+      autocomplete="off"
+      spellcheck="false"
+      maxlength="10"
+      placeholder="YYYY-MM-DD"
+      aria-label="Start date"
+      [value]="fromText()"
+      [attr.aria-invalid]="checked().from.problem !== null"
+      [attr.aria-describedby]="noteId"
+      (change)="fromText.set(fromInput.value.trim())"
+    />
+    <i class="pi pi-arrow-right date-range__arrow" aria-hidden="true"></i>
+    <input
+      #toInput
+      type="text"
+      class="date-control__input mono"
+      inputmode="numeric"
+      autocomplete="off"
+      spellcheck="false"
+      maxlength="10"
+      placeholder="YYYY-MM-DD"
+      aria-label="End date"
+      [value]="toText()"
+      [attr.aria-invalid]="checked().to.problem !== null"
+      [attr.aria-describedby]="noteId"
+      (change)="toText.set(toInput.value.trim())"
+    />
+    <button type="button" class="date-control__open" aria-label="Open the calendar" aria-haspopup="dialog" (click)="popover.toggle($event, anchor)">
+      <i class="pi pi-calendar" aria-hidden="true"></i>
+    </button>
+  </div>
+
+  @if (offers().length > 0) {
+    <div class="date-range__ranges" role="group" aria-label="Quick ranges">
+      @for (offer of offers(); track offer.key) {
+        <button
+          type="button"
+          class="date-range__range"
+          [class.date-range__range--active]="active() === offer.key"
+          [attr.aria-pressed]="active() === offer.key"
+          [attr.aria-disabled]="offer.unavailable !== null"
+          [attr.aria-label]="offer.unavailable === null ? null : offer.key + ', unavailable: ' + offer.unavailable"
+          [pTooltip]="offer.unavailable ?? undefined"
+          tooltipEvent="both"
+          tooltipPosition="top"
+          (click)="applyOffer(offer)"
+        >
+          {{ offer.key }}
+        </button>
+      }
+    </div>
+  }
+
+  <p class="date-control__note" [id]="noteId" [class.date-control__note--problem]="problem() !== null || calendarProblem() !== null" aria-live="polite">
+    @if (problem(); as message) {
+      {{ message }}
+    } @else if (calendarProblem(); as message) {
+      The trading calendar could not be read: {{ message }}
+      <button type="button" class="date-control__retry" (click)="retryCalendar()">Retry</button>
+    } @else {
+      {{ summary() }}
+    }
+  </p>
+
+  <p-popover #popover ariaLabel="Calendar">
+    <app-date-calendar
+      mode="range"
+      [from]="checked().from.date"
+      [to]="checked().to.date"
+      [bounds]="bounds()"
+      [sessions]="sessions()"
+      (picked)="setRange($event); popover.hide()"
+    />
+  </p-popover>
+</div>

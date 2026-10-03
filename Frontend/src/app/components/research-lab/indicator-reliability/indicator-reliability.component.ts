@@ -244,8 +244,8 @@ export class IndicatorReliabilityComponent {
   // reliability uses the indicator's own timeframe, not a per-form setting.
   range = signal<TickerRange>({
     symbol: 'AAPL',
-    from: '2024-01-01',
-    to: '2024-06-30',
+    from: '2024-01-02',
+    to: '2024-06-28',
     resolution: 'minute',
   });
 

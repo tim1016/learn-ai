@@ -2,6 +2,7 @@ import type { Provider } from '@angular/core';
 import type { ComponentFixture } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 
+import { provideFakeDateWorld } from '../../date-picker/testing/fake-trading-calendar';
 import type { TickerOption } from '../../ticker-range-picker/ticker-range-picker.types';
 import {
   fakeEnsureCoverage,
@@ -20,8 +21,9 @@ import { SymbolPickerComponent } from '../symbol-picker.component';
 
 /**
  * The test world a host spec needs to render anything that embeds the
- * picker family: a fake lake catalog, a fake vendor catalog and a fake
- * coverage gate, so no spec mounts the real HTTP/gate chain by accident.
+ * picker family: a fake lake catalog, a fake vendor catalog, a fake
+ * coverage gate, and a fake trading calendar and provider history for the
+ * date picker, so no spec mounts the real HTTP/gate chain by accident.
  *
  * `provideFleetDirectory` is the precedent: one composition point per
  * cross-cutting fake, instead of every spec re-stating the trio.
@@ -64,6 +66,7 @@ export function fakePickerWorld(
       provideFakeTickerCatalog(fakeTickerCatalog(pool)),
       provideFakeVendorCatalog(vendor),
       provideFakeEnsureCoverage(coverage),
+      ...provideFakeDateWorld(),
     ],
   };
 }

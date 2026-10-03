@@ -611,6 +611,79 @@ class ClerkSqliteRepository(
                 control_revision=control_revision,
             )
 
+    def append_fill(self, transition: TransitionInput, *, symbol: str) -> CommittedTransition:
+        """Append a fill of one of this authority's orders, crediting its position unless a discharge counted it (#2854).
+
+        The append both fill kinds go through: an exact execution slice
+        (:meth:`append_execution_slice_if_absent`) and a cumulative total
+        (``order_evidence.fold_order_evidence``) alike, whichever read
+        brought it -- a stream frame, a reconnect's replay, an open-order
+        snapshot or an exact lookup. ``repository_boundary`` lists every
+        producer of one. One other append moves a position: a manual chain's
+        proven total, through :meth:`append_transition` under its own kind. A
+        manual order has no strategy, and no discharge is ever its own.
+
+        An operator's discharge zeroes a strategy's residue in a symbol once
+        the broker's position is proven equal to the account's attribution
+        less that residue. A fill of an order created before it is one the
+        discharge already counted, or one executed after its broker read;
+        ``reads.discharge_accounts_for_fill`` tells them apart, and names
+        the case it cannot. A counted fill is still recorded -- the execution
+        is evidence, and the order's fills must add up or it would be asked
+        about for ever -- but under ``reads.FILL_CREDIT_WITHHELD_BY_DISCHARGE``,
+        and its fold moves no position: crediting it would count it twice. A
+        fill executed after the read is credited as any other.
+
+        The read and the append share the write coordinator, so a discharge
+        cannot land between them.
+        """
+        if transition.order_ref is None:
+            raise ValueError("a fill names the order that executed")
+        with self._write_lock:
+            discharge = reads.residue_discharge_since_order_created(
+                self._conn,
+                order_ref=transition.order_ref,
+                strategy_instance_id=transition.strategy_instance_id,
+                symbol=symbol,
+            )
+            if discharge is None:
+                return self.append_transition(transition)
+            withheld = reads.discharge_accounts_for_fill(
+                discharge,
+                transition_kind=transition.transition_kind,
+                source_event_at_ms=transition.source_event_at_ms,
+            )
+            committed = self.append_transition(
+                replace(transition, summary_code=reads.FILL_CREDIT_WITHHELD_BY_DISCHARGE)
+                if withheld
+                else transition
+            )
+        if withheld:
+            action = "fill_credit_withheld_residue_discharged"
+            message = "a fill of an order whose position was discharged was recorded without crediting it"
+        else:
+            action = "fill_credited_after_residue_discharge"
+            message = (
+                "a fill of an order whose position was discharged executed after the discharge's "
+                "broker read and was credited"
+            )
+        logger.warning(
+            message,
+            extra={
+                "action": action,
+                "account_id": self._account_id,
+                "strategy_instance_id": transition.strategy_instance_id,
+                "order_ref": transition.order_ref,
+                "symbol": symbol.upper(),
+                "transition_kind": transition.transition_kind,
+                "source_event_at_ms": transition.source_event_at_ms,
+                "discharge_sequence": discharge.sequence,
+                "discharge_broker_observed_at_ms": discharge.broker_observed_at_ms,
+                "sequence": committed.sequence,
+            },
+        )
+        return committed
+
     def append_execution_slice_if_absent(
         self,
         *,
@@ -754,12 +827,12 @@ class ClerkSqliteRepository(
                 )
                 return "coverage_conflict_raised"
             transition = build_transition()
-            self._validated_execution_slice_transition(
+            facts = self._validated_execution_slice_transition(
                 transition,
                 execution_id=execution_id,
                 order_ref=order_ref,
             )
-            self.append_transition(transition)
+            self.append_fill(transition, symbol=facts.symbol)
             return "appended"
 
     def exact_execution_contradicts_record(self, *, order_ref: str, facts: ExecutionSliceFilledFacts) -> bool:

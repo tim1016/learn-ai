@@ -118,7 +118,8 @@ export class StrategyPreflightComponent {
     'ema', 'sma', 'rsi', 'macd', 'bb', 'adx', 'atr', 'supertrend',
   ];
 
-  readonly canRun = computed(() => !this.isLoading());
+  /** An empty date is the picker saying its field holds no usable one. */
+  readonly canRun = computed(() => !this.isLoading() && this.range().from !== '' && this.range().to !== '');
 
   readonly verdictBanner = computed<{ text: string; severity: Severity } | null>(() => {
     const r = this.result();

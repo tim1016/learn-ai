@@ -19,6 +19,15 @@ operator-confirmed ``ATTRIBUTED_RESIDUE_DISCHARGED`` transition (the typed
 confirmation is the acknowledgement; the operator's reason is recorded when
 given), after which the strategy's EXIT fences resolve through the existing
 attributed-flat proof.
+
+The broker reads that prove the discharge already hold whatever the
+strategy's orders in the symbol had executed by then. One of those orders
+may have filled unseen, and its fill can still arrive. It is then recorded
+and not credited (#2854, ``ClerkSqliteRepository.append_fill``); credited, it
+would be counted twice. ``broker_observed_at_ms`` is the Clerk's clock as the
+second read returned, and it is the line: an execution the broker times later
+than that, by more than the clocks can differ, is not in the reads and is
+credited (``reads.discharge_accounts_for_fill``).
 """
 
 from __future__ import annotations

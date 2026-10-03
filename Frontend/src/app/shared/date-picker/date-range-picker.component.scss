@@ -1,0 +1,65 @@
+@use './date-control';
+
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.date-range {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+
+  &__fields {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  &__arrow {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+  }
+
+  &__ranges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  &__range {
+    height: 28px;
+    padding: 0 10px;
+    background: transparent;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+    font-weight: var(--fw-semi);
+    cursor: pointer;
+    transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+
+    &:hover:not([aria-disabled='true']) {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    &--active {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    &[aria-disabled='true'] {
+      color: var(--text-subtle);
+      border-style: dashed;
+      cursor: not-allowed;
+    }
+  }
+}

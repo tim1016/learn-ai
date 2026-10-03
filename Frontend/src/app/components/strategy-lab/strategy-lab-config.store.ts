@@ -8,8 +8,8 @@ import { environment } from "../../../environments/environment";
 import { toDataPolicyPayload, type DataPolicy } from "../../models/data-policy";
 import { RESEARCH_DEFAULT_FILL_MODE, type FillModeName } from "../../models/fill-mode";
 import type { PriceAdjustmentMode } from "../../shared/data-lake";
+import { ProviderBoundsService, TradingCalendarService, UNBOUNDED, heldBounds, offerQuickRanges, type DateBounds } from "../../shared/date-picker";
 import { TickerCatalogService } from "../../shared/ticker-catalog";
-import { toMostRecentWeekday } from "../../shared/date/weekday";
 import type { TickerRange } from "../../shared/ticker-range-picker";
 import {
   leanValidationTemplateForStrategy,
@@ -40,6 +40,10 @@ export class StrategyLabConfigStore {
   private readonly http = inject(HttpClient);
   private readonly route = inject(ActivatedRoute);
   private readonly tickerCatalog = inject(TickerCatalogService);
+  private readonly providerBounds = inject(ProviderBoundsService);
+  private readonly calendar = inject(TradingCalendarService);
+  /** Whether the window has held both its dates yet; it is started once, never again after that. */
+  private windowStarted = false;
   private readonly launchParams = toSignal(
     this.route.queryParamMap.pipe(map(parseEngineLaunchParams)),
     { initialValue: {} },
@@ -76,8 +80,10 @@ export class StrategyLabConfigStore {
   readonly paramValues = signal<Record<string, unknown>>({});
   readonly range = signal<TickerRange>({
     symbol: "SPY",
-    from: defaultStart(),
-    to: defaultEnd(),
+    // Empty until the calendar is read and the window starts on its last
+    // month: only the trading calendar knows which days are sessions.
+    from: "",
+    to: "",
     resolution: "minute",
     autoFetch: true,
   });
@@ -198,6 +204,29 @@ export class StrategyLabConfigStore {
     return !view.pool().some((option) => option.symbol === this.effectiveSymbol());
   });
 
+  /**
+   * The dates this run can read. A run that fetches missing days (auto-fetch)
+   * is bounded by what the provider serves; a run that reads the tree as it
+   * stands is bounded by the days the tree holds for the symbol; a run that
+   * replays recorded bars reads no dates from the lake at all.
+   */
+  readonly dateBounds = computed<DateBounds>(() => {
+    if (!this.readsLake()) return UNBOUNDED;
+    if (this.autoFetch()) return this.providerBounds.bounds();
+    const mode = this.adjustmentMode();
+    const symbol = this.effectiveSymbol();
+    const view = untracked(() => this.tickerCatalog.viewFor(mode));
+    // Not a verdict until the tree has answered: say so rather than "no held days".
+    const unavailable = view.unavailable();
+    if (unavailable !== null) return { ...UNBOUNDED, unknown: `The lake's holdings could not be read: ${unavailable}` };
+    if (!view.resolved()) return { ...UNBOUNDED, unknown: "The lake's holdings are being read." };
+    const held = view.pool().find((option) => option.symbol === symbol);
+    return heldBounds(symbol, held?.firstHeld ?? null, held?.lastHeld ?? null);
+  });
+
+  /** A date field holds no usable date: the picker hands over an empty one until it does. */
+  readonly datesMissing = computed(() => this.range().from === "" || this.range().to === "");
+
   readonly rerunBlocked = computed(() => {
     const name = this.selectedStrategyName();
     return this.configurationWarning() !== null ||
@@ -223,6 +252,24 @@ export class StrategyLabConfigStore {
 
   constructor() {
     effect(() => persistNavOverride(this.configNavOverride()));
+
+    // Starts the window on the last month of what this run can read. A launch
+    // link may name one end only: that end is kept and the other is filled, a
+    // month before the given end or on the last readable day. A direct write,
+    // not `changeRange`: nobody chose these dates, so they must not clear a
+    // warning or release a restored selection.
+    effect(() => {
+      const range = this.range();
+      if (range.from !== "" && range.to !== "") this.windowStarted = true;
+      if (this.windowStarted) return;
+      const bounds = this.dateBounds();
+      const endingOn = range.to === "" ? bounds : { ...bounds, max: range.to };
+      const [lastMonth] = offerQuickRanges(["1M"], endingOn, this.calendar.sessions(), this.calendar.lastCompleted());
+      if (lastMonth.range === null) return;
+      const from = range.from === "" ? lastMonth.range.from : range.from;
+      const to = range.to === "" ? lastMonth.range.to : range.to;
+      untracked(() => this.range.update((current) => ({ ...current, from, to })));
+    });
 
     effect(() => {
       const current = this.range();
@@ -375,6 +422,12 @@ export class StrategyLabConfigStore {
 
   changeRange(range: TickerRange): void {
     const previous = this.range();
+    // The picker hands over an empty date for a field it cannot use. That is
+    // not a new configuration: it keeps the warning and the restored selection.
+    if (onlyRefusesDates(previous, range)) {
+      this.range.set(range);
+      return;
+    }
     this.retainingHistoricalSelection.set(false);
     this.configurationWarning.set(null);
     this.range.set(range);
@@ -556,28 +609,19 @@ function barLabel(bars: { timespan: string; multiplier: number }): string {
   return `${bars.multiplier}-${bars.timespan === "day" ? "day" : "minute"}`;
 }
 
-function yesterday(): Date {
-  const date = new Date();
-  date.setDate(date.getDate() - 1);
-  date.setHours(0, 0, 0, 0);
-  return date;
-}
-
-function toIso(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function defaultEnd(): string {
-  return toIso(toMostRecentWeekday(yesterday()));
-}
-
-function defaultStart(): string {
-  const start = yesterday();
-  start.setDate(start.getDate() - 30);
-  return toIso(toMostRecentWeekday(start));
+/** Whether ``next`` differs from ``previous`` only in dates that became empty. */
+function onlyRefusesDates(previous: TickerRange, next: TickerRange): boolean {
+  const refusedOrSame = (was: string, now: string): boolean => now === was || now === "";
+  return (
+    (next.from !== previous.from || next.to !== previous.to) &&
+    refusedOrSame(previous.from, next.from) &&
+    refusedOrSame(previous.to, next.to) &&
+    next.symbol === previous.symbol &&
+    next.resolution === previous.resolution &&
+    next.multiplier === previous.multiplier &&
+    next.session === previous.session &&
+    next.autoFetch === previous.autoFetch
+  );
 }
 
 function loadNavOverride(): "expanded" | "collapsed" | null {

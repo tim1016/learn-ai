@@ -602,6 +602,22 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(service.preflight).toHaveBeenCalledTimes(2);
   });
 
+  it('leaves a date field alone while its year is typed, then sends the whole date (#2858)', async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    const field = screen.getByLabelText('Development from') as HTMLInputElement;
+
+    // What the browser reports for the keys 1 1 0 1 2 0 2 2: the year arrives one digit at a time.
+    for (const typed of ['0002-11-01', '0020-11-01', '0202-11-01', '2022-11-01']) {
+      fireEvent.input(field, { target: { value: typed } });
+      await view.fixture.whenStable();
+      expect(field.value).toBe(typed);
+    }
+
+    await waitFor(() => expect(service.preflight.mock.lastCall?.[0].development_start_ms).toBe(etMidnightMs('2022-11-01')));
+  });
+
   it('a date typed by hand while dates are being laid out wins: the late layout is dropped and the month count cleared', async () => {
     const service = fakeService();
     const { view } = await renderForm(service);
