@@ -67,6 +67,7 @@ const axisText = (theme: ChartTheme) => ({ color: theme.textSecondary, fontSize:
 
 /** Each fold as a row: its training window, then its test window coloured by how the fold ended. */
 export function foldTimelineSpec(charts: TestOverTimeCharts, capability: StrategyCapability | null): ChartSpec {
+  const winnerText = (fold: FoldChart) => (fold.winner === null ? 'no winner' : fullPointEntries(fold.winner, capability).map(entryText).join(' · '));
   const folds = charts.folds;
   const ran = folds.filter((fold) => fold.status === 'completed').length;
   const summary = charts.planned
@@ -79,7 +80,7 @@ export function foldTimelineSpec(charts: TestOverTimeCharts, capability: Strateg
     option: (theme) => timelineOption(folds, capability, theme),
     table: {
       caption: 'Every fold’s windows (ET) and results; — marks a value not recorded',
-      columns: ['Fold', 'Training', 'Test', 'Status', 'Training Sharpe', 'Test Sharpe', 'Retention', 'Test return', 'Test trades'],
+      columns: ['Fold', 'Training', 'Test', 'Status', 'Winner', 'Training Sharpe', 'Test Sharpe', 'Retention', 'Test return', 'Test trades'],
       rows: folds.map((fold) => ({
         key: String(fold.fold_index),
         cells: [
@@ -87,6 +88,7 @@ export function foldTimelineSpec(charts: TestOverTimeCharts, capability: Strateg
           windowText(fold.train_start_ms, fold.train_end_ms),
           windowText(fold.test_start_ms, fold.test_end_ms),
           fold.failure_reason === null ? STATUS_TEXT[fold.status] : `${STATUS_TEXT[fold.status]}: ${fold.failure_reason}`,
+          winnerText(fold),
           ratioText(fold.train_sharpe),
           ratioText(fold.test_sharpe),
           retentionText(fold),
@@ -407,6 +409,11 @@ function driftOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOption
 
 // ---------------------------------------------------------------- V16 test return per fold
 
+/** The incumbent's return on a fold's test window, or that its run failed. */
+function incumbentText(fold: FoldChart): string {
+  return fold.incumbent_failure === null ? signedPercentOrNotRecorded(fold.incumbent_return) : `run failed: ${fold.incumbent_failure}`;
+}
+
 /** Each fold's test return for the procedure's winner and for the current settings on the same window. */
 export function foldReturnsSpec(charts: TestOverTimeCharts): ChartSpec {
   return {
@@ -419,7 +426,7 @@ export function foldReturnsSpec(charts: TestOverTimeCharts): ChartSpec {
       columns: ['Fold', PROCEDURE, INCUMBENT, 'Difference'],
       rows: charts.folds.map((fold) => ({
         key: String(fold.fold_index),
-        cells: [foldName(fold), signedPercentText(fold.test_return), signedPercentText(fold.incumbent_return), signedPercentText(fold.return_difference)],
+        cells: [foldName(fold), signedPercentText(fold.test_return), fold.incumbent_failure === null ? signedPercentText(fold.incumbent_return) : 'run failed', signedPercentText(fold.return_difference)],
       })),
     },
   };
@@ -442,7 +449,7 @@ function returnsOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOpti
         if (fold === undefined) return '';
         const rows: TooltipRow[] = [
           { label: PROCEDURE, values: [signedPercentOrNotRecorded(fold.test_return)], swatch: { color: theme.candidates.all_period, dashed: false } },
-          { label: INCUMBENT, values: [signedPercentOrNotRecorded(fold.incumbent_return)], swatch: { color: theme.candidates.incumbent, dashed: false } },
+          { label: INCUMBENT, values: [incumbentText(fold)], swatch: { color: theme.candidates.incumbent, dashed: false } },
           { label: 'Difference', values: [signedPercentOrNotRecorded(fold.return_difference)] },
         ];
         return tooltipHtml({ title: `${foldName(fold)} · test ${windowText(fold.test_start_ms, fold.test_end_ms)} (ET)`, columns: ['Test return'], rows, notes: ['Each return is on the fold’s fresh starting capital.', OUT_OF_SAMPLE] }, theme);
@@ -479,10 +486,13 @@ export function foldActivitySpec(charts: TestOverTimeCharts): ChartSpec {
     option: (theme) => activityOption(charts, theme),
     table: {
       caption: 'Test trades by fold, and the total over completed folds',
-      columns: ['Fold', 'Test trades'],
+      columns: ['Fold', 'Test trades', `${INCUMBENT}, same test`],
       rows: [
-        ...charts.folds.map((fold) => ({ key: String(fold.fold_index), cells: [foldName(fold), fold.test_trades === null ? '—' : String(fold.test_trades)] })),
-        { key: 'total', cells: [charts.in_progress ? `${ALL_FOLDS} so far, before the verdict` : `${ALL_FOLDS}${minimum === null ? '' : ` (minimum ${minimum})`}`, total === null ? '—' : String(total)] },
+        ...charts.folds.map((fold) => ({
+          key: String(fold.fold_index),
+          cells: [foldName(fold), fold.test_trades === null ? '—' : String(fold.test_trades), fold.incumbent_failure === null ? (fold.incumbent_trades === null ? '—' : String(fold.incumbent_trades)) : 'run failed'],
+        })),
+        { key: 'total', cells: [charts.in_progress ? `${ALL_FOLDS} so far, before the verdict` : `${ALL_FOLDS}${minimum === null ? '' : ` (minimum ${minimum})`}`, total === null ? '—' : String(total), '—'] },
       ],
     },
   };
@@ -492,8 +502,8 @@ function activityOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOpt
   const folds = charts.folds;
   const total = charts.test_trades_total;
   const minimum = charts.forward_minimum;
-  // Only a finished verdict's total is judged against the minimum.
-  const short = !charts.in_progress && total !== null && minimum !== null && total < minimum;
+  // The verdict's own trade-floor fact, from the server.
+  const short = charts.below_minimum === true;
   return {
     grid: [
       { left: 40, right: '34%', top: 20, bottom: 28 },
@@ -515,7 +525,7 @@ function activityOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOpt
         if (fold === undefined) return '';
         const rows: TooltipRow[] = [
           { label: 'Test trades', values: [fold.test_trades === null ? NOT_RECORDED : String(fold.test_trades)] },
-          { label: `${INCUMBENT}, same test`, values: [fold.incumbent_trades === null ? NOT_RECORDED : String(fold.incumbent_trades)] },
+          { label: `${INCUMBENT}, same test`, values: [fold.incumbent_failure === null ? (fold.incumbent_trades === null ? NOT_RECORDED : String(fold.incumbent_trades)) : `run failed: ${fold.incumbent_failure}`] },
         ];
         return tooltipHtml({ title: `${foldName(fold)} · ${STATUS_TEXT[fold.status]}`, columns: ['Trades'], rows, notes: [OUT_OF_SAMPLE] }, theme);
       },

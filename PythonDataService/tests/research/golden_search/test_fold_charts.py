@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -48,6 +49,12 @@ def test_a_failed_test_run_keeps_the_winners_training_sharpe_and_nothing_else() 
     assert _numbers(view) == pytest.approx((1.5, None, None, None, 0.004, None, None, 50), abs=1e-9, rel=0)
 
 
+def test_an_incumbent_run_that_failed_says_why_and_one_never_run_says_nothing() -> None:
+    failed = replace(metrics(None, net=None, total_return=None, status="failed"), error="engine refused the window")
+    assert fold_view(_fold("completed", train=metrics(1.0), test=metrics(0.5), incumbent=failed))["incumbent_failure"] == "engine refused the window"
+    assert fold_view(_fold("completed", train=metrics(1.0), test=metrics(0.5)))["incumbent_failure"] is None
+
+
 def test_a_planned_fold_has_its_windows_and_no_numbers() -> None:
     view = fold_view({**WINDOWS, "status": "planned"})
     assert view["status"] == "planned" and view["failure_reason"] is None
@@ -76,7 +83,7 @@ def test_a_running_stage_counts_its_completed_folds_so_far_and_never_judges_them
     ]
     charts = fold_charts(_row({"validation": {"folds": folds, "verdict": None, "linked": [], "incumbent_linked": []}}))
 
-    assert (charts["planned"], charts["in_progress"], charts["test_trades_total"], charts["median_retention"]) == (False, True, 11, None)
+    assert (charts["planned"], charts["in_progress"], charts["test_trades_total"], charts["median_retention"], charts["below_minimum"]) == (False, True, 11, None, None)
     assert charts["forward_minimum"] is not None and charts["linked"] == []
     drift = {knob["name"]: knob["folds"] for knob in charts["drift"]}
     assert drift == {"gap": [pytest.approx(0.25, abs=1e-12), None], "hold_bars": [5, None]}

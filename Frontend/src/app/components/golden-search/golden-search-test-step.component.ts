@@ -16,7 +16,7 @@ import {
   sharpeRetentionSpec,
 } from './golden-search-test-charts';
 import { GoldenSearchService } from './golden-search.service';
-import type { StrategyCapability, StudyDetail, TestOverTimeCharts } from './golden-search.types';
+import { isLive, type StrategyCapability, type StudyDetail, type TestOverTimeCharts } from './golden-search.types';
 
 /**
  * The Test over time step (#2696): each fold re-ran the frozen procedure on
@@ -67,21 +67,27 @@ export class GoldenSearchTestStepComponent {
 
   constructor() {
     // A reload keeps the drawn charts while it reads; a change of params would blank them.
+    // The first read starts with the progress at creation; a reload asked for while one is in flight is dropped,
+    // so a change during any read waits for it to settle and then catches up.
     let seen: string | null = null;
     effect(() => {
       const progress = this.progress();
-      // A reload asked for while one is in flight is dropped: wait for it to settle, then catch up.
-      if (this.charts.isLoading()) return;
-      if (seen !== null && progress !== seen) untracked(() => this.charts.reload());
+      const loading = this.charts.isLoading();
+      if (seen === null) {
+        seen = progress;
+        return;
+      }
+      if (loading || progress === seen) return;
       seen = progress;
+      untracked(() => this.charts.reload());
     });
   }
 
-  /** Running, or stopped before its verdict. */
-  protected readonly running = computed(() => this.study().state === 'validation_running');
+  /** Testing over time has a live worker (a stopped one keeps the stage state so Finish can resume it). */
+  protected readonly running = computed(() => this.study().state === 'validation_running' && isLive(this.study().presented_status));
 
   protected readonly pending = computed(() =>
-    this.study().state === 'validation_running'
+    this.running()
       ? 'The folds are running; each appears here when the stage finishes.'
       : 'The procedure has not been tested over time yet. It runs after the search.',
   );
