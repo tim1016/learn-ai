@@ -20,6 +20,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from itertools import takewhile
 from pathlib import Path
 from typing import Any, Literal
 
@@ -51,7 +52,7 @@ from app.engine.strategy.registry import (
 )
 from app.engine.strategy.signal_program import SignalDecision
 from app.jobs.phases import friendly
-from app.lean_sidecar.trading_calendar import session_start_for_bar_count
+from app.lean_sidecar.trading_calendar import session_windows_ms_utc
 from app.models.responses import (
     LeanPortfolioStatsResponse,
     LeanRuntimeStatsResponse,
@@ -71,7 +72,7 @@ from app.schemas.engine_backtest import (
     _EngineDataPolicyModel,
 )
 from app.schemas.engine_validation import EngineValidationAnalyticsResponse
-from app.services.engine_bars_service import read_consolidated_bars
+from app.services.engine_bars_service import consolidate_bars
 from app.services.engine_validation_analytics import (
     ValidationEquityPoint,
     ValidationTrade,
@@ -88,6 +89,9 @@ from app.services.strategy_view_replay import record_staged_decisions
 from app.utils.session_anchors import et_day_end_ms, et_midnight_ms
 
 logger = logging.getLogger(__name__)
+
+# A lead-in read looks back at most this many sessions: about one trading year.
+MAX_LEAD_IN_SESSIONS = 250
 
 
 def _reject_hidden_params(reg: StrategyRegistration, params: dict[str, Any]) -> None:
@@ -512,40 +516,41 @@ def replay_engine_run(
 def read_replay_lead_in(request: EngineBacktestRequest, *, timeframe_ms: int, count: int) -> list[TradeBar]:
     """Up to ``count`` decision bars from just before a saved run's data, oldest first (#2800).
 
-    Read as the replay reads its own bars -- the same roots, session filter
-    and consolidator -- and kept only where the Signal Session would accept
-    them: exactly ``timeframe_ms`` wide. Read-only: a session the lake cannot
-    read is never fetched, and the bars start after the latest such session,
-    so they run unbroken up to the run's first bar. A daily run gets none: its
-    bars are not consolidated minute bars.
+    Read as the replay reads its own bars -- the same roots, minute reader,
+    session filter and consolidator -- and kept only where the Signal Session
+    would accept them: exactly ``timeframe_ms`` wide. Read-only: a session the
+    lake cannot read is never fetched, and the bars start after the latest
+    such session, so they run unbroken up to the run's first bar.
+
+    The read goes back at most ``MAX_LEAD_IN_SESSIONS`` sessions, so a coarse
+    timeframe gets fewer than ``count`` bars: at four hours, two a session,
+    500. A daily run gets none: its bars are not consolidated minute bars.
     """
     policy = request.data_policy
     data_start = request.warmup_from_date or request.from_date
     if policy is None or data_start is None or request.resolution != "minute":
         return []
     first = _parse_iso_date(data_start, "data_start")
-    try:
-        start = session_start_for_bar_count(et_midnight_ms(first), target_bars=count, bar_span_ms=timeframe_ms)
-    except LookupError:
-        # No run of sessions holds that many bars: the bar is longer than a session.
-        return []
-    end = first - timedelta(days=1)
+    # About five days in seven are sessions, so twice the bound in calendar days holds at least the bound.
+    sessions = session_windows_ms_utc(first - timedelta(days=2 * MAX_LEAD_IN_SESSIONS), first - timedelta(days=1))
+    # Newest first: go back until the sessions' whole bars cover ``count``; a bar longer than a session counts as one.
+    dates: list[date] = []
+    wanted = count
+    for session in reversed(sessions[-MAX_LEAD_IN_SESSIONS:]):
+        dates.append(session.session_date)
+        wanted -= max(1, (session.close_ms_utc - session.open_ms_utc) // timeframe_ms)
+        if wanted <= 0:
+            break
     roots = _resolve_lean_data_roots(adjusted=_policy_adjusted(policy))
-    coverage = check_availability(roots, policy.symbol, start, end, resolution="minute", session=policy.session)
-    gaps = [*coverage.missing_days, *coverage.unreadable_days]
-    if gaps:
-        start = max(gaps) + timedelta(days=1)
-    if end < start:
+    coverage = check_availability(roots, policy.symbol, dates[-1], dates[0], resolution="minute", session=policy.session)
+    unread = {*coverage.missing_days, *coverage.unreadable_days}
+    readable = list(takewhile(lambda day: day not in unread, dates))
+    if not readable:
         return []
-    bars = read_consolidated_bars(
-        roots=roots,
-        symbol=policy.symbol,
-        start=start,
-        end=end,
-        session=policy.session,
-        timespan="minute",
-        multiplier=timeframe_ms // 60_000,
-    ).bars
+    reader = LeanMinuteDataReader(roots, session=policy.session)
+    bars = consolidate_bars(
+        reader.iter_bars(policy.symbol, readable[-1], readable[0]), timedelta(milliseconds=timeframe_ms)
+    )
     return [bar for bar in bars if bar.end_ms - bar.start_ms == timeframe_ms][-count:]
 
 

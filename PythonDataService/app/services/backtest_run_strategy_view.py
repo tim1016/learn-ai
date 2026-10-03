@@ -14,7 +14,8 @@ stored with the run.
 The view also carries lead-in bars for catalogue indicators to warm up on
 (#2800): the decision bars just before its first candle, from the replay
 itself where the candle cap left some out, then from the lake as the replay
-reads it. The lake is only read: where it lacks a day the lead-in is shorter.
+reads it. The lake is only read, and no more than about a trading year back:
+where it lacks a day, or the bars are coarse, the lead-in is shorter.
 """
 
 from __future__ import annotations

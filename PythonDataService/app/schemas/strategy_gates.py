@@ -12,7 +12,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.schemas.strategy_view import MAX_LEAD_IN_BARS, LeadInBar
+from app.schemas.strategy_view import MAX_LEAD_IN_BARS, DecisionBarOhlcv, LeadInBar
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 GateSign = Literal["gt", "lt"]
@@ -77,17 +77,9 @@ class StrategyGateList(BaseModel):
     gates: list[CustomGate]
 
 
-class GateCandle(BaseModel):
+class GateCandle(DecisionBarOhlcv):
     """One decision candle a gate is judged on: its OHLCV and the bot's values by key."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    bar_close_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-    open: FiniteFloat
-    high: FiniteFloat
-    low: FiniteFloat
-    close: FiniteFloat
-    volume: FiniteFloat = Field(ge=0)
     values: dict[str, FiniteFloat | None] = Field(default_factory=dict)
 
 

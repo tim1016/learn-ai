@@ -138,12 +138,8 @@ class StrategyViewCandle(BaseModel):
     gates: dict[str, bool | None]
 
 
-class LeadInBar(BaseModel):
-    """One decision bar from before the view's first candle, labelled by its close.
-
-    A catalogue indicator is computed over these and then the candles, so it
-    has warmed up by the first candle. A lead-in bar is never drawn or judged.
-    """
+class DecisionBarOhlcv(BaseModel):
+    """One decision bar as a catalogue indicator reads it: its OHLCV, labelled by its close."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -153,6 +149,14 @@ class LeadInBar(BaseModel):
     low: float = Field(allow_inf_nan=False)
     close: float = Field(allow_inf_nan=False)
     volume: float = Field(ge=0, allow_inf_nan=False)
+
+
+class LeadInBar(DecisionBarOhlcv):
+    """One decision bar from before the view's first candle, labelled by its close.
+
+    A catalogue indicator is computed over these and then the candles, so it
+    has warmed up by the first candle. A lead-in bar is never drawn or judged.
+    """
 
 
 class StrategyViewResponse(BaseModel):
@@ -183,6 +187,7 @@ class StrategyViewResponse(BaseModel):
 __all__ = [
     "MAX_LEAD_IN_BARS",
     "CatalogueIndicatorRef",
+    "DecisionBarOhlcv",
     "DecisionExplanationView",
     "ExplainedCheckView",
     "ExplainedValueView",

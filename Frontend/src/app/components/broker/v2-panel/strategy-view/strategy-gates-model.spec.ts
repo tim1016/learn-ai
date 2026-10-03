@@ -80,7 +80,7 @@ describe('strategy gates model (#2639)', () => {
       ['Candle', ['open', 'high', 'low', 'close', 'volume']],
       ['Catalogue', ['EMA10', 'VWAP']],
     ]);
-    expect(groups.find((group) => group.title === 'Catalogue')?.note).toBe('chart-computed from these candles');
+    expect(groups.find((group) => group.title === 'Catalogue')?.note).toBe('computed by the chart, not recorded by the strategy');
   });
 
   it('leaves out a catalogue name the bot already records, which the data plane reads as the bot’s value', () => {

@@ -24,9 +24,13 @@ average) still has no value. A recursive indicator still carries a share of
 its seed, smaller with every earlier bar: by ``indicator_warmup_policy``'s
 bound it is at most e⁻¹⁰ after five times the length for an EMA and ten times
 for Wilder's RMA; a cumulative sum such as OBV never forgets its start, and
-KAMA's memory follows a slow length the catalogue does not expose. Strategy
-Lab's lead-in comes from the lake; a bot sends none, because its before-start
-candles are already every earlier bar it kept.
+KAMA's memory follows a slow length the catalogue does not expose. A lead-in
+holds at most 1,000 bars, so it reaches that bound only up to length 200 for
+an EMA and 100 for an RMA; the catalogue allows both up to 500, and a longer
+one keeps more of its seed. Strategy Lab's lead-in is the replayed run's own
+bars the candle cap left out, then the lake's bars from before the run; a bot
+sends none, because its before-start candles are already every earlier bar it
+kept.
 
 Formula: g = Σ aᵢ·Xᵢ + c; bright where g > 0 (``gt``) or g < 0 (``lt``); no
   result where any Xᵢ is missing or a value is not finite. A catalogue Xᵢ on

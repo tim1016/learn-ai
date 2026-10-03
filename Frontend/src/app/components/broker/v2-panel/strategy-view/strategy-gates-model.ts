@@ -26,6 +26,9 @@ export const DRAFT_GATE_ID = 'draft';
 /** The candle fields every gate can read. */
 const CANDLE_VARIABLES = ['open', 'high', 'low', 'close', 'volume'] as const;
 
+/** Said under the catalogue's title, on a bot's view and Strategy Lab's alike. */
+const CATALOGUE_NOTE = 'computed by the chart, not recorded by the strategy';
+
 /** A gate's results, tied to the candles they were judged on. */
 export interface GateEvaluation {
   /** The judged candles' bar closes, in the order `results` lists them. */
@@ -162,13 +165,13 @@ export function gateVariableGroups(
     catalogue === null
       ? {
           title: 'Catalogue',
-          note: 'chart-computed from these candles',
+          note: CATALOGUE_NOTE,
           chips: [],
           unavailable: 'The data plane did not list its catalogue. Refresh to try again.',
         }
       : {
           title: 'Catalogue',
-          note: 'chart-computed from these candles',
+          note: CATALOGUE_NOTE,
           chips: catalogue
             .filter((indicator) => !recorded.has(indicator.variable.toUpperCase()))
             .map((indicator) => ({ name: indicator.variable, hint: indicator.description })),
