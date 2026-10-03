@@ -19037,6 +19037,100 @@
         "title": "GoldenSearchCosts",
         "type": "object"
       },
+      "GoldenSearchCoverageMeasured": {
+        "additionalProperties": false,
+        "properties": {
+          "months": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchCoverageMonth"
+            },
+            "title": "Months",
+            "type": "array"
+          },
+          "status": {
+            "const": "measured",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "months"
+        ],
+        "title": "GoldenSearchCoverageMeasured",
+        "type": "object"
+      },
+      "GoldenSearchCoverageMissing": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "const": "missing",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "GoldenSearchCoverageMissing",
+        "type": "object"
+      },
+      "GoldenSearchCoverageMonth": {
+        "additionalProperties": false,
+        "properties": {
+          "complete": {
+            "title": "Complete",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "fetching": {
+            "title": "Fetching",
+            "type": "integer"
+          },
+          "missing": {
+            "title": "Missing",
+            "type": "integer"
+          },
+          "month": {
+            "maximum": 12.0,
+            "minimum": 1.0,
+            "title": "Month",
+            "type": "integer"
+          },
+          "month_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Month Start Ms",
+            "type": "integer"
+          },
+          "sessions": {
+            "title": "Sessions",
+            "type": "integer"
+          },
+          "year": {
+            "title": "Year",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "month_start_ms",
+          "year",
+          "month",
+          "sessions",
+          "complete",
+          "fetching",
+          "failed",
+          "missing"
+        ],
+        "title": "GoldenSearchCoverageMonth",
+        "type": "object"
+      },
       "GoldenSearchCreateStudyRequest": {
         "additionalProperties": false,
         "properties": {
@@ -21464,6 +21558,112 @@
         "title": "GoldenSearchMetrics",
         "type": "object"
       },
+      "GoldenSearchMinimumWindow": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "minimum_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum Trades"
+          },
+          "trading_years": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "\u03a3 selected / scheduled sessions per year; null on a fixed-floor plan.",
+            "title": "Trading Years"
+          },
+          "years": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchMinimumYear"
+            },
+            "title": "Years",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "minimum_trades",
+          "trading_years",
+          "years"
+        ],
+        "title": "GoldenSearchMinimumWindow",
+        "type": "object"
+      },
+      "GoldenSearchMinimumYear": {
+        "additionalProperties": false,
+        "properties": {
+          "selected_sessions": {
+            "title": "Selected Sessions",
+            "type": "integer"
+          },
+          "year": {
+            "title": "Year",
+            "type": "integer"
+          },
+          "year_sessions": {
+            "title": "Year Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "year",
+          "selected_sessions",
+          "year_sessions"
+        ],
+        "title": "GoldenSearchMinimumYear",
+        "type": "object"
+      },
+      "GoldenSearchMinimums": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_trades_per_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null on a fixed-floor plan.",
+            "title": "Expected Trades Per Year"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchMinimumWindow"
+            },
+            "title": "Windows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "expected_trades_per_year",
+          "windows"
+        ],
+        "title": "GoldenSearchMinimums",
+        "type": "object"
+      },
       "GoldenSearchMonthlyResult": {
         "additionalProperties": false,
         "properties": {
@@ -21714,6 +21914,256 @@
           "cells"
         ],
         "title": "GoldenSearchPairMap",
+        "type": "object"
+      },
+      "GoldenSearchPlanCharts": {
+        "additionalProperties": false,
+        "properties": {
+          "coverage": {
+            "discriminator": {
+              "mapping": {
+                "measured": "#/components/schemas/GoldenSearchCoverageMeasured",
+                "missing": "#/components/schemas/GoldenSearchCoverageMissing"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchCoverageMeasured"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchCoverageMissing"
+              }
+            ],
+            "title": "Coverage"
+          },
+          "minimums": {
+            "$ref": "#/components/schemas/GoldenSearchMinimums"
+          },
+          "search_space": {
+            "description": "Every declared knob, in the plan's search order.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchPlanKnob"
+            },
+            "title": "Search Space",
+            "type": "array"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchPlanWindow"
+            },
+            "title": "Windows",
+            "type": "array"
+          },
+          "workload": {
+            "$ref": "#/components/schemas/GoldenSearchWorkload"
+          }
+        },
+        "required": [
+          "windows",
+          "search_space",
+          "workload",
+          "minimums",
+          "coverage"
+        ],
+        "title": "GoldenSearchPlanCharts",
+        "type": "object"
+      },
+      "GoldenSearchPlanKnob": {
+        "additionalProperties": false,
+        "properties": {
+          "current": {
+            "description": "The frozen incumbent's value.",
+            "title": "Current",
+            "type": "number"
+          },
+          "current_position": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Position"
+          },
+          "domain_high": {
+            "title": "Domain High",
+            "type": "number"
+          },
+          "domain_low": {
+            "title": "Domain Low",
+            "type": "number"
+          },
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "high_position": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "High Position"
+          },
+          "importance": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Importance"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "low": {
+            "description": "The searched range's low end, or the held value.",
+            "title": "Low",
+            "type": "number"
+          },
+          "low_position": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Positions in the legal domain, 0 to 1; null for a domain of one value.",
+            "title": "Low Position"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "searched": {
+            "title": "Searched",
+            "type": "boolean"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settings the knob can take: 1 when held; null when its range is not valid.",
+            "title": "Values"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "unit",
+          "searched",
+          "low",
+          "high",
+          "step",
+          "values",
+          "importance",
+          "current",
+          "domain_low",
+          "domain_high",
+          "low_position",
+          "high_position",
+          "current_position"
+        ],
+        "title": "GoldenSearchPlanKnob",
+        "type": "object"
+      },
+      "GoldenSearchPlanWindow": {
+        "additionalProperties": false,
+        "properties": {
+          "end_ms": {
+            "description": "Exclusive.",
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "run_up",
+              "development",
+              "recent",
+              "training",
+              "test",
+              "forward",
+              "final"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "minimum_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The trades the window must reach; null for the run-up and a single fold's test, which have none.",
+            "title": "Minimum Trades"
+          },
+          "sessions": {
+            "description": "The canonical calendar's sessions in the window.",
+            "title": "Sessions",
+            "type": "integer"
+          },
+          "start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "kind",
+          "start_ms",
+          "end_ms",
+          "sessions",
+          "minimum_trades"
+        ],
+        "title": "GoldenSearchPlanWindow",
         "type": "object"
       },
       "GoldenSearchPreflight": {
@@ -23366,6 +23816,37 @@
         "title": "GoldenSearchStageEstimate",
         "type": "object"
       },
+      "GoldenSearchStageWorkload": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "planned": {
+            "description": "The receipt's planned maximum evaluations.",
+            "title": "Planned",
+            "type": "integer"
+          },
+          "reserved": {
+            "description": "Evaluations the stage has reserved so far.",
+            "title": "Reserved",
+            "type": "integer"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "label",
+          "planned",
+          "reserved"
+        ],
+        "title": "GoldenSearchStageWorkload",
+        "type": "object"
+      },
       "GoldenSearchStressResult": {
         "additionalProperties": false,
         "properties": {
@@ -24906,6 +25387,38 @@
           "end_ms"
         ],
         "title": "GoldenSearchWindow",
+        "type": "object"
+      },
+      "GoldenSearchWorkload": {
+        "additionalProperties": false,
+        "properties": {
+          "cap": {
+            "title": "Cap",
+            "type": "integer"
+          },
+          "consumed": {
+            "title": "Consumed",
+            "type": "integer"
+          },
+          "planned_total": {
+            "title": "Planned Total",
+            "type": "integer"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchStageWorkload"
+            },
+            "title": "Stages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "cap",
+          "consumed",
+          "planned_total",
+          "stages"
+        ],
+        "title": "GoldenSearchWorkload",
         "type": "object"
       },
       "GoldenSearchZoomRound": {
@@ -65745,6 +66258,107 @@
           }
         },
         "summary": "Get Candidate",
+        "tags": [
+          "research-golden-search"
+        ]
+      }
+    },
+    "/api/research/golden-search/studies/{study_id}/charts/plan": {
+      "get": {
+        "description": "The Plan step's charts: the frozen windows, search space, workload, trade minimums and data coverage.",
+        "operationId": "get_plan_charts_api_research_golden_search_studies__study_id__charts_plan_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchPlanCharts"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Plan Charts",
         "tags": [
           "research-golden-search"
         ]

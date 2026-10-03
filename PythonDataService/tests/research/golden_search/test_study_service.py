@@ -91,6 +91,10 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     row = await driver.lock(symbol)
     detail = await driver.detail(row)
     assert detail["state"] == "locked" and detail["presented_status"] == "idle"
+    # The Plan charts read the frozen windows and the receipt's estimate; nothing is reserved before the search.
+    planned = await service.plan_step_charts(row.id)
+    assert [window["kind"] for window in planned["windows"]][:2] == ["run_up", "development"]
+    assert {stage["reserved"] for stage in planned["workload"]["stages"]} == {0} and planned["coverage"]["status"] in ("measured", "missing")
     assert detail["permitted_actions"] == ["continue", "run_research", "close", "revise"]
     assert detail["guidance"]["headline"] == "Ready to search"
     assert detail["scope"]["final_state"] == "locked"

@@ -5070,6 +5070,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/golden-search/studies/{study_id}/charts/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plan Charts
+         * @description The Plan step's charts: the frozen windows, search space, workload, trade minimums and data coverage.
+         */
+        get: operations["get_plan_charts_api_research_golden_search_studies__study_id__charts_plan_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/golden-search/studies/{study_id}/charts/search": {
         parameters: {
             query?: never;
@@ -13608,6 +13628,45 @@ export interface components {
             /** Slippage Per Share */
             slippage_per_share: number;
         };
+        /** GoldenSearchCoverageMeasured */
+        GoldenSearchCoverageMeasured: {
+            /** Months */
+            months: components["schemas"]["GoldenSearchCoverageMonth"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "measured";
+        };
+        /** GoldenSearchCoverageMissing */
+        GoldenSearchCoverageMissing: {
+            /** Reason */
+            reason: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            status: "missing";
+        };
+        /** GoldenSearchCoverageMonth */
+        GoldenSearchCoverageMonth: {
+            /** Complete */
+            complete: number;
+            /** Failed */
+            failed: number;
+            /** Fetching */
+            fetching: number;
+            /** Missing */
+            missing: number;
+            /** Month */
+            month: number;
+            /** Month Start Ms */
+            month_start_ms: number;
+            /** Sessions */
+            sessions: number;
+            /** Year */
+            year: number;
+        };
         /** GoldenSearchCreateStudyRequest */
         GoldenSearchCreateStudyRequest: {
             /** Idempotencykey */
@@ -14533,6 +14592,41 @@ export interface components {
             /** Win Rate */
             win_rate: number | null;
         };
+        /** GoldenSearchMinimumWindow */
+        GoldenSearchMinimumWindow: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Minimum Trades */
+            minimum_trades: number | null;
+            /**
+             * Trading Years
+             * @description Σ selected / scheduled sessions per year; null on a fixed-floor plan.
+             */
+            trading_years: number | null;
+            /** Years */
+            years: components["schemas"]["GoldenSearchMinimumYear"][];
+        };
+        /** GoldenSearchMinimumYear */
+        GoldenSearchMinimumYear: {
+            /** Selected Sessions */
+            selected_sessions: number;
+            /** Year */
+            year: number;
+            /** Year Sessions */
+            year_sessions: number;
+        };
+        /** GoldenSearchMinimums */
+        GoldenSearchMinimums: {
+            /**
+             * Expected Trades Per Year
+             * @description Null on a fixed-floor plan.
+             */
+            expected_trades_per_year: number | null;
+            /** Windows */
+            windows: components["schemas"]["GoldenSearchMinimumWindow"][];
+        };
         /** GoldenSearchMonthlyResult */
         GoldenSearchMonthlyResult: {
             /**
@@ -14617,6 +14711,94 @@ export interface components {
             y_knob: string;
             /** Y Values */
             y_values: number[];
+        };
+        /** GoldenSearchPlanCharts */
+        GoldenSearchPlanCharts: {
+            /** Coverage */
+            coverage: components["schemas"]["GoldenSearchCoverageMeasured"] | components["schemas"]["GoldenSearchCoverageMissing"];
+            minimums: components["schemas"]["GoldenSearchMinimums"];
+            /**
+             * Search Space
+             * @description Every declared knob, in the plan's search order.
+             */
+            search_space: components["schemas"]["GoldenSearchPlanKnob"][];
+            /** Windows */
+            windows: components["schemas"]["GoldenSearchPlanWindow"][];
+            workload: components["schemas"]["GoldenSearchWorkload"];
+        };
+        /** GoldenSearchPlanKnob */
+        GoldenSearchPlanKnob: {
+            /**
+             * Current
+             * @description The frozen incumbent's value.
+             */
+            current: number;
+            /** Current Position */
+            current_position: number | null;
+            /** Domain High */
+            domain_high: number;
+            /** Domain Low */
+            domain_low: number;
+            /** High */
+            high: number;
+            /** High Position */
+            high_position: number | null;
+            /** Importance */
+            importance: number | null;
+            /** Label */
+            label: string;
+            /**
+             * Low
+             * @description The searched range's low end, or the held value.
+             */
+            low: number;
+            /**
+             * Low Position
+             * @description Positions in the legal domain, 0 to 1; null for a domain of one value.
+             */
+            low_position: number | null;
+            /** Name */
+            name: string;
+            /** Searched */
+            searched: boolean;
+            /** Step */
+            step: number | null;
+            /** Unit */
+            unit: string;
+            /**
+             * Values
+             * @description Settings the knob can take: 1 when held; null when its range is not valid.
+             */
+            values: number | null;
+        };
+        /** GoldenSearchPlanWindow */
+        GoldenSearchPlanWindow: {
+            /**
+             * End Ms
+             * @description Exclusive.
+             */
+            end_ms: number;
+            /** Key */
+            key: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "run_up" | "development" | "recent" | "training" | "test" | "forward" | "final";
+            /** Label */
+            label: string;
+            /**
+             * Minimum Trades
+             * @description The trades the window must reach; null for the run-up and a single fold's test, which have none.
+             */
+            minimum_trades: number | null;
+            /**
+             * Sessions
+             * @description The canonical calendar's sessions in the window.
+             */
+            sessions: number;
+            /** Start Ms */
+            start_ms: number;
         };
         /**
          * GoldenSearchPreflight
@@ -15160,6 +15342,23 @@ export interface components {
             /** Stage */
             stage: string;
         };
+        /** GoldenSearchStageWorkload */
+        GoldenSearchStageWorkload: {
+            /** Label */
+            label: string;
+            /**
+             * Planned
+             * @description The receipt's planned maximum evaluations.
+             */
+            planned: number;
+            /**
+             * Reserved
+             * @description Evaluations the stage has reserved so far.
+             */
+            reserved: number;
+            /** Stage */
+            stage: string;
+        };
         /** GoldenSearchStressResult */
         GoldenSearchStressResult: {
             /** Label */
@@ -15653,6 +15852,17 @@ export interface components {
             end_ms: number;
             /** Start Ms */
             start_ms: number;
+        };
+        /** GoldenSearchWorkload */
+        GoldenSearchWorkload: {
+            /** Cap */
+            cap: number;
+            /** Consumed */
+            consumed: number;
+            /** Planned Total */
+            planned_total: number;
+            /** Stages */
+            stages: components["schemas"]["GoldenSearchStageWorkload"][];
         };
         /** GoldenSearchZoomRound */
         GoldenSearchZoomRound: {
@@ -33898,6 +34108,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GoldenSearchCandidateDetail"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+        };
+    };
+    get_plan_charts_api_research_golden_search_studies__study_id__charts_plan_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchPlanCharts"];
                 };
             };
             /** @description Bad Request */

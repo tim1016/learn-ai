@@ -957,6 +957,12 @@ async def window_evaluations(conn: asyncpg.Connection, study_id: str, *, window_
     return [_evaluation(row) for row in rows]
 
 
+async def reserved_by_stage(conn: asyncpg.Connection, study_id: str) -> dict[str, int]:
+    """How many evaluation rows each stage has reserved for a study, pending ones included."""
+    rows = await conn.fetch("SELECT stage, COUNT(*) AS n FROM research_golden_search_evaluations WHERE study_id = $1 GROUP BY stage", study_id)
+    return {str(row["stage"]): int(row["n"]) for row in rows}
+
+
 async def count_recorded_evaluations(conn: asyncpg.Connection, study_id: str, steps: Sequence[str]) -> int:
     """Evaluations with a recorded result for the named steps — a running stage's progress."""
     value = await conn.fetchval(
