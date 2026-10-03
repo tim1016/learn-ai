@@ -1365,21 +1365,19 @@ def _build_safe_flatten_plan(
     )
 
 
-SETTLE_UNKNOWN_EXIT_ORDER_HAS_A_PAGE: Final[bool] = False
-"""Whether any operator page can run ``settle_unknown_exit_order`` (#2854). None can yet.
+SETTLE_UNKNOWN_EXIT_ORDER_HAS_A_PAGE: Final[bool] = True
+"""Whether any operator page can run ``settle_unknown_exit_order`` (#2854). The bot's page can.
 
-The action needs what no page collects today: the operator's attestation of
-what Alpaca shows, made after reading the Clerk's own findings. Until a page
-does, nothing may point an operator at it. So while this is ``False`` the
-action is never a catalog's primary action -- which is also what a roster
+The action needs the operator's attestation of what Alpaca shows, made after
+reading the Clerk's own findings. The bot's page collects it: its toolbar
+opens a ticket that asks, shows what the Clerk read, and confirms. So the
+action can be a catalog's primary action -- which is also what a roster
 row's command and a bot page's primary command are taken from -- and an
-account-scoped catalog does not list it, since all it could say there is
-that the order is settled from a page that has no such control.
+account-scoped catalog lists it, never available there, saying the order is
+settled from its bot's page.
 
 A bot-scoped catalog always carries it: the Clerk's bot-scoped check and
 execute routes and the panel's execute route recheck a request against it.
-
-The page that lands flips this one constant.
 """
 
 
@@ -1464,7 +1462,7 @@ def _primary_action_id(capabilities: list[RecoveryCapability]) -> str | None:
         "resolve_execution_coverage",
         "cancel_verified_working_orders",
         # Above Reconcile now, which cannot settle an order no read shows
-        # (#2854) -- once a page can run it; until then never primary.
+        # (#2854) -- while a page can run it; without one, never primary.
         *(("settle_unknown_exit_order",) if SETTLE_UNKNOWN_EXIT_ORDER_HAS_A_PAGE else ()),
         "reconcile_now",
         "stop_bot_decisions",

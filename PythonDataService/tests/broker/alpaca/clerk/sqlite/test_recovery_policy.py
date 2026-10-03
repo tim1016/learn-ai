@@ -6,7 +6,6 @@ from dataclasses import replace
 
 import pytest
 
-from app.broker.alpaca.clerk.sqlite import recovery_policy
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ProjectedExecutionCoverageConflict,
     ProjectedOrder,
@@ -1335,34 +1334,32 @@ def test_settling_is_offered_for_a_stopped_bots_unknown_closing_order() -> None:
     assert [item.reference for item in action.evidence] == ["order:bot:spy-bot:close-1"]
 
 
-def test_settling_is_kept_off_every_operator_surface_until_a_page_can_run_it(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """No page collects an attestation yet, so nothing points an operator at the action.
+def test_settling_is_the_bots_cure_and_the_accounts_catalog_says_where_it_is_done() -> None:
+    """The bot's page collects the attestation, so the action is pointed at.
 
-    It is never the primary action -- what a roster row's command and a bot
-    page's primary command are taken from -- and the account's catalog does
-    not list it. The bot's own catalog still carries it, available, for the
-    routes that recheck a request against it. One constant surfaces it.
+    It is the bot's primary action -- what a roster row's command and a bot
+    page's primary command are taken from: Reconcile now cannot settle an
+    order no read shows. The account's catalog lists it, never available
+    there, and says the order is settled from its bot's page.
     """
     bot = _stopped_with_an_unknown_exit(uncertainties=(_bot_exit_episode("ORDER_OUTCOME_UNKNOWN"),))
     account = replace(bot, strategy_instance_id=None)
 
-    assert (_settle(bot).available, _settle(bot).primary) == (True, False)
-    assert [action.action_id for action in build_recovery_catalog(bot) if action.primary] == ["reconcile_now"]
-    assert "settle_unknown_exit_order" not in {
-        action.action_id for action in build_recovery_catalog(account)
-    }
-
-    monkeypatch.setattr(recovery_policy, "SETTLE_UNKNOWN_EXIT_ORDER_HAS_A_PAGE", True)
-
-    # Reconcile now cannot settle an order no read shows, so this is the bot's cure.
     assert [action.action_id for action in build_recovery_catalog(bot) if action.primary] == [
         "settle_unknown_exit_order"
     ]
+    # Still gated, it is no cure yet, and Reconcile now is the primary as before.
+    still_running = replace(bot, runs=_context().runs)
+    assert (_settle(still_running).available, _settle(still_running).primary) == (False, False)
+    assert [action.action_id for action in build_recovery_catalog(still_running) if action.primary] == [
+        "reconcile_now"
+    ]
     on_the_desk = _settle(account)
-    assert (on_the_desk.available, on_the_desk.unavailable_reason_code) == (False, "NO_UNKNOWN_EXIT_ORDER")
+    assert (on_the_desk.available, on_the_desk.primary) == (False, False)
+    assert (on_the_desk.unavailable_reason_code, on_the_desk.needed) == ("NO_UNKNOWN_EXIT_ORDER", False)
     assert on_the_desk.unavailable_reason == "An uncertain closing order is settled from its bot's page."
+    assert on_the_desk.next_step == "Open the bot whose closing order the Clerk could not confirm."
+    assert on_the_desk.settlement is None
 
 
 def test_the_settle_ticket_says_what_was_sent_and_offers_both_attestations() -> None:

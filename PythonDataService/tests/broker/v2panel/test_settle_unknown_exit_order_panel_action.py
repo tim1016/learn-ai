@@ -312,30 +312,23 @@ def _settle_on_the_page(repo: ClerkSqliteRepository, *, running: bool) -> tuple[
     return entry.availability, entry.reason, action["settlement"]
 
 
-def test_no_row_and_no_page_names_settling_as_the_bots_cure_while_no_page_can_run_it(
-    lost_closing_order,
-) -> None:
+def test_settling_is_the_cure_a_row_and_a_page_name_for_the_bot(lost_closing_order) -> None:
     """A roster row's command and a bot page's primary command are the bot's cure.
 
-    No page can collect an attestation yet, so the cure of a bot whose
-    closing order is unknown is still the one a row and a page can run:
-    Reconcile now. Settling is offered by the Clerk's catalog all the same.
+    The bot's page collects the attestation, so the cure of a bot whose
+    closing order is unknown is to settle it: Reconcile now cannot settle an
+    order no read shows. The row's command carries the order it is about,
+    which is what the page's ticket opens from.
     """
     repo, _alpaca, _facade = lost_closing_order
-    reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
-    try:
-        projection = reader.bot_snapshot(settling.SID)
-    finally:
-        reader.close()
-    assert projection is not None
+    projection = _projection(repo)
 
     row_action = _catalog_row_action(projection, row_needs_attention=True)
     cure = _recovery_cure(projection, bot_owns_problem=True)
 
-    assert row_action is not None and row_action.action_id == "reconcile_now"
-    assert cure is not None and cure.action_id == "reconcile_now"
-    settle = next(action for action in projection.recovery_actions if action.action_id == SETTLE)
-    assert (settle.available, settle.primary) == (True, False)
+    assert row_action is not None and row_action.action_id == SETTLE
+    assert row_action.settlement is not None and row_action.confirmation is not None
+    assert cure is not None and cure.action_id == SETTLE
 
 
 def test_the_bot_page_offers_settling_from_its_toolbar_with_the_ticket_it_opens(lost_closing_order) -> None:
