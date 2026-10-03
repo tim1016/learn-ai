@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -17,6 +18,8 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter
 from app.broker.alpaca.clerk.sqlite.folds import DEFAULT_FOLD_REGISTRY
+from app.broker.alpaca.clerk.sqlite.projection_models import TimelineEntry
+from app.broker.alpaca.clerk.sqlite.reads import FILL_CREDIT_WITHHELD_BY_DISCHARGE
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.config import reset_alpaca_settings_for_testing
@@ -32,6 +35,7 @@ from app.services.broker_v2_panel.evidence_service import (
     _SQLITE_CUSTODY_COPY,
     _SQLITE_OPERATION_STATE_COPY,
     _SQLITE_TRANSITION_COPY,
+    _sqlite_evidence_entry,
 )
 from tests.broker.v2panel.fixtures import ACCT, OTHER_SID, SID
 
@@ -144,6 +148,36 @@ def test_sqlite_evidence_copy_covers_closed_fold_and_state_vocabularies() -> Non
         "unknown",
     }
     assert set(_SQLITE_CUSTODY_COPY) == {"ACCOUNT_CLERK"}
+
+
+def test_a_fill_recorded_without_credit_does_not_read_as_a_credited_one() -> None:
+    """A fill a discharge had already counted moved no position, and its timeline entry says so (#2854)."""
+    credited = TimelineEntry(
+        sequence=7,
+        operation_ref="effect:exit-1",
+        effect_operation_id="effect:exit-1",
+        command_id="command:exit-1",
+        order_ref="order-1",
+        broker_order_id="broker-order-1",
+        transition_kind="EXECUTION_SLICE_FILLED",
+        operation_state="in_progress",
+        broker_state=None,
+        custody_owner="ACCOUNT_CLERK",
+        execution_authority="ACCOUNT_CLERK",
+        summary_code="EXECUTION_SLICE_FILLED",
+        proof_reference=None,
+        source_event_at_ms=_T0,
+        clerk_observed_at_ms=_T0,
+        recorded_at_ms=_T0,
+    )
+
+    as_credited = _sqlite_evidence_entry(credited)
+    as_withheld = _sqlite_evidence_entry(replace(credited, summary_code=FILL_CREDIT_WITHHELD_BY_DISCHARGE))
+
+    assert as_credited.kind_label == "Execution slice recorded"
+    assert as_withheld.kind == "EXECUTION_SLICE_FILLED"
+    assert as_withheld.kind_label == "Fill recorded, not counted"
+    assert "did not count it in the bot's position" in as_withheld.summary
 
 
 @pytest.mark.asyncio
