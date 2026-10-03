@@ -22,7 +22,10 @@ from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.research.golden_search.qualification_service import JudgedQualification, StatusName
 from app.research.golden_search.qualifications import QualificationRow, params_sha256
 from app.services.broker_v2_panel import panel_deploy
-from app.services.broker_v2_panel.paper_deploy_service import _qualified_configuration
+from app.services.broker_v2_panel.paper_deploy_service import (
+    _qualified_configuration,
+    resolve_deploy_strategy_params,
+)
 from app.services.broker_v2_panel.strategy_catalog import GoldenValidationScope
 from tests.broker.v2panel.conftest import _BODY
 from tests.broker.v2panel.fixtures import ACCT
@@ -105,15 +108,13 @@ def test_a_default_that_is_not_ready_falls_back_to_the_registry_point(status: St
     assert preset.explanation.startswith(_REGISTRY_EXPLANATION_START)
 
 
-def test_a_ready_default_deploy_would_refuse_falls_back_to_the_registry_point_and_says_why() -> None:
-    """#2841: a READY tuple whose periods need more history than a bot can load was still offered, then always refused."""
-    program = "sma_crossover"
+def _ready_default_of(program: str, symbol: str, **overrides: object) -> tuple[JudgedQualification, dict[str, object]]:
+    """A READY default of ``program`` at its registry point plus ``overrides``, and that registry point's parameters."""
     registration = _STRATEGY_REGISTRY[program]
     contract = registration.signal_program_contract
     assert contract is not None
-    symbol = contract.validated_symbols[0]
     registry_point = registration.param_schema.model_validate({**contract.validated_settings, "symbol": symbol})
-    approved = registry_point.model_copy(update={"short_window": 50, "long_window": 500}).model_dump(mode="json")
+    approved = registry_point.model_copy(update=overrides).model_dump(mode="json")
     default = JudgedQualification(
         qualification=dataclasses.replace(
             _judged(symbol).qualification,
@@ -127,15 +128,47 @@ def test_a_ready_default_deploy_would_refuse_falls_back_to_the_registry_point_an
         status="ready",
         is_default=True,
     )
+    offered_from_registry = registry_point.model_dump(mode="json", exclude={"symbol", *registration.hidden_params})
+    return default, offered_from_registry
 
-    preset = _qualified_configuration(program, symbol, {(program, symbol): default})
+
+def test_a_ready_default_deploy_would_refuse_falls_back_to_the_registry_point_and_says_why() -> None:
+    """#2841: a READY tuple whose periods need more history than a bot can load was still offered, then always refused."""
+    default, registry_parameters = _ready_default_of("sma_crossover", "SPY", short_window=50, long_window=500)
+
+    preset = _qualified_configuration("sma_crossover", "SPY", {("sma_crossover", "SPY"): default})
 
     assert preset is not None
     assert preset.golden_qualification_id is None
-    assert preset.parameters == registry_point.model_dump(mode="json", exclude={"symbol"})
+    assert preset.parameters == registry_parameters
     assert preset.explanation.startswith(_REGISTRY_EXPLANATION_START)
-    assert f"The Golden Search default for {symbol} is not offered" in preset.explanation
+    assert "The Golden Search default for SPY is not offered" in preset.explanation
     assert "39 days" in preset.explanation
+
+
+def test_a_ready_default_is_offered_without_the_parameter_deploy_sets_itself() -> None:
+    """#2841: the form submits the preset as it stands, and Deploy refuses a hidden parameter it is sent."""
+    default, _ = _ready_default_of("deployment_validation", "SPY", trade_symbol="SPY")
+
+    preset = _qualified_configuration("deployment_validation", "SPY", {("deployment_validation", "SPY"): default})
+
+    assert preset is not None
+    assert preset.golden_qualification_id == default.qualification.id
+    assert "trade_symbol" not in preset.parameters
+    resolved = resolve_deploy_strategy_params("deployment_validation", preset.symbol, dict(preset.parameters))
+    assert resolved.effective["trade_symbol"] == default.qualification.params["trade_symbol"]
+
+
+def test_a_ready_default_deploy_cannot_reach_is_not_offered() -> None:
+    """Deploy sets the traded stock to the signal stock, so a default approved on another one is out of its reach."""
+    default, registry_parameters = _ready_default_of("deployment_validation", "SPY", trade_symbol="QQQ")
+
+    preset = _qualified_configuration("deployment_validation", "SPY", {("deployment_validation", "SPY"): default})
+
+    assert preset is not None
+    assert preset.golden_qualification_id is None
+    assert preset.parameters == registry_parameters
+    assert "The Golden Search default for SPY is not offered: Deploy sets trade_symbol itself" in preset.explanation
 
 
 def test_another_stocks_default_leaves_this_stock_on_the_registry_point() -> None:
