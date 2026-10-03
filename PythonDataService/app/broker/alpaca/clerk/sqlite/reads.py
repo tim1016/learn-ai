@@ -820,7 +820,10 @@ FILL_CREDIT_WITHHELD_BY_DISCHARGE = "FILL_CREDIT_WITHHELD_RESIDUE_DISCHARGED"
 
 #: The most the broker's clock and the Clerk's are taken to differ (#2854).
 #: Inside it the Clerk cannot tell whether an execution came before a
-#: discharge's broker read or after, and withholding sends nothing.
+#: discharge's broker read or after, and withholding sends nothing. A fold
+#: proves each withheld slice against this value again, so it may only grow:
+#: lowered, a ledger that holds a slice withheld inside the old value no
+#: longer rebuilds.
 DISCHARGE_READ_CLOCK_ALLOWANCE_MS = 5_000
 
 

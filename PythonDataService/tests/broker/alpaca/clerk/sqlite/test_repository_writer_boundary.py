@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -262,6 +263,8 @@ class _FillTransitionVisitor(ast.NodeVisitor):
 
     The owner is the outermost function around the call, under its class: a
     nested builder or a lambda belongs to the function that hands it on.
+    The kind may be spelled as a string or as a module-level name bound to
+    one. ``sites`` counts each site, so a second one in a listed owner shows.
     ``called`` is every method each owner calls, by name.
     """
 
@@ -269,8 +272,25 @@ class _FillTransitionVisitor(ast.NodeVisitor):
         self._source_root = source_root
         self._classes: list[str] = []
         self._owner: str | None = None
-        self.sites: set[_FillTransitionSite] = set()
+        self._module_strings: dict[str, str] = {}
+        self.sites: Counter[_FillTransitionSite] = Counter()
         self.called: dict[str, set[str]] = {}
+
+    def visit_Module(self, node: ast.Module) -> None:
+        for statement in node.body:
+            targets: list[ast.expr] = []
+            if isinstance(statement, ast.Assign):
+                targets = statement.targets
+            elif isinstance(statement, ast.AnnAssign):
+                targets = [statement.target]
+            else:
+                continue
+            value = statement.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        self._module_strings[target.id] = value.value
+        self.generic_visit(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._classes.append(node.name)
@@ -288,15 +308,19 @@ class _FillTransitionVisitor(ast.NodeVisitor):
         if isinstance(node.func, ast.Attribute):
             self.called.setdefault(owner, set()).add(node.func.attr)
         for keyword in node.keywords:
-            if (
-                keyword.arg == "transition_kind"
-                and isinstance(keyword.value, ast.Constant)
-                and keyword.value.value in FILL_TRANSITION_KINDS
-            ):
-                self.sites.add(
-                    _FillTransitionSite(self._source_root.as_posix(), owner, keyword.value.value)
-                )
+            if keyword.arg != "transition_kind":
+                continue
+            kind = self._kind_named(keyword.value)
+            if kind in FILL_TRANSITION_KINDS:
+                self.sites[_FillTransitionSite(self._source_root.as_posix(), owner, kind)] += 1
         self.generic_visit(node)
+
+    def _kind_named(self, value: ast.expr) -> object:
+        if isinstance(value, ast.Constant):
+            return value.value
+        if isinstance(value, ast.Name):
+            return self._module_strings.get(value.id)
+        return None
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         outermost = self._owner is None
@@ -314,18 +338,19 @@ def _fill_transition_visitor(source: str, *, source_root: Path) -> _FillTransiti
 
 
 def _assert_fill_census(
-    observed: set[_FillTransitionSite],
-    expected: set[_FillTransitionSite],
+    observed: Counter[_FillTransitionSite],
+    expected: Counter[_FillTransitionSite],
 ) -> None:
     assert observed == expected, (
-        "A fill transition must be built where the census names, and appended through "
+        "A fill transition must be built once where the census names, and appended through "
         "append_fill so a discharge that counted it withholds its credit (#2854). "
-        f"Unlisted: {sorted(observed - expected)!r}; stale: {sorted(expected - observed)!r}"
+        f"Unlisted: {sorted((observed - expected).elements())!r}; "
+        f"stale: {sorted((expected - observed).elements())!r}"
     )
 
 
 def test_fill_transitions_are_built_only_where_the_census_names_and_go_through_a_guarded_append() -> None:
-    observed: set[_FillTransitionSite] = set()
+    observed: Counter[_FillTransitionSite] = Counter()
     called: dict[tuple[str, str], set[str]] = {}
     for path in _PRODUCTION_ROOT.rglob("*.py"):
         source_root = path.relative_to(_PYTHON_DATA_SERVICE_ROOT)
@@ -336,7 +361,9 @@ def test_fill_transitions_are_built_only_where_the_census_names_and_go_through_a
 
     _assert_fill_census(
         observed,
-        {_FillTransitionSite(entry.path, entry.owner, entry.kind) for entry in FILL_TRANSITION_PRODUCER_CENSUS},
+        Counter(
+            _FillTransitionSite(entry.path, entry.owner, entry.kind) for entry in FILL_TRANSITION_PRODUCER_CENSUS
+        ),
     )
     for entry in FILL_TRANSITION_PRODUCER_CENSUS:
         assert entry.through in FILL_GUARDED_APPENDS, entry
@@ -352,8 +379,32 @@ def test_an_unlisted_fill_producer_fails_the_census_even_from_a_nested_builder()
     )
     visitor = _fill_transition_visitor(source, source_root=Path("fixture/unlisted_producer.py"))
 
-    assert visitor.sites == {
-        _FillTransitionSite("fixture/unlisted_producer.py", "unlisted_producer", "ORDER_FILL_OBSERVED")
-    }
+    site = _FillTransitionSite("fixture/unlisted_producer.py", "unlisted_producer", "ORDER_FILL_OBSERVED")
+    assert visitor.sites == Counter({site: 1})
     with pytest.raises(AssertionError, match="Unlisted"):
-        _assert_fill_census(visitor.sites, set())
+        _assert_fill_census(visitor.sites, Counter())
+
+
+def test_a_fill_kind_held_in_a_module_constant_is_still_a_producer() -> None:
+    source = (
+        "KIND = \"EXECUTION_SLICE_FILLED\"\n"
+        "def constant_producer(repo, effect):\n"
+        "    repo.append_transition(TransitionInput(transition_kind=KIND, order_ref=effect.order_ref))\n"
+    )
+    visitor = _fill_transition_visitor(source, source_root=Path("fixture/constant_producer.py"))
+
+    site = _FillTransitionSite("fixture/constant_producer.py", "constant_producer", "EXECUTION_SLICE_FILLED")
+    assert visitor.sites == Counter({site: 1})
+
+
+def test_a_second_fill_site_in_a_listed_owner_fails_the_census() -> None:
+    source = (
+        "def listed_owner(repo, effect):\n"
+        "    repo.append_fill(TransitionInput(transition_kind=\"ORDER_FILL_OBSERVED\"), symbol=\"SPY\")\n"
+        "    repo.append_transition(TransitionInput(transition_kind=\"ORDER_FILL_OBSERVED\"))\n"
+    )
+    visitor = _fill_transition_visitor(source, source_root=Path("fixture/listed_owner.py"))
+
+    site = _FillTransitionSite("fixture/listed_owner.py", "listed_owner", "ORDER_FILL_OBSERVED")
+    with pytest.raises(AssertionError, match="Unlisted"):
+        _assert_fill_census(visitor.sites, Counter({site: 1}))
