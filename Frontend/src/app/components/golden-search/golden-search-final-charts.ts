@@ -123,7 +123,9 @@ function comparisonOption(runs: readonly FinalRun[], theme: ChartTheme): ChartOp
       data: runs.map((run) => run.label),
       inverse: true,
       name: measure.label,
-      nameLocation: 'end' as const,
+      // The axis runs top to bottom, so its start is the block's top: the measure's name heads its block.
+      nameLocation: 'start' as const,
+      nameGap: 10,
       nameTextStyle: { ...axisText(theme), align: 'left' as const },
       axisLine: { lineStyle: { color: theme.axis } },
       axisTick: { show: false },
