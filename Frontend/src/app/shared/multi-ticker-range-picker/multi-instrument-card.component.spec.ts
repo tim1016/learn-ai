@@ -146,6 +146,40 @@ describe('MultiInstrumentCardComponent', () => {
     expect(optionsText.some((text) => text.includes('SPY'))).toBe(false);
     expect(optionsText.some((text) => text.includes('IWM'))).toBe(true);
   });
+
+  // The live catalog's own rows, in its alphabetical order: sixteen symbols
+  // whose ticker or name contains "QQQ" sort ahead of QQQ itself, and the
+  // suggestion list shows eight. Unranked, QQQ could never be picked.
+  it('offers the typed symbol first, however many other matches sort ahead of it', () => {
+    const catalog: PickerSymbol[] = [
+      ['CQQQ', 'Invesco China Technology ETF'],
+      ['DVQQ', 'WEBs QQQ Defined Volatility ETF'],
+      ['EQQQ', 'ProShares Ultra QQQ Equal Weight'],
+      ['GQQQ', 'Astoria US Quality Growth Kings ETF'],
+      ['IQQQ', 'ProShares Nasdaq-100 High Income ETF'],
+      ['KQQQ', 'Kurv Technology Titans Select ETF'],
+      ['MQQQ', 'Tradr 2X Long Innovation 100 Monthly ETF'],
+      ['PSQ', 'ProShares Short QQQ'],
+      ['QBIG', 'Invesco Top QQQ ETF'],
+      ['QEW', 'Invesco QQQ Equal Weight ETF'],
+      ['QID', 'ProShares UltraShort QQQ'],
+      ['QLD', 'ProShares Ultra QQQ'],
+      ['QQA', 'Invesco QQQ Income Advantage ETF'],
+      ['QQDN', 'ProShares UltraShort QQQ Mega'],
+      ['QQHG', 'Invesco QQQ Hedged Advantage ETF'],
+      ['QQLV', 'Invesco QQQ Low Volatility ETF'],
+      ['QQQ', 'Invesco QQQ Trust, Series 1'],
+      ['QQQM', 'Invesco NASDAQ 100 ETF'],
+    ].map(([symbol, name]) => ({ symbol, name, delisted: false }));
+    fixture.componentRef.setInput('options', catalog);
+    fixture.detectChanges();
+    search('QQQ');
+
+    const offered = Array.from(
+      fixture.nativeElement.querySelectorAll('[role="option"] .asset-identity__symbol'),
+    ).map((cell) => (cell as HTMLElement).textContent?.trim());
+    expect(offered[0]).toBe('QQQ');
+  });
   // ── The optional coverage gate (ADR 0066) ────────────────────────────────
 
   it('with an adjustment mode, a held pick applies immediately — no gate', () => {
