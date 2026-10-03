@@ -351,6 +351,10 @@ describe('routes', () => {
     const FIX_PAGES: Readonly<Record<AccountWorkspaceFixDestination, { url: string; page: unknown }>> = {
       bot: { url: '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/bots/sid-1', page: BotPanelShellComponent },
       activity: { url: '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity', page: AlpacaActivityPageComponent },
+      reconcile: {
+        url: '/brokers/alpaca/clerks/clrk_spec/accounts/PA9/activity?recover=reconcile_now',
+        page: AlpacaActivityPageComponent,
+      },
       settings: { url: '/brokers/alpaca/clerks/clrk_spec/settings', page: AlpacaSettingsPageComponent },
     };
 

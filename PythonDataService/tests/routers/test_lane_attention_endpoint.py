@@ -320,7 +320,7 @@ async def test_dead_run_reaches_account_desk_and_bell_without_selling(
         # against Alpaca, since nothing has checked it since the crash.
         [line] = bell.json()["items"]
         assert (line["kind"], line["strategy_instance_id"], line["action"]["destination"]) == (
-            "out_of_sync", None, "activity",
+            "out_of_sync", None, "reconcile",
         )
         assert desk.status_code == 200
         # The desk still names the bot's own unverified custody, in the words
@@ -358,7 +358,7 @@ async def test_corrupt_lifecycle_preserves_sibling_recovery_notices(tmp_path: Pa
             "ema-1's lifecycle could not be read, so what it holds is unknown. "
             "Reconcile now to re-read the account at Alpaca."
         )
-        assert line["action"] == {"label": "Open order records", "destination": "activity"}
+        assert line["action"] == {"label": "Reconcile now", "destination": "reconcile"}
         for text in (line["headline"], unreadable["label"], unreadable["explanation"]):
             assert "at the broker" not in text and "check the broker" not in text.lower()
     finally:
@@ -535,9 +535,54 @@ async def test_flat_bots_that_ended_uncleanly_are_one_account_line_until_the_acc
 
     [line] = before
     assert (line["condition_id"], line["kind"], line["strategy_instance_id"]) == ("positions-unchecked", "out_of_sync", None)
-    assert line["action"] == {"label": "Open order records", "destination": "activity"}
+    assert line["action"] == {"label": "Reconcile now", "destination": "reconcile"}
     assert line["headline"].startswith("7 bots ended without a clean exit")
     assert after == []
+
+
+@pytest.mark.parametrize(
+    ("verdict", "cut_before_bot", "intent_unresolved", "line_stays"),
+    [
+        pytest.param("clean", False, False, False, id="clean-pass-saw-the-bot"),
+        pytest.param("position_drift", False, False, True, id="unclean-pass"),
+        pytest.param("clean", True, False, True, id="pass-before-the-bots-newest-record"),
+        pytest.param("clean", False, True, True, id="clean-pass-with-the-bots-intent-unresolved"),
+    ],
+)
+async def test_the_clerks_own_pass_clears_the_unclean_exit_line_once_it_vouches_for_the_bot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    verdict: str, cut_before_bot: bool, intent_unresolved: bool, line_stays: bool,
+) -> None:
+    """The Clerk compares the account with Alpaca every 15 s, but only a
+    Reconcile now ever cleared this line, so it rang until the owner clicked
+    a button buried in Activity. A clean pass that saw every record of the
+    flat bot is that check; an unclean pass, one older than the bot's newest
+    record, or one that still finds an order of the bot's unresolved proves
+    nothing about it."""
+    from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
+    from app.services.broker_v2_panel import sqlite_roster_status
+
+    repo = _budgeted(ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=_Clock()))
+    monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
+    repo.register_strategy_instance(strategy_instance_id="paper-0", symbol="SPY", config_hash="h1", config_json=_TRADE_CONFIG)
+    _end_uncleanly(tmp_path, "paper-0", at_ms=_T0)
+    facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=object(), trade=object())
+    if intent_unresolved:
+        monkeypatch.setattr(facade, "_unresolved_order_refs", lambda sid: ("intent:enter:1",))
+    newest = repo.last_custody_sequence("paper-0")
+    facade.publish_sweep_reconciliation(AccountReconciliationResult(
+        verdict=verdict, through_sequence=newest - 1 if cut_before_bot else newest,
+    ))
+    set_active_clerk_runtime(ActiveClerkRuntime(
+        authority_kind="sqlite", clerk=facade, _sqlite_repository=repo, account_id=ACCOUNT,
+    ))
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            items = (await client.get("/api/brokers/alpaca/attention")).json()["items"]
+    finally:
+        repo.close()
+
+    assert [item["condition_id"] for item in items] == (["positions-unchecked"] if line_stays else [])
 
 
 async def test_a_crashed_bot_whose_run_row_is_still_active_but_holds_shares_is_one_stopped_line(
