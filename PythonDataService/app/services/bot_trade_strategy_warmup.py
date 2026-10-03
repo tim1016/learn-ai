@@ -65,7 +65,9 @@ def _warmup_lookback_days_for(binding: BrokerBotBinding) -> int:
     (``_seal_checks``' ``clock.warmup_lookback_days`` row), so reading the
     seal is both authoritative and consistent with what admission verified —
     whereas reading the registry directly would let an edit between sealing
-    and Resume silently change how far back the bot warms.
+    and Resume silently change how far back the bot warms. The sealed value
+    is the one the instance's own periods resolved (#2841), so a long-period
+    deploy warms on more than its program's default days.
 
     No ``max()`` against the module floor. Flooring the sealed value would
     reintroduce exactly the defect repaired for ``decision_timeframe_ms``:

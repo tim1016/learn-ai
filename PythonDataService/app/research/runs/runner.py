@@ -32,8 +32,8 @@ from app.engine.engine import (
     EquitySnapshot,
     pin_strategy_window,
 )
+from app.engine.execution.fill_mode_names import parse_fill_mode
 from app.engine.execution.fill_model import FillModel
-from app.engine.execution.order import FillMode
 from app.engine.results.statistics import EquityPoint, summarize
 from app.engine.run_gate import one_backtest_in_flight
 from app.engine.strategy.base import LoggedTrade
@@ -91,7 +91,6 @@ class RunRequest:
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------
-_VALID_FILL_MODES = {"signal_bar_close", "next_bar_open", "next_session_open"}
 _NY = ZoneInfo("America/New_York")
 
 # Default artifact root: ``PythonDataService/artifacts/`` (sibling of ``app/``).
@@ -111,28 +110,6 @@ def _prediction_artifacts_root() -> Path:
     if override:
         return Path(override)
     return _DEFAULT_ARTIFACTS_ROOT / "predictions"
-
-
-def _normalize_fill_mode(s: str) -> str:
-    """Lowercase + replace ``-`` → ``_``. Identity for the canonical form.
-
-    The router accepts hyphen / case variants (``"SIGNAL-BAR-CLOSE"``);
-    the runner stores and validates against the canonical form so the
-    ledger doesn't carry style noise into ``data_snapshot_id`` or
-    cross-run comparisons.
-    """
-    return s.lower().replace("-", "_")
-
-
-def _parse_fill_mode(s: str) -> FillMode:
-    norm = _normalize_fill_mode(s)
-    if norm == "signal_bar_close":
-        return FillMode.SIGNAL_BAR_CLOSE
-    if norm == "next_bar_open":
-        return FillMode.NEXT_BAR_OPEN
-    if norm == "next_session_open":
-        return FillMode.NEXT_SESSION_OPEN
-    raise ValueError(f"unknown fill_mode {s!r} — expected one of {sorted(_VALID_FILL_MODES)}")
 
 
 def _date_to_ny_midnight_ms(d: Date) -> int:
@@ -309,12 +286,10 @@ def run_strategy_spec(
     # through this one (#1990).
     with one_backtest_in_flight():
         spec = request.spec
-        # Normalize the fill mode early so the ledger and the engine see the
+        # Parse the fill mode early so the ledger and the engine see the
         # same canonical form, and accept the same hyphen/case variants the
         # HTTP layer accepts.
-        fill_mode_norm = _normalize_fill_mode(request.fill_mode)
-        if fill_mode_norm not in _VALID_FILL_MODES:
-            raise ValueError(f"unknown fill_mode {request.fill_mode!r} — expected one of {sorted(_VALID_FILL_MODES)}")
+        fill_mode = parse_fill_mode(request.fill_mode)
         if request.start_ms >= request.end_ms:
             raise ValueError(
                 f"start_ms must be strictly before end_ms (got start={request.start_ms}, end={request.end_ms})"
@@ -382,7 +357,7 @@ def run_strategy_spec(
             end_ms=end_ms,
             warmup_start_ms=(warmup_start_ms if data_start_ms < request.start_ms else None),
             initial_cash=request.initial_cash,
-            fill_mode=fill_mode_norm,
+            fill_mode=fill_mode.value,
             commission_per_order=request.commission_per_order,
             slippage_per_share=request.slippage_per_share,
             random_seed=request.random_seed,
@@ -489,7 +464,6 @@ def run_strategy_spec(
         # Honor the request's date window and cash override.
         pin_strategy_window(strategy, data_start_date, end_date, cash=request.initial_cash)
 
-        fill_mode = _parse_fill_mode(fill_mode_norm)
         engine = BacktestEngine(
             data_source=data_source,
             fill_model=FillModel(

@@ -17,6 +17,7 @@ from app.broker.ibkr.bars import (
     IBKRBarSubscriptionStalled,
     MinuteAssembler,
     fetch_historical_minute_bars,
+    historical_bars_timeout_s,
     stream_minute_bars,
     stream_raw_5s_bars,
 )
@@ -455,6 +456,7 @@ class _FakeIb:
         self.use_rth_seen: bool | None = None
         self.historical_bars = []
         self.historical_use_rth_seen: bool | None = None
+        self.historical_timeout_seen: float | None = None
 
     def reqRealTimeBars(self, contract, bar_size: int, what_to_show: str, *, useRTH: bool):
         self.realtime_bar_request_count += 1
@@ -469,9 +471,11 @@ class _FakeIb:
         self.cancelled = True
         self.realtime_bar_cancel_count += 1
 
-    async def reqHistoricalDataAsync(self, contract, **kwargs):
+    async def reqHistoricalDataAsync(self, contract, *, timeout: float = 60, **kwargs):
+        # `timeout` and its default are ib_async 2.1.0's own.
         assert contract.symbol == "SPY"
         self.historical_use_rth_seen = kwargs["useRTH"]
+        self.historical_timeout_seen = timeout
         return self.historical_bars
 
     async def qualifyContractsAsync(self, contract):
@@ -635,6 +639,55 @@ async def test_fetch_historical_minute_bars_refuses_an_impossible_bar(
 
     with pytest.raises(IBKRImpossibleBarError, match=violation):
         await fetch_historical_minute_bars(client, "SPY", use_rth=False)
+
+
+@pytest.mark.parametrize(
+    ("lookback_days", "timeout_s"),
+    [(1, 15.0), (5, 15.0), (10, 15.0), (11, 75.0), (18, 75.0), (20, 75.0)],
+)
+def test_historical_bars_timeout_is_longer_only_past_ten_days(lookback_days: int, timeout_s: float) -> None:
+    """#2841: IBKR took 48 s to serve 20 days of 1-minute history, so a long
+    lookback is given 75 s. Nothing between 10 and 20 days is measured, so
+    every lookback past ten gets the same. Ten days or fewer -- every bot
+    running a default lookback -- keep the 15 s they have always had."""
+    assert historical_bars_timeout_s(lookback_days) == pytest.approx(timeout_s, abs=1e-9, rel=0)
+
+
+@pytest.mark.asyncio
+async def test_fetch_historical_minute_bars_turns_off_the_request_s_own_timeout() -> None:
+    """#2841: ib_async ends a request at its own timeout, 60 s unless told
+    otherwise, by returning no bars and no error. Left on, it capped a long
+    warmup load at 60 s whatever ``timeout_s`` said. The fetch passes 0, which
+    ib_async reads as no timeout, so a later default cannot cap it again."""
+    client = _FakeClient()
+
+    await fetch_historical_minute_bars(client, "SPY", timeout_s=75.0)
+
+    assert client.ib.historical_timeout_seen == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_historical_minute_bars_gives_up_at_the_timeout_it_is_given() -> None:
+    """#2841: the wait is the caller's to size. A request still unanswered when
+    it runs out is refused then as a timeout -- not at the fixed 15 s, and not
+    earlier as a symbol with no history, which is how ib_async's own timeout
+    ends it."""
+    client = _FakeClient()
+
+    async def never_answered(_contract, *, timeout: float = 0.01, **_kwargs):
+        # ib_async when IBKR never answers: at its own timeout it returns no
+        # bars and raises nothing; at 0 it waits. 0.01 s stands in for its 60 s.
+        unanswered: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        try:
+            await (asyncio.wait_for(unanswered, timeout) if timeout else unanswered)
+        except TimeoutError:
+            return []
+
+    client.ib.reqHistoricalDataAsync = never_answered
+
+    async with asyncio.timeout(5):
+        with pytest.raises(IBKRBarStreamError, match="timed out"):
+            await fetch_historical_minute_bars(client, "SPY", timeout_s=0.1)
 
 
 @pytest.mark.asyncio

@@ -27,8 +27,13 @@ fixture and a verifier:
 
 **Limits.** One day, one liquid symbol for the price comparison. The fetch is
 clamped to the sealed warmup lookback (10 days of 1-minute history returned in
-0.6 s; 20 days took 48 s, beyond `_HISTORICAL_BARS_TIMEOUT_S`). Re-capture on a
-second symbol and day before widening the claim.
+0.6 s; 20 days took 48 s). A load of more than 10 days is given 75 s instead of
+15 s, and Deploy refuses a lookback over 20 days; nothing between 10 and 20
+days is measured. Unverified: the 2026-09-24 capture's 5-day fetch with
+extended hours at Thursday 09:31 ET returned 4171 bars (4 × 960 + 331), which
+is five trading days and not five calendar days, so IBKR's `N D` appears to
+count trading days. Re-capture on a second symbol and day before widening the
+claim.
 
 ## The startup join (#2410)
 

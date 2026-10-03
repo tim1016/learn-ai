@@ -717,6 +717,22 @@ describe('InstrumentCardComponent', () => {
     expect(fixture.nativeElement.textContent).toContain('80 matches');
   });
 
+  it('lists the typed symbol above the matches that sort ahead of it', () => {
+    alpaca.entries.set([
+      { symbol: 'BGLD', name: 'FT Vest Gold Strategy Quarterly Buffer ETF', asset_class: 'us_equity', exchange: 'BATS', status: 'active' },
+      { symbol: 'GLD', name: 'SPDR Gold Shares', asset_class: 'us_equity', exchange: 'ARCA', status: 'active' },
+    ]);
+    fixture.detectChanges();
+    openDropdown(fixture);
+    component.onSearchInput('GLD');
+    fixture.detectChanges();
+
+    const listed = Array.from(
+      fixture.nativeElement.querySelectorAll('.dropdown__scroll .row .asset-identity__symbol'),
+    ).map((cell) => (cell as HTMLElement).textContent?.trim());
+    expect(listed).toEqual(['GLD', 'BGLD']);
+  });
+
   // With the lake dark, coverage is unknown — every row reads unheld and a
   // gate would backfill on a guess. The pick is refused with the lake's own
   // reason instead.

@@ -19,6 +19,7 @@ import pytest
 
 from app.jobs.progress import JobCancelled
 from app.lean_sidecar.trading_calendar import expected_sessions
+from app.research.grid_search import engine_adapter
 from app.research.grid_search import repository as sweep_repo
 from app.research.grid_search import service as sweeps
 from app.research.grid_search.models import CellResult, GridSearchSpec, SearchRow
@@ -29,6 +30,7 @@ from app.research.sweep.identity import DIGEST_SCHEME, CodeIdentity
 from app.research.walk_forward_study import repository as repo
 from app.research.walk_forward_study import service
 from app.research.walk_forward_study.models import StudySpec
+from app.schemas.walk_forward_study import WalkForwardStudySpecRequest, to_study_spec
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.lean_store import seed_store_day
 
@@ -122,6 +124,33 @@ def test_preflight_applies_the_total_backtest_limit_across_folds(lake: Path) -> 
     with pytest.raises(service.GridSearchRefusal) as excinfo:
         service.preflight(_spec(param_ranges=ranges), roots=[lake])  # 1300 combos × 2 folds × 2 = 5200
     assert excinfo.value.code == "WORKLOAD_LIMIT"
+
+
+def test_a_study_that_names_no_fill_mode_is_frozen_and_swept_at_the_decision_minute_open(lake: Path) -> None:
+    """The study answers "will this survive live?", so that is its default fill (#2599)."""
+    params = {"short_window": 2.0, "long_window": 5.0, "resolution_minutes": 60.0}
+    body = WalkForwardStudySpecRequest(
+        strategy_key="sma_crossover",
+        symbol="SPY",
+        param_ranges={name: {"type": "value_list", "values": [value]} for name, value in params.items()},
+        start_ms=et_midnight_ms(START),
+        end_ms=et_midnight_ms(END_EXCLUSIVE),
+        min_trades=1,
+        training_months=1,
+        test_months=1,
+    )
+
+    study = service.prepare_launch(to_study_spec(body), job_id=None, roots=[lake])
+    # A fold's sweep, as the study launches it: the stored request over one fold window.
+    fold = study.folds[0]
+    sweep_spec = StudySpec.from_request_dict(study.request).sweep_spec(fold.train_start_ms, fold.train_end_ms)
+    sweep = sweeps.prepare_launch(sweep_spec, job_id=None, roots=[lake])
+    candidate = RunSpec(symbol="SPY", strategy_key="sma_crossover", params=params, params_hash="x")
+    cell_request = engine_adapter.engine_request(sweep, GridSearchSpec.from_request_dict(sweep.request), candidate)
+
+    assert study.request["fill_mode"] == "decision_minute_open"
+    assert study.receipt["execution_contract"]["fill_mode"] == "decision_minute_open"
+    assert cell_request.fill_mode == "decision_minute_open"
 
 
 # ── Execute ──────────────────────────────────────────────────────────────

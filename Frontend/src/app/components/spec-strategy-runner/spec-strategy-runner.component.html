@@ -374,8 +374,9 @@
         <label class="ssr-field">
           <span class="ssr-field-label">Fill mode</span>
           <select class="ssr-input" [ngModel]="fillMode()" (ngModelChange)="fillMode.set($event)">
-            <option value="signal_bar_close">Signal bar close</option>
-            <option value="next_bar_open">Next bar open</option>
+            @for (option of fillModes; track option.value) {
+              <option [value]="option.value">{{ option.label }}</option>
+            }
           </select>
         </label>
       </div>

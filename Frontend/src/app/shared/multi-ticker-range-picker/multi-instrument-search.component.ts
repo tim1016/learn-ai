@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 
+import { matchSymbols } from '../symbol-catalog/symbol-match';
 import type { PickerSymbol } from '../symbol-catalog/symbol-catalog.types';
 import { InstrumentOptionComponent } from '../ticker-range-picker/parts/instrument-option.component';
 
@@ -17,15 +18,9 @@ export class MultiInstrumentSearchComponent {
   readonly query = signal('');
 
   readonly addable = computed<readonly PickerSymbol[]>(() => {
-    const query = this.query().trim().toUpperCase();
     const selected = new Set(this.selected());
-    return this.options()
-      .filter((ticker) => !selected.has(ticker.symbol))
-      .filter(
-        (ticker) =>
-          !query || ticker.symbol.includes(query) || ticker.name.toUpperCase().includes(query),
-      )
-      .slice(0, 8);
+    const unselected = this.options().filter((ticker) => !selected.has(ticker.symbol));
+    return matchSymbols(unselected, this.query()).slice(0, 8);
   });
 
   onQueryInput(event: Event): void {

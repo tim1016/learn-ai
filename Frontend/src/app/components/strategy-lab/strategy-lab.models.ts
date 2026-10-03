@@ -1,7 +1,7 @@
 import type { EngineValidationAnalytics } from "../lean-engine/engine-results/engine-validation-analytics.types";
 import type { RunVerdict } from "../../api/run-verdict.types";
 import type { DataPolicy } from "../../models/data-policy";
-import { isFillModeName, type FillModeName } from "../../models/fill-mode";
+import { storedFillMode, type FillModeName } from "../../models/fill-mode";
 import type { BacktestRunDetail } from "../../services/backtest-runs.types";
 import { runWindowDate } from "../../services/backtest-runs.types";
 import type { TickerRange } from "../../shared/ticker-range-picker";
@@ -174,7 +174,7 @@ function runInputsFrom(facts: RunFacts, currentRange: TickerRange): StrategyLabR
       autoFetch: facts.autoFetch,
     },
     parameters: { ...facts.parameters, symbol },
-    fillMode: isFillModeName(facts.fillMode) ? facts.fillMode : "signal_bar_close",
+    fillMode: storedFillMode(facts.fillMode),
     initialCash: facts.initialCash,
     commissionPerOrder: facts.commissionPerOrder ?? 0,
     dataPolicy: facts.policy,

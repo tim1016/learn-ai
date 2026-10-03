@@ -9,7 +9,7 @@ import { WalkForwardStudyService } from './walk-forward-study.service';
 
 describe('WalkForwardStudyPageComponent', () => {
   it('seeds the form from ?search=, then opens a launched study by its job id', async () => {
-    const study = { id: 'study-9', status: 'queued', folds: [], verdict: null, fold_count: 0, completed_folds: 0, failed_folds: 0, strategy_key: 'sma_crossover', symbol: 'SPY', window_start_ms: 0, window_end_ms: 1, training_months: 1, test_months: 1, measure: 'sharpe_ratio', min_trades: 5, created_at_ms: 0, expected_backtests: 0, completed_backtests: 0, winner_changes: 0, incomplete: false, uncommitted_changes: false, failure_reason: null, resumable: false, resume_refusal: null };
+    const study = { id: 'study-9', status: 'queued', request: {}, folds: [], verdict: null, fold_count: 0, completed_folds: 0, failed_folds: 0, strategy_key: 'sma_crossover', symbol: 'SPY', window_start_ms: 0, window_end_ms: 1, training_months: 1, test_months: 1, measure: 'sharpe_ratio', min_trades: 5, created_at_ms: 0, expected_backtests: 0, completed_backtests: 0, winner_changes: 0, incomplete: false, uncommitted_changes: false, failure_reason: null, resumable: false, resume_refusal: null };
     const list = vi.fn(async () => [study]);
     const gridGet = vi.fn(async () => ({ id: 'grid-1', request: { strategy_key: 'sma_crossover', symbol: 'SPY', param_ranges: {}, start_ms: 0, end_ms: 1, resolution: 'minute', fill_mode: 'signal_bar_close', commission_per_order: 1, slippage_per_share: 0, initial_cash: 100000, measure: 'sharpe_ratio', min_trades: 5 } }));
     const view = await render(WalkForwardStudyPageComponent, {

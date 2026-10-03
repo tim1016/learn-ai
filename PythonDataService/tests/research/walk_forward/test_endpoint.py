@@ -291,6 +291,55 @@ async def test_list_since_ms_admits_the_ceiling_and_refuses_past_it(client, path
     assert past_ceiling.status_code == 422, past_ceiling.text
 
 
+async def _stored_fill_mode_and_fold_entries(client, fill_mode: str) -> tuple[str, list[float]]:
+    """Run a walk-forward under ``fill_mode``; return the mode it stored and the prices its fold runs entered at."""
+    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.6}, fill_mode=fill_mode)
+    response = await client.post(_WALK_FORWARD, json=body)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["result"]["status"] == "completed"
+
+    stored = (await client.get(f"{_WALK_FORWARD}/{payload['config']['walk_forward_id']}")).json()["config"]["fill_mode"]
+    entries: list[float] = []
+    for fold in payload["result"]["folds"]:
+        run = (await client.get(f"/api/research/strategy-runs/{fold['test_run_id']}")).json()
+        assert run["ledger"]["fill_mode"] == stored
+        entries += [trade["entry_price"] for trade in run["result"]["trades"]]
+    return stored, entries
+
+
+async def test_post_fills_its_folds_under_the_fill_mode_the_request_names(client):
+    """Each mode enters the same folds at its own price, so the runner did not ignore it (#2599)."""
+    entries: dict[str, list[float]] = {}
+    for fill_mode in ("signal_bar_close", "next_bar_open", "decision_minute_open"):
+        stored, entries[fill_mode] = await _stored_fill_mode_and_fold_entries(client, fill_mode)
+        assert stored == fill_mode
+
+    assert all(entries.values())
+    assert entries["decision_minute_open"] != entries["signal_bar_close"]
+    assert entries["decision_minute_open"] != entries["next_bar_open"]
+    assert entries["signal_bar_close"] != entries["next_bar_open"]
+
+
+async def test_post_stores_the_canonical_fill_mode_not_the_spelling_the_request_used(client):
+    stored, entries = await _stored_fill_mode_and_fold_entries(client, "Decision-Minute-Open")
+    _, canonical_entries = await _stored_fill_mode_and_fold_entries(client, "decision_minute_open")
+
+    assert stored == "decision_minute_open"
+    assert entries == canonical_entries
+
+
+# ``next_session_open`` is a real mode this route does not run; ``open`` is the
+# engine backtest's short name, which names nothing among three "...open" modes.
+@pytest.mark.parametrize("fill_mode", ["magic", "next_session_open", "open"])
+async def test_post_unknown_fill_mode_returns_400_naming_the_modes(client, fill_mode: str):
+    body = _request_body(split_policy={"kind": "chronological", "train_pct": 0.6}, fill_mode=fill_mode)
+    response = await client.post(_WALK_FORWARD, json=body)
+
+    assert response.status_code == 400, response.text
+    assert "signal_bar_close, next_bar_open or decision_minute_open" in response.json()["detail"]
+
+
 async def test_post_unknown_split_kind_returns_400(client):
     body = _request_body(split_policy={"kind": "totally_made_up"})
     response = await client.post("/api/research/strategy-runs/walk-forward", json=body)

@@ -19,12 +19,14 @@ floors an unregistered ``strategy_key``.
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
@@ -35,7 +37,13 @@ from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.ibkr.bars import IBKRBarStreamError
 from app.engine.execution.portfolio import Portfolio
 from app.engine.strategy.base import StrategyContext
-from app.marketdata.feed import WARMUP_HISTORY_UNAVAILABLE, MarketDataBar, MarketDataFeedError
+from app.lean_sidecar.trading_calendar import session_open_ms_utc, session_windows_ms_utc
+from app.marketdata.feed import (
+    WARMUP_HISTORY_UNAVAILABLE,
+    MarketDataBar,
+    MarketDataFeedError,
+    warmup_window_start_ms,
+)
 from app.marketdata.ibkr_feed import IbkrMarketDataFeed, require_warmup_coverage
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_trade_strategy_warmup import (
@@ -391,6 +399,187 @@ def test_warmup_lookback_days_for_reads_the_seal_over_the_live_registry() -> Non
 
     assert _warmup_lookback_days_for(sealed_binding) == contract.warmup_lookback_days
     assert _warmup_lookback_days_for(stale_binding) == 11
+
+
+def _sealed_sma_50_200_binding() -> BrokerBotBinding:
+    """A binding sealed for SMA 50/200, which needs 200 decision bars before it is ready."""
+    from app.schemas.run_admission import StrategyValidationAdmissionFact
+    from app.services.signal_program_admission import build_start_program_seal
+
+    periods = {"short_window": 50, "long_window": 200}
+    binding = _binding(strategy_key="sma_crossover").model_copy(
+        update={
+            "sealed_account_id": "sim:warmup-long-periods",
+            "strategy_params": periods,
+            "strategy_param_origins": dict.fromkeys(periods, "deploy_override"),
+        }
+    )
+    seal = build_start_program_seal(
+        binding,
+        StrategyValidationAdmissionFact(
+            state="VERIFIED",
+            strategy_key="sma_crossover",
+            evidence_status="accepted",
+            event_id="validation-warmup-2",
+            evidence_snapshot_sha256="e" * 64,
+            verified_at_ms=1_787_356_800_000,
+            explanation="The exact validation snapshot was re-hashed.",
+        ),
+        parameter_origins=binding.strategy_param_origins,
+    )
+    assert seal is not None
+    return binding.model_copy(update={"sealed_program": seal})
+
+
+@pytest.mark.asyncio
+async def test_a_sealed_long_period_deploy_warms_on_the_lookback_its_periods_need() -> None:
+    """SMA 50/200 needs 200 decision bars before it is ready; the program's
+    default seven days cannot hold them, so the bot started unready and waited
+    on live bars (#2841). Its seal now names the days those periods need, and
+    that is the window the feed is asked for.
+    """
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
+
+    sealed_binding = _sealed_sma_50_200_binding()
+    feed = _RecordingFeed()
+
+    await replay_warmup_bars(
+        _FakeRuntime(),  # type: ignore[arg-type]
+        _context(),
+        feed,  # type: ignore[arg-type]
+        sealed_binding,
+        captured_decisions=None,
+    )
+
+    contract = _STRATEGY_REGISTRY["sma_crossover"].signal_program_contract
+    assert contract is not None
+    assert _warmup_lookback_days_for(sealed_binding) == 18
+    assert feed.recorded_lookback_days == 18 > contract.warmup_lookback_days
+
+
+# A start an 18-day window holds the fewest decision bars at, of every minute
+# the lookback sweep covers (tests/engine/strategy/test_signal_program_warmup_lookback.py):
+# one minute after the open on Monday 2025-01-06. The window holds Christmas
+# Eve's early close, Christmas Day and New Year's Day.
+_WORST_18_DAY_START_DATE = date(2025, 1, 6)
+
+
+def _regular_hours_minutes(first: date, last: date) -> list[MarketDataBar]:
+    """A seeded 1-minute bar for every minute of every NYSE session in ``[first, last]``.
+
+    The sessions are the canonical calendar's, so an early close is short and
+    a holiday is absent.
+    """
+    rng = np.random.default_rng(seed=2841)
+    bars: list[MarketDataBar] = []
+    last_close = 400.0
+    for window in session_windows_ms_utc(first, last):
+        for start_ms in range(window.open_ms_utc, window.close_ms_utc, _MINUTE_MS):
+            close = max(last_close + float(rng.normal(0.0, 0.05)), 1.0)
+            low, high = sorted((last_close, close))
+            bars.append(
+                MarketDataBar(
+                    symbol="SPY",
+                    start_ms=start_ms,
+                    end_ms=start_ms + _MINUTE_MS,
+                    open=Decimal(f"{last_close:.2f}"),
+                    high=Decimal(f"{high:.2f}"),
+                    low=Decimal(f"{low:.2f}"),
+                    close=Decimal(f"{close:.2f}"),
+                    volume=1000,
+                    fetched_at_ms=start_ms + _MINUTE_MS,
+                    feed_id="synthetic",
+                    session_phase="RTH",
+                )
+            )
+            last_close = close
+    return bars
+
+
+class _SyntheticMinuteFeed:
+    """One list of minutes: history up to ``start_ms``, the live stream after it.
+
+    ``recent_closed_bars`` returns the closed minutes the ``lookback_days``
+    window holds, by the feed's own definition of that window.
+    """
+
+    feed_id = "synthetic"
+
+    def __init__(self, bars: list[MarketDataBar], *, start_ms: int) -> None:
+        self._bars = bars
+        self._start_ms = start_ms
+
+    async def recent_closed_bars(self, symbol: str, *, use_rth: bool = True, lookback_days: int = 5) -> list[MarketDataBar]:
+        del symbol, use_rth
+        window_start_ms = warmup_window_start_ms(lookback_days, now_ms=self._start_ms)
+        return [
+            bar.model_copy(update={"provenance": "history"})
+            for bar in self._bars
+            if window_start_ms <= bar.start_ms and bar.end_ms <= self._start_ms
+        ]
+
+    async def stream_bars(self, symbol: str, *, use_rth: bool = True):  # type: ignore[no-untyped-def]
+        del symbol, use_rth
+        for bar in self._bars:
+            if bar.start_ms >= self._start_ms:
+                yield bar
+
+
+async def _first_live_decision(binding: BrokerBotBinding, feed: _SyntheticMinuteFeed) -> Any:
+    """The first evaluation the real runner path yields: warmup replay, then the live stream."""
+    from app.services.bot_trade_strategy import strategy_evaluations
+
+    evaluations = strategy_evaluations(binding, feed)  # type: ignore[arg-type]
+    try:
+        return await anext(evaluations)
+    finally:
+        await evaluations.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_long_period_deploy_is_ready_at_its_first_live_decision_only_on_the_lookback_its_seal_names() -> None:
+    """#2841, through the runner's own path: the real SMA 50/200 program, warmed
+    by ``replay_warmup_bars`` on the window its seal names, then fed live minutes.
+
+    On the 18 days the seal now names, the first live decision is ready. On
+    the default seven days every such seal named before, the same decision is
+    not: the bot was running and could not act.
+    """
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
+
+    contract = _STRATEGY_REGISTRY["sma_crossover"].signal_program_contract
+    assert contract is not None
+    sealed = _sealed_sma_50_200_binding()
+    seal = sealed.sealed_program
+    assert seal is not None
+    default_clock = seal.configured_signal.clock.model_copy(update={"warmup_lookback_days": contract.warmup_lookback_days})
+    sealed_before_2841 = sealed.model_copy(
+        update={
+            "sealed_program": seal.model_copy(
+                update={"configured_signal": seal.configured_signal.model_copy(update={"clock": default_clock})}
+            )
+        }
+    )
+    session_open_ms = session_open_ms_utc(_WORST_18_DAY_START_DATE)
+    start_ms = session_open_ms + _MINUTE_MS
+    lookback_days = _warmup_lookback_days_for(sealed)
+    minutes = _regular_hours_minutes(
+        _WORST_18_DAY_START_DATE - timedelta(days=lookback_days), _WORST_18_DAY_START_DATE
+    )
+
+    on_sealed_lookback = await _first_live_decision(sealed, _SyntheticMinuteFeed(minutes, start_ms=start_ms))
+    on_default_lookback = await _first_live_decision(
+        sealed_before_2841, _SyntheticMinuteFeed(minutes, start_ms=start_ms)
+    )
+
+    # Both are the session's first decision bar, closed by live minutes.
+    first_decision_close_ms = session_open_ms + seal.configured_signal.data.decision_timeframe_ms
+    assert on_sealed_lookback.decision_bar_close_ms == first_decision_close_ms
+    assert on_default_lookback.decision_bar_close_ms == first_decision_close_ms
+    assert on_sealed_lookback.bar.provenance == on_default_lookback.bar.provenance == "realtime"
+    assert (lookback_days, _warmup_lookback_days_for(sealed_before_2841)) == (18, 7)
+    assert on_sealed_lookback.trace.ready is True
+    assert on_default_lookback.trace.ready is False
 
 
 def test_captured_decision_outcomes_sees_decisions_older_than_the_presentation_cap(

@@ -575,7 +575,7 @@ describe("Strategy Lab Workbench", () => {
     // written over the defaults the operator is now looking at.
     expect(lab.report.displayRun()).toBeNull();
     expect(lab.config.initialCash()).toBe(100_000);
-    expect(lab.config.fillMode()).toBe("signal_bar_close");
+    expect(lab.config.fillMode()).toBe("decision_minute_open");
     http.verify();
   });
 
@@ -895,7 +895,7 @@ describe("Strategy Lab saved configuration", () => {
     });
   });
 
-  it("restores a decision-minute-open run's fill mode and reads an unknown one as the default (#2599)", () => {
+  it("restores a decision-minute-open run's fill mode and reads an unknown one as the unrecorded rule, not the default (#2599)", () => {
     const range = { symbol: "SPY", from: "2025-01-01", to: "2025-01-02", resolution: "minute" } as const;
 
     expect(inputsFromSavedRun(run({ fillMode: "decision_minute_open" }), range).fillMode).toBe("decision_minute_open");
