@@ -37,6 +37,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     execute_recovery_action,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
+    PublishedPass,
     RecoveryActionUnavailableError,
     StaleRecoveryTokenError,
     build_recovery_catalog,
@@ -393,6 +394,7 @@ async def read_sqlite_panel_evidence(
     now_ms: int,
     facade: SqliteAlpacaClerkFacade | None = None,
     run: RunScope | None = None,
+    published_pass: PublishedPass | None = None,
 ) -> SqlitePanelEvidence | None:
     """Read one panel's custody and S2 economics at the same SQLite revision.
 
@@ -410,9 +412,11 @@ async def read_sqlite_panel_evidence(
     ``run`` also reads that run's fills and activity, at the same revision:
     the bot page summarizes its run and lists its fills (#2794).
 
-    The Clerk's latest published pass is read first, before any attempt's
-    snapshot, exactly as a commit reads it (``read_recovery_context``): the
-    Flatten this panel presents may rest on it (#2839).
+    ``published_pass`` is the Clerk's latest published pass for the bot, read
+    by the caller before this read, as a commit reads it
+    (``read_recovery_context``): the Flatten a panel presents may rest on it
+    (#2839). A caller that presents no recovery action -- a chart, the
+    gallery wall -- hands none and waits on no lock for one.
     """
     facade = facade or active_sqlite_facade(broker)
     if facade is None:
@@ -420,7 +424,6 @@ async def read_sqlite_panel_evidence(
     if facade.account_id != account_id:
         raise ValueError("Requested account is not the active SQLite authority")
     session_window = current_trading_session_window(now_ms)
-    published_pass = await facade.published_pass(strategy_instance_id)
 
     def read_once() -> SqlitePanelEvidence | None:
         for _attempt in _spaced_attempts():
@@ -1251,6 +1254,15 @@ def home_roster(repository: ClerkSqliteRepository, *, world: AuthorityKind) -> l
 
 
 @dataclass(frozen=True)
+class _EndedBot:
+    """One bot whose run ended uncleanly, as its lifecycle says."""
+
+    sid: str
+    symbol: str
+    kind: str
+
+
+@dataclass(frozen=True)
 class _UncleanEnd:
     """One uncleanly ended bot, with its custody cut on the account's snapshot."""
 
@@ -1263,28 +1275,36 @@ class _UncleanEnd:
 async def read_account_custody(
     facade: SqliteAlpacaClerkFacade,
 ) -> tuple[ClerkProjection, list[ExposureNoticeView]]:
-    """Read desk and bell custody with terminal notices on one SQLite snapshot."""
+    """Read desk and bell custody with terminal notices on one SQLite snapshot.
+
+    Each uncleanly ended bot's cut is read beside the Clerk's latest published
+    pass for it, read before the snapshot as the bot's own page reads it
+    (#2839): its notice then offers Flatten exactly when its page does.
+    """
+    ended, unreadable = await asyncio.to_thread(_uncleanly_ended, facade)
+    passes = {bot.sid: await facade.published_pass(bot.sid) for bot in ended}
+
     def read() -> tuple[ClerkProjection, list[_UncleanEnd], list[ExposureNoticeView]]:
         reader = SqliteClerkProjectionReader.from_facade(facade)
         try:
             with reader.snapshot():
                 projection = reader.account_snapshot()
-                return projection, *_unclean_ends(facade, reader)
+                return projection, *_unclean_ends(reader, ended, passes, account_id=facade.account_id)
         finally:
             reader.close()
 
-    projection, ends, unreadable = await asyncio.to_thread(read)
-    return projection, [*unreadable, *await _terminal_exposure_notices(facade, ends)]
+    projection, ends, uncut = await asyncio.to_thread(read)
+    return projection, [*unreadable, *uncut, *await _terminal_exposure_notices(facade, ends)]
 
 
-def _unclean_ends(
-    facade: SqliteAlpacaClerkFacade, reader: SqliteClerkProjectionReader,
-) -> tuple[list[_UncleanEnd], list[ExposureNoticeView]]:
-    """The uncleanly ended bots, and a notice for each one whose evidence could not be read. Blocking.
+def _uncleanly_ended(
+    facade: SqliteAlpacaClerkFacade,
+) -> tuple[list[_EndedBot], list[ExposureNoticeView]]:
+    """The bots whose run ended uncleanly, and a notice for each whose lifecycle could not be read. Blocking.
 
     Reuses roster lifecycle truth; a bad bot never hides its healthy siblings.
     """
-    ends: list[_UncleanEnd] = []
+    ended: list[_EndedBot] = []
     unreadable: list[ExposureNoticeView] = []
     repository = facade.repository
     # A retired registration with no live custody is the catalog's inert row
@@ -1297,30 +1317,61 @@ def _unclean_ends(
             continue
         try:
             status = build_roster_status("alpaca", registration, repository)
-            outcome = status.duty_outcome
-            if outcome is None or not ended_uncleanly(kind=outcome.kind, running=status.running):
-                continue
-            projection = reader.bot_snapshot(sid)
+        except SqliteCatalogProjectionUnavailable:
+            unreadable.append(_unreadable_evidence_notice(sid, str(registration["symbol"]), repository.account_id))
+            continue
+        outcome = status.duty_outcome
+        if outcome is not None and ended_uncleanly(kind=outcome.kind, running=status.running):
+            ended.append(_EndedBot(sid=sid, symbol=status.symbol, kind=outcome.kind))
+    return ended, unreadable
+
+
+def _unclean_ends(
+    reader: SqliteClerkProjectionReader,
+    ended: list[_EndedBot],
+    passes: dict[str, PublishedPass | None],
+    *,
+    account_id: str,
+) -> tuple[list[_UncleanEnd], list[ExposureNoticeView]]:
+    """Each ended bot's custody cut on the reader's snapshot, and a notice for each bot that has none. Blocking.
+
+    ``passes`` holds the Clerk's published pass read for each bot before the
+    snapshot was taken.
+    """
+    ends: list[_UncleanEnd] = []
+    unreadable: list[ExposureNoticeView] = []
+    for bot in ended:
+        try:
+            projection = reader.bot_snapshot(bot.sid, published_pass=passes.get(bot.sid))
             if projection is None:
-                raise ProjectionReadError(f"Custody projection is missing for {sid}")
-            ends.append(_UncleanEnd(sid=sid, symbol=status.symbol, kind=outcome.kind, projection=projection))
-        except (SqliteCatalogProjectionUnavailable, ProjectionReadError):
-            logger.error("Could not read one bot's terminal custody evidence", extra={
-                "action": "terminal_exposure_unreadable", "strategy_instance_id": sid,
-                "account_id": repository.account_id,
-            }, exc_info=True)
-            unreadable.append(ExposureNoticeView(
-                strategy_instance_id=sid, symbol=str(registration["symbol"]),
-                kind="position_unverified", label="Position could not be verified",
-                # Every fix it names is in the app (hurdle H29).
-                explanation=(
-                    "This bot's lifecycle or custody evidence could not be read, so the app cannot vouch "
-                    "for what it holds. Reconcile now re-reads the account at Alpaca; Flatten becomes "
-                    "available once the position is proven."
-                ),
-                action_label="Open bot",
-            ))
+                raise ProjectionReadError(f"Custody projection is missing for {bot.sid}")
+        except ProjectionReadError:
+            unreadable.append(_unreadable_evidence_notice(bot.sid, bot.symbol, account_id))
+            continue
+        ends.append(_UncleanEnd(sid=bot.sid, symbol=bot.symbol, kind=bot.kind, projection=projection))
     return ends, unreadable
+
+
+def _unreadable_evidence_notice(sid: str, symbol: str, account_id: str) -> ExposureNoticeView:
+    """Log that a bot's lifecycle or custody evidence could not be read, and author its notice.
+
+    Called while that error is being handled: the log carries its traceback.
+    """
+    logger.error("Could not read one bot's terminal custody evidence", extra={
+        "action": "terminal_exposure_unreadable", "strategy_instance_id": sid,
+        "account_id": account_id,
+    }, exc_info=True)
+    return ExposureNoticeView(
+        strategy_instance_id=sid, symbol=symbol,
+        kind="position_unverified", label="Position could not be verified",
+        # Every fix it names is in the app (hurdle H29).
+        explanation=(
+            "This bot's lifecycle or custody evidence could not be read, so the app cannot vouch "
+            "for what it holds. Reconcile now re-reads the account at Alpaca; Flatten becomes "
+            "available once the position is proven."
+        ),
+        action_label="Open bot",
+    )
 
 
 async def _terminal_exposure_notices(

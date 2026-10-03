@@ -17,6 +17,10 @@ import { TimestampDisplayComponent } from '../../../../shared/timestamp';
 /**
  * Pure presentation for one backend-authored, read-only reduction plan.
  *
+ * The plan names the check of the account it rests on (#2839): a Reconcile
+ * now receipt, or the Account Clerk's own periodic check, which has no
+ * receipt. Either is shown with the time it was made.
+ *
  * `pricing` says how the plan's flatten would go out now (#2007): a market
  * order inside the regular session, or why none can be sent. The priced
  * extended-hours ticket is the host's to render — it is interactive.

@@ -641,6 +641,72 @@ async def test_the_clerks_own_pass_vouches_on_the_desk_and_dates_the_sync_check(
     assert status.json()["latest_reconciliation"]["recorded_at_ms"] == last_checked_ms
 
 
+@pytest.mark.parametrize(
+    ("verdict", "position_changed_after_ms", "read_after_ms", "notice"),
+    [
+        pytest.param(
+            "clean", None, 0,
+            ("position_unmanaged", "Flatten", "Use Flatten to close this position."),
+            id="the-pass-vouches-for-the-bot",
+        ),
+        # The pass still says what the bot holds, but the bot's page would refuse its Flatten.
+        pytest.param(
+            "clean", 1_000, 0,
+            ("position_unmanaged", "Open bot", "Reconcile now, then use Flatten to close this position."),
+            id="the-position-changed-after-the-pass",
+        ),
+        pytest.param(
+            "position_drift", None, 0, ("position_unverified", "Open bot", None), id="the-pass-cannot-vouch",
+        ),
+        pytest.param("clean", None, 60_001, ("position_unverified", "Open bot", None), id="the-pass-is-stale"),
+    ],
+)
+async def test_the_desks_notice_of_an_ended_bot_offers_flatten_when_the_clerks_own_pass_vouches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    verdict: str, position_changed_after_ms: int | None, read_after_ms: int, notice: tuple[str, str, str | None],
+) -> None:
+    """#2839: the desk said "Reconcile now, then use Flatten" although the Clerk had just checked the account.
+
+    The notice offers Flatten exactly when the bot's own page does: on a
+    pass that vouches for the bot and that the page's gate accepts. A pass
+    the gate would refuse still sends the owner to Reconcile now first.
+    """
+    from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
+    from app.services.broker_v2_panel import sqlite_roster_status
+
+    clock = _Clock()
+    repo = _budgeted(ClerkSqliteRepository.initialize(account_id=ACCOUNT, artifacts_root=tmp_path, clock=clock))
+    monkeypatch.setattr(sqlite_roster_status, "live_artifacts_root", lambda: tmp_path)
+    repo.register_strategy_instance(strategy_instance_id="paper-0", symbol="SPY", config_hash="h1", config_json=_TRADE_CONFIG)
+    _end_uncleanly(tmp_path, "paper-0", at_ms=_T0)
+    _hold_position(repo, "paper-0", 3)
+    facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=object(), trade=object())
+    clock.now_ms = _T0 + 45_000
+    facade.publish_sweep_reconciliation(AccountReconciliationResult(
+        verdict=verdict, through_sequence=repo.last_custody_sequence("paper-0"),
+    ))
+    if position_changed_after_ms is not None:
+        repo._conn.execute("UPDATE positions SET updated_at_ms = ?", (clock.now_ms + position_changed_after_ms,))
+        repo._conn.commit()
+    clock.now_ms += max(read_after_ms, 2_000)
+    set_active_clerk_runtime(ActiveClerkRuntime(
+        authority_kind="sqlite", clerk=facade, _sqlite_repository=repo, account_id=ACCOUNT,
+    ))
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            desk = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT}/snapshot")
+    finally:
+        repo.close()
+
+    assert desk.status_code == 200
+    (shown,) = desk.json()["exposure_notices"]
+    kind, action_label, closing = notice
+    assert (shown["kind"], shown["action_label"], shown["strategy_instance_id"]) == (kind, action_label, "paper-0")
+    if closing is not None:
+        assert "The Clerk attributes 3 SPY to this bot." in shown["explanation"]
+        assert shown["explanation"].endswith(closing)
+
+
 async def test_a_crashed_bot_whose_run_row_is_still_active_but_holds_shares_is_one_stopped_line(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

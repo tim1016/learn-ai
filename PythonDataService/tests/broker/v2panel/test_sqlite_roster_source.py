@@ -306,8 +306,11 @@ def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
 
     # Missing per-bot custody is an explicit warning, including a crash whose
     # RUN_STOPPED fold failed. It must not disappear from the desk or bell.
-    ends, notices = sqlite_panel_source._unclean_ends(facade, SimpleNamespace(bot_snapshot=lambda _sid: None))
-    assert ends == []
+    ended, unreadable = sqlite_panel_source._uncleanly_ended(facade)
+    ends, notices = sqlite_panel_source._unclean_ends(
+        SimpleNamespace(bot_snapshot=lambda _sid, published_pass: None), ended, {}, account_id="paper-account"
+    )
+    assert (ends, unreadable) == ([], [])
     assert [(notice.strategy_instance_id, notice.kind) for notice in notices] == [
         ("active-spy", "position_unverified"),
     ]
@@ -694,11 +697,6 @@ async def test_activated_catalog_never_scans_large_legacy_set(
     assert [row.strategy_instance_id for row in result] == ["active-spy"]
 
 
-async def _no_published_pass(_strategy_instance_id: str) -> None:
-    """The stand-in authority has published no account pass (#2839)."""
-    return None
-
-
 async def _resolved_account(_broker: str, account_id: str) -> str:
     return account_id
 
@@ -826,10 +824,7 @@ async def test_panel_evidence_retries_status_revision_race_with_verified_zero_ec
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = _Repository()
-    facade = SimpleNamespace(
-        account_id="paper-account", account_mode="paper", repository=repository,
-        published_pass=_no_published_pass,
-    )
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository)
     snapshot = replace(
         _economic_rollup_map("paper-account", ["active-spy"])["active-spy"],
         session_open_ms=None,
@@ -1277,10 +1272,7 @@ async def test_panel_evidence_raises_bot_not_found_for_an_absent_projection(
     a SQLite authority that was already healthy.
     """
     repository = _Repository()
-    facade = SimpleNamespace(
-        account_id="paper-account", account_mode="paper", repository=repository,
-        published_pass=_no_published_pass,
-    )
+    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository)
 
     class _CustodyReader:
         @classmethod

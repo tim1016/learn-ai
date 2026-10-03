@@ -3037,8 +3037,8 @@ def test_the_clerks_own_pass_vouches_for_a_flat_bot_with_no_fresh_receipt() -> N
 
 
 def test_the_clerks_own_pass_names_what_the_ended_bot_holds_and_sends_the_owner_to_reconcile_first() -> None:
-    """Flatten still needs a fresh Reconcile now receipt, so a notice the pass
-    alone vouches for never offers a Flatten the page would refuse."""
+    """The pass says what the bot holds, but this cut's own gate offers no
+    Flatten: a notice never offers a Flatten the page would refuse."""
     outcome = adapt_sqlite_panel(
         _refused_panel("CRASHED"), _unreceipted_projection(), pass_proof=_pass_proof(exposure={"SPY": 3.0})
     ).health.duty_outcome
@@ -3048,6 +3048,34 @@ def test_the_clerks_own_pass_names_what_the_ended_bot_holds_and_sends_the_owner_
     assert (notice.kind, notice.action_label) == ("position_unmanaged", "Open bot")
     assert "3 SPY" in notice.explanation
     assert notice.explanation.endswith("Reconcile now, then use Flatten to close this position.")
+
+
+def _with_the_flatten_offered(projection: ClerkProjection) -> ClerkProjection:
+    """The same cut, with the recovery policy's Flatten plan offered in it."""
+    return replace(projection, recovery_actions=(_recovery_capability("prepare_safe_flatten", primary=False),))
+
+
+@pytest.mark.parametrize(
+    "proof",
+    [
+        pytest.param(_pass_proof(exposure={"SPY": 3.0}), id="the-pass-still-vouches-when-the-notice-reads-it"),
+        # Read a moment after the cut: the notice follows the cut's own gate, as the page's button does.
+        pytest.param(None, id="the-pass-no-longer-vouches-when-the-notice-reads-it"),
+    ],
+)
+def test_the_clerks_own_pass_offers_flatten_once_this_cuts_gate_accepts_it(
+    proof: InstanceCustodyProof | None,
+) -> None:
+    """#2839: with no Reconcile now receipt, the notice says "Use Flatten" exactly when the page's Flatten is offered."""
+    projection = _with_the_flatten_offered(_unreceipted_projection(positions=_held(3.0)))
+
+    outcome = adapt_sqlite_panel(_refused_panel("CRASHED"), projection, pass_proof=proof).health.duty_outcome
+
+    assert outcome is not None
+    (notice,) = outcome.exposure_notices
+    assert (notice.kind, notice.action_label) == ("position_unmanaged", "Flatten")
+    assert "3 SPY" in notice.explanation
+    assert notice.explanation.endswith("Use Flatten to close this position.")
 
 
 def test_a_fresh_reconcile_now_receipt_offers_flatten_whatever_the_pass_proved() -> None:

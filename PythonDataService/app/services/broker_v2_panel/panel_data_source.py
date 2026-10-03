@@ -456,6 +456,10 @@ async def _get_panel_with_entries_from_authority(
         )
     authority_account_id = facade.account_id
     run = _latest_run(registry, broker, sid, binding=binding, facade=facade)
+    # Read before the custody snapshot, exactly as a commit reads it
+    # (``read_recovery_context``): the Flatten this panel presents may rest on
+    # the Clerk's own pass (#2839).
+    published_pass = await facade.published_pass(sid)
     try:
         evidence = await read_sqlite_panel_evidence(
             broker,
@@ -464,6 +468,7 @@ async def _get_panel_with_entries_from_authority(
             now_ms=captured_now_ms,
             facade=facade,
             run=None if run.view is None else RunScope(run.view.run_id, run.view.started_at_ms),
+            published_pass=published_pass,
         )
     except SqlitePanelBotNotFound as exc:
         raise UnknownBotError(str(exc)) from exc

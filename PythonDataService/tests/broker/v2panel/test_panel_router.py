@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Sequence
-from dataclasses import replace
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,6 +27,7 @@ from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
+from app.broker.alpaca.clerk.sqlite.recovery_policy import SWEEP_LIVENESS_BOUND_MS
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
     ExecutionLeaseLost,
@@ -40,8 +41,9 @@ from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
 )
-from app.routers import broker_v2_gallery, broker_v2_panel
+from app.routers import alpaca_clerk_sqlite, broker_v2_gallery, broker_v2_panel
 from app.routers.broker_v2_panel import router
+from app.schemas.alpaca_clerk_sqlite import RecoveryActionCheckRequest, RecoveryActionExecuteRequest
 from app.schemas.bot_end import BotEndView
 from app.schemas.broker_bots import BotStatusView
 from app.schemas.broker_v2_panel import (
@@ -66,11 +68,15 @@ from app.services.broker_v2_panel.action_execution_service import (
 )
 from app.services.broker_v2_panel.chart_projection_service import chart_feed_view
 from app.services.live_chart_window import CHART_FEED_NOT_EXPECTED
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite.conftest import (
+    FIXTURE_RTH_MS,
     _broker_position_fixture,
     _FakeReadPort,
     _FakeTradePort,
     _make_held_position,
+    _TestClock,
+    _walk_clock_to,
 )
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
 from tests.broker.v2panel.conftest import account_snapshot
@@ -1967,6 +1973,368 @@ async def test_a_crashed_bots_unverified_position_notice_clears_on_the_clerks_ow
 
     assert [notice["kind"] for notice in before] == ["position_unverified"]
     assert after == []
+
+
+# ── The Flatten gate accepts the Clerk's own check of the account (#2839) ────
+
+_PANEL = f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel"
+_ACTIONS = f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/actions"
+_NEEDS_A_CHECK = "A successful account reconciliation is required before preparing reduction."
+_UNVERIFIED = ("position_unverified", "Open bot")
+_USE_FLATTEN = ("position_unmanaged", "Flatten", "Use Flatten to close this position.")
+
+
+class _SpyAccount:
+    """The Alpaca account the crashed bot's Flatten is checked against as it is sent.
+
+    What it holds is the test's to change; every read it answers is recorded.
+    """
+
+    def __init__(self, *, holds: float) -> None:
+        self.holds = holds
+        self.reads: list[str] = []
+
+    async def list_orders(self, **_kwargs: object) -> list:
+        self.reads.append("orders")
+        return []
+
+    async def list_positions(self) -> list:
+        self.reads.append("positions")
+        return [_broker_position_fixture("SPY", quantity=self.holds)] if self.holds else []
+
+
+@dataclass(frozen=True)
+class _CrashedHolding:
+    app: FastAPI
+    repo: ClerkSqliteRepository
+    clock: _TestClock
+    facade: SqliteAlpacaClerkFacade
+    account: _SpyAccount
+    trade: _FakeTradePort
+
+
+@pytest.fixture()
+async def crashed_holding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_CrashedHolding]:
+    """A crashed bot still holding 1 SPY, on a Clerk whose clock, account and sends the test controls.
+
+    Inside the regular session, where a Flatten goes out as a market order.
+    Nothing has checked the account yet: no Reconcile now, no pass of the Clerk's.
+    """
+    reset_broker_registry_for_testing()
+    reset_idempotency_store_for_testing()
+    set_active_clerk_runtime(None)
+    set_bot_task_registry(_FakeRegistry(tmp_path, sids=(SID,)))  # type: ignore[arg-type]
+    get_broker_registry().register(_FakeBrokerPort())  # type: ignore[arg-type]
+    clock = _TestClock(FIXTURE_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCT, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    repo.register_strategy_instance(
+        strategy_instance_id=SID,
+        symbol="SPY",
+        config_hash="config-1",
+        strategy_key="deployment_validation",
+        display_name="Deployment Validation",
+        config_json=json.dumps({"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}),
+        exit_terms=DEPLOY_EXIT_TERMS,
+    )
+    submit_start_run(repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id=_run_id(SID))
+    account, trade = _SpyAccount(holds=1.0), _FakeTradePort()
+    facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=account, trade=trade)  # type: ignore[arg-type]
+    set_active_clerk_runtime(ActiveClerkRuntime(authority_kind="sqlite", clerk=facade))
+    app = FastAPI()
+    app.include_router(router)
+    try:
+        await _make_held_position(repo, account_id=ACCT, strategy_instance_id=SID, run_id=_run_id(SID), quantity=1.0)
+        _crash_the_run(repo, monkeypatch)
+        yield _CrashedHolding(app=app, repo=repo, clock=clock, facade=facade, account=account, trade=trade)
+    finally:
+        set_active_clerk_runtime(None)
+        set_bot_task_registry(None)
+        repo.close()
+        reset_broker_registry_for_testing()
+        reset_idempotency_store_for_testing()
+
+
+@dataclass(frozen=True)
+class _FlattenOffer:
+    """What ONE panel read says about selling the bot's position: the button, the notice and the command."""
+
+    sell_button: tuple[str, str]
+    notice: tuple[str, ...]
+    command_enabled: bool
+    command: dict[str, object]
+
+
+def _flatten_offer(panel: dict, *, key: str) -> _FlattenOffer:
+    sell = next(entry for entry in panel["bot_page"]["toolbar"] if entry["action_id"] == "prepare_safe_flatten")
+    execute = next(item for item in panel["actions"] if item["action_id"] == "execute_safe_flatten")
+    (notice,) = panel["health"]["duty_outcome"]["exposure_notices"]
+    closing = notice["explanation"].rsplit(". ", 1)[-1]
+    return _FlattenOffer(
+        sell_button=(sell["availability"], sell["reason"]),
+        notice=(
+            (notice["kind"], notice["action_label"], closing)
+            if notice["kind"] == "position_unmanaged"
+            else (notice["kind"], notice["action_label"])
+        ),
+        command_enabled=execute["enabled"],
+        command={
+            "action_id": "execute_safe_flatten",
+            "revision": panel["revision"],
+            "concurrency_token": execute["concurrency_token"],
+            "idempotency_key": key,
+        },
+    )
+
+
+async def _clerk_pass(world: _CrashedHolding) -> None:
+    """One pass of the Clerk's own 15 s check: it compares the account and publishes; it writes no receipt."""
+    result = await world.facade.reconcile_account(trigger="AUTOMATIC")
+    assert (result.verdict, result.receipt_id) == ("clean", None)
+
+
+async def _reconcile_now(world: _CrashedHolding) -> None:
+    async with _client(world.app) as client:
+        panel = (await client.get(_PANEL)).json()
+        action = next(item for item in panel["actions"] if item["action_id"] == "reconcile_now")
+        response = await client.post(_ACTIONS, json={
+            "action_id": "reconcile_now", "revision": panel["revision"],
+            "concurrency_token": action["concurrency_token"], "idempotency_key": "reconcile-now",
+        })
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.parametrize(
+    "check_the_account",
+    [pytest.param(_reconcile_now, id="reconcile-now"), pytest.param(_clerk_pass, id="the-clerks-own-pass")],
+)
+async def test_a_crashed_bots_flatten_is_offered_and_sent_on_either_check_of_the_account(
+    crashed_holding: _CrashedHolding, check_the_account: Callable[[_CrashedHolding], Awaitable[None]]
+) -> None:
+    """#2839: the Clerk checks the whole account every 15 s, yet the page said "Reconcile now, then use Flatten".
+
+    On one panel read the Sell button, the notice and the Flatten command all
+    say the position can be sold, and the command sells it -- after reading
+    the account as it is sent, whichever check offered it.
+    """
+    world = crashed_holding
+    await check_the_account(world)
+    world.account.reads.clear()
+
+    async with _client(world.app) as client:
+        offer = _flatten_offer((await client.get(_PANEL)).json(), key="flatten-1")
+        committed = await client.post(_ACTIONS, json=offer.command)
+
+    assert offer.sell_button == ("available", "Review a plan to sell what this bot holds, then send it.")
+    assert offer.notice == _USE_FLATTEN
+    assert offer.command_enabled is True
+    assert committed.status_code == 200, committed.text
+    assert committed.json()["applied"] is True
+    assert world.account.reads == ["orders", "positions"]
+    assert [(leg.side, leg.quantity) for leg in world.trade.submitted_legs] == [("sell", 1.0)]
+
+
+def _nothing_checked_the_account(world: _CrashedHolding) -> None:
+    """Neither a Reconcile now nor a pass of the Clerk's."""
+
+
+def _the_pass_found_the_account_out_of_step(world: _CrashedHolding) -> None:
+    world.facade.publish_sweep_reconciliation(AccountReconciliationResult(
+        verdict="position_drift", through_sequence=world.repo.last_custody_sequence(),
+    ))
+
+
+def _the_pass_ran_before_the_bots_newest_record(world: _CrashedHolding) -> None:
+    world.facade.publish_sweep_reconciliation(AccountReconciliationResult(
+        verdict="clean", through_sequence=world.repo.last_custody_sequence(SID) - 1,
+    ))
+
+
+async def _the_pass_is_older_than_the_sweeps_bound(world: _CrashedHolding) -> None:
+    await _clerk_pass(world)
+    _walk_clock_to(world.repo, world.clock.value + SWEEP_LIVENESS_BOUND_MS + 1)
+
+
+async def _the_bot_wrote_a_record_after_the_pass(world: _CrashedHolding) -> None:
+    await _clerk_pass(world)
+    submit_start_run(world.repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id="run-again")
+    submit_stop_run(world.repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id="run-again")
+
+
+@pytest.mark.parametrize(
+    "the_account_check",
+    [
+        pytest.param(_nothing_checked_the_account, id="neither-check"),
+        pytest.param(_the_pass_found_the_account_out_of_step, id="the-pass-cannot-vouch"),
+        pytest.param(_the_pass_ran_before_the_bots_newest_record, id="the-pass-did-not-see-this-bots-records"),
+        pytest.param(_the_pass_is_older_than_the_sweeps_bound, id="the-pass-is-stale"),
+        pytest.param(_the_bot_wrote_a_record_after_the_pass, id="a-custody-record-after-the-pass"),
+    ],
+)
+async def test_a_crashed_bots_flatten_is_withheld_when_no_check_of_the_account_stands(
+    crashed_holding: _CrashedHolding,
+    the_account_check: Callable[[_CrashedHolding], Awaitable[None] | None],
+) -> None:
+    """With no fresh receipt and no pass that qualifies, the page is what it was before #2839.
+
+    The button, the notice and the command agree from one read, in the same
+    words as before; the command is refused, reads nothing and sends nothing.
+    """
+    world = crashed_holding
+    prepared = the_account_check(world)
+    if prepared is not None:
+        await prepared
+    world.account.reads.clear()
+
+    async with _client(world.app) as client:
+        offer = _flatten_offer((await client.get(_PANEL)).json(), key="flatten-1")
+        committed = await client.post(_ACTIONS, json=offer.command)
+
+    assert offer.sell_button == ("blocked", _NEEDS_A_CHECK)
+    assert offer.notice == _UNVERIFIED
+    assert offer.command_enabled is False
+    assert committed.status_code == 409, committed.text
+    assert committed.json()["detail"]["message"] == _NEEDS_A_CHECK
+    assert world.account.reads == []
+    assert world.trade.submit_calls == []
+
+
+async def test_a_flatten_presented_under_the_clerks_pass_is_refused_at_commit_once_the_pass_is_stale(
+    crashed_holding: _CrashedHolding,
+) -> None:
+    """The page offered the Flatten under a pass; the sweep then stopped publishing.
+
+    The commit reads the pass again and refuses: it never sells on what the
+    presentation saw.
+    """
+    world = crashed_holding
+    await _clerk_pass(world)
+    world.account.reads.clear()
+
+    async with _client(world.app) as client:
+        offer = _flatten_offer((await client.get(_PANEL)).json(), key="flatten-1")
+        _walk_clock_to(world.repo, world.clock.value + SWEEP_LIVENESS_BOUND_MS + 1)
+        committed = await client.post(_ACTIONS, json=offer.command)
+        after = _flatten_offer((await client.get(_PANEL)).json(), key="flatten-2")
+
+    assert (offer.sell_button[0], offer.notice, offer.command_enabled) == ("available", _USE_FLATTEN, True)
+    assert committed.status_code == 409, committed.text
+    assert world.account.reads == []
+    assert world.trade.submit_calls == []
+    assert (after.sell_button, after.notice, after.command_enabled) == (("blocked", _NEEDS_A_CHECK), _UNVERIFIED, False)
+
+
+async def test_a_flatten_under_the_clerks_pass_is_refused_when_alpaca_no_longer_holds_the_shares(
+    crashed_holding: _CrashedHolding,
+) -> None:
+    """The pass saw 1 SPY; it is gone at Alpaca by the time the Flatten goes out. The send-time read refuses."""
+    world = crashed_holding
+    await _clerk_pass(world)
+    world.account.holds = 0.0
+    world.account.reads.clear()
+
+    async with _client(world.app) as client:
+        offer = _flatten_offer((await client.get(_PANEL)).json(), key="flatten-1")
+        committed = await client.post(_ACTIONS, json=offer.command)
+
+    assert offer.command_enabled is True
+    assert committed.status_code == 409, committed.text
+    assert "Alpaca holds no SPY, less than the 1 this flatten would sell; nothing was sent." in (
+        committed.json()["detail"]["message"]
+    )
+    assert world.account.reads == ["orders", "positions"]
+    assert world.trade.submit_calls == []
+
+
+async def test_the_clerks_own_routes_prepare_and_send_a_flatten_under_its_pass_by_the_panels_rule(
+    crashed_holding: _CrashedHolding,
+) -> None:
+    """The bot page prepares its sale through the Clerk's check route with the token its panel presented.
+
+    The panel, the Clerk's snapshot and its check and execute routes all read
+    the Clerk's pass the same way, so they present one token and one plan --
+    and the plan says which check of the account it rests on.
+    """
+    world = crashed_holding
+    await _clerk_pass(world)
+    world.account.reads.clear()
+    async with _client(world.app) as client:
+        panel = (await client.get(_PANEL)).json()
+    presented = {item["action_id"]: item["concurrency_token"] for item in panel["actions"]}
+
+    check = await alpaca_clerk_sqlite.check_bot_recovery_action(
+        ACCT, SID,
+        RecoveryActionCheckRequest(
+            action_id="prepare_safe_flatten", concurrency_token=presented["prepare_safe_flatten"]
+        ),
+    )
+    snapshot = await alpaca_clerk_sqlite.get_bot_snapshot(ACCT, SID)
+    sent = await alpaca_clerk_sqlite.execute_bot_recovery_action(
+        ACCT, SID,
+        RecoveryActionExecuteRequest(
+            action_id="execute_safe_flatten", concurrency_token=presented["execute_safe_flatten"]
+        ),
+    )
+
+    plan = check.capability.reduction_plan
+    assert plan is not None
+    assert (plan.account_check_kind, plan.reconciliation_id) == ("clerk_pass", None)
+    assert plan.expires_at_ms == plan.account_check_observed_at_ms + SWEEP_LIVENESS_BOUND_MS
+    assert {
+        action.action_id: action.concurrency_token
+        for action in snapshot.recovery_actions
+        if action.action_id in ("prepare_safe_flatten", "execute_safe_flatten")
+    } == {action_id: presented[action_id] for action_id in ("prepare_safe_flatten", "execute_safe_flatten")}
+    assert sent.applied is True
+    assert world.account.reads == ["orders", "positions"]
+    assert [(leg.side, leg.quantity) for leg in world.trade.submitted_legs] == [("sell", 1.0)]
+
+
+async def test_the_clerks_execute_route_refuses_a_flatten_whose_pass_went_stale_after_it_was_presented(
+    crashed_holding: _CrashedHolding,
+) -> None:
+    world = crashed_holding
+    await _clerk_pass(world)
+    world.account.reads.clear()
+    snapshot = await alpaca_clerk_sqlite.get_bot_snapshot(ACCT, SID)
+    execute = next(action for action in snapshot.recovery_actions if action.action_id == "execute_safe_flatten")
+    assert execute.available
+
+    _walk_clock_to(world.repo, world.clock.value + SWEEP_LIVENESS_BOUND_MS + 1)
+    with pytest.raises(HTTPException) as refused:
+        await alpaca_clerk_sqlite.execute_bot_recovery_action(
+            ACCT, SID,
+            RecoveryActionExecuteRequest(
+                action_id="execute_safe_flatten", concurrency_token=execute.concurrency_token
+            ),
+        )
+
+    assert refused.value.status_code == 409
+    assert refused.value.detail == {
+        "reason": "stale_action_token",
+        "message": "The recovery evidence changed. Refresh before confirming the action.",
+    }
+    assert world.account.reads == []
+    assert world.trade.submit_calls == []
+
+
+async def test_the_accounts_own_flatten_plan_still_waits_for_reconcile_now(
+    crashed_holding: _CrashedHolding,
+) -> None:
+    """An account-scope action never rests on the Clerk's pass, though this bot's own does."""
+    world = crashed_holding
+    await _clerk_pass(world)
+
+    account = await alpaca_clerk_sqlite.get_account_snapshot(ACCT)
+    bot = await alpaca_clerk_sqlite.get_bot_snapshot(ACCT, SID)
+
+    def prepare(actions: list) -> tuple[bool, str | None]:
+        action = next(item for item in actions if item.action_id == "prepare_safe_flatten")
+        return action.available, action.unavailable_reason
+
+    assert prepare(bot.recovery_actions) == (True, None)
+    assert prepare(account.recovery_actions) == (False, _NEEDS_A_CHECK)
 
 
 async def test_a_hold_on_the_bots_own_custody_needs_attention(api) -> None:
