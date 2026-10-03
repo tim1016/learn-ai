@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
+    CRASH_CANDIDATE_OUTCOME,
     DecisionOutcome,
     SqliteDecisionReceipts,
 )
@@ -572,6 +573,7 @@ async def _warm_up_signal_strategy(
     binding: BrokerBotBinding,
     *,
     captured_decisions: Mapping[str, str] | None,
+    rotated_out_before_ms: int | None = None,
     record_before_start: BeforeStartSink | None = None,
 ) -> StrategyEvaluation | None:
     """Replay recent closed bars so indicators are ready before live
@@ -593,6 +595,7 @@ async def _warm_up_signal_strategy(
         feed,
         binding,
         captured_decisions=captured_decisions,
+        rotated_out_before_ms=rotated_out_before_ms,
         record_before_start=record_before_start,
     )
     if uncaptured is None:
@@ -626,6 +629,8 @@ async def _signal_strategy_evaluations(
     captured_decisions: Mapping[str, str] | None,
     quarantine_receipts: QuarantineReceiptSink | None,
     record_before_start: BeforeStartSink | None = None,
+    *,
+    rotated_out_before_ms: int | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Run one canonical signal-intent strategy on the production minute stream."""
     runtime = _build_signal_strategy(
@@ -642,6 +647,7 @@ async def _signal_strategy_evaluations(
         feed,
         binding,
         captured_decisions=captured_decisions,
+        rotated_out_before_ms=rotated_out_before_ms,
         record_before_start=record_before_start,
     )
     # Warmup replays backfilled buckets through the same entrypoint, so it is
@@ -745,6 +751,7 @@ async def strategy_evaluations(
     quarantine_receipts: QuarantineReceiptSink | None = None,
     session: RunDecisionSession | None = None,
     record_before_start: BeforeStartSink | None = None,
+    rotated_out_before_ms: int | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Stream one strategy's evaluations.
 
@@ -755,6 +762,14 @@ async def strategy_evaluations(
     default) means no such recovery is attempted, which is correct for a
     read-only stream with no custody seam to record or discard a recovered
     candidate through.
+
+    ``rotated_out_before_ms`` comes from the same receipt read as
+    ``captured_decisions``
+    (:func:`bot_trade_strategy_warmup.captured_decision_outcomes` returns
+    both): the decision-bar close before which a bucket's receipt may have
+    rotated out of that read. Warmup replay never flags a bucket that closed
+    before it as a crash candidate (#2850). ``None`` (the default) says no
+    receipt is known to have rotated out.
 
     ``quarantine_receipts`` is where a refused decision bar becomes durable
     evidence rather than only a log line (issue #1827). Pass a custody
@@ -781,7 +796,12 @@ async def strategy_evaluations(
         raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}")
     _validate_decision_session(binding, session)
     async for evaluation in _signal_strategy_evaluations(
-        binding, feed, captured_decisions, quarantine_receipts, record_before_start
+        binding,
+        feed,
+        captured_decisions,
+        quarantine_receipts,
+        record_before_start,
+        rotated_out_before_ms=rotated_out_before_ms,
     ):
         yield evaluation
 
@@ -895,10 +915,12 @@ async def run_trade_bot(
         )
     )
     async with run_feed_scope as run_feed:
+        captured = captured_decision_outcomes(decision_receipts)
         async for evaluation in strategy_evaluations(
             binding,
             run_feed,
-            captured_decisions=captured_decision_outcomes(decision_receipts),
+            captured_decisions=captured.outcomes,
+            rotated_out_before_ms=captured.rotated_out_before_ms,
             quarantine_receipts=decision_receipts,
             session=session,
             record_before_start=_before_start_recorder(source_bars, binding),
@@ -914,7 +936,7 @@ async def run_trade_bot(
                     decision_receipts,
                     binding=binding,
                     evaluation=evaluation,
-                    outcome="candidate_uncaptured_at_crash",
+                    outcome=CRASH_CANDIDATE_OUTCOME,
                     reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
                 )
                 continue
@@ -1076,7 +1098,7 @@ _PROTECTED_RETENTION_CLASS_BY_OUTCOME: dict[str, str] = {
     "blocked": "protected_refusal",
     # FR-016 / AC #9: crash-window evidence must survive the tail
     # compaction in `decision_receipts.py` the same way a refusal does.
-    "candidate_uncaptured_at_crash": "protected_crash_evidence",
+    CRASH_CANDIDATE_OUTCOME: "protected_crash_evidence",
 }
 
 
@@ -1364,10 +1386,12 @@ async def run_dry_run_bot(
         session=session,
         continuity=continuity,
     ) as retained_feed:
+        captured = captured_decision_outcomes(decision_receipts)
         async for evaluation in strategy_evaluations(
             binding,
             retained_feed,
-            captured_decisions=captured_decision_outcomes(decision_receipts),
+            captured_decisions=captured.outcomes,
+            rotated_out_before_ms=captured.rotated_out_before_ms,
             quarantine_receipts=decision_receipts,
             session=session,
             record_before_start=_before_start_recorder(source_bars, binding),
@@ -1383,7 +1407,7 @@ async def run_dry_run_bot(
                     decision_receipts,
                     binding=binding,
                     evaluation=evaluation,
-                    outcome="candidate_uncaptured_at_crash",
+                    outcome=CRASH_CANDIDATE_OUTCOME,
                     reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
                 )
                 continue

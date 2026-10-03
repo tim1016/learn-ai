@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Sequence
+from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -28,7 +30,10 @@ import pytest
 import app.broker.alpaca.clerk.sqlite.runtime as clerk_runtime
 import app.services.bot_trade_strategy as bot_trade_strategy
 from app.broker.alpaca.clerk import set_alpaca_clerk
+from app.broker.alpaca.clerk.sqlite.decision_receipts import MAX_DECISION_RECEIPTS_PER_STRATEGY
+from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.lean_sidecar.trading_calendar import is_early_close, session_windows_ms_utc
 from app.marketdata.feed import ContinuityPolicy, MarketDataBar
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from tests._helpers.bot_runner.custody import _SID
@@ -42,6 +47,7 @@ from tests._helpers.bot_runner.market import (
     _tradable_market_liveness,
     patch_wall_clock_to_the_fed_bar,
 )
+from tests._helpers.signal_program import anchor_session_date
 
 
 @pytest.fixture(autouse=True)
@@ -109,10 +115,10 @@ class _PhaseFeed:
         return list(self._retained_bars)
 
 
-def _binding(*, run_id: str) -> BrokerBotBinding:
+def _binding(*, run_id: str, strategy_key: str = "ema_crossover_signal") -> BrokerBotBinding:
     return BrokerBotBinding(
         strategy_instance_id=_SID,
-        strategy_key="ema_crossover_signal",
+        strategy_key=strategy_key,
         broker="alpaca",
         symbol="SPY",
         mode="trade",
@@ -253,6 +259,192 @@ async def test_a_never_run_instance_gets_no_crash_evidence_from_cold_warmup(
 
         receipts = repo.decision_receipt_tail(strategy_instance_id=_SID, limit=500)
         assert not any(receipt.outcome == "candidate_uncaptured_at_crash" for receipt in receipts)
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+# ---------------------------------------------------------------------------
+# A bot that has decided more buckets than its receipt window retains (#2850).
+# ---------------------------------------------------------------------------
+
+_MINUTE_MS = 60_000
+_DV = "deployment_validation"
+_EARLY_ENTER_MINUTE = 31
+"""Minute of the tape whose close stages the first ENTER: the second of two
+green minutes, inside the first session's detection window."""
+_LATE_ENTER_MINUTE = 1_081
+"""Minute whose close stages an ENTER in the third session, after more
+decisions than the receipt window retains."""
+
+
+def _red_tape(*, minutes: int, enter_minutes: Sequence[int]) -> list[MarketDataBar]:
+    """``minutes`` consecutive regular-session one-minute bars, red but for a
+    green pair ending at each of ``enter_minutes``.
+
+    ``deployment_validation`` decides on every minute and proposes an ENTER on
+    the second of two consecutive green minutes, so the tape holds one
+    decision per bar and stages an ENTER exactly at the named minutes.
+    """
+    first = anchor_session_date()
+    starts = [
+        start_ms
+        for window in session_windows_ms_utc(first, first + timedelta(days=14))
+        if not is_early_close(window.session_date)
+        for start_ms in range(window.open_ms_utc, window.close_ms_utc, _MINUTE_MS)
+    ][:minutes]
+    assert len(starts) == minutes
+    green = {minute for enter in enter_minutes for minute in (enter - 1, enter)}
+    return [
+        MarketDataBar(
+            symbol="SPY",
+            start_ms=start_ms,
+            end_ms=start_ms + _MINUTE_MS,
+            open=Decimal("500") if minute in green else Decimal("501"),
+            high=Decimal("502"),
+            low=Decimal("499"),
+            close=Decimal("501") if minute in green else Decimal("500"),
+            volume=100,
+            fetched_at_ms=start_ms + _MINUTE_MS,
+            feed_id="fake-phase",
+            session_phase="RTH",
+        )
+        for minute, start_ms in enumerate(starts)
+    ]
+
+
+def _sqlite_clerk(tmp_path: Path) -> tuple[ClerkSqliteRepository, _FakeClerk]:
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
+    repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
+    clerk = _FakeClerk(repository=repo)
+    clerk.authority_kind = "sqlite"
+    clerk.account_id = "PA-TEST"
+    return repo, clerk
+
+
+def _retained(repo: ClerkSqliteRepository) -> list[DecisionReceiptResource]:
+    return repo.decision_receipt_tail(
+        strategy_instance_id=_SID, limit=MAX_DECISION_RECEIPTS_PER_STRATEGY
+    )
+
+
+def _crash_evidence_closes(repo: ClerkSqliteRepository) -> list[int]:
+    return [
+        json.loads(receipt.facts_json)["decision_bar_close_ms"]
+        for receipt in _retained(repo)
+        if receipt.outcome == "candidate_uncaptured_at_crash"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resume_past_the_receipt_window_fabricates_no_crash_evidence(tmp_path: Path) -> None:
+    """#2850: a clean stop is not a crash, however long the bot has run.
+
+    The first run decides more buckets than the receipt window retains, so
+    its early ENTER's receipt has rotated out by the time it stops. A Resume
+    replays every retained bar (#2314), restages that ENTER and finds no
+    receipt for it in the window -- which is retention, not a crash. Before
+    the fix it was flagged, and recording it as crash evidence collided with
+    the ENTER's own protected receipt: the Resume ended in
+    ``DecisionReceiptConflictError``.
+    """
+    repo, clerk = _sqlite_clerk(tmp_path)
+    set_alpaca_clerk(clerk)
+    try:
+        bars = _red_tape(minutes=_LATE_ENTER_MINUTE, enter_minutes=[_EARLY_ENTER_MINUTE])
+        early_enter_close_ms = bars[_EARLY_ENTER_MINUTE].end_ms
+
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-1", strategy_key=_DV), _PhaseFeed(live_bars=bars)
+        )
+        after_first_run = _retained(repo)
+        assert clerk.calls[0]["purpose"] == "ENTER"
+        assert clerk.calls[0]["decision_evidence"].decision_bar_close_ms == early_enter_close_ms
+        # The window no longer reaches back to that ENTER.
+        assert after_first_run[0].seq > 1
+        assert json.loads(after_first_run[0].facts_json)["decision_bar_close_ms"] > early_enter_close_ms
+
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-2", strategy_key=_DV), _PhaseFeed(retained_bars=bars)
+        )
+
+        assert _retained(repo) == after_first_run
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_past_the_receipt_window_still_names_the_candidate_a_crash_left_staged(
+    tmp_path: Path,
+) -> None:
+    """The exemption for rotated-out buckets must not reach the real crash window.
+
+    The crashed run decided more buckets than the receipt window retains,
+    then died on the bar that closes a staged ENTER. Replay restages two
+    uncaptured ENTERs: the early one, whose receipt rotated out, and the one
+    the crash left staged. Only the second is crash evidence, and it is the
+    one named -- before #2850 the early one was flagged first, which hid it.
+    """
+    repo, clerk = _sqlite_clerk(tmp_path)
+    set_alpaca_clerk(clerk)
+    try:
+        bars = _red_tape(
+            minutes=_LATE_ENTER_MINUTE + 1, enter_minutes=[_EARLY_ENTER_MINUTE, _LATE_ENTER_MINUTE]
+        )
+        crash_close_ms = bars[_LATE_ENTER_MINUTE].end_ms
+
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-1", strategy_key=_DV), _PhaseFeed(live_bars=bars[:_LATE_ENTER_MINUTE])
+        )
+        calls_before_resume = len(clerk.calls)
+        assert _retained(repo)[0].seq > 1
+
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-2", strategy_key=_DV), _PhaseFeed(retained_bars=bars)
+        )
+
+        assert len(clerk.calls) == calls_before_resume
+        assert _crash_evidence_closes(repo) == [crash_close_ms]
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_a_bucket_older_than_every_receipt_is_still_named_while_none_has_rotated_out(
+    tmp_path: Path,
+) -> None:
+    """A store that has dropped no receipt exempts nothing (#2850).
+
+    The instance's first run died on its very first decision: the bar that
+    staged an ENTER was retained, no receipt was ever written. A Resume with
+    no receipts on file flags nothing, so the bucket goes unnamed and that run
+    writes the instance's first receipts -- all for later bars. At the next
+    Resume the staged bucket is older than every receipt, but nothing has
+    rotated out, so its missing receipt was never written: it is named.
+    """
+    repo, clerk = _sqlite_clerk(tmp_path)
+    set_alpaca_clerk(clerk)
+    try:
+        tape = _red_tape(minutes=_EARLY_ENTER_MINUTE + 6, enter_minutes=[_EARLY_ENTER_MINUTE])
+        warmup = [bar.model_copy(update={"provenance": "history"}) for bar in tape[:_EARLY_ENTER_MINUTE]]
+        crash_bar = tape[_EARLY_ENTER_MINUTE]
+        later = tape[_EARLY_ENTER_MINUTE + 1 :]
+
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-2", strategy_key=_DV),
+            _PhaseFeed(retained_bars=[*warmup, crash_bar], live_bars=later),
+        )
+        assert [receipt.outcome for receipt in _retained(repo)] == ["no_action"] * len(later)
+
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-3", strategy_key=_DV),
+            _PhaseFeed(retained_bars=[*warmup, crash_bar, *later]),
+        )
+
+        assert _crash_evidence_closes(repo) == [crash_bar.end_ms]
+        assert clerk.calls == []
     finally:
         set_alpaca_clerk(None)
         repo.close()

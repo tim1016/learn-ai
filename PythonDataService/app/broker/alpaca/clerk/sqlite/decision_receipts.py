@@ -60,6 +60,12 @@ DecisionOutcome = Literal[
 # eventually disagrees with itself.
 QUARANTINE_OUTCOME: DecisionOutcome = "decision_bar_quarantined"
 
+# Named for the same reason: the runner writes it, and a Resume's replay must
+# recognise it as the one decision receipt written by a replay rather than
+# when its bucket was decided -- so the only one that can sit out of bar
+# order (#2850).
+CRASH_CANDIDATE_OUTCOME: DecisionOutcome = "candidate_uncaptured_at_crash"
+
 
 class DecisionReceipt(BaseModel):
     """Trader-facing view of one SQLite decision receipt."""
@@ -531,8 +537,10 @@ class SqliteDecisionReceipts:
         ``MAX_DECISION_RECEIPTS_PER_STRATEGY`` sequences (plus ``protected_*``
         rows beyond them), and FR-016 crash replay must see that whole window
         or a decision older than the presentation cap looks uncaptured
-        (#1740). Older ``protected_*`` rows are not needed there: they are
-        never a replayed bucket's own disposition.
+        (#1740). Older ``protected_*`` rows are not returned: a Resume does
+        replay buckets older than this window (#2314), and it leaves them
+        out of crash-candidate flagging rather than reading their
+        dispositions (#2850).
         """
         return self._repository.decision_receipt_tail(
             strategy_instance_id=self._strategy_instance_id,
