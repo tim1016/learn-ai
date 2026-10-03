@@ -56,7 +56,11 @@ from app.broker.alpaca.clerk.sqlite.flatten_cover import FLATTEN_NOT_COVERED_AT_
 from app.broker.alpaca.clerk.sqlite.idempotency import UnknownEntryOrderError
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import OrderResource
-from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain, submit_absence_grace_ms
+from app.broker.alpaca.clerk.sqlite.order_evidence import (
+    fold_order_evidence,
+    fold_uncertain,
+    submit_absence_grace_ms,
+)
 from app.broker.alpaca.clerk.sqlite.projection_models import ProjectedUncertainty
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.reconcile import reconcile_account
@@ -1016,6 +1020,153 @@ async def test_a_refusal_is_no_longer_told_once_its_order_is_found_while_another
     assert (one_unknown.explanation, one_unknown.next_step) == (
         "One or more broker responses remain unknown.", LOST_ANSWER_NEXT_STEP,
     )
+
+
+async def _the_entry_is_found_while_the_closing_order_is_held_for_another_identity(
+    repo: ClerkSqliteRepository, clock: _TestClock
+) -> tuple[_Alpaca, ProjectedUncertainty]:
+    """Two orders of one bot are unknown, and the one that is not held is then found.
+
+    Alpaca answered the closing order's send under another client order id,
+    so it is held and never sent again. The entry's cancel answer is then
+    lost too, and two passes find both still unknown. Then Alpaca shows the
+    entry. Returns Alpaca and the notice as it stood while both were unknown.
+    """
+    alpaca = _Alpaca(repo, clock, submits=(_AnsweredAs("an-id-the-clerk-never-sent"),))
+    exit_id = await _the_runner_sends_the_exit(repo, alpaca)
+    _the_entrys_cancel_answer_is_lost(repo, exit_id)
+    await _passes(repo, _the_sweep(repo, alpaca), 2)
+    both_unknown = _the_open_notice(repo)
+    assert both_unknown is not None
+    assert "the Clerk will not send this order again" in both_unknown.explanation
+
+    _the_entry_is_found(repo, exit_id)
+    return alpaca, both_unknown
+
+
+def _the_entrys_cancel_answer_is_lost(repo: ClerkSqliteRepository, exit_id: str) -> None:
+    """The bot's entry joins the orders whose outcome its EXIT does not know."""
+    (entry,) = repo.entry_orders_for_strategy(SID)
+    fold_uncertain(
+        repo, effect_operation_id=exit_id, order_ref=entry.order_ref,
+        why="The cancel response for the entry was lost.", transition_kind="ORDER_CANCEL_UNCERTAIN",
+    )
+
+
+def _the_entry_is_found(repo: ClerkSqliteRepository, exit_id: str) -> None:
+    """Alpaca shows the bot's entry, filled as it was: the exact evidence its EXIT folds for it."""
+    (entry,) = repo.entry_orders_for_strategy(SID)
+    assert entry.broker_order_id is not None
+    fold_order_evidence(
+        repo, effect_operation_id=exit_id,
+        order=safe_flatten._broker_order(
+            entry.order_ref, order_id=entry.broker_order_id, status="filled",
+            quantity=10.0, filled_quantity=10.0, filled_avg_price=100.0,
+        ),
+    )
+
+
+async def test_an_order_held_for_another_identity_is_still_told_so_once_another_order_is_found(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """That the Clerk will not send a held order again was lost for good when another order of the bot was found (#2854).
+
+    One notice covers every order of the bot whose outcome is unknown. When
+    one of them was found, the notice went back to "responses remain unknown"
+    and "Reconcile now" -- and the held order's own words never came back:
+    they are recorded once, when Alpaca answers, and no later pass repeats
+    them. The notice now says of the order that is still held what it said
+    before, names that order alone, and keeps saying it.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca, both_unknown = await _the_entry_is_found_while_the_closing_order_is_held_for_another_identity(
+        repo, clock
+    )
+
+    held = _the_open_notice(repo)
+    assert held is not None
+    assert (held.uncertainty_id, held.explanation, held.next_step) == (
+        both_unknown.uncertainty_id, both_unknown.explanation, both_unknown.next_step,
+    )
+    assert held.evidence_refs == (_closing_order(repo).order_ref,)
+
+    await _passes(repo, _the_sweep(repo, alpaca), FIVE_MINUTES_OF_PASSES)
+
+    still = _the_open_notice(repo)
+    assert still is not None
+    assert (still.explanation, still.next_step) == (both_unknown.explanation, both_unknown.next_step)
+    assert len(alpaca.sent) == 1
+
+
+async def test_a_refusal_is_not_told_again_of_an_order_alpaca_has_since_accepted(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """A notice describes a send Alpaca never acknowledged, and no order it has accepted since (#2854).
+
+    The refused order is accepted on its next send, and then no read shows
+    it: its outcome is unknown again, for another reason, and it is not sent
+    again. When the bot's other unknown order is found, the notice is about
+    the accepted order alone and says nothing of the old refusal.
+    """
+    repo, clock = crashed_with_exposure
+    refused = _Refused(403, "insufficient qty available for order (requested: 10, available: 0)")
+    alpaca = _Alpaca(repo, clock, submits=("never_arrives", refused))
+    exit_id = await _the_runner_sends_the_exit(repo, alpaca)
+    await _passes_until_sent(repo, _the_sweep(repo, alpaca), alpaca, sends=2)
+    _the_entrys_cancel_answer_is_lost(repo, exit_id)
+    await _passes_until_sent(repo, _the_sweep(repo, alpaca), alpaca, sends=3)
+    accepted = _closing_order(repo)
+    assert accepted.broker_order_id is not None
+
+    alpaca.loses_sight_of(accepted.client_order_id)
+    await _passes(repo, _the_sweep(repo, alpaca), 1)
+    assert _exit_state(repo, exit_id) == "unknown"
+    _the_entry_is_found(repo, exit_id)
+
+    notice = _the_open_notice(repo)
+    assert notice is not None
+    assert notice.evidence_refs == (accepted.order_ref,)
+    assert (notice.explanation, notice.next_step) == (
+        "One or more broker responses remain unknown.", LOST_ANSWER_NEXT_STEP,
+    )
+    assert len(alpaca.sent) == 3
+
+
+async def test_a_store_rebuilt_from_its_mirror_still_tells_an_order_held_for_another_identity(
+    tmp_path: Path,
+) -> None:
+    """What the notice says once another order is found is read from the held order's own record (#2854).
+
+    The fold that takes the found order out of the notice reads the newest
+    notice recorded for an order that is still unknown. A store replayed from
+    its mirror reads the same rows in the same order, and shows the same notice.
+    """
+    clock = _clock_at(FIXTURE_RTH_MS)
+    repo = ClerkSqliteRepository.initialize(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
+    )
+    repo.register_strategy_instance(
+        exit_terms=DEPLOY_EXIT_TERMS, strategy_instance_id=SID, symbol="SPY", config_hash="h1"
+    )
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id=RUN_ID)
+    alpaca, both_unknown = await _the_entry_is_found_while_the_closing_order_is_held_for_another_identity(
+        repo, clock
+    )
+    await _passes(repo, _the_sweep(repo, alpaca), 1)
+    told = _the_open_notice(repo)
+    assert told is not None
+    assert (told.explanation, told.next_step) == (both_unknown.explanation, both_unknown.next_step)
+    db_path = repo.db_path
+    repo.close()
+    db_path.rename(db_path.with_suffix(".db.corrupt"))
+
+    rebuilt = ClerkSqliteRepository.rebuild_from_mirror(
+        account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock
+    )
+    try:
+        assert _the_open_notice(rebuilt) == told
+    finally:
+        rebuilt.close()
 
 
 async def test_a_store_rebuilt_from_its_mirror_tells_the_same_refusal(tmp_path: Path) -> None:

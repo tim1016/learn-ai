@@ -277,7 +277,9 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
     none leaves an open episode's words as they are: each pass that finds the
     order still absent refreshes the episode, and what the broker last
     answered stays true until another answer or the order's proof replaces
-    it (:func:`resolve_unknown_outcome_if_proven`).
+    it. When another order's proof takes that order out of the episode, the
+    words are read back from the orders that remain
+    (:func:`resolve_unknown_outcome_if_proven`).
     """
     notice = OrderSubmitUncertainFacts.from_facts_json(payload["facts_json"]).notice
     effect_operation_id = payload["effect_operation_id"]
@@ -378,6 +380,44 @@ def open_or_refresh_unknown_outcome(conn: sqlite3.Connection, payload: dict[str,
         )
 
 
+def _newest_standing_notice(
+    conn: sqlite3.Connection, identities: tuple[UnknownOrderIdentity, ...]
+) -> UnknownOutcomeNotice | None:
+    """The newest notice recorded for any of these still-unknown orders, or ``None`` when none has one (#2854).
+
+    A notice is recorded once, on the row of the broker's answer; the passes
+    that then find the order still unknown record none. So when another
+    order leaves the episode, what is still true of these is read back from
+    their own rows: an order held because the broker answered under another
+    client order id is still told as held.
+
+    A notice describes a send the broker never acknowledged. Once the broker
+    has acknowledged the order it no longer does, even if the order's outcome
+    is unknown again, so an acknowledged order's notices are not read.
+
+    Each read walks one order's index from its newest row back to its newest
+    notice. Only rows already in the ledger are read, in sequence order, so a
+    store replayed from its mirror reads the same notice.
+    """
+    newest: sqlite3.Row | None = None
+    for identity in identities:
+        row = conn.execute(
+            "SELECT t.sequence, t.facts_json FROM custody_transitions t "
+            "JOIN orders o ON o.order_ref = t.order_ref "
+            "WHERE t.order_ref = ? AND t.effect_operation_id = ? "
+            "AND t.transition_kind = 'ORDER_SUBMIT_UNCERTAIN' "
+            "AND json_extract(t.facts_json, '$.notice') IS NOT NULL "
+            "AND o.broker_order_id IS NULL "
+            "ORDER BY t.sequence DESC LIMIT 1",
+            (identity.order_ref, identity.effect_operation_id),
+        ).fetchone()
+        if row is not None and (newest is None or row["sequence"] > newest["sequence"]):
+            newest = row
+    if newest is None:
+        return None
+    return OrderSubmitUncertainFacts.from_facts_json(newest["facts_json"]).notice
+
+
 @dataclass(frozen=True)
 class UnknownEvidenceDisposition:
     exact_identity_proven: bool
@@ -430,14 +470,15 @@ def resolve_unknown_outcome_if_proven(conn: sqlite3.Connection, payload: dict[st
         return UnknownEvidenceDisposition(False, effect_still_unknown, True)
     remaining = tuple(identity for identity in cause.identities if identity != proven)
     if remaining:
+        # The episode's words are written again (#2854): the notice they came
+        # from may be about the order just proven. They are the newest notice
+        # recorded for an order that is still unknown, or this envelope's own
+        # when none of those orders has one.
         remaining_facts = _unknown_outcome_envelope(
             cause=OrderOutcomeUnknownCause(identities=remaining),
             why="One or more broker responses remain unknown.",
+            notice=_newest_standing_notice(conn, remaining),
         )
-        # The episode's words go back to this envelope's (#2854): a notice
-        # one fold recorded may be about the order just proven, and no row
-        # says which order it was about. The next fold that records one for
-        # an order still unknown puts it back.
         conn.execute(
             "UPDATE uncertainties SET observed_at_ms = ?, evidence_refs_json = ?, "
             "facts_json = ?, explanation = ?, next_step = ? "
