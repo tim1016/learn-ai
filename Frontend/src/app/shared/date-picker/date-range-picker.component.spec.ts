@@ -59,6 +59,16 @@ describe('DateRangePickerComponent', () => {
     expect(screen.getByText(/^5 sessions/)).not.toBeNull();
   });
 
+  it('hands the host a typed date at once, so a click in the same task already runs on it', async () => {
+    const { host, start } = await renderPicker();
+
+    // No tick between leaving the field and the next click, as on a touch tap.
+    start.value = '2026-09-14';
+    start.dispatchEvent(new Event('change'));
+
+    expect(host.from()).toBe('2026-09-14');
+  });
+
   it('keeps a half-typed date in the field, says why, and hands the host an empty date until it is whole', async () => {
     const { host, start, retype } = await renderPicker();
 
