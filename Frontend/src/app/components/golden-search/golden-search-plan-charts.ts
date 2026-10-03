@@ -168,7 +168,7 @@ function searchSpaceOption(knobs: readonly PlanKnob[], theme: ChartTheme): Chart
           ...(knob.start === null ? [] : [{ label: 'Zoom starts at', values: [String(knob.start)] }]),
         ];
         const notes = [`Legal range ${knob.domain_low} to ${knob.domain_high}. Higher importance is searched first.`];
-        if (knob.start !== null && knob.searched) notes.push('Zoom keeps its starting value in every round, so it can end there even outside the band.');
+        if (knob.start !== null && knob.searched) notes.push('Zoom weighs the value it holds in every round, so it can end where it started even outside the band.');
         return tooltipHtml({ title: `${knob.label} (${knob.unit})`, columns: ['Value'], rows: [...rows, ...marks], notes }, theme);
       },
     },
