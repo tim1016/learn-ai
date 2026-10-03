@@ -474,6 +474,20 @@ describe('GoldenSearchStudyComponent', () => {
     expect(document.activeElement).toBe(button);
   });
 
+  it('a review started on one study does not follow the page to another', async () => {
+    const service = fakeService(studyDetail('awaiting_candidate'));
+    const view = await renderStudy(service);
+    fireEvent.click(screen.getByRole('button', { name: 'Review this study' }));
+    await screen.findByRole('group', { name: 'Review this study' });
+
+    service.get.mockResolvedValue(studyDetail('awaiting_candidate', { id: 'study-0002-bbbb' }));
+    view.fixture.componentRef.setInput('studyId', 'study-0002-bbbb');
+    await view.fixture.whenStable();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Review this study' }).getAttribute('aria-expanded')).toBe('false'));
+    expect(screen.queryByRole('group', { name: 'Review this study' })).toBeNull();
+  });
+
   it('passes axe on the Compare and Final decision steps', async () => {
     const view = await renderStudy(fakeService(studyDetail('awaiting_review')));
     const nav = within(screen.getByRole('navigation', { name: 'Research steps' }));

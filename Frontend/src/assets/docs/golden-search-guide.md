@@ -378,7 +378,7 @@ Does the result hold across two knobs’ searched ranges together?
 
 #### What you're looking at
 
-A grid of cells, one per pair of values: rows for one knob, columns for the other, every other setting held at the all-period winner’s. Each axis takes five values spread evenly across the knob's searched range, one of them the winner's. Each cell prints the development net return and is coloured by it: green for a gain, red for a loss, with 0% in the middle. The outlined cell is the all-period winner itself. Grey cells have no return: an invalid pair (—), a value outside the legal range (·), a pair never run (?), a run that failed (Failed), or one that recorded no return (no return). When the plan audited more than one pair, buttons above the chart switch between them.
+A grid of cells, one per pair of values: rows for one knob, columns for the other, every other setting held at the all-period winner’s. Each axis takes up to five values across the knob's searched range, rounded to the knob's step (so a narrow range can have fewer) and with the winner's value among them. Each cell prints the development net return and is coloured by it: green for a gain, red for a loss, with 0% in the middle. The outlined cell is the all-period winner itself. Grey cells have no return: an invalid pair (—), a value outside the legal range (·), a pair never run (?), a run that failed (Failed), or one that recorded no return (no return). When the plan audited more than one pair, buttons above the chart switch between them.
 
 The landscape is a two-knob slice: it says nothing about combinations of the other knobs.
 
