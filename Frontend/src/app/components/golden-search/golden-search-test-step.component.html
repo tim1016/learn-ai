@@ -1,5 +1,6 @@
-@if (validation(); as v) {
-  <div class="step">
+@let v = validation();
+<div class="step">
+  @if (v) {
     <p class="note note--blue" role="note"><i class="pi pi-shield" aria-hidden="true"></i> Original ranges and starting rules repeat in every fold. The all-period winner never seeds an earlier test.</p>
     @if (v.incomplete) {
       <p class="note" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i> Testing over time stopped at its evaluation budget, so some folds are missing: they are shown as failed, with the budget as the reason.</p>
@@ -18,38 +19,58 @@
         </dl>
       </section>
     }
+    <ul class="pills" aria-label="Test-over-time summary">
+      <li>{{ v.summary_pills.judged }}</li>
+      <li>{{ v.summary_pills.test_trades | number }} test trades</li>
+      <li>{{ v.summary_pills.median_retention === null ? 'Median retention not available' : (v.summary_pills.median_retention | number: '1.2-2') + ' median retention' }}</li>
+    </ul>
+  } @else {
+    <p class="pending" role="status">{{ pending() }}</p>
+  }
 
-    <section class="panel" aria-labelledby="gs-linked-title">
-      <h3 id="gs-linked-title">Selection procedure · forward test periods</h3>
-      <p class="legend"><span><i class="swatch" aria-hidden="true"></i>Search procedure</span><span><i class="swatch swatch--benchmark" aria-hidden="true"></i>Frozen incumbent, same test months</span></p>
-      <app-golden-search-linked-line [points]="v.linked" [benchmark]="v.incumbent_linked" />
-      <ul class="pills" aria-label="Test-over-time summary">
-        <li>{{ v.summary_pills.judged }}</li>
-        <li>{{ v.summary_pills.test_trades | number }} test trades</li>
-        <li>{{ v.summary_pills.median_retention === null ? 'Median retention not available' : (v.summary_pills.median_retention | number: '1.2-2') + ' median retention' }}</li>
-      </ul>
-      <p class="muted">Linked fold returns: each fold starts flat with fresh capital, and a missing fold breaks the line. This is not the fixed candidate's track record.</p>
-      <div class="table-wrap" role="region" tabindex="0" aria-label="Linked test-period return">
-        <table class="linked-table">
-          <caption>Linked test-period return by fold</caption>
-          <thead><tr><th scope="col">Fold</th><th scope="col">Test ends</th><th scope="col" class="num">Linked return</th><th scope="col" class="num">Current settings</th></tr></thead>
-          <tbody>
-            @for (point of linkedRows(); track point.fold_index) {
-              <tr>
-                <th scope="row">{{ point.fold_index + 1 }}</th>
-                <td><app-timestamp-display [value]="point.test_end_ms - 1" mode="date-et" /></td>
-                <td class="num">{{ point.linked_return === null ? point.linkedGap : (point.linked_return | percent: '1.2-2') }}</td>
-                <td class="num">{{ point.benchmark === null ? point.benchmarkGap : (point.benchmark | percent: '1.2-2') }}</td>
-              </tr>
-            }
-          </tbody>
-        </table>
-      </div>
-      <app-golden-search-fold-table [rows]="rows()" />
-    </section>
+  @if (chartsError(); as message) {
+    <div role="alert" class="failed">
+      <p>{{ message }}</p>
+      <button type="button" class="link" (click)="retry()">Try again</button>
+    </div>
+  } @else if (timeline(); as spec) {
+    <app-golden-search-grid>
+      <app-golden-search-panel chart="fold-timeline" data-span="12">
+        <app-golden-search-chart [spec]="spec" [height]="timelineHeight()" />
+        <p caption class="caption">{{ v ? 'Each fold trained on its window, then tested its winner on the next.' : 'The folds the plan froze at lock; testing over time runs them after the search.' }}</p>
+      </app-golden-search-panel>
+      @if (v) {
+        <app-golden-search-panel chart="linked-return" data-span="8">
+          @if (linked(); as spec) { <app-golden-search-chart [spec]="spec" [height]="240" /> }
+          <p caption class="caption">Linked fold returns: each fold starts flat with fresh capital, and a missing fold breaks the line. This is not the fixed candidate's track record.</p>
+        </app-golden-search-panel>
+        <app-golden-search-panel chart="train-test-sharpe" data-span="4">
+          @if (sharpe(); as spec) { <app-golden-search-chart [spec]="spec" [height]="240" /> }
+          <p caption class="caption">Retention is the test Sharpe kept from training, as the verdict reads it.</p>
+        </app-golden-search-panel>
+        <app-golden-search-panel chart="parameter-drift" data-span="12">
+          @if (drift(); as spec) {
+            <app-golden-search-chart [spec]="spec" [height]="driftHeight()" />
+          } @else {
+            <p class="muted">This plan searched no knob.</p>
+          }
+          <p caption class="caption">Each searched knob on its own range: dashed, the all-period winner; dotted, the current settings.</p>
+        </app-golden-search-panel>
+        <app-golden-search-panel chart="fold-returns" data-span="6">
+          @if (returns(); as spec) { <app-golden-search-chart [spec]="spec" [height]="220" /> }
+          <p caption class="caption">The current settings ran on every fold's test window too, for comparison.</p>
+        </app-golden-search-panel>
+        <app-golden-search-panel chart="fold-activity" data-span="6">
+          @if (activity(); as spec) { <app-golden-search-chart [spec]="spec" [height]="220" /> }
+          <p caption class="caption">The minimum applies to all forward tests together, not to each fold.</p>
+        </app-golden-search-panel>
+      }
+    </app-golden-search-grid>
+  } @else if (chartData() === null) {
+    <p class="muted" role="status">Loading the test-over-time charts…</p>
+  }
 
+  @if (v) {
     <p class="note" role="note"><i class="pi pi-info-circle" aria-hidden="true"></i> The retained legacy verdict is a rule-of-thumb summary; it is not a probability of future profit.</p>
-  </div>
-} @else {
-  <p class="pending" role="status">{{ pending() }}</p>
-}
+  }
+</div>

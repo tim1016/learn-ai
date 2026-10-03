@@ -20,6 +20,7 @@ import type {
   StudyDetail,
   StudyListFilters,
   StudySummary,
+  TestOverTimeCharts,
 } from './golden-search.types';
 
 export { GridSearchRefusedError as GoldenSearchRefusedError } from '../grid-search/grid-search.service';
@@ -155,6 +156,11 @@ export class GoldenSearchService {
     if (query.stage) params = params.set('stage', query.stage);
     if (query.fold_index !== undefined) params = params.set('fold_index', String(query.fold_index));
     return firstValueFrom(this.http.get<EvaluationPage>(`${this.base}/studies/${encodeURIComponent(id)}/evaluations`, { params }));
+  }
+
+  /** The Test over time step's charts: every fold, planned or run. */
+  async testOverTimeCharts(id: string): Promise<TestOverTimeCharts> {
+    return firstValueFrom(this.http.get<TestOverTimeCharts>(`${this.base}/studies/${encodeURIComponent(id)}/charts/test-over-time`));
   }
 
   async candidate(id: string, key: CandidateKey): Promise<CandidateDetail> {

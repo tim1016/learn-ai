@@ -277,6 +277,11 @@ export type Concentration = Schemas['GoldenSearchEvidenceCandidate']['concentrat
 export type MeasuredConcentration = Schemas['GoldenSearchConcentrationMeasured'];
 export type CandidateRunDetail = Schemas['GoldenSearchRunDetail'];
 
+/** `GET /studies/{id}/charts/test-over-time`: every fold, from the receipt's plan before testing over time ran. */
+export type TestOverTimeCharts = Schemas['GoldenSearchTestOverTimeCharts'];
+export type FoldChart = Schemas['GoldenSearchFoldChart'];
+export type KnobDrift = Schemas['GoldenSearchKnobDrift'];
+
 /** `GET /studies/{id}/candidates/{key}`: the development detail run, plus the exam's once it ran. */
 export type CandidateDetail = Omit<Schemas['GoldenSearchCandidateDetail'], 'point'> & { point: Point };
 

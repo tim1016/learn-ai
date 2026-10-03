@@ -1,5 +1,5 @@
 import { InjectionToken } from '@angular/core';
-import type { BarSeriesOption, HeatmapSeriesOption, LineSeriesOption, ScatterSeriesOption } from 'echarts/charts';
+import type { BarSeriesOption, CustomSeriesOption, HeatmapSeriesOption, LineSeriesOption, ScatterSeriesOption } from 'echarts/charts';
 import type {
   AxisPointerComponentOption,
   GridComponentOption,
@@ -15,6 +15,7 @@ export type ChartOption = ComposeOption<
   | BarSeriesOption
   | ScatterSeriesOption
   | HeatmapSeriesOption
+  | CustomSeriesOption
   | GridComponentOption
   | TooltipComponentOption
   | AxisPointerComponentOption

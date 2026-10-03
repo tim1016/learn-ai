@@ -1,4 +1,5 @@
 import { install as BarChart } from 'echarts/lib/chart/bar/install';
+import { install as CustomChart } from 'echarts/lib/chart/custom/install';
 import { install as HeatmapChart } from 'echarts/lib/chart/heatmap/install';
 import { install as LineChart } from 'echarts/lib/chart/line/install';
 import { install as ScatterChart } from 'echarts/lib/chart/scatter/install';
@@ -14,6 +15,6 @@ import { init, use } from 'echarts/core';
 // and `echarts/components` barrels: through a barrel the build keeps every
 // chart type and component, the whole library. Loaded only through
 // `loadGoldenSearchCharts`, so ECharts stays out of the initial bundle.
-use([LineChart, BarChart, ScatterChart, HeatmapChart, GridComponent, TooltipComponent, AxisPointerComponent, MarkLineComponent, VisualMapComponent, CanvasRenderer]);
+use([LineChart, BarChart, ScatterChart, HeatmapChart, CustomChart, GridComponent, TooltipComponent, AxisPointerComponent, MarkLineComponent, VisualMapComponent, CanvasRenderer]);
 
 export { init };

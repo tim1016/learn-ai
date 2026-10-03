@@ -64,7 +64,7 @@
       @switch (selectedStep()) {
         @case ('plan') { <app-golden-search-plan-summary [study]="d" [capability]="capability()" /> }
         @case ('search') { <app-golden-search-search-step [study]="d" [capability]="capability()" /> }
-        @case ('test') { <app-golden-search-test-step [study]="d" [capability]="capability()" /> }
+        @case ('test') { <app-golden-search-test-step [study]="d" /> }
         @case ('compare') { <app-golden-search-compare-step [study]="d" [capability]="capability()" [busy]="busy()" (studyCommand)="onStepCommand($event)" (goTo)="selectStep($event)" /> }
         @case ('decision') { <app-golden-search-decision-step [study]="d" [capability]="capability()" [busy]="busy()" (studyCommand)="onStepCommand($event)" (goTo)="selectStep($event)" /> }
       }

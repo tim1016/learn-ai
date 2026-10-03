@@ -3,6 +3,9 @@
 declare module 'echarts/lib/chart/bar/install' {
   export { BarChart as install } from 'echarts/charts';
 }
+declare module 'echarts/lib/chart/custom/install' {
+  export { CustomChart as install } from 'echarts/charts';
+}
 declare module 'echarts/lib/chart/heatmap/install' {
   export { HeatmapChart as install } from 'echarts/charts';
 }

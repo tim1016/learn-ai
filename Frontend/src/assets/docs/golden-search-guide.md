@@ -16,6 +16,196 @@ A few rules hold for every chart:
 - **Every number comes from the study.** The charts draw values the research recorded; the page computes none of its own.
 - **Show as table.** Every chart can show its values as a table, for reading without a mouse or with a screen reader.
 
+## Test over time
+
+Test over time checks the search procedure itself. It cuts the development period into folds. Each fold searches again, from the same starting point and the same ranges, on its own training window only, then tests the winner it chose on the months right after. The current settings run on every test window too, as a benchmark. Every test result here is out-of-sample for the winner that produced it, and none of it judges a single candidate: it judges the way candidates are chosen.
+
+### Fold timeline {#fold-timeline}
+
+#### The question it answers
+
+Which months did each fold train on and test on, and how did each fold end?
+
+#### What you're looking at
+
+A row for each fold. The grey bar is the fold's training window; the coloured bar right after it is its test window, in Eastern dates. A blue test bar is a fold that completed, red one that failed, and grey one that has not run yet. Before testing over time runs, the chart shows the folds the plan froze when the study was locked.
+
+Hover a fold to see its windows, the winner's training and test Sharpe, its retention, its test return and its test trades, or the reason it failed.
+
+#### How to read it
+
+1. Read each row as one fold: the grey bar is its training window, the coloured bar the test window right after it.
+2. The test windows follow one another in time, so together they cover a stretch the procedure never trained on before choosing.
+3. A red test bar is a fold that failed; hover it for the reason. A grey one has not run yet.
+4. Hover a fold for its windows, both Sharpes, its retention, test return and trades.
+
+#### Good signs and warning signs
+
+- Good: every fold completed.
+- Warning: failed folds. The verdict cannot judge a procedure with a failed fold, and the linked return breaks at it.
+- Warning: very short test windows. A few weeks of testing says little.
+
+#### An everyday comparison
+
+A teacher who writes each week's quiz using only what was taught up to that week, then gives it the following week. Every quiz tests material the teacher could not tailor the questions to.
+
+### Linked test return {#linked-return}
+
+#### The question it answers
+
+If the procedure had chosen fresh settings before each test window, how would its test results have added up?
+
+#### What you're looking at
+
+Each fold's test return, linked one after another as if each fold's result were reinvested in the next. The solid line is the search procedure; the dashed line is the current settings on the same test windows.
+
+$$\text{linked return after fold } k = (1 + r_1)(1 + r_2) \cdots (1 + r_k) - 1$$
+
+where each r is one fold's test return on its own fresh starting capital. A missing fold has no return, so the line breaks there and stays broken: linking needs every fold. Hover a fold for both lines' values.
+
+This is the procedure's record, not any candidate's: each fold used a different winner.
+
+#### How to read it
+
+1. Follow the solid line: each fold’s test return, linked one after another.
+2. Compare the dashed line: the current settings on the same test windows.
+3. A gap in a line is a missing fold. Everything after it is cut off, because linking needs every fold.
+4. Remember what it judges: the procedure that chose the settings, not any one candidate.
+
+#### Good signs and warning signs
+
+- Good: the solid line ends above the dashed one and above 0%.
+- Warning: the solid line ends below the dashed one. Searching again did worse than keeping the current settings.
+- Warning: a broken line. The record is incomplete.
+
+#### An everyday comparison
+
+A fund manager who rebalances every quarter using only past data, compared with simply holding what you already own. The question is whether the rebalancing habit paid, not whether any one quarter's picks were good.
+
+### Training against test Sharpe {#train-test-sharpe}
+
+#### The question it answers
+
+How much of each fold's training Sharpe survived on its test window?
+
+#### What you're looking at
+
+Two bars per fold: the winner's Sharpe on its training window, in grey, and on its test window, in blue. The label above the test bar is its retention, the share of the training Sharpe it kept:
+
+$$\text{retention} = \frac{\text{test Sharpe}}{\text{training Sharpe}}$$
+
+Retention is defined only for a completed fold whose training Sharpe is above 0. The verdict takes the median retention over the folds that have one and needs 50% or more to say the procedure still worked.
+
+#### How to read it
+
+1. Each fold has two bars: the winner’s Sharpe on its training window, then on its test window.
+2. Read the label above each test bar: the share of the training Sharpe it kept, its retention.
+3. The verdict takes the median retention over folds and asks for 50% or more.
+4. A fold with no label has no defined retention: it failed, or its training Sharpe was not above 0.
+
+#### Good signs and warning signs
+
+- Good: test bars a good fraction of the training bars, fold after fold.
+- Warning: tall training bars with short or negative test bars. The search fitted each training window's noise.
+- Warning: retention above 100% in one fold and far below in others. One lucky fold can hide the rest.
+
+#### An everyday comparison
+
+A runner's practice times against race times. Practice always looks better; the question is how much of it shows up on race day.
+
+### Parameter drift {#parameter-drift}
+
+#### The question it answers
+
+Did the search choose similar settings in every fold?
+
+#### What you're looking at
+
+A row for each searched knob, each on its own searched range. The dots are the value each fold's training chose; a fold without a winner has no dot. The dashed line is the all-period winner, the value the search chose on the whole development period; the dotted line is the current settings.
+
+Hover a dot for the fold's value beside both reference values and the searched range.
+
+#### How to read it
+
+1. Each row is one searched knob on its own range; the dots are the value each fold’s training chose.
+2. The dashed line is the all-period winner and the dotted line the current settings.
+3. Dots that stay close together mean the search found the same answer each time.
+4. Dots that jump around, or sit at the edge of the range, mean the best value depends on the period, or lies outside what was searched.
+
+#### Good signs and warning signs
+
+- Good: the fold winners cluster near the all-period winner.
+- Warning: winners spread across the whole range. The knob's best value is unstable, so the all-period winner may be luck.
+- Warning: winners pinned at the top or bottom of the range. A wider range might find a different answer.
+
+#### An everyday comparison
+
+Asking several tailors to measure you on different days. If they all write down nearly the same size, the size is real; if every one writes a different size, something is off with the measuring.
+
+### Test return per fold {#fold-returns}
+
+#### The question it answers
+
+Fold by fold, did the procedure's winner beat the current settings on the same test window?
+
+#### What you're looking at
+
+Two bars per fold: the test return of the winner that fold's training chose, in blue, and the current settings' return on the same test window, in grey. Each return is on the fold's own fresh starting capital. Hover a fold for both returns and the difference between them:
+
+$$\text{difference} = \text{winner's test return} - \text{current settings' test return}$$
+
+A fold whose winner failed has only the grey bar.
+
+#### How to read it
+
+1. Each fold has two bars: the return of the winner its training chose, and the current settings on the same test window.
+2. Compare them fold by fold. The grey bar is the benchmark.
+3. Count the folds where the procedure leads. Winning a few folds by a lot is weaker than winning most of them.
+4. A fold with only a grey bar is one whose winner failed; hover it for what the current settings did.
+
+#### Good signs and warning signs
+
+- Good: the blue bar ahead in most folds.
+- Warning: the blue bar behind in most folds. Searching again tends to do worse than keeping what you have.
+- Warning: one fold with a large lead and the rest behind.
+
+#### An everyday comparison
+
+Two route planners driving the same trips. One plans fresh each time; the other always takes the usual road. Count how often the fresh plan arrived first.
+
+### Test activity per fold {#fold-activity}
+
+#### The question it answers
+
+Did the folds trade enough on their test windows to judge the procedure?
+
+#### What you're looking at
+
+On the left, each fold's test trades: the trades its winner made on its test window. On the right, all completed folds together, against the forward minimum, the dashed line:
+
+$$\text{test trades} = \sum_{\text{completed folds}} \text{trades on the fold's test window}$$
+
+The forward minimum is the number of trades all forward tests must reach together; for a plan with an expected trade frequency, it is that frequency over the forward tests' trading years, frozen when the study was locked. It applies to the total only: no fold has a minimum of its own. A total below it turns red.
+
+Hover a fold for its test trades and the current settings' trades on the same window.
+
+#### How to read it
+
+1. Each bar on the left is one fold’s test trades.
+2. The bar on the right is all completed folds together.
+3. The dashed line is the forward minimum: the trades all forward tests must reach together. It applies to the total, not to each fold.
+4. A total below the line turns red: too few test trades to judge the procedure.
+
+#### Good signs and warning signs
+
+- Good: a total well above the line, spread across the folds.
+- Warning: a total below the line. The verdict cannot call a result with so few trades.
+- Warning: most of the trades in one fold. The others say little.
+
+#### An everyday comparison
+
+A survey that needs a thousand answers in total. A few hundred from each town is fine; nine hundred from one town is not much of a survey of the others.
+
 ## Compare
 
 Compare lines up the candidates on the development data, the data used to choose them. The candidates are the all-period fit (blue), the recent fit (amber) and your current settings (grey, dashed).
