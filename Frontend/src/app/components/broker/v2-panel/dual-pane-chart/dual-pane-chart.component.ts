@@ -54,7 +54,7 @@ import {
 } from '../../../../shared/trading-chart';
 import type { IndicatorPickerAdd } from '../../../../shared/indicator-picker/indicator-picker.component';
 import { PanelInstrumentQuoteComponent } from '../instrument-quote/panel-instrument-quote.component';
-import { placeLanes, type ChartLane, type PlacedLane } from '../strategy-view/chart-lanes';
+import { placeLanes, type LaneSource, type PlacedLane } from '../strategy-view/chart-lanes';
 import { ChartLanesComponent } from '../strategy-view/chart-lanes.component';
 import type { LogicalCoordinateScale } from '../strategy-view/strategy-chart-overlay';
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
@@ -314,8 +314,9 @@ export class DualPaneChartComponent implements AfterViewInit {
 
   /** The pane the chart opens on: the bot page opens a finished run on its delayed 1-minute tape (#2794 R7). */
   readonly initialPane = input<ChartPane>('live');
-  /** The run's events, drawn under the chart on the active pane's clock (#2808). The Strategy Lab passes none. */
-  readonly lanes = input<readonly ChartLane[]>([]);
+  /** The run's events, drawn under the chart on the active pane's bars and labelled in the
+   * tape's own Local or ET setting (#2808). The Strategy Lab passes none. */
+  readonly lanes = input<LaneSource | null>(null);
   protected readonly activePane = linkedSignal(() => this.initialPane());
   protected readonly fullscreen = signal(false);
   protected readonly timeZone = signal<ChartTimeZone>(persistedChartTimeZone());
@@ -444,7 +445,7 @@ export class DualPaneChartComponent implements AfterViewInit {
     const bars = this.activeBars();
     const timeScale = this.chart?.timeScale();
     return placeLanes(
-      this.lanes(),
+      this.lanes()?.(this.timeZone()) ?? [],
       bars.map((bar) => ({ startMs: bar.start_ms, closeMs: bar.end_ms })),
       timeScale === undefined ? undefined : barCoordinateScale(timeScale, bars),
       this.plotWidth(),

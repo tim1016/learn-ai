@@ -12,7 +12,7 @@ import {
   toSeriesMarkers,
 } from './dual-pane-chart.component';
 import type { ChartBar } from '../lib/broker-v2-panel.types';
-import type { ChartLane } from '../strategy-view/chart-lanes';
+import type { ChartLane, LaneClock } from '../strategy-view/chart-lanes';
 import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
 import type { ChartIndicatorBatchResponse } from './dual-pane-chart-indicators';
@@ -283,12 +283,13 @@ describe('DualPaneChartComponent', () => {
   describe('the run’s lanes under the tape (#2808)', () => {
     const T0 = 1_700_000_040_000;
     const minuteBar = (index: number): ChartBar => liveBar(T0 + index * 60_000, T0 + (index + 1) * 60_000);
-    const lanes: ChartLane[] = [{
+    /** The host's lanes, each label naming the clock the tape asked for. */
+    const lanesOn = (clock: LaneClock): ChartLane[] => [{
       key: 'decisions',
       title: 'Decisions',
       marks: [
         // Halfway through the second 1-minute bar; the first 5-second bar's close.
-        { key: 'mid', atMs: T0 + 90_000, endMs: null, glyph: 'up', tone: 'bull', label: 'Enter' },
+        { key: 'mid', atMs: T0 + 90_000, endMs: null, glyph: 'up', tone: 'bull', label: `Enter (${clock})` },
         { key: 'first', atMs: T0 + 5_000, endMs: null, glyph: 'dot', tone: 'neutral', label: 'Hold' },
         { key: 'early', atMs: T0 - 3_600_000, endMs: null, glyph: 'ring', tone: 'muted', label: 'Before start' },
       ],
@@ -297,7 +298,9 @@ describe('DualPaneChartComponent', () => {
     /** A tape whose candle starting at `T0` sits at x 100, ten pixels a minute; the chart has measured itself. */
     async function renderTape(inputs: Record<string, unknown>) {
       chartMocks.timeToCoordinate.mockImplementation((time: number) => 100 + ((time * 1000 - T0) / 60_000) * 10);
-      const rendered = await render(DualPaneChartComponent, { inputs: { symbol: 'SPY', lanes, ...inputs } });
+      const rendered = await render(DualPaneChartComponent, {
+        inputs: { symbol: 'SPY', lanes: (clock: LaneClock) => lanesOn(clock), ...inputs },
+      });
       await waitFor(() => expect(chartMocks.subscribeSizeChange).toHaveBeenCalled());
       for (const [measure] of chartMocks.subscribeSizeChange.mock.calls) measure();
       rendered.fixture.detectChanges();
@@ -315,7 +318,23 @@ describe('DualPaneChartComponent', () => {
       const decisions = within(screen.getByRole('group', { name: 'The run’s events on the chart’s clock' }))
         .getByRole('list', { name: 'Decisions' });
       // Bar 1's candle is centred at x 110; halfway through it is its centre.
-      expect(within(decisions).getByRole('listitem', { name: 'Enter' }).style.left).toBe('110px');
+      expect(within(decisions).getByRole('listitem', { name: 'Enter (local)' }).style.left).toBe('110px');
+    });
+
+    it('labels the lanes on the clock the tape is switched to', async () => {
+      const { fixture } = await renderTape({
+        liveBars: [],
+        histBars: [minuteBar(0), minuteBar(1), minuteBar(2)],
+        historyDataTimeframe: '1m',
+        initialPane: 'polygon',
+      });
+
+      screen.getByRole('button', { name: 'ET' }).click();
+      fixture.detectChanges();
+
+      // The axis and the lanes read one clock: a label left in local time would name another minute.
+      expect(screen.getByRole('listitem', { name: 'Enter (et)' })).toBeTruthy();
+      expect(screen.queryByRole('listitem', { name: 'Enter (local)' })).toBeNull();
     });
 
     it('places the same marks on the live bars when that pane is showing', async () => {

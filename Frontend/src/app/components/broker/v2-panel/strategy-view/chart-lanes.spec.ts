@@ -103,6 +103,24 @@ describe('chartLanes (#2794)', () => {
   });
 });
 
+describe('chartLanes on the tape’s ET setting (#2808)', () => {
+  it('writes every time in ET when asked, so a label never names another clock than the axis', () => {
+    const et = (ms: number): string => formatTimestampDisplay(ms, { mode: 'et', granularity: 'minute' });
+    const lanes = chartLanes(
+      fakeStrategyView({ run_stopped_at_ms: STRATEGY_RUN_STOPPED_AT_MS }),
+      context({ fills: [{ filled_at_ms: barCloseMs(3), side: 'buy', quantity: 1, price: 501, order_ref: 'o-1', event_key: 'e-1' }] }),
+      'et',
+    );
+
+    expect(lane(lanes, 'bot').marks.map((mark) => mark.label)).toEqual([
+      `Started ${et(STRATEGY_RUN_STARTED_AT_MS)}`,
+      `Ended ${et(STRATEGY_RUN_STOPPED_AT_MS)}`,
+    ]);
+    expect(lane(lanes, 'orders').marks[0].label).toBe(`${et(barCloseMs(3))} · Bought 1 @ 501`);
+    expect(lane(lanes, 'decisions').marks.every((mark) => mark.label.startsWith(et(mark.atMs)))).toBe(true);
+  });
+});
+
 describe('formingBar (#2794)', () => {
   it('is the bar after the last close while now falls inside it, and nothing otherwise', () => {
     const view = fakeStrategyView();
