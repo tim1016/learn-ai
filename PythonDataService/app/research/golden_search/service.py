@@ -40,6 +40,7 @@ from app.research.golden_search.actions import (
 from app.research.golden_search.activity import DEFAULT_EXPECTED_TRADES_PER_YEAR
 from app.research.golden_search.declarations import declaration_for, point_hash, unavailable_reason
 from app.research.golden_search.exposure_rules import EXPOSURE_EXPLANATIONS, claim_for, exposure_state
+from app.research.golden_search.fold_charts import fold_charts
 from app.research.golden_search.guidance import params_sentence, research_weakness
 from app.research.golden_search.models import (
     CANDIDATE_KEYS,
@@ -518,6 +519,11 @@ async def candidate(study_id: str, candidate_key: str) -> dict[str, Any]:
         exam=exam_record,
         commission_per_order=protocol["execution"]["commission_per_order"],
     )
+
+
+async def test_over_time_charts(study_id: str) -> dict[str, Any]:
+    """The Test over time step's charts, from the stored folds or, before they ran, the receipt's plan."""
+    return fold_charts(await get_row(study_id))
 
 
 async def evaluations(study_id: str, *, stage: str | None = None, fold_index: int | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:

@@ -5070,6 +5070,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research/golden-search/studies/{study_id}/charts/test-over-time": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Test Over Time Charts
+         * @description The Test over time step's charts: every fold's windows and results, the linked returns and each searched knob's drift.
+         */
+        get: operations["get_test_over_time_charts_api_research_golden_search_studies__study_id__charts_test_over_time_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/research/golden-search/studies/{study_id}/commands": {
         parameters: {
             query?: never;
@@ -14060,6 +14080,61 @@ export interface components {
             /** Train Start Ms */
             train_start_ms: number;
         };
+        /** GoldenSearchFoldChart */
+        GoldenSearchFoldChart: {
+            /** Failure Reason */
+            failure_reason: string | null;
+            /** Fold Index */
+            fold_index: number;
+            /**
+             * Incumbent Return
+             * @description The frozen incumbent's return on the same test window.
+             */
+            incumbent_return: number | null;
+            /** Incumbent Trades */
+            incumbent_trades: number | null;
+            /**
+             * Retention
+             * @description Test Sharpe over training Sharpe as the verdict reads it; null unless the fold completed with a positive training Sharpe.
+             */
+            retention: number | null;
+            /**
+             * Return Difference
+             * @description test_return less incumbent_return; null unless both exist.
+             */
+            return_difference: number | null;
+            /**
+             * Status
+             * @description planned: from the receipt, before testing over time ran.
+             * @enum {string}
+             */
+            status: "planned" | "pending" | "completed" | "failed";
+            /** Test End Ms */
+            test_end_ms: number;
+            /**
+             * Test Return
+             * @description The winner's test return, a fraction of the fold's fresh capital.
+             */
+            test_return: number | null;
+            /**
+             * Test Sharpe
+             * @description Its test Sharpe; null unless the fold completed.
+             */
+            test_sharpe: number | null;
+            /** Test Start Ms */
+            test_start_ms: number;
+            /** Test Trades */
+            test_trades: number | null;
+            /** Train End Ms */
+            train_end_ms: number;
+            /**
+             * Train Sharpe
+             * @description The fold winner's training Sharpe; null without a winner.
+             */
+            train_sharpe: number | null;
+            /** Train Start Ms */
+            train_start_ms: number;
+        };
         /** GoldenSearchGuidance */
         GoldenSearchGuidance: {
             /** Detail */
@@ -14161,6 +14236,37 @@ export interface components {
             stageToken: string;
             /** Studyid */
             studyId: string;
+        };
+        /** GoldenSearchKnobDrift */
+        GoldenSearchKnobDrift: {
+            /**
+             * All Period
+             * @description The all-period winner's value; null before the search finished.
+             */
+            all_period: number | null;
+            /**
+             * Current
+             * @description The frozen incumbent's value.
+             */
+            current: number;
+            /**
+             * Folds
+             * @description Each fold winner's value, in fold order; null for a fold without a winner.
+             */
+            folds: (number | null)[];
+            /** High */
+            high: number;
+            /** Label */
+            label: string;
+            /**
+             * Low
+             * @description The searched range's low end.
+             */
+            low: number;
+            /** Name */
+            name: string;
+            /** Unit */
+            unit: string;
         };
         /** GoldenSearchKnobPlan */
         GoldenSearchKnobPlan: {
@@ -15057,6 +15163,39 @@ export interface components {
             status: "meets" | "concern" | "missing";
             /** Text */
             text: string;
+        };
+        /** GoldenSearchTestOverTimeCharts */
+        GoldenSearchTestOverTimeCharts: {
+            /**
+             * Drift
+             * @description Each searched knob, in the plan's order.
+             */
+            drift: components["schemas"]["GoldenSearchKnobDrift"][];
+            /** Folds */
+            folds: components["schemas"]["GoldenSearchFoldChart"][];
+            /**
+             * Forward Minimum
+             * @description The trades all forward tests together must reach, as the verdict judged them.
+             */
+            forward_minimum: number | null;
+            /** Incumbent Linked */
+            incumbent_linked: components["schemas"]["GoldenSearchLinkedReturn"][];
+            /** Linked */
+            linked: components["schemas"]["GoldenSearchLinkedReturn"][];
+            /** Median Retention */
+            median_retention: number | null;
+            /**
+             * Planned
+             * @description Testing over time has not run: the folds are the receipt's plan.
+             */
+            planned: boolean;
+            /** Retention Threshold */
+            retention_threshold: number;
+            /**
+             * Test Trades Total
+             * @description Test trades over completed folds; null before testing over time ran.
+             */
+            test_trades_total: number | null;
         };
         /** GoldenSearchTradeChartsMeasured */
         GoldenSearchTradeChartsMeasured: {
@@ -33454,6 +33593,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GoldenSearchCandidateDetail"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchRefusalBody"];
+                };
+            };
+        };
+    };
+    get_test_over_time_charts_api_research_golden_search_studies__study_id__charts_test_over_time_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                study_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoldenSearchTestOverTimeCharts"];
                 };
             };
             /** @description Bad Request */

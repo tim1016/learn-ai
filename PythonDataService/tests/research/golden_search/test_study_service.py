@@ -103,6 +103,12 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     assert search["winner"]["gap"] == pytest.approx(0.3, abs=1e-12) and search["winner"]["hold_bars"] == 7
     assert search["counts"]["evaluated"] == search["evaluations"]
     assert search["pair_maps"][0]["x_knob"] == "hold_bars" and len(search["pair_maps"][0]["cells"]) == 25
+    # Before testing over time runs, its charts show the receipt's planned folds and the search's winner.
+    planned = await service.test_over_time_charts(row.id)
+    assert planned["planned"] and [fold["status"] for fold in planned["folds"]] == ["planned", "planned"]
+    assert [(fold["train_start_ms"], fold["test_end_ms"]) for fold in planned["folds"]] == [(fold["train_start_ms"], fold["test_end_ms"]) for fold in row.receipt["folds"]]
+    assert planned["test_trades_total"] is None and planned["forward_minimum"] == row.protocol["policy"]["min_trades"]
+    assert [(knob["name"], knob["all_period"], knob["folds"]) for knob in planned["drift"]] == [("gap", pytest.approx(0.3, abs=1e-12), [None, None]), ("hold_bars", 7, [None, None])]
 
     row = await driver.advance(row, "continue")
     detail = await driver.detail(row)
@@ -110,6 +116,13 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     validation = detail["results"]["validation"]
     assert [fold["status"] for fold in validation["folds"]] == ["completed", "completed"]
     assert all(fold["incumbent_test_metrics"] is not None for fold in validation["folds"])
+    # The charts read the stored folds: each fold's retention is the verdict's, and the trades add up to its count.
+    charts = await service.test_over_time_charts(row.id)
+    assert not charts["planned"] and charts["test_trades_total"] == validation["verdict"]["oos_trade_count"]
+    for fold, stored in zip(charts["folds"], validation["folds"], strict=True):
+        train, test = stored["train_metrics"]["sharpe_ratio"], stored["test_metrics"]["sharpe_ratio"]
+        assert fold["retention"] == (pytest.approx(test / train, abs=1e-9, rel=0) if train > 0 else None)
+    assert charts["drift"][0]["folds"] == pytest.approx([fold["winner"]["gap"] for fold in validation["folds"]], abs=1e-12, rel=0)
     evidence = detail["results"]["evidence"]
     keys = [candidate["key"] for candidate in evidence["candidates"]]
     assert keys == ["incumbent", "all_period", "recent"]

@@ -20358,6 +20358,174 @@
         "title": "GoldenSearchFold",
         "type": "object"
       },
+      "GoldenSearchFoldChart": {
+        "additionalProperties": false,
+        "properties": {
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "fold_index": {
+            "title": "Fold Index",
+            "type": "integer"
+          },
+          "incumbent_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The frozen incumbent's return on the same test window.",
+            "title": "Incumbent Return"
+          },
+          "incumbent_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Incumbent Trades"
+          },
+          "retention": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Test Sharpe over training Sharpe as the verdict reads it; null unless the fold completed with a positive training Sharpe.",
+            "title": "Retention"
+          },
+          "return_difference": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "test_return less incumbent_return; null unless both exist.",
+            "title": "Return Difference"
+          },
+          "status": {
+            "description": "planned: from the receipt, before testing over time ran.",
+            "enum": [
+              "planned",
+              "pending",
+              "completed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "test_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Test End Ms",
+            "type": "integer"
+          },
+          "test_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The winner's test return, a fraction of the fold's fresh capital.",
+            "title": "Test Return"
+          },
+          "test_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Its test Sharpe; null unless the fold completed.",
+            "title": "Test Sharpe"
+          },
+          "test_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Test Start Ms",
+            "type": "integer"
+          },
+          "test_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Trades"
+          },
+          "train_end_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Train End Ms",
+            "type": "integer"
+          },
+          "train_sharpe": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The fold winner's training Sharpe; null without a winner.",
+            "title": "Train Sharpe"
+          },
+          "train_start_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Train Start Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fold_index",
+          "train_start_ms",
+          "train_end_ms",
+          "test_start_ms",
+          "test_end_ms",
+          "status",
+          "failure_reason",
+          "train_sharpe",
+          "test_sharpe",
+          "retention",
+          "test_return",
+          "incumbent_return",
+          "return_difference",
+          "test_trades",
+          "incumbent_trades"
+        ],
+        "title": "GoldenSearchFoldChart",
+        "type": "object"
+      },
       "GoldenSearchGuidance": {
         "additionalProperties": false,
         "properties": {
@@ -20586,6 +20754,76 @@
           "stageToken"
         ],
         "title": "GoldenSearchJobRequest",
+        "type": "object"
+      },
+      "GoldenSearchKnobDrift": {
+        "additionalProperties": false,
+        "properties": {
+          "all_period": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The all-period winner's value; null before the search finished.",
+            "title": "All Period"
+          },
+          "current": {
+            "description": "The frozen incumbent's value.",
+            "title": "Current",
+            "type": "number"
+          },
+          "folds": {
+            "description": "Each fold winner's value, in fold order; null for a fold without a winner.",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Folds",
+            "type": "array"
+          },
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "low": {
+            "description": "The searched range's low end.",
+            "title": "Low",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "unit",
+          "low",
+          "high",
+          "current",
+          "all_period",
+          "folds"
+        ],
+        "title": "GoldenSearchKnobDrift",
         "type": "object"
       },
       "GoldenSearchKnobPlan": {
@@ -23315,6 +23553,97 @@
           "link"
         ],
         "title": "GoldenSearchSummaryRow",
+        "type": "object"
+      },
+      "GoldenSearchTestOverTimeCharts": {
+        "additionalProperties": false,
+        "properties": {
+          "drift": {
+            "description": "Each searched knob, in the plan's order.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchKnobDrift"
+            },
+            "title": "Drift",
+            "type": "array"
+          },
+          "folds": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchFoldChart"
+            },
+            "title": "Folds",
+            "type": "array"
+          },
+          "forward_minimum": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The trades all forward tests together must reach, as the verdict judged them.",
+            "title": "Forward Minimum"
+          },
+          "incumbent_linked": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchLinkedReturn"
+            },
+            "title": "Incumbent Linked",
+            "type": "array"
+          },
+          "linked": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchLinkedReturn"
+            },
+            "title": "Linked",
+            "type": "array"
+          },
+          "median_retention": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Median Retention"
+          },
+          "planned": {
+            "description": "Testing over time has not run: the folds are the receipt's plan.",
+            "title": "Planned",
+            "type": "boolean"
+          },
+          "retention_threshold": {
+            "title": "Retention Threshold",
+            "type": "number"
+          },
+          "test_trades_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Test trades over completed folds; null before testing over time ran.",
+            "title": "Test Trades Total"
+          }
+        },
+        "required": [
+          "planned",
+          "folds",
+          "linked",
+          "incumbent_linked",
+          "retention_threshold",
+          "median_retention",
+          "test_trades_total",
+          "forward_minimum",
+          "drift"
+        ],
+        "title": "GoldenSearchTestOverTimeCharts",
         "type": "object"
       },
       "GoldenSearchTradeChartsMeasured": {
@@ -64606,6 +64935,107 @@
           }
         },
         "summary": "Get Candidate",
+        "tags": [
+          "research-golden-search"
+        ]
+      }
+    },
+    "/api/research/golden-search/studies/{study_id}/charts/test-over-time": {
+      "get": {
+        "description": "The Test over time step's charts: every fold's windows and results, the linked returns and each searched knob's drift.",
+        "operationId": "get_test_over_time_charts_api_research_golden_search_studies__study_id__charts_test_over_time_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchTestOverTimeCharts"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Test Over Time Charts",
         "tags": [
           "research-golden-search"
         ]

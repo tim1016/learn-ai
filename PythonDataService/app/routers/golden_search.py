@@ -42,6 +42,7 @@ from app.schemas.golden_search import (
     GoldenSearchRefusalDetail,
     GoldenSearchStudyDetail,
     GoldenSearchStudySummary,
+    GoldenSearchTestOverTimeCharts,
 )
 
 router = APIRouter()
@@ -196,6 +197,16 @@ async def list_evaluations(
     except GoldenSearchRefusal as exc:
         raise await _refused(exc) from exc
     return GoldenSearchEvaluationPage.model_validate(result)
+
+
+@router.get("/studies/{study_id}/charts/test-over-time", response_model=GoldenSearchTestOverTimeCharts, responses=_REFUSALS)
+async def get_test_over_time_charts(study_id: StudyId) -> GoldenSearchTestOverTimeCharts:
+    """The Test over time step's charts: every fold's windows and results, the linked returns and each searched knob's drift."""
+    try:
+        result = await service.test_over_time_charts(study_id)
+    except GoldenSearchRefusal as exc:
+        raise await _refused(exc) from exc
+    return GoldenSearchTestOverTimeCharts.model_validate(result)
 
 
 @router.get("/studies/{study_id}/candidates/{candidate_key}", response_model=GoldenSearchCandidateDetail, responses=_REFUSALS)
