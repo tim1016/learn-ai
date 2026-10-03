@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.routers.trading_calendar import router
+from app.schemas.trading_calendar import TradingCalendarWindow
+from app.services.trading_calendar_service import get_calendar_window
 
 pytestmark = pytest.mark.asyncio
 
@@ -40,3 +42,21 @@ async def test_a_window_the_calendar_cannot_serve_is_a_422_with_the_reason() -> 
 
     assert status_code == 422
     assert body["detail"] == "The window ends before it starts."
+
+
+async def test_the_route_asks_its_calendar_dependency_for_the_two_et_dates() -> None:
+    asked: list[tuple[date, date]] = []
+
+    def window_for(start: date, end: date) -> TradingCalendarWindow:
+        asked.append((start, end))
+        return TradingCalendarWindow(session_open_ms=[], session_close_ms=[], holidays=[])
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/calendar")
+    app.dependency_overrides[get_calendar_window] = lambda: window_for
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # 03:00Z on January 3rd is still January 2nd in New York.
+        response = await client.get("/api/calendar/sessions", params={"start_ms": _utc_ms(2024, 1, 3, 3), "end_ms": _utc_ms(2024, 1, 31, 15)})
+
+    assert response.status_code == 200
+    assert asked == [(date(2024, 1, 2), date(2024, 1, 31))]

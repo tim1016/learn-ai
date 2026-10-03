@@ -6,6 +6,7 @@ A projection only: every session, close and holiday comes from
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 from functools import lru_cache
 
@@ -34,3 +35,11 @@ def calendar_window(start: date, end: date) -> TradingCalendarWindow:
         session_close_ms=[session.close_ms_utc for session in sessions],
         holidays=[CalendarHoliday(date_ms=session_open_ms_utc(day), name=name) for day, name in sorted(holidays.items())],
     )
+
+
+CalendarWindowFn = Callable[[date, date], TradingCalendarWindow]
+
+
+def get_calendar_window() -> CalendarWindowFn:
+    """The calendar projection as a FastAPI dependency, so a transport test can replace it."""
+    return calendar_window
