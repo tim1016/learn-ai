@@ -1,0 +1,14 @@
+@use './date-control';
+
+:host {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.date-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
