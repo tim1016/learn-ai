@@ -154,7 +154,7 @@ Does the result survive nearby settings of two knobs together?
 
 #### What you're looking at
 
-A grid of cells, one per pair of values: rows for one knob, columns for the other, every other setting held at the candidate's. Each cell prints the development net return and is coloured by it: green for a gain, red for a loss, with 0% in the middle. The outlined cell is the candidate itself. Grey cells were not tested: an invalid pair (—), a value outside the legal range (·), or a pair never run (?). When the plan audited more than one pair, buttons above the chart switch between them.
+A grid of cells, one per pair of values: rows for one knob, columns for the other, every other setting held at the candidate's. Each cell prints the development net return and is coloured by it: green for a gain, red for a loss, with 0% in the middle. The outlined cell is the candidate itself. Grey cells have no return: an invalid pair (—), a value outside the legal range (·), a pair never run (?), a run that failed (Failed), or one that recorded no return (no return). When the plan audited more than one pair, buttons above the chart switch between them.
 
 The landscape is a two-knob slice: it says nothing about combinations of the other knobs.
 
@@ -163,7 +163,7 @@ The landscape is a two-knob slice: it says nothing about combinations of the oth
 1. Each cell is one pair of values: rows for one knob, columns for the other, every other setting held at the candidate.
 2. Green cells made money and red cells lost it; each cell prints its net return.
 3. The outlined cell is the candidate itself. A plateau of similar cells around it is more robust than a lone peak.
-4. Grey cells were not tested: an invalid pair (—), outside the legal range (·), or never run (?).
+4. Grey cells have no return: an invalid pair (—), outside the legal range (·), never run (?), a failed run, or one that recorded none.
 
 #### Good signs and warning signs
 

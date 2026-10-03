@@ -365,6 +365,10 @@ export function eligibilityMapSpec(procedure: ProcedureCharts, capability: Strat
   };
 }
 
+function maxTrades(points: ProcedureCharts['points']): number {
+  return Math.max(0, ...points.map((point) => point.total_trades ?? 0));
+}
+
 function eligibilityOption(procedure: ProcedureCharts, capability: StrategyCapability | null, theme: ChartTheme): ChartOption {
   const colors: Readonly<Record<string, string>> = { eligible: theme.candidates.all_period, trades: theme.warn, fall: theme.loss, loss: theme.stepBelow, other: theme.textSecondary };
   const groups = RULE_GROUPS.map((group) => ({ ...group, points: procedure.points.filter((point) => groupOf(point.ineligibility) === group.group) }));
@@ -385,8 +389,8 @@ function eligibilityOption(procedure: ProcedureCharts, capability: StrategyCapab
     },
     xAxis: {
       type: 'value',
-      // The trade floor stays on the axis even when every point trades less.
-      max: (extent: { max: number }) => Math.max(extent.max, floor ?? 0),
+      // The trade floor stays on the axis even when every point trades less; otherwise the axis keeps its round scale.
+      ...(floor !== null && floor > maxTrades(procedure.points) ? { max: floor } : {}),
       name: 'Trades',
       nameLocation: 'middle',
       nameGap: 24,

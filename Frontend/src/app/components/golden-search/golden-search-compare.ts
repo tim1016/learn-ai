@@ -221,7 +221,8 @@ export function pairMapView(map: PairMap, capability: StrategyCapability | null,
       const reason = cell?.reason ?? null;
       const metrics = cell?.metrics ?? null;
       const value = kind === 'tested' ? (metrics?.total_return_pct ?? null) : null;
-      const text = kind === 'tested' ? signedPercentText(value) : STATUS_MARKS[kind];
+      // A tested cell whose run recorded no return says so, never the invalid pair's dash.
+      const text = kind === 'tested' ? (value === null ? 'no return' : signedPercentText(value)) : STATUS_MARKS[kind];
       const words = kind === 'tested' ? text : STATUS_WORDS[kind];
       return { key: `${y}|${x}`, row, column, x, y, kind, text, words, center: x === centerX && y === centerY, metrics, reason };
     }),
