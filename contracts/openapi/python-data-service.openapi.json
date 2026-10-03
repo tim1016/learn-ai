@@ -2665,6 +2665,56 @@
         "title": "AtmStrike",
         "type": "object"
       },
+      "AttestationFindingsResponse": {
+        "description": "What the Clerk read at Alpaca for an attestation, with nothing settled (#2854).\n\n``lines`` are the Clerk's own sentences, shown as written before the\noperator confirms. ``would_settle`` is whether the same attestation made\nnow would settle the order; when it would not, ``lines`` is why and\n``refusal_reason_code`` names it. The settlement reads Alpaca again.",
+        "properties": {
+          "attestation": {
+            "enum": [
+              "absent",
+              "exists"
+            ],
+            "title": "Attestation",
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "observed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "refusal_reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal Reason Code"
+          },
+          "would_settle": {
+            "title": "Would Settle",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "attestation",
+          "would_settle",
+          "refusal_reason_code",
+          "lines",
+          "observed_at_ms"
+        ],
+        "title": "AttestationFindingsResponse",
+        "type": "object"
+      },
       "BackfillDefaults": {
         "description": "The parts of a ``DataRunSpec`` only the data plane knows (#1838).\n\n``lean_image_digest`` is required by ``DataRunSpec`` and has no default;\na browser has no way to derive the pinned LEAN image, and hand-typing a\ncontainer digest into a form is not a receipt anybody could audit. The\ncaps come from ``app.data_lake.types`` so the Observatory rejects an\nover-wide window in the form rather than by round-tripping a 422.\n\n``lean_image_digest`` is ``None`` when the data plane has no pin\nconfigured \u2014 reported honestly rather than as an empty string, so the\nUI can say backfill is unavailable instead of submitting a spec that\nwould fail deep inside Phase 0.\n\n``provider_history_start_ms`` is the oldest day the configured provider\nplan will actually serve. ``max_trading_range_days`` is *not* a stand-in\nfor it: that cap is a request-validation ceiling padded to ``5 * 366``\nfor leap years, so a window composed against it starts a few days\noutside a 5-year entitlement and dies on a globally-fatal\n``provider_entitlement_error`` before one bar is written (#2241). Only\nthe data plane holds the provider credential, so only the data plane can\nstate this; a browser composing its own floor is guessing at a vendor\nplan.",
         "properties": {
@@ -5318,6 +5368,7 @@
                   "prepare_safe_flatten",
                   "execute_safe_flatten",
                   "discharge_attributed_residue",
+                  "settle_unknown_exit_order",
                   "stop_bot_decisions",
                   "open_custody_timeline"
                 ],
@@ -33540,6 +33591,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -33622,6 +33674,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -33705,11 +33758,22 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
             "title": "Action Id",
             "type": "string"
+          },
+          "attestation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UnknownOrderAttestationRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "concurrency_token": {
             "maxLength": 128,
@@ -33763,6 +33827,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -33858,10 +33923,21 @@
               "cancel_verified_working_orders",
               "execute_safe_flatten",
               "reconcile_now",
-              "discharge_attributed_residue"
+              "discharge_attributed_residue",
+              "settle_unknown_exit_order"
             ],
             "title": "Action Id",
             "type": "string"
+          },
+          "attestation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UnknownOrderAttestationRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "concurrency_token": {
             "maxLength": 128,
@@ -35874,6 +35950,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -37019,7 +37096,7 @@
       },
       "RecoveryActionCheckRequest": {
         "additionalProperties": false,
-        "description": "Action-specific token checked against a fresh policy evaluation.\n\n``proposed_limit_price`` asks what a specific extended-hours price would\ndo against the quote the Clerk holds (#2007) \u2014 the operator's review step.\nIt confirms nothing and sends nothing; only the execute route does that.",
+        "description": "Action-specific token checked against a fresh policy evaluation.\n\n``proposed_limit_price`` asks what a specific extended-hours price would\ndo against the quote the Clerk holds (#2007) \u2014 the operator's review step.\nIt confirms nothing and sends nothing; only the execute route does that.\n\n``attestation`` asks what the Clerk reads at Alpaca for it now (#2854):\nthe reads a settlement would rest on, made and answered, with nothing\nsettled.",
         "properties": {
           "action_id": {
             "enum": [
@@ -37030,11 +37107,22 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
             "title": "Action Id",
             "type": "string"
+          },
+          "attestation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UnknownOrderAttestationRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "band_override": {
             "default": false,
@@ -37069,6 +37157,16 @@
       },
       "RecoveryActionCheckResponse": {
         "properties": {
+          "attestation_findings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttestationFindingsResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "capability": {
             "$ref": "#/components/schemas/RecoveryCapabilityResponse"
           },
@@ -37121,11 +37219,22 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
             "title": "Action Id",
             "type": "string"
+          },
+          "attestation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UnknownOrderAttestationRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "concurrency_token": {
             "maxLength": 128,
@@ -37186,6 +37295,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -37260,6 +37370,7 @@
               "prepare_safe_flatten",
               "execute_safe_flatten",
               "discharge_attributed_residue",
+              "settle_unknown_exit_order",
               "stop_bot_decisions",
               "open_custody_timeline"
             ],
@@ -37349,6 +37460,16 @@
             ],
             "title": "Scope",
             "type": "string"
+          },
+          "settlement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UnknownOrderSettlementResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "unavailable_reason": {
             "anyOf": [
@@ -40151,6 +40272,39 @@
           "fraction"
         ],
         "title": "SetHoldings",
+        "type": "object"
+      },
+      "SettlementChoiceResponse": {
+        "description": "One thing the operator can say Alpaca shows for an uncertain order (#2854).",
+        "properties": {
+          "asks_broker_order_id": {
+            "title": "Asks Broker Order Id",
+            "type": "boolean"
+          },
+          "attestation": {
+            "enum": [
+              "absent",
+              "exists"
+            ],
+            "title": "Attestation",
+            "type": "string"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "attestation",
+          "label",
+          "explanation",
+          "asks_broker_order_id"
+        ],
+        "title": "SettlementChoiceResponse",
         "type": "object"
       },
       "ShadowActivationOutcome": {
@@ -44578,6 +44732,7 @@
           "ORDER_CANCEL_REQUESTED",
           "ORDER_CANCEL_UNCERTAIN",
           "ORDER_FILL_OBSERVED",
+          "ORDER_OUTCOME_ATTESTED",
           "ORDER_SUBMIT_ACKED",
           "ORDER_SUBMIT_FAILED",
           "ORDER_SUBMIT_REQUESTED",
@@ -45353,6 +45508,92 @@
           "ticker"
         ],
         "title": "UnderlyingSnapshot",
+        "type": "object"
+      },
+      "UnknownOrderAttestationRequest": {
+        "additionalProperties": false,
+        "description": "What the operator says Alpaca shows for a closing order whose outcome is unknown (#2854).\n\n``absent``: Alpaca has no such order. ``exists``: it is the order under\n``broker_order_id``, the id Alpaca shows for it. The Clerk reads Alpaca\nitself before it acts on either; an attestation is never taken on trust.",
+        "properties": {
+          "broker_order_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker Order Id"
+          },
+          "kind": {
+            "enum": [
+              "absent",
+              "exists"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "UnknownOrderAttestationRequest",
+        "type": "object"
+      },
+      "UnknownOrderSettlementResponse": {
+        "description": "The closing order an available ``settle_unknown_exit_order`` asks about (#2854).\n\n``ticket`` is the Clerk's own sentence about the order; the page shows it\nas written and offers ``choices`` beneath it.",
+        "properties": {
+          "choices": {
+            "items": {
+              "$ref": "#/components/schemas/SettlementChoiceResponse"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "first_sent_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "First Sent At Ms",
+            "type": "integer"
+          },
+          "order_ref": {
+            "title": "Order Ref",
+            "type": "string"
+          },
+          "quantity": {
+            "title": "Quantity",
+            "type": "number"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "ticket": {
+            "title": "Ticket",
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_ref",
+          "symbol",
+          "side",
+          "quantity",
+          "first_sent_at_ms",
+          "ticket",
+          "choices"
+        ],
+        "title": "UnknownOrderSettlementResponse",
         "type": "object"
       },
       "ValidationError": {

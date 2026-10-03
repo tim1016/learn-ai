@@ -7140,6 +7140,30 @@ export interface components {
             selector: "atm";
         };
         /**
+         * AttestationFindingsResponse
+         * @description What the Clerk read at Alpaca for an attestation, with nothing settled (#2854).
+         *
+         *     ``lines`` are the Clerk's own sentences, shown as written before the
+         *     operator confirms. ``would_settle`` is whether the same attestation made
+         *     now would settle the order; when it would not, ``lines`` is why and
+         *     ``refusal_reason_code`` names it. The settlement reads Alpaca again.
+         */
+        AttestationFindingsResponse: {
+            /**
+             * Attestation
+             * @enum {string}
+             */
+            attestation: "absent" | "exists";
+            /** Lines */
+            lines: string[];
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Refusal Reason Code */
+            refusal_reason_code: string | null;
+            /** Would Settle */
+            would_settle: boolean;
+        };
+        /**
          * BackfillDefaults
          * @description The parts of a ``DataRunSpec`` only the data plane knows (#1838).
          *
@@ -8176,7 +8200,7 @@ export interface components {
             /** Open Pnl Usd */
             open_pnl_usd: string | null;
             /** Primary Action */
-            primary_action: ("archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline") | null;
+            primary_action: ("archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline") | null;
             program_build: components["schemas"]["ProgramBuildAdmissionFact"];
             rail: components["schemas"]["TransactionRail"];
             /** Readiness Blocked Count */
@@ -19410,7 +19434,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Blockers */
             blockers: components["schemas"]["OperatorBlocker"][];
             /** Concurrency Token */
@@ -19448,7 +19472,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Message */
             message: string;
             /**
@@ -19477,7 +19501,8 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            attestation?: components["schemas"]["UnknownOrderAttestationRequest"] | null;
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -19500,7 +19525,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Applied */
             applied: boolean;
             /** Concurrency Token */
@@ -19556,7 +19581,8 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "stop_bot_decisions" | "cancel_verified_working_orders" | "execute_safe_flatten" | "reconcile_now" | "discharge_attributed_residue";
+            action_id: "stop_bot_decisions" | "cancel_verified_working_orders" | "execute_safe_flatten" | "reconcile_now" | "discharge_attributed_residue" | "settle_unknown_exit_order";
+            attestation?: components["schemas"]["UnknownOrderAttestationRequest"] | null;
             /** Concurrency Token */
             concurrency_token: string;
             /** Idempotency Key */
@@ -20397,7 +20423,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            operation: "archive" | "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Ready */
             ready: boolean;
             /**
@@ -20779,13 +20805,18 @@ export interface components {
          *     ``proposed_limit_price`` asks what a specific extended-hours price would
          *     do against the quote the Clerk holds (#2007) — the operator's review step.
          *     It confirms nothing and sends nothing; only the execute route does that.
+         *
+         *     ``attestation`` asks what the Clerk reads at Alpaca for it now (#2854):
+         *     the reads a settlement would rest on, made and answered, with nothing
+         *     settled.
          */
         RecoveryActionCheckRequest: {
             /**
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            attestation?: components["schemas"]["UnknownOrderAttestationRequest"] | null;
             /**
              * Band Override
              * @default false
@@ -20798,6 +20829,7 @@ export interface components {
         };
         /** RecoveryActionCheckResponse */
         RecoveryActionCheckResponse: {
+            attestation_findings?: components["schemas"]["AttestationFindingsResponse"] | null;
             capability: components["schemas"]["RecoveryCapabilityResponse"];
             /** Reduction Pricing */
             reduction_pricing?: (components["schemas"]["RegularSessionFlattenPricing"] | components["schemas"]["ExtendedLimitFlattenPricing"] | components["schemas"]["RefusedFlattenPricing"]) | null;
@@ -20811,7 +20843,8 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
+            attestation?: components["schemas"]["UnknownOrderAttestationRequest"] | null;
             /** Concurrency Token */
             concurrency_token: string;
             /** Execution Ref */
@@ -20826,7 +20859,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Applied */
             applied: boolean;
             command: components["schemas"]["CommandResponse"] | null;
@@ -20850,7 +20883,7 @@ export interface components {
              * Action Id
              * @enum {string}
              */
-            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "stop_bot_decisions" | "open_custody_timeline";
+            action_id: "reconcile_now" | "recover_exact_execution_evidence" | "resolve_execution_coverage" | "cancel_verified_working_orders" | "prepare_safe_flatten" | "execute_safe_flatten" | "discharge_attributed_residue" | "settle_unknown_exit_order" | "stop_bot_decisions" | "open_custody_timeline";
             /** Available */
             available: boolean;
             /** Concurrency Token */
@@ -20881,6 +20914,7 @@ export interface components {
              * @enum {string}
              */
             scope: "CUSTODY_SUBJECT" | "ACCOUNT_CLERK";
+            settlement?: components["schemas"]["UnknownOrderSettlementResponse"] | null;
             /** Unavailable Reason */
             unavailable_reason: string | null;
             /** Unavailable Reason Code */
@@ -21914,6 +21948,23 @@ export interface components {
              * @enum {string}
              */
             kind: "SetHoldings";
+        };
+        /**
+         * SettlementChoiceResponse
+         * @description One thing the operator can say Alpaca shows for an uncertain order (#2854).
+         */
+        SettlementChoiceResponse: {
+            /** Asks Broker Order Id */
+            asks_broker_order_id: boolean;
+            /**
+             * Attestation
+             * @enum {string}
+             */
+            attestation: "absent" | "exists";
+            /** Explanation */
+            explanation: string;
+            /** Label */
+            label: string;
         };
         /**
          * ShadowActivationOutcome
@@ -23674,7 +23725,7 @@ export interface components {
          * TimelineTransitionKind
          * @enum {string}
          */
-        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_REPLACED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "SIMULATION_SESSION_BASELINE" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
+        TimelineTransitionKind: "ACCOUNT_HOLD_RAISED" | "ACCOUNT_HOLD_REFRESHED" | "ACCOUNT_HOLD_RESOLVED" | "ACCOUNT_RISK_LIMITS_APPLIED" | "ATTRIBUTED_RESIDUE_DISCHARGED" | "BUDGET_AUTHORITY_CUTOVER" | "COMMAND_REJECTED" | "CUSTODY_SUBJECT_REGISTERED" | "DEPLOY_COMMITTED" | "DEPLOY_LAUNCHED" | "ENTER_ACCEPTED" | "ENTER_SUBMISSION_REFUSED" | "ENTER_UNFILLED" | "ENTRY_NEVER_ACCEPTED" | "ENTRY_TERMINAL_CONFIRMED" | "EXECUTION_COVERAGE_CHAIN_TOTAL_PROVEN" | "EXECUTION_COVERAGE_QUARANTINED" | "EXECUTION_COVERAGE_RESOLVED" | "EXECUTION_COVERAGE_SUPERSEDED" | "EXECUTION_SLICE_FILLED" | "EXIT_ACCEPTED" | "EXIT_ATTRIBUTED_FLAT" | "EXIT_MARKET_HOLD" | "EXIT_NOT_FLAT" | "EXIT_RECOVERY_EVALUATED" | "EXIT_REDUCING_ORDER_CREATED" | "EXIT_TERMS_SEALED" | "EXIT_TERMS_UPGRADE_COMPLETED" | "EXTERNAL_ORDER_ACKNOWLEDGED" | "EXTERNAL_ORDER_OBSERVED" | "FEE_EVIDENCE_OBSERVED" | "MANUAL_ORDER_ACCEPTED" | "MANUAL_ORDER_CANCELED" | "MANUAL_ORDER_CANCEL_ACCEPTED" | "MANUAL_ORDER_CANCEL_CONFIRMED" | "MANUAL_ORDER_CANCEL_TERMINAL" | "MANUAL_ORDER_FILLED" | "MANUAL_ORDER_REPLACED" | "MANUAL_ORDER_TERMINAL" | "MANUAL_TICKET_CANCELED" | "MANUAL_TICKET_COMPLETED" | "MANUAL_TICKET_PAUSED_UNKNOWN" | "MANUAL_TICKET_RESERVED" | "ORDER_CANCEL_REQUESTED" | "ORDER_CANCEL_UNCERTAIN" | "ORDER_FILL_OBSERVED" | "ORDER_OUTCOME_ATTESTED" | "ORDER_SUBMIT_ACKED" | "ORDER_SUBMIT_FAILED" | "ORDER_SUBMIT_REQUESTED" | "ORDER_SUBMIT_UNCERTAIN" | "RECONCILIATION_ATTEMPTED" | "RUN_STARTED" | "RUN_STOPPED" | "SIMULATION_SESSION_BASELINE" | "STRATEGY_INSTANCE_REGISTERED" | "STRATEGY_INSTANCE_RETIRED" | "UNCERTAINTY_RAISED" | "UNCERTAINTY_REFRESHED" | "UNCERTAINTY_RESOLVED";
         /** TimingCellResponse */
         TimingCellResponse: {
             /** Average Return */
@@ -23997,6 +24048,49 @@ export interface components {
             price?: number | null;
             /** Ticker */
             ticker: string;
+        };
+        /**
+         * UnknownOrderAttestationRequest
+         * @description What the operator says Alpaca shows for a closing order whose outcome is unknown (#2854).
+         *
+         *     ``absent``: Alpaca has no such order. ``exists``: it is the order under
+         *     ``broker_order_id``, the id Alpaca shows for it. The Clerk reads Alpaca
+         *     itself before it acts on either; an attestation is never taken on trust.
+         */
+        UnknownOrderAttestationRequest: {
+            /** Broker Order Id */
+            broker_order_id?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "absent" | "exists";
+        };
+        /**
+         * UnknownOrderSettlementResponse
+         * @description The closing order an available ``settle_unknown_exit_order`` asks about (#2854).
+         *
+         *     ``ticket`` is the Clerk's own sentence about the order; the page shows it
+         *     as written and offers ``choices`` beneath it.
+         */
+        UnknownOrderSettlementResponse: {
+            /** Choices */
+            choices: components["schemas"]["SettlementChoiceResponse"][];
+            /** First Sent At Ms */
+            first_sent_at_ms: number;
+            /** Order Ref */
+            order_ref: string;
+            /** Quantity */
+            quantity: number;
+            /**
+             * Side
+             * @enum {string}
+             */
+            side: "buy" | "sell";
+            /** Symbol */
+            symbol: string;
+            /** Ticket */
+            ticket: string;
         };
         /** ValidationError */
         ValidationError: {

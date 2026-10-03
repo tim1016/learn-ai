@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.recovery_reduction import (
 from app.broker.alpaca.clerk.sqlite.models import CommandResource
 from app.broker.alpaca.clerk.sqlite.projection_models import SettlementAttestation
 from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryActionId
+from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import OrderOutcomeAttestation
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 if TYPE_CHECKING:
@@ -519,12 +520,51 @@ class HistoricalExecutionRecoveryReceiptResponse(BaseModel):
     applied: bool
 
 
+class UnknownOrderAttestationRequest(BaseModel):
+    """What the operator says Alpaca shows for a closing order whose outcome is unknown (#2854).
+
+    ``absent``: Alpaca has no such order. ``exists``: it is the order under
+    ``broker_order_id``, the id Alpaca shows for it. The Clerk reads Alpaca
+    itself before it acts on either; an attestation is never taken on trust.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: SettlementAttestation
+    broker_order_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"\S")
+
+    @model_validator(mode="after")
+    def _an_order_shown_is_named_by_its_id(self) -> UnknownOrderAttestationRequest:
+        if self.kind == "exists" and self.broker_order_id is None:
+            raise ValueError("an attestation that Alpaca shows the order names its Alpaca order id")
+        if self.kind == "absent" and self.broker_order_id is not None:
+            raise ValueError("an attestation that Alpaca has no such order names no Alpaca order id")
+        return self
+
+    def to_attestation(self) -> OrderOutcomeAttestation:
+        return OrderOutcomeAttestation(
+            kind=self.kind,
+            broker_order_id=None if self.broker_order_id is None else self.broker_order_id.strip(),
+        )
+
+
+def _require_attestation_fits(
+    action_id: str, attestation: UnknownOrderAttestationRequest | None
+) -> None:
+    if attestation is not None and action_id != "settle_unknown_exit_order":
+        raise ValueError("attestation settles only a settle_unknown_exit_order action")
+
+
 class RecoveryActionCheckRequest(BaseModel):
     """Action-specific token checked against a fresh policy evaluation.
 
     ``proposed_limit_price`` asks what a specific extended-hours price would
     do against the quote the Clerk holds (#2007) — the operator's review step.
     It confirms nothing and sends nothing; only the execute route does that.
+
+    ``attestation`` asks what the Clerk reads at Alpaca for it now (#2854):
+    the reads a settlement would rest on, made and answered, with nothing
+    settled.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -533,6 +573,12 @@ class RecoveryActionCheckRequest(BaseModel):
     concurrency_token: str = Field(min_length=1, max_length=128)
     proposed_limit_price: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     band_override: bool = False
+    attestation: UnknownOrderAttestationRequest | None = None
+
+    @model_validator(mode="after")
+    def _attestation_settles_only_an_unknown_order(self) -> RecoveryActionCheckRequest:
+        _require_attestation_fits(self.action_id, self.attestation)
+        return self
 
 
 class RegularSessionFlattenPricing(BaseModel):
@@ -692,6 +738,24 @@ def safe_flatten_pricing_response(
     return RegularSessionFlattenPricing(kind="regular_session")
 
 
+class AttestationFindingsResponse(BaseModel):
+    """What the Clerk read at Alpaca for an attestation, with nothing settled (#2854).
+
+    ``lines`` are the Clerk's own sentences, shown as written before the
+    operator confirms. ``would_settle`` is whether the same attestation made
+    now would settle the order; when it would not, ``lines`` is why and
+    ``refusal_reason_code`` names it. The settlement reads Alpaca again.
+    """
+
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+
+    attestation: SettlementAttestation
+    would_settle: bool
+    refusal_reason_code: str | None
+    lines: tuple[str, ...]
+    observed_at_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
+
+
 class RecoveryActionCheckResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -699,6 +763,9 @@ class RecoveryActionCheckResponse(BaseModel):
     # How a single-leg safe flatten would go out now (#2007); ``None`` for every
     # other capability and for a prepare-only multi-leg plan.
     reduction_pricing: SafeFlattenPricingResponse | None = None
+    # What the Clerk read for the attestation the check carried (#2854);
+    # ``None`` when it carried none.
+    attestation_findings: AttestationFindingsResponse | None = None
 
 
 class ExtendedLimitConfirmationRequest(BaseModel):
@@ -734,11 +801,16 @@ class RecoveryActionExecuteRequest(BaseModel):
     execution_ref: str | None = Field(default=None, max_length=256)
     reason: str | None = Field(default=None, max_length=512)
     extended_limit: ExtendedLimitConfirmationRequest | None = None
+    # What the operator says Alpaca shows, for ``settle_unknown_exit_order``
+    # (#2854). Who says it is never a request field: the route records the
+    # installation's configured operator identity.
+    attestation: UnknownOrderAttestationRequest | None = None
 
     @model_validator(mode="after")
     def _extended_limit_prices_only_a_flatten(self) -> RecoveryActionExecuteRequest:
         if self.extended_limit is not None and self.action_id != "execute_safe_flatten":
             raise ValueError("extended_limit prices only an execute_safe_flatten action")
+        _require_attestation_fits(self.action_id, self.attestation)
         return self
 
 

@@ -37,7 +37,11 @@ from app.schemas.account_authority import (
     AuthorityKind,
     account_authority_agrees,
 )
-from app.schemas.alpaca_clerk_sqlite import ExposureNoticeView, RecoveryStatusResponse
+from app.schemas.alpaca_clerk_sqlite import (
+    ExposureNoticeView,
+    RecoveryStatusResponse,
+    UnknownOrderAttestationRequest,
+)
 from app.schemas.bot_end import BotEndView
 from app.schemas.bot_history import BotHistoryStatus
 from app.schemas.bot_page import BotPageView
@@ -775,6 +779,15 @@ class PanelActionRequest(BaseModel):
     concurrency_token: str = Field(min_length=1, max_length=128)
     idempotency_key: str = Field(min_length=1, max_length=128)
     reason: str | None = Field(default=None, max_length=512)
+    # What the operator says Alpaca shows, for ``settle_unknown_exit_order``
+    # (#2854); the Clerk reads Alpaca itself before it acts on it.
+    attestation: UnknownOrderAttestationRequest | None = None
+
+    @model_validator(mode="after")
+    def _attestation_settles_only_an_unknown_order(self) -> PanelActionRequest:
+        if self.attestation is not None and self.action_id != "settle_unknown_exit_order":
+            raise ValueError("attestation settles only a settle_unknown_exit_order action")
+        return self
 
 
 class PanelQuiesceActionRequest(PanelActionRequest):

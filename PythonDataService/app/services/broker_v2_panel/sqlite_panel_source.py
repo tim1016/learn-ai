@@ -939,8 +939,12 @@ async def execute_sqlite_panel_action(
     availability_error: ActionNotAvailableError | None,
     facade: SqliteAlpacaClerkFacade | None,
     store: IdempotencyStore | None = None,
+    operator_identity: str | None = None,
 ) -> PanelActionResult | None:
     """Execute through the same policy that authored the presented action.
+
+    ``operator_identity`` is who asks: the configured operator the panel
+    route acts as, recorded on an order an operator settles (#2854).
 
     ``facade`` is the authority the bot's panel was read from
     (``bot_custody``'s one selection): a Dry Run's own
@@ -1057,6 +1061,10 @@ async def execute_sqlite_panel_action(
                     capability.execution_ref if capability is not None else None
                 ),
                 reason=request.reason,
+                attestation=(
+                    None if request.attestation is None else request.attestation.to_attestation()
+                ),
+                operator=operator_identity,
             ),
             current_context=current_context,
         )

@@ -312,15 +312,19 @@ def test_the_quiesce_action_set_is_one_closed_set_every_surface_derives_from() -
     assert quiesce <= set(ACTION_IDS)
     assert quiesce <= set(get_args(PanelQuiesceActionRequest.model_fields["action_id"].annotation))
     # Every recovery id whose executor only stops decisions, cancels owned
-    # verified working orders, submits a reduction, reconciles, or discharges
+    # verified working orders, submits a reduction, reconciles, discharges
     # a residue the broker proves it does not hold (#2381: a draining lane
-    # stranded by EXIT_NOT_FLAT/EXIT_STUCK needs it to answer quiet).
+    # stranded by EXIT_NOT_FLAT/EXIT_STUCK needs it to answer quiet), or
+    # settles a closing order whose outcome is unknown on the Clerk's own
+    # reads of the broker (#2854: a lane holding one cannot answer quiet; it
+    # sends no order and requires no active run).
     assert quiesce & set(get_args(RecoveryActionId)) == {
         "stop_bot_decisions",
         "cancel_verified_working_orders",
         "execute_safe_flatten",
         "reconcile_now",
         "discharge_attributed_residue",
+        "settle_unknown_exit_order",
     }
     # Rewrites fill evidence and can lift a hold a running bot is under.
     assert "resolve_execution_coverage" not in quiesce
@@ -409,6 +413,46 @@ async def test_a_draining_lane_routes_the_panels_cancel_verified_working_orders(
         delivered_body = delivery.bodies[0]
         assert isinstance(delivered_body, dict)
         assert delivered_body["action_id"] == "cancel_verified_working_orders"
+        await close_fleet_lane(boot)
+    finally:
+        service.close()
+
+
+async def test_a_draining_lane_routes_the_settling_of_an_uncertain_order_with_its_attestation(
+    control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lane holding a closing order whose outcome is unknown cannot answer quiet (#2854).
+
+    Its operator settles the order from the panel while the lane drains: the
+    act travels on the quiesce operation, with what the operator says Alpaca
+    shows, and the request the lane validates admits it.
+    """
+    service = _service(control_dir, clock)
+    try:
+        _provisioned, _root, boot = await _open_confirmed_lane(
+            service, control_dir, clock, tmp_path, monkeypatch
+        )
+        service.drain_clerk(clerk_id=boot.clerk_id)
+        delivery = _RecordingDelivery()
+        router = LaneRouter(service=service, delivery_for=lambda broker, session: delivery)
+        settle = {
+            "action_id": "settle_unknown_exit_order",
+            "revision": 1,
+            "concurrency_token": "tok",
+            "attestation": {"kind": "exists", "broker_order_id": "alpaca-order-1"},
+        }
+
+        await _route(
+            router, boot.clerk_id, _operation("bot_panel_quiesce_action"), key="settle-1", body=settle
+        )
+
+        assert delivery.delivered == ["bot_panel_quiesce_action"]
+        assert delivery.bodies == [{**settle, "idempotency_key": "settle-1"}]
+        admitted = PanelQuiesceActionRequest.model_validate(delivery.bodies[0])
+        assert admitted.attestation is not None
+        assert (admitted.attestation.kind, admitted.attestation.broker_order_id) == (
+            "exists", "alpaca-order-1",
+        )
         await close_fleet_lane(boot)
     finally:
         service.close()
