@@ -36,6 +36,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine, BacktestResult
 from app.engine.execution.commission import IbkrEquityCommissionModel
 from app.engine.execution.execution_config import ExecutionConfig
+from app.engine.execution.fill_mode_names import ENGINE_BACKTEST_ALIASES, UnknownFillModeError
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.execution.sizing import LeanSetHoldingsSizing
@@ -79,6 +80,7 @@ from app.services.engine_validation_analytics import (
     build_compatibility_equity_curve,
     compute_engine_validation_analytics,
 )
+from app.services.fill_mode_request import fill_mode_or_400
 from app.services.parity_companion import (
     COMPATIBILITY_PROFILE_US_EQUITY_RAW_IBKR_V1,
     dispatch_parity_companion,
@@ -200,18 +202,13 @@ def _dispatch_requested_parity_companion(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+def _unknown_fill_mode_detail(exc: UnknownFillModeError) -> str:
+    return f"Unknown fill_mode '{exc.raw}'. Expected {exc.expected}."
+
+
 def _parse_fill_mode(raw: str) -> FillMode:
-    key = raw.strip().lower()
-    if key in ("signal_bar_close", "signalbarclose", "close"):
-        return FillMode.SIGNAL_BAR_CLOSE
-    if key in ("next_bar_open", "nextbaropen", "open"):
-        return FillMode.NEXT_BAR_OPEN
-    if key == FillMode.DECISION_MINUTE_OPEN.value:
-        return FillMode.DECISION_MINUTE_OPEN
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Unknown fill_mode '{raw}'. Expected signal_bar_close, next_bar_open or decision_minute_open.",
-    )
+    # The engine backtest alone keeps its short names and its own 400 text (#2599).
+    return fill_mode_or_400(raw, aliases=ENGINE_BACKTEST_ALIASES, detail=_unknown_fill_mode_detail)
 
 
 def _apply_overrides(strategy: Strategy, req: EngineBacktestRequest) -> None:

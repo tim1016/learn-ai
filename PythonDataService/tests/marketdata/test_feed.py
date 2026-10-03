@@ -685,6 +685,31 @@ async def test_recent_closed_bars_refuses_loudly_when_history_is_unavailable(
     assert refused.value.__cause__ is failure
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("lookback_days", "timeout_s"), [(5, 15.0), (18, 75.0)])
+async def test_recent_closed_bars_gives_a_long_lookback_longer_to_answer(
+    monkeypatch: pytest.MonkeyPatch, lookback_days: int, timeout_s: float
+) -> None:
+    """#2841: an 18-day warmup (SMA 50/200) asks IBKR for history that takes
+    longer than 15 s to serve, so its fetch waits longer. A 5-day one waits
+    the 15 s it always has."""
+    asked: dict[str, Any] = {}
+
+    async def _fake_history(*_args: Any, **kwargs: Any) -> list[SimpleNamespace]:
+        asked.update(kwargs)
+        return []
+
+    monkeypatch.setattr(
+        "app.marketdata.ibkr_feed.fetch_historical_minute_bars", _fake_history
+    )
+    _skip_warmup_coverage(monkeypatch)
+
+    feed = IbkrMarketDataFeed(_fake_connected_client())
+    await feed.recent_closed_bars("SPY", use_rth=False, lookback_days=lookback_days)
+
+    assert asked["timeout_s"] == pytest.approx(timeout_s, abs=1e-9, rel=0)
+
+
 # ---------------------------------------------------------------------------
 # #1921 — reconnect continuity: bar provenance, typed feed errors, the policy
 # ---------------------------------------------------------------------------

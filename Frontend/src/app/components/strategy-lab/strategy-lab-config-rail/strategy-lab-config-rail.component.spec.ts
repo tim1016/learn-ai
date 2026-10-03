@@ -285,7 +285,7 @@ describe("StrategyLabConfigRailComponent", () => {
     expect(advanced.textContent).not.toContain("pinned IBKR equity fee model");
   });
 
-  it("labels a $0 commission as fees not charged, and offers the decision-minute open (#2599, #2601)", async () => {
+  it("labels a $0 commission as fees not charged, and starts on the decision-minute open (#2599, #2601)", async () => {
     const fixture = await createRail();
     fixture.componentRef.setInput("engine", "python");
     fixture.componentRef.setInput("commissionPerOrder", 0);
@@ -300,7 +300,8 @@ describe("StrategyLabConfigRailComponent", () => {
     fixture.detectChanges();
     const select = advanced.querySelector<HTMLSelectElement>(".advanced-params select");
     if (!select) throw new Error("Fill mode select is missing");
-    select.value = "decision_minute_open";
+    expect(select.value).toBe("decision_minute_open");
+    select.value = "next_bar_open";
     select.dispatchEvent(new Event("change"));
 
     expect(advanced.textContent).toContain("Fees not charged");
@@ -309,7 +310,7 @@ describe("StrategyLabConfigRailComponent", () => {
       "Next bar open",
       "Decision minute open",
     ]);
-    expect(emitted).toHaveBeenCalledWith("decision_minute_open");
+    expect(emitted).toHaveBeenCalledWith("next_bar_open");
 
     fixture.componentRef.setInput("commissionPerOrder", 1);
     fixture.detectChanges();

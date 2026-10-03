@@ -1474,6 +1474,8 @@ async def run_dry_run_bot(
                     symbol=binding.symbol,
                     side=side,
                     quantity=float(binding.quantity),
+                    # A Dry Run fills at the decision bar's close on purpose
+                    # (#2599): it needs a price at the moment it decides.
                     fill_price=float(retained.close),
                 )
             )

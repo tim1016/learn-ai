@@ -191,6 +191,47 @@ async def test_deploy_rejects_an_invalid_parameter_with_a_clear_message(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["bots", "bots/admission"])
+async def test_deploy_refuses_periods_whose_warmup_history_a_bot_cannot_load(
+    deploy_app,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+) -> None:
+    """#2841: SMA 50/500 needs 39 days of history. It was sealed, and the bot then refused at Start.
+
+    Each period is inside its own bounds, so only the lookback refuses it:
+    on the Deploy and on the check the form runs before it, with nothing
+    handed to the runner.
+    """
+    fast_app, registry = deploy_app
+    monkeypatch.setattr(
+        "app.services.canary_admission.CANARY_ADMITTED_PROGRAM_ACCOUNT_PAIRS",
+        frozenset({("sma_crossover", ACCT)}),
+    )
+    settings = _BODY if route == "bots" else _SETTINGS
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=fast_app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/brokers/alpaca/accounts/{ACCT}/{route}",
+            json={
+                **settings,
+                "strategy_key": "sma_crossover",
+                "evidence_override": {
+                    "acknowledgement": "I_ACCEPT_EVIDENCE_ONLY_DEPLOYMENT_RISK",
+                    "reason": "Paper canary approved by the strategy owner.",
+                },
+                "parameters": {"short_window": 50, "long_window": 500},
+            },
+        )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["message"] == "The submitted strategy parameters are invalid."
+    assert "39 days" in detail["why"]
+    assert registry.deploy_calls == []
+
+
+@pytest.mark.asyncio
 async def test_deploy_rejects_symbol_submitted_inside_parameters(
     deploy_app,
     monkeypatch: pytest.MonkeyPatch,

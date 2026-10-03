@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import logging
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
@@ -20,6 +22,8 @@ from httpx import ASGITransport
 from app.main import app
 from app.research.recency import service as recency_service
 from app.research.recency.models import LaunchView
+from app.research.recency.runner import RecencyLaunchConfig, run_recency
+from app.routers import jobs as jobs_router
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 
@@ -251,6 +255,116 @@ class TestWindowCeiling:
         detail = response.json()["detail"]
         assert detail["code"] == "NOT_RESUMABLE"
         assert "window_end_ms" in detail["message"]
+
+
+def _trade_fingerprint(config: RecencyLaunchConfig) -> str:
+    """The identity the runner gives the one trade of a launch's one cell."""
+    trade = SimpleNamespace(entry_time=100, exit_time=200, pnl_pts=2.0, pnl_pct=0.02, quantity=10, is_synthetic_exit=False, signal_reason="")
+    result = SimpleNamespace(success=True, error=None, trades=[trade], study_id=None, data_policy=SimpleNamespace(model_dump_json=lambda: "{}"))
+    persisted: list[Any] = []
+    run_recency(
+        config,
+        execute_backtest_fn=lambda run_spec, config: result,
+        persist_fn=persisted.append,
+        strategy_code_version_fn=lambda strategy_key: "v1",
+    )
+    return persisted[0].trades[0].fingerprint
+
+
+class TestFillModeIdentity:
+    """A new launch runs, stores and fingerprints the canonical fill-mode name;
+    a stored launch keeps the spelling its cells were fingerprinted under (#2599)."""
+
+    _STORED = {
+        "strategies": [{"strategy_key": "ema_crossover_signal", "param_ranges": {"gap_bps": {"type": "value_list", "values": [2.0]}}}],
+        "symbols": ["SPY"],
+        "window_start_ms": 0,
+        "window_end_ms": 1,
+    }
+    _BODY = {
+        "strategies": [{"strategyKey": "ema_crossover_signal", "paramRanges": {"gap_bps": {"type": "value_list", "values": [2.0]}}}],
+        "symbols": ["SPY"],
+        "windowStartMs": 0,
+        "windowEndMs": 1,
+    }
+
+    @pytest.fixture
+    def seen(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+        """What a launch stores and what its worker is handed, with no database and no thread."""
+        seen: dict[str, Any] = {}
+
+        async def create_launch(launch: recency_service.ValidatedLaunch, *, request: dict[str, Any]) -> bool:
+            seen["stored"] = request
+            return True
+
+        def run_launch(config: RecencyLaunchConfig, **_: Any) -> dict[str, Any]:
+            seen["config"] = config
+            return {}
+
+        monkeypatch.setattr(recency_service, "create_launch", create_launch)
+        monkeypatch.setattr(recency_service, "run_launch", run_launch)
+        monkeypatch.setattr(jobs_router, "run_in_thread", lambda job_id, work, **_: work(None, None))
+        return seen
+
+    async def _post(self, body: dict[str, Any]) -> httpx.Response:
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            return await client.post("/api/jobs-internal/recency-chart", json=body)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("spelling", ["Signal-Bar-Close", " close "])
+    async def test_a_new_launch_stores_and_fingerprints_the_canonical_name(self, seen: dict[str, Any], spelling: str) -> None:
+        canonical = await self._post({**self._BODY, "jobId": "job-canonical", "fillMode": "signal_bar_close"})
+        assert canonical.status_code == 202, canonical.text
+        canonical_fingerprint = _trade_fingerprint(seen["config"])
+
+        response = await self._post({**self._BODY, "jobId": "job-spelled", "fillMode": spelling})
+
+        assert response.status_code == 202, response.text
+        assert seen["stored"]["fill_mode"] == "signal_bar_close"
+        assert _trade_fingerprint(seen["config"]) == canonical_fingerprint
+
+    @pytest.mark.asyncio
+    async def test_an_unknown_fill_mode_is_refused_before_anything_is_stored(self, seen: dict[str, Any]) -> None:
+        response = await self._post({**self._BODY, "jobId": "job-magic", "fillMode": "magic"})
+
+        assert response.status_code == 400, response.text
+        assert "signal_bar_close, next_bar_open or decision_minute_open" in response.json()["detail"]
+        assert seen == {}
+
+    @pytest.mark.asyncio
+    async def test_a_resumed_launch_keeps_the_identity_its_stored_spelling_gave_it(
+        self, seen: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Stored before launches named the mode canonically: its recorded cells
+        # were fingerprinted under "close", so the rest of the grid must be too.
+        launch = LaunchView(
+            launch_id="launch-short-name",
+            status="FAILED",
+            job_id="job-original",
+            attempt=1,
+            expected_runs=1,
+            succeeded_runs=0,
+            failed_runs=1,
+            created_at_ms=0,
+            completed_at_ms=1,
+            deleted_at_ms=None,
+            config_json=json.dumps({**self._STORED, "fill_mode": "close"}),
+        )
+
+        async def load_launch(launch_id: str) -> LaunchView | None:
+            return launch if launch_id == launch.launch_id else None
+
+        monkeypatch.setattr(recency_service, "load_launch", load_launch)
+        canonical = await self._post({**self._BODY, "jobId": "job-canonical", "fillMode": "signal_bar_close"})
+        assert canonical.status_code == 202, canonical.text
+        canonical_fingerprint = _trade_fingerprint(seen["config"])
+
+        response = await self._post({**self._BODY, "jobId": "job-resume", "resumeLaunchId": launch.launch_id})
+
+        assert response.status_code == 202, response.text
+        assert seen["config"].launch_id == launch.launch_id
+        assert seen["config"].fill_mode == "close"
+        assert _trade_fingerprint(seen["config"]) != canonical_fingerprint
 
 
 class TestRecordRecencyAbortState:

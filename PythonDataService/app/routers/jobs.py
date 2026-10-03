@@ -547,6 +547,10 @@ async def start_recency_chart_job(req: RecencyChartJobRequest) -> dict:
     else:
         strategies = _grid_configs(req)
         try:
+            # A new launch runs, stores and fingerprints the canonical name
+            # (#2599). The resume above never does this: it keeps the stored
+            # spelling, the one its recorded cells were fingerprinted under.
+            req = req.model_copy(update={"fill_mode": recency_service.canonical_fill_mode(req.fill_mode)})
             launch = recency_service.validate_launch(
                 launch_id=req.job_id,
                 strategies=strategies,

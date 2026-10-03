@@ -22,6 +22,7 @@ from app.engine.strategy.registry import (
     strategy_experimental_notice,
 )
 from app.lean_sidecar.trading_calendar import next_trading_day
+from app.marketdata.feed import MAX_WARMUP_LOOKBACK_DAYS
 from app.research.golden_search.qualification_service import JudgedQualification, public_parameters
 from app.schemas.account_authority import CustodyWorld, world_admits_account_mode
 from app.schemas.broker_bots import (
@@ -127,9 +128,11 @@ def resolve_deploy_strategy_params(
     default, not a fabricated dataset.
 
     Raises ``ValueError`` with a human-readable message for an unknown
-    strategy, a hidden/live-only parameter, a schema validation failure, or a
-    combination the strategy's own rule refuses (``params_refusal``) —
-    callers translate this into their own typed error shape.
+    strategy, a hidden/live-only parameter, a schema validation failure, a
+    combination the strategy's own rule refuses (``params_refusal``), a bar
+    no lookback can be sized for, or periods whose warmup needs more history
+    than a bot can load — callers translate this into their own typed error
+    shape.
     """
     registration = _STRATEGY_REGISTRY.get(strategy_key)
     if registration is None:
@@ -148,6 +151,20 @@ def resolve_deploy_strategy_params(
     refusal = None if registration.params_refusal is None else registration.params_refusal(validated)
     if refusal is not None:
         raise ValueError(f"Invalid strategy parameters: {refusal}")
+    # A lookback the feed cannot load would be sealed here and refused at
+    # Start; one that cannot be sized would start the bot unwarmed (#2841).
+    # A strategy with no contract seals no lookback to check.
+    contract = registration.signal_program_contract
+    if contract is not None:
+        lookback_refusal = contract.warmup_lookback_refusal(validated)
+        if lookback_refusal is not None:
+            raise ValueError(f"Invalid strategy parameters: {lookback_refusal}")
+        lookback_days = contract.resolved_warmup_lookback_days(validated)
+        if lookback_days > MAX_WARMUP_LOOKBACK_DAYS:
+            raise ValueError(
+                f"Invalid strategy parameters: These periods need {lookback_days} days of history to warm up; "
+                f"a bot can load at most {MAX_WARMUP_LOOKBACK_DAYS}. Use shorter periods or a shorter bar."
+            )
     defaults = registration.param_schema().model_dump(exclude={"symbol"})
     effective = validated.model_dump(exclude={"symbol"})
     diverges = tuple(sorted(name for name, value in effective.items() if value != defaults.get(name)))
@@ -414,7 +431,13 @@ def _qualified_configuration(
 
     The stock's active Golden Search default comes first when it is READY
     (#2696): its exact approved tuple, named by approval date and study.
-    Otherwise the registry's validated point, unchanged.
+    Otherwise the registry's validated point, unchanged. A READY default
+    Deploy itself would refuse is not offered: the registry point is, and
+    its explanation says why (#2841).
+
+    Either preset carries only the parameters the form may submit. A hidden
+    one is resolved by Deploy, never sent, so a READY default is offered
+    only when Deploy resolves it to the approved tuple.
     """
     registration = _STRATEGY_REGISTRY.get(strategy_key)
     contract = registration.signal_program_contract if registration is not None else None
@@ -422,19 +445,24 @@ def _qualified_configuration(
         return None
     lookup_symbol = requested_symbol or (contract.validated_symbols[0] if contract.validated_symbols else None)
     golden = (golden_defaults or {}).get((strategy_key, lookup_symbol.upper())) if lookup_symbol else None
+    undeployable: str | None = None
     if golden is not None and golden.status == "ready":
-        return QualifiedDeployConfiguration(
-            symbol=golden.qualification.symbol,
-            parameters=public_parameters(golden.qualification),
-            explanation=golden.explanation,
-            golden_qualification_id=golden.qualification.id,
+        parameters, undeployable = _deployable_preset(
+            strategy_key, golden.qualification.symbol, public_parameters(golden.qualification)
         )
+        if undeployable is None:
+            return QualifiedDeployConfiguration(
+                symbol=golden.qualification.symbol,
+                parameters=parameters,
+                explanation=golden.explanation,
+                golden_qualification_id=golden.qualification.id,
+            )
     if not contract.validated_symbols:
         return None
     symbol = requested_symbol if requested_symbol in contract.validated_symbols else contract.validated_symbols[0]
     parameters = registration.param_schema.model_validate(
         {**contract.validated_settings, "symbol": symbol}
-    ).model_dump(mode="json", exclude={"symbol"})
+    ).model_dump(mode="json", exclude={"symbol", *registration.hidden_params})
     return QualifiedDeployConfiguration(
         symbol=symbol,
         parameters=parameters,
@@ -442,8 +470,34 @@ def _qualified_configuration(
             "This exact symbol and parameter configuration is covered by the registered qualification corpus. "
             "Using it changes the form only; current evidence, account access, budget, and safety checks still apply. "
             "Other configurations can be explored in Dry Run."
+            + (
+                ""
+                if undeployable is None or golden is None
+                else f" The Golden Search default for {golden.qualification.symbol} is not offered: {undeployable}"
+            )
         ),
     )
+
+
+def _deployable_preset(
+    strategy_key: str, symbol: str, approved: dict[str, object]
+) -> tuple[dict[str, object], str | None]:
+    """The parameters the form submits for an approved tuple, and why Deploy would not reach that tuple from them.
+
+    The reason is ``None`` when Deploy takes exactly those parameters and
+    resolves them, hidden ones included, to the approved tuple.
+    """
+    registration = _STRATEGY_REGISTRY[strategy_key]
+    hidden = hidden_params_present(registration, approved, extra_hidden=frozenset({"symbol"}))
+    offered = {name: value for name, value in approved.items() if name not in hidden}
+    try:
+        resolved = resolve_deploy_strategy_params(strategy_key, symbol, offered)
+        approved_point = registration.param_schema.model_validate({**approved, "symbol": symbol})
+    except ValueError as exc:
+        return offered, str(exc).removeprefix("Invalid strategy parameters: ")
+    if resolved.effective != approved_point.model_dump(exclude={"symbol"}):
+        return offered, f"Deploy sets {', '.join(hidden)} itself, to a value other than the approved one."
+    return offered, None
 
 
 def _strategy_views(

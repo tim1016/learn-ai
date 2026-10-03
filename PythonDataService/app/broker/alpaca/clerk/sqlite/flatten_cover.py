@@ -23,7 +23,7 @@ import math
 
 from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.sqlite.account_open_work import (
-    AccountOpenWork,
+    OpenOrdersThenPositions,
     broker_order_in_flight,
     broker_quantity_by_symbol,
     open_order_snapshot_is_full,
@@ -38,8 +38,12 @@ FLATTEN_NOT_COVERED_AT_BROKER = "FLATTEN_NOT_COVERED_AT_BROKER"
 FLATTEN_COVER_UNPROVEN = "FLATTEN_COVER_UNPROVEN"
 """The Clerk could not work out what Alpaca holds free.
 
-No read, a full order page, an open order with no quantity, or a quantity that is not a finite number.
+No read, a full order page, an open order with no symbol or no quantity, a
+position whose side is neither long nor short, or a quantity that is not a
+finite number.
 """
+
+_POSITION_SIDES = frozenset({"long", "short"})
 
 _RECONCILE_THEN_PREPARE_AGAIN = "Run Reconcile now, then prepare the flatten again."
 
@@ -94,30 +98,38 @@ def flatten_cover_refusal(
     symbol: str,
     side: OrderSide,
     quantity: float,
-    observed: AccountOpenWork | BrokerError | None,
+    observed: OpenOrdersThenPositions | BrokerError | None,
 ) -> LegRefusal | None:
     """Why a ``side`` reduction of ``quantity`` ``symbol`` must not be sent, or ``None`` to send it.
 
     ``observed`` is the account read taken for this send, the error that read
-    ended in, or ``None`` when the Clerk had no port to read with -- which
-    refuses like any other read it could not make.
+    ended in -- alone, or beside the open orders when it was the positions
+    that could not be read -- or ``None`` when the Clerk had no port to read
+    with, which refuses like any other read it could not make.
 
     An open order competes for the position unless it is in another symbol
     or provably on the other side: a sell whoever placed it, and equally an
     order whose side the broker left unreadable. One that states no quantity
-    refuses the send, because what it takes cannot be subtracted. An order
-    naming no symbol at all (a multi-leg parent, whose legs are listed as
-    their own orders) competes for nothing.
+    refuses the send, because what it takes cannot be subtracted. So does one
+    whose symbol could not be read: the adapter reads a missing symbol as
+    blank, which is how Alpaca lists a multi-leg parent and equally how a
+    malformed order in this very symbol reads, and an order row carries no
+    order class and no legs to tell the two apart.
+
+    Every row of the position in the symbol must state a side that is
+    exactly long or short. The signed quantity reads every side but short as
+    long, so a short reported under any other side would cover a sale.
 
     Every quantity in the rule must be a finite number -- the position, each
-    competing order's quantity and filled quantity, and the reduction's own.
-    One that is not refuses as unproven: a ``NaN`` compares false both ways
-    and an infinite position would cover anything, so neither may read as
-    covered.
+    competing order's quantity and filled quantity, and the reduction's own,
+    which must also be above zero. One that is not refuses as unproven: a
+    ``NaN`` compares false both ways, an infinite position would cover
+    anything, and any account covers a reduction of nothing, so none may read
+    as covered.
     """
-    if not math.isfinite(quantity):
+    if not (math.isfinite(quantity) and quantity > 0):
         return _unproven(
-            f"This flatten's own {symbol} quantity ({quantity:g}) is not a finite number of shares; "
+            f"This flatten's own {symbol} quantity ({quantity:g}) is not a positive, finite number of shares; "
             "nothing was sent."
         )
     selling = side is OrderSide.SELL
@@ -135,16 +147,22 @@ def flatten_cover_refusal(
             f"This Clerk has no connection to read the Alpaca account as it sends, {unconfirmed}"
         )
     if isinstance(observed, BrokerError):
-        return _unproven(
-            "The Clerk could not read the Alpaca account just before sending this flatten "
-            f"({observed}), {unconfirmed}"
-        )
+        return _account_unread(observed, unconfirmed)
     broker_orders, broker_positions = observed
+    if isinstance(broker_positions, BrokerError):
+        return _account_unread(broker_positions, unconfirmed)
     if open_order_snapshot_is_full(broker_orders):
         return _unproven(
             f"Alpaca returned {len(broker_orders)} open orders, the most one read returns, "
             f"so there may be more than the Clerk saw, and {unconfirmed}"
         )
+    for order in broker_orders:
+        if broker_order_in_flight(order) and not order.symbol.strip():
+            return _unproven(
+                f"An open order at Alpaca ({order.order_id}) names no symbol the Clerk could read, "
+                f"so whether it is working on {symbol} is unknown, and {unconfirmed} "
+                "A flatten on this account is refused for as long as that order is open at Alpaca."
+            )
     other_side = OrderSide.BUY if selling else OrderSide.SELL
     competing = [
         order
@@ -166,6 +184,12 @@ def flatten_cover_refusal(
                 f"a finite number, so how much of the position it takes is unknown, and {unconfirmed}"
             )
         competing_unfilled += max(order.quantity - order.filled_quantity, 0.0)
+    for held in broker_positions:
+        if held.symbol.upper() == symbol.upper() and held.side.lower() not in _POSITION_SIDES:
+            return _unproven(
+                f"Alpaca reported its {symbol} position with the side {held.side!r}, which is "
+                f"neither long nor short, {unconfirmed}"
+            )
     position = broker_quantity_by_symbol(broker_positions).get(symbol.upper(), 0.0)
     if not math.isfinite(position):
         return _unproven(
@@ -200,7 +224,7 @@ def flatten_cover_refusal(
 
 
 def account_lists_order(
-    observed: AccountOpenWork | BrokerError | None, *, client_order_id: str
+    observed: OpenOrdersThenPositions | BrokerError | None, *, client_order_id: str
 ) -> bool:
     """Whether the account read lists an order carrying ``client_order_id`` (#2839).
 
@@ -208,11 +232,22 @@ def account_lists_order(
     the read shows under that identity reached the broker, after an exact
     lookup answered that it had not. It is the sale itself, not a competitor
     for the position, so the caller neither sends it again nor refuses it.
+
+    Answered from the open orders alone, whatever the positions read after
+    them came to: a failed positions read refuses a send, and must never hide
+    an order that is already working.
     """
     if observed is None or isinstance(observed, BrokerError):
         return False
     broker_orders, _broker_positions = observed
     return any(order.client_order_id == client_order_id for order in broker_orders)
+
+
+def _account_unread(error: BrokerError, unconfirmed: str) -> LegRefusal:
+    return _unproven(
+        "The Clerk could not read the Alpaca account just before sending this flatten "
+        f"({error}), {unconfirmed}"
+    )
 
 
 def _unproven(explanation: str) -> LegRefusal:

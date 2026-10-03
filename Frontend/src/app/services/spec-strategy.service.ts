@@ -3,6 +3,7 @@ import { Injectable, inject, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
 import { environment } from '../../environments/environment';
+import type { FillModeName } from '../models/fill-mode';
 import {
   SpecBacktestRequest,
   SpecStrategyBacktestResult,
@@ -14,7 +15,7 @@ export interface SpecBacktestRunOptions {
   startDate: string;
   endDate: string;
   initialCash?: number;
-  fillMode?: 'signal_bar_close' | 'next_bar_open';
+  fillMode?: FillModeName;
   commissionPerOrder?: number;
 }
 

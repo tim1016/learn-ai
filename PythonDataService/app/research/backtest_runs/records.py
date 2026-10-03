@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal
 
+from app.engine.execution.fill_mode_names import UNRECORDED_FILL_MODE
 from app.research.backtest_runs.evidence_provenance import RunEvidenceProvenance
 from app.research.documentation.analytical_metric_catalog import metric_documentation_context_for_source
 from app.utils.session_anchors import et_midnight_ms
@@ -38,7 +39,7 @@ REQUESTED_ENGINES_BY_SOURCE: Mapping[str, tuple[str, ...]] = {
     "engine": ("python", "both"),
     "lean-sidecar": ("lean", "both"),
 }
-DEFAULT_FILL_MODE_BY_SOURCE: Mapping[str, str] = {"engine": "signal_bar_close", "lean-sidecar": "lean-sidecar"}
+DEFAULT_FILL_MODE_BY_SOURCE: Mapping[str, str] = {"engine": UNRECORDED_FILL_MODE, "lean-sidecar": "lean-sidecar"}
 
 
 class RunPayloadError(ValueError):

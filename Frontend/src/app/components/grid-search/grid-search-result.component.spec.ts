@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GridSearchResultComponent } from './grid-search-result.component';
+import { RESEARCH_DEFAULT_FILL_MODE } from '../../models/fill-mode';
+import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import { JobsService } from '../../services/jobs.service';
 import { GridSearchService } from './grid-search.service';
 import { gridSearchDetail as detail } from './testing/fixtures';
@@ -48,6 +50,14 @@ describe('GridSearchResultComponent', () => {
     await waitFor(() => expect(screen.getByRole('note').textContent).toMatch(/in-sample/i));
     const link = screen.getByRole('link', { name: /walk-forward/i }) as HTMLAnchorElement;
     expect(link.getAttribute('href')).toContain('/walk-forward?search=abc');
+  });
+
+  it.each(['signal_bar_close', 'next_bar_open'] as const)("names the fill rule the search ran under (%s), not today's default (#2599)", async (ranUnder) => {
+    const get = vi.fn(async (_id: string) => detail({ request: { ...detail().request, fill_mode: ranUnder } }));
+    await renderResult({ get });
+
+    expect(await screen.findByText(new RegExp(formatReceiptLabel(ranUnder)))).not.toBeNull();
+    expect(screen.queryByText(new RegExp(formatReceiptLabel(RESEARCH_DEFAULT_FILL_MODE)))).toBeNull();
   });
 
   it('marks the leader, the ranking measure, and labels zero-trade and failed cells', async () => {

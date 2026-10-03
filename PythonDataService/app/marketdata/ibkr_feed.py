@@ -47,6 +47,7 @@ from app.broker.ibkr.bars import (
     IBKRBarSubscriptionStalled,
     MinuteAssembler,
     fetch_historical_minute_bars,
+    historical_bars_timeout_s,
     stream_minute_bars,
 )
 from app.broker.ibkr.client import BrokerError, IbkrClient, NotConnectedError
@@ -490,6 +491,8 @@ class IbkrMarketDataFeed:
                 normalized_symbol,
                 duration=f"{lookback_days} D",
                 use_rth=use_rth,
+                # A long lookback takes IBKR longer to serve (#2841).
+                timeout_s=historical_bars_timeout_s(lookback_days),
             )
         except IBKRImpossibleBarError as exc:
             # A bar that cannot be real is corruption the retry cannot cure, so
