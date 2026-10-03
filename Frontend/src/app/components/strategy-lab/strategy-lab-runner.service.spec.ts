@@ -410,7 +410,7 @@ describe("StrategyLab configuration and runner", () => {
     it.each([
       // A launch link naming only the start keeps it and ends on the last readable day.
       { given: { from: "2026-07-01" }, expected: { from: "2026-07-01", to: "2026-09-18" } },
-      // One naming only the end keeps it and starts a month before: 2026-05-30 is a Saturday, so Monday.
+      // One naming only the end keeps it and starts a month before: the month ending 2026-06-30 starts on 2026-06-01.
       { given: { to: "2026-06-30" }, expected: { from: "2026-06-01", to: "2026-06-30" } },
     ])("keeps the one date a launch link names and fills the other: $given", ({ given, expected }) => {
       const store = labBeforeTheCalendar();
