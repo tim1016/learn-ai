@@ -35,6 +35,17 @@ full, and one Alpaca replaced whose replacement is not among the orders
 read. The EXIT fails releasably, under an ``EXIT_NOT_FLAT`` notice, and the
 attributed quantity is never changed.
 
+The order Alpaca answered this order's send with, under another client order
+id, is not one more ended order the position answers for. What it sold was
+sold for this EXIT, and shares the account holds outside the Clerk's records
+can make the position agree all the same: ended as not sent, the EXIT would
+release a position already sold, and the Clerk would sell it again. So for
+such an order "no such order" rests on the Clerk's own read of that order,
+by the client order id Alpaca answered under, in both rounds. It settles
+only when that order was read, has ended, and filled nothing. One that
+filled anything, is still working, was replaced, or could not be read
+refuses, each in its own words.
+
 Attestation ``exists`` -- "Alpaca shows it, under this Alpaca order id". The
 Clerk reads that order by its broker id and takes it up only when it is this
 order: it carries exactly the client order id the Clerk sent, and the
@@ -44,8 +55,9 @@ followed, a fill is credited once, an order that ended unfilled fails the
 EXIT through ``EXIT_NOT_FLAT``. A wrong id, another bot's order, or an order
 under another client order id is refused. Taking up an order Alpaca booked
 under another client order id is not done here: while such an order works,
-neither attestation settles this one, and once it has ended "no such order"
-does.
+neither attestation settles this one; once it has ended without selling
+anything, "no such order" does; and once it has sold anything, neither does,
+and the Clerk keeps the position held.
 
 A settlement runs under the EXIT's exclusive operation claim, the one
 ``resolve_exit`` takes: a pass of the Clerk that meets it defers the EXIT,
@@ -214,6 +226,10 @@ class _AccountRead:
     open_orders: list[BrokerOrder]
     positions: list[BrokerPosition]
     orders_since: list[BrokerOrder]
+    # The exact lookup of the order Alpaca answered this order's send with,
+    # under another client order id; ``None`` when Alpaca shows none under
+    # that id, and for a send it did not answer so.
+    answered_order: BrokerOrder | None = None
 
 
 @dataclass(frozen=True)
@@ -247,6 +263,9 @@ class _AbsenceProof:
     # Orders on this order's side of its symbol that the Clerk did not place
     # and that had ended, as the later round read them.
     ended_foreign_orders: tuple[EndedForeignOrder, ...]
+    # The order Alpaca answered this order's send with, under another client
+    # order id, as the later round read it: ended, with nothing filled.
+    answered_as_order: EndedForeignOrder | None
 
     @property
     def account_agrees(self) -> bool:
@@ -289,7 +308,11 @@ class _AlpacaReads:
             self.around_each_read()
 
     async def order_sent_as(self, client_order_id: str) -> BrokerOrder | None:
-        """The order's exact lookup by the client order id it was sent under."""
+        """The exact lookup of the order Alpaca has under ``client_order_id``.
+
+        Asked for the client order id this order was sent under, and for the
+        other one Alpaca answered its send under, when it did.
+        """
         observed = await self._answer(lambda: self.trade.get_order_by_client_order_id(client_order_id))
         if observed is not None and observed.client_order_id != client_order_id:
             raise _broker_unreadable(
@@ -549,7 +572,9 @@ def _require_settleable(
     its latest send being part of it. Its bot must still be stopped. And
     "no such order" waits out the submit-absence wait after the latest send:
     an order sent moments ago may be at Alpaca and not yet show in a read,
-    which the Clerk's own re-send waits out too.
+    which the Clerk's own re-send waits out too. It is refused outright for
+    a send Alpaca answered with an order that names no client order id: the
+    Clerk has no id to read that order by.
     """
     current = next(
         (
@@ -579,6 +604,8 @@ def _require_settleable(
         )
     if kind != "absent":
         return
+    if presented.answered_as_client_order_id == "":
+        raise _answered_order_not_read(presented, None)
     settles_at_ms = unknown_order_lookup_settles_at_ms(presented)
     now_ms = repo.clock()
     if now_ms < settles_at_ms:
@@ -600,15 +627,22 @@ async def _read_account(
     own exact lookup answering. The open orders are the whole account's; the
     orders since are asked for in the closing order's symbol only, so a busy
     account's other symbols cannot crowd them out.
+
+    A send Alpaca answered under another client order id is followed by the
+    exact lookup of that id too: what that order did is what "no such order"
+    rests on (:func:`_answered_order_sold_nothing`).
     """
     exact = await alpaca.order_sent_as(presented.order_ref)
     if exact is not None:
         raise _order_is_at_alpaca(exact)
+    answered_as = presented.answered_as_client_order_id
+    answered_order = await alpaca.order_sent_as(answered_as) if answered_as else None
     open_orders, positions = await alpaca.open_orders_then_positions()
     return _AccountRead(
         open_orders=open_orders,
         positions=positions,
         orders_since=await alpaca.symbol_orders_since(presented.symbol.upper(), since_ms),
+        answered_order=answered_order,
     )
 
 
@@ -674,12 +708,18 @@ def _ended_foreign_orders(
     - an order Alpaca replaced, when the order that replaced it is not among
       those read: that one may be working where no read shows it.
 
+    The order Alpaca answered this order's send with is not among them: the
+    position does not answer for it, its own read does
+    (:func:`_answered_order_sold_nothing`).
+
     Called once every order in the round is known to have ended.
     """
     symbol, side = presented.symbol.upper(), presented.side.lower()
     read_ids = {order.order_id for order in (*round_.open_orders, *round_.orders_since)}
     ended: list[EndedForeignOrder] = []
     for order in round_.orders_since:
+        if _is_the_answered_order(presented, order):
+            continue
         # The Clerk's own orders are captured by their client order id, a
         # manual order Alpaca replaced by its broker order id (#2656).
         if order.client_order_id in known_refs or repo.manual_chain_order_ref(order.order_id) is not None:
@@ -713,19 +753,128 @@ def _ended_foreign_orders(
     return tuple(ended)
 
 
-def _answered_as_another_order(presented: ProjectedUnknownExitOrder) -> str:
-    """What a refusal adds for an order whose send Alpaca answered under another client order id.
+def _is_the_answered_order(presented: ProjectedUnknownExitOrder, order: BrokerOrder) -> bool:
+    """Whether ``order`` is the one Alpaca answered this order's send with, under another client order id."""
+    answered_as = presented.answered_as_client_order_id
+    return bool(answered_as) and order.client_order_id == answered_as
 
-    Such an order is offered for settling at once, and while the order
-    Alpaca answered with is working neither attestation can settle it:
-    taking up an order under another client order id is not built yet.
+
+_KEEPS_THE_POSITION_HELD = (
+    "The Clerk cannot take up an order under another id yet, so it keeps the position held."
+)
+
+
+def _traded(side: str) -> str:
+    return "sold" if side.lower() == "sell" else "bought"
+
+
+def _trading(side: str) -> str:
+    return "selling" if side.lower() == "sell" else "buying"
+
+
+def _answered_order_not_read(
+    presented: ProjectedUnknownExitOrder, unreadable: BrokerOrder | None
+) -> UnknownOrderSettlementRefused:
+    """The refusal for an answered-with order the Clerk has no read of: none found, no id to ask by, or one it could not read in full."""
+    answered_as = presented.answered_as_client_order_id
+    if not answered_as:
+        found = (
+            "Alpaca answered this order's send with an order that names no client order id, so "
+            "the Clerk has no id to read that order by and cannot tell what it did."
+        )
+    elif unreadable is None:
+        found = (
+            "Alpaca answered this order's send with another order, under client order id "
+            f"{answered_as!r}, and the Clerk found no order under that id at Alpaca, so it cannot "
+            "tell what that order did."
+        )
+    else:
+        found = (
+            "Alpaca answered this order's send with another order (client order id "
+            f"{answered_as!r}, Alpaca order id {unreadable.order_id!r}), and the Clerk could not "
+            "read all of that order, so it cannot tell what it did."
+        )
+    return UnknownOrderSettlementRefused(
+        "ANSWERED_ORDER_NOT_READ",
+        f"{found} This order cannot be settled as absent. {_KEEPS_THE_POSITION_HELD} Nothing "
+        "was changed.",
+    )
+
+
+def _answered_order_sold_nothing(
+    presented: ProjectedUnknownExitOrder, round_: _AccountRead
+) -> EndedForeignOrder | None:
+    """Refuse unless the order Alpaca answered this order's send with was read, has ended, and filled nothing.
+
+    ``None`` for a send Alpaca did not answer under another client order id.
+
+    That order is not one more ended order whose sale the position answers
+    for. What it sold was sold for this EXIT, and shares the account holds
+    outside the Clerk's records can make the position agree all the same:
+    Alpaca held 20 against the Clerk's 10 before it sold 10, and holds 10
+    against 10 after. Ended as not sent, the EXIT would release a position
+    already sold and the Clerk would sell it a second time. So the position
+    is never asked about it. Every read of the round that shows the order --
+    its own exact lookup, and its row among the orders listed -- must show it
+    ended with nothing filled, and at least one read must show it.
+
+    An order Alpaca replaced refuses too: the order that replaced it is under
+    yet another id, and may be working or may have sold.
     """
-    if presented.answered_as_client_order_id is None:
-        return ""
-    return (
-        " Alpaca answered this order's send under another client order id, so the working order "
-        "may be this one, and the Clerk cannot take up an order under another id yet. Once that "
-        'order has ended, "Alpaca has no such order" settles this one.'
+    answered_as = presented.answered_as_client_order_id
+    if answered_as is None:
+        return None
+    shown = [
+        order
+        for order in (round_.answered_order, *round_.open_orders, *round_.orders_since)
+        if order is not None and _is_the_answered_order(presented, order)
+    ]
+    if not shown:
+        raise _answered_order_not_read(presented, None)
+    for order in shown:
+        named = all(value.strip() for value in (order.order_id, order.status, order.side))
+        if order.unreadable_fields or not named or not math.isfinite(order.filled_quantity):
+            raise _answered_order_not_read(presented, order)
+        the_order = (
+            "Alpaca answered this order's send with another order (client order id "
+            f"{answered_as!r}, Alpaca order id {order.order_id!r})"
+        )
+        symbol = order.symbol.strip().upper() or presented.symbol.upper()
+        status = order.status.lower()
+        if broker_order_in_flight(order):
+            raise UnknownOrderSettlementRefused(
+                "ANSWERED_ORDER_WORKING",
+                f"{the_order}, and that order is still working at Alpaca ({order.status}, "
+                f"{order.filled_quantity:g} filled). This order cannot be settled as absent while "
+                f"that one can still fill. {_KEEPS_THE_POSITION_HELD} Once that order has ended "
+                f'without {_trading(order.side)} anything, "Alpaca has no such order" settles '
+                "this one. Nothing was changed.",
+            )
+        if status == "filled" or position_quantity_is_nonzero(order.filled_quantity):
+            raise UnknownOrderSettlementRefused(
+                "ANSWERED_ORDER_FILLED",
+                f"{the_order}, and that order {_traded(order.side)} {order.filled_quantity:g} "
+                f"{symbol} under that id ({order.status}). This order cannot be settled as "
+                f"absent. {_KEEPS_THE_POSITION_HELD} Nothing was changed.",
+            )
+        if status == "replaced":
+            replacement = (
+                f"with Alpaca order {order.replaced_by!r}"
+                if (order.replaced_by or "").strip()
+                else "and does not say with which order"
+            )
+            raise UnknownOrderSettlementRefused(
+                "ANSWERED_ORDER_REPLACED",
+                f"{the_order}, and Alpaca has since replaced that order {replacement}. The order "
+                f"that replaced it may be working or may have {_traded(order.side)}, and the "
+                "Clerk does not follow it. This order cannot be settled as absent. "
+                f"{_KEEPS_THE_POSITION_HELD} Nothing was changed.",
+            )
+    ended = shown[0]
+    return EndedForeignOrder(
+        broker_order_id=ended.order_id,
+        broker_state=ended.status,
+        filled_quantity=ended.filled_quantity,
     )
 
 
@@ -739,11 +888,14 @@ def _prove_absent(
     No order may carry this order's client order id, and none may be working
     on its symbol, on either side. An order that has ended is recorded, not
     refused (:func:`_ended_foreign_orders`): whatever it sold is in the
-    position, and the position rule below is what answers for it.
+    position, and the position rule below is what answers for it. The order
+    Alpaca answered this order's send with is the exception, and must have
+    ended with nothing filled (:func:`_answered_order_sold_nothing`).
     """
     symbol = presented.symbol.upper()
     known_refs = repo.all_order_refs()
     ended_foreign: tuple[EndedForeignOrder, ...] = ()
+    answered_order: EndedForeignOrder | None = None
     for round_ in rounds:
         if open_order_snapshot_is_full(round_.open_orders):
             raise UnknownOrderSettlementRefused(
@@ -755,14 +907,14 @@ def _prove_absent(
         for order in listed:
             if order.client_order_id == presented.order_ref:
                 raise _order_is_at_alpaca(order)
+        answered_order = _answered_order_sold_nothing(presented, round_)
         for order in listed:
             if broker_order_in_flight(order) and _may_be(order, symbol=symbol):
                 raise UnknownOrderSettlementRefused(
                     "BROKER_ORDER_WORKING",
                     f"An order for {symbol} is working at Alpaca (Alpaca order id {order.order_id!r}, "
                     f"{order.status or 'no status'}). This order cannot be settled as absent while an "
-                    f"order is working on its symbol.{_answered_as_another_order(presented)} Nothing "
-                    "was changed.",
+                    "order is working on its symbol. Nothing was changed.",
                 )
         ended_foreign = _ended_foreign_orders(repo, presented, round_, known_refs)
     earlier, later = (
@@ -792,6 +944,7 @@ def _prove_absent(
         broker_qty=later.broker_qty,
         account_attributed_qty=later.attributed_qty,
         ended_foreign_orders=ended_foreign,
+        answered_as_order=answered_order,
     )
     if not proof.account_agrees and not _open_drift_names(repo, symbol):
         raise UnknownOrderSettlementRefused(
@@ -926,6 +1079,7 @@ def _commit_absent(
             broker_qty=proof.broker_qty,
             account_attributed_qty=proof.account_attributed_qty,
             ended_foreign_orders=proof.ended_foreign_orders or None,
+            answered_as_order=proof.answered_as_order,
             exit_not_flat=None if notice is None else json.loads(notice.to_facts_json()),
         ),
         observed_at_ms=reads.observed_at_ms,
@@ -961,16 +1115,21 @@ def _absence_lines(presented: ProjectedUnknownExitOrder, proof: _AbsenceProof) -
             "settling, write off the missing shares if Alpaca does not hold them."
         )
     )
+    # The order Alpaca answered the send with has a line of its own; the
+    # sentence about orders the Clerk did not place is about every other one.
+    # Orders the Clerk placed itself, for another bot or by hand, are none of
+    # them, so that sentence says "that the Clerk did not place" either way.
+    answered = proof.answered_as_order
+    other = "" if answered is None else "other "
     if not proof.ended_foreign_orders:
-        # Orders the Clerk placed itself, for another bot or by hand, may be
-        # listed too: the sentence is only about those it did not place.
         others = (
-            f"Since this one was sent, Alpaca shows no order to {side} {symbol} that the Clerk "
-            "did not place."
+            f"Since this one was sent, Alpaca shows no {other}order to {side} {symbol} that the "
+            "Clerk did not place."
         )
     else:
+        count = len(proof.ended_foreign_orders)
         others = (
-            f"Since this one was sent, Alpaca shows {_count_of_orders(len(proof.ended_foreign_orders))} "
+            f"Since this one was sent, Alpaca shows {count} {other}{'order' if count == 1 else 'orders'} "
             f"to {side} {symbol} that the Clerk did not place, all ended: "
             + "; ".join(
                 f"Alpaca order {order.broker_order_id}, {order.broker_state}, "
@@ -981,14 +1140,19 @@ def _absence_lines(presented: ProjectedUnknownExitOrder, proof: _AbsenceProof) -
         )
     return (
         "Alpaca shows no order under this order's id.",
+        *(
+            ()
+            if answered is None
+            else (
+                f"The order Alpaca answered this order's send with (Alpaca order "
+                f"{answered.broker_order_id}) has ended, {answered.broker_state}, without "
+                f"{_trading(side)} anything.",
+            )
+        ),
         f"No order is working on {symbol}.",
         others,
         position,
     )
-
-
-def _count_of_orders(count: int) -> str:
-    return "1 order" if count == 1 else f"{count} orders"
 
 
 def _append_attestation(
@@ -1089,7 +1253,8 @@ def _require_same_order(presented: ProjectedUnknownExitOrder, observed: BrokerOr
                 f"client order id {observed.client_order_id!r} and not the {presented.order_ref!r} "
                 "the Clerk sent. The Clerk cannot take up an order under another client order id "
                 "yet. While that order is working, this one cannot be settled either way; once it "
-                'has ended, "Alpaca has no such order" settles it. Nothing was changed.',
+                f"has ended without {_trading(presented.side)} anything, "
+                '"Alpaca has no such order" settles it. Nothing was changed.',
             )
         raise UnknownOrderSettlementRefused(
             "NOT_THIS_ORDER",

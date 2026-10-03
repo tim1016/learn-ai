@@ -810,7 +810,10 @@ class OrderOutcomeAttestedFacts:
       are the orders among them, on this order's side, that the Clerk did
       not place and that had ended: what the operator and the Clerk were
       looking at when the order was ended as not sent. Recorded only when
-      there were any.
+      there were any. ``answered_as_order`` is the order Alpaca answered
+      this order's send with, under another client order id, as the Clerk
+      read it: ended, with nothing filled. Recorded only for an order whose
+      send was answered so, and never among ``ended_foreign_orders``.
     - ``exists``: the broker order id that was read, its state and its
       cumulative filled quantity as read.
 
@@ -840,6 +843,7 @@ class OrderOutcomeAttestedFacts:
     broker_qty: float | None = None
     account_attributed_qty: float | None = None
     ended_foreign_orders: tuple[EndedForeignOrder, ...] | None = None
+    answered_as_order: EndedForeignOrder | None = None
     exit_not_flat: dict[str, Any] | None = None
     broker_order_id: str | None = None
     broker_state: str | None = None
@@ -855,7 +859,12 @@ class OrderOutcomeAttestedFacts:
             if self.attestation == "absent"
             else (
                 _EXISTS_ATTESTATION_FIELDS,
-                (*_ABSENT_ATTESTATION_FIELDS, "ended_foreign_orders", "exit_not_flat"),
+                (
+                    *_ABSENT_ATTESTATION_FIELDS,
+                    "ended_foreign_orders",
+                    "answered_as_order",
+                    "exit_not_flat",
+                ),
             )
         )
         if any(getattr(self, name) is None for name in recorded) or any(
@@ -876,6 +885,8 @@ class OrderOutcomeAttestedFacts:
             facts["ended_foreign_orders"] = tuple(
                 EndedForeignOrder(**order) for order in facts["ended_foreign_orders"]
             )
+        if facts.get("answered_as_order") is not None:
+            facts["answered_as_order"] = EndedForeignOrder(**facts["answered_as_order"])
         return cls(**facts)
 
 

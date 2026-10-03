@@ -318,5 +318,8 @@ ledger holds an attestation that did not take effect. For this one state the
 at Alpaca, then acts through the Clerk.
 
 Known gap: an order Alpaca answered under another client order id cannot be
-taken up yet. While that order is working neither attestation settles the
-EXIT; once it has ended, "no such order" does.
+taken up yet. "No such order" rests on the Clerk's own read of that order.
+While it is working neither attestation settles the EXIT; once it has ended
+without selling anything, "no such order" does. Once it has sold anything,
+was replaced, or cannot be read, neither attestation settles the EXIT and
+the Clerk keeps the position held.

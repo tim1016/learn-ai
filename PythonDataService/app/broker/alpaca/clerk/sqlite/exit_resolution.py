@@ -2453,8 +2453,9 @@ def attested_absent_exit_notice(
         return None
     settled = (
         f"The Clerk could not confirm the order to {_the_reduction(created)}. An operator said "
-        "Alpaca has no such order, the Clerk's own reads of Alpaca found none, and the exit was "
-        f"ended as not sent; {held:g} {created.symbol} is still held."
+        "Alpaca has no such order, the Clerk's own reads of Alpaca found no order under its "
+        f"client order id and none working on {created.symbol}, and the exit was ended as not "
+        f"sent; {held:g} {created.symbol} is still held."
     )
     if position_quantity_is_nonzero(broker_qty - account_attributed_qty):
         explanation = (
