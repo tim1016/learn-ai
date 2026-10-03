@@ -344,12 +344,15 @@ def test_a_detail_run_reads_back_as_cumulative_return_drawdown_and_months() -> N
     # The candidate read draws the development run's concentration curve from its trades, held back like the
     # stored measure for evidence recorded before it; this one trade nets $10 of the run's $2,010.
     stored = {"key": "all_period", "point": {"symbol": "SPY"}, "concentration": {"status": "missing", "reason": "r"}}
-    read = candidate_detail(stored, strategy_key="ema_crossover_signal", development=record, exam=None, commission_per_order=0.0)
+    floors = TradeFloors(protocol_from_request(plan_request("SPY")), {})
+    window = (record.window_start_ms, record.window_end_ms)
+    read = candidate_detail(stored, strategy_key="ema_crossover_signal", development=record, exam=None, commission_per_order=0.0, floors=floors, development_window=window)
     assert read["development"]["concentration_curve"]["reason"].startswith("Its trades add up to $10.00")
     # The trade charts read the same trades, so they say the same.
     assert read["development"]["trade_charts"]["reason"] == read["development"]["concentration_curve"]["reason"]
     legacy = candidate_detail(
-        {"key": "all_period", "point": {"symbol": "SPY"}}, strategy_key="ema_crossover_signal", development=record, exam=None, commission_per_order=0.0
+        {"key": "all_period", "point": {"symbol": "SPY"}}, strategy_key="ema_crossover_signal", development=record, exam=None, commission_per_order=0.0,
+        floors=floors, development_window=window,
     )
     assert legacy["development"]["concentration_curve"] == {"points": [], "best_count": None, "reason": NOT_MEASURED}
 

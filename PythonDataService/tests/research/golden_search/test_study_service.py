@@ -1053,6 +1053,11 @@ async def test_candidate_detail_and_the_evaluation_ledger_read_back_after_the_ex
     assert charts["status"] == "measured" and [trade["bars_held"] for trade in charts["trades"]] == [4, 4]
     assert charts["entry_rsi"]["status"] == "measured" and chosen["exam"]["trade_charts"] is None
     assert chosen["exam"]["window"] == {"start_ms": row.protocol["final_start_ms"], "end_ms": row.protocol["final_end_ms"]}
+    # The final test sits beside development, measure by measure, with the change.
+    comparison = {item["key"]: item for item in chosen["exam"]["comparison"]}
+    sharpe = comparison["sharpe_ratio"]
+    assert sharpe["change"] == pytest.approx(sharpe["final"] - sharpe["development"], abs=1e-9, rel=0)
+    assert chosen["development"]["comparison"] is None
     assert (await service.candidate(row.id, "recent"))["exam"] is not None  # the same point
     assert (await service.candidate(row.id, "incumbent"))["exam"] is not None  # the benchmark
 

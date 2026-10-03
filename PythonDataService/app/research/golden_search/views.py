@@ -13,7 +13,8 @@ Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Compare
   ``app/research/golden_search/evidence.py``.
 Canonical implementation: this file (shapes); evidence.py (series math);
   compare_measures.py (the Compare charts' measures); concentration.py (the
-  concentration curve); trade_charts.py (the trade charts).
+  concentration curve); trade_charts.py (the trade charts); final_measures.py
+  (the final test against development).
 Validated against: tests/research/golden_search/test_views.py.
 """
 
@@ -34,6 +35,7 @@ from app.research.golden_search.concentration import (
 from app.research.golden_search.decision_summary import decision_summaries
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, scalar
 from app.research.golden_search.evidence import CANDIDATE_LABELS, drawdown_series, monthly_results
+from app.research.golden_search.final_measures import final_comparison
 from app.research.golden_search.guidance import (
     candidate_flags,
     candidate_guidance,
@@ -468,8 +470,10 @@ def candidate_detail(
     development: EvaluationRecord | None,
     exam: EvaluationRecord | None,
     commission_per_order: float,
+    floors: TradeFloors,
+    development_window: tuple[int, int],
 ) -> dict[str, Any]:
-    """The stored candidate's development run, with its concentration curve and trade charts, and its final-test run."""
+    """The stored candidate's development run, with its concentration curve and trade charts, and its final-test run with its comparison to development."""
     point = stored["point"]
     run = None
     if development is not None:
@@ -487,10 +491,20 @@ def candidate_detail(
             bar_span_ms=decision_bar_span_ms(strategy_key, point),
             rsi_gates=entry_rsi_gates(strategy_key, point),
         )
-        run = {**run_detail(development), "concentration_curve": curve, "trade_charts": charts}
+        run = {**run_detail(development), "concentration_curve": curve, "trade_charts": charts, "comparison": None}
     return {
         "candidate_key": stored["key"],
         "point": dict(point),
         "development": run,
-        "exam": None if exam is None else {**run_detail(exam), "concentration_curve": None, "trade_charts": None},
+        "exam": None if exam is None else {**run_detail(exam), "concentration_curve": None, "trade_charts": None, "comparison": _comparison(stored, exam, floors, development_window)},
     }
+
+
+def _comparison(stored: Mapping[str, Any], exam: EvaluationRecord, floors: TradeFloors, development_window: tuple[int, int]) -> list[dict[str, Any]]:
+    """The final-test run's measures beside the candidate's stored development metrics, each window over its own trading years."""
+    return final_comparison(
+        stored.get("development_metrics"),
+        metrics_of(exam).as_dict(),
+        development_years=floors.trading_years(development_window),
+        final_years=floors.trading_years((exam.window_start_ms, exam.window_end_ms)),
+    )

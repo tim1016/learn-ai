@@ -14167,6 +14167,31 @@ export interface components {
              */
             state: "not_opened" | "previously_used" | "history_unknown";
         };
+        /** GoldenSearchFinalMeasure */
+        GoldenSearchFinalMeasure: {
+            /**
+             * Change
+             * @description final − development; null unless both exist.
+             */
+            change: number | null;
+            /**
+             * Development
+             * @description Over the development period; null when its run failed or did not record it.
+             */
+            development: number | null;
+            /**
+             * Final
+             * @description Over the final test.
+             */
+            final: number | null;
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "annualized_return" | "sharpe_ratio" | "max_drawdown_pct" | "trades_per_year";
+            /** Label */
+            label: string;
+        };
         /** GoldenSearchFinding */
         GoldenSearchFinding: {
             /** Code */
@@ -15171,6 +15196,11 @@ export interface components {
         };
         /** GoldenSearchRunDetail */
         GoldenSearchRunDetail: {
+            /**
+             * Comparison
+             * @description A final-test run's measures beside development's; null on a development run.
+             */
+            comparison?: components["schemas"]["GoldenSearchFinalMeasure"][] | null;
             /** @description The development run's; null on a final-test run. */
             concentration_curve: components["schemas"]["GoldenSearchConcentrationCurve"] | null;
             /** Cumulative Return */
