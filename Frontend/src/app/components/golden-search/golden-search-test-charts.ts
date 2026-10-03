@@ -305,18 +305,21 @@ export function parameterDriftSpec(charts: TestOverTimeCharts): ChartSpec {
 
 /** The chart's height for `count` knobs: a row each. */
 export function driftHeight(count: number): number {
-  return 24 + DRIFT_ROW * Math.max(count, 1);
+  return 40 + DRIFT_ROW * Math.max(count, 1);
 }
 
 function driftOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOption {
   const knobs = charts.drift;
   const folds = charts.folds.map(foldName);
   const reference = (knob: KnobDrift) => [
-    ...(knob.all_period === null ? [] : [{ yAxis: knob.all_period, name: 'all-period', lineStyle: { color: theme.candidates.all_period, type: 'dashed' as const } }]),
-    { yAxis: knob.current, name: 'current', lineStyle: { color: theme.candidates.incumbent, type: 'dotted' as const } },
+    // Labels above and below their lines, so close values never print over each other.
+    ...(knob.all_period === null
+      ? []
+      : [{ yAxis: knob.all_period, name: 'all-period', lineStyle: { color: theme.candidates.all_period, type: 'dashed' as const }, label: { position: 'insideEndTop' as const } }]),
+    { yAxis: knob.current, name: 'current', lineStyle: { color: theme.candidates.incumbent, type: 'dotted' as const }, label: { position: 'insideEndBottom' as const } },
   ];
   return {
-    grid: knobs.map((_, i) => ({ left: 56, right: 88, top: 20 + i * DRIFT_ROW, height: DRIFT_ROW - 44 })),
+    grid: knobs.map((_, i) => ({ left: 56, right: 24, top: 32 + i * DRIFT_ROW, height: DRIFT_ROW - 48 })),
     tooltip: {
       ...tooltipFrame(theme),
       trigger: 'item',
@@ -368,7 +371,7 @@ function driftOption(charts: TestOverTimeCharts, theme: ChartTheme): ChartOption
       markLine: {
         silent: true,
         symbol: 'none',
-        label: { position: 'end' as const, color: theme.textSecondary, fontSize: 10, formatter: (params: { name?: string }) => params.name ?? '' },
+        label: { color: theme.textSecondary, fontSize: 10, formatter: (params: { name?: string }) => params.name ?? '' },
         data: reference(knob),
       },
     })),
