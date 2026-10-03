@@ -1,4 +1,4 @@
-export { TickerRangePickerComponent, type RunDataSource } from "./ticker-range-picker.component";
+export { TickerRangePickerComponent } from "./ticker-range-picker.component";
 export {
   type AdvisoryAction,
   type Advisory,

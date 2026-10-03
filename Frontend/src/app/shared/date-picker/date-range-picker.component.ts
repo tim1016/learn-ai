@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, linkedSignal, model, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, linkedSignal, model, output, untracked } from '@angular/core';
 import { Popover } from 'primeng/popover';
 import { Tooltip } from 'primeng/tooltip';
 
@@ -42,15 +42,10 @@ export class DateRangePickerComponent {
   readonly ranges = input<readonly QuickRangeKey[]>(QUICK_RANGES);
   /** Whether both ends must be trading sessions. */
   readonly sessionsOnly = input(true);
-  /**
-   * The quick range to start on when the host hands over no dates. A host
-   * with no window of its own starts empty and names one, so its first
-   * window comes from the calendar rather than from day arithmetic that
-   * cannot see a holiday.
-   */
-  readonly fallback = input<QuickRangeKey | null>(null);
   /** The group's accessible name. */
   readonly label = input('Date range');
+  /** Both dates after any change, in one event, for a host that keeps them in one value. */
+  readonly changed = output<{ readonly from: string; readonly to: string }>();
 
   protected readonly noteId = `date-range-note-${nextNoteId++}`;
   /** What this picker last handed its host, so its own empty date is not read back as the host clearing the field. */
@@ -69,7 +64,7 @@ export class DateRangePickerComponent {
   protected readonly calendarProblem = computed(() => (this.sessionsOnly() ? this.calendar.problem() : null));
   protected readonly checked = computed(() => checkRange(this.fromText(), this.toText(), { bounds: this.bounds(), sessions: this.sessions() }));
   protected readonly problem = computed(() => this.checked().from.problem ?? this.checked().to.problem);
-  protected readonly offers = computed(() => offerQuickRanges(this.ranges(), this.bounds(), this.calendar.sessions(), this.calendar.nowMs()));
+  protected readonly offers = computed(() => offerQuickRanges(this.ranges(), this.bounds(), this.calendar.sessions(), this.calendar.lastCompleted()));
   protected readonly active = computed(() => activeQuickRange(this.offers(), this.checked().from.date, this.checked().to.date));
 
   /** How many sessions the range holds, and whether the page's data stops short of the market. */
@@ -82,30 +77,23 @@ export class DateRangePickerComponent {
       parts.push(`${count} ${count === 1 ? 'session' : 'sessions'}`);
     }
     const { max, maxReason } = this.bounds();
-    const market = sessions?.lastCompleted(this.calendar.nowMs()) ?? null;
+    const market = this.calendar.lastCompleted();
     if (max !== null && maxReason !== null && market !== null && max < market) parts.push(maxReason);
     return parts.length === 0 ? null : parts.join(' · ');
   });
 
-  /** Whether the fields have held dates yet; the fallback fills them once, never again after a host or a person has. */
-  private seeded = false;
-
   constructor() {
-    effect(() => {
-      const key = this.fallback();
-      if (this.fromText() !== '' || this.toText() !== '') this.seeded = true;
-      if (this.seeded || key === null) return;
-      const [offer] = offerQuickRanges([key], this.bounds(), this.calendar.sessions(), this.calendar.nowMs());
-      if (offer.range === null) return;
-      const { range } = offer;
-      untracked(() => this.setRange(range));
-    });
+    // Reads the host's dates tracked: a host that puts back a date this
+    // picker has refused must be answered with the empty date again.
     effect(() => {
       const { from, to } = this.checked();
+      const held = { from: this.from(), to: this.to() };
+      this.emitted = { from: from.date, to: to.date };
+      if (held.from === from.date && held.to === to.date) return;
       untracked(() => {
-        this.emitted = { from: from.date, to: to.date };
-        if (this.from() !== from.date) this.from.set(from.date);
-        if (this.to() !== to.date) this.to.set(to.date);
+        this.from.set(from.date);
+        this.to.set(to.date);
+        this.changed.emit({ from: from.date, to: to.date });
       });
     });
   }

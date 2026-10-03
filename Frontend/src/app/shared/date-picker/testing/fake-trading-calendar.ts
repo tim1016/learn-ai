@@ -2,8 +2,7 @@ import { signal, type Provider, type Signal } from '@angular/core';
 
 import { etMidnightMs } from '../../date/et-midnight';
 import { addDays, isWeekend, type IsoDate } from '../../date/iso-date';
-import type { DateBounds } from '../date-bounds';
-import { ProviderBoundsService } from '../provider-bounds.service';
+import { ProviderBoundsService, providerBounds } from '../provider-bounds.service';
 import { TradingCalendarService } from '../trading-calendar.service';
 import { TradingSessions } from '../trading-sessions';
 
@@ -25,21 +24,21 @@ export function fakeSessions(from: IsoDate, through: IsoDate, holidays: Readonly
   return new TradingSessions({ session_open_ms: opens, session_close_ms: closes, holidays: closed }, from, through);
 }
 
-/** The surface of ``TradingCalendarService`` a picker reads, with the clock fixed at ``now``. */
+/** The surface of ``TradingCalendarService`` a picker reads. */
 export interface FakeTradingCalendar {
   readonly sessions: Signal<TradingSessions | null>;
   readonly problem: Signal<string | null>;
+  readonly lastCompleted: Signal<IsoDate | null>;
   retry(): void;
-  nowMs(): number;
 }
 
-/** A stand-in for ``TradingCalendarService``: ``now`` is noon ET on that date. */
+/** A stand-in for ``TradingCalendarService`` with the clock fixed at noon ET on ``now``. */
 export function fakeTradingCalendar(sessions: TradingSessions | null, now: IsoDate, problem: string | null = null): FakeTradingCalendar {
   return {
     sessions: signal(sessions),
     problem: signal(problem),
+    lastCompleted: signal(sessions?.lastCompleted(etMidnightMs(now) + 12 * HOUR_MS) ?? null),
     retry: () => undefined,
-    nowMs: () => etMidnightMs(now) + 12 * HOUR_MS,
   };
 }
 
@@ -56,25 +55,17 @@ export const STANDARD_DATE_WORLD = {
   },
 } as const;
 
-/** The provider's bound as ``ProviderBoundsService`` would state it for ``calendar``. */
-export function fakeProviderBounds(calendar: FakeTradingCalendar, floor: IsoDate): DateBounds {
-  const last = calendar.sessions()?.lastCompleted(calendar.nowMs()) ?? null;
-  return {
-    min: floor,
-    max: last,
-    minReason: `The provider serves bars from ${floor}.`,
-    maxReason: last === null ? null : `The last completed session is ${last}.`,
-    unknown: null,
-  };
-}
-
 /**
  * Stands in for the two services every date picker reads, so a host spec
  * mounts no HTTP for the trading calendar or the provider's history floor.
  */
 export function provideFakeDateWorld(calendar: FakeTradingCalendar = fakeTradingCalendar(STANDARD_DATE_WORLD.sessions, STANDARD_DATE_WORLD.now)): Provider[] {
+  const floor = STANDARD_DATE_WORLD.providerFloor;
   return [
     { provide: TradingCalendarService, useValue: calendar },
-    { provide: ProviderBoundsService, useValue: { bounds: signal(fakeProviderBounds(calendar, STANDARD_DATE_WORLD.providerFloor)) } },
+    {
+      provide: ProviderBoundsService,
+      useValue: { bounds: signal(providerBounds(floor, calendar.lastCompleted())), openEnded: signal(providerBounds(floor, null)) },
+    },
   ];
 }

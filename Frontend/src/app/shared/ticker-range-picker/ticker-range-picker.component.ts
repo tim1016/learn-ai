@@ -1,6 +1,6 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, model, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, model } from '@angular/core';
 
-import { ProviderBoundsService, QUICK_RANGES, heldBounds, type DateBounds, type QuickRangeKey } from '../date-picker';
+import { ProviderBoundsService, type DateBounds } from '../date-picker';
 import type { PriceAdjustmentMode } from '../data-lake';
 import { DEFAULT_ADJUSTMENT_MODE } from '../ticker-catalog';
 import { InstrumentCardComponent } from './parts/instrument-card.component';
@@ -19,17 +19,6 @@ export type { SessionMode };
 type TickerRangePickerPresentation = 'card' | 'embedded';
 
 /**
- * What the host's run reads, which decides the dates it can pick.
- *
- * - ``lake``: the run reads the lake as it stands, so the dates are bounded
- *   by the days the lake holds for the instrument.
- * - ``provider``: the run fetches its own bars (or materializes the missing
- *   days before it reads), so the dates are bounded by what the provider
- *   serves, up to the last completed session.
- */
-export type RunDataSource = 'lake' | 'provider';
-
-/**
  * Shared ticker + range picker: the one way a page picks an instrument and
  * its dates together.
  *
@@ -39,9 +28,8 @@ export type RunDataSource = 'lake' | 'provider';
  *   <app-sampling-card>     — resolution toggle + opt-in multiplier + session + auto-fetch
  *
  * Owns the cross-card concerns: the optional outer card frame, the summary
- * header, the advisory cluster, and the date bounds, which it works out from
- * what the host's run reads so no host wires an instrument's held span into
- * its dates by hand.
+ * header and the advisory cluster. The host states what bounds its dates,
+ * because only the host knows what its run reads.
  */
 @Component({
   selector: 'app-ticker-range-picker',
@@ -59,10 +47,15 @@ export class TickerRangePickerComponent {
   /** The lake tree this page's run will read. */
   readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
   readonly value = model.required<TickerRange>();
-  /** What the host's run reads. Required: only the host knows, and a wrong guess offers dates the run cannot read. */
-  readonly reads = input.required<RunDataSource>();
-  /** The quick ranges offered; a host leaves out what makes no sense for it. */
-  readonly ranges = input<readonly QuickRangeKey[]>(QUICK_RANGES);
+  /**
+   * What bounds the dates. Required, because a wrong guess offers dates the
+   * run cannot read. ``provider`` is a run that fetches its own bars, or
+   * materializes the missing days before it reads: the provider's oldest day
+   * to the last completed session. Any other host hands over its own bound.
+   */
+  readonly dateBounds = input.required<'provider' | DateBounds>();
+  /** Whether both dates must be trading sessions. */
+  readonly sessionsOnly = input(true);
 
   readonly availableResolutions = input<readonly Resolution[]>(['minute', 'hour', 'daily']);
   readonly availableMultipliers = input<readonly number[]>([]);
@@ -83,12 +76,9 @@ export class TickerRangePickerComponent {
   readonly title = input('Backtest data');
   readonly sessionMode = input<SessionMode>('preview');
 
-  private readonly instrument = viewChild(InstrumentCardComponent);
-
   protected readonly bounds = computed<DateBounds>(() => {
-    if (this.reads() === 'provider') return this.provider.bounds();
-    const instrument = this.instrument();
-    return heldBounds(this.value().symbol, instrument?.selectedFirstHeld() ?? null, instrument?.selectedLastHeld() ?? null);
+    const bounds = this.dateBounds();
+    return bounds === 'provider' ? this.provider.bounds() : bounds;
   });
 
   readonly advisories = computed<readonly Advisory[]>(() => computeAdvisories(this.value()));

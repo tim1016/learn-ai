@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -25,6 +26,7 @@ async def get_sessions(start_ms: InstantMs, end_ms: InstantMs) -> TradingCalenda
     the exchange is closed, without a second calendar in the browser.
     """
     try:
-        return calendar_window(et_date_at_ms(start_ms), et_date_at_ms(end_ms))
+        # Building decades of sessions takes over a second the first time; off the event loop so no other request waits on it.
+        return await asyncio.to_thread(calendar_window, et_date_at_ms(start_ms), et_date_at_ms(end_ms))
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc

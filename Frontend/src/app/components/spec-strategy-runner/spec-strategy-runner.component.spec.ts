@@ -1,3 +1,4 @@
+import { provideFakeDateWorld } from '../../shared/date-picker/testing/fake-trading-calendar';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideZonelessChangeDetection, signal, WritableSignal } from '@angular/core';
 import { afterEach, beforeEach, describe, expect, it, Mock, vi } from 'vitest';
@@ -49,6 +50,7 @@ describe('SpecStrategyRunnerComponent', () => {
       imports: [SpecStrategyRunnerComponent],
       providers: [
         provideZonelessChangeDetection(),
+        ...provideFakeDateWorld(),
         {
           provide: SpecStrategyService,
           useValue: {

@@ -30,7 +30,7 @@
       <!-- Ticker + range picker (Sampling card hidden — indicator timeframe drives bar resolution). -->
       <app-ticker-range-picker
         [(value)]="range"
-        reads="provider"
+        dateBounds="provider"
         [hideSampling]="true"
         title="Reliability data"
       />

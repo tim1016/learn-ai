@@ -50,7 +50,7 @@ function calendarStart(key: QuickRangeKey, end: IsoDate): IsoDate | null {
  * What each quick range would set, or why it cannot be served.
  *
  * A range ends on the last day the page's run can read (``bounds.max``, else
- * the last completed session) and starts that span back on the calendar: 1M
+ * ``lastCompleted``, the last session that has closed) and starts that span back on the calendar: 1M
  * is one calendar month, not thirty days. The start then moves forward to the
  * next session, so a range never reaches past its label. A range whose start
  * falls before ``bounds.min`` is refused with the bound's own reason.
@@ -59,12 +59,12 @@ export function offerQuickRanges(
   keys: readonly QuickRangeKey[],
   bounds: DateBounds,
   sessions: TradingSessions | null,
-  nowMs: number,
+  lastCompleted: IsoDate | null,
 ): QuickRangeOffer[] {
   const refuseAll = (reason: string): QuickRangeOffer[] => keys.map((key) => ({ key, range: null, unavailable: reason }));
   if (bounds.unknown !== null) return refuseAll(bounds.unknown);
   if (sessions === null) return refuseAll('The trading calendar has not been read.');
-  const last = bounds.max ?? sessions.lastCompleted(nowMs);
+  const last = bounds.max ?? lastCompleted;
   const end = last === null ? null : sessions.onOrBefore(last);
   if (end === null) return refuseAll('The trading calendar holds no session to end on.');
 

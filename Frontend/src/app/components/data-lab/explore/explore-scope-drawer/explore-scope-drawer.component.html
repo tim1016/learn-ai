@@ -7,7 +7,8 @@
     <app-ticker-range-picker
       [value]="range()"
       (valueChange)="rangeChange.emit($event)"
-      reads="provider"
+      [dateBounds]="dateBounds()"
+      [sessionsOnly]="false"
       [hideSampling]="true"
       [showAutoFetch]="false"
       presentation="card"

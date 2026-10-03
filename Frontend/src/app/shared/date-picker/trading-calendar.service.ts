@@ -1,8 +1,9 @@
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { Injectable, Injector, computed, inject, resource, untracked, type ResourceRef } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Injectable, Injector, computed, inject, resource, signal, untracked, type ResourceRef } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
 import { environment } from '../../../environments/environment';
+import { classifyDataLakeError } from '../data-lake';
 import { etIsoDate, etMidnightMs } from '../date/et-midnight';
 import type { IsoDate } from '../date/iso-date';
 import { TradingSessions, type TradingCalendarWindow } from './trading-sessions';
@@ -23,6 +24,9 @@ export class TradingCalendarService {
   private readonly http = inject(HttpClient);
   private readonly injector = inject(Injector);
   private opened: ResourceRef<CalendarRead | undefined> | null = null;
+  /** Bumped each time a session closes, so what depends on the clock is worked out again. */
+  private readonly closes = signal(0);
+  private nextClose: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * The one read, started by the first picker that asks. A date field that
@@ -46,6 +50,15 @@ export class TradingCalendarService {
     return read?.kind === 'failed' ? read.message : null;
   });
 
+  /**
+   * The last session that has closed. It moves when a session closes, so a
+   * tab left open across the close offers the day that just finished.
+   */
+  readonly lastCompleted = computed<IsoDate | null>(() => {
+    this.closes();
+    return this.sessions()?.lastCompleted(this.nowMs()) ?? null;
+  });
+
   retry(): void {
     this.read.reload();
   }
@@ -63,10 +76,22 @@ export class TradingCalendarService {
           params: { start_ms: etMidnightMs(CALENDAR_FROM), end_ms: etMidnightMs(through) },
         }),
       );
-      return { kind: 'ok', sessions: new TradingSessions(window, CALENDAR_FROM, through) };
+      const sessions = new TradingSessions(window, CALENDAR_FROM, through);
+      this.wakeAtNextClose(sessions);
+      return { kind: 'ok', sessions };
     } catch (error) {
-      const offline = error instanceof HttpErrorResponse && error.status === 0;
-      return { kind: 'failed', message: offline ? 'The data plane did not respond.' : error instanceof Error ? error.message : String(error) };
+      return { kind: 'failed', message: classifyDataLakeError(error).message };
     }
+  }
+
+  /** Arms one timer for the next scheduled close; when it fires, the close is counted and the next one armed. */
+  private wakeAtNextClose(sessions: TradingSessions): void {
+    if (this.nextClose !== null) clearTimeout(this.nextClose);
+    const close = sessions.nextCloseAfter(this.nowMs());
+    if (close === null) return;
+    this.nextClose = setTimeout(() => {
+      this.closes.update((count) => count + 1);
+      this.wakeAtNextClose(sessions);
+    }, close - this.nowMs());
   }
 }

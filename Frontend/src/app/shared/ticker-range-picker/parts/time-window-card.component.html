@@ -9,11 +9,9 @@
   <app-date-range-picker
     label="Dates"
     [from]="value().from"
-    (fromChange)="setFrom($event)"
     [to]="value().to"
-    (toChange)="setTo($event)"
     [bounds]="bounds()"
-    [ranges]="ranges()"
-    [fallback]="fallback()"
+    [sessionsOnly]="sessionsOnly()"
+    (changed)="setDates($event)"
   />
 </section>

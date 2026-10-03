@@ -1,4 +1,4 @@
-import { isCalendarDate } from './local-wall-clock';
+import { isCalendarDate, localWallClock } from './local-wall-clock';
 
 /** A calendar date as ``YYYY-MM-DD``. Text order is date order, so dates compare with ``<`` and ``>``. */
 export type IsoDate = string;
@@ -42,6 +42,5 @@ export function toCalendarDate(date: IsoDate): Date {
 
 /** The calendar day a widget's local ``Date`` stands for. */
 export function fromCalendarDate(date: Date): IsoDate {
-  const two = (value: number): string => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())}`;
+  return localWallClock(date.getTime()).date;
 }

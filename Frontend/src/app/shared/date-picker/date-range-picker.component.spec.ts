@@ -146,6 +146,18 @@ describe('DateRangePickerComponent', () => {
     expect(screen.getByText('AAPL is held from 2026-09-01.')).not.toBeNull();
   });
 
+  it('answers a host that puts back a date the field has refused with the empty date again', async () => {
+    const { view, host, start, retype } = await renderPicker();
+    await retype(start, '2026-09-07');
+    expect(host.from()).toBe('');
+
+    host.from.set('2026-09-07');
+    await view.fixture.whenStable();
+
+    expect(host.from()).toBe('');
+    expect(start.value).toBe('2026-09-07');
+  });
+
   it('says when the trading calendar cannot be read and offers a retry', async () => {
     const calendar = { ...fakeTradingCalendar(null, '2026-10-02', 'The data plane did not respond.'), retry: vi.fn() };
     const { quick } = await renderPicker(calendar);

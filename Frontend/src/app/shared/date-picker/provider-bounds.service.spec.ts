@@ -26,12 +26,12 @@ async function boundsAfter(read: DataLakeRead<BackfillDefaults>) {
   TestBed.tick();
   answer(read);
   await TestBed.inject(ApplicationRef).whenStable();
-  return { before, after: service.bounds() };
+  return { before, after: service.bounds(), openEnded: service.openEnded() };
 }
 
 describe('ProviderBoundsService', () => {
   it("runs from the provider's oldest day to the last completed session", async () => {
-    const { before, after } = await boundsAfter({ kind: 'ok', value: defaults('2021-10-04') });
+    const { before, after, openEnded } = await boundsAfter({ kind: 'ok', value: defaults('2021-10-04') });
 
     // No range can be offered before the floor is known; typed dates stay unchecked.
     expect(before).toMatchObject({ min: null, max: null, unknown: "The provider's history is being read." });
@@ -42,6 +42,8 @@ describe('ProviderBoundsService', () => {
       maxReason: 'The last completed session is 2026-10-01.',
       unknown: null,
     });
+    // A page that also shows the session still forming has the same first day and no last one.
+    expect(openEnded).toMatchObject({ min: '2021-10-04', max: null, maxReason: null });
   });
 
   it('offers no bound it could not read, and says why', async () => {

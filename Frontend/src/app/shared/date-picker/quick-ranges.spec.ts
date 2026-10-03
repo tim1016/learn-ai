@@ -7,12 +7,12 @@ import { fakeSessions } from './testing/fake-trading-calendar';
 
 const HOLIDAYS = { '2024-09-02': 'Labor Day', '2026-01-01': "New Year's Day" };
 const SESSIONS = fakeSessions('2021-01-01', '2026-12-31', HOLIDAYS);
-/** Noon ET on Friday 2026-10-02: that session has not closed yet. */
-const NOON_FRIDAY = etMidnightMs('2026-10-02') + 12 * 60 * 60 * 1000;
+/** At noon ET on Friday 2026-10-02 that session has not closed, so the last completed one is Thursday. */
+const LAST_COMPLETED = SESSIONS.lastCompleted(etMidnightMs('2026-10-02') + 12 * 60 * 60 * 1000);
 const QQQ = heldBounds('QQQ', '2024-09-03', '2026-09-18');
 
 function offer(key: QuickRangeKey, bounds = QQQ) {
-  return offerQuickRanges([key], bounds, SESSIONS, NOON_FRIDAY)[0];
+  return offerQuickRanges([key], bounds, SESSIONS, LAST_COMPLETED)[0];
 }
 
 describe('offerQuickRanges', () => {
@@ -47,24 +47,23 @@ describe('offerQuickRanges', () => {
 
   it('ends on the last completed session when the page has no last day of its own', () => {
     const fetched = { ...UNBOUNDED, min: '2021-10-04', minReason: 'The provider serves bars from 2021-10-04.' };
-    // Friday's session is still open at noon, so the last completed one is Thursday.
     expect(offer('1D', fetched).range).toEqual({ from: '2026-10-01', to: '2026-10-01' });
     expect(offer('Max', fetched).range).toEqual({ from: '2021-10-04', to: '2026-10-01' });
     expect(offer('5Y', fetched).unavailable).toBe('The provider serves bars from 2021-10-04.');
   });
 
   it('offers nothing while the span or the calendar is unknown, and says why', () => {
-    const unknown = offerQuickRanges(QUICK_RANGES, heldBounds('', null, null), SESSIONS, NOON_FRIDAY);
+    const unknown = offerQuickRanges(QUICK_RANGES, heldBounds('', null, null), SESSIONS, LAST_COMPLETED);
     expect(unknown.every((o) => o.range === null && o.unavailable === 'Pick an instrument to see the dates it is held for.')).toBe(true);
 
-    const unread = offerQuickRanges(['1M'], QQQ, null, NOON_FRIDAY);
+    const unread = offerQuickRanges(['1M'], QQQ, null, LAST_COMPLETED);
     expect(unread).toEqual([{ key: '1M', range: null, unavailable: 'The trading calendar has not been read.' }]);
   });
 });
 
 describe('activeQuickRange', () => {
   it('names a range only when the dates are exactly what its click would set', () => {
-    const offers = offerQuickRanges(QUICK_RANGES, QQQ, SESSIONS, NOON_FRIDAY);
+    const offers = offerQuickRanges(QUICK_RANGES, QQQ, SESSIONS, LAST_COMPLETED);
 
     expect(activeQuickRange(offers, '2026-08-18', '2026-09-18')).toBe('1M');
     expect(activeQuickRange(offers, '2026-08-19', '2026-09-18')).toBeNull();

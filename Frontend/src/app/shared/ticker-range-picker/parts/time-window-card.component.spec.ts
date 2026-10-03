@@ -24,14 +24,16 @@ describe('TimeWindowCardComponent', () => {
     fixture.componentRef.setInput('bounds', SPY);
   });
 
-  it("writes a picked range into the value's dates and leaves the rest of the value alone", async () => {
+  it("writes a picked range into the value's dates in one change and leaves the rest of the value alone", async () => {
     fixture.componentRef.setInput('value', range());
     await fixture.whenStable();
+    const changes: TickerRange[] = [];
+    fixture.componentInstance.value.subscribe((value) => changes.push(value));
 
     quick('3M').click();
     await fixture.whenStable();
 
-    expect(fixture.componentInstance.value()).toEqual({ symbol: 'SPY', from: '2026-06-18', to: '2026-09-18', resolution: 'minute' });
+    expect(changes).toEqual([{ symbol: 'SPY', from: '2026-06-18', to: '2026-09-18', resolution: 'minute' }]);
   });
 
   it("gives the picker its host's bounds: a range the data cannot serve is greyed with the reason", async () => {
@@ -39,18 +41,5 @@ describe('TimeWindowCardComponent', () => {
     await fixture.whenStable();
 
     expect(quick('5Y').getAttribute('aria-label')).toBe('5Y, unavailable: SPY is held from 2024-01-02.');
-  });
-
-  it('starts an empty window on the fallback range, and only once', async () => {
-    fixture.componentRef.setInput('value', range({ from: '', to: '' }));
-    fixture.componentRef.setInput('fallback', '1M');
-    await fixture.whenStable();
-
-    expect(fixture.componentInstance.value()).toMatchObject({ from: '2026-08-18', to: '2026-09-18' });
-
-    fixture.componentRef.setInput('value', range({ from: '', to: '' }));
-    await fixture.whenStable();
-
-    expect(fixture.componentInstance.value()).toMatchObject({ from: '', to: '' });
   });
 });

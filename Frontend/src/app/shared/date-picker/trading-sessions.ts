@@ -65,6 +65,21 @@ export class TradingSessions {
 
   /** The last session whose scheduled close is at or before ``nowMs``; null when none has closed. */
   lastCompleted(nowMs: number): IsoDate | null {
+    return this.days[this.closedBy(nowMs) - 1] ?? null;
+  }
+
+  /** The first scheduled close after ``nowMs``; null when the window holds none. */
+  nextCloseAfter(nowMs: number): number | null {
+    return this.closes[this.closedBy(nowMs)] ?? null;
+  }
+
+  /** Every weekday the exchange is closed in ``[from, to]``, oldest first. */
+  holidaysBetween(from: IsoDate, to: IsoDate): IsoDate[] {
+    return [...this.holidays.keys()].filter((day) => from <= day && day <= to).sort();
+  }
+
+  /** How many sessions have closed at or before ``nowMs``. */
+  private closedBy(nowMs: number): number {
     let low = 0;
     let high = this.closes.length;
     while (low < high) {
@@ -72,12 +87,7 @@ export class TradingSessions {
       if (this.closes[middle] <= nowMs) low = middle + 1;
       else high = middle;
     }
-    return this.days[low - 1] ?? null;
-  }
-
-  /** Every weekday the exchange is closed in ``[from, to]``, oldest first. */
-  holidaysBetween(from: IsoDate, to: IsoDate): IsoDate[] {
-    return [...this.holidays.keys()].filter((day) => from <= day && day <= to).sort();
+    return low;
   }
 
   private firstIndexAtOrAfter(date: IsoDate): number {

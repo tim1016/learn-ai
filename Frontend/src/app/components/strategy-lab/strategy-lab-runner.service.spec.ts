@@ -5,7 +5,8 @@ import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
 import { of } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { heldBounds } from "../../shared/date-picker";
+import { ProviderBoundsService, TradingCalendarService, heldBounds, type TradingSessions } from "../../shared/date-picker";
+import { providerBounds } from "../../shared/date-picker/provider-bounds.service";
 import { STANDARD_DATE_WORLD, provideFakeDateWorld } from "../../shared/date-picker/testing/fake-trading-calendar";
 import { fakeTickerCatalog, provideFakeTickerCatalog } from "../../shared/ticker-catalog/testing/fake-ticker-catalog";
 import { JobsService } from "../../services/jobs.service";
@@ -370,6 +371,47 @@ describe("StrategyLab configuration and runner", () => {
     config.range.update((range) => ({ ...range, autoFetch: false }));
 
     expect(config.dateBounds()).toEqual(heldBounds("SPY", "2024-01-02", "2026-09-18"));
+  });
+
+  it("keeps a launch warning when the picker refuses a date, and clears it when the operator changes the range", () => {
+    config.configurationWarning.set("This strategy does not support daily data.");
+
+    config.changeRange({ ...config.range(), from: "" });
+    expect(config.configurationWarning()).toBe("This strategy does not support daily data.");
+    expect(config.range().from).toBe("");
+
+    config.changeRange({ ...config.range(), from: "2026-01-06" });
+    expect(config.configurationWarning()).toBeNull();
+  });
+
+  describe("the window a new lab starts on", () => {
+    it("is the last month of what the run can read, set once the calendar has been read and never again", () => {
+      const sessions = signal<TradingSessions | null>(null);
+      const lastCompleted = signal<string | null>(null);
+      TestBed.resetTestingModule();
+      configureLab();
+      TestBed.overrideProvider(TradingCalendarService, { useValue: { sessions, lastCompleted, problem: signal(null), retry: () => undefined } });
+      TestBed.overrideProvider(ProviderBoundsService, {
+        useValue: { bounds: computed(() => providerBounds(STANDARD_DATE_WORLD.providerFloor, lastCompleted())) },
+      });
+      const store = TestBed.inject(StrategyLabConfigStore);
+      store.configurationWarning.set("This strategy does not support daily data.");
+      TestBed.tick();
+      expect(store.range()).toMatchObject({ from: "", to: "" });
+
+      sessions.set(STANDARD_DATE_WORLD.sessions);
+      lastCompleted.set("2026-09-18");
+      TestBed.tick();
+
+      expect(store.range()).toMatchObject({ from: "2026-08-18", to: "2026-09-18" });
+      // Nobody chose these dates, so the warning stands.
+      expect(store.configurationWarning()).toBe("This strategy does not support daily data.");
+
+      store.changeRange({ ...store.range(), from: "", to: "" });
+      TestBed.tick();
+
+      expect(store.range()).toMatchObject({ from: "", to: "" });
+    });
   });
 
   it("rejects an empty custom source before probing the launcher", async () => {

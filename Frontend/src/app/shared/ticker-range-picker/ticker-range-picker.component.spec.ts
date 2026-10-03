@@ -6,11 +6,12 @@
  * The component-level tests verify picker presentation and flags
  * (``presentation`` removes duplicate host chrome, ``availableMultipliers``
  * passes through to SamplingCard, ``hideSampling`` collapses Sampling) and
- * that the dates are bounded by what the host's run reads.
+ * that the dates take the bound the host states.
  */
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
 
+import { heldBounds } from '../date-picker';
 import { fakePickerWorld } from '../symbol-picker/testing/fake-picker-world';
 import { TickerRangePickerComponent } from './ticker-range-picker.component';
 import { computeAdvisories, type TickerRange } from './ticker-range-picker.types';
@@ -54,7 +55,7 @@ describe('TickerRangePickerComponent (flags)', () => {
 
     fixture = TestBed.createComponent(TickerRangePickerComponent);
     fixture.componentRef.setInput('value', baseValue);
-    fixture.componentRef.setInput('reads', 'provider');
+    fixture.componentRef.setInput('dateBounds', 'provider');
   });
 
   it('renders the Sampling card by default', () => {
@@ -104,16 +105,24 @@ describe('TickerRangePickerComponent (flags)', () => {
     return button instanceof HTMLElement ? button.getAttribute('aria-label') : null;
   };
 
-  it("bounds the dates by the instrument's held span when the run reads the lake as it stands", async () => {
-    fixture.componentRef.setInput('reads', 'lake');
-    await fixture.whenStable();
-
-    expect(fiveYears()).toBe('5Y, unavailable: SPY is held from 2024-01-02.');
-  });
-
-  it("bounds the dates by the provider's history when the run fetches its own bars", async () => {
+  it("bounds the dates by the provider's history when the host's run fetches its own bars", async () => {
     await fixture.whenStable();
 
     expect(fiveYears()).toBe('5Y, unavailable: The provider serves bars from 2021-09-21.');
+  });
+
+  it("takes a host's own bound, and any day when the host's dates need not be sessions", async () => {
+    fixture.componentRef.setInput('dateBounds', heldBounds('SPY', '2024-01-02', '2026-09-18'));
+    fixture.componentRef.setInput('sessionsOnly', false);
+    await fixture.whenStable();
+    expect(fiveYears()).toBe('5Y, unavailable: SPY is held from 2024-01-02.');
+
+    const start: HTMLInputElement = fixture.nativeElement.querySelector("input[aria-label='Start date']");
+    start.value = '2025-04-05';
+    start.dispatchEvent(new Event('change'));
+    await fixture.whenStable();
+
+    // A Saturday.
+    expect(fixture.componentInstance.value().from).toBe('2025-04-05');
   });
 });
