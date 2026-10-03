@@ -28,6 +28,7 @@ import type {
   SqliteExtendedLimitPricing,
   SqliteSafeFlattenPlan,
   SqliteSafeFlattenPricing,
+  SqliteUnknownOrderAttestation,
 } from '../../../../api/alpaca.types';
 import {
   ExtendedFlattenTicketComponent,
@@ -90,6 +91,7 @@ import { RunFillsListComponent } from '../bot-page/run-fills-list.component';
 import { RecentDecisionsListComponent } from '../bot-page/recent-decisions-list/recent-decisions-list.component';
 import { BotDayChartComponent } from '../bot-page/bot-day-chart.component';
 import { BotEndCardComponent } from '../bot-page/bot-end-card.component';
+import { SettleOrderTicketComponent, type SettlementCheck } from '../bot-page/settle-order-ticket.component';
 import { StrandedPositionWarningComponent } from '../bot-page/stranded-position-warning.component';
 import { BotChartPanelComponent } from '../strategy-view/bot-chart-panel.component';
 import { chartLanes, type LaneSource, type StrategyRunContext } from '../strategy-view/chart-lanes';
@@ -146,6 +148,27 @@ interface PreparedSafeFlatten {
   readonly sid: string;
   /** Why the last quote refresh failed; the quote then ages until it cannot be sent. */
   readonly quoteError: string | null;
+}
+
+/** The open ticket that settles the bot's uncertain closing order (#2854).
+ *
+ * `action` is the settle action as the page presented it when the ticket
+ * opened: its token names the order's latest send, so a ticket left open
+ * while the Clerk sends the order again is refused, never quietly re-pointed
+ * at the newer send. `check` and `settle` are bound to the lane, account and
+ * bot shown at that moment. */
+interface SettleTicketDraft {
+  readonly action: PanelAction;
+  readonly check: (attestation: SqliteUnknownOrderAttestation) => Promise<SettlementCheck>;
+  readonly settle: (attestation: SqliteUnknownOrderAttestation) => Promise<void>;
+}
+
+/** The action route itself answered that nothing was done: its typed refusal
+ * says how it ended (`outcome`). A dropped connection, a timeout or the
+ * fleet's own refusal says no such thing, and leaves the outcome unknown. */
+function refusedByTheActionRoute(error: unknown): boolean {
+  const outcome = extractActionErrorDetail(error)?.['outcome'];
+  return outcome === 'conflict' || outcome === 'failure';
 }
 
 /** An extended-hours ticket re-reads the live quote this often while open (#2007). */
@@ -214,7 +237,8 @@ const RUN_TAPE_PADDING_MS = 15 * 60_000;
  *   history chart (a finished run's own window), the strategy view
  *   (re-read on each new decision).
  * - Action execution, each command owned by the bot it was sent to (#2471),
- *   including the one-confirmation Flatten sequence (hurdle H30).
+ *   including the one-confirmation Flatten sequence (hurdle H30) and the
+ *   ticket that settles an uncertain closing order (#2854).
  */
 @Component({
   selector: 'app-bot-panel-shell',
@@ -228,6 +252,7 @@ const RUN_TAPE_PADDING_MS = 15 * 60_000;
     BotChartPanelComponent,
     BotDayChartComponent,
     BotEndCardComponent,
+    SettleOrderTicketComponent,
     BotHealthGroupsComponent,
     BotOrderRecordsComponent,
     BotPageHeaderComponent,
@@ -422,6 +447,11 @@ export class BotPanelShellComponent {
     source: this.routeIdentity,
     computation: (): HistoricalExecutionRecoveryDraft | null => null,
   });
+  /** The open settle ticket; like the drafts above, it never follows the page to another bot. */
+  protected readonly settleTicket = linkedSignal({
+    source: this.routeIdentity,
+    computation: (): SettleTicketDraft | null => null,
+  });
 
   protected readonly panel = computed(() => this.liveStore.snapshot()?.panel ?? null);
   protected readonly liveChart = computed(() => {
@@ -479,6 +509,7 @@ export class BotPanelShellComponent {
   private readonly receiptView = viewChild(PanelActionReceiptComponent);
   private readonly strandedWarning = viewChild(StrandedPositionWarningComponent);
   private readonly flattenTicketView = viewChild<ElementRef<HTMLElement>>('flattenTicket');
+  private readonly settleTicketView = viewChild(SettleOrderTicketComponent);
   private readonly boardView = viewChild<ElementRef<HTMLElement>>('board');
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
 
@@ -826,6 +857,12 @@ export class BotPanelShellComponent {
     }
     const target = fencedTarget(this.target(), fence);
     const sid = this.sid();
+    if (action.settlement != null) {
+      // Settling an uncertain order asks what Alpaca shows first: the ticket
+      // sends nothing until the Clerk has checked and the owner confirmed (#2854).
+      this.openSettleTicket(action, target, sid);
+      return;
+    }
     if (action.action_id === 'open_custody_timeline') {
       // Activity's "Order records and recovery" fold opens on arrival at
       // this bot's timeline (`sqliteTimelineQueryFromParams`).
@@ -872,6 +909,63 @@ export class BotPanelShellComponent {
       // not an oversight.
       await this.liveStore.refresh();
     } finally {
+      this.actionPending.set(false);
+    }
+  }
+
+  /**
+   * Open the ticket that settles this bot's uncertain closing order (#2854).
+   *
+   * The ticket keeps the action, lane, account and bot the owner opened it
+   * on. Each thing the owner can say Alpaca shows gets one command key, sent
+   * again with every retry of it, so a settlement whose answer was lost is
+   * answered with its recorded receipt and never made twice. Only the action
+   * route's own refusal -- nothing was done -- ends a key: the backend never
+   * takes a refused key again, so the next try is a new command.
+   */
+  private openSettleTicket(action: PanelAction, target: ResourceTarget, sid: string): void {
+    const commandKeys = new Map<string, string>();
+    this.actionReceipt.set(null);
+    this.settleTicket.set({
+      action,
+      check: (attestation) => this.brokers.checkSqliteSettlement(
+        target.clerkId, this.requiredAccountId(target), sid, action.concurrency_token, attestation,
+      ),
+      settle: (attestation) => this.settleUncertainOrder(action, target, sid, attestation, commandKeys),
+    });
+    afterNextRender(() => this.settleTicketView()?.focus(), { injector: this.injector });
+  }
+
+  /** Settle the order on what the owner said Alpaca shows. Resolves once the
+   * Clerk recorded it and the ticket is closed; rejects with the refusal,
+   * which the ticket shows. The panel is re-read whatever the answer. */
+  private async settleUncertainOrder(
+    action: PanelAction,
+    target: ResourceTarget,
+    sid: string,
+    attestation: SqliteUnknownOrderAttestation,
+    commandKeys: Map<string, string>,
+  ): Promise<void> {
+    if (this.actionPending()) throw new Error(ACTION_ALREADY_PENDING_MESSAGE);
+    const said = `${attestation.kind}:${attestation.broker_order_id ?? ''}`;
+    const key = commandKeys.get(said) ?? crypto.randomUUID();
+    commandKeys.set(said, key);
+    const ownership = this.beginActionOwnership();
+    this.actionPending.set(true);
+    this.actionReceipt.set(null);
+    try {
+      const result = await this.panelSvc.runBotAction(
+        withCommand(target, 'bot_action', key), sid, action, null, attestation,
+      );
+      if (ownership.stillOwns()) this.settleTicket.set(null);
+      ownership.deliverOutcome(this.successReceipt(result));
+    } catch (error) {
+      if (refusedByTheActionRoute(error)) commandKeys.delete(said);
+      this.refreshLaneIfStale(this.describeRejection(error, action));
+      throw error;
+    } finally {
+      // Never rejects: the live store keeps a failed read as its error state.
+      await this.liveStore.refresh();
       this.actionPending.set(false);
     }
   }

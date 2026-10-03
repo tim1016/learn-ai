@@ -6,6 +6,10 @@ Clerk's recovery executor, which reads Alpaca itself before it settles
 anything. The real Clerk on a real ledger; only Alpaca is faked, and the
 panel view and presented action are the stand-ins
 ``test_sqlite_action_fence`` uses.
+
+The bot's page offers the action from its toolbar and opens a ticket from the
+action's ``settlement``: both are read here from the real projection of that
+ledger, adapted as the panel serves it.
 """
 
 from __future__ import annotations
@@ -17,33 +21,47 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.facts import OrderOutcomeAttestedFacts
+from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.schemas.alpaca_clerk_sqlite import UnknownOrderAttestationRequest
-from app.schemas.broker_v2_panel import PanelActionRequest, PanelActionResult, PanelQuiesceActionRequest
+from app.schemas.bot_page import ToolbarActionView
+from app.schemas.broker_v2_panel import (
+    BotPanelView,
+    PanelActionRequest,
+    PanelActionResult,
+    PanelQuiesceActionRequest,
+)
 from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     DurableIdempotencyStore,
     IdempotencyKeyConflictError,
     IdempotencyStore,
 )
-from app.services.broker_v2_panel.sqlite_panel_adapter import _catalog_row_action, _recovery_cure
+from app.services.broker_v2_panel.bot_page_projection import bot_own_status, toolbar_actions
+from app.services.broker_v2_panel.sqlite_panel_adapter import (
+    _catalog_row_action,
+    _recovery_cure,
+    adapt_sqlite_panel,
+    has_bot_scoped_custody_problem,
+)
 from app.services.broker_v2_panel.sqlite_panel_source import execute_sqlite_panel_action
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_unknown_order_attestation as settling
-from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at
+from tests.broker.alpaca.clerk.sqlite.conftest import FIXTURE_RTH_MS, _clock_at, _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_flatten_send_cover import _context_of
+from tests.broker.v2panel.test_panel_projection import _clerk_status, _panel, _status
 
 SETTLE = "settle_unknown_exit_order"
 
 
 @pytest.fixture
-async def lost_closing_order(tmp_path: Path):
-    """A stopped bot holding 10 SPY whose closing order's submit was lost and never reached Alpaca."""
+def started_bot(tmp_path: Path):
+    """A running bot's ledger behind the real Clerk, and an Alpaca that never receives what is sent to it."""
     clock = _clock_at(FIXTURE_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=settling.ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
@@ -56,12 +74,19 @@ async def lost_closing_order(tmp_path: Path):
         lifecycle_run_id=settling.RUN_ID,
     )
     alpaca = settling._AlpacaAccount(repo, clock, submits=("never_arrives",))
-    await settling._a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
     facade = SqliteAlpacaClerkFacade(repo=repo, read=alpaca, trade=alpaca, account_mode="paper")
     try:
         yield repo, alpaca, facade
     finally:
         repo.close()
+
+
+@pytest.fixture
+async def lost_closing_order(started_bot):
+    """A stopped bot holding 10 SPY whose closing order's submit was lost and never reached Alpaca."""
+    repo, alpaca, facade = started_bot
+    await settling._a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    return repo, alpaca, facade
 
 
 async def _run_from_the_panel(
@@ -240,7 +265,7 @@ async def test_a_settlement_the_process_died_after_is_answered_with_its_receipt_
 async def test_a_settle_posted_without_saying_what_alpaca_shows_is_refused_and_writes_nothing(
     lost_closing_order,
 ) -> None:
-    """What a page that cannot ask the operator yet would post: refused in words, nothing changed."""
+    """What a client that does not ask the operator would post: refused in words, nothing changed."""
     repo, alpaca, facade = lost_closing_order
     ledger = repo.custody_transitions()
 
@@ -252,6 +277,39 @@ async def test_a_settle_posted_without_saying_what_alpaca_shows_is_refused_and_w
     assert repo.custody_transitions() == ledger
     assert alpaca.reads == []
     assert len(alpaca.sent) == 1
+
+
+def _projection(repo: ClerkSqliteRepository) -> ClerkProjection:
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+    try:
+        projection = reader.bot_snapshot(settling.SID)
+    finally:
+        reader.close()
+    assert projection is not None
+    return projection
+
+
+def _bot_page(repo: ClerkSqliteRepository, *, running: bool) -> tuple[BotPanelView, list[ToolbarActionView]]:
+    """The bot's panel as it is served from this ledger, and the toolbar its page draws from it."""
+    projection = _projection(repo)
+    served = adapt_sqlite_panel(
+        _panel(_status(running=running, mode="trade"), _clerk_status(), []), projection, account_mode="paper"
+    )
+    status = bot_own_status(
+        served,
+        bot_owns_custody_problem=has_bot_scoped_custody_problem(projection),
+        execution_coverage_complete=True,
+    )
+    return served, toolbar_actions(served, status=status)
+
+
+def _settle_on_the_page(repo: ClerkSqliteRepository, *, running: bool) -> tuple[str, str, dict | None]:
+    """How the page's toolbar offers settling, why, and the settlement its action carries on the wire."""
+    served, toolbar = _bot_page(repo, running=running)
+    (entry,) = [item for item in toolbar if item.action_id == SETTLE]
+    (action,) = [item for item in served.model_dump(mode="json")["actions"] if item["action_id"] == SETTLE]
+    assert action["enabled"] is (entry.availability == "available")
+    return entry.availability, entry.reason, action["settlement"]
 
 
 def test_no_row_and_no_page_names_settling_as_the_bots_cure_while_no_page_can_run_it(
@@ -278,6 +336,80 @@ def test_no_row_and_no_page_names_settling_as_the_bots_cure_while_no_page_can_ru
     assert cure is not None and cure.action_id == "reconcile_now"
     settle = next(action for action in projection.recovery_actions if action.action_id == SETTLE)
     assert (settle.available, settle.primary) == (True, False)
+
+
+def test_the_bot_page_offers_settling_from_its_toolbar_with_the_ticket_it_opens(lost_closing_order) -> None:
+    """Fix group, danger, between Cancel open orders and Write off missing shares; the ticket is on the wire."""
+    repo, _alpaca, _facade = lost_closing_order
+
+    served, toolbar = _bot_page(repo, running=False)
+
+    (entry,) = [item for item in toolbar if item.action_id == SETTLE]
+    assert (entry.label, entry.group, entry.tone, entry.availability) == (
+        "Settle the uncertain order", "fix", "danger", "available",
+    )
+    assert entry.reason == "Say what Alpaca shows for a closing order the Clerk could not confirm."
+    fix_group = [item.action_id for item in toolbar if item.group == "fix"]
+    assert fix_group[fix_group.index(SETTLE) - 1 : fix_group.index(SETTLE) + 2] == [
+        "cancel_verified_working_orders", SETTLE, "discharge_attributed_residue",
+    ]
+    # A stopped bot still holding shares has no primary command: its page's warning owns that place.
+    assert (served.primary_action, entry.primary) == (None, False)
+
+    wire = served.model_dump(mode="json")
+    (action,) = [item for item in wire["actions"] if item["action_id"] == SETTLE]
+    settlement = action["settlement"]
+    (order,) = [order for order in repo.orders_for_strategy(settling.SID) if order.role == "REDUCING"]
+    assert (settlement["order_ref"], settlement["symbol"], settlement["side"], settlement["quantity"]) == (
+        order.order_ref, "SPY", "sell", 10.0,
+    )
+    assert settlement["ticket"].startswith("The Clerk sent an order to sell 10 SPY on ")
+    assert settlement["ticket"].endswith("look at Alpaca again and open this action again.")
+    assert [
+        (choice["attestation"], choice["label"], choice["asks_broker_order_id"])
+        for choice in settlement["choices"]
+    ] == [("absent", "Alpaca has no such order", False), ("exists", "Alpaca shows it", True)]
+    assert all(choice["explanation"] for choice in settlement["choices"])
+    assert action["confirmation"]["confirm_label"] == "Settle the order"
+    assert [item["settlement"] for item in wire["actions"] if item["action_id"] != SETTLE] == [None] * (
+        len(wire["actions"]) - 1
+    )
+
+
+async def test_the_bot_page_offers_settling_only_while_the_clerks_catalog_does(started_bot) -> None:
+    """The toolbar's entry follows the Clerk's catalog through the order's life, and carries a ticket only when offered.
+
+    Nothing uncertain: not needed, so it is off the bar. The closing order is
+    lost while the bot runs: blocked, with the Clerk's reason. Stopped, and
+    the wait after the send not yet over: blocked. The wait over: offered.
+    Settled: not needed again.
+    """
+    repo, alpaca, facade = started_bot
+    assert _settle_on_the_page(repo, running=True) == ("not_needed", "No closing order is uncertain.", None)
+
+    await settling._the_runner_sends_the_exit(repo, alpaca)
+    assert _settle_on_the_page(repo, running=True) == (
+        "blocked", "Stop the bot before settling its uncertain order.", None,
+    )
+
+    submit_stop_run(
+        repo, account_id=settling.ACCOUNT_ID, strategy_instance_id=settling.SID,
+        lifecycle_run_id=settling.RUN_ID, operator_reason="operator_stop",
+    )
+    assert _settle_on_the_page(repo, running=False) == (
+        "blocked", "The Clerk sent this order moments ago and may still find it at Alpaca by itself.", None,
+    )
+
+    _walk_clock_to(repo, repo.clock() + settling.WAIT_MS)
+    availability, _reason, settlement = _settle_on_the_page(repo, running=False)
+    assert availability == "available" and settlement is not None
+
+    settled = await _run_from_the_panel(
+        repo, facade, IdempotencyStore(wait_timeout_s=0),
+        attestation=UnknownOrderAttestationRequest(kind="absent"), idempotency_key="settle-1",
+    )
+    assert settled is not None and settled.applied is True
+    assert _settle_on_the_page(repo, running=False) == ("not_needed", "No closing order is uncertain.", None)
 
 
 async def test_the_quiesce_route_carries_the_attestation_and_acts_as_the_configured_operator(

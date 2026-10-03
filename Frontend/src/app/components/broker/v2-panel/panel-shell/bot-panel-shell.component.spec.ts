@@ -9,6 +9,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, 
 import { MessageService } from 'primeng/api';
 import type {
   HistoricalExecutionRecoveryPlan,
+  SqliteAttestationFindings,
   SqliteRecoveryAction,
   SqliteRecoveryActionCheck,
   SqliteSafeFlattenPlan,
@@ -17,7 +18,12 @@ import { BotPanelShellComponent, CURRENT_RUN_POLL_MS } from './bot-panel-shell.c
 import { BrokerV2PanelService, type BotEndView, type DeploymentBudgetView } from '../lib/broker-v2-panel.service';
 import { BrokersService, sqliteTimelineQueryFromParams } from '../../../../services/brokers.service';
 import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-display';
-import { fakeBotPage, fakeChartFeed, fakeSqliteStopAction } from '../../../../testing/bot-panel-fixtures';
+import {
+  fakeBotPage,
+  fakeChartFeed,
+  fakeSqliteSettleAction,
+  fakeSqliteStopAction,
+} from '../../../../testing/bot-panel-fixtures';
 import { DUAL_PANE_CHART_FACTORY } from '../dual-pane-chart/dual-pane-chart.component';
 import type {
   BotPanelView,
@@ -2577,6 +2583,145 @@ describe('BotPanelShellComponent', () => {
 
       const results = await axe.run(document.body, { rules: { 'color-contrast': { enabled: false } } });
       expect(results.violations).toEqual([]);
+    });
+  });
+
+  describe('settling an uncertain closing order (#2854)', () => {
+    /** A stopped bot still holding 2.5 QQQ whose closing order the Clerk could not confirm. */
+    const SETTLE_ACTION = fakeSqliteSettleAction({ revision: 17, concurrency_token: 'settle-token-17' });
+    const NOTHING_AT_ALPACA: SqliteAttestationFindings = {
+      attestation: 'absent',
+      would_settle: true,
+      refusal_reason_code: null,
+      lines: ['Alpaca shows no order under this order\'s id.', 'No order is working on QQQ.'],
+      observed_at_ms: 1_753_800_000_500,
+    };
+    const CHECKED = {
+      capability: { ...SAFE_FLATTEN_CAPABILITY, action_id: 'settle_unknown_exit_order', reduction_plan: null },
+      attestation_findings: NOTHING_AT_ALPACA,
+    } satisfies SqliteRecoveryActionCheck;
+    const SETTLED = fakeActionResult({
+      action_id: 'settle_unknown_exit_order', receipt_id: 'transition:41',
+      concurrency_token: 'settle-token-17', message: 'Settle the uncertain order completed.',
+    });
+    const BUSY_MESSAGE = 'The Clerk is working on this exit right now. Try again in a few seconds. Nothing was changed.';
+
+    async function renderSettle(runBotAction = vi.fn().mockResolvedValue(SETTLED)) {
+      const checkSqliteSettlement = vi.fn().mockResolvedValue(CHECKED);
+      const snapshot = liveSnapshot(strandedPanel({ actions: [RECONCILE_ACTION, SETTLE_ACTION] }));
+      const view = await render(BotPanelShellComponent, {
+        inputs: { clerkId: 'clrk_spec', broker: 'alpaca', accountId: 'DUM284968', sid: 'sid-001' },
+        providers: [
+          provideRouter([]),
+          {
+            provide: BrokerV2PanelService,
+            useValue: { ...mockService, getLiveSnapshot: vi.fn().mockResolvedValue(snapshot), runBotAction },
+          },
+          { provide: BrokersService, useValue: { ...brokersMock, checkSqliteSettlement } },
+          { provide: MessageService, useValue: messageService },
+        ],
+      });
+      await view.fixture.whenStable();
+      view.fixture.detectChanges();
+      return { ...view, runBotAction, checkSqliteSettlement, user: userEvent.setup() };
+    }
+
+    type User = ReturnType<typeof userEvent.setup>;
+
+    async function openTicket(user: User): Promise<HTMLElement> {
+      const toolbar = screen.getByRole('toolbar', { name: 'Actions for this bot' });
+      await user.click(within(toolbar).getByRole('button', { name: 'Settle the uncertain order' }));
+      return screen.findByRole('region', { name: 'Settle the uncertain order' });
+    }
+
+    /** Say "Alpaca has no such order" and have the Clerk check it. */
+    async function sayNoSuchOrder(user: User, ticket: HTMLElement): Promise<void> {
+      await user.click(within(ticket).getByRole('radio', { name: /^Alpaca has no such order/ }));
+      await user.click(within(ticket).getByRole('button', { name: 'Ask the Clerk to check' }));
+      await within(ticket).findByRole('status', { name: 'What the Clerk found' });
+    }
+
+    async function confirmSettle(user: User, ticket: HTMLElement): Promise<void> {
+      await user.click(within(ticket).getByRole('button', { name: 'Settle the order…' }));
+      const dialog = screen.getByRole('dialog', { name: 'Settle the uncertain order?' });
+      await user.type(within(dialog).getByRole('textbox'), 'SETTLE');
+      await user.click(within(dialog).getByRole('button', { name: 'Settle the order' }));
+    }
+
+    it('opens the ticket from the toolbar with the Clerk’s words, and sends and confirms nothing yet', async () => {
+      const { runBotAction, checkSqliteSettlement, user } = await renderSettle();
+
+      const ticket = await openTicket(user);
+
+      expect(ticket.textContent).toContain(SETTLE_ACTION.settlement?.ticket);
+      // The ticket holds the confirmation: the button's own plain "are you sure" never opens.
+      expect(screen.queryByRole('dialog', { name: 'Settle the uncertain order?' })).toBeNull();
+      expect(runBotAction).not.toHaveBeenCalled();
+      expect(checkSqliteSettlement).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(document.activeElement).toBe(ticket));
+    });
+
+    it('has the Clerk check on the presented token, then settles with what was said and shows the receipt', async () => {
+      const { runBotAction, checkSqliteSettlement, user } = await renderSettle();
+      const ticket = await openTicket(user);
+
+      await sayNoSuchOrder(user, ticket);
+
+      expect(checkSqliteSettlement).toHaveBeenCalledExactlyOnceWith(
+        'clrk_spec', 'DUM284968', 'sid-001', 'settle-token-17', { kind: 'absent' },
+      );
+      expect(runBotAction).not.toHaveBeenCalled();
+
+      await confirmSettle(user, ticket);
+
+      await vi.waitFor(() => expect(runBotAction).toHaveBeenCalledTimes(1));
+      const [target, sid, action, reason, attestation] = runBotAction.mock.calls[0];
+      expect(target).toMatchObject({
+        broker: 'alpaca', clerkId: 'clrk_spec', accountId: 'DUM284968', entityId: 'sid-001', capability: 'bot_action',
+      });
+      expect(target.idempotencyKey).toEqual(expect.any(String));
+      expect([sid, action, reason, attestation]).toEqual(['sid-001', SETTLE_ACTION, null, { kind: 'absent' }]);
+      // The result is the page's receipt, in the backend's words; the ticket is done.
+      expect(await screen.findByText('Settle the uncertain order completed.')).toBeTruthy();
+      expect(screen.queryByRole('region', { name: 'Settle the uncertain order' })).toBeNull();
+    });
+
+    it('sends the same command key again when no answer came back, and a new one once the Clerk refused', async () => {
+      const refusedByTheClerk = new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            action_id: 'settle_unknown_exit_order', outcome: 'failure', receipt_id: null, recorded_at_ms: 1,
+            message: BUSY_MESSAGE, why: null, reason_code: null,
+          },
+        },
+      });
+      const runBotAction = vi.fn()
+        .mockRejectedValueOnce(new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' }))
+        .mockRejectedValueOnce(refusedByTheClerk)
+        .mockResolvedValueOnce(SETTLED);
+      const { user } = await renderSettle(runBotAction);
+      const ticket = await openTicket(user);
+      await sayNoSuchOrder(user, ticket);
+      const keyOfTry = (index: number): unknown => runBotAction.mock.calls[index][0].idempotencyKey;
+
+      // No answer: the outcome is not known, so the ticket stays and the same command is asked again.
+      await confirmSettle(user, ticket);
+      expect((await within(ticket).findByRole('alert')).textContent).toContain('the result is not known');
+      await confirmSettle(user, ticket);
+
+      // The Clerk refused, in its own words: nothing was changed, and the ticket is still open.
+      expect(await within(ticket).findByText(BUSY_MESSAGE)).toBeTruthy();
+      expect(runBotAction).toHaveBeenCalledTimes(2);
+      expect(keyOfTry(1)).toBe(keyOfTry(0));
+      expect(screen.queryByText('Settle the uncertain order completed.')).toBeNull();
+
+      // A refused key is never taken again, so the next try is a new command.
+      await confirmSettle(user, ticket);
+      expect(await screen.findByText('Settle the uncertain order completed.')).toBeTruthy();
+      expect(runBotAction).toHaveBeenCalledTimes(3);
+      expect(keyOfTry(2)).not.toBe(keyOfTry(1));
+      for (const call of runBotAction.mock.calls) expect(call[4]).toEqual({ kind: 'absent' });
     });
   });
 });

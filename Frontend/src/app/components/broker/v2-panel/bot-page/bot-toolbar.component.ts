@@ -64,6 +64,7 @@ const ICONS: Readonly<Record<ToolbarActionId, string>> = {
   manual_order: 'pi-pencil',
   reconcile_now: 'pi-sync',
   cancel_verified_working_orders: 'pi-times-circle',
+  settle_unknown_exit_order: 'pi-question-circle',
   discharge_attributed_residue: 'pi-eraser',
   recover_exact_execution_evidence: 'pi-download',
   resolve_execution_coverage: 'pi-check-circle',
@@ -170,7 +171,8 @@ function storedLabels(): boolean {
  * Custody actions run through the shared action button, so their
  * confirmations and blockers are the ones the backend presented; Deploy
  * again and Manual order are links; Change end and Build proof open the
- * host's panels.
+ * host's panels. Settle the uncertain order opens the host's ticket (#2854),
+ * which asks what Alpaca shows and confirms there.
  */
 @Component({
   selector: 'app-bot-toolbar',
@@ -245,6 +247,11 @@ export class BotToolbarComponent {
 
   protected panelAction(entry: ToolbarActionView): PanelAction | null {
     return this.actionsById().get(entry.action_id) ?? null;
+  }
+
+  /** An action that carries the order it settles is confirmed in the host's ticket, not in the button's dialog (#2854). */
+  protected opensTicket(action: PanelAction): boolean {
+    return action.settlement != null;
   }
 
   protected showLabel(entry: ToolbarActionView): boolean {

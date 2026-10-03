@@ -11,6 +11,7 @@
       [hint]="entry.reason"
       [tone]="entry.tone"
       [filled]="entry.primary === true"
+      [opensTicket]="opensTicket(action)"
       [pending]="pending()"
       (triggered)="onTriggered($event)"
     />

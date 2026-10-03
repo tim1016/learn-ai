@@ -7,7 +7,13 @@ import { render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fakeBotPage, fakeBotPanelView, fakePanelAction, fakeSqliteStopAction } from '../../../../testing/bot-panel-fixtures';
+import {
+  fakeBotPage,
+  fakeBotPanelView,
+  fakePanelAction,
+  fakeSqliteSettleAction,
+  fakeSqliteStopAction,
+} from '../../../../testing/bot-panel-fixtures';
 import type { ManualOrderTicketNavigation } from '../../lib/manual-order-navigation';
 import type { BotPanelView, ToolbarActionView } from '../lib/broker-v2-panel.types';
 import { BotToolbarComponent } from './bot-toolbar.component';
@@ -101,6 +107,54 @@ describe('BotToolbarComponent (#2794)', () => {
     }));
     expect(buildProof).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('group', { name: 'More actions for this bot' })).toBeNull();
+  });
+
+  it('offers Settle the uncertain order in Fix, as a danger action that opens the host’s ticket (#2854)', async () => {
+    const user = userEvent.setup();
+    const settle = fakeSqliteSettleAction();
+    const { actionRequested } = await renderToolbar(fakeBotPanelView({
+      health: { ...fakeBotPanelView().health, running: false },
+      exposure: { SPY: 10 },
+      actions: [fakePanelAction('reconcile_now', { label: 'Reconcile now' }), settle],
+    }));
+
+    const fix = within(screen.getByRole('toolbar', { name: 'Actions for this bot' })).getByRole('group', { name: 'Fix' });
+    const button = within(fix).getByRole('button', { name: 'Settle the uncertain order' });
+    expect(button.className).toContain('panel-action__button--danger');
+    await user.click(button);
+
+    // The action carries its own confirmation, and the ticket asks it: no dialog opens here.
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(actionRequested).toHaveBeenCalledExactlyOnceWith({ action: settle, reason: null });
+  });
+
+  it('shows a settle the Clerk blocks disabled with its reason, and one with nothing to settle not at all (#2854)', async () => {
+    // Not available, so the Clerk sends no order to settle with it.
+    const panel = fakeBotPanelView({ actions: [fakeSqliteSettleAction({ enabled: false, settlement: null })] });
+    const withReason = (availability: ToolbarActionView['availability'], reason: string): BotPanelView => ({
+      ...panel,
+      bot_page: {
+        ...fakeBotPage(panel),
+        toolbar: [toolbarEntry({
+          action_id: 'settle_unknown_exit_order', label: 'Settle the uncertain order', group: 'fix', tone: 'danger',
+          availability, reason,
+        })],
+      },
+    });
+    const { actionRequested, rerender } = await renderToolbar(
+      withReason('blocked', 'Stop the bot before settling its uncertain order.'),
+    );
+
+    const button = screen.getByRole('button', { name: 'Settle the uncertain order' });
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.getAttribute('title')).toBe('Stop the bot before settling its uncertain order.');
+    await userEvent.click(button);
+    expect(actionRequested).not.toHaveBeenCalled();
+
+    await rerender({
+      inputs: { panel: withReason('not_needed', 'No closing order is uncertain.') }, partialUpdate: true,
+    });
+    expect(screen.queryByRole('button', { name: 'Settle the uncertain order' })).toBeNull();
   });
 
   it('lists every action in All actions -- available, blocked or not needed -- with its reason and system name', async () => {

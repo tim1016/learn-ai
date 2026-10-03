@@ -1,0 +1,116 @@
+@use '../../../../styles/filled-controls' as *;
+
+:host { display: block; min-width: 0; }
+
+.settle-ticket {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--bear) 45%, var(--border-light));
+  border-left: 4px solid var(--bear);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+
+  &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  p { margin: 0; }
+}
+
+.settle-ticket__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+
+  h3 { margin: 0; font-size: var(--fs-md); }
+}
+
+.settle-ticket__close { @include soft-button; }
+
+.settle-ticket__order { line-height: 1.5; }
+
+.settle-ticket__choices {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+
+  legend {
+    padding: 0;
+    margin-bottom: var(--space-1);
+    @include field-label;
+  }
+}
+
+.settle-ticket__choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  cursor: pointer;
+
+  input { margin-top: 0.2rem; }
+  strong { display: block; font-weight: var(--fw-semi); }
+}
+
+.settle-ticket__explanation {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.settle-ticket__order-id {
+  display: grid;
+  gap: var(--space-1);
+  max-width: 28rem;
+
+  span { @include field-label; }
+  input { @include filled-field; font-family: var(--font-mono); }
+}
+
+.settle-ticket__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.settle-ticket__check { @include soft-button; }
+
+.settle-ticket__found {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+
+  h4 { margin: 0; font-size: var(--fs-sm); }
+  ul { margin: 0; padding-left: 1.1rem; line-height: 1.5; }
+}
+
+.settle-ticket__found--refused {
+  background: color-mix(in srgb, var(--bear) 12%, var(--bg-surface));
+}
+
+.settle-ticket__read {
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.settle-ticket__settle {
+  justify-self: start;
+  min-height: 2.25rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--bear);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--bear);
+  font: inherit;
+  font-weight: var(--fw-semi);
+  cursor: pointer;
+
+  &:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  &:disabled { cursor: not-allowed; opacity: 0.55; }
+}

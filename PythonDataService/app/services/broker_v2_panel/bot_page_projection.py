@@ -315,6 +315,13 @@ _CUSTODY_ENTRIES: dict[str, _CustodyEntry] = {
     "cancel_verified_working_orders": _CustodyEntry(
         "Cancel open orders", "fix", "danger", "Cancel this bot's open orders at Alpaca.", "This bot has no open orders."
     ),
+    "settle_unknown_exit_order": _CustodyEntry(
+        "Settle the uncertain order",
+        "fix",
+        "danger",
+        "Say what Alpaca shows for a closing order the Clerk could not confirm.",
+        "No closing order is uncertain.",
+    ),
     "discharge_attributed_residue": _CustodyEntry(
         "Write off missing shares",
         "fix",
@@ -459,6 +466,7 @@ def toolbar_actions(panel: BotPanelView, *, status: BotOwnStatusView) -> list[To
         _manual_order_entry(panel),
         *custody_entry("reconcile_now"),
         *custody_entry("cancel_verified_working_orders"),
+        *custody_entry("settle_unknown_exit_order"),
         *custody_entry("discharge_attributed_residue"),
         *custody_entry("recover_exact_execution_evidence"),
         *custody_entry("resolve_execution_coverage"),

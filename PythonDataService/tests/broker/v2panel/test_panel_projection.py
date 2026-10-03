@@ -2045,6 +2045,8 @@ def _served_archive(*, token: str, blocker: str | None = None) -> dict[str, obje
         "concurrency_token": token,
         "evidence_refs": [],
         "needed": True,
+        # Only a settle of an uncertain order carries one (#2854).
+        "settlement": None,
     }
 
 

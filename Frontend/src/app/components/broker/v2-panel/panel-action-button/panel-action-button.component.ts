@@ -74,6 +74,9 @@ export class PanelActionButtonComponent {
   readonly filled = input(false);
   /** The page's own tooltip -- what the action does, or why it waits -- in place of the backend's system copy. */
   readonly hint = input<string | null>(null);
+  /** The host opens this action's own ticket, which asks for more than a yes and
+   * confirms there (#2854): a press goes straight to the host, with no dialog here. */
+  readonly opensTicket = input(false);
 
   readonly triggered = output<PanelActionTrigger>();
   readonly moveRequested = output<OperatorMove>();
@@ -124,7 +127,7 @@ export class PanelActionButtonComponent {
 
   protected trigger(): void {
     if (this.disabled()) return;
-    if (this.action().confirmation) {
+    if (this.action().confirmation && !this.opensTicket()) {
       this.confirmationOpen.set(true);
       return;
     }

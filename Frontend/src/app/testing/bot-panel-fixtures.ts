@@ -184,6 +184,9 @@ const CUSTODY_ENTRIES: Readonly<Partial<Record<ToolbarActionView['action_id'], F
   cancel_verified_working_orders: {
     label: 'Cancel open orders', group: 'fix', tone: 'danger', notNeeded: 'This bot has no open orders.',
   },
+  settle_unknown_exit_order: {
+    label: 'Settle the uncertain order', group: 'fix', tone: 'danger', notNeeded: 'No closing order is uncertain.',
+  },
   discharge_attributed_residue: {
     label: 'Write off missing shares', group: 'fix', tone: 'danger', notNeeded: 'No shares are missing.',
   },
@@ -251,6 +254,7 @@ export function fakeBotPage(panel: BotPanelView): BotPageView {
       : entry('manual_order', 'Manual order', 'bot', 'available', `Place an order for ${panel.symbol} on this account.`),
     ...custody('reconcile_now'),
     ...custody('cancel_verified_working_orders'),
+    ...custody('settle_unknown_exit_order'),
     ...custody('discharge_attributed_residue'),
     ...custody('recover_exact_execution_evidence'),
     ...custody('resolve_execution_coverage'),
@@ -352,6 +356,56 @@ export function fakeSqliteStopAction(
   });
 }
 
+/** The settle action the SQLite panel presents for a stopped bot whose
+ * closing order the Clerk could not confirm (`recovery_policy`, #2854): the
+ * Clerk's ticket for the order, the two things the operator can say Alpaca
+ * shows, and the confirmation -- every sentence the backend's. */
+export function fakeSqliteSettleAction(overrides: Partial<PanelAction> = {}): PanelAction {
+  const explanation = 'Say what Alpaca shows for a closing order the Clerk could not confirm. '
+    + 'The Clerk reads Alpaca itself first and sends no order.';
+  return fakePanelAction('settle_unknown_exit_order', {
+    label: 'Settle the uncertain order',
+    explanation,
+    confirmation: {
+      title: 'Settle the uncertain order?',
+      body: explanation,
+      consequence: 'The Clerk reads Alpaca again and settles the order only if what it reads agrees with '
+        + 'what you said. It sends no order. This cannot be undone.',
+      confirm_label: 'Settle the order',
+      required_token: '',
+    },
+    evidence_refs: ['order:learn-ai/spy-momentum-01/v1:close-1'],
+    settlement: {
+      order_ref: 'learn-ai/spy-momentum-01/v1:close-1',
+      symbol: 'SPY',
+      side: 'sell',
+      quantity: 10,
+      first_sent_at_ms: OBSERVED_AT_MS,
+      ticket: 'The Clerk sent an order to sell 10 SPY on Tue Nov 14, 17:13 ET and could not confirm it. '
+        + 'It holds the position and starts no other closing order for this bot. While the order\'s session '
+        + 'is open, the Clerk sends this same order again by itself, after a wait that grows to 5 minutes and '
+        + 'then stays there. If it does, look at Alpaca again and open this action again.',
+      choices: [
+        {
+          attestation: 'absent',
+          label: 'Alpaca has no such order',
+          explanation: 'The Clerk checks once more. If it finds nothing, it ends this exit as not sent. '
+            + 'The shares stay with the bot; the Clerk may sell again after checking the account. '
+            + 'This cannot be undone.',
+          asks_broker_order_id: false,
+        },
+        {
+          attestation: 'exists',
+          label: 'Alpaca shows it',
+          explanation: 'The Clerk reads that order and takes it only if it is the same order. Nothing is sent.',
+          asks_broker_order_id: true,
+        },
+      ],
+    },
+    ...overrides,
+  });
+}
+
 /**
  * A bot's actions as the SQLite panel really presents them
  * (`sqlite_panel_adapter.adapt_sqlite_panel`): a stopped bot's `archive`
@@ -411,6 +465,11 @@ export function fakeSqliteBotActions(
       id: 'RECOVERY_SCOPE_UNSUPPORTED',
       headline: 'Discharge a residue from the single bot that holds one attributed symbol.',
       detail: 'Open the bot that holds the residue.',
+    }),
+    unavailableSqliteAction('settle_unknown_exit_order', 'Settle the uncertain order', {
+      id: 'NO_UNKNOWN_EXIT_ORDER',
+      headline: 'No closing order of this bot has an outcome the Clerk could not confirm.',
+      detail: 'Nothing to settle.',
     }),
     running
       ? fakeSqliteStopAction({}, { sid })

@@ -41,6 +41,7 @@ from app.schemas.alpaca_clerk_sqlite import (
     ExposureNoticeView,
     RecoveryStatusResponse,
     UnknownOrderAttestationRequest,
+    UnknownOrderSettlementResponse,
     require_attestation_fits,
 )
 from app.schemas.bot_end import BotEndView
@@ -149,6 +150,11 @@ class PanelAction(BaseModel):
     # and gated: the bot page shows it as "Not needed", not as a blocker
     # (#2794). Decided by the recovery policy where it writes the reason.
     needed: bool = True
+    # The closing order an available ``settle_unknown_exit_order`` asks about
+    # (#2854): the Clerk's ticket for it and what the operator may say Alpaca
+    # shows. The bot page opens its ticket from it. ``None`` for every other
+    # action, and while this one is not available.
+    settlement: UnknownOrderSettlementResponse | None = None
 
 
 BotGroup = Literal["running", "holding", "finished", "dry_run"]

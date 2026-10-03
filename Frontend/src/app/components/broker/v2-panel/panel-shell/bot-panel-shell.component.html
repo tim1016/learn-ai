@@ -66,6 +66,17 @@
         />
       }
 
+      @if (settleTicket(); as ticket) {
+        <app-settle-order-ticket
+          [action]="ticket.action"
+          [accountId]="accountId()"
+          [check]="ticket.check"
+          [settle]="ticket.settle"
+          [locked]="actionPending()"
+          (closed)="settleTicket.set(null)"
+        />
+      }
+
       @if (reductionPlan(); as plan) {
         <div #flattenTicket class="flatten-ticket" tabindex="-1" aria-label="Prepared sale">
           <app-safe-flatten-plan [plan]="plan" [pricing]="reductionPricing()" />
