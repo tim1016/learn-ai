@@ -138,9 +138,35 @@ def test_stress_calls_a_zero_result_break_even_not_a_loss() -> None:
     assert (flat["status"], flat["text"]) == ("concern", "It only breaks even before any cost stress.")
 
 
-def test_concentration_is_not_measured_so_it_is_always_missing() -> None:
-    row = _rows(_results(_candidate()))["concentration"]
-    assert row["status"] == "missing" and row["text"].startswith("Not measured")
+def _measure(status: str, *, month: float = 500.0, trades: float = 1_500.0, best: int = 1, reason: str | None = None) -> dict[str, Any]:
+    measured = status != "missing"
+    return {
+        "status": status,
+        "reason": reason,
+        "net_profit": 3_500.0 if measured else None,
+        "trades": 20 if measured else 0,
+        "best_month": {"month_start_ms": 0, "net_profit": 3_500.0 - month} if measured else None,
+        "without_best_month": month if measured else None,
+        "best_trades": [{"entry_ms": 0, "exit_ms": 1, "net_profit": 100.0}] * best if measured else [],
+        "best_trades_net_profit": 3_500.0 - trades if measured else None,
+        "without_best_trades": trades if measured else None,
+    }
+
+
+def test_concentration_reads_the_stored_measure_and_names_what_fails() -> None:
+    meets = _rows(_results(_candidate(concentration=_measure("meets", best=10))))["concentration"]
+    assert (meets["status"], meets["text"]) == ("meets", "Still profitable without its best month ($500.00) or its best 10 trades ($1,500.00).")
+    one = _rows(_results(_candidate(concentration=_measure("concern", month=500.0, trades=-250.0))))["concentration"]
+    assert (one["status"], one["text"]) == ("concern", "Not profitable without its best trade (-$250.00).")
+    both = _rows(_results(_candidate(concentration=_measure("concern", month=0.0, trades=-250.0, best=2))))["concentration"]
+    assert both["text"] == "Not profitable without its best month ($0.00) or its best 2 trades (-$250.00)."
+
+
+def test_concentration_is_missing_with_its_reason_or_for_evidence_recorded_before_it() -> None:
+    unmeasured = _rows(_results(_candidate(concentration=_measure("missing", reason="The development run made no trades."))))["concentration"]
+    assert (unmeasured["status"], unmeasured["text"]) == ("missing", "The development run made no trades.")
+    legacy = _rows(_results(_candidate()))["concentration"]
+    assert legacy["status"] == "missing" and legacy["text"].startswith("Not measured for this study")
 
 
 def test_final_exposure_follows_the_ledger_and_an_opened_test_records_its_own_state() -> None:
@@ -159,6 +185,6 @@ def test_every_row_links_to_its_evidence() -> None:
         "test_over_time": ("step", "test"),
         "neighbors": ("chart", "neighbor-tornado"),
         "stress": ("chart", "cost-stress"),
-        "concentration": ("tab", "months"),
+        "concentration": ("chart", "without-best"),
         "final_exposure": ("step", "decision"),
     }

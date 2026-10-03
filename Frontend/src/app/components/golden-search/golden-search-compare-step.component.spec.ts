@@ -89,11 +89,16 @@ describe('GoldenSearchCompareStepComponent', () => {
     const summary = screen.getByRole('region', { name: 'What the research supports' });
     const items = within(summary).getAllByRole('listitem').map((item) => item.textContent?.replace(/\s+/g, ' ').trim() ?? '');
     expect(items[0]).toMatch(/^Meets\s*Development activity\s*42 trades/);
-    expect(items.find((item) => item.includes('Concentration'))).toMatch(/^Missing\s*Concentration\s*Not measured/);
+    expect(items.find((item) => item.includes('Concentration'))).toMatch(/^Meets\s*Concentration\s*Still profitable without its best month/);
     expect(items.find((item) => item.includes('Neighbor sensitivity'))).toMatch(/^Concern/);
 
     fireEvent.click(within(summary).getByRole('button', { name: 'See the evidence for Neighbor sensitivity' }));
     expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Neighbor tornado' }));
+    // A chart inside a tab: the link opens the tab, then moves focus to the chart once it shows.
+    await screen.findByRole('img', { name: /development cumulative return and fall from peak/i });
+    fireEvent.click(within(summary).getByRole('button', { name: 'See the evidence for Concentration' }));
+    expect(evidenceTab('By month').getAttribute('aria-pressed')).toBe('true');
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Without its best' })));
     fireEvent.click(within(summary).getByRole('button', { name: 'See the evidence for Development activity' }));
     expect(evidenceTab('Trades').getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(within(summary).getByRole('button', { name: 'See the evidence for Test over time' }));
@@ -242,11 +247,12 @@ describe('GoldenSearchCompareStepComponent', () => {
     ]);
 
     // A study poll brings a new study object with the same runs and evidence: nothing is read or redrawn again.
-    await waitFor(() => expect(charts).toHaveLength(7));
+    const live = () => charts.filter((chart) => !chart.disposed);
+    await waitFor(() => expect(live()).toHaveLength(7));
     view.fixture.componentRef.setInput('study', { ...studyDetail('awaiting_candidate') });
     await view.fixture.whenStable();
     expect(service.candidate).toHaveBeenCalledTimes(3);
-    expect(charts.map((chart) => chart.options.length)).toEqual([1, 1, 1, 1, 1, 1, 1]);
+    expect(live().map((chart) => chart.options.length)).toEqual([1, 1, 1, 1, 1, 1, 1]);
   });
 
   it('About this chart opens the guide beside the chart, at that chart’s section', async () => {
@@ -277,6 +283,30 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(within(trades).getByRole('columnheader', { name: 'P&L before fees' })).toBeTruthy();
     expect(within(trades).queryByRole('columnheader', { name: /net p&l/i })).toBeNull();
     expect(first).toContain('+$243.00');
+  });
+
+  it('By month shows how much of the selected result rests on its best trades or month, each value in a table, and says why when unmeasured', async () => {
+    await renderStep();
+
+    fireEvent.click(evidenceTab('By month'));
+    const curve = await screen.findByRole('region', { name: 'Profit concentration curve' });
+    expect((await within(curve).findByRole('img')).getAttribute('aria-label')).toContain('The best 1 trade of 2 make 160.9% of its development net profit.');
+    fireEvent.click(within(curve).getByRole('button', { name: 'Show as table' }));
+    expect(within(curve).getAllByRole('row').map((row) => row.textContent ?? '')[2]).toMatch(/1\s*50\.0%\s*\+\$243\s*160\.9%/);
+
+    const without = region('Without its best');
+    expect(within(without).getByRole('img').getAttribute('aria-label')).toBe(
+      'All-period fit without its best. All-period fit: All trades +$8,700; Without its best month +$6,800; Without its best 8 trades +$5,400.',
+    );
+    fireEvent.click(within(without).getByRole('button', { name: 'Show as table' }));
+    const results = within(without).getAllByRole('row').slice(1).map((row) => row.textContent ?? '');
+    expect(results[1]).toMatch(/Without its best month \(month from 2025-11-01, ET\)\s*\+\$6,800\s*\+\$1,900/);
+    expect(results[2]).toMatch(/Without its best 8 trades\s*\+\$5,400\s*\+\$3,300/);
+
+    // Evidence recorded before concentration was measured says so; it never draws an empty or zero chart.
+    fireEvent.click(screen.getByRole('button', { name: /current settings frozen incumbent/i }));
+    expect(region('Without its best').textContent).toContain('Not measured for this study');
+    expect(within(region('Without its best')).queryByRole('img')).toBeNull();
   });
 
   it('a trade worth less than a dollar keeps its cents, and a month without a defined return reads — with no bar', async () => {
@@ -386,6 +416,11 @@ describe('GoldenSearchCompareStepComponent', () => {
     await screen.findByRole('img', { name: /development cumulative return and fall from peak/i });
     expect(await check()).toEqual([]);
     for (const toggle of screen.getAllByRole('button', { name: 'Show as table' })) fireEvent.click(toggle);
+    expect(await check()).toEqual([]);
+
+    fireEvent.click(evidenceTab('By month'));
+    await within(await screen.findByRole('region', { name: 'Profit concentration curve' })).findByRole('img');
+    for (const name of ['Profit concentration curve', 'Without its best']) fireEvent.click(within(region(name)).getByRole('button', { name: 'Show as table' }));
     expect(await check()).toEqual([]);
   });
 });

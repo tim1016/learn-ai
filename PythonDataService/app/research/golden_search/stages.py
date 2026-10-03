@@ -28,6 +28,7 @@ from app.research.golden_search import repository as repo
 from app.research.golden_search.actions import authorize
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.budget import EXAM_EVALUATIONS, PROOF_EVALUATIONS
+from app.research.golden_search.concentration import concentration
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, point_hash
 from app.research.golden_search.evaluator import (
     EvaluationCapability,
@@ -440,6 +441,17 @@ class _EvidenceRun:
         self.exhausted = metrics is None
         return metrics
 
+    def concentration(self, digest: str, metrics: Metrics | None) -> dict[str, Any]:
+        """How much of ``digest``'s development result rests on its best month or trades, from its recorded detail run."""
+        record = None
+        if metrics is not None and metrics.status == "completed":
+            start, end = self.ctx.development
+            record = run_sync(
+                with_connection(repo.find_detail_evaluation, self.evaluator.study_id, point_hash=digest, window_start_ms=start, window_end_ms=end)
+            )
+        detail = None if record is None else record.detail_json
+        return concentration(metrics, detail, commission_per_order=self.ctx.protocol.execution.commission_per_order)
+
     def neighborhoods(self, point: Mapping[str, Any], center: Metrics | None) -> tuple[Neighborhood, ...]:
         """Every searched knob one neighbor step either way from ``point``; untested once the budget is gone."""
         values = knob_values(self.ctx.declaration, point)
@@ -487,6 +499,8 @@ def _evidence(ctx: StageContext, evaluator: StudyEvaluator, verdict: Verdict) ->
                 "neighbors_audited": audit,
                 "stress": [{"scenario": item.scenario, "label": item.label, "metrics": _metrics_dict(item.metrics)} for item in stress],
                 "edge_hits": list(edges),
+                # Informs the decision summary only (ADR 0074 decision 11).
+                "concentration": run.concentration(digest, metrics),
             }
         )
     advice = recommendation(evidences, verdict, ctx.floors.policy(ctx.development))

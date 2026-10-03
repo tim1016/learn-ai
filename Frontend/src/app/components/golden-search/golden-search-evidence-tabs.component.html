@@ -24,6 +24,24 @@
     } @else if (selectedRun(); as run) {
       @if (active() === 'months') {
         <app-golden-search-monthly [monthly]="run.monthly" [candidateLabel]="row.candidate.label" />
+        <app-golden-search-grid class="concentration">
+          <app-golden-search-panel chart="concentration-curve" data-span="6">
+            @if (curve(); as spec) {
+              <app-golden-search-chart [spec]="spec" [height]="260" />
+            } @else {
+              <p class="muted">{{ run.concentration_curve?.reason ?? 'No concentration curve is recorded for this run.' }}</p>
+            }
+            <p caption class="caption">{{ row.candidate.label }} · development trades, each net of its entry and exit commission.</p>
+          </app-golden-search-panel>
+          <app-golden-search-panel chart="without-best" data-span="6">
+            @if (withoutBest(); as spec) {
+              <app-golden-search-chart [spec]="spec" [height]="180" />
+            } @else {
+              <p class="muted">{{ withoutBestNote() }}</p>
+            }
+            <p caption class="caption">Concern when the result without its best month or its best 5% of trades is $0 or less. It informs your choice; it gates nothing.</p>
+          </app-golden-search-panel>
+        </app-golden-search-grid>
       } @else {
         <app-golden-search-trades [trades]="run.trades" [candidateLabel]="row.candidate.label" />
       }

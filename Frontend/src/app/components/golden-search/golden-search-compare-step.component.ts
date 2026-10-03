@@ -165,10 +165,11 @@ export class GoldenSearchCompareStepComponent {
     return { kind: 'none', label: 'Review final-test lock', reason: study.action_refusals.select_candidate ?? 'This study cannot lock a candidate now.' };
   });
 
-  /** A summary row's evidence: one of this step's tabs or charts, or the study step that holds it. */
+  /** A summary row's evidence: one of this step's tabs or charts (in its own grid or inside a tab), or the study step that holds it. */
   protected follow(link: SummaryLink): void {
     if (link.kind === 'tab' && isEvidenceTab(link.target)) this.tabs()?.open(link.target);
     else if (link.kind === 'chart' && isOwnPanel(link.target)) this.panels().find((panel) => panel.chart() === link.target)?.focusHeading();
+    else if (link.kind === 'chart') this.tabs()?.showChart(link.target);
     else if (link.kind === 'step' && isStudyStep(link.target)) this.goTo.emit(link.target);
   }
 

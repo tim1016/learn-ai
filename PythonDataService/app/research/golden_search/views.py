@@ -3,14 +3,16 @@
 Formula (candidate run detail): from a detail run's session-close daily
 equity ``E_t`` and starting capital ``C``: cumulative return
 ``E_t / C − 1``; drawdown ``E_t / max_{s<=t} E_s − 1``; performance by month
-as ``evidence.monthly_results``. Everything else here re-shapes stored
-stage output and attaches the closed copy of ``guidance``; no number is
-computed in the browser.
+as ``evidence.monthly_results``; the development run's concentration curve
+as ``concentration.concentration_curve``. Everything else here re-shapes
+stored stage output and attaches the closed copy of ``guidance``; no number
+is computed in the browser.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2696 "Compare
   candidates and weaknesses"; the series math is
   ``app/research/golden_search/evidence.py``.
 Canonical implementation: this file (shapes); evidence.py (series math);
-  compare_measures.py (the Compare charts' measures).
+  compare_measures.py (the Compare charts' measures); concentration.py (the
+  concentration curve).
 Validated against: tests/research/golden_search/test_views.py.
 """
 
@@ -22,6 +24,7 @@ from typing import Any
 from app.research.golden_search.actions import permitted
 from app.research.golden_search.activity import TradeFloors
 from app.research.golden_search.compare_measures import neighborhood_view, stress_tally, stress_view, trades_per_year
+from app.research.golden_search.concentration import concentration_curve
 from app.research.golden_search.decision_summary import decision_summaries
 from app.research.golden_search.declarations import SearchDeclaration, declaration_for, knob_values, scalar
 from app.research.golden_search.evidence import CANDIDATE_LABELS, drawdown_series, monthly_results
@@ -348,6 +351,8 @@ def evidence_view(
                 "stress": [stress_view(result, item["development_metrics"]) for result in item["stress"]],
                 "trades_per_year": trades_per_year(item["development_metrics"], years),
                 "stress_tally": stress_tally(item["stress"]),
+                # Absent from evidence recorded before the evidence stage measured it.
+                "concentration": item.get("concentration"),
                 "edge_hits": list(item["edge_hits"]),
                 "guidance": candidate_guidance(
                     key=item["key"],
@@ -431,32 +436,50 @@ def qualification_view(row: StudyRow) -> dict[str, Any] | None:
 # ── Candidate detail ─────────────────────────────────────────────────────
 
 
-def run_detail(record: EvaluationRecord) -> dict[str, Any]:
-    """One detail run's metrics and its daily series."""
+def run_detail(record: EvaluationRecord, *, commission_per_order: float | None = None) -> dict[str, Any]:
+    """One detail run's metrics and its daily series, with its concentration curve when ``commission_per_order`` is given."""
     window = {"start_ms": record.window_start_ms, "end_ms": record.window_end_ms}
     detail = record.detail_json
+    metrics = metrics_of(record)
+    curve = None if commission_per_order is None else concentration_curve(metrics, detail, commission_per_order=commission_per_order)
     if detail is None:
-        return {"window": window, "metrics": metrics_of(record).as_dict(), "cumulative_return": [], "daily_equity": [], "drawdown": [], "monthly": [], "trades": []}
+        return {
+            "window": window,
+            "metrics": metrics.as_dict(),
+            "cumulative_return": [],
+            "daily_equity": [],
+            "drawdown": [],
+            "monthly": [],
+            "trades": [],
+            "concentration_curve": curve,
+        }
     capital = float(detail["initial_cash"])
     daily = [(int(ms), float(equity)) for ms, equity in detail["daily_equity"]]
     trades = list(detail["trades"])
     return {
         "window": window,
-        "metrics": metrics_of(record).as_dict(),
+        "metrics": metrics.as_dict(),
         "cumulative_return": [{"ms": ms, "value": equity / capital - 1.0} for ms, equity in daily],
         "daily_equity": [{"ms": ms, "equity": equity} for ms, equity in daily],
         "drawdown": [{"ms": ms, "drawdown": value} for ms, value in drawdown_series(daily)],
         "monthly": [month.as_dict() for month in monthly_results(daily, capital, [int(trade["exit_ms"]) for trade in trades])],
         "trades": trades,
+        "concentration_curve": curve,
     }
 
 
 def candidate_detail(
-    key: str, point: Mapping[str, Any], *, development: EvaluationRecord | None, exam: EvaluationRecord | None
+    key: str,
+    point: Mapping[str, Any],
+    *,
+    development: EvaluationRecord | None,
+    exam: EvaluationRecord | None,
+    commission_per_order: float,
 ) -> dict[str, Any]:
+    """The candidate's development run, with its concentration curve, and its final-test run."""
     return {
         "candidate_key": key,
         "point": dict(point),
-        "development": None if development is None else run_detail(development),
+        "development": None if development is None else run_detail(development, commission_per_order=commission_per_order),
         "exam": None if exam is None else run_detail(exam),
     }

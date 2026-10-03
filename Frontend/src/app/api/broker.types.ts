@@ -13312,6 +13312,16 @@ export interface components {
             /** Year Sessions */
             year_sessions: number;
         };
+        /** GoldenSearchBestMonth */
+        GoldenSearchBestMonth: {
+            /**
+             * Month Start Ms
+             * @description The month's start at ET midnight.
+             */
+            month_start_ms: number;
+            /** Net Profit */
+            net_profit: number;
+        };
         /** GoldenSearchCandidateDetail */
         GoldenSearchCandidateDetail: {
             /**
@@ -13425,6 +13435,69 @@ export interface components {
             /** Payload */
             payload?: Record<string, never>;
         };
+        /**
+         * GoldenSearchConcentration
+         * @description How much of the development result rests on its best month or its best trades (#2815). It never gates.
+         */
+        GoldenSearchConcentration: {
+            best_month: components["schemas"]["GoldenSearchBestMonth"] | null;
+            /**
+             * Best Trades
+             * @description The best 5% of the trades, rounded up, best first.
+             */
+            best_trades: components["schemas"]["GoldenSearchRankedTrade"][];
+            /**
+             * Best Trades Net Profit
+             * @description The best trades' net profit together.
+             */
+            best_trades_net_profit: number | null;
+            /**
+             * Net Profit
+             * @description The development run's net profit.
+             */
+            net_profit: number | null;
+            /**
+             * Reason
+             * @description Why nothing was measured; null unless the status is missing.
+             */
+            reason: string | null;
+            /**
+             * Status
+             * @description Concern when either result without its best is $0 or less.
+             * @enum {string}
+             */
+            status: "meets" | "concern" | "missing";
+            /** Trades */
+            trades: number;
+            /**
+             * Without Best Month
+             * @description Net profit less the best month's.
+             */
+            without_best_month: number | null;
+            /**
+             * Without Best Trades
+             * @description Net profit less the best trades' together.
+             */
+            without_best_trades: number | null;
+        };
+        /** GoldenSearchConcentrationCurve */
+        GoldenSearchConcentrationCurve: {
+            /**
+             * Best Count
+             * @description How many trades make the best 5%, rounded up.
+             */
+            best_count: number;
+            /**
+             * Points
+             * @description From no trades to every trade; empty when no curve is drawn.
+             */
+            points: components["schemas"]["GoldenSearchCurvePoint"][];
+            /**
+             * Reason
+             * @description Why no curve is drawn; null when it is.
+             */
+            reason: string | null;
+        };
         /** GoldenSearchConstraint */
         GoldenSearchConstraint: {
             /** Left */
@@ -13472,6 +13545,29 @@ export interface components {
              * @description A fraction of starting capital.
              */
             value: number;
+        };
+        /** GoldenSearchCurvePoint */
+        GoldenSearchCurvePoint: {
+            /**
+             * Net Profit
+             * @description Their running net profit.
+             */
+            net_profit: number;
+            /**
+             * Share Of Profit
+             * @description Their running net profit as a fraction of the run's.
+             */
+            share_of_profit: number;
+            /**
+             * Share Of Trades
+             * @description A fraction of all the run's trades.
+             */
+            share_of_trades: number;
+            /**
+             * Trades
+             * @description Trades counted so far, best first.
+             */
+            trades: number;
         };
         /** GoldenSearchDecision */
         GoldenSearchDecision: {
@@ -13691,6 +13787,8 @@ export interface components {
         };
         /** GoldenSearchEvidenceCandidate */
         GoldenSearchEvidenceCandidate: {
+            /** @description Null for a study whose evidence was recorded before the evidence stage measured concentration. */
+            concentration: components["schemas"]["GoldenSearchConcentration"] | null;
             development_metrics: components["schemas"]["GoldenSearchMetrics"] | null;
             /** Edge Hits */
             edge_hits: string[];
@@ -14361,6 +14459,18 @@ export interface components {
              */
             status: "pending" | "ready" | "failed";
         };
+        /** GoldenSearchRankedTrade */
+        GoldenSearchRankedTrade: {
+            /** Entry Ms */
+            entry_ms: number;
+            /** Exit Ms */
+            exit_ms: number;
+            /**
+             * Net Profit
+             * @description The trade's P&L less its entry and exit commission.
+             */
+            net_profit: number;
+        };
         /** GoldenSearchReceiptSummary */
         GoldenSearchReceiptSummary: {
             code: components["schemas"]["GoldenSearchCodeIdentity"];
@@ -14425,6 +14535,8 @@ export interface components {
         };
         /** GoldenSearchRunDetail */
         GoldenSearchRunDetail: {
+            /** @description The development run's; null on a final-test run. */
+            concentration_curve: components["schemas"]["GoldenSearchConcentrationCurve"] | null;
             /** Cumulative Return */
             cumulative_return: components["schemas"]["GoldenSearchCumulativeReturnPoint"][];
             /** Daily Equity */

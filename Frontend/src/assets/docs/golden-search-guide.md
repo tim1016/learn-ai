@@ -198,3 +198,89 @@ Hover a bar to see its net return, its change from the top bar, its worst fall, 
 #### An everyday comparison
 
 A bridge engineer tests a bridge with more weight than it should ever carry. If it still stands, the extra margin gives confidence. Here the extra weight is higher costs and slower fills.
+
+## Compare: by month
+
+The **By month** tab of Compare's evidence shows the selected candidate's development months, and how much of its result rests on its best month or its best few trades. The decision summary's Concentration row reports the same measure.
+
+### Profit concentration curve {#concentration-curve}
+
+#### The question it answers
+
+How fast does the selected candidate's development net profit pile up when its trades are counted from best to worst? A steep start means the result rests on a few big winners.
+
+#### What you're looking at
+
+A trade is one entry and the exit that closes it. Its net profit is what it made or lost after its entry and exit commission. The candidate's development trades are sorted from the biggest winner to the biggest loser.
+
+The horizontal axis is the share of trades counted so far, from 0% to 100%. The vertical axis is their running net profit as a share of the final net profit. The shaded line is that running total. A dashed line at 100%, labelled "all net profit", marks the final result. A dot marks the best 5% of trades, rounded up, with the share of net profit they make together.
+
+$$\text{share of net profit after } i \text{ trades} = \frac{\text{net profit of the best } i \text{ trades}}{\text{net profit of all the trades}}$$
+
+The line climbs above 100% because the winners come first: the winners alone add up to more than the final result. Then the losers begin, smallest first, each pulling the total down. After the last and biggest loss, the line ends at 100%, because all the trades together make the final net profit.
+
+The curve is drawn only when the trades, each net of its commission, add up to the run's net profit within a cent, and only when the run made money: a share of a loss means nothing. Otherwise the panel says why.
+
+Hover the line to see how many trades are counted, their running net profit and its share of the whole.
+
+#### How to read it
+
+1. A steep climb at the left means the best few trades carry much of the profit.
+2. The marked dot shows the share of net profit the best 5% of trades make.
+3. The peak is where the winning trades end. Its height is all the winners added together.
+4. The fall from the peak back to 100% is all the losing trades added together.
+
+#### Good signs and warning signs
+
+- Good: a steady climb over many trades, with the dot well below 100%.
+- Warning: the curve passes 100% within the first few percent of trades. A handful of trades earned everything.
+- Warning: the dot at or above 100%. Without those trades the result would be $0 or less, which the concentration rule flags.
+- Warning: a very tall peak. The losses gave back most of what the winners made.
+
+#### An everyday comparison
+
+Sort a basketball team's games from biggest win to biggest loss and keep a running total of the point difference. The wins push the total above the season's final figure, and the losses pull it back down.
+
+### Without its best {#without-best}
+
+#### The question it answers
+
+Does the selected candidate stay profitable over the development period without its best month, or without its best 5% of trades? This is the concentration rule, and the decision summary's Concentration row reports it.
+
+#### What you're looking at
+
+Three horizontal bars start at $0:
+
+- **All trades**, in the candidate's colour, is the whole development net profit.
+- **Without its best month** takes out the month with the highest net profit.
+- **Without its best trades** takes out the best 5% of trades, rounded up, so at least one. Each trade counts its net profit after its entry and exit commission.
+
+Each bar's value is printed at its end. A bar at $0 or less turns red, reaches left of $0, and is marked "not profitable".
+
+$$\text{without the best month} = \text{net profit} - \text{the best month's net profit}$$
+
+$$\text{without the best trades} = \text{net profit} - \text{net profit of the best } \lceil n / 20 \rceil \text{ of the } n \text{ trades}$$
+
+The rule reads **concern** when either result is $0 or less, and **meets** otherwise. It reads **missing** when the run failed or made no trades, or when its trades do not add up to the run's net profit within a cent, for example because a position was still open when the period ended. Nothing is rescaled to make them fit. The measure informs your choice; it gates nothing. A study whose evidence was recorded before concentration was measured says "Not measured for this study".
+
+Hover a bar to see what it takes out: the month and what it made, or the trades and what they made together.
+
+#### How to read it
+
+1. Start from the top bar: the development net profit with every trade.
+2. Compare the middle bar with it. The gap is what the best month made.
+3. Compare the bottom bar with it. The gap is what the best 5% of trades made together.
+4. A bar at $0 or less turns red. That is the concern the decision summary reports.
+
+#### Good signs and warning signs
+
+- Good: both lower bars well above $0, each keeping a large share of the top bar's length. The profit came from many months and many trades.
+- Warning: a bar at or below $0. The result rests on one month or a few trades that may never repeat.
+- Warning: a bar just above $0. It passes with little room to spare.
+- Warning: a large drop between bars, even when every bar stays above $0.
+
+The rule sets a floor. Passing it does not show that the profit was evenly spread, and it promises nothing about future results.
+
+#### An everyday comparison
+
+A student's term grade looks strong. The teacher drops the best test, then separately the best few homework scores, and checks whether the grade still passes. If it fails either way, the grade depended on a couple of lucky days.

@@ -20,6 +20,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
+from app.research.golden_search.concentration import Status as ConcentrationStatus
 from app.research.golden_search.declarations import KnobKind
 from app.research.golden_search.evidence import CellStatus
 from app.research.golden_search.exam_rules import CheckStatus, ExamOutcome
@@ -674,6 +675,31 @@ class GoldenSearchStressTally(_Wire):
     scenarios: int = Field(description="Stress scenarios the plan scheduled.")
 
 
+class GoldenSearchBestMonth(_Wire):
+    month_start_ms: InstantMs = Field(description="The month's start at ET midnight.")
+    net_profit: float
+
+
+class GoldenSearchRankedTrade(_Wire):
+    entry_ms: InstantMs
+    exit_ms: InstantMs
+    net_profit: float = Field(description="The trade's P&L less its entry and exit commission.")
+
+
+class GoldenSearchConcentration(_Wire):
+    """How much of the development result rests on its best month or its best trades (#2815). It never gates."""
+
+    status: ConcentrationStatus = Field(description="Concern when either result without its best is $0 or less.")
+    reason: str | None = Field(description="Why nothing was measured; null unless the status is missing.")
+    net_profit: float | None = Field(description="The development run's net profit.")
+    trades: int
+    best_month: GoldenSearchBestMonth | None
+    without_best_month: float | None = Field(description="Net profit less the best month's.")
+    best_trades: list[GoldenSearchRankedTrade] = Field(description="The best 5% of the trades, rounded up, best first.")
+    best_trades_net_profit: float | None = Field(description="The best trades' net profit together.")
+    without_best_trades: float | None = Field(description="Net profit less the best trades' together.")
+
+
 class GoldenSearchCandidateGuidance(_Wire):
     title: str
     text: str
@@ -699,6 +725,9 @@ class GoldenSearchEvidenceCandidate(_Wire):
         description="Development trades per trading year of the development window; null when the development run has no completed result."
     )
     stress_tally: GoldenSearchStressTally
+    concentration: GoldenSearchConcentration | None = Field(
+        description="Null for a study whose evidence was recorded before the evidence stage measured concentration."
+    )
     edge_hits: list[str]
     guidance: GoldenSearchCandidateGuidance
     flags: list[GoldenSearchFinding]
@@ -890,6 +919,19 @@ class GoldenSearchTrade(_Wire):
     exit_reason: str | None
 
 
+class GoldenSearchCurvePoint(_Wire):
+    trades: int = Field(description="Trades counted so far, best first.")
+    share_of_trades: float = Field(description="A fraction of all the run's trades.")
+    share_of_profit: float = Field(description="Their running net profit as a fraction of the run's.")
+    net_profit: float = Field(description="Their running net profit.")
+
+
+class GoldenSearchConcentrationCurve(_Wire):
+    points: list[GoldenSearchCurvePoint] = Field(description="From no trades to every trade; empty when no curve is drawn.")
+    best_count: int = Field(description="How many trades make the best 5%, rounded up.")
+    reason: str | None = Field(description="Why no curve is drawn; null when it is.")
+
+
 class GoldenSearchRunDetail(_Wire):
     window: GoldenSearchWindow
     metrics: GoldenSearchMetrics
@@ -898,6 +940,7 @@ class GoldenSearchRunDetail(_Wire):
     drawdown: list[GoldenSearchDrawdownPoint]
     monthly: list[GoldenSearchMonthlyResult]
     trades: list[GoldenSearchTrade]
+    concentration_curve: GoldenSearchConcentrationCurve | None = Field(description="The development run's; null on a final-test run.")
 
 
 class GoldenSearchCandidateDetail(_Wire):

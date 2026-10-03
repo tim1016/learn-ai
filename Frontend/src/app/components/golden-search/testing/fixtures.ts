@@ -2,6 +2,7 @@ import { etMidnightMs } from '../../../shared/date/et-midnight';
 import type {
   CandidateDetail,
   CandidateKey,
+  Concentration,
   DecisionSummary,
   EvidenceCandidate,
   EvidenceView,
@@ -371,6 +372,7 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       stress: [{ scenario: 'slippage_1c', label: 'Extra 1¢/share slippage', metrics: metrics({ total_return_pct: 0.041 }), return_change: -0.046 }],
       trades_per_year: 73,
       stress_tally: { in_profit: 1, recorded: 1, scenarios: 1 },
+      concentration: concentration({ without_best_month: 6800, best_trades_net_profit: 3300, without_best_trades: 5400 }),
       guidance: { title: 'Prefer evidence that survives small changes', text: 'Less return than the recent fit, with lower drawdown and several useful neighbors.' },
       flags: [],
       params_sentence: 'Gap $0.15 · RSI 48–72 · EMA 8/21 · hold 4 bars',
@@ -391,6 +393,7 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       stress: [],
       trades_per_year: 45.5,
       stress_tally: { in_profit: 0, recorded: 0, scenarios: 0 },
+      concentration: concentration({ status: 'concern', net_profit: 11600, trades: 91, without_best_month: 2100, best_trades_net_profit: 12000, without_best_trades: -400 }),
       guidance: { title: 'The extra return comes with a warning', text: 'The largest development return also exceeds your drawdown ceiling.' },
       flags: [{ code: 'DRAWDOWN_ABOVE_CEILING', text: 'Above 12% limit' }],
       params_sentence: 'Gap $0.10 · RSI 45–70 · EMA 5/10 · hold 3 bars',
@@ -411,6 +414,8 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
       stress: [],
       trades_per_year: 79,
       stress_tally: { in_profit: 0, recorded: 0, scenarios: 0 },
+      // Evidence recorded before the evidence stage measured concentration.
+      concentration: null,
       guidance: { title: 'No change can be the best decision', text: 'Keeping the incumbent is a complete research decision.' },
       flags: [],
       params_sentence: 'Gap $0.20 · RSI 50–70 · EMA 5/10 · hold 5 bars',
@@ -420,6 +425,23 @@ export function evidenceCandidate(key: CandidateKey, overrides: Partial<Evidence
     },
   };
   return { ...base[key], ...overrides };
+}
+
+/** A measured result (#2815): 8,700 net over 146 development trades unless overridden; its best month is November 2025. */
+export function concentration(overrides: Partial<Concentration> = {}): Concentration {
+  const trades = overrides.trades ?? 146;
+  return {
+    status: 'meets',
+    reason: null,
+    net_profit: 8700,
+    trades,
+    best_month: { month_start_ms: etMidnightMs('2025-11-01'), net_profit: 1900 },
+    without_best_month: 6800,
+    best_trades: Array.from({ length: Math.ceil(trades / 20) }, (_, i) => ({ entry_ms: etMidnightMs('2025-12-23') + 15 * 3600_000 - i * 86_400_000, exit_ms: etMidnightMs('2025-12-23') + 16 * 3600_000 - i * 86_400_000, net_profit: 600 - i * 50 })),
+    best_trades_net_profit: 3300,
+    without_best_trades: 5400,
+    ...overrides,
+  };
 }
 
 export function evidenceView(overrides: Partial<EvidenceView> = {}): EvidenceView {
@@ -464,6 +486,16 @@ export function candidateDetail(key: CandidateKey, overrides: Partial<CandidateD
         { entry_ms: etMidnightMs('2025-12-23') + 15 * 3600_000, exit_ms: etMidnightMs('2025-12-23') + 16 * 3600_000, entry_price: 590.1, exit_price: 592.5, quantity: 77, pnl: 243, pnl_pct: 0.0041, indicators: { rsi: 58.2, ema5: 590, ema10: 589.4 }, exit_reason: 'HOLD_COMPLETE' },
         { entry_ms: etMidnightMs('2025-12-24') + 15 * 3600_000, exit_ms: etMidnightMs('2025-12-24') + 17 * 3600_000, entry_price: 594, exit_price: 592.8, quantity: 77, pnl: -92, pnl_pct: -0.0015, indicators: { rsi: 54 }, exit_reason: null },
       ],
+      // The two trades above, best first, at no commission: 243 then 151 of 151.
+      concentration_curve: {
+        points: [
+          { trades: 0, share_of_trades: 0, share_of_profit: 0, net_profit: 0 },
+          { trades: 1, share_of_trades: 0.5, share_of_profit: 243 / 151, net_profit: 243 },
+          { trades: 2, share_of_trades: 1, share_of_profit: 1, net_profit: 151 },
+        ],
+        best_count: 1,
+        reason: null,
+      },
     },
     exam: null,
     ...overrides,
@@ -597,7 +629,7 @@ export function decisionSummary(key: CandidateKey, rows: DecisionSummary['rows']
       { key: 'test_over_time', label: 'Test over time', status: 'meets', text: 'The search procedure still worked: median out-of-sample Sharpe is positive. 9 of 9 scheduled folds completed.', link: { kind: 'step', target: 'test' } },
       { key: 'neighbors', label: 'Neighbor sensitivity', status: 'concern', text: 'A one-step change in hold_bars loses money.', link: { kind: 'chart', target: 'neighbor-tornado' } },
       { key: 'stress', label: 'Cost stresses', status: 'meets', text: 'Every stressed run still makes money.', link: { kind: 'chart', target: 'cost-stress' } },
-      { key: 'concentration', label: 'Concentration', status: 'missing', text: 'Not measured: no stage yet checks how much of the result comes from a few trades or months.', link: { kind: 'tab', target: 'months' } },
+      { key: 'concentration', label: 'Concentration', status: 'meets', text: 'Still profitable without its best month ($6,800.00) or its best 8 trades ($5,400.00).', link: { kind: 'chart', target: 'without-best' } },
       { key: 'final_exposure', label: 'Final-test exposure', status: 'meets', text: 'No recorded research has used the final interval, so its one look counts as confirmatory.', link: { kind: 'step', target: 'decision' } },
     ],
   };

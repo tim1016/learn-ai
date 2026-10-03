@@ -19,6 +19,8 @@ export interface ChartTheme {
   readonly stepAbove: string;
   /** A run under a cost stress. */
   readonly stressed: string;
+  /** A result with its best month or its best trades taken out. */
+  readonly withoutBest: string;
   /** Current settings grey, All-period fit blue, Recent fit amber. */
   readonly candidates: Readonly<Record<CandidateKey, string>>;
 }
@@ -35,6 +37,7 @@ export function chartTheme(element: HTMLElement): ChartTheme {
     stepBelow: themeColor(element, '--chart-series-sky'),
     stepAbove: themeColor(element, '--chart-series-blue'),
     stressed: themeColor(element, '--chart-series-teal'),
+    withoutBest: themeColor(element, '--chart-series-teal'),
     candidates: {
       incumbent: themeColor(element, '--text-secondary'),
       all_period: themeColor(element, '--chart-series-blue'),

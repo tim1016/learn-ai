@@ -162,6 +162,27 @@ A legacy plan carries no importance and keeps its own order and hash. Revising
 one starts every knob at 5, so its revision is searched in the strategy's order
 until the user changes a score.
 
+### 11. Concentration informs the decision summary and gates nothing
+
+Owner decision, 2026-10-02, on [#2815](https://github.com/tim1016/learn-ai/issues/2815),
+built under [#2821](https://github.com/tim1016/learn-ai/issues/2821): the
+evidence stage measures how much of each candidate's development result rests
+on its best month or its best trades, and stores that measure with the
+candidate's evidence. Compare's decision summary reads its Concentration row
+from it:
+
+- **concern** when the development net profit without its best month, or
+  without its best 5% of trades (rounded up, at least one), is $0 or less;
+- **meets** otherwise;
+- **missing** when the run was not evaluated, failed or made no trades, or
+  when its trades, each net of its own entry and exit commission, do not add up
+  to the run's net profit within a cent. Nothing is rescaled to make them fit.
+
+The measure informs. Selection, eligibility, the recommendation and the final
+test are unchanged, and no rule reads it. Evidence recorded before the stage
+measured concentration is not backfilled: its row reads "Not measured for this
+study".
+
 ## Consequences
 
 - An owner-approved tuple for one stock is deployable in Paper or Live without a code edit, a qualification script or a restart. Other stocks keep the registry point.
