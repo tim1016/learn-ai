@@ -6,12 +6,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { GoldenSearchDecisionStepComponent } from './golden-search-decision-step.component';
 import type { StudyStep } from './golden-search-steps';
 import { GoldenSearchService } from './golden-search.service';
-import type { CandidateKey, ExamView, StudyCommand, StudyDetail } from './golden-search.types';
+import type { CandidateDetail, CandidateKey, ExamView, StudyCommand, StudyDetail } from './golden-search.types';
 import { fakeCharts } from './testing/fake-charts';
 import { candidateDetail, emaCapability, examView, exposure, finalRun, frequencyProtocol, protocol, studyDetail, tradeActivity } from './testing/fixtures';
 
-async function renderStep(study: StudyDetail) {
-  const service = { candidate: vi.fn(async (_id: string, key: CandidateKey) => candidateDetail(key, { exam: finalRun(key) })) };
+async function renderStep(study: StudyDetail, exam: (key: CandidateKey) => CandidateDetail['exam'] = finalRun) {
+  const service = { candidate: vi.fn(async (_id: string, key: CandidateKey) => candidateDetail(key, { exam: exam(key) })) };
   const view = await render(GoldenSearchDecisionStepComponent, {
     inputs: { study, capability: emaCapability() },
     providers: [provideRouter([]), { provide: GoldenSearchService, useValue: service }, ...fakeCharts().providers],
@@ -53,6 +53,14 @@ describe('GoldenSearchDecisionStepComponent — final-test charts', () => {
     const months = screen.getByRole('region', { name: 'Final-test months' });
     fireEvent.click(within(months).getByRole('button', { name: 'Show as table' }));
     expect(within(months).getAllByRole('row')[1].textContent).toMatch(/Jan 2026\s*\+0\.7%\s*\+0\.4%/);
+  });
+
+  it('says which run of the pair has no final-test record instead of dropping it', async () => {
+    const { service } = await renderStep(studyDetail('awaiting_review'), (key) => (key === 'incumbent' ? null : finalRun(key)));
+    await screen.findByRole('region', { name: 'Development against final' });
+
+    expect(service.candidate).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/No final-test run is recorded for Current settings, so these charts show the other run only\./)).toBeTruthy();
   });
 
   it('reads the final-test runs once; a poll keeps them drawn', async () => {
