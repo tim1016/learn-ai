@@ -1154,7 +1154,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 # The trace/decision identity is Decimal-exact and
                 # SHA-256-compared (signal_program.py), not
                 # tolerance-compared -- see
-                # test_validated_sma_settings_corpus_has_a_pinned_trace_root's
+                # test_validated_settings_corpus_has_a_pinned_trace_root[sma_crossover]'s
                 # byte-exact trace_root assertion. Unlike EMA, there is no
                 # second, one-level-down LEAN-value-parity claim here (no
                 # tolerance_atol/tolerance_rtol/parity_fixture_ids) --
@@ -1316,7 +1316,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 # The trace/decision identity is Decimal-exact and
                 # SHA-256-compared (signal_program.py), not
                 # tolerance-compared -- see
-                # test_validated_rsi_mean_reversion_settings_corpus_has_a_pinned_trace_root's
+                # test_validated_settings_corpus_has_a_pinned_trace_root[rsi_mean_reversion]'s
                 # byte-exact trace_root assertion. Same as sma_crossover:
                 # no second, one-level-down LEAN-value-parity claim here --
                 # nothing beyond this corpus's own self-consistency has been
@@ -1696,7 +1696,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 # The trace/decision identity is Decimal-exact and
                 # SHA-256-compared (signal_program.py), not
                 # tolerance-compared -- see
-                # test_validated_spy_strategy_a_settings_corpus_has_a_pinned_trace_root's
+                # test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_a]'s
                 # byte-exact trace_root assertion. Same as sma_crossover:
                 # nothing beyond this corpus's own self-consistency has been
                 # established for this promotion, so no
@@ -1893,7 +1893,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 # The trace/decision identity is Decimal-exact and
                 # SHA-256-compared (signal_program.py), not
                 # tolerance-compared -- see
-                # test_validated_spy_strategy_b_settings_corpus_has_a_pinned_trace_root's
+                # test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_b]'s
                 # byte-exact trace_root assertion. Same as sma_crossover: no
                 # second, one-level-down LEAN-value-parity claim exists for
                 # this promotion (no tolerance_atol/tolerance_rtol/
