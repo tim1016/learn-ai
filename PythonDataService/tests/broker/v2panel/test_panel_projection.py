@@ -34,6 +34,7 @@ from app.broker.alpaca.clerk.sqlite.exit import accept_exit
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     ClerkProjection,
     ProjectedCommand,
+    ProjectedHold,
     ProjectedOperation,
     ProjectedOrder,
     ProjectedPosition,
@@ -3035,15 +3036,31 @@ def test_the_clerks_own_pass_vouches_for_a_flat_bot_with_no_fresh_receipt() -> N
     assert _notices(_refused_panel("CRASHED"), _unreceipted_projection(), pass_proof=_pass_proof()) == []
 
 
-def test_the_clerks_own_pass_names_what_the_ended_bot_still_holds() -> None:
+def test_the_clerks_own_pass_names_what_the_ended_bot_holds_and_sends_the_owner_to_reconcile_first() -> None:
+    """Flatten still needs a fresh Reconcile now receipt, so a notice the pass
+    alone vouches for never offers a Flatten the page would refuse."""
     outcome = adapt_sqlite_panel(
         _refused_panel("CRASHED"), _unreceipted_projection(), pass_proof=_pass_proof(exposure={"SPY": 3.0})
     ).health.duty_outcome
 
     assert outcome is not None
     (notice,) = outcome.exposure_notices
-    assert (notice.kind, notice.action_label) == ("position_unmanaged", "Flatten")
+    assert (notice.kind, notice.action_label) == ("position_unmanaged", "Open bot")
     assert "3 SPY" in notice.explanation
+    assert notice.explanation.endswith("Reconcile now, then use Flatten to close this position.")
+
+
+def test_a_fresh_reconcile_now_receipt_offers_flatten_whatever_the_pass_proved() -> None:
+    projection = replace(_exposure_projection(orders=()), positions=_held(3.0))
+
+    outcome = adapt_sqlite_panel(
+        _refused_panel("CRASHED"), projection, pass_proof=_pass_proof(exposure={"SPY": 3.0})
+    ).health.duty_outcome
+
+    assert outcome is not None
+    (notice,) = outcome.exposure_notices
+    assert (notice.kind, notice.action_label) == ("position_unmanaged", "Flatten")
+    assert notice.explanation.endswith("Use Flatten to close this position.")
 
 
 @pytest.mark.parametrize(
@@ -3087,7 +3104,7 @@ def test_a_clean_pass_never_vouches_over_an_unhealthy_authority() -> None:
         pytest.param(None, _NOW - 4_000, _NOW - 4_000, id="no-receipt-ever"),
     ],
 )
-def test_sqlite_status_dates_the_last_check_by_the_newest_of_receipt_and_pass(
+def test_sqlite_status_dates_a_clean_check_by_the_newest_of_receipt_and_pass(
     receipt_at_ms: int | None, pass_at_ms: int | None, checked_at_ms: int
 ) -> None:
     """#2826: "last checked" read days old while the Clerk had checked the account seconds before."""
@@ -3103,6 +3120,19 @@ def test_sqlite_status_dates_the_last_check_by_the_newest_of_receipt_and_pass(
 
 def test_sqlite_status_has_no_last_check_before_any_receipt_or_clean_pass() -> None:
     assert sqlite_clerk_status(_rail_projection(orders=()), last_clean_pass_at_ms=None).latest_reconciliation is None
+
+
+def test_sqlite_status_that_is_not_clean_keeps_its_receipts_time() -> None:
+    """A clean pass did not see what holds the account, so it does not date a status that is not clean."""
+    hold = ProjectedHold(
+        hold_id="hold:stream", scope="ACCOUNT", strategy_instance_id=None,
+        reason_code="STREAM_HEALTH_HOLD", opened_at_ms=_NOW - 9_000, evidence_refs=(),
+    )
+    projection = replace(_exposure_projection(orders=()), holds=(hold,))
+
+    status = sqlite_clerk_status(projection, last_clean_pass_at_ms=_NOW - 4_000)
+
+    assert status.latest_reconciliation == ReconciliationSummary(verdict="unexplained_order", recorded_at_ms=_NOW - 100)
 
 
 def test_operator_stop_keeps_its_own_copy_even_with_exposure() -> None:

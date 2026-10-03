@@ -276,9 +276,10 @@ def sqlite_clerk_status(
 
     ``last_clean_pass_at_ms`` is when the Clerk's own latest pass found the
     account clean (``SqliteAlpacaClerkFacade.last_clean_pass_at_ms``). The
-    status names the later of it and the newest durable receipt as the time
-    the account was last checked: the 15 s sweep checks the whole account but
-    writes no receipt (#2826).
+    15 s sweep checks the whole account but writes no receipt, so a clean
+    status names the later of that pass and the newest durable receipt as
+    the time the account was last checked (#2826). A status that is not
+    clean keeps the receipt's time: the pass did not see what holds it.
     """
     hold = projection.holds[0] if projection.holds else None
     unresolved = sum(
@@ -286,20 +287,23 @@ def sqlite_clerk_status(
         for operation in projection.operations
     )
     latest = projection.latest_reconciliation
-    checked_at_ms = max(
-        (
-            at_ms
-            for at_ms in (None if latest is None else latest.attempted_at_ms, last_clean_pass_at_ms)
-            if at_ms is not None
-        ),
-        default=None,
-    )
     if projection.uncertainties:
         verdict = "stale"
     elif hold is not None:
         verdict = "unexplained_order"
     else:
         verdict = "clean"
+    checked_at_ms = max(
+        (
+            at_ms
+            for at_ms in (
+                None if latest is None else latest.attempted_at_ms,
+                last_clean_pass_at_ms if verdict == "clean" else None,
+            )
+            if at_ms is not None
+        ),
+        default=None,
+    )
     return ClerkStatus(
         broker="alpaca",
         account_id=projection.account_id,

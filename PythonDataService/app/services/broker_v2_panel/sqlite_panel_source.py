@@ -1248,39 +1248,40 @@ def home_roster(repository: ClerkSqliteRepository, *, world: AuthorityKind) -> l
 
 @dataclass(frozen=True)
 class _UncleanEnd:
-    """One uncleanly ended bot, with its custody cut on the account's snapshot.
-
-    ``projection`` is ``None`` when its lifecycle or custody evidence could not be read.
-    """
+    """One uncleanly ended bot, with its custody cut on the account's snapshot."""
 
     sid: str
     symbol: str
-    kind: str = ""
-    projection: ClerkProjection | None = None
+    kind: str
+    projection: ClerkProjection
 
 
 async def read_account_custody(
     facade: SqliteAlpacaClerkFacade,
 ) -> tuple[ClerkProjection, list[ExposureNoticeView]]:
     """Read desk and bell custody with terminal notices on one SQLite snapshot."""
-    def read() -> tuple[ClerkProjection, list[_UncleanEnd]]:
+    def read() -> tuple[ClerkProjection, list[_UncleanEnd], list[ExposureNoticeView]]:
         reader = SqliteClerkProjectionReader.from_facade(facade)
         try:
             with reader.snapshot():
                 projection = reader.account_snapshot()
-                return projection, _unclean_ends(facade, reader)
+                return projection, *_unclean_ends(facade, reader)
         finally:
             reader.close()
 
-    projection, ends = await asyncio.to_thread(read)
-    return projection, await _terminal_exposure_notices(facade, ends)
+    projection, ends, unreadable = await asyncio.to_thread(read)
+    return projection, [*unreadable, *await _terminal_exposure_notices(facade, ends)]
 
 
 def _unclean_ends(
     facade: SqliteAlpacaClerkFacade, reader: SqliteClerkProjectionReader,
-) -> list[_UncleanEnd]:
-    """Reuse roster lifecycle truth; a bad bot never hides its healthy siblings. Blocking."""
+) -> tuple[list[_UncleanEnd], list[ExposureNoticeView]]:
+    """The uncleanly ended bots, and a notice for each one whose evidence could not be read. Blocking.
+
+    Reuses roster lifecycle truth; a bad bot never hides its healthy siblings.
+    """
     ends: list[_UncleanEnd] = []
+    unreadable: list[ExposureNoticeView] = []
     repository = facade.repository
     # A retired registration with no live custody is the catalog's inert row
     # (#1911): retirement settled its outcome, and nothing of it can need the
@@ -1304,8 +1305,18 @@ def _unclean_ends(
                 "action": "terminal_exposure_unreadable", "strategy_instance_id": sid,
                 "account_id": repository.account_id,
             }, exc_info=True)
-            ends.append(_UncleanEnd(sid=sid, symbol=str(registration["symbol"])))
-    return ends
+            unreadable.append(ExposureNoticeView(
+                strategy_instance_id=sid, symbol=str(registration["symbol"]),
+                kind="position_unverified", label="Position could not be verified",
+                # Every fix it names is in the app (hurdle H29).
+                explanation=(
+                    "This bot's lifecycle or custody evidence could not be read, so the app cannot vouch "
+                    "for what it holds. Reconcile now re-reads the account at Alpaca; Flatten becomes "
+                    "available once the position is proven."
+                ),
+                action_label="Open bot",
+            ))
+    return ends, unreadable
 
 
 async def _terminal_exposure_notices(
@@ -1317,19 +1328,6 @@ async def _terminal_exposure_notices(
     """
     notices: list[ExposureNoticeView] = []
     for end in ends:
-        if end.projection is None:
-            notices.append(ExposureNoticeView(
-                strategy_instance_id=end.sid, symbol=end.symbol,
-                kind="position_unverified", label="Position could not be verified",
-                # Every fix it names is in the app (hurdle H29).
-                explanation=(
-                    "This bot's lifecycle or custody evidence could not be read, so the app cannot vouch "
-                    "for what it holds. Reconcile now re-reads the account at Alpaca; Flatten becomes "
-                    "available once the position is proven."
-                ),
-                action_label="Open bot",
-            ))
-            continue
         notices.extend(terminal_exposure_notices(
             end.projection, sid=end.sid, symbol=end.symbol, kind=end.kind, running=False,
             pass_proof=await facade.published_custody(end.sid),

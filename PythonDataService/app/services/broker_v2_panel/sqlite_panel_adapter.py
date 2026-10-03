@@ -804,18 +804,23 @@ def _vouched_holdings(
         return None
     if pass_proof is not None and not pass_proof.unprovable:
         return dict(pass_proof.exposure)
-    reconciliation = projection.latest_reconciliation
-    if not (
-        reconciliation is not None and reconciliation.outcome == "RESOLVED_SUCCESS"
-        and reconciliation.effect_operation_id is None and reconciliation.order_ref is None
-        and 0 <= projection.generated_at_ms - reconciliation.attempted_at_ms <= FRESH_EVIDENCE_MAX_AGE_MS
-    ):
+    if not _has_fresh_account_receipt(projection):
         return None
     return {
         position.symbol: position.attributed_qty
         for position in projection.positions
         if position.strategy_instance_id == sid and position_quantity_is_nonzero(position.attributed_qty)
     }
+
+
+def _has_fresh_account_receipt(projection: ClerkProjection) -> bool:
+    """Whether a Reconcile now receipt for the whole account is still fresh: what Flatten asks for."""
+    reconciliation = projection.latest_reconciliation
+    return (
+        reconciliation is not None and reconciliation.outcome == "RESOLVED_SUCCESS"
+        and reconciliation.effect_operation_id is None and reconciliation.order_ref is None
+        and 0 <= projection.generated_at_ms - reconciliation.attempted_at_ms <= FRESH_EVIDENCE_MAX_AGE_MS
+    )
 
 
 def _is_working(order: ProjectedOrder) -> bool:
@@ -871,16 +876,23 @@ def terminal_exposure_notices(
         return []
     notices: list[ExposureNoticeView] = []
     held = _vouched_holdings(projection, sid, pass_proof)
+    # Flatten still asks for a fresh Reconcile now receipt; the Clerk's own
+    # pass vouches for the notice only, so the notice never offers a Flatten
+    # the page would refuse.
+    flatten_ready = _has_fresh_account_receipt(projection)
     if held is None:
         notices.append(_POSITION_UNVERIFIED)
     elif held:
         positions = ", ".join(f"{quantity:g} {held_symbol}" for held_symbol, quantity in held.items())
-        closing = (
-            "The Clerk is still working this bot's exit order; Flatten becomes available "
-            "if that order ends without closing the position."
-            if exit_in_progress(projection, sid)
-            else "Use Flatten to close this position."
-        )
+        if exit_in_progress(projection, sid):
+            closing = (
+                "The Clerk is still working this bot's exit order; Flatten becomes available "
+                "if that order ends without closing the position."
+            )
+        elif flatten_ready:
+            closing = "Use Flatten to close this position."
+        else:
+            closing = "Reconcile now, then use Flatten to close this position."
         notices.append(
             ExposureNoticeView(
                 kind="position_unmanaged",
@@ -900,7 +912,7 @@ def terminal_exposure_notices(
         notices.append(_ENTRY_ORDER_WORKING)
     return [notice.model_copy(update={
         "strategy_instance_id": sid, "symbol": symbol,
-        "action_label": "Flatten" if notice.kind == "position_unmanaged" else "Open bot",
+        "action_label": "Flatten" if notice.kind == "position_unmanaged" and flatten_ready else "Open bot",
     }) for notice in notices]
 
 

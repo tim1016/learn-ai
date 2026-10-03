@@ -586,21 +586,29 @@ async def test_the_clerks_own_pass_clears_the_unclean_exit_line_once_it_vouches_
 
 
 @pytest.mark.parametrize(
-    ("verdict", "desk_notices", "last_checked_ms"),
+    ("verdict", "read_after_ms", "desk_notices", "bell_lines", "last_checked_ms"),
     [
-        pytest.param("clean", [], _T0 + 45_000, id="clean-pass"),
+        pytest.param("clean", 0, [], [], _T0 + 45_000, id="clean-pass"),
         pytest.param(
-            "position_drift", ["Position could not be verified"], _T0 - 864_000_000, id="unclean-pass",
+            "position_drift", 0, ["Position could not be verified"], ["positions-unchecked"], _T0 - 864_000_000,
+            id="unclean-pass",
+        ),
+        # The pass still dates the last check, but a sweep that has stopped vouches for no bot.
+        pytest.param(
+            "clean", 60_001, ["Position could not be verified"], ["positions-unchecked"], _T0 + 45_000,
+            id="pass-older-than-the-sweeps-liveness-bound",
         ),
     ],
 )
 async def test_the_clerks_own_pass_vouches_on_the_desk_and_dates_the_sync_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    verdict: str, desk_notices: list[str], last_checked_ms: int,
+    verdict: str, read_after_ms: int, desk_notices: list[str], bell_lines: list[str], last_checked_ms: int,
 ) -> None:
     """#2826: the desk's "Position could not be verified" and the status's
     "last checked" counted only a Reconcile now receipt, so a clean 15 s pass
-    left the notice up and the time days old. An unclean pass changes neither."""
+    left the notice up and the time days old. An unclean pass changes
+    neither, and a pass the sweep has not renewed stops vouching, on the desk
+    and on the bell alike."""
     from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
     from app.services.broker_v2_panel import sqlite_roster_status
 
@@ -615,6 +623,7 @@ async def test_the_clerks_own_pass_vouches_on_the_desk_and_dates_the_sync_check(
     facade.publish_sweep_reconciliation(AccountReconciliationResult(
         verdict=verdict, through_sequence=repo.last_custody_sequence("paper-0"),
     ))
+    clock.now_ms += read_after_ms
     set_active_clerk_runtime(ActiveClerkRuntime(
         authority_kind="sqlite", clerk=facade, _sqlite_repository=repo, account_id=ACCOUNT,
     ))
@@ -622,11 +631,13 @@ async def test_the_clerks_own_pass_vouches_on_the_desk_and_dates_the_sync_check(
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             desk = await client.get(f"/api/alpaca-clerk-sqlite/accounts/{ACCOUNT}/snapshot")
             status = await client.get("/api/brokers/alpaca/clerk/status")
+            bell = await client.get("/api/brokers/alpaca/attention")
     finally:
         repo.close()
 
-    assert desk.status_code == status.status_code == 200
+    assert desk.status_code == status.status_code == bell.status_code == 200
     assert [notice["label"] for notice in desk.json()["exposure_notices"]] == desk_notices
+    assert [item["condition_id"] for item in bell.json()["items"]] == bell_lines
     assert status.json()["latest_reconciliation"]["recorded_at_ms"] == last_checked_ms
 
 

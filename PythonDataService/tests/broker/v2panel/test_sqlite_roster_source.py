@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import threading
@@ -307,9 +306,8 @@ def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
 
     # Missing per-bot custody is an explicit warning, including a crash whose
     # RUN_STOPPED fold failed. It must not disappear from the desk or bell.
-    notices = asyncio.run(sqlite_panel_source._terminal_exposure_notices(
-        facade, sqlite_panel_source._unclean_ends(facade, SimpleNamespace(bot_snapshot=lambda _sid: None)),
-    ))
+    ends, notices = sqlite_panel_source._unclean_ends(facade, SimpleNamespace(bot_snapshot=lambda _sid: None))
+    assert ends == []
     assert [(notice.strategy_instance_id, notice.kind) for notice in notices] == [
         ("active-spy", "position_unverified"),
     ]
