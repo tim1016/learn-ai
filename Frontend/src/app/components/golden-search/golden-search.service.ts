@@ -13,6 +13,7 @@ import type {
   EvaluationQuery,
   GoldenSearchDefaults,
   GoldenSearchPreflight,
+  PlanCharts,
   ProtocolRequest,
   QualificationDeployOffer,
   StrategyCapability,
@@ -157,6 +158,11 @@ export class GoldenSearchService {
     if (query.stage) params = params.set('stage', query.stage);
     if (query.fold_index !== undefined) params = params.set('fold_index', String(query.fold_index));
     return firstValueFrom(this.http.get<EvaluationPage>(`${this.base}/studies/${encodeURIComponent(id)}/evaluations`, { params }));
+  }
+
+  /** The Plan step's charts for a locked study. */
+  async planCharts(id: string): Promise<PlanCharts> {
+    return firstValueFrom(this.http.get<PlanCharts>(`${this.base}/studies/${encodeURIComponent(id)}/charts/plan`));
   }
 
   /** The Search step's charts: each recorded procedure's path, knob moves, profiles and scored points. */

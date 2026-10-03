@@ -279,6 +279,13 @@ export type MeasuredConcentration = Schemas['GoldenSearchConcentrationMeasured']
 export type CandidateRef = Pick<EvidenceCandidate, 'key' | 'label'>;
 export type CandidateRunDetail = Schemas['GoldenSearchRunDetail'];
 
+/** `GET /studies/{id}/charts/plan`: a locked study's frozen windows, search space, workload, trade minimums and lake coverage. */
+export type PlanCharts = Schemas['GoldenSearchPlanCharts'];
+export type PlanWindow = Schemas['GoldenSearchPlanWindow'];
+export type PlanKnob = Schemas['GoldenSearchPlanKnob'];
+export type MinimumWindow = Schemas['GoldenSearchMinimumWindow'];
+export type CoverageMonth = Schemas['GoldenSearchCoverageMonth'];
+
 /** `GET /studies/{id}/charts/search`: each recorded procedure's path, knob moves, profiles and scored points. */
 export type TriedPoint = Omit<Schemas['GoldenSearchTriedPoint'], 'point'> & { point: Point };
 export type ScoredPoint = Omit<Schemas['GoldenSearchScoredPoint'], 'point'> & { point: Point };

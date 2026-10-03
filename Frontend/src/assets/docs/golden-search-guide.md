@@ -16,6 +16,176 @@ A few rules hold for every chart:
 - **Every number comes from the study.** The charts draw values the research recorded; the page computes none of its own.
 - **Show as table.** Every chart can show its values as a table, for reading without a mouse or with a screen reader.
 
+## Plan
+
+The Plan step shows what a locked study froze: its windows, its search space, how much work it may do, how many trades each window needs, and whether the data lake holds the bars it reads. Nothing here changes after lock; Revise starts a new study.
+
+### Plan at a glance {#plan-tiles}
+
+#### The question it answers
+
+What did you lock in, in four numbers?
+
+#### What you're looking at
+
+Four tiles: the search method and its settings, the development period with its trading sessions, the final test with its sessions and whether it has been opened, and the engine runs the plan may use against the study's cap.
+
+#### How to read it
+
+1. The search method: Zoom moves one knob at a time; Grid tries every combination.
+2. The development period: the data the search chooses on, with its trading sessions.
+3. The final test: kept sealed until you choose, then opened once.
+4. The engine runs the plan may use, against the study’s cap.
+
+#### Good signs and warning signs
+
+- Good: a development period of several years and a final test long enough to hold real trades.
+- Warning: a short final test. Opened once, it may hold too few trades to tell anything.
+
+#### An everyday comparison
+
+The cover sheet of an exam: how long it is, what it covers, and how much time you have.
+
+### Window map {#window-map}
+
+#### The question it answers
+
+Which months does each part of the study use?
+
+#### What you're looking at
+
+A row for each window the plan evaluates, on one time axis in Eastern dates: the run-up that warms the indicators up, the development period, the recent fit's window, each fold's training and test windows, all forward tests together, and the final test. Hover a window for its dates, its trading sessions and its trade minimum. The run-up and a single fold's test have no minimum of their own.
+
+$$\text{sessions in a window} = \text{the trading calendar's sessions from its first to its last day}$$
+
+#### How to read it
+
+1. Each row is a window, on one time axis: the run-up, development, the recent fit, each fold, and the final test.
+2. The run-up only warms the indicators; nothing is judged on it.
+3. The folds’ test windows follow one another; together they are the forward tests the verdict counts trades over.
+4. Hover a window for its dates, sessions and trade minimum. The final test sits after everything else, untouched.
+
+#### Good signs and warning signs
+
+- Good: the final test entirely after the development period, with no overlap.
+- Warning: folds whose training windows are only a month or two. Each fold then chooses on very little data.
+
+#### An everyday comparison
+
+A school year planner: term dates, practice tests along the way, and the final exam at the end.
+
+### Search space {#search-space}
+
+#### The question it answers
+
+How much of each knob's legal range does the search explore?
+
+#### What you're looking at
+
+A row for each knob, drawn across its whole legal range, in the order the search takes them. The blue band is the range the search may try; a held knob is a single grey mark at its value. The diamond is the current settings. Hover a knob for its step, how many values it can take, and its importance.
+
+$$\text{position} = \frac{\text{value} - \text{legal low}}{\text{legal high} - \text{legal low}}$$
+
+#### How to read it
+
+1. Each row is a knob, drawn across its whole legal range.
+2. The band is the range the search may try; a held knob is a single grey mark.
+3. The diamond is the current settings. A diamond outside a band means the search cannot return to today’s value.
+4. Hover a knob for its step, how many values it can take and its importance: higher importance is searched first.
+
+#### Good signs and warning signs
+
+- Good: bands that include the current settings, so the search can keep them.
+- Warning: a narrow band far from the current settings. The search can only move away.
+
+#### An everyday comparison
+
+A map with the area you will search shaded in, and a pin where you are standing now.
+
+### Workload {#workload}
+
+#### The question it answers
+
+How many engine runs does each stage plan, and how many has it used?
+
+#### What you're looking at
+
+A row for each stage. The grey bar is the most engine runs the plan allows the stage, frozen at lock; the blue bar is how many it has reserved so far. A cached answer reuses an earlier run without spending the cap.
+
+#### How to read it
+
+1. Each row is a stage of the study.
+2. The grey bar is the most runs the plan allows the stage.
+3. The blue bar is how many it has reserved so far.
+4. A stage that reaches its plan may stop short; the study notes it as incomplete.
+
+#### Good signs and warning signs
+
+- Good: blue bars inside their grey bars.
+- Warning: a stage at its limit. Its results may be incomplete.
+
+#### An everyday comparison
+
+A budget beside the receipts: what each line was allowed, and what it has spent.
+
+### Trade minimums {#trade-minimums}
+
+#### The question it answers
+
+How many trades must each window reach for its results to count?
+
+#### What you're looking at
+
+A bar for each window's trade minimum. With an expected trade frequency, each window's minimum is that frequency times the window's trading years, rounded up, where a trading year counts each calendar year's sessions in the window against all its sessions:
+
+$$\text{minimum} = \left\lceil \text{trades a year} \times \sum_{\text{years}} \frac{\text{sessions in the window that year}}{\text{sessions that year}} \right\rceil$$
+
+The receipt froze these at lock. A fixed-floor plan shows its two floors instead. Hover a window for its trading years, year by year.
+
+#### How to read it
+
+1. Each bar is a window’s trade minimum.
+2. With an expected trade frequency, the minimum grows with the window’s trading years, rounded up.
+3. Hover a window for its trading years, year by year.
+4. A fixed-floor plan shows its two floors instead: one for every selection window, one for the final test.
+
+#### Good signs and warning signs
+
+- Good: minimums that match how often the strategy really trades.
+- Warning: minimums far above what the strategy trades. Every window will fail the rule.
+
+#### An everyday comparison
+
+A survey's minimum sample: a longer survey needs more answers before its result counts.
+
+### Data coverage {#data-coverage}
+
+#### The question it answers
+
+Does the lake hold the minute bars the study's data span needs?
+
+#### What you're looking at
+
+A bar for each month of the study's data span, from the run-up's start to the final test's end, as tall as the month's trading sessions. Each bar is split by what the data lake holds for those sessions: complete in green, still fetching in amber, failed in red, and not in the lake at all in grey. Weekends and holidays are not sessions, so they never count as missing.
+
+This is the lake now. The study ran on the data snapshot frozen at lock, which this cannot change.
+
+#### How to read it
+
+1. Each bar is a month of the study’s data span, as tall as its trading sessions.
+2. Green sessions are complete in the lake.
+3. Amber is still fetching, red failed, and grey not in the lake at all.
+4. This is the lake now. The study ran on the data snapshot frozen at lock, which this cannot change.
+
+#### Good signs and warning signs
+
+- Good: solid green bars.
+- Warning: grey or red months inside the span. A revised plan reading them would find holes.
+
+#### An everyday comparison
+
+A library shelf check: every volume of a series on the shelf, or gaps where some are out or lost.
+
 ## Search
 
 Search fits the settings. The all-period search runs on the whole development period from the frozen starting point; when the plan asks for it, the recent fit runs the same way on only the last few months. Every number here is in-sample: these runs chose the settings, so they show how the choice was made, not how well it will hold.
