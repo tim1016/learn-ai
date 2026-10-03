@@ -14,6 +14,10 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from app.broker.alpaca.clerk.account_authority import (
+    AccountAuthorityIdentityError,
+    shadow_account_id_for_live_account,
+)
 from app.engine.live.bot_lifecycle_state import (
     BotDutyOutcome,
     BotLifecyclePhase,
@@ -75,6 +79,23 @@ class ForeignBinding:
     strategy_instance_id: str
     sealed_account_id: str
     installed_account_id: str
+
+    @property
+    def rehearsed_on_installed_account(self) -> bool:
+        """Whether the binding is sealed on the installed account's own Shadow store (#2694).
+
+        The one rule for the foreign store Clear and Home may read in the
+        installed Clerk's place: ``shadow:<installed account>``, where that
+        account rehearsed before it went live. Another account's ``shadow:``
+        store is as foreign as another real account's, and a Clear on this
+        account must never retire a registration there. An installed id that
+        has no Shadow store of its own -- it is itself a ``shadow:`` or
+        ``sim:`` id -- pairs with none.
+        """
+        try:
+            return self.sealed_account_id == shadow_account_id_for_live_account(self.installed_account_id)
+        except AccountAuthorityIdentityError:
+            return False
 
 
 @dataclass(frozen=True, slots=True)

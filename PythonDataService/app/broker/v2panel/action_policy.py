@@ -148,8 +148,9 @@ def evaluate_archive(
     installed Clerk does not custody (#2589). Nothing here can prove it holds
     nothing, and no wait changes that, so it is refused before its duty
     settles: a not-yet-settled refusal would promise a clear that never
-    comes. The one such account that keeps a proof of its own, a graduated
-    Shadow store, is answered by ``evaluate_rehearsal_custody`` instead.
+    comes. The one such account that keeps a proof of its own, the installed
+    account's own graduated Shadow store, is answered by
+    ``evaluate_rehearsal_custody`` instead.
 
     ``outstanding_effect_count`` is bot-scoped and asymmetric by design: the
     commit-time caller reads it from a freshly reconciled custody snapshot,
@@ -291,11 +292,13 @@ def sealed_account_archive_action(
     """Present Clear for a bot sealed on an account the installed Clerk does not custody (#2694).
 
     No page is built for such a bot, so a Clear request presents this from
-    the runner's own duty record. ``keeps_records`` is a graduated Shadow
-    store: what its records show the bot holds is the commit's to read
-    (``evaluate_rehearsal_custody``), so nothing is presented in the way --
-    the asymmetry ``evaluate_archive`` describes for an effect only the
-    commit can see. A bot sealed on any other account is refused for it.
+    the runner's own duty record. ``keeps_records`` is the installed
+    account's own graduated Shadow store: what its records show the bot
+    holds is the commit's to read (``evaluate_rehearsal_custody``), so
+    nothing is presented in the way -- the asymmetry ``evaluate_archive``
+    describes for an effect only the commit can see. A bot sealed on any
+    other account, another account's Shadow store included, is refused for
+    it.
     """
     verdict = (
         evaluate_archive_duty(running=running, phase=phase) or ArchiveVerdict(eligible=True)

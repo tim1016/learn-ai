@@ -197,7 +197,7 @@ NONTERMINAL_EFFECT_STATES: frozenset[str] = frozenset(
 )
 
 
-def strategy_instances_with_live_custody(conn: sqlite3.Connection) -> set[str]:
+def strategy_instances_with_live_custody(conn: sqlite3.Connection, *, dormant: bool = False) -> set[str]:
     """Roster ids whose custody can still change, or still needs attention.
 
     The union of the bot-scoped facts a catalog row's attention flag and its
@@ -225,10 +225,17 @@ def strategy_instances_with_live_custody(conn: sqlite3.Connection) -> set[str]:
     float-aware ``position_quantity_is_nonzero`` would call flat, so a
     borderline row takes the fully-projected path. Costing a read is the safe
     direction to be wrong in; going quiet on a bot that needs attention is not.
+
+    ``dormant`` is a store no Clerk reconciles again: a live account's Shadow
+    world once the account is live (#2694). No pass there ever ends a filled
+    ENTER's effect, so the nonterminal-effect arm would hold a flat bot for
+    good. For such a store that one arm is narrowed to the effects still owed
+    broker evidence (``reconcilable_effect_operations``), Clear's own test of
+    them (``recorded_custody``). Every other arm stands as it is.
     """
     working_states = ", ".join("?" for _ in WORKING_BROKER_STATES)
     nonterminal_states = ", ".join("?" for _ in NONTERMINAL_EFFECT_STATES)
-    rows = conn.execute(
+    held = (
         "SELECT strategy_instance_id FROM uncertainties "
         "WHERE resolved_at_ms IS NULL AND strategy_instance_id IS NOT NULL "
         "UNION SELECT strategy_instance_id FROM positions "
@@ -238,7 +245,17 @@ def strategy_instances_with_live_custody(conn: sqlite3.Connection) -> set[str]:
         "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
         f"WHERE LOWER(o.broker_state) IN ({working_states}) "
         "AND e.strategy_instance_id IS NOT NULL "
-        "UNION SELECT strategy_instance_id FROM effect_operations "
+    )
+    if dormant:
+        rows = conn.execute(held, tuple(sorted(WORKING_BROKER_STATES))).fetchall()
+        owed_evidence = {
+            effect.strategy_instance_id
+            for effect in reconcilable_effect_operations(conn)
+            if effect.strategy_instance_id is not None
+        }
+        return {str(row["strategy_instance_id"]) for row in rows} | owed_evidence
+    rows = conn.execute(
+        held + "UNION SELECT strategy_instance_id FROM effect_operations "
         f"WHERE state IN ({nonterminal_states}) AND strategy_instance_id IS NOT NULL",
         (*sorted(WORKING_BROKER_STATES), *sorted(NONTERMINAL_EFFECT_STATES)),
     ).fetchall()

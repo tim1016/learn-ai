@@ -23,7 +23,6 @@ from typing import Literal, NoReturn
 from app.broker.alpaca.clerk.account_authority import (
     account_route_matches_custody,
     evidence_account_id_for,
-    is_shadow_account_id,
     synthetic_account_id_for_strategy,
 )
 from app.broker.alpaca.clerk.active_authority import (
@@ -1001,8 +1000,8 @@ def _sealed_account_archive(registry: BotTaskRegistry, broker: str, sid: str) ->
     read answers "no custody record". Its Clear is presented from the
     runner's own duty record instead. What the bot holds is the commit's to
     prove, from the store it is sealed on (``BotTaskRegistry.archive``) --
-    the asymmetry every presented Clear has (``evaluate_archive``): only a
-    ``shadow:`` store keeps records to read.
+    the asymmetry every presented Clear has (``evaluate_archive``): only the
+    installed account's own ``shadow:`` store keeps records to read.
     """
     foreign = registry.foreign_binding(sid)
     if foreign is None:
@@ -1011,7 +1010,7 @@ def _sealed_account_archive(registry: BotTaskRegistry, broker: str, sid: str) ->
     return sealed_account_archive_action(
         running=status.running,
         phase=status.phase,
-        keeps_records=is_shadow_account_id(foreign.sealed_account_id),
+        keeps_records=foreign.rehearsed_on_installed_account,
         account_id=foreign.sealed_account_id,
         strategy_instance_id=sid,
     )

@@ -228,6 +228,10 @@ class AlpacaLifecycleProjector:
         """The reason the Clerk stopped this exact run under; ``None`` while it has not: a read."""
         return self._authority.stop_reason(strategy_instance_id, run_id)
 
+    def is_retired(self, *, strategy_instance_id: str) -> bool:
+        """Whether the Clerk already holds this registration retired: a read, never a projection."""
+        return self._authority.snapshot(strategy_instance_id, None).retired_at_ms is not None
+
     def project_active(
         self,
         *,

@@ -730,7 +730,9 @@ class BindingAuthoritySelector:
         """The authority of a binding sealed on ``account_id``, a store the installed authority does not custody.
 
         ``None`` unless that store is a ``shadow:`` one: no other account this
-        lane does not hold keeps records it can read.
+        lane does not hold keeps records it can read. Whose Shadow store it
+        is, is not asked here: Clear asks before it comes
+        (``ForeignBinding.rehearsed_on_installed_account``).
         """
         if not is_shadow_account_id(account_id):
             return None

@@ -292,13 +292,26 @@ async def test_a_live_accounts_shadow_bots_come_from_its_own_shadow_database(
 
 
 @pytest.mark.asyncio
-async def test_a_cleared_shadow_bot_that_traded_reads_cleared_once_its_account_is_live(
+@pytest.mark.parametrize(
+    ("left", "status", "transactions"),
+    [
+        ("nothing", ("cleared", "Cleared"), 2),
+        ("its shares", ("holding", "Stopped · still holding"), 1),
+        ("an entry the broker never answered", ("finished", "Finished"), 0),
+    ],
+    ids=["traded-and-flat", "stranded-position", "unanswered-entry"],
+)
+async def test_a_retired_shadow_bot_reads_cleared_once_its_account_is_live_only_if_its_records_hold_nothing(
     lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch,
+    left: str, status: tuple[str, str], transactions: int,
 ) -> None:
     """No fold ends a filled ENTER, so a bot that traded is one whose custody
     "can still change" for good, and a cleared one read "Finished". Nothing
-    reconciles a graduated account's Shadow database again: what could still
-    change there never will, and a retired bot of it is cleared (#2694)."""
+    reconciles a graduated account's Shadow database again, so that filled
+    ENTER no longer counts and a retired bot of it is cleared (#2694). Only
+    that: a bot retired with its shares unsold, or with an entry the broker
+    never answered, is not cleared -- it has no page, so History is the one
+    place that says so."""
     shadow = ClerkSqliteRepository.initialize(
         account_id=f"shadow:{_ACCOUNT}", artifacts_root=lane.db_path.parents[3], clock=_TestClock(NOON),
     )
@@ -306,9 +319,11 @@ async def test_a_cleared_shadow_bot_that_traded_reads_cleared_once_its_account_i
         _register(shadow, "rehearsal")
         submit_start_run(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r", clock=shadow.clock)
         bought = _enter(shadow, "rehearsal", "run-r", "enter-r")
-        _ack(shadow, bought, "filled")
-        _append_slice(shadow, bought, execution_id="r-buy", quantity=1, source_event_at_ms=NOON - 2, fee=0)
-        _record_sale(shadow, bought, key="r-sell", price=110, at_ms=NOON - 1)
+        if left != "an entry the broker never answered":
+            _ack(shadow, bought, "filled")
+            _append_slice(shadow, bought, execution_id="r-buy", quantity=1, source_event_at_ms=NOON - 2, fee=0)
+        if left == "nothing":
+            _record_sale(shadow, bought, key="r-sell", price=110, at_ms=NOON - 1)
         submit_stop_run(shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", lifecycle_run_id="run-r", clock=shadow.clock)
         submit_retire_strategy_instance(
             shadow, account_id=shadow.account_id, strategy_instance_id="rehearsal", retired_at_ms=NOON, clock=shadow.clock,
@@ -324,7 +339,7 @@ async def test_a_cleared_shadow_bot_that_traded_reads_cleared_once_its_account_i
     history = await bot_history.account_bot_history("alpaca", _ACCOUNT)
 
     rehearsal = next(bot for bot in history.bots if bot.strategy_instance_id == "rehearsal")
-    assert (rehearsal.status, rehearsal.status_label, rehearsal.transaction_count) == ("cleared", "Cleared", 2)
+    assert (rehearsal.status, rehearsal.status_label, rehearsal.transaction_count) == (*status, transactions)
 
 
 def _shadow_rehearsal(lane: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch) -> Path:

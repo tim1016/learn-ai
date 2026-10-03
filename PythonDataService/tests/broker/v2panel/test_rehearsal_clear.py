@@ -31,6 +31,7 @@ from app.broker.alpaca.clerk.active_authority import (
 )
 from app.broker.alpaca.clerk.live_envelope import LiveEnvelopeGate
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
+from app.broker.alpaca.clerk.sqlite.facts import StrategyInstanceRetiredFacts
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, RepositoryPoisoned
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.contract.models import BrokerAccountSnapshot
@@ -40,6 +41,7 @@ from app.schemas.broker_v2_panel import BotClearRequest, PanelActionRequest
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_lifecycle_projection import AlpacaLifecycleProjector
 from app.services.bot_runner import BotTaskRegistry, set_bot_task_registry
+from app.services.bot_runner_errors import BotRunnerError
 from app.services.broker_v2_panel import bot_clear, bot_history, panel_data_source, panel_scope, sqlite_roster_status
 from app.services.broker_v2_panel.action_execution_service import (
     ActionOutcomeUnknownError,
@@ -57,6 +59,11 @@ _FLAT = "spy-rehearsal-flat"
 _HELD = "spy-rehearsal-held"
 #: Sealed on another real account, which keeps no records this lane can read.
 _ELSEWHERE = "spy-sealed-elsewhere"
+#: Another live account's Shadow store, kept under this lane's root, and a
+#: flat bot that rehearsed there: its records would pass Clear's proof.
+_OTHER_LIVE = "8LIVE0002"
+_OTHER_SEALED = f"shadow:{_OTHER_LIVE}"
+_REHEARSED_ELSEWHERE = "spy-rehearsal-other-account"
 #: Bound to the Shadow store by the runner, but never registered in it.
 _UNREGISTERED = "spy-rehearsal-unregistered"
 #: What the panel read answered for such a bot, and what no Clear may answer now.
@@ -73,18 +80,34 @@ class _Lane:
     live: ClerkSqliteRepository
     runner: BotTaskRegistry
 
-    def retired_at_ms(self, sid: str) -> int | None:
+    def retired_at_ms(self, sid: str, *, sealed_account_id: str = _SEALED) -> int | None:
         """When the Shadow store's own record says the bot was cleared."""
-        sealed = ClerkSqliteRepository.open(account_id=_SEALED, artifacts_root=self.root)
+        sealed = ClerkSqliteRepository.open(account_id=sealed_account_id, artifacts_root=self.root)
         try:
             return sealed.strategy_instance(sid)["retired_at_ms"]
         finally:
             sealed.close()
 
+    def retirements(self, sid: str) -> list[tuple[int, str | None]]:
+        """Every retirement the Shadow store holds for the bot: when, and the reason it was given."""
+        sealed = ClerkSqliteRepository.open(account_id=_SEALED, artifacts_root=self.root)
+        try:
+            retired = [
+                StrategyInstanceRetiredFacts.from_facts_json(transition["facts_json"])
+                for transition in sealed.custody_transitions()
+                if transition["transition_kind"] == "STRATEGY_INSTANCE_RETIRED"
+                and transition["strategy_instance_id"] == sid
+            ]
+            return [(facts.retired_at_ms, facts.operator_reason) for facts in retired]
+        finally:
+            sealed.close()
 
-async def _rehearsed(root: Path, runner: BotTaskRegistry, sid: str, *, holds_spy: bool) -> None:
-    """One bot that ran in the Shadow world and stopped; ``holds_spy`` leaves it long 10 SPY."""
-    sealed = ClerkSqliteRepository.open(account_id=_SEALED, artifacts_root=root)
+
+async def _rehearsed(
+    root: Path, runner: BotTaskRegistry, sid: str, *, holds_spy: bool, sealed_account_id: str = _SEALED,
+) -> None:
+    """One bot that ran in a Shadow world and stopped; ``holds_spy`` leaves it long 10 SPY."""
+    sealed = ClerkSqliteRepository.open(account_id=sealed_account_id, artifacts_root=root)
     try:
         sealed.register_strategy_instance(
             exit_terms=DEPLOY_EXIT_TERMS,
@@ -95,13 +118,13 @@ async def _rehearsed(root: Path, runner: BotTaskRegistry, sid: str, *, holds_spy
             display_name="Deployment Validation",
             config_json=json.dumps({"mode": "trade", "quantity": 1, "carryover_policy": "FORBID"}),
         )
-        submit_start_run(sealed, account_id=_SEALED, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
+        submit_start_run(sealed, account_id=sealed_account_id, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
         if holds_spy:
-            await _make_held_position(sealed, account_id=_SEALED, strategy_instance_id=sid, run_id=f"run-{sid}")
-        submit_stop_run(sealed, account_id=_SEALED, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
+            await _make_held_position(sealed, account_id=sealed_account_id, strategy_instance_id=sid, run_id=f"run-{sid}")
+        submit_stop_run(sealed, account_id=sealed_account_id, strategy_instance_id=sid, lifecycle_run_id=f"run-{sid}")
     finally:
         sealed.close()
-    _bound(runner, sid, sealed_account_id=_SEALED)
+    _bound(runner, sid, sealed_account_id=sealed_account_id)
 
 
 def _bound(runner: BotTaskRegistry, sid: str, *, sealed_account_id: str) -> None:
@@ -244,7 +267,12 @@ async def test_a_clear_that_retired_the_bot_but_failed_to_record_it_is_finished_
 ) -> None:
     """The Shadow store took the retirement, then the runner's own record of
     it failed to write. The bot is neither cleared nor gone: it stays in
-    Home's Finished fold, and clearing it again completes the record."""
+    Home's Finished fold, and clearing it again completes the record.
+
+    The first Clear was posted for the bot with the owner's own reason, and
+    Home's gives another. The store keeps one retirement per bot and refuses
+    a second under a different reason, so the one it holds is recorded as it
+    stands, never asked for again."""
     real_refresh = AlpacaLifecycleProjector.refresh
     failed: list[str] = []
 
@@ -256,18 +284,27 @@ async def test_a_clear_that_retired_the_bot_but_failed_to_record_it_is_finished_
 
     monkeypatch.setattr(AlpacaLifecycleProjector, "refresh", _first_record_fails)
 
-    first = await bot_clear.clear_bots("alpaca", _LIVE, _clear(_FLAT), operator_identity="owner")
+    with pytest.raises(ActionOutcomeUnknownError):
+        await panel_data_source.run_action(
+            "alpaca", _LIVE, _FLAT,
+            PanelActionRequest(
+                action_id="archive", revision=0, concurrency_token=_PRESENTED_CLEAR_TOKEN,
+                idempotency_key="direct-1", reason="The rehearsal is over",
+            ),
+            operator_identity="owner",
+        )
 
-    assert [leg.outcome for leg in first.legs] == ["unknown"]
-    assert lane.retired_at_ms(_FLAT) is not None
+    committed = lane.retirements(_FLAT)
+    assert [reason for _at_ms, reason in committed] == ["The rehearsal is over"]
     assert lane.runner.status("alpaca", _FLAT).phase == "OFF_DUTY"
     home = await panel_data_source.get_catalog("alpaca", _LIVE, home=True)
     assert [row.strategy_instance_id for row in home] == [_FLAT]
 
-    again = await bot_clear.clear_bots("alpaca", _LIVE, _clear(_FLAT, key="clear-2"), operator_identity="owner")
+    again = await bot_clear.clear_bots("alpaca", _LIVE, _clear(_FLAT), operator_identity="owner")
 
     assert [leg.outcome for leg in again.legs] == ["applied"]
     assert lane.runner.status("alpaca", _FLAT).phase == "RETIRED"
+    assert lane.retirements(_FLAT) == committed
     assert await panel_data_source.get_catalog("alpaca", _LIVE, home=True) == []
 
 
@@ -282,6 +319,32 @@ async def test_a_clear_naming_a_bot_sealed_on_another_real_account_is_refused_fo
     assert (result.legs[0].outcome, refused.reason_code) == ("refused", "ARCHIVE_SEALED_ACCOUNT_CUSTODY")
     assert refused.message == "This bot's account is no longer managed here."
     assert lane.runner.status("alpaca", _ELSEWHERE).phase == "OFF_DUTY"
+
+
+async def test_a_bot_that_rehearsed_in_another_accounts_shadow_world_is_refused_for_its_account(lane: _Lane) -> None:
+    """Only this account's own Shadow store is read in the installed Clerk's
+    place. A flat bot of another live account's Shadow world would pass the
+    proof in its own store, and a Clear on this account must still never
+    retire it there: the commit and a Clear from Home both refuse it for its
+    account, this account's Home does not list it, and its store keeps no
+    retirement."""
+    await activate_shadow_clerk_authority(live_account_id=_OTHER_LIVE, artifacts_root=lane.root)
+    await _rehearsed(lane.root, lane.runner, _REHEARSED_ELSEWHERE, holds_spy=False, sealed_account_id=_OTHER_SEALED)
+
+    with pytest.raises(BotRunnerError) as commit:
+        await lane.runner.archive("alpaca", _REHEARSED_ELSEWHERE, updated_by="owner")
+    result = await bot_clear.clear_bots("alpaca", _LIVE, _clear(_REHEARSED_ELSEWHERE), operator_identity="owner")
+    home = await panel_data_source.get_catalog("alpaca", _LIVE, home=True)
+
+    assert commit.value.reason_code == "ARCHIVE_SEALED_ACCOUNT_CUSTODY"
+    refused = result.legs[0].error
+    assert refused is not None
+    assert (result.legs[0].outcome, refused.reason_code, refused.message) == (
+        "refused", "ARCHIVE_SEALED_ACCOUNT_CUSTODY", "This bot's account is no longer managed here.",
+    )
+    assert [row.strategy_instance_id for row in home] == [_FLAT]
+    assert lane.runner.status("alpaca", _REHEARSED_ELSEWHERE).phase == "OFF_DUTY"
+    assert lane.retired_at_ms(_REHEARSED_ELSEWHERE, sealed_account_id=_OTHER_SEALED) is None
 
 
 @pytest.mark.parametrize(

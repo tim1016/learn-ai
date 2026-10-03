@@ -458,7 +458,7 @@ class _Graduated:
 async def _graduated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry: BotTaskRegistry
 ) -> AsyncIterator[_Graduated]:
-    repo, clerk, broker = _account("PA-LIVE-2", tmp_path / "clerk-live")
+    repo, clerk, broker = _account(_LIVE_ACCOUNT_ID, tmp_path / "clerk-live")
     installed_writes: list[str] = []
     for method in ("project_terminal", "refresh", "retire"):
         real = getattr(registry._lifecycle_projector, method)

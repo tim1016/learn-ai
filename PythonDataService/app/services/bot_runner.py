@@ -999,10 +999,13 @@ class BotTaskRegistry:
             status = self.status(broker, strategy_instance_id)
             # The one classification, which the duty settle reads too (#2589).
             foreign = self._boot_recovery.foreign_binding(strategy_instance_id)
+            # Only the installed account's own Shadow store is read and
+            # retired in: a bot sealed on another account's is refused for
+            # its account below, and that store is never opened (#2694).
             rehearsal = (
-                None
-                if foreign is None
-                else self._authorities.sealed_shadow(binding, account_id=foreign.sealed_account_id)
+                self._authorities.sealed_shadow(binding, account_id=foreign.sealed_account_id)
+                if foreign is not None and foreign.rehearsed_on_installed_account
+                else None
             )
             if rehearsal is not None:
                 return await self._archive_rehearsal_locked(
@@ -1049,7 +1052,7 @@ class BotTaskRegistry:
         updated_by: str,
         reason: str | None,
     ) -> BotStatusView:
-        """Clear a bot sealed on a graduated ``shadow:`` store, on that store's own records (#2694).
+        """Clear a bot sealed on the installed account's graduated ``shadow:`` store, on that store's own records (#2694).
 
         The installed Clerk holds no custody for it, so the proof that it
         holds nothing is read from the store it rehearsed on, and the
@@ -1081,9 +1084,23 @@ class BotTaskRegistry:
 
         One opening, so one execution lease covers the proof and the
         retirement it permits.
+
+        A store that already holds the retirement is not asked for it again:
+        an earlier Clear committed it there and then failed to record it
+        here. The store keeps one retirement per bot, under its first
+        reason, and refuses a second under any other as a conflict, so what
+        it holds is recorded as it stands.
         """
         try:
             async with authority.custody_for_clear() as (custody, projector):
+                if projector.is_retired(strategy_instance_id=strategy_instance_id):
+                    projector.refresh(
+                        strategy_instance_id=strategy_instance_id,
+                        now_ms=self._now_ms(),
+                        updated_by=updated_by,
+                        reason=reason,
+                    )
+                    return ArchiveVerdict(eligible=True)
                 verdict = evaluate_rehearsal_custody(
                     RehearsalRecords(readable=True, held=None if custody.holds_nothing else custody.held_phrase)
                 )
@@ -1121,10 +1138,10 @@ class BotTaskRegistry:
         """The shared archive rule, answered under the bot's lock against fresh custody."""
         if sealed_elsewhere:
             # The installed Clerk holds no custody for a bot sealed on another
-            # account, and only a ``shadow:`` store keeps records to read in
-            # its place (``_archive_rehearsal_locked``): as under a freeze,
-            # the facts below prove nothing, and the rule refuses on the
-            # account first.
+            # account, and only its own ``shadow:`` store keeps records to
+            # read in its place (``_archive_rehearsal_locked``): as under a
+            # freeze, the facts below prove nothing, and the rule refuses on
+            # the account first.
             return evaluate_archive(
                 running=status.running,
                 phase=status.phase,

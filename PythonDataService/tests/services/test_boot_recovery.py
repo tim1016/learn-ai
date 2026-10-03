@@ -43,6 +43,7 @@ from app.services.bot_boot_recovery import (
     BootAuthorityPreparationError,
     BotBootRecovery,
     BotRecoveryCandidate,
+    ForeignBinding,
 )
 from app.services.bot_lifecycle_projection import (
     ActiveSqliteAlpacaLifecycleAuthority,
@@ -1199,3 +1200,27 @@ async def test_boot_never_reports_a_dry_run_binding_foreign(tmp_path: Path, monk
     # on duty, and no interrupted evidence authored over a live run.
     assert _lifecycle_json(_artifacts_root(tmp_path), _SID)["phase"] == "ON_DUTY"
     await registry.stop("alpaca", _SID, updated_by="test")
+
+
+@pytest.mark.parametrize(
+    ("sealed_account_id", "installed_account_id", "its_own"),
+    [
+        ("shadow:9LIVE0001", "9LIVE0001", True),
+        ("shadow:8LIVE0002", "9LIVE0001", False),
+        ("PA-OLD", "shadow:9LIVE0001", False),
+        ("shadow:shadow:9LIVE0001", "shadow:9LIVE0001", False),
+    ],
+    ids=["its-own-shadow", "another-accounts-shadow", "installed-is-a-shadow-world", "a-shadow-of-a-shadow-world"],
+)
+def test_only_the_installed_accounts_own_shadow_store_counts_as_its_rehearsal(
+    sealed_account_id: str, installed_account_id: str, its_own: bool,
+) -> None:
+    """#2694: Clear and Home read one foreign store in the installed Clerk's
+    place, ``shadow:<installed account>``. Another account's Shadow store is
+    not it, and an installed Shadow world has none: the question answers no
+    there, where composing its Shadow id would raise."""
+    foreign = ForeignBinding(
+        strategy_instance_id="bot", sealed_account_id=sealed_account_id, installed_account_id=installed_account_id,
+    )
+
+    assert foreign.rehearsed_on_installed_account is its_own

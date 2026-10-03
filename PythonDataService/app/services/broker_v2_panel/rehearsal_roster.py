@@ -40,7 +40,7 @@ _LISTED: tuple[BotHistoryStatus, ...] = ("finished", "cleared")
 
 
 class _Rehearsal(NamedTuple):
-    """One stopped, uncleared bot sealed on a ``shadow:`` store the installed authority does not custody."""
+    """One stopped, uncleared bot sealed on the installed account's own ``shadow:`` store."""
 
     status: BotStatusView
     sealed_account_id: str
@@ -80,7 +80,8 @@ def _uncleared_rehearsals(
         if binding.mode == "dry_run" or not is_shadow_account_id(binding.sealed_account_id or ""):
             continue
         foreign = registry.foreign_binding(binding.strategy_instance_id)
-        if foreign is None or not is_shadow_account_id(foreign.sealed_account_id):
+        # Another account's Shadow bot is not this account's to list or clear.
+        if foreign is None or not foreign.rehearsed_on_installed_account:
             continue
         status = registry.status(broker, binding.strategy_instance_id)
         # A cleared bot is off Home, and no bot the runner still runs is finished.
