@@ -10,7 +10,7 @@ classification.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -20,7 +20,7 @@ from app.engine.strategy.signal_program import Settlement, trace_root
 from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE, is_closing_bar
 from app.marketdata.feed import ContinuityPolicy, FeedHealth, MarketDataBar
 from app.services.bot_trade_strategy import strategy_evaluations
-from app.services.bot_trade_strategy_warmup import _COMMIT_WORTHY_OUTCOMES
+from app.services.bot_trade_strategy_warmup import _COMMIT_WORTHY_OUTCOMES, CapturedDecisions
 from app.services.decision_session import RunDecisionSession
 from app.services.feed_continuity_policy import DECISION_LATE_REASON_CODE
 from app.services.source_bar_ledger import RetainedSourceBar
@@ -251,7 +251,7 @@ async def run_fidelity_over_bars(
     warmup: Sequence[RetainedSourceBar],
     live: Sequence[RetainedSourceBar],
     records: Sequence[LiveDecisionRecord],
-    captured_decisions: Mapping[str, str],
+    captured_decisions: CapturedDecisions,
     session: RunDecisionSession,
     crash_records: Sequence[LiveDecisionRecord] = (),
 ) -> RunFidelityResult:
@@ -264,7 +264,9 @@ async def run_fidelity_over_bars(
     #1767). Warmup buckets settle inside ``strategy_evaluations`` via
     ``captured_decisions`` (the FR-016 machinery); crash-window buckets replay
     as ``crash_recovered`` and are digest-verified against their protected
-    receipts rather than trusted on presence.
+    receipts rather than trusted on presence. ``captured_decisions`` is the
+    receipt read the run started from, with how far back it reached, so the
+    replay names the crash candidates that run named and no others (#2850).
 
     ``session`` is the run's decision session, resolved by the caller.
     """
@@ -302,7 +304,7 @@ async def run_fidelity_over_bars(
         )
 
     async for evaluation in strategy_evaluations(
-        binding, feed, captured_decisions=dict(captured_decisions), session=session
+        binding, feed, captured_decisions=captured_decisions, session=session
     ):
         eval_id = evaluation.evaluation_id
         replay_digest = trace_root([evaluation.trace])

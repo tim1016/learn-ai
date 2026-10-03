@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
@@ -22,6 +22,7 @@ from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
 from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
+    CRASH_CANDIDATE_OUTCOME,
     DecisionOutcome,
     SqliteDecisionReceipts,
 )
@@ -52,7 +53,11 @@ from app.marketdata.feed import (
 from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
-from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, replay_warmup_bars
+from app.services.bot_trade_strategy_warmup import (
+    CapturedDecisions,
+    captured_decision_outcomes,
+    replay_warmup_bars,
+)
 from app.services.decision_session import RunDecisionSession
 from app.services.feed_continuity_policy import (
     DECISION_LATE_REASON_CODE,
@@ -571,7 +576,7 @@ async def _warm_up_signal_strategy(
     feed: MarketDataFeed,
     binding: BrokerBotBinding,
     *,
-    captured_decisions: Mapping[str, str] | None,
+    captured_decisions: CapturedDecisions | None,
     record_before_start: BeforeStartSink | None = None,
 ) -> StrategyEvaluation | None:
     """Replay recent closed bars so indicators are ready before live
@@ -623,7 +628,7 @@ async def _warm_up_signal_strategy(
 async def _signal_strategy_evaluations(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
-    captured_decisions: Mapping[str, str] | None,
+    captured_decisions: CapturedDecisions | None,
     quarantine_receipts: QuarantineReceiptSink | None,
     record_before_start: BeforeStartSink | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
@@ -741,20 +746,23 @@ async def strategy_evaluations(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
     *,
-    captured_decisions: Mapping[str, str] | None = None,
+    captured_decisions: CapturedDecisions | None = None,
     quarantine_receipts: QuarantineReceiptSink | None = None,
     session: RunDecisionSession | None = None,
     record_before_start: BeforeStartSink | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Stream one strategy's evaluations.
 
-    ``captured_decisions`` maps this strategy instance's own recently
-    durable decision identities to their outcomes (FR-016) -- pass it so
-    warmup replay can reapply each bucket's own known disposition and
-    recognize a candidate a crash left uncaptured. Omitting it (the
-    default) means no such recovery is attempted, which is correct for a
-    read-only stream with no custody seam to record or discard a recovered
-    candidate through.
+    ``captured_decisions`` is one read of this strategy instance's own
+    retained decision receipts (FR-016;
+    :func:`bot_trade_strategy_warmup.captured_decision_outcomes`) -- pass it
+    so warmup replay can reapply each bucket's own known disposition and
+    recognize a candidate a crash left uncaptured. It carries how far back
+    the read reaches along with the decisions, so replay never takes a
+    bucket whose receipt has rotated out for a crash candidate (#2850).
+    Omitting it (the default) means no such recovery is attempted, which is
+    correct for a read-only stream with no custody seam to record or discard
+    a recovered candidate through.
 
     ``quarantine_receipts`` is where a refused decision bar becomes durable
     evidence rather than only a log line (issue #1827). Pass a custody
@@ -914,7 +922,7 @@ async def run_trade_bot(
                     decision_receipts,
                     binding=binding,
                     evaluation=evaluation,
-                    outcome="candidate_uncaptured_at_crash",
+                    outcome=CRASH_CANDIDATE_OUTCOME,
                     reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
                 )
                 continue
@@ -1076,7 +1084,7 @@ _PROTECTED_RETENTION_CLASS_BY_OUTCOME: dict[str, str] = {
     "blocked": "protected_refusal",
     # FR-016 / AC #9: crash-window evidence must survive the tail
     # compaction in `decision_receipts.py` the same way a refusal does.
-    "candidate_uncaptured_at_crash": "protected_crash_evidence",
+    CRASH_CANDIDATE_OUTCOME: "protected_crash_evidence",
 }
 
 
@@ -1383,7 +1391,7 @@ async def run_dry_run_bot(
                     decision_receipts,
                     binding=binding,
                     evaluation=evaluation,
-                    outcome="candidate_uncaptured_at_crash",
+                    outcome=CRASH_CANDIDATE_OUTCOME,
                     reason_code="CANDIDATE_UNCAPTURED_AT_CRASH",
                 )
                 continue

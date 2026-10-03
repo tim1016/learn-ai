@@ -12,6 +12,7 @@ from app.lean_sidecar.closing_bar import CLOSING_BAR_REASON_CODE, is_closing_bar
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.marketdata.feed import MarketDataBar
 from app.services.bot_trade_strategy import strategy_evaluations
+from app.services.bot_trade_strategy_warmup import CapturedDecisions
 from app.services.decision_session import RunDecisionSession
 from app.services.run_replay_proof import (
     LiveDecisionRecord,
@@ -26,6 +27,8 @@ from tests._helpers.bot_runner.ema_parity import (
 from tests.services.test_candidate_uncaptured_at_crash import _binding, _PhaseFeed
 
 _RTH_SESSION = RunDecisionSession(kind="rth", window=None)
+_NOTHING_CAPTURED = CapturedDecisions(outcomes={}, rotated_out_before_ms=None)
+"""A run that started with no decision receipt on file."""
 
 
 def _retained(bars: Sequence[MarketDataBar]) -> list[RetainedSourceBar]:
@@ -78,7 +81,7 @@ async def test_run_fidelity_over_bars_full_parity_on_an_unblocked_run() -> None:
         warmup=[],
         live=_retained(bars),
         records=records,
-        captured_decisions={},
+        captured_decisions=_NOTHING_CAPTURED,
         session=_RTH_SESSION,
     )
 
@@ -100,7 +103,7 @@ async def test_run_fidelity_over_bars_classifies_a_blocked_enter_as_expected() -
         warmup=[],
         live=_retained(bars),
         records=records,
-        captured_decisions={},
+        captured_decisions=_NOTHING_CAPTURED,
         session=_RTH_SESSION,
     )
 
@@ -131,7 +134,7 @@ async def test_run_fidelity_classifies_an_unfoldable_order_entry_pause_as_expect
         warmup=[],
         live=_retained(bars),
         records=records,
-        captured_decisions={},
+        captured_decisions=_NOTHING_CAPTURED,
         session=_RTH_SESSION,
     )
 
@@ -162,7 +165,7 @@ async def test_run_fidelity_over_bars_classifies_a_decision_late_enter_as_expect
         warmup=[],
         live=_retained(bars),
         records=records,
-        captured_decisions={},
+        captured_decisions=_NOTHING_CAPTURED,
         session=_RTH_SESSION,
     )
 
@@ -198,7 +201,7 @@ async def _replay_with_the_first_enter_refused_as_closing_bar(bars: list[MarketD
         warmup=[],
         live=_retained(bars),
         records=records,
-        captured_decisions={},
+        captured_decisions=_NOTHING_CAPTURED,
         session=_RTH_SESSION,
     )
     return records[blocked], result
@@ -271,7 +274,7 @@ async def test_run_fidelity_over_bars_classifies_a_tampered_record_as_drift() ->
         warmup=[],
         live=_retained(bars),
         records=records,
-        captured_decisions={},
+        captured_decisions=_NOTHING_CAPTURED,
         session=_RTH_SESSION,
     )
 
@@ -302,7 +305,7 @@ async def test_run_fidelity_over_bars_flags_a_content_level_digest_mismatch_as_d
         warmup=[],
         live=_retained(bars),
         records=records,
-        captured_decisions={},
+        captured_decisions=_NOTHING_CAPTURED,
         session=_RTH_SESSION,
     )
 
@@ -311,18 +314,21 @@ async def test_run_fidelity_over_bars_flags_a_content_level_digest_mismatch_as_d
     assert drift.reason_code == "TRACE_DIGEST_MISMATCH"
 
 
-async def _crash_setup() -> tuple[list, dict[str, str], LiveDecisionRecord]:
+async def _crash_setup() -> tuple[list, CapturedDecisions, LiveDecisionRecord]:
     """All bars in warmup with the EXIT bucket left uncaptured, so the warmup
     machinery reconstructs it as a crash-recovered candidate."""
     bars = _ema_parity_bars_through_first_exit()
     records = await _record_live_pass(bars, block_first_enter=False)
     exit_idx = next(i for i, record in enumerate(records) if record.outcome == "exit_intent")
     exit_record = records[exit_idx]
-    captured = {
-        record.evaluation_id: record.outcome
-        for index, record in enumerate(records)
-        if index != exit_idx
-    }
+    captured = CapturedDecisions(
+        outcomes={
+            record.evaluation_id: record.outcome
+            for index, record in enumerate(records)
+            if index != exit_idx
+        },
+        rotated_out_before_ms=None,
+    )
     return bars, captured, exit_record
 
 
@@ -421,7 +427,7 @@ async def test_run_fidelity_over_bars_refuses_a_blocked_row_with_an_unrecognized
         warmup=[],
         live=_retained(bars),
         records=records,
-        captured_decisions={},
+        captured_decisions=_NOTHING_CAPTURED,
         session=_RTH_SESSION,
     )
 

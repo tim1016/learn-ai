@@ -587,6 +587,9 @@ class _FakeClerk:
                 "retention_class": (
                     "protected_refusal" if rejected else "protected_effect"
                 ),
+                # The real Clerk records it on an effect and on a refusal
+                # alike; a Resume reads it off the oldest retained row (#2850).
+                "decision_bar_close_ms": decision_evidence.decision_bar_close_ms,
             }
             if rejected:
                 facts["refusal_reason"] = "The test Clerk rejected this strategy submission."
