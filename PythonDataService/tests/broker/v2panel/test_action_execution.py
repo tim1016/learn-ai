@@ -790,7 +790,9 @@ async def test_panel_liveness_is_evaluated_after_evidence_lands_mid_request(monk
     monkeypatch.setattr(panel_data_source, "read_sqlite_decision_receipts", lambda *_a, **_k: [])
     monkeypatch.setattr(panel_data_source, "build_market_pulse", _market_pulse)
     monkeypatch.setattr(panel_data_source, "custody_bot_status", lambda *_args, **_kwargs: "running")
-    monkeypatch.setattr(panel_data_source, "build_panel", lambda *_args, **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(panel_data_source, "build_panel", lambda *_args, **_kwargs: SimpleNamespace(
+        health=SimpleNamespace(duty_outcome=None, running=True),
+    ))
     monkeypatch.setattr(panel_data_source, "adapt_sqlite_panel", lambda panel, *_args, **_kwargs: panel)
     monkeypatch.setattr(panel_data_source, "_with_bot_page", lambda panel, *_args, **_kwargs: panel)
 

@@ -92,7 +92,7 @@ import { BotDayChartComponent } from '../bot-page/bot-day-chart.component';
 import { BotEndCardComponent } from '../bot-page/bot-end-card.component';
 import { StrandedPositionWarningComponent } from '../bot-page/stranded-position-warning.component';
 import { BotChartPanelComponent } from '../strategy-view/bot-chart-panel.component';
-import type { StrategyRunContext } from '../strategy-view/chart-lanes';
+import { chartLanes, type LaneSource, type StrategyRunContext } from '../strategy-view/chart-lanes';
 import type { StrategyViewFailure } from '../strategy-view/strategy-view-model';
 import {
   flattenUnderway,
@@ -598,6 +598,14 @@ export class BotPanelShellComponent {
   protected readonly strategyViewValue = computed(() =>
     this.strategyView.hasValue() ? this.strategyView.value() : null,
   );
+
+  /** The strategy chart's lanes again, for the tape to place on its own bars and label in
+   * its own Local or ET setting (#2808). */
+  protected readonly tapeLanes = computed((): LaneSource | null => {
+    const view = this.strategyViewValue();
+    const context = this.runContext();
+    return view === null || context === null ? null : (clock) => chartLanes(view, context, clock);
+  });
 
   /** A failed read in the backend's words; the rest of the page is untouched. */
   protected readonly strategyViewFailure = computed((): StrategyViewFailure | null => {

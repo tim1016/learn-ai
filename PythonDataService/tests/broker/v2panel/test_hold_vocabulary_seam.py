@@ -96,7 +96,7 @@ def _write_hold(repo: ClerkSqliteRepository, reason_code: str) -> None:
 
 def _card_for_stored_cause(tmp_path: Path, reason_code: str) -> ClerkCard:
     """Write one hold through the real fold and render the operator's card."""
-    return build_clerk_card(sqlite_clerk_status(_projection_for_stored_cause(tmp_path, reason_code)), _NOW)
+    return build_clerk_card(sqlite_clerk_status(_projection_for_stored_cause(tmp_path, reason_code), last_clean_pass_at_ms=None), _NOW)
 
 
 def _projection_for_stored_cause(
@@ -162,7 +162,9 @@ def test_the_account_hold_explains_its_own_cause(tmp_path: Path, reason_code: st
     projection's guidance, which beside a stream-health hold read "Normal
     Clerk-governed controls remain available." while every entry was refused.
     """
-    status = sqlite_clerk_status(_projection_for_stored_cause(tmp_path, reason_code, account_wide=True))
+    status = sqlite_clerk_status(
+        _projection_for_stored_cause(tmp_path, reason_code, account_wide=True), last_clean_pass_at_ms=None
+    )
 
     assert status.hold.active is True
     assert status.hold.reason == copy_for(
@@ -209,7 +211,7 @@ def test_no_hold_renders_as_no_hold(tmp_path: Path) -> None:
         repo.close()
 
     assert projection is not None
-    card = build_clerk_card(sqlite_clerk_status(projection), _NOW)
+    card = build_clerk_card(sqlite_clerk_status(projection, last_clean_pass_at_ms=None), _NOW)
 
     assert card.hold_active is False
     assert card.hold_reason == "NO_HOLD"

@@ -9,6 +9,7 @@ import {
 import type { TickerQuoteView } from '../../../../shared/ticker-quote/ticker-quote.component';
 import { DualPaneChartComponent, type ChartPane } from '../dual-pane-chart/dual-pane-chart.component';
 import { toCandle } from '../lib/chart-bar-mapping';
+import type { LaneSource } from '../strategy-view/chart-lanes';
 import { historyUnavailableNotice } from '../lib/chart-history-notice';
 import type {
   ChartHistoryResponse,
@@ -44,6 +45,8 @@ export class BotDayChartComponent {
   readonly historyTimeframe = input<ChartHistoryTimeframe>('1m');
   /** The pane it opens on: live for a running bot, the delayed tape (a finished run's window) otherwise. */
   readonly initialPane = input<ChartPane>('live');
+  /** The run's lanes, drawn under the tape on its clock (#2808). */
+  readonly lanes = input<LaneSource | null>(null);
 
   readonly historyTimeframeChange = output<ChartHistoryTimeframe>();
   readonly liveResolutionChange = output<ChartLiveResolution>();

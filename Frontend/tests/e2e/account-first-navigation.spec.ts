@@ -23,6 +23,7 @@ import {
   fakeCatalogBot,
   fakeChartFeed,
 } from '../../src/app/testing/bot-panel-fixtures';
+import { expectStatusReadOnlyFromOwnLane, withoutShellPolls } from './support/shell-polls';
 
 /**
  * The account-first walk (ADR 0064, #2187; PRD #2560): one way into Alpaca,
@@ -386,11 +387,6 @@ async function installFleetBoundary(page: Page): Promise<string[]> {
   return requests;
 }
 
-/** The shell's per-lane trust-anchor poll fires on every route; it proves the
- * shell is alive, not that a surface reached into a lane. */
-const withoutVerdictPolls = (requests: string[]): string[] =>
-  requests.filter((entry) => !entry.includes('/live-verdict'));
-
 /** The top-bar account pills (PRD #2560 D4), each a link named by its
  * account and the server's verdict for it. */
 const accountPill = (page: Page, account: 'Paper' | 'Live') =>
@@ -475,10 +471,13 @@ test.describe('Account-first Alpaca navigation', () => {
 
     // Nothing the workspace did reached into the other account (FR-096).
     expect(
-      withoutVerdictPolls(requests.slice(sinceTheChoice)).filter((entry) =>
+      withoutShellPolls(requests.slice(sinceTheChoice)).filter((entry) =>
         entry.includes(`/clerks/${LIVE_CLERK}/`),
       ),
     ).toEqual([]);
+    // Counted over the whole walk: the workspace's own status read lands as
+    // it opens, before the choice is marked.
+    await expectStatusReadOnlyFromOwnLane(() => requests, { own: PAPER_CLERK, other: LIVE_CLERK });
   });
 
   test('switches accounts in place from the top-bar pills, keeping the tab', async ({ page }) => {

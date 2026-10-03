@@ -1715,7 +1715,8 @@ export interface paths {
          *     A protected read (the always-on data-plane secret gates the whole router).
          *     Transport only: resolve the account-scoped Clerk facade and delegate — the
          *     Clerk owns the journal-derived hold + verdict + outstanding-intent state.
-         *     It never reads the broker: every fact is the custody projection's.
+         *     It never reads the broker: every fact is the custody projection's, with
+         *     the time of the Clerk's own latest clean pass beside it.
          */
         get: operations["get_clerk_status_api_brokers__broker__clerk_status_get"];
         put?: never;

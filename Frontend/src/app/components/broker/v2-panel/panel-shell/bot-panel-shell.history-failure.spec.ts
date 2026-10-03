@@ -36,7 +36,14 @@ import { provideFleetDirectory, testLane } from '../../../../fleet/fleet-directo
 import { fakeStrategyView } from '../../../../testing/strategy-view-fixtures';
 
 const chartMocks = vi.hoisted(() => {
-  const timeScale = { fitContent: vi.fn() };
+  const timeScale = {
+    fitContent: vi.fn(),
+    subscribeSizeChange: vi.fn(),
+    subscribeVisibleLogicalRangeChange: vi.fn(),
+    width: vi.fn().mockReturnValue(0),
+    timeToCoordinate: vi.fn().mockReturnValue(null),
+    options: vi.fn().mockReturnValue({ barSpacing: 6 }),
+  };
   const series = { setData: vi.fn(), update: vi.fn(), applyOptions: vi.fn() };
   const chart = {
     addSeries: vi.fn().mockReturnValue(series),

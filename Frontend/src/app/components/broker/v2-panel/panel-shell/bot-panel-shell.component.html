@@ -115,6 +115,7 @@
               [liveResolution]="liveResolution()"
               [historyTimeframe]="selectedHistoryTimeframe()"
               [initialPane]="panelData.health.running ? 'live' : 'polygon'"
+              [lanes]="tapeLanes()"
               (historyTimeframeChange)="onHistoryTimeframeChange($event)"
               (liveResolutionChange)="onLiveResolutionChange($event)"
               (historyRetry)="histChart.reload()"

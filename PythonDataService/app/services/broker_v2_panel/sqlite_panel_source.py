@@ -77,6 +77,8 @@ from app.services.broker_v2_panel.sqlite_panel_adapter import (
     SQLITE_PANEL_LIFECYCLE_ACTION_IDS,
     CatalogHomeFacts,
     build_sqlite_catalog,
+    ended_uncleanly,
+    terminal_exposure_notices,
     with_finished_results,
 )
 from app.services.broker_v2_panel.sqlite_roster_status import (
@@ -346,6 +348,7 @@ async def read_sqlite_clerk_status(
     projection = await asyncio.to_thread(_account_projection, facade)
     return sqlite_clerk_status(
         projection,
+        last_clean_pass_at_ms=facade.last_clean_pass_at_ms(),
         channel_healths=_channel_healths(broker, facade, symbol),
     )
 
@@ -1243,29 +1246,42 @@ def home_roster(repository: ClerkSqliteRepository, *, world: AuthorityKind) -> l
     return bots
 
 
+@dataclass(frozen=True)
+class _UncleanEnd:
+    """One uncleanly ended bot, with its custody cut on the account's snapshot."""
+
+    sid: str
+    symbol: str
+    kind: str
+    projection: ClerkProjection
+
+
 async def read_account_custody(
     facade: SqliteAlpacaClerkFacade,
 ) -> tuple[ClerkProjection, list[ExposureNoticeView]]:
     """Read desk and bell custody with terminal notices on one SQLite snapshot."""
-    def read() -> tuple[ClerkProjection, list[ExposureNoticeView]]:
+    def read() -> tuple[ClerkProjection, list[_UncleanEnd], list[ExposureNoticeView]]:
         reader = SqliteClerkProjectionReader.from_facade(facade)
         try:
             with reader.snapshot():
                 projection = reader.account_snapshot()
-                return projection, _terminal_exposure_notices(facade, reader)
+                return projection, *_unclean_ends(facade, reader)
         finally:
             reader.close()
 
-    return await asyncio.to_thread(read)
+    projection, ends, unreadable = await asyncio.to_thread(read)
+    return projection, [*unreadable, *await _terminal_exposure_notices(facade, ends)]
 
 
-def _terminal_exposure_notices(
+def _unclean_ends(
     facade: SqliteAlpacaClerkFacade, reader: SqliteClerkProjectionReader,
-) -> list[ExposureNoticeView]:
-    """Reuse roster lifecycle truth; a bad bot never hides its healthy siblings."""
-    from app.services.broker_v2_panel.sqlite_panel_adapter import terminal_exposure_notices
+) -> tuple[list[_UncleanEnd], list[ExposureNoticeView]]:
+    """The uncleanly ended bots, and a notice for each one whose evidence could not be read. Blocking.
 
-    notices: list[ExposureNoticeView] = []
+    Reuses roster lifecycle truth; a bad bot never hides its healthy siblings.
+    """
+    ends: list[_UncleanEnd] = []
+    unreadable: list[ExposureNoticeView] = []
     repository = facade.repository
     # A retired registration with no live custody is the catalog's inert row
     # (#1911): retirement settled its outcome, and nothing of it can need the
@@ -1278,21 +1294,18 @@ def _terminal_exposure_notices(
         try:
             status = build_roster_status("alpaca", registration, repository)
             outcome = status.duty_outcome
-            if outcome is None or outcome.kind not in UNCLEAN_DUTY_OUTCOMES:
+            if outcome is None or not ended_uncleanly(kind=outcome.kind, running=status.running):
                 continue
             projection = reader.bot_snapshot(sid)
             if projection is None:
                 raise ProjectionReadError(f"Custody projection is missing for {sid}")
-            notices.extend(terminal_exposure_notices(
-                projection, sid=sid, symbol=status.symbol,
-                kind=outcome.kind, reason_code=outcome.reason_code, running=status.running,
-            ))
+            ends.append(_UncleanEnd(sid=sid, symbol=status.symbol, kind=outcome.kind, projection=projection))
         except (SqliteCatalogProjectionUnavailable, ProjectionReadError):
             logger.error("Could not read one bot's terminal custody evidence", extra={
                 "action": "terminal_exposure_unreadable", "strategy_instance_id": sid,
                 "account_id": repository.account_id,
             }, exc_info=True)
-            notices.append(ExposureNoticeView(
+            unreadable.append(ExposureNoticeView(
                 strategy_instance_id=sid, symbol=str(registration["symbol"]),
                 kind="position_unverified", label="Position could not be verified",
                 # Every fix it names is in the app (hurdle H29).
@@ -1303,4 +1316,20 @@ def _terminal_exposure_notices(
                 ),
                 action_label="Open bot",
             ))
+    return ends, unreadable
+
+
+async def _terminal_exposure_notices(
+    facade: SqliteAlpacaClerkFacade, ends: list[_UncleanEnd],
+) -> list[ExposureNoticeView]:
+    """Author each ended bot's notices, accepting the Clerk's latest pass as its check (#2826).
+
+    On the event loop: ``published_custody`` reads under the intake lock.
+    """
+    notices: list[ExposureNoticeView] = []
+    for end in ends:
+        notices.extend(terminal_exposure_notices(
+            end.projection, sid=end.sid, symbol=end.symbol, kind=end.kind, running=False,
+            pass_proof=await facade.published_custody(end.sid),
+        ))
     return notices
