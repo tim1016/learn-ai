@@ -5,9 +5,7 @@ import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { evidenceRows } from './golden-search-decision';
 import { metricTexts, percentText, type MetricTexts } from './golden-search-display';
-import type { ExamCheck, ExamView, Metrics, StudyDetail } from './golden-search.types';
-
-const CHECK_WORDS: Readonly<Record<ExamCheck['status'], string>> = { pass: 'Pass', fail: 'Fail', not_available: 'Not available' };
+import type { ExamView, Metrics, StudyDetail } from './golden-search.types';
 
 interface ResultRow extends MetricTexts {
   readonly key: string;
@@ -46,7 +44,6 @@ export class GoldenSearchExamResultComponent {
     resultRow('incumbent', 'Frozen incumbent', this.exam().incumbent_metrics, false),
   ]);
   protected readonly evidence = computed(() => evidenceRows(this.study().state, this.exam()));
-  protected readonly checkWords = CHECK_WORDS;
   protected readonly retention = computed(() => {
     const retention = this.exam().retention;
     return retention === null ? null : percentText(retention);

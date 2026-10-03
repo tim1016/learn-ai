@@ -12,10 +12,6 @@ tr.selected { background: var(--accent-soft); }
 small { display: block; color: var(--text-secondary); font-size: var(--fs-xs); }
 .bad { color: var(--bear); }
 .caption { color: var(--text-secondary); font-size: var(--fs-xs); }
-.checks { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--space-1); font-size: var(--fs-xs); color: var(--text-secondary); }
-.checks li[data-status='pass'] strong { color: var(--bull); }
-.checks li[data-status='fail'] strong { color: var(--bear); }
-.checks li[data-status='not_available'] strong { color: var(--warn); }
 .proof { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 .evidence { display: grid; gap: var(--space-1); align-content: start; padding: var(--space-3) var(--space-4); background: var(--bg-surface); border: 1px solid var(--border-light); border-radius: var(--radius-sm); }
 .evidence h3 { margin: 0; font-size: var(--fs-sm); }

@@ -6,6 +6,7 @@ import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { GoldenSearchApprovalComponent } from './golden-search-approval.component';
 import { exposurePreview } from './golden-search-display';
 import { GoldenSearchExamResultComponent } from './golden-search-exam-result.component';
+import { GoldenSearchFinalChartsComponent } from './golden-search-final-charts.component';
 import { GoldenSearchLockboxComponent } from './golden-search-lockbox.component';
 import { RETAIN_KINDS } from './golden-search-retain.component';
 import type { StudyStep } from './golden-search-steps';
@@ -31,6 +32,7 @@ const FINISHED_STATES: ReadonlySet<StudyState> = new Set(['retained', 'closed'])
     ButtonModule,
     GoldenSearchApprovalComponent,
     GoldenSearchExamResultComponent,
+    GoldenSearchFinalChartsComponent,
     GoldenSearchLockboxComponent,
     GoldenSearchTupleComponent,
     ReceiptLabelPipe,

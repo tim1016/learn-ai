@@ -22,6 +22,7 @@
       <div class="review">
         <app-golden-search-tuple [study]="s" [capability]="capability()" [candidate]="candidate()" [incumbent]="incumbent()" />
         <app-golden-search-exam-result [study]="s" [exam]="exam" [candidateLabel]="candidateLabel()" />
+        @if (exam.outcome !== null) { <app-golden-search-final-charts [study]="s" [exam]="exam" [candidateLabel]="candidateLabel()" /> }
         <app-golden-search-approval [study]="s" [exam]="exam" [busy]="busy()" (studyCommand)="studyCommand.emit($event)" />
       </div>
     }
@@ -40,7 +41,10 @@
         </div>
       </section>
       @if (s.results.exam; as exam) {
-        @if (exam.outcome !== null) { <app-golden-search-exam-result [study]="s" [exam]="exam" [candidateLabel]="candidateLabel()" /> }
+        @if (exam.outcome !== null) {
+          <app-golden-search-exam-result [study]="s" [exam]="exam" [candidateLabel]="candidateLabel()" />
+          <app-golden-search-final-charts [study]="s" [exam]="exam" [candidateLabel]="candidateLabel()" />
+        }
       }
     </div>
   }
