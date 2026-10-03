@@ -4,10 +4,7 @@ import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { describe, expect, it } from 'vitest';
 
-import { UNBOUNDED, type DateBounds } from './date-bounds';
 import { DateFieldComponent } from './date-field.component';
-import { fakeSessions, fakeTradingCalendar } from './testing/fake-trading-calendar';
-import { TradingCalendarService } from './trading-calendar.service';
 
 @Component({
   imports: [DateFieldComponent],
@@ -15,10 +12,9 @@ import { TradingCalendarService } from './trading-calendar.service';
     <label for="dev-start">Development from</label>
     <app-date-field
       [(value)]="value"
-      [bounds]="bounds()"
-      [sessionsOnly]="sessionsOnly()"
       [hostProblem]="hostProblem()"
       [pickFrom]="pickFrom()"
+      [calendar]="calendar()"
       [disabled]="disabled()"
       inputId="dev-start"
       (touch)="touches.set(touches() + 1)"
@@ -27,26 +23,15 @@ import { TradingCalendarService } from './trading-calendar.service';
 })
 class HostComponent {
   readonly value = signal('2022-11-01');
-  readonly bounds = signal<DateBounds>(UNBOUNDED);
-  readonly sessionsOnly = signal(false);
   readonly hostProblem = signal<string | null>(null);
   readonly pickFrom = signal<string | null>(null);
+  readonly calendar = signal<'popup' | 'inline'>('popup');
   readonly disabled = signal(false);
   readonly touches = signal(0);
 }
 
-/** A calendar that fails the test if anything reads it. */
-const UNREAD_CALENDAR = {
-  sessions: (): never => {
-    throw new Error('a field that takes any day must not read the trading calendar');
-  },
-  problem: (): null => null,
-  lastCompleted: (): null => null,
-  retry: (): void => undefined,
-};
-
-async function renderField(calendar: unknown = UNREAD_CALENDAR) {
-  const view = await render(HostComponent, { providers: [{ provide: TradingCalendarService, useValue: calendar }] });
+async function renderField() {
+  const view = await render(HostComponent);
   const host = view.fixture.componentInstance;
   const field = screen.getByLabelText('Development from') as HTMLInputElement;
   const retype = async (text: string): Promise<void> => {
@@ -55,25 +40,32 @@ async function renderField(calendar: unknown = UNREAD_CALENDAR) {
     await userEvent.tab();
     await view.fixture.whenStable();
   };
-  return { view, host, field, retype };
+  /** PrimeNG's day cell for a date; its months are zero-based. */
+  const day = (within: Element, date: string): HTMLElement => {
+    const [year, month, dayOfMonth] = date.split('-').map(Number);
+    const cell = within.querySelector<HTMLElement>(`span[data-date="${year}-${month - 1}-${dayOfMonth}"]`);
+    if (cell === null) throw new Error(`${date} is not on the calendar`);
+    return cell;
+  };
+  return { view, host, field, retype, day };
 }
 
 describe('DateFieldComponent', () => {
-  it('carries the id its host gives it, so the host\'s label names it', async () => {
+  it("carries the id its host gives it, so the host's label names it", async () => {
     const { field } = await renderField();
 
     expect(field.value).toBe('2022-11-01');
     expect(field.id).toBe('dev-start');
   });
 
-  it('applies a typed date when the field is left; a weekend is a date like any other', async () => {
-    const { host, field, retype } = await renderField();
+  it('hands the host a typed date at once, so a click in the same task already acts on it; a weekend is a date like any other', async () => {
+    const { host, field } = await renderField();
 
-    // 2022-10-01 is a Saturday: a month start the fold planner accepts.
-    await retype('2022-10-01');
+    // 2022-10-01 is a Saturday: a month start the fold planner accepts. No tick follows the change.
+    field.value = '2022-10-01';
+    field.dispatchEvent(new Event('change'));
 
     expect(host.value()).toBe('2022-10-01');
-    expect(field.getAttribute('aria-invalid')).toBe('false');
   });
 
   it('keeps an unusable entry in the field with its reason and hands the host an empty date', async () => {
@@ -84,17 +76,6 @@ describe('DateFieldComponent', () => {
     expect(field.value).toBe('11/01/2022');
     expect(field.getAttribute('aria-invalid')).toBe('true');
     expect(screen.getByRole('alert').textContent).toBe('Enter a date as YYYY-MM-DD.');
-    expect(host.value()).toBe('');
-  });
-
-  it('refuses a day outside its bounds', async () => {
-    const { view, host, retype } = await renderField();
-    host.bounds.set({ ...UNBOUNDED, min: '2026-10-03', minReason: 'A bot cannot end before today.' });
-    await view.fixture.whenStable();
-
-    await retype('2026-10-02');
-
-    expect(screen.getByRole('alert').textContent).toBe('A bot cannot end before today.');
     expect(host.value()).toBe('');
   });
 
@@ -121,55 +102,54 @@ describe('DateFieldComponent', () => {
     expect(host.value()).toBe('2022-11-01');
   });
 
-  it('takes only trading sessions when its host asks for them', async () => {
-    const calendar = fakeTradingCalendar(fakeSessions('2022-01-01', '2022-12-31'), '2022-12-30');
-    const { view, host, retype } = await renderField(calendar);
-    host.sessionsOnly.set(true);
-    await view.fixture.whenStable();
-
-    await retype('2022-10-01');
-
-    expect(screen.getByRole('alert').textContent).toBe('2022-10-01 is a weekend. The next session is 2022-10-03.');
-    expect(host.value()).toBe('');
-  });
-
-  it('picks a day from the calendar', async () => {
-    const { view, host, field } = await renderField();
-
-    await userEvent.click(screen.getByRole('button', { name: 'Open the calendar' }));
-    const calendar = await screen.findByRole('dialog', { name: 'Calendar' });
-    const day = calendar.querySelector<HTMLElement>('span[data-date="2022-10-15"]');
-    if (day === null) throw new Error('2022-11-15 is not on the calendar');
-    await userEvent.click(day);
-    await view.fixture.whenStable();
-
-    expect(host.value()).toBe('2022-11-15');
-    expect(field.value).toBe('2022-11-15');
-  });
-
-  it('offers no day before the first day its host names, yet takes an earlier date that is typed', async () => {
-    const { view, host, retype } = await renderField();
+  it('picks a day from a calendar over the page, which offers no day before the first its host names; an earlier date can still be typed', async () => {
+    const { view, host, field, retype, day } = await renderField();
     host.pickFrom.set('2022-11-10');
     await view.fixture.whenStable();
 
     await userEvent.click(screen.getByRole('button', { name: 'Open the calendar' }));
     const calendar = await screen.findByRole('dialog', { name: 'Calendar' });
-    const day = (dayOfMonth: number): boolean => calendar.querySelector(`span[data-date="2022-10-${dayOfMonth}"]`)?.classList.contains('p-disabled') ?? false;
-    expect([day(9), day(10)]).toEqual([true, false]);
+    expect([day(calendar, '2022-11-09'), day(calendar, '2022-11-10')].map((cell) => cell.classList.contains('p-disabled'))).toEqual([true, false]);
+
+    await userEvent.click(day(calendar, '2022-11-15'));
+    await view.fixture.whenStable();
+    expect(host.value()).toBe('2022-11-15');
+    expect(field.value).toBe('2022-11-15');
 
     // The host's server judges a date that has passed, in its own words.
     await retype('2022-11-02');
     expect(host.value()).toBe('2022-11-02');
   });
 
+  it('opens its calendar in place for a host that is itself a popover, and closes it on a pick', async () => {
+    const { view, host, day } = await renderField();
+    host.calendar.set('inline');
+    await view.fixture.whenStable();
+    const open = screen.getByRole('button', { name: 'Open the calendar' });
+
+    await userEvent.click(open);
+    await view.fixture.whenStable();
+
+    // In the field's own element, not floated to the page body where a top-layer host would cover it.
+    const calendar = screen.getByRole('group', { name: 'Calendar' });
+    expect(view.container.querySelector('app-date-field')?.contains(calendar)).toBe(true);
+    expect(open.getAttribute('aria-expanded')).toBe('true');
+
+    await userEvent.click(day(calendar, '2022-11-15'));
+    await view.fixture.whenStable();
+
+    expect(host.value()).toBe('2022-11-15');
+    expect(screen.queryByRole('group', { name: 'Calendar' })).toBeNull();
+  });
+
   it('checks nothing and hands nothing back while disabled, and says when it has been left', async () => {
     const { view, host, field } = await renderField();
-    host.bounds.set({ ...UNBOUNDED, min: '2026-10-03', minReason: 'Too early.' });
+    host.value.set('not a date');
     host.disabled.set(true);
     await view.fixture.whenStable();
 
     expect(field.disabled).toBe(true);
-    expect(host.value()).toBe('2022-11-01');
+    expect(host.value()).toBe('not a date');
     expect(screen.queryByRole('alert')).toBeNull();
 
     host.disabled.set(false);
@@ -179,6 +159,24 @@ describe('DateFieldComponent', () => {
 
     expect(host.touches()).toBe(1);
     expect(host.value()).toBe('');
+  });
+
+  it('does not write an old date back over what its host set while it was disabled', async () => {
+    const { view, host, field, retype } = await renderField();
+    await retype('2022-12-01');
+    host.disabled.set(true);
+    await view.fixture.whenStable();
+
+    // The host moves the date and moves it back while the field is out of use.
+    host.value.set('2023-01-03');
+    await view.fixture.whenStable();
+    host.value.set('2022-12-01');
+    await view.fixture.whenStable();
+    host.disabled.set(false);
+    await view.fixture.whenStable();
+
+    expect(host.value()).toBe('2022-12-01');
+    expect(field.value).toBe('2022-12-01');
   });
 
   it('has no accessibility violations', async () => {

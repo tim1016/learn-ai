@@ -3,6 +3,7 @@ import {
   Component,
   computed,
   inject,
+  linkedSignal,
   signal,
 } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
@@ -108,16 +109,16 @@ const PRESET_LABELS: Readonly<Record<string, QuickRangeKey>> = {
   '2Y': '2Y',
 };
 
-/** Parse a strict YYYY-MM-DD string to int64 ms UTC at UTC midnight. The
- *  shared `parseYmd` builds LOCAL-midnight Dates, which would make stored
- *  MsUtc window boundaries shift with the viewer's timezone — every
- *  YMD→ms boundary in this shell therefore goes through `Date.UTC`. Pure;
- *  returns null for malformed or impossible calendar dates. */
 /** The UTC calendar date of a window boundary; empty for ms 0, which is "no window yet", not 1970. */
 function isoOrEmpty(ms: number): string {
   return ms > 0 ? utcMsToIsoDate(ms) : '';
 }
 
+/** Parse a strict YYYY-MM-DD string to int64 ms UTC at UTC midnight. The
+ *  shared `parseYmd` builds LOCAL-midnight Dates, which would make stored
+ *  MsUtc window boundaries shift with the viewer's timezone — every
+ *  YMD→ms boundary in this shell therefore goes through `Date.UTC`. Pure;
+ *  returns null for malformed or impossible calendar dates. */
 export function parseYmdMsUtc(s: string): number | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const [y, m, d] = s.split('-').map(Number);
@@ -297,8 +298,12 @@ export class DataLabComponent {
    * not be sessions.
    */
   protected readonly dateBounds = inject(ProviderBoundsService).openEnded;
-  /** A date field holds no usable date; the picker says why beside it. */
-  protected readonly datesUnusable = signal(false);
+  /**
+   * A date field holds no usable date; the picker says why beside it. It
+   * starts over whenever the draft window is replaced (a saved setup, a
+   * preset), because the fields then show the new window's dates.
+   */
+  protected readonly datesUnusable = linkedSignal({ source: () => this.store.draft().window, computation: () => false });
   readonly draftTimeframeValue = computed(() => {
     const d = this.store.draft();
     const match = BAR_TIMEFRAMES.find(

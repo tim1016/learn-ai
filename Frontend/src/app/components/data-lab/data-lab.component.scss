@@ -96,13 +96,13 @@
   flex-direction: column;
   gap: 0.25rem;
   min-width: 0;
+  font-size: 0.8rem;
 
   // The dates: two fields, their calendar and the quick ranges need room.
   &--dates { flex: 1 1 22rem; }
 
   // The instrument: room for the symbol and its name.
   &--instrument { flex: 0 1 20rem; min-width: min(17.5rem, 100%); }
-  font-size: 0.8rem;
 
   > span {
     color: $text-secondary;
