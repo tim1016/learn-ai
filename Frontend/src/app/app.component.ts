@@ -6,12 +6,12 @@ import { AlpacaLiveBannerComponent } from './shell/alpaca-live-banner.component'
 import { LaneAttentionBellComponent } from './shell/lane-attention-bell.component';
 import { IbkrFeedPillComponent } from './shell/ibkr-feed-pill.component';
 import { MarkdownDrawerHostComponent } from './shared/markdown-drawer/markdown-drawer-host.component';
-import { AlpacaLiveVerdictService } from './services/alpaca-live-verdict.service';
+import { AlpacaLiveVerdictService, verdictModeChip } from './services/alpaca-live-verdict.service';
 import { LaneAttentionService } from './services/lane-attention.service';
 import { IbkrFeedService } from './services/ibkr-feed.service';
 import { FleetDirectoryService } from './fleet/fleet-directory.service';
 import { AppMenubarComponent } from './shell/app-menubar.component';
-import { TopBarComponent } from './shell/top-bar.component';
+import { TopBarComponent, type ShellAccountMode } from './shell/top-bar.component';
 import { PageBodyComponent } from './shell/page-body.component';
 import { pageTitleFor } from './shell/app-menu';
 import { CurrentUrlService } from './shell/current-url.service';
@@ -107,7 +107,7 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
   `],
   template: `
     <div class="shell">
-      <app-top-bar>
+      <app-top-bar [accountMode]="shellAccountMode()">
         <app-menubar shell-nav />
         <!-- Beside the menu, where the bar has room: the account pills'
              row scrolls and would clip it at narrow widths. -->
@@ -173,6 +173,23 @@ export class AppComponent {
     () => this.workspaceTitle() ?? pageTitleFor(this.currentUrl()),
   );
   protected readonly alpacaLanes = computed(() => this.fleetDirectory.lanesOf('alpaca'));
+  /** The header's solid worst-case tint (owner decision 2026-10-03,
+   * superseding #2168's neutral header): an all-Paper fleet paints Paper;
+   * anything else paints Live. An empty roster is the least-known state,
+   * not a calm one — it is every boot until the directory resolves, and
+   * indefinitely if that load fails — so it reads Live, the same
+   * fail-closed stance as the pills (#2110 D2). Shadow rides real custody
+   * and an unread or errored verdict is an undetermined mode, so both read
+   * Live too. The pills stay the per-lane truth; this is only the tint. */
+  protected readonly shellAccountMode = computed<ShellAccountMode>(() => {
+    const lanes = this.alpacaLanes();
+    if (lanes.length === 0) return 'live';
+    return lanes.every(
+      (lane) => verdictModeChip(this.alpacaLive.stateFor(lane.clerk_id)).tone === 'paper',
+    )
+      ? 'paper'
+      : 'live';
+  });
   protected readonly isFullBleedRoute = computed(() => {
     this.currentUrl();
     return activeRouteHasData(this.router.routerState.snapshot.root, 'fullBleed');
