@@ -27,7 +27,7 @@ export interface ProcedureChartsView {
   readonly eligibility: ChartSpec | null;
 }
 
-const LABELS: Readonly<Record<ProcedureCharts['key'], string>> = { search: 'All-period search', recent: 'Recent window' };
+const LABELS: Readonly<Record<ProcedureCharts['key'], string>> = { search: 'All-period', recent: 'Recent window' };
 
 /**
  * The Search step (#2696): the all-period procedure fitted on the whole

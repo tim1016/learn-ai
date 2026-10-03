@@ -383,7 +383,7 @@ function eligibilityOption(procedure: ProcedureCharts, capability: StrategyCapab
               symbol: 'none',
               lineStyle: { color: theme.textSecondary, type: 'dashed' as const, width: 1 },
               label: { color: theme.textSecondary, fontSize: 10, formatter: (params: { name?: string }) => params.name ?? '' },
-              data: [...(floor === null ? [] : [{ xAxis: floor, name: `floor ${floor}` }]), ...(procedure.policy.require_positive_net ? [{ yAxis: 0, name: '$0' }] : [])],
+              data: [...(floor === null ? [] : [{ xAxis: floor, name: `trade floor ${floor}` }]), ...(procedure.policy.require_positive_net ? [{ yAxis: 0, name: 'no profit' }] : [])],
             },
           }
         : {}),

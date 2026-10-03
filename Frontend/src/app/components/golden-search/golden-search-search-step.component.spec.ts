@@ -130,7 +130,7 @@ describe('GoldenSearchSearchStepComponent', () => {
     await renderStep(studyDetail('awaiting_validation'));
 
     const path = await screen.findByRole('region', { name: 'Search path' });
-    expect(within(path).getByRole('img').getAttribute('aria-label')).toContain('All-period search: 3 points tried in order, each by its Sharpe; the best eligible Sharpe so far ends at 1.18.');
+    expect(within(path).getByRole('img').getAttribute('aria-label')).toContain('All-period: 3 points tried in order, each by its Sharpe; the best eligible Sharpe so far ends at 1.18.');
     expect(tableRows(path)[2]).toMatch(/Pass 1, fast_period round 1\s*3\s*not recorded\s*too few trades\s*0\.90/);
     expect(tableRows(screen.getByRole('region', { name: 'Knob moves' }))[1]).toMatch(/Fast EMA length\s*3 to 12\s*5\s*8\s*no/);
     expect(tableRows(screen.getByRole('region', { name: 'One-knob profiles' })).at(-1)).toMatch(/Fast EMA length\s*8\s*1\.18\s*meets the rules\s*yes/);
