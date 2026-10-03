@@ -30,9 +30,13 @@ from __future__ import annotations
 
 import pytest
 
+from app.engine.indicators.adx import AverageDirectionalIndex
 from app.engine.indicators.base import BarIndicator, Indicator
 from app.engine.indicators.ema import ExponentialMovingAverage
+from app.engine.indicators.macd import MovingAverageConvergenceDivergence
 from app.engine.indicators.rsi import RelativeStrengthIndex
+from app.engine.indicators.sma import SimpleMovingAverage
+from app.engine.indicators.supertrend import Supertrend
 from app.engine.strategy.programs.ema_crossover_signal import EmaCrossoverSignalParams
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import SignalSession
@@ -209,6 +213,16 @@ def test_registry_signal_series_periods_match_the_constructed_indicators() -> No
 
 _DECISION_BAR_MS = 15 * 60_000
 
+# The sealed ``indicator`` kind each indicator class is named by.
+_SEALED_KIND: dict[type, str] = {
+    SimpleMovingAverage: "sma",
+    ExponentialMovingAverage: "ema",
+    RelativeStrengthIndex: "rsi_wilders",
+    AverageDirectionalIndex: "adx_wilders",
+    MovingAverageConvergenceDivergence: "macd",
+    Supertrend: "supertrend",
+}
+
 
 def _bars_until_ready(indicator: Indicator | BarIndicator) -> int:
     """How many decision bars a freshly built indicator takes to turn ready."""
@@ -233,9 +247,10 @@ def test_resolved_series_are_exactly_the_indicators_these_parameters_build(
     program_key: str, overrides: dict[str, int]
 ) -> None:
     """A seal names what runs (#2796): each series its parameters resolve is
-    one indicator the program built from them constructs -- the same period,
-    ready on the same bar -- and the program constructs no other. Each series
-    is held as ``_<name>`` on its strategy.
+    one indicator the program built from them constructs -- the same kind,
+    reading the same field, with the same period, ready on the same bar --
+    and the program constructs no other. Each series is held as ``_<name>``
+    on its strategy.
     """
     registration = _STRATEGY_REGISTRY[program_key]
     contract = registration.signal_program_contract
@@ -249,6 +264,9 @@ def test_resolved_series_are_exactly_the_indicators_these_parameters_build(
 
     assert set(series) == set(built)
     for name, indicator in built.items():
+        assert series[name].indicator == _SEALED_KIND[type(indicator)], name
+        # A bar indicator reads the whole bar; every other one reads its close.
+        assert series[name].field == ("high_low_close" if isinstance(indicator, BarIndicator) else "close"), name
         assert series[name].period == indicator.period, name
         assert series[name].warmup_bars == _bars_until_ready(indicator), name
 

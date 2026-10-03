@@ -558,7 +558,7 @@ _SPY_STRATEGY_C_DEFAULT_PERIODS_PROVENANCE = NumericalProvenanceContract(
     # The trace/decision identity is Decimal-exact and
     # SHA-256-compared (signal_program.py), not
     # tolerance-compared -- see
-    # test_validated_spy_strategy_c_settings_corpus_has_a_pinned_trace_root's
+    # test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_c]'s
     # byte-exact trace_root assertion. Same as sma_crossover:
     # no second, one-level-down LEAN-value-parity claim here
     # (no tolerance_atol/tolerance_rtol/parity_fixture_ids) --
@@ -882,11 +882,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # RSI(14) is fixed in this program version. warmup_bars mirrors
             # each indicator's own is_ready threshold
             # (app/engine/indicators/base.py: samples >= period; RSI
-            # overrides to period + 1 for its first delta) — any drift
-            # between these constants and the real indicators would already
-            # change the golden trace root and fail
-            # test_validated_ema_settings_corpus_has_a_pinned_trace_root, so
-            # this cannot silently go stale.
+            # overrides to period + 1 for its first delta);
+            # test_contract_series_and_hold_describe_the_program_these_parameters_build
+            # holds the series to the indicators the program builds.
             signals=(
                 SignalSeriesContract(name="ema_fast", indicator="ema", field="close", period=5, warmup_bars=5),
                 SignalSeriesContract(name="ema_slow", indicator="ema", field="close", period=10, warmup_bars=10),
@@ -1636,12 +1634,12 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # 2 * period; MovingAverageConvergenceDivergence's own `period`
             # bookkeeping value already equals slow_period + signal_period -
             # 1, the sample count at which its internal signal EMA becomes
-            # ready) -- any drift between these constants and the real
-            # indicators would already change the golden trace root and fail
-            # test_validated_spy_strategy_a_settings_corpus_has_a_pinned_trace_root,
-            # so this cannot silently go stale. These static values are the
-            # default point; every period is a parameter, so a seal records
-            # `signals_for` resolved against its own (#2796).
+            # ready);
+            # test_resolved_series_are_exactly_the_indicators_these_parameters_build
+            # holds the series to the indicators the program builds. These
+            # static values are the default point; every period is a
+            # parameter, so a seal records `signals_for` resolved against its
+            # own (#2796).
             signals=(
                 SignalSeriesContract(name="ema_fast", indicator="ema", field="close", period=20, warmup_bars=20),
                 SignalSeriesContract(name="ema_slow", indicator="ema", field="close", period=50, warmup_bars=50),
@@ -1839,10 +1837,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # slow_period + signal_period - 1 = 34 at construction
             # (app/engine/indicators/macd.py), which is also its own
             # is_ready threshold since MACD delegates is_ready to its
-            # internal signal EMA. Any drift between these constants and the
-            # real indicators would already change the golden trace root and
-            # fail test_validated_spy_strategy_b_settings_corpus_has_a_pinned_trace_root,
-            # so this cannot silently go stale.
+            # internal signal EMA.
+            # test_resolved_series_are_exactly_the_indicators_these_parameters_build
+            # holds the series to the indicators the program builds.
             signals=(
                 SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
                 SignalSeriesContract(
@@ -2041,12 +2038,12 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # samples >= 2 * period (app/engine/indicators/adx.py -- true
             # range and directional movement both need a *prior* bar
             # before the Wilder smoothing itself needs `period` more
-            # samples). Any drift between these constants and the real
-            # indicators would already change the golden trace root and
-            # fail test_validated_spy_strategy_c_settings_corpus_has_a_pinned_trace_root,
-            # so this cannot silently go stale. These static values are the
-            # 14/14 default point; both periods are parameters, so a seal
-            # records `signals_for` resolved against its own (#2796).
+            # samples).
+            # test_resolved_series_are_exactly_the_indicators_these_parameters_build
+            # holds the series to the indicators the program builds. These
+            # static values are the 14/14 default point; both periods are
+            # parameters, so a seal records `signals_for` resolved against
+            # its own (#2796).
             signals=(
                 SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
                 SignalSeriesContract(

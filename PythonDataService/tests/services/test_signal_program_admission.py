@@ -674,14 +674,17 @@ def test_seal_whose_parameters_no_longer_validate_fails_closed() -> None:
 _SERIES_OFF_VALIDATED: dict[str, dict[str, tuple[int, int]]] = {
     "sma_crossover": {"sma_short": (7, 7), "sma_long": (21, 21)},
     "rsi_mean_reversion": {"rsi": (21, 22)},
-    "spy_strategy_a": {"ema_fast": (8, 8), "ema_slow": (21, 21), "macd": (16, 16), "rsi": (21, 22), "adx": (10, 20)},
+    "spy_strategy_a": {"ema_fast": (8, 8), "ema_slow": (23, 23), "macd": (16, 16), "rsi": (21, 22), "adx": (10, 20)},
     "spy_strategy_b": {"rsi": (21, 22), "adx": (10, 20), "supertrend": (7, 7), "macd": (16, 16)},
     "spy_strategy_c": {"rsi": (21, 22), "adx": (10, 20)},
 }
 
 
-def _off_validated_seal(program_key: str) -> tuple[BrokerBotBinding, SealedBotProgram]:
-    periods = OFF_VALIDATED_PERIODS[program_key]
+def _off_validated_seal(
+    program_key: str, periods: dict[str, int] | None = None
+) -> tuple[BrokerBotBinding, SealedBotProgram]:
+    """Seal ``program_key`` at ``periods``, or at its ``OFF_VALIDATED_PERIODS`` point."""
+    periods = OFF_VALIDATED_PERIODS[program_key] if periods is None else periods
     binding = _binding(
         strategy_instance_id=f"sealed-{program_key}",
         strategy_key=program_key,
@@ -721,9 +724,15 @@ def test_a_seal_naming_the_default_periods_for_another_deploy_fails_closed(progr
     assert "signal semantics" in proof.explanation
 
 
-def test_a_strategy_c_seal_off_its_default_periods_does_not_claim_them_in_its_formula() -> None:
-    """Strategy C's formula names RSI(14) and ADX(14) outright; that holds only at 14/14."""
-    _bound, seal = _off_validated_seal("spy_strategy_c")
+@pytest.mark.parametrize(("rsi_period", "adx_period"), [(21, 14), (14, 10), (21, 10)])
+def test_a_strategy_c_seal_off_its_default_periods_does_not_claim_them_in_its_formula(
+    rsi_period: int, adx_period: int
+) -> None:
+    """Strategy C's formula names RSI(14) and ADX(14) outright; that holds only at 14/14.
+
+    Either period off 14 is enough: the formula states both as fact.
+    """
+    _bound, seal = _off_validated_seal("spy_strategy_c", {"rsi_period": rsi_period, "adx_period": adx_period})
 
     formula = seal.configured_signal.numerical_provenance.formula
     assert "RSI(rsi_period)" in formula and "ADX(adx_period)" in formula

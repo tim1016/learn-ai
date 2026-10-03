@@ -56,7 +56,7 @@ OFF_VALIDATED_PERIODS: dict[str, dict[str, int]] = {
     "rsi_mean_reversion": {"window": 21},
     "spy_strategy_a": {
         "ema_fast_period": 8,
-        "ema_slow_period": 21,
+        "ema_slow_period": 23,
         "macd_fast": 5,
         "macd_slow": 13,
         "macd_signal": 4,
@@ -75,7 +75,8 @@ OFF_VALIDATED_PERIODS: dict[str, dict[str, int]] = {
 }
 """One point off the validated settings per program that seals an indicator
 series, moving every period that is a parameter: what a non-default deploy
-runs, and so what its seal and its view must name (#2796)."""
+runs, and so what its seal and its view must name (#2796). No two periods of
+a program share a value, so a series wired to the wrong one cannot pass."""
 
 
 def sealed_series_points() -> list[tuple[str, dict[str, int]]]:
@@ -90,7 +91,9 @@ def sealed_series_points() -> list[tuple[str, dict[str, int]]]:
     for key, registration in sealed_programs():
         contract = registration.signal_program_contract
         if contract is not None and contract.signals:
-            points.append((key, OFF_VALIDATED_PERIODS[key]))
+            periods = OFF_VALIDATED_PERIODS[key]
+            assert len(set(periods.values())) == len(periods), f"'{key}' repeats a period value off its validated point"
+            points.append((key, periods))
     return points
 
 
