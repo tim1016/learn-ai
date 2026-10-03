@@ -14608,7 +14608,7 @@ export interface components {
             in_profit: number;
             /**
              * Recorded
-             * @description Stress runs that completed with a net profit.
+             * @description Stress runs that completed with a recorded net profit, of any sign.
              */
             recorded: number;
             /**

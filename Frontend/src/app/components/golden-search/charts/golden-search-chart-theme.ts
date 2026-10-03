@@ -62,6 +62,24 @@ export function tooltipFrame(theme: ChartTheme): TooltipComponentOption {
   };
 }
 
+/** How a tooltip, summary or table names a value the study did not record. */
+export const NOT_RECORDED = 'not recorded';
+
+/** The hovered index from an axis tooltip's parameters (an array) or an item tooltip's (one object). */
+export function dataIndexOf(params: unknown): number | null {
+  const first: unknown = Array.isArray(params) ? params[0] : params;
+  if (typeof first !== 'object' || first === null || !('dataIndex' in first)) return null;
+  const index = first.dataIndex;
+  return typeof index === 'number' ? index : null;
+}
+
+/** The hovered series' index from an item tooltip's parameters. */
+export function seriesIndexOf(params: unknown): number | null {
+  if (typeof params !== 'object' || params === null || !('seriesIndex' in params)) return null;
+  const index = params.seriesIndex;
+  return typeof index === 'number' ? index : null;
+}
+
 export interface TooltipRow {
   readonly label: string;
   readonly values: readonly string[];

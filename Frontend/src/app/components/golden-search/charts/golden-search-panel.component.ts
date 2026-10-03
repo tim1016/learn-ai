@@ -27,6 +27,7 @@ export class GoldenSearchPanelComponent {
   private readonly drawer = inject(MarkdownDrawerService);
   private readonly host = contentChild(GoldenSearchChartComponent);
   private readonly walkButton = viewChild.required<ElementRef<HTMLButtonElement>>('walk');
+  private readonly heading = viewChild.required<ElementRef<HTMLHeadingElement>>('heading');
 
   protected readonly guide = computed(() => CHART_GUIDES[this.chart()]);
   protected readonly headingId = computed(() => `gs-chart-${this.chart()}`);
@@ -41,6 +42,11 @@ export class GoldenSearchPanelComponent {
       const step = this.step();
       if (host !== undefined) untracked(() => host.highlight(step === null ? null : this.guide().steps[step].target));
     });
+  }
+
+  /** Moves focus to the panel's title, which brings the panel into view (a summary row's "See the evidence"). */
+  focusHeading(): void {
+    this.heading().nativeElement.focus();
   }
 
   protected about(): void {

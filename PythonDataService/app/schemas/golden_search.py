@@ -670,7 +670,7 @@ class GoldenSearchStressResult(_Wire):
 
 class GoldenSearchStressTally(_Wire):
     in_profit: int = Field(description="Stress runs that completed with a net profit above zero.")
-    recorded: int = Field(description="Stress runs that completed with a net profit.")
+    recorded: int = Field(description="Stress runs that completed with a recorded net profit, of any sign.")
     scenarios: int = Field(description="Stress scenarios the plan scheduled.")
 
 

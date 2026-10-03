@@ -4,7 +4,7 @@ import type { HighlightTarget } from './golden-search-chart-spec';
 export type GoldenSearchChartId = 'candidate-cards' | 'equity-and-fall' | 'side-by-side' | 'neighbor-tornado' | 'cost-stress';
 
 export interface WalkthroughStep {
-  /** The guide's "How to read it" step, in the same words. */
+  /** The step as the guide's "How to read it" list words it (the contract spec holds the step counts together). */
   readonly text: string;
   /** What the step lights up on the chart; null when it reads the panel as a whole. */
   readonly target: HighlightTarget | null;

@@ -1,6 +1,6 @@
 import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec } from './charts/golden-search-chart-spec';
-import { tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
+import { dataIndexOf, NOT_RECORDED, seriesIndexOf, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
 import type { CandidateRow } from './golden-search-compare';
 import { knobsByName, metricTexts, percentText, ratioText, signedPercentText } from './golden-search-display';
@@ -15,7 +15,6 @@ import type { CandidateKey, CumulativeReturnPoint, EvidenceCandidate, EvidenceCe
  * out of the drawing (`'-'`) and reads "not recorded", never zero.
  */
 
-const NOT_RECORDED = 'not recorded';
 const DEVELOPMENT = 'Development data, used for choosing.';
 
 export const NEIGHBOR_STATUS: Readonly<Record<EvidenceCellStatus, string>> = {
@@ -45,7 +44,7 @@ export function sparklineSpec(key: CandidateKey, label: string, points: readonly
   const values = points.map((point) => point.value);
   return {
     label: `${label} development cumulative return`,
-    summary: `Ends at ${signedPercentText(values.at(-1))} after ${points.length} sessions.`,
+    summary: `Ends at ${signedPercentText(values.at(-1))}.`,
     featured: key,
     option: (theme) => {
       const color = theme.candidates[key];
@@ -91,7 +90,7 @@ export function sparklineSpec(key: CandidateKey, label: string, points: readonly
 interface Measure {
   readonly label: string;
   /** What the measure is, for the hover. */
-  readonly note: (rows: readonly CandidateRow[]) => string;
+  readonly note: string;
   readonly value: (row: CandidateRow) => number | null;
   /** A value as its cells read it. */
   readonly text: (value: number | null) => string;
@@ -112,7 +111,7 @@ function completed(row: CandidateRow): Metrics | null {
 
 function stressDetail(row: CandidateRow): string {
   const tally = row.candidate.stress_tally;
-  if (tally.scenarios === 0) return '—';
+  if (tally.recorded === 0) return '—';
   const recorded = tally.recorded === tally.scenarios ? '' : ` (${tally.recorded} recorded)`;
   return `${tally.in_profit} of ${tally.scenarios}${recorded}`;
 }
@@ -125,40 +124,41 @@ function cellText(measure: Measure, row: CandidateRow): string {
 const MEASURES: readonly Measure[] = [
   {
     label: 'Net return',
-    note: () => 'Net return after costs, as a share of starting capital.',
+    note: 'Net return after costs, as a share of starting capital.',
     value: (row) => completed(row)?.total_return_pct ?? null,
     text: signedPercentText,
   },
   {
     label: 'Sharpe',
-    note: () => 'Return for each unit of day-to-day swing; higher is steadier.',
+    note: 'Return for each unit of day-to-day swing; higher is steadier.',
     value: (row) => completed(row)?.sharpe_ratio ?? null,
     text: ratioText,
   },
   {
     label: 'Worst fall',
-    note: () => 'The deepest fall from a peak on the engine’s bar-by-bar equity. Drawn reversed: a smaller fall sits further right.',
+    note: 'The deepest fall from a peak on the engine’s bar-by-bar equity. Drawn reversed: a smaller fall sits further right.',
     value: (row) => completed(row)?.max_drawdown_pct ?? null,
     text: percentText,
     inverse: true,
   },
   {
     label: 'Trades a year',
-    note: () => 'Development trades per trading year, counted on the exchange calendar.',
+    note: 'Development trades per trading year, counted on the exchange calendar.',
     value: (row) => row.candidate.trades_per_year,
     text: (value) => (value === null ? '—' : ONE_DECIMAL.format(value)),
     tick: (value) => WHOLE.format(value),
   },
   {
     label: 'Win rate',
-    note: () => 'The share of trades that made money.',
+    note: 'The share of trades that made money.',
     value: (row) => completed(row)?.win_rate ?? null,
     text: percentText,
   },
   {
     label: 'Stress runs in profit',
-    note: () => 'Reruns under harsher costs and fills that still made money, of the scenarios the plan scheduled.',
-    value: (row) => (row.candidate.stress_tally.scenarios === 0 ? null : row.candidate.stress_tally.in_profit),
+    note: 'Reruns under harsher costs and fills that still made money, of the scenarios the plan scheduled.',
+    // No stress run recorded is a missing value, never zero runs in profit.
+    value: (row) => (row.candidate.stress_tally.recorded === 0 ? null : row.candidate.stress_tally.in_profit),
     text: (value) => (value === null ? '—' : String(value)),
     detail: stressDetail,
     min: 0,
@@ -193,19 +193,21 @@ const ROW_PITCH = 46;
 
 function sideBySideOption(rows: readonly CandidateRow[], featured: CandidateKey, theme: ChartTheme): ChartOption {
   const axisLabel = { color: theme.textSecondary, fontSize: 10 };
+  // Series run candidate by candidate, one per measure, so series i plots measure i mod the measure count.
+  const measureOf = (series: number | null): Measure | undefined => (series === null ? undefined : MEASURES[series % MEASURES.length]);
   return {
     grid: MEASURES.map((_, i) => ({ left: 128, right: 28, top: 10 + i * ROW_PITCH, height: 14 })),
     tooltip: {
       ...tooltipFrame(theme),
       trigger: 'item',
       formatter: (params: unknown) => {
-        const measure = MEASURES[measureIndexOf(params) ?? -1];
+        const measure = measureOf(seriesIndexOf(params));
         if (measure === undefined) return '';
         const lines: TooltipRow[] = rows.map((row) => {
           const value = measure.value(row) === null ? NOT_RECORDED : cellText(measure, row);
           return { label: row.candidate.label, swatch: { color: theme.candidates[row.key], dashed: false }, values: [value] };
         });
-        return tooltipHtml({ title: measure.label, columns: ['Value'], rows: lines, notes: [measure.note(rows), DEVELOPMENT] }, theme);
+        return tooltipHtml({ title: measure.label, columns: ['Value'], rows: lines, notes: [measure.note, DEVELOPMENT] }, theme);
       },
     },
     xAxis: MEASURES.map((measure, i) => ({
@@ -262,15 +264,16 @@ interface KnobSides {
   readonly above: NeighborRow | null;
 }
 
+/** A tested neighbor (its run completed) whose net profit is below zero. */
 function loses(row: NeighborRow | null): boolean {
-  const metrics = row?.metrics;
-  return row?.status === 'tested' && metrics?.status === 'completed' && metrics.net_profit !== null && metrics.net_profit < 0;
+  const net = row?.status === 'tested' ? row.metrics?.net_profit : null;
+  return net !== null && net !== undefined && net < 0;
 }
 
 function sideText(row: NeighborRow | null): string {
   if (row === null) return NOT_RECORDED;
   if ((row.status === 'tested' || row.status === 'center') && row.metrics?.status === 'completed') return signedPercentText(row.metrics.total_return_pct);
-  return NEIGHBOR_STATUS[row.metrics?.status === 'failed' ? 'failed' : row.status];
+  return NEIGHBOR_STATUS[row.status];
 }
 
 /**
@@ -536,21 +539,4 @@ function stressTooltip(rung: Rung, theme: ChartTheme): string {
   const what = rung.base ? 'The study’s own costs and fills.' : 'The same settings rerun in the engine with this scenario’s costs and fills.';
   const failed = figures.failure === null ? [] : [`The run failed: ${figures.failure}`];
   return tooltipHtml({ title: rung.label, columns: ['Value'], rows, notes: [...failed, what, DEVELOPMENT] }, theme);
-}
-
-// ---------------------------------------------------------------- tooltip parameters
-
-/** The hovered index from an axis tooltip's parameters (an array) or an item tooltip's (one object). */
-function dataIndexOf(params: unknown): number | null {
-  const first: unknown = Array.isArray(params) ? params[0] : params;
-  if (typeof first !== 'object' || first === null || !('dataIndex' in first)) return null;
-  const index = first.dataIndex;
-  return typeof index === 'number' ? index : null;
-}
-
-/** The measure a side-by-side dot belongs to, from its series id `<group>:<candidate>:<measure>`. */
-function measureIndexOf(params: unknown): number | null {
-  if (typeof params !== 'object' || params === null || !('seriesId' in params) || typeof params.seriesId !== 'string') return null;
-  const index = Number(params.seriesId.split(':')[2]);
-  return Number.isInteger(index) ? index : null;
 }

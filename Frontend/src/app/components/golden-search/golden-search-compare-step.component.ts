@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, ElementRef, inject, input, output, resource, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, output, resource, signal, viewChild, viewChildren } from '@angular/core';
 import { ButtonModule } from 'primeng/button';
 
 import { extractServerMessage } from '../broker/operation-error';
@@ -63,7 +63,6 @@ const INCUMBENT_CAPTION = 'The incumbent is not a new candidate. Use “Keep cur
 })
 export class GoldenSearchCompareStepComponent {
   private readonly service = inject(GoldenSearchService);
-  private readonly element: HTMLElement = inject(ElementRef).nativeElement;
 
   readonly study = input.required<StudyDetail>();
   readonly capability = input<StrategyCapability | null>(null);
@@ -90,6 +89,7 @@ export class GoldenSearchCompareStepComponent {
     return row === null ? null : rowSummary(row, this.study().decision_summaries);
   });
   private readonly tabs = viewChild(GoldenSearchEvidenceTabsComponent);
+  private readonly panels = viewChildren(GoldenSearchPanelComponent);
 
   /** Each row's development detail run, read once per study and candidate set, not on every poll. */
   private readonly detailRequest = computed<DetailRequest | undefined>(
@@ -168,7 +168,7 @@ export class GoldenSearchCompareStepComponent {
   /** A summary row's evidence: one of this step's tabs or charts, or the study step that holds it. */
   protected follow(link: SummaryLink): void {
     if (link.kind === 'tab' && isEvidenceTab(link.target)) this.tabs()?.open(link.target);
-    else if (link.kind === 'chart' && isChartId(link.target)) this.element.querySelector<HTMLElement>(`#gs-chart-${link.target}`)?.focus();
+    else if (link.kind === 'chart' && isChartId(link.target)) this.panels().find((panel) => panel.chart() === link.target)?.focusHeading();
     else if (link.kind === 'step' && isStudyStep(link.target)) this.goTo.emit(link.target);
   }
 

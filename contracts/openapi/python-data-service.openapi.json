@@ -22162,7 +22162,7 @@
             "type": "integer"
           },
           "recorded": {
-            "description": "Stress runs that completed with a net profit.",
+            "description": "Stress runs that completed with a recorded net profit, of any sign.",
             "title": "Recorded",
             "type": "integer"
           },

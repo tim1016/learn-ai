@@ -60,6 +60,8 @@ def test_a_frequency_plan_reads_its_frozen_trading_years_and_a_fixed_floor_plan_
     # The receipt wins over the calendar: a frozen half year stays a half year.
     window["years"] = [{"year": 2025, "selected_sessions": 125, "year_sessions": 250}]
     assert TradeFloors(protocol, receipt).trading_years(span) == Fraction(1, 2)
+    with pytest.raises(ValueError, match="no activity policy"):
+        TradeFloors(protocol, receipt).trading_years(_window(date(2026, 1, 1), date(2026, 2, 1)))
     legacy = protocol_from_request(plan_request("SPY"))
     assert TradeFloors(legacy, {}).trading_years(_window(date(2026, 1, 1), date(2026, 7, 1))) == Fraction(123, 251)
 

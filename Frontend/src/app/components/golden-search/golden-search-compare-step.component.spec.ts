@@ -236,9 +236,9 @@ describe('GoldenSearchCompareStepComponent', () => {
     expect(service.candidate).toHaveBeenCalledTimes(3);
     // Every candidate card draws its own return line, the same runs again.
     expect(within(region('Candidate cards')).getAllByRole('img').map((img) => img.getAttribute('aria-label'))).toEqual([
-      'All-period fit development cumulative return. Ends at +8.7% after 3 sessions.',
-      'Recent fit development cumulative return. Ends at +11.6% after 3 sessions.',
-      'Current settings development cumulative return. Ends at +5.2% after 3 sessions.',
+      'All-period fit development cumulative return. Ends at +8.7%.',
+      'Recent fit development cumulative return. Ends at +11.6%.',
+      'Current settings development cumulative return. Ends at +5.2%.',
     ]);
 
     // A study poll brings a new study object with the same runs and evidence: nothing is read or redrawn again.

@@ -1,6 +1,6 @@
 import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec } from './charts/golden-search-chart-spec';
-import { tooltipFrame, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
+import { dataIndexOf, NOT_RECORDED, tooltipFrame, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
 import { percentText, signedPercentText } from './golden-search-display';
 import type { CandidateKey, CumulativeReturnPoint, DrawdownPoint } from './golden-search.types';
@@ -20,7 +20,6 @@ interface AlignedLine {
   readonly falls: readonly (number | null)[];
 }
 
-const NOT_RECORDED = 'not recorded';
 const LABEL = 'Development cumulative return and fall from peak';
 
 /**
@@ -165,12 +164,4 @@ function lastValue(values: readonly (number | null)[]): number | null {
     if (value !== null) return value;
   }
   return null;
-}
-
-/** The hovered session's index from an axis tooltip's parameters (an array) or an item tooltip's (one object). */
-function dataIndexOf(params: unknown): number | null {
-  const first: unknown = Array.isArray(params) ? params[0] : params;
-  if (typeof first !== 'object' || first === null || !('dataIndex' in first)) return null;
-  const index = first.dataIndex;
-  return typeof index === 'number' ? index : null;
 }

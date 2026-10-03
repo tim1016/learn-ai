@@ -101,8 +101,8 @@ class TradeFloors:
 
     def __init__(self, protocol: GoldenSearchProtocol, receipt: Mapping[str, Any]) -> None:
         self._protocol = protocol
-        self._frozen: dict[Window, int] | None = None
-        self._frozen_years: dict[Window, list[Mapping[str, int]]] = {}
+        # Each frozen window's floor and its yearly session counts.
+        self._frozen: dict[Window, tuple[int, list[Mapping[str, int]]]] | None = None
         rate = protocol.expected_trades_per_year
         if rate is None:
             return
@@ -111,8 +111,7 @@ class TradeFloors:
             raise ValueError("The study receipt is missing its expected trade frequency policy.")
         if frozen["expected_trades_per_year"] != rate:
             raise ValueError("The study receipt's expected trade frequency does not match its frozen protocol.")
-        self._frozen = {(int(item["start_ms"]), int(item["end_ms"])): int(item["minimum_trades"]) for item in frozen["windows"]}
-        self._frozen_years = {(int(item["start_ms"]), int(item["end_ms"])): list(item["years"]) for item in frozen["windows"]}
+        self._frozen = {(int(item["start_ms"]), int(item["end_ms"])): (int(item["minimum_trades"]), list(item["years"])) for item in frozen["windows"]}
 
     @property
     def frequency_based(self) -> bool:
@@ -125,14 +124,19 @@ class TradeFloors:
             if flat is None:
                 raise ValueError("A plan without an expected trade frequency needs its fixed trade floors.")
             return flat
-        if window not in self._frozen:
-            raise ValueError("The study receipt has no activity policy for this evaluation window.")
-        return self._frozen[window]
+        return self._frozen_window(window)[0]
 
     def trading_years(self, window: Window) -> Fraction:
         """``window``'s length in trading years: as the receipt froze it for a frequency plan, else from the calendar."""
-        years = self._frozen_years.get(window)
-        return _calendar_trading_years(*window) if years is None else trading_years(years)
+        if self._frozen is None:
+            return _calendar_trading_years(*window)
+        return trading_years(self._frozen_window(window)[1])
+
+    def _frozen_window(self, window: Window) -> tuple[int, list[Mapping[str, int]]]:
+        assert self._frozen is not None  # only a frequency plan froze windows
+        if window not in self._frozen:
+            raise ValueError("The study receipt has no activity policy for this evaluation window.")
+        return self._frozen[window]
 
     def policy(self, window: Window) -> SelectionPolicy:
         """The plan's selection policy with ``window``'s floor resolved."""
