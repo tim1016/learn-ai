@@ -25,6 +25,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import asyncpg
 import redis
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
@@ -53,6 +54,7 @@ from app.research.golden_search.models import (
     StudyRow,
     require_mapping,
 )
+from app.research.golden_search.plan_charts import coverage_span, plan_charts, runs_used
 from app.research.golden_search.planning import (
     DEFAULT_FINAL_MONTHS,
     DEFAULT_TEST_MONTHS,
@@ -520,6 +522,48 @@ async def candidate(study_id: str, candidate_key: str) -> dict[str, Any]:
         exam=exam_record,
         commission_per_order=protocol["execution"]["commission_per_order"],
     )
+
+
+LAKE_UNREADABLE = "The data lake catalog could not be read, so coverage is not shown."
+
+
+async def _lake_statuses(row: StudyRow) -> dict[date, str] | str:
+    """Each session's minute-bar artifact status over the study's data span, or why the catalog could not say."""
+    from app.data_lake import catalog_client
+    from app.data_lake.catalog_client import CatalogSchemaNotReadyError, CatalogUnavailableError
+    from app.data_lake.ensure_data import provider_for_data_type
+    from app.data_lake.types import polygon_mode_for
+
+    start, end = coverage_span(row)
+    adjusted = bool(row.receipt["execution_contract"]["data_policy"]["adjusted"])
+    try:
+        await catalog_client.init_pool()
+        rows = await catalog_client.select_artifact_coverage(
+            market="usa",
+            symbol=row.symbol,
+            data_type="trade",
+            provider=provider_for_data_type("trade"),
+            price_adjustment_mode=polygon_mode_for(adjusted=adjusted),
+            start_trading_date=start,
+            end_trading_date=end,
+        )
+    except (CatalogUnavailableError, CatalogSchemaNotReadyError, asyncpg.PostgresError, asyncpg.InterfaceError, OSError):
+        logger.warning(
+            "lake coverage unreadable; the plan's coverage chart says so",
+            extra={"action": "golden_search_plan_coverage_unreadable", "study_id": row.id},
+            exc_info=True,
+        )
+        return LAKE_UNREADABLE
+    return {item.trading_date: item.status for item in rows}
+
+
+async def plan_step_charts(study_id: str) -> dict[str, Any]:
+    """The Plan step's charts for a locked study: its frozen windows, search space, workload, trade minimums and data coverage."""
+    snapshot = await with_connection(repo.workload_snapshot, study_id)
+    if snapshot is None:
+        raise _not_found(study_id)
+    row, rows_by_step, proof = snapshot
+    return plan_charts(row, used=runs_used(rows_by_step, proof), statuses=await _lake_statuses(row))
 
 
 async def search_step_charts(study_id: str) -> dict[str, Any]:

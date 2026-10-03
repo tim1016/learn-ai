@@ -67,6 +67,8 @@ STAGE_ESTIMATES: dict[StageName, tuple[str, ...]] = {
     "exam": ("exam",),
     "qualification": ("proof",),
 }
+# The estimate row that plans each evaluation step's runs: the search's plan includes its pair audits.
+ESTIMATE_ROW_OF_STEP: dict[str, str] = {"search": "search", "pair_audit": "search", "recent": "recent", "validation": "validation", "evidence": "evidence", "exam": "exam"}
 
 
 class GoldenSearchRefusal(ValueError):

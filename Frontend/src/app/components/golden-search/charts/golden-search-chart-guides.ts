@@ -26,7 +26,13 @@ export type GoldenSearchChartId =
   | 'knob-moves'
   | 'knob-profiles'
   | 'eligibility-map'
-  | 'pair-landscape';
+  | 'pair-landscape'
+  | 'plan-tiles'
+  | 'window-map'
+  | 'search-space'
+  | 'workload'
+  | 'trade-minimums'
+  | 'data-coverage';
 
 export interface WalkthroughStep {
   /** The step as the guide's "How to read it" list words it (the contract spec holds the step counts together). */
@@ -302,6 +308,66 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Green cells made money and red cells lost it; each cell prints its net return.', target: null },
       { text: 'The outlined cell is the candidate itself. A plateau of similar cells around it is more robust than a lone peak.', target: null },
       { text: 'Grey cells have no return: an invalid pair (—), outside the legal range (·), never run (?), a failed run, or one that recorded none.', target: { kind: 'series', group: 'other' } },
+    ],
+  },
+  'plan-tiles': {
+    title: 'Plan at a glance',
+    question: 'What did you lock in, in four numbers?',
+    steps: [
+      { text: 'The search method: Zoom moves one knob at a time; Grid tries every combination.', target: null },
+      { text: 'The development period: the data the search chooses on, with its trading sessions.', target: null },
+      { text: 'The final test: kept sealed until you choose, then opened once.', target: null },
+      { text: 'The engine runs the plan may use, against the study’s cap.', target: null },
+    ],
+  },
+  'window-map': {
+    title: 'Window map',
+    question: 'Which months does each part of the study use?',
+    steps: [
+      { text: 'Each row is a window, on one time axis: the run-up, development, the recent fit, each fold, and the final test.', target: { kind: 'series', group: 'windows' } },
+      { text: 'The run-up only warms the indicators; nothing is judged on it.', target: null },
+      { text: 'The folds’ test windows follow one another; together they are the forward tests the verdict counts trades over.', target: null },
+      { text: 'Hover a window for its dates, sessions and trade minimum. The final test sits after everything else, untouched.', target: null },
+    ],
+  },
+  'search-space': {
+    title: 'Search space',
+    question: 'How much of each knob’s legal range does the search explore?',
+    steps: [
+      { text: 'Each row is a knob, drawn across its whole legal range.', target: null },
+      { text: 'The band is the range the search may try; a held knob is a single grey mark.', target: { kind: 'series', group: 'range' } },
+      { text: 'The diamond is the current settings; the ring is where Zoom starts. Grid tries only the band. Zoom weighs the value it holds in every round, so it can end where it started even outside the band.', target: { kind: 'series', group: 'current' } },
+      { text: 'Hover a knob for its step, how many values it can take and its importance: higher importance is searched first.', target: null },
+    ],
+  },
+  workload: {
+    title: 'Workload',
+    question: 'How many engine runs does each stage plan, and how many has it used?',
+    steps: [
+      { text: 'Each row is a stage of the study.', target: null },
+      { text: 'The grey bar is the most runs the plan allows the stage.', target: { kind: 'series', group: 'planned' } },
+      { text: 'The blue bar is how many it has used so far, runs in flight included.', target: { kind: 'series', group: 'used' } },
+      { text: 'The plan is an upper bound, not a stop. A stage stops short only when the study’s cap runs out; the study then notes it as incomplete.', target: null },
+    ],
+  },
+  'trade-minimums': {
+    title: 'Trade minimums',
+    question: 'How many trades must each window reach for its results to count?',
+    steps: [
+      { text: 'Each bar is a window’s trade minimum.', target: { kind: 'series', group: 'minimum' } },
+      { text: 'With an expected trade frequency, the minimum grows with the window’s trading years, rounded up.', target: null },
+      { text: 'Hover a window for its trading years, year by year.', target: null },
+      { text: 'A fixed-floor plan shows its two floors instead: one for every selection window, one for the final test.', target: null },
+    ],
+  },
+  'data-coverage': {
+    title: 'Data coverage',
+    question: 'Does the lake hold the minute bars the study’s data span needs?',
+    steps: [
+      { text: 'Each bar is a month of the study’s data span, as tall as its trading sessions.', target: null },
+      { text: 'Green sessions are complete in the lake.', target: { kind: 'series', group: 'complete' } },
+      { text: 'Amber is still fetching, teal stale, red failed, and grey not in the lake at all.', target: { kind: 'series', group: 'missing' } },
+      { text: 'This is the lake now. The study ran on the data snapshot frozen at lock, which this cannot change.', target: null },
     ],
   },
 };

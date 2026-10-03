@@ -1,7 +1,8 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, resource, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, resource } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 
 import { extractServerMessage } from '../broker/operation-error';
+import { reloadOnProgress } from './charts/golden-search-reload';
 import { pairAudit } from './golden-search-compare';
 import { GoldenSearchProcedureChartsComponent } from './golden-search-procedure-charts.component';
 import { GoldenSearchProcedureComponent } from './golden-search-procedure.component';
@@ -64,20 +65,7 @@ export class GoldenSearchSearchStepComponent {
   protected readonly audits = computed(() => this.pairMaps().map((map) => pairAudit(map, this.capability())));
 
   constructor() {
-    // A new revision reloads the charts; a reload keeps what is drawn, where a change of params would blank it.
-    // The first read starts at the revision of creation; a change during any read waits for it to settle, then reloads.
-    let seen: number | null = null;
-    effect(() => {
-      const revision = this.revision();
-      const loading = this.charts.isLoading();
-      if (seen === null) {
-        seen = revision;
-        return;
-      }
-      if (loading || revision === seen || this.request() === undefined) return;
-      seen = revision;
-      untracked(() => this.charts.reload());
-    });
+    reloadOnProgress(this.revision, this.charts, () => this.request() !== undefined);
   }
 
   protected retry(): void {

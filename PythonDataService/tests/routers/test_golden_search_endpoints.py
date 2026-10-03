@@ -345,6 +345,9 @@ async def test_a_study_runs_from_lock_to_an_approved_golden_configuration_over_h
     assert candidate.status_code == 200, candidate.text
     development = candidate.json()["development"]
     assert development["cumulative_return"] and development["trade_charts"]["trades"] and candidate.json()["exam"] is None
+    planned = await client.get(f"{BASE}/studies/{study['id']}/charts/plan")
+    assert planned.status_code == 200, planned.text
+    assert planned.json()["windows"][-1]["kind"] == "final"
     searched = await client.get(f"{BASE}/studies/{study['id']}/charts/search")
     assert searched.status_code == 200, searched.text
     assert [procedure["key"] for procedure in searched.json()["procedures"]] == ["search", "recent"]
@@ -556,13 +559,14 @@ async def test_reads_of_a_missing_study_or_candidate_are_404_with_a_code(client:
         await client.get(f"{BASE}/studies/{missing}/candidates/incumbent"),
         await client.get(f"{BASE}/studies/{missing}/charts/test-over-time"),
         await client.get(f"{BASE}/studies/{missing}/charts/search"),
+        await client.get(f"{BASE}/studies/{missing}/charts/plan"),
         await client.delete(f"{BASE}/studies/{missing}"),
         await _command(client, {"id": missing, "revision": 0}, "continue"),
     ]
     before_evidence = await client.get(f"{BASE}/studies/{study['id']}/candidates/all_period")
     unknown_key = await client.get(f"{BASE}/studies/{study['id']}/candidates/best_guess")
 
-    assert [(r.status_code, r.json()["detail"]["code"]) for r in responses] == [(404, "NOT_FOUND")] * 7
+    assert [(r.status_code, r.json()["detail"]["code"]) for r in responses] == [(404, "NOT_FOUND")] * 8
     assert before_evidence.status_code == 404 and before_evidence.json()["detail"]["code"] == "CANDIDATE_UNAVAILABLE"
     assert unknown_key.status_code == 422
 

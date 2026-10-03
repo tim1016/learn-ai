@@ -6,13 +6,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { GoldenSearchStudyComponent } from './golden-search-study.component';
 import { GoldenSearchRefusedError, GoldenSearchService, StageDispatchError, StudyConflictError, type CommandOutcome } from './golden-search.service';
-import type { StudyCommandRequest, StudyDetail } from './golden-search.types';
-import { emaCapability, frequencyProtocol, QUALIFICATION_FAILURE, studyDetail, tradeActivity } from './testing/fixtures';
+import type { PlanCharts, StudyCommandRequest, StudyDetail } from './golden-search.types';
+import { emaCapability, frequencyProtocol, planCharts, QUALIFICATION_FAILURE, studyDetail, tradeActivity } from './testing/fixtures';
 
 interface FakeService {
   get: ReturnType<typeof vi.fn<(id: string) => Promise<StudyDetail>>>;
   command: ReturnType<typeof vi.fn<(id: string, request: StudyCommandRequest) => Promise<CommandOutcome>>>;
   hide: ReturnType<typeof vi.fn<(id: string) => Promise<void>>>;
+  planCharts: ReturnType<typeof vi.fn<(id: string) => Promise<PlanCharts>>>;
 }
 
 function fakeService(study: StudyDetail): FakeService {
@@ -20,6 +21,7 @@ function fakeService(study: StudyDetail): FakeService {
     get: vi.fn(async (_id: string) => study),
     command: vi.fn(async (_id: string, _request: StudyCommandRequest) => ({ study, jobId: null })),
     hide: vi.fn(async (_id: string) => undefined),
+    planCharts: vi.fn(async (_id: string) => planCharts()),
   };
 }
 

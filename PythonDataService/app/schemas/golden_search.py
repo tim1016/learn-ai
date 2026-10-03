@@ -626,6 +626,102 @@ class GoldenSearchLinkedReturn(_Wire):
     fold_missing: bool = Field(description="This fold has no test return of its own (a null linked_return after it is the broken line).")
 
 
+class GoldenSearchPlanWindow(_Wire):
+    key: str
+    label: str
+    kind: Literal["run_up", "development", "recent", "training", "test", "forward", "final"]
+    start_ms: InstantMs
+    end_ms: InstantMs = Field(description="Exclusive.")
+    sessions: int = Field(description="The canonical calendar's sessions in the window.")
+    minimum_trades: int | None = Field(description="The trades the window must reach; null for the run-up and a single fold's test, which have none.")
+
+
+class GoldenSearchPlanKnob(_Wire):
+    name: str
+    label: str
+    unit: str
+    searched: bool
+    low: float = Field(description="The searched range's low end, or the held value.")
+    high: float
+    step: float | None
+    values: int | None = Field(description="Settings the knob can take: 1 when held; null when its range is not valid.")
+    importance: int | None
+    current: float = Field(description="The frozen incumbent's value.")
+    domain_low: float
+    domain_high: float
+    low_position: float | None = Field(description="Positions in the legal domain, 0 to 1; null for a domain of one value.")
+    high_position: float | None
+    current_position: float | None
+    start: float | None = Field(description="Where Zoom starts (the seed's value), which it keeps in every round; null for Grid.")
+    start_position: float | None
+
+
+class GoldenSearchStageWorkload(_Wire):
+    stage: str
+    label: str
+    planned: int = Field(description="The receipt's planned maximum evaluations: an upper bound, never a stopping point.")
+    used: int = Field(description="Engine runs used so far, runs in flight included; the stages' together equal the study's consumed evaluations.")
+
+
+class GoldenSearchWorkload(_Wire):
+    cap: int
+    consumed: int
+    planned_total: int
+    stages: list[GoldenSearchStageWorkload]
+
+
+class GoldenSearchMinimumYear(_Wire):
+    year: int
+    selected_sessions: int
+    year_sessions: int
+
+
+class GoldenSearchMinimumWindow(_Wire):
+    key: str
+    label: str
+    minimum_trades: int | None
+    trading_years: float | None = Field(description="Σ selected / scheduled sessions per year; null on a fixed-floor plan.")
+    years: list[GoldenSearchMinimumYear]
+
+
+class GoldenSearchMinimums(_Wire):
+    expected_trades_per_year: int | None = Field(description="Null on a fixed-floor plan.")
+    windows: list[GoldenSearchMinimumWindow]
+
+
+class GoldenSearchCoverageMonth(_Wire):
+    month_start_ms: InstantMs
+    year: int
+    month: int = Field(ge=1, le=12)
+    sessions: int
+    complete: int
+    fetching: int
+    stale: int
+    failed: int
+    missing: int
+
+
+class GoldenSearchCoverageMeasured(_Wire):
+    status: Literal["measured"]
+    months: list[GoldenSearchCoverageMonth]
+
+
+class GoldenSearchCoverageMissing(_Wire):
+    status: Literal["missing"]
+    reason: str
+
+
+GoldenSearchCoverage = Annotated[GoldenSearchCoverageMeasured | GoldenSearchCoverageMissing, Field(discriminator="status")]
+
+
+class GoldenSearchPlanCharts(_Wire):
+    windows: list[GoldenSearchPlanWindow]
+    search_space: list[GoldenSearchPlanKnob] = Field(description="Every declared knob, in the plan's search order.")
+    workload: GoldenSearchWorkload
+    minimums: GoldenSearchMinimums
+    coverage: GoldenSearchCoverage
+
+
 class GoldenSearchScoredNumbers(_Wire):
     """A scored point's development numbers under the window's frozen selection policy."""
 

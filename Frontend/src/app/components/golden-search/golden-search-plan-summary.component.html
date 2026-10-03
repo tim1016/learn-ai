@@ -10,6 +10,71 @@
     }
   </header>
 
+  @if (chartsError(); as message) {
+    <div role="alert" class="failed">
+      <p>{{ message }}</p>
+      <button type="button" class="link" (click)="retry()">Try again</button>
+    </div>
+  } @else if (chartData(); as charts) {
+    <app-golden-search-grid>
+      <app-golden-search-panel chart="plan-tiles" data-span="12">
+        <ul class="tiles">
+          <li>
+            <span class="tile__label">Search method</span>
+            <strong>{{ p.method === 'zoom' ? 'Zoom Search' : 'Grid Search' }}</strong>
+            <span class="tile__detail">{{ methodDetail() }}</span>
+          </li>
+          @if (tileWindows().development; as w) {
+            <li>
+              <span class="tile__label">Development</span>
+              <strong><app-timestamp-display [value]="w.start_ms" mode="date-et" /> → <app-timestamp-display [value]="w.end_ms - 1" mode="date-et" /></strong>
+              <span class="tile__detail">{{ w.sessions | number }} sessions to search and choose on</span>
+            </li>
+          }
+          @if (tileWindows().final; as w) {
+            <li>
+              <span class="tile__label">Final test</span>
+              <strong><app-timestamp-display [value]="w.start_ms" mode="date-et" /> → <app-timestamp-display [value]="w.end_ms - 1" mode="date-et" /></strong>
+              <span class="tile__detail">{{ w.sessions | number }} sessions · {{ s.exam_locked ? 'opened once' : 'locked until you choose' }}</span>
+            </li>
+          }
+          <li>
+            <span class="tile__label">Engine runs</span>
+            <strong>Up to {{ charts.workload.planned_total | number }}</strong>
+            <span class="tile__detail">of a {{ charts.workload.cap | number }} cap · {{ charts.workload.consumed | number }} used so far</span>
+          </li>
+        </ul>
+        <p caption class="caption">Frozen when the plan was locked: the study runs exactly this.</p>
+      </app-golden-search-panel>
+      <app-golden-search-panel chart="window-map" data-span="12">
+        @if (windowMap(); as spec) { <app-golden-search-chart [spec]="spec" [height]="heights().windows" [minWidth]="520" /> }
+        <p caption class="caption">Every window the plan evaluates, in Eastern dates, with its sessions and trade minimum.</p>
+      </app-golden-search-panel>
+      <app-golden-search-panel chart="search-space" data-span="8">
+        @if (searchSpace(); as spec) { <app-golden-search-chart [spec]="spec" [height]="heights().space" /> }
+        <p caption class="caption">Each knob in its legal range: the band is what the search may try; the diamond, the current settings; the ring, where Zoom starts.</p>
+      </app-golden-search-panel>
+      <app-golden-search-panel chart="workload" data-span="4">
+        @if (workload(); as spec) { <app-golden-search-chart [spec]="spec" [height]="heights().workload" /> }
+        <p caption class="caption">Planned at most against used so far; a cached answer spends no run.</p>
+      </app-golden-search-panel>
+      <app-golden-search-panel chart="trade-minimums" data-span="4">
+        @if (minimums(); as spec) { <app-golden-search-chart [spec]="spec" [height]="heights().minimums" /> }
+        <p caption class="caption">{{ frequencyBased() ? 'Expected trades a year × the trading years each window holds, rounded up.' : 'Two fixed floors set in the plan.' }}</p>
+      </app-golden-search-panel>
+      <app-golden-search-panel chart="data-coverage" data-span="8">
+        @if (coverage(); as spec) {
+          <app-golden-search-chart [spec]="spec" [height]="220" />
+        } @else if (coverageNote(); as note) {
+          <p class="muted">{{ note }}</p>
+        }
+        <p caption class="caption">The lake's minute bars over the study's data span, now. The study ran on the snapshot frozen at lock.</p>
+      </app-golden-search-panel>
+    </app-golden-search-grid>
+  } @else {
+    <p class="muted" role="status">Loading the plan charts…</p>
+  }
+
   <app-golden-search-knob-table [knobs]="p.knobs" [capability]="capability()" [method]="p.method" [golden]="p.incumbent.params" [readonly]="true" />
 
   <dl class="facts">

@@ -36,6 +36,7 @@ from app.schemas.golden_search import (
     GoldenSearchEvaluationPage,
     GoldenSearchJobAccepted,
     GoldenSearchJobRequest,
+    GoldenSearchPlanCharts,
     GoldenSearchPreflight,
     GoldenSearchProtocolRequest,
     GoldenSearchRefusalBody,
@@ -198,6 +199,16 @@ async def list_evaluations(
     except GoldenSearchRefusal as exc:
         raise await _refused(exc) from exc
     return GoldenSearchEvaluationPage.model_validate(result)
+
+
+@router.get("/studies/{study_id}/charts/plan", response_model=GoldenSearchPlanCharts, responses=_REFUSALS)
+async def get_plan_charts(study_id: StudyId) -> GoldenSearchPlanCharts:
+    """The Plan step's charts: the frozen windows, search space, workload, trade minimums and data coverage."""
+    try:
+        result = await service.plan_step_charts(study_id)
+    except GoldenSearchRefusal as exc:
+        raise await _refused(exc) from exc
+    return GoldenSearchPlanCharts.model_validate(result)
 
 
 @router.get("/studies/{study_id}/charts/search", response_model=GoldenSearchSearchCharts, responses=_REFUSALS)

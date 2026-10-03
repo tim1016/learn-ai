@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, resource, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, resource } from '@angular/core';
 import { DecimalPipe, PercentPipe } from '@angular/common';
 
 import { extractServerMessage } from '../broker/operation-error';
@@ -6,6 +6,7 @@ import { GoldenSearchChartComponent } from './charts/golden-search-chart.compone
 import { sameChart } from './charts/golden-search-chart-spec';
 import { GoldenSearchGridComponent } from './charts/golden-search-grid.component';
 import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
+import { reloadOnProgress } from './charts/golden-search-reload';
 import {
   driftHeight,
   foldActivitySpec,
@@ -66,21 +67,7 @@ export class GoldenSearchTestStepComponent {
   protected readonly timelineHeight = computed(() => 44 + 30 * (this.chartData()?.folds.length ?? 0));
 
   constructor() {
-    // A reload keeps the drawn charts while it reads; a change of params would blank them.
-    // The first read starts with the progress at creation; a reload asked for while one is in flight is dropped,
-    // so a change during any read waits for it to settle and then catches up.
-    let seen: string | null = null;
-    effect(() => {
-      const progress = this.progress();
-      const loading = this.charts.isLoading();
-      if (seen === null) {
-        seen = progress;
-        return;
-      }
-      if (loading || progress === seen) return;
-      seen = progress;
-      untracked(() => this.charts.reload());
-    });
+    reloadOnProgress(this.progress, this.charts);
   }
 
   /** Testing over time has a live worker (a stopped one keeps the stage state so Finish can resume it). */
