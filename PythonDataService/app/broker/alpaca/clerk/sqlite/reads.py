@@ -722,6 +722,113 @@ def terminal_entry_orders_unproven_at_broker(
     Orders already in the open-order snapshot are dropped before ``limit``,
     so they cannot spend a slot either.
     """
+    return _failed_operation_orders_unproven_at_broker(
+        conn,
+        operation_kind="ENTER",
+        order_role="ENTRY",
+        created_kind="ENTER_ACCEPTED",
+        symbol_path="$.leg.symbol",
+        also="AND e.strategy_instance_id IS NOT NULL ",
+        also_params=(),
+        symbols=symbols,
+        exclude_client_order_ids=exclude_client_order_ids,
+        rested_since_ms=rested_since_ms,
+        limit=limit,
+    )
+
+
+def failed_exit_orders_unproven_at_broker(
+    conn: sqlite3.Connection,
+    *,
+    symbols: frozenset[str],
+    exclude_client_order_ids: frozenset[str],
+    rested_since_ms: int,
+    failed_since_ms: int,
+    limit: int,
+) -> list[str]:
+    """REDUCING orders of a failed EXIT that were sent and that no broker state ended (#2854).
+
+    The sweep's exact-lookup worklist for a closing order that may have
+    filled where the open-order snapshot cannot show it. An EXIT can fail
+    while its order's outcome is not known: an operator's Flatten refused by
+    the account check as it would be sent again, or a send made again that
+    its session no longer allows. The order had at least one
+    ``ORDER_SUBMIT_REQUESTED``, so it may be at the broker -- working, or
+    already ``filled`` and closed. One never sent cannot be, and one the
+    broker itself ended is proven; both are excluded. Narrowed to ``symbols``
+    (matched on the immutable ``EXIT_REDUCING_ORDER_CREATED`` facts).
+
+    An order leaves the list for good once an operator discharged its
+    strategy's position in its symbol (``ATTRIBUTED_RESIDUE_DISCHARGED``)
+    after the order was created. The discharge wrote off whatever the order
+    did to that position, so a fill found afterwards would be credited on top
+    of it and leave the strategy attributed a position the broker does not
+    hold. A discharge is refused while any operation on the symbol is
+    unfinished, so one recorded after the order's creation was made after its
+    EXIT failed. Read from the transitions themselves, so it holds for a
+    discharge made before this list existed.
+
+    Only an EXIT that failed at or after ``failed_since_ms`` is listed, so an
+    old one is not asked about for ever. The rotation is
+    :func:`terminal_entry_orders_unproven_at_broker`'s: least recently looked
+    up first, an order looked up after ``rested_since_ms`` rests, and orders
+    already in the open-order snapshot are dropped before ``limit``.
+    """
+    return _failed_operation_orders_unproven_at_broker(
+        conn,
+        operation_kind="EXIT",
+        order_role="REDUCING",
+        created_kind="EXIT_REDUCING_ORDER_CREATED",
+        symbol_path="$.symbol",
+        also=(
+            "AND e.updated_at_ms >= ? "
+            "AND EXISTS (SELECT 1 FROM custody_transitions s WHERE s.order_ref = o.order_ref "
+            "AND s.transition_kind = 'ORDER_SUBMIT_REQUESTED') "
+            "AND NOT EXISTS (SELECT 1 FROM custody_transitions d "
+            "WHERE d.strategy_instance_id = e.strategy_instance_id AND d.sequence > t.sequence "
+            "AND d.transition_kind = 'ATTRIBUTED_RESIDUE_DISCHARGED' "
+            "AND UPPER(json_extract(d.facts_json, '$.symbol')) "
+            "= UPPER(json_extract(t.facts_json, '$.symbol'))) "
+        ),
+        also_params=(failed_since_ms,),
+        symbols=symbols,
+        exclude_client_order_ids=exclude_client_order_ids,
+        rested_since_ms=rested_since_ms,
+        limit=limit,
+    )
+
+
+def _failed_operation_orders_unproven_at_broker(
+    conn: sqlite3.Connection,
+    *,
+    operation_kind: str,
+    order_role: str,
+    created_kind: str,
+    symbol_path: str,
+    also: str,
+    also_params: tuple[object, ...],
+    symbols: frozenset[str],
+    exclude_client_order_ids: frozenset[str],
+    rested_since_ms: int,
+    limit: int,
+) -> list[str]:
+    """The exact-lookup worklist both kinds of failed operation share (#2348, #2854).
+
+    Orders of role ``order_role`` whose ``operation_kind`` operation is
+    ``failed``/``rejected`` and that no broker state ended, in ``symbols``.
+    The symbol is read at ``symbol_path`` in the facts of the order's own
+    ``created_kind`` transition, which is never rewritten. ``also`` narrows
+    the list further, over ``e`` (the operation), ``o`` (the order) and ``t``
+    (that transition), with ``also_params`` bound to it. The rotation is the
+    one :func:`terminal_entry_orders_unproven_at_broker` describes.
+
+    The read starts from the operations and reaches each order, and then its
+    transition, through their indexes. The joins are ``CROSS JOIN`` so that
+    SQLite keeps that order and never scans the ledger for the one transition
+    kind: this runs on every pass that reads a symbol as drifted. A bound on
+    the operation in ``also`` -- the failed EXIT's day -- is walked off
+    ``ix_effect_operations_updated_at``.
+    """
     if not symbols:
         return []
     symbol_marks = ", ".join("?" for _ in symbols)
@@ -735,20 +842,30 @@ def terminal_entry_orders_unproven_at_broker(
         "(SELECT MAX(r.attempted_at_ms) FROM reconciliations r "
         "WHERE r.effect_operation_id = o.effect_operation_id "
         "AND r.order_ref = o.order_ref) AS last_lookup_ms "
-        "FROM orders o "
-        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
-        "JOIN custody_transitions t ON t.order_ref = o.order_ref "
-        "AND t.transition_kind = 'ENTER_ACCEPTED' "
-        "WHERE o.role = 'ENTRY' AND e.kind = 'ENTER' AND e.state IN ('failed', 'rejected') "
-        "AND e.strategy_instance_id IS NOT NULL "
+        "FROM effect_operations e "
+        "CROSS JOIN orders o ON o.effect_operation_id = e.effect_operation_id "
+        "CROSS JOIN custody_transitions t ON t.order_ref = o.order_ref "
+        "AND t.transition_kind = ? "
+        "WHERE o.role = ? AND e.kind = ? AND e.state IN ('failed', 'rejected') "
+        f"{also}"
         "AND (o.broker_state IS NULL OR LOWER(o.broker_state) NOT IN "
         f"({_TERMINAL_BROKER_STATES_SQL})) "
-        f"AND UPPER(json_extract(t.facts_json, '$.leg.symbol')) IN ({symbol_marks}) "
+        f"AND UPPER(json_extract(t.facts_json, ?)) IN ({symbol_marks}) "
         f"{exclude_clause}"
         ") WHERE last_lookup_ms IS NULL OR last_lookup_ms <= ? "
         "ORDER BY last_lookup_ms IS NOT NULL, last_lookup_ms ASC, "
         "updated_at_ms DESC, order_ref DESC LIMIT ?",
-        (*sorted(symbols), *excluded, rested_since_ms, limit),
+        (
+            created_kind,
+            order_role,
+            operation_kind,
+            *also_params,
+            symbol_path,
+            *sorted(symbols),
+            *excluded,
+            rested_since_ms,
+            limit,
+        ),
     ).fetchall()
     return [row["order_ref"] for row in rows]
 
