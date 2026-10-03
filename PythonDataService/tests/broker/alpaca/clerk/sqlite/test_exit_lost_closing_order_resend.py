@@ -1058,27 +1058,29 @@ def test_an_unknown_outcomes_facts_omit_the_notice_so_every_ordinary_row_hashes_
 
     Every ``ORDER_SUBMIT_UNCERTAIN`` written before it existed, and every
     ordinary one after it, re-serializes byte-identically, so no sealed
-    receipt moves. A notice is its explanation and its next step together.
+    receipt moves. A notice is one object -- its explanation and its next
+    step together -- and reads back as it was written.
     """
     earlier_row = '{"why":"the submit timed out"}'
     earlier_marked_row = '{"answered_as_client_order_id":"another-id","why":"the submit timed out"}'
     plain = OrderSubmitUncertainFacts.from_facts_json(earlier_row)
     marked = OrderSubmitUncertainFacts.from_facts_json(earlier_marked_row)
-    noticed = OrderSubmitUncertainFacts(
-        why="the submit timed out", notice_explanation="Alpaca refused it.", notice_next_step="Look at Alpaca."
-    )
+    notice = UnknownOutcomeNotice(explanation="Alpaca refused it.", next_step="Look at Alpaca.")
+    noticed = OrderSubmitUncertainFacts(why="the submit timed out", notice=notice)
 
     assert plain.to_facts_json() == earlier_row
     assert marked.to_facts_json() == earlier_marked_row
     assert plain.notice is None and marked.notice is None
     assert noticed.to_facts_json() == (
-        '{"notice_explanation":"Alpaca refused it.","notice_next_step":"Look at Alpaca.",'
+        '{"notice":{"explanation":"Alpaca refused it.","next_step":"Look at Alpaca."},'
         '"why":"the submit timed out"}'
     )
     assert OrderSubmitUncertainFacts.from_facts_json(noticed.to_facts_json()) == noticed
-    assert noticed.notice == UnknownOutcomeNotice(explanation="Alpaca refused it.", next_step="Look at Alpaca.")
-    with pytest.raises(ValueError, match="its explanation and its next step, or neither"):
-        OrderSubmitUncertainFacts(why="the submit timed out", notice_explanation="Alpaca refused it.")
+    # Half a notice is no notice: a row that names an explanation and no next step does not read.
+    with pytest.raises(TypeError, match="next_step"):
+        OrderSubmitUncertainFacts.from_facts_json(
+            '{"notice":{"explanation":"Alpaca refused it."},"why":"the submit timed out"}'
+        )
 
 
 async def test_a_clock_stepped_back_while_a_send_was_awaited_does_not_shorten_the_wait(

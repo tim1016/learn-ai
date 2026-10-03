@@ -261,38 +261,29 @@ class OrderSubmitUncertainFacts:
     other row -- and every row written before it existed -- hashes
     identically (hash-chained schema evolution).
 
-    ``notice_explanation`` and ``notice_next_step`` are recorded, together,
-    only when the broker did answer and the outcome is still unknown (#2854):
-    what the open notice says of this order from this row on
-    (:class:`UnknownOutcomeNotice`). Both are omitted when ``None``, by the
+    ``notice`` is recorded only when the broker did answer and the outcome is
+    still unknown (#2854): what the open notice says of this order from this
+    row on. It is one object, so its explanation and its next step are
+    recorded together or not at all, and it is omitted when ``None``, by the
     same rule."""
 
     why: str
     answered_as_client_order_id: str | None = None
-    notice_explanation: str | None = None
-    notice_next_step: str | None = None
-
-    def __post_init__(self) -> None:
-        if (self.notice_explanation is None) != (self.notice_next_step is None):
-            raise ValueError("An unknown outcome's notice records its explanation and its next step, or neither")
-
-    @property
-    def notice(self) -> UnknownOutcomeNotice | None:
-        """The notice this row records, or ``None`` for a row that records none."""
-        if self.notice_explanation is None or self.notice_next_step is None:
-            return None
-        return UnknownOutcomeNotice(explanation=self.notice_explanation, next_step=self.notice_next_step)
+    notice: UnknownOutcomeNotice | None = None
 
     def to_facts_json(self) -> str:
         facts = asdict(self)
-        for key in ("answered_as_client_order_id", "notice_explanation", "notice_next_step"):
+        for key in ("answered_as_client_order_id", "notice"):
             if facts[key] is None:
                 facts.pop(key)
         return canonicalize(facts)
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> OrderSubmitUncertainFacts:
-        return cls(**json.loads(facts_json))
+        facts = json.loads(facts_json)
+        if facts.get("notice") is not None:
+            facts["notice"] = UnknownOutcomeNotice(**facts["notice"])
+        return cls(**facts)
 
 
 @dataclass(frozen=True)
