@@ -730,7 +730,9 @@ def _pass_evidence(
         or _relevant_runs(ctx)
         or not 0 <= ctx.now_ms - published.observed_at_ms <= SWEEP_LIVENESS_BOUND_MS
         or ctx.subject_custody_sequence > published.through_sequence
-        or _admitted_uncertainties_newer_than(ctx, published.observed_at_ms)
+        # An episode recorded in the verdict's own millisecond may have
+        # landed just after it, so the pass counts it as newer (#2839).
+        or _admitted_uncertainties_newer_than(ctx, published.observed_at_ms - 1)
         or any(position.updated_at_ms > published.observed_at_ms for position in positions)
     ):
         return None

@@ -1110,8 +1110,8 @@ def test_a_stopped_bots_flatten_rests_on_the_clerks_own_pass() -> None:
     assert wire_plan["account_check_kind"] == "clerk_pass"
 
 
-def _an_unfoldable_order_seen_after_the_pass() -> ProjectedUncertainty:
-    return _account_uncertainty("UNFOLDABLE_BROKER_ORDER", observed_at_ms=_PASS_AT_MS + 1)
+def _an_unfoldable_order_seen_after_the_pass(*, later_by_ms: int = 1) -> ProjectedUncertainty:
+    return _account_uncertainty("UNFOLDABLE_BROKER_ORDER", observed_at_ms=_PASS_AT_MS + later_by_ms)
 
 
 @pytest.mark.parametrize(
@@ -1145,6 +1145,10 @@ def _an_unfoldable_order_seen_after_the_pass() -> ProjectedUncertainty:
         pytest.param(
             {"uncertainties": (_an_unfoldable_order_seen_after_the_pass(),)},
             id="broker-evidence-arrived-after-the-pass",
+        ),
+        pytest.param(
+            {"uncertainties": (_an_unfoldable_order_seen_after_the_pass(later_by_ms=0),)},
+            id="broker-evidence-arrived-in-the-passs-own-millisecond",
         ),
         pytest.param({"runs": _context().runs}, id="the-bot-is-still-running"),
         pytest.param({"strategy_instance_id": None}, id="the-whole-account-not-one-bot"),
