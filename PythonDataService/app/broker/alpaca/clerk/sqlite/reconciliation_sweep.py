@@ -9,6 +9,7 @@ from contextlib import suppress
 
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
 from app.broker.alpaca.clerk.sqlite.broker_port_guard import guard_broker_ports
+from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     AccountReconciliationResult,
@@ -52,7 +53,7 @@ class ReconciliationSweep:
         repo: ClerkSqliteRepository,
         read: BrokerReadPort,
         trade: BrokerTradePort,
-        interval_s: float = 15.0,
+        interval_s: float = DEFAULT_RECOVERY_INTERVAL_MS / 1000,
         max_backoff_s: float = 300.0,
         sleep: Sleep = asyncio.sleep,
         lease_sleep: Sleep = asyncio.sleep,

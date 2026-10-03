@@ -269,6 +269,7 @@ class ClerkSqliteRepositoryReadApi:
         *,
         order_ref: str,
         transition_kind: str | None = None,
+        after_sequence: int | None = None,
     ) -> dict | None:
         """The earliest transition for one order — of ``transition_kind`` if given.
 
@@ -286,8 +287,14 @@ class ClerkSqliteRepositoryReadApi:
         ``sequence`` is the table's ``INTEGER PRIMARY KEY``, so
         ``ix_custody_transitions_order_ref`` yields sequence order for free and
         ``LIMIT 1`` genuinely short-circuits (no temp b-tree).
+
+        ``after_sequence`` asks for the earliest one appended after that
+        sequence: the first of a kind since a known point in the order's
+        history (#2845). The index bounds it the same way.
         """
-        return self._one_order_transition(order_ref, transition_kind, "ASC")
+        return self._one_order_transition(
+            order_ref, transition_kind, "ASC", after_sequence=after_sequence
+        )
 
     def last_order_transition(
         self: ClerkSqliteRepository,
@@ -303,12 +310,17 @@ class ClerkSqliteRepositoryReadApi:
         order_ref: str,
         transition_kind: str | None,
         direction: Literal["ASC", "DESC"],
+        *,
+        after_sequence: int | None = None,
     ) -> dict | None:
         clauses = ["order_ref = ?"]
-        params: list[str] = [order_ref]
+        params: list[str | int] = [order_ref]
         if transition_kind is not None:
             clauses.append("transition_kind = ?")
             params.append(transition_kind)
+        if after_sequence is not None:
+            clauses.append("sequence > ?")
+            params.append(after_sequence)
         with self._write_lock:
             row = self._conn.execute(
                 f"SELECT {', '.join(writes.TRANSITION_COLUMNS)} FROM custody_transitions "
@@ -343,29 +355,6 @@ class ClerkSqliteRepositoryReadApi:
                 (effect_operation_id, transition_kind),
             ).fetchone()
             return None if row is None else writes.row_to_payload(row)
-
-    def max_order_transition_recorded_at_ms(
-        self: ClerkSqliteRepository,
-        *,
-        order_ref: str,
-        transition_kind: str,
-    ) -> int | None:
-        """The greatest ``recorded_at_ms`` among an order's transitions of one kind.
-
-        Distinct from :meth:`last_order_transition` on purpose. ``sequence`` is
-        append order; ``recorded_at_ms`` comes from the repository clock, which
-        is wall time. A host clock that steps backwards and rebounds can leave
-        the latest-by-sequence row holding a *lower* timestamp than an earlier
-        one, so a grace window anchored on "the most recent uncertainty" has to
-        ask for the maximum rather than the last (#1942).
-        """
-        with self._write_lock:
-            row = self._conn.execute(
-                "SELECT MAX(recorded_at_ms) FROM custody_transitions "
-                "WHERE order_ref = ? AND transition_kind = ?",
-                (order_ref, transition_kind),
-            ).fetchone()
-            return None if row is None else row[0]
 
     def has_order_transition(
         self: ClerkSqliteRepository,

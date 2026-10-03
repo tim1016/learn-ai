@@ -1226,51 +1226,6 @@ async def test_a_later_resolve_call_resolves_the_reducing_orders_lost_submit(
     assert reducing_order is not None and reducing_order.broker_order_id is not None
 
 
-async def test_each_absent_reducing_poll_rearms_the_submit_grace(
-    repo: ClerkSqliteRepository,
-) -> None:
-    entry_ref = await _make_entry(repo, quantity=10, status="filled", filled_quantity=10.0)
-    accepted = accept_exit(
-        repo,
-        account_id=ACCOUNT_ID,
-        strategy_instance_id=SID,
-        decision_id="exit-rearmed-grace",
-        lifecycle_run_id=RUN_ID,
-        entry_order_ref=entry_ref,
-    )
-    assert accepted.effect_operation_id is not None
-    first = await resolve_exit(
-        repo,
-        effect_operation_id=accepted.effect_operation_id,
-        trade=_FakeTrade(submit_error=BrokerUnavailable("timeout")),
-        pricing=UNPRICEABLE_RECOVERY,
-        read=None,
-    )
-    assert first.reducing_order_ref is not None
-
-    repo._clock.advance(20_000)  # type: ignore[attr-defined]
-    first_absent = _FakeTrade(lookup_results=[None])
-    await resolve_exit(
-        repo,
-        effect_operation_id=accepted.effect_operation_id,
-        trade=first_absent,
-        pricing=UNPRICEABLE_RECOVERY,
-        read=None,
-    )
-    assert first_absent.submit_calls == []
-
-    repo._clock.advance(11_000)  # type: ignore[attr-defined]
-    second_absent = _FakeTrade(lookup_results=[None])
-    await resolve_exit(
-        repo,
-        effect_operation_id=accepted.effect_operation_id,
-        trade=second_absent,
-        pricing=UNPRICEABLE_RECOVERY,
-        read=None,
-    )
-    assert second_absent.submit_calls == []
-
-
 async def test_acknowledged_reducing_order_is_polled_until_terminal(
     repo: ClerkSqliteRepository,
 ) -> None:

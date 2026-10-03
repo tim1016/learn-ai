@@ -51,6 +51,14 @@ positions, and sends only a sale the account covers (``flatten_cover``).
 Otherwise nothing is sent and the EXIT folds as a broker's refusal does. A
 resumed send that finds its own order among those open orders is neither sent
 again nor refused: custody is retained until the order's exact lookup answers.
+
+A reducing order whose send was lost is sent again, under the same client
+order id, once an exact lookup has read it absent a whole submit-absence wait
+after its latest send (#2845). Two things guard that second send. Whether the
+order ever reached the broker is read again in the run that records the send
+(:func:`_resend_still_proven_absent`). And a refusal that may be the broker's
+answer to a client order id it already has never fails the EXIT: custody is
+retained as an unknown outcome (:func:`_fold_send_refused`).
 """
 
 from __future__ import annotations
@@ -140,7 +148,13 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     resolve_exit_not_flat_uncertainty,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause
-from app.broker.contract.errors import BrokerError, BrokerUnavailable
+from app.broker.contract.errors import (
+    BrokerError,
+    BrokerOrderNotPermitted,
+    BrokerOrderRejected,
+    BrokerRequestInvalid,
+    BrokerUnavailable,
+)
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
@@ -1750,6 +1764,15 @@ async def _submit_reducing_order(
             limit_price=facts.limit_price,
             extended_hours=facts.extended_hours,
         )
+        # Sent before (#2845): the lookup that read it absent was made before
+        # the account was read, so its absence is read again here, first --
+        # before any rule below can fold the EXIT over an order that arrived.
+        if repo.has_order_transition(
+            order_ref=reducing.order_ref, transition_kind="ORDER_SUBMIT_REQUESTED"
+        ) and not _resend_still_proven_absent(
+            repo, effect_operation_id=effect_operation_id, reducing=reducing
+        ):
+            return None
         # A resubmission after an outage or a restart replays the leg created
         # earlier; the clock may have moved past where it could be sent.
         if not _created_leg_may_be_sent(
@@ -1808,11 +1831,12 @@ async def _submit_reducing_order(
     except BrokerError as exc:
         refused = exc
         await run(
-            lambda: _fold_submit_refused(
+            lambda: _fold_send_refused(
                 repo,
                 effect_operation_id=effect_operation_id,
                 reducing=reducing,
-                refusal=broker_refusal(repo, leg=leg, error=refused),
+                leg=leg,
+                error=refused,
             )
         )
         return
@@ -1972,6 +1996,144 @@ def _fold_market_hold(
     ))
 
 
+def _resend_still_proven_absent(
+    repo: ClerkSqliteRepository, *, effect_operation_id: str, reducing: OrderResource
+) -> bool:
+    """Whether a reducing order about to be sent again still reads as never having reached the broker (#2845).
+
+    The exact lookup answered that it never did, but the send is recorded in
+    a later repository run: an operator's Flatten reads the account in
+    between (#2839), and the stream may acknowledge or fill the order
+    meanwhile. So the order is read again -- its broker identity is not taken
+    from the caller's earlier read -- through ``order_never_reached_broker``,
+    the one predicate that reads absence as an answer. When that no longer
+    holds, nothing is recorded and nothing is sent: the EXIT is left as it
+    is, and the next pass folds the order.
+    """
+    current = repo.order(reducing.order_ref)
+    assert current is not None
+    if order_never_reached_broker(repo, current):
+        return True
+    logger.warning(
+        "a reducing order about to be sent again is no longer proven absent from the broker; it is not sent",
+        extra={
+            "action": "reducing_resend_withheld",
+            "account_id": repo.account_id,
+            "effect_operation_id": effect_operation_id,
+            "order_ref": reducing.order_ref,
+            "broker_order_id": current.broker_order_id,
+        },
+    )
+    return False
+
+
+def _was_sent_before_this_attempt(repo: ClerkSqliteRepository, order_ref: str) -> bool:
+    """Whether the send just recorded for this reducing order was not its first (#2845).
+
+    Every send records its own ``ORDER_SUBMIT_REQUESTED`` before it leaves,
+    so an order sent before carries an earlier one than this attempt's.
+    """
+    first = repo.first_order_transition(order_ref=order_ref, transition_kind="ORDER_SUBMIT_REQUESTED")
+    last = repo.last_order_transition(order_ref=order_ref, transition_kind="ORDER_SUBMIT_REQUESTED")
+    if first is None or last is None:
+        raise AssertionError(f"no recorded send for {order_ref!r}")
+    return first["sequence"] != last["sequence"]
+
+
+def _may_be_the_duplicate_reply(error: BrokerError) -> bool:
+    """Whether a refusal of an order sent again may be the broker's answer to a client order id it already has (#2845).
+
+    Alpaca answers such a submit 422, ``client_order_id must be unique``:
+    ``BrokerRequestInvalid``, the class of every 400 and 422. ``map_api_error``
+    also names a 409 on an order request an order conflict, a duplicate client
+    order id among them: ``BrokerOrderRejected`` itself. The answer is read by
+    its class, never by the broker's words or code: Alpaca does not document
+    the order in which it validates a request, so no answer of these two
+    classes to a send made again can be proven not to be that one.
+
+    Never ``BrokerOrderNotPermitted`` -- Alpaca's 403, a
+    ``BrokerOrderRejected`` by inheritance: Alpaca will not place a new order
+    for this account (shares or buying power not sufficient, wash-trade
+    protection), which is not its answer to a client order id. That refusal
+    keeps its own fold, whose recorded evidence the watchdog's re-drive reads
+    (#2622). Nor a credentials failure (401) or an exhausted throttle (429),
+    which no client order id causes.
+    """
+    if isinstance(error, BrokerOrderNotPermitted):
+        return False
+    return isinstance(error, (BrokerRequestInvalid, BrokerOrderRejected))
+
+
+def _retain_resend_answered_as_duplicate(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    reducing: OrderResource,
+    error: BrokerError,
+) -> None:
+    """A reducing order sent again was refused the way a client order id the broker already has is (#2845).
+
+    An earlier send may have arrived: its answer was lost, and the exact
+    lookup read the order absent after the wait, which this answer
+    contradicts. It is not the refusal :func:`_fold_submit_refused` records.
+    That fold fails the EXIT and releases the position, and the next EXIT --
+    the watchdog's re-drive, the bot's next decision -- would sell it again
+    under a new client order id while this order works. Custody is retained
+    as an unknown outcome instead. The next pass's exact lookup folds the
+    order once the broker shows it; while it stays absent, the wait runs
+    again from this answer and the same order is sent again.
+    """
+    logger.warning(
+        "a reducing order sent again was refused as a client order id the broker may already have",
+        extra={
+            "action": "reducing_resend_answered_as_duplicate",
+            "account_id": repo.account_id,
+            "effect_operation_id": effect_operation_id,
+            "order_ref": reducing.order_ref,
+            "broker_error": type(error).__name__,
+            "broker_error_code": error.code,
+        },
+    )
+    fold_uncertain(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=reducing.order_ref,
+        why=(
+            "The broker refused this reducing order, sent again, with an answer it also gives "
+            "to a client order id it already has; an earlier send may have arrived. Retaining "
+            f"custody until its exact lookup answers. {error}"
+        ),
+    )
+
+
+def _fold_send_refused(
+    repo: ClerkSqliteRepository,
+    *,
+    effect_operation_id: str,
+    reducing: OrderResource,
+    leg: BrokerOrderLeg,
+    error: BrokerError,
+) -> None:
+    """Fold the broker's outright refusal of a reducing order's send, by what the answer can mean (#2845).
+
+    A first send's refusal is definitive: nothing was sent before, so no
+    answer to it can be about an earlier order. The refusal of an order sent
+    again is definitive too, unless it may be the broker's answer to a client
+    order id it already has (:func:`_may_be_the_duplicate_reply`).
+    """
+    if _was_sent_before_this_attempt(repo, reducing.order_ref) and _may_be_the_duplicate_reply(error):
+        _retain_resend_answered_as_duplicate(
+            repo, effect_operation_id=effect_operation_id, reducing=reducing, error=error
+        )
+        return
+    _fold_submit_refused(
+        repo,
+        effect_operation_id=effect_operation_id,
+        reducing=reducing,
+        refusal=broker_refusal(repo, leg=leg, error=error),
+    )
+
+
 def _fold_submit_refused(
     repo: ClerkSqliteRepository,
     *,
@@ -1985,6 +2147,8 @@ def _fold_submit_refused(
     releasably as before. While exposure is still held that is the
     ``EXIT_NOT_FLAT`` episode (#2440 review): a bare ``ORDER_SUBMIT_FAILED``
     raised no notice and no bell, and left the position open silently.
+    A refusal that is not definitive never reaches this fold
+    (:func:`_fold_send_refused`).
     """
     created = _reducing_order_facts(repo, reducing.order_ref)
     effect = repo.effect_operation(effect_operation_id)
@@ -2160,22 +2324,47 @@ def _reducing_order_facts(repo: ClerkSqliteRepository, order_ref: str) -> ExitRe
 
 
 def _absence_grace_elapsed(repo: ClerkSqliteRepository, order_ref: str) -> bool:
-    # The greatest recorded uncertainty is the anchor when there is one — the
-    # maximum, not the last by sequence: ``recorded_at_ms`` is wall time, so a
-    # host clock that steps backwards and rebounds can leave the newest row
-    # holding an older timestamp, and a grace window must not shorten because
-    # of that. SQLite computes it over the index; the former ``max()`` did it
-    # after reading the order's whole history in Python (#1942).
-    anchor_ms = repo.max_order_transition_recorded_at_ms(
-        order_ref=order_ref, transition_kind="ORDER_SUBMIT_UNCERTAIN"
+    """Whether the submit-absence wait since this reducing order's latest send has passed (#2845).
+
+    An order whose submit answer was lost may have reached the broker and not
+    yet show in an exact lookup; sent again inside that window, it could sell
+    twice. So the wait runs from the latest send: from its
+    ``ORDER_SUBMIT_REQUESTED``, recorded before every send, or from the first
+    ``ORDER_SUBMIT_UNCERTAIN`` after it -- that send's lost answer, or the
+    first pass to find the order absent when the Clerk stopped before it
+    recorded one -- whichever was recorded with the later time.
+    ``recorded_at_ms`` is wall time, so the later of the two is not always
+    the later by sequence: a host clock that steps backwards between them
+    must not shorten the wait. An order never sent waits from its creation.
+
+    No later ``ORDER_SUBMIT_UNCERTAIN`` moves the wait. Those are this
+    machine's own records that the order is still absent: each pass writes
+    one, and the passes come more often than the wait is long, so a wait
+    measured from the newest never ended and the order was never sent again
+    while the passes kept running. Each read is one row off the order's
+    index (#1942).
+    """
+    requested = repo.last_order_transition(
+        order_ref=order_ref, transition_kind="ORDER_SUBMIT_REQUESTED"
     )
-    if anchor_ms is None:
+    if requested is None:
         created = repo.first_order_transition(
             order_ref=order_ref, transition_kind="EXIT_REDUCING_ORDER_CREATED"
         )
         if created is None:
             raise AssertionError(f"no reducing-order creation transition for {order_ref!r}")
         anchor_ms = created["recorded_at_ms"]
+    else:
+        answer_lost = repo.first_order_transition(
+            order_ref=order_ref,
+            transition_kind="ORDER_SUBMIT_UNCERTAIN",
+            after_sequence=requested["sequence"],
+        )
+        anchor_ms = (
+            requested["recorded_at_ms"]
+            if answer_lost is None
+            else max(requested["recorded_at_ms"], answer_lost["recorded_at_ms"])
+        )
     return repo.clock() - anchor_ms >= submit_absence_grace_ms()
 
 
