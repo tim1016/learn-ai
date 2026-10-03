@@ -27,6 +27,8 @@ export interface ChartTheme {
   readonly stressed: string;
   /** A result with its best month or its best trades taken out. */
   readonly withoutBest: string;
+  /** The development period beside the final test. */
+  readonly development: string;
   /** Current settings grey, All-period fit blue, Recent fit amber. */
   readonly candidates: Readonly<Record<CandidateKey, string>>;
 }
@@ -47,6 +49,7 @@ export function chartTheme(element: HTMLElement): ChartTheme {
     stepAbove: themeColor(element, '--chart-series-blue'),
     stressed: themeColor(element, '--chart-series-teal'),
     withoutBest: themeColor(element, '--chart-series-teal'),
+    development: themeColor(element, '--chart-series-teal'),
     candidates: {
       incumbent: themeColor(element, '--text-secondary'),
       all_period: themeColor(element, '--chart-series-blue'),
@@ -132,4 +135,22 @@ export function tooltipHtml(content: TooltipContent, theme: ChartTheme): string 
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** The calendar's months, January first. */
+export const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
+
+/** A calendar month as "Jun 2024". */
+export function monthText(month: { readonly year: number; readonly month: number }): string {
+  return `${MONTH_NAMES[month.month - 1]} ${month.year}`;
+}
+
+/** A calendar month as a short axis label, "Jun ’24". */
+export function monthAxisText(month: { readonly year: number; readonly month: number }): string {
+  return `${MONTH_NAMES[month.month - 1]} ’${String(month.year).slice(-2)}`;
+}
+
+/** The axes' label text. */
+export function axisText(theme: ChartTheme): { color: string; fontSize: number } {
+  return { color: theme.textSecondary, fontSize: 11 };
 }

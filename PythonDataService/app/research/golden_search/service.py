@@ -38,7 +38,7 @@ from app.research.golden_search.actions import (
     presented_status,
     unclaimed,
 )
-from app.research.golden_search.activity import DEFAULT_EXPECTED_TRADES_PER_YEAR
+from app.research.golden_search.activity import DEFAULT_EXPECTED_TRADES_PER_YEAR, TradeFloors
 from app.research.golden_search.declarations import declaration_for, point_hash, unavailable_reason
 from app.research.golden_search.exposure_rules import EXPOSURE_EXPLANATIONS, claim_for, exposure_state
 from app.research.golden_search.fold_charts import fold_charts
@@ -69,7 +69,13 @@ from app.research.golden_search.planning import (
     review_plan,
     study_id_for,
 )
-from app.research.golden_search.protocol import DEFAULT_IMPORTANCE, IMPORTANCE_HIGH, IMPORTANCE_LOW, IncumbentRef
+from app.research.golden_search.protocol import (
+    DEFAULT_IMPORTANCE,
+    IMPORTANCE_HIGH,
+    IMPORTANCE_LOW,
+    GoldenSearchProtocol,
+    IncumbentRef,
+)
 from app.research.golden_search.search_charts import procedure_windows, search_charts
 from app.research.golden_search.stages import ApprovalBinding, StageOutcome, execute_stage, stage_refusal, stage_total
 from app.research.golden_search.views import candidate_detail, study_detail, study_summary
@@ -515,12 +521,15 @@ async def candidate(study_id: str, candidate_key: str) -> dict[str, Any]:
             window_start_ms=protocol["final_start_ms"],
             window_end_ms=protocol["final_end_ms"],
         )
+    frozen = GoldenSearchProtocol.from_dict(protocol)
     return candidate_detail(
         stored,
         strategy_key=row.strategy_key,
         development=development,
         exam=exam_record,
         commission_per_order=protocol["execution"]["commission_per_order"],
+        floors=TradeFloors(frozen, row.receipt),
+        development_window=(frozen.development_start_ms, frozen.development_end_ms),
     )
 
 

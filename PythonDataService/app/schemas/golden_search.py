@@ -1255,6 +1255,14 @@ class GoldenSearchConcentrationCurve(_Wire):
     reason: str | None = Field(description="Why no curve is drawn; null when it is.")
 
 
+class GoldenSearchFinalMeasure(_Wire):
+    key: Literal["annualized_return", "sharpe_ratio", "max_drawdown_pct", "trades_per_year"]
+    label: str
+    development: float | None = Field(description="Over the development period; null when its run failed or did not record it.")
+    final: float | None = Field(description="Over the final test.")
+    change: float | None = Field(description="final − development; null unless both exist.")
+
+
 class GoldenSearchRunDetail(_Wire):
     window: GoldenSearchWindow
     metrics: GoldenSearchMetrics
@@ -1264,6 +1272,7 @@ class GoldenSearchRunDetail(_Wire):
     monthly: list[GoldenSearchMonthlyResult]
     concentration_curve: GoldenSearchConcentrationCurve | None = Field(description="The development run's; null on a final-test run.")
     trade_charts: GoldenSearchTradeCharts | None = Field(description="The development run's; null on a final-test run.")
+    comparison: list[GoldenSearchFinalMeasure] | None = Field(description="A final-test run's measures beside development's; null on a development run.")
 
 
 class GoldenSearchCandidateDetail(_Wire):

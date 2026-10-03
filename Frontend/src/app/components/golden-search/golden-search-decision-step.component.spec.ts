@@ -1,23 +1,26 @@
 import { provideRouter } from '@angular/router';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import axe from 'axe-core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { GoldenSearchDecisionStepComponent } from './golden-search-decision-step.component';
 import type { StudyStep } from './golden-search-steps';
-import type { ExamView, StudyCommand, StudyDetail } from './golden-search.types';
-import { emaCapability, examView, exposure, frequencyProtocol, protocol, studyDetail, tradeActivity } from './testing/fixtures';
+import { GoldenSearchService } from './golden-search.service';
+import type { CandidateDetail, CandidateKey, ExamView, StudyCommand, StudyDetail } from './golden-search.types';
+import { fakeCharts } from './testing/fake-charts';
+import { candidateDetail, emaCapability, examView, exposure, finalRun, frequencyProtocol, protocol, studyDetail, tradeActivity } from './testing/fixtures';
 
-async function renderStep(study: StudyDetail) {
+async function renderStep(study: StudyDetail, exam: (key: CandidateKey) => CandidateDetail['exam'] = finalRun) {
+  const service = { candidate: vi.fn(async (_id: string, key: CandidateKey) => candidateDetail(key, { exam: exam(key) })) };
   const view = await render(GoldenSearchDecisionStepComponent, {
     inputs: { study, capability: emaCapability() },
-    providers: [provideRouter([])],
+    providers: [provideRouter([]), { provide: GoldenSearchService, useValue: service }, ...fakeCharts().providers],
   });
   const commands: StudyCommand[] = [];
   const steps: StudyStep[] = [];
   view.fixture.componentInstance.studyCommand.subscribe((command) => commands.push(command));
   view.fixture.componentInstance.goTo.subscribe((step) => steps.push(step));
-  return { view, commands, steps };
+  return { view, commands, steps, service };
 }
 
 function reviewWith(exam: Partial<ExamView>, overrides: Partial<StudyDetail> = {}): StudyDetail {
@@ -37,6 +40,40 @@ async function noAxeViolations(container: Element): Promise<void> {
   const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } });
   expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
 }
+
+describe('GoldenSearchDecisionStepComponent — final-test charts', () => {
+  it('sets each measure beside development and draws both runs through the final test, every value in a table', async () => {
+    await renderStep(studyDetail('awaiting_review'));
+
+    const comparison = await screen.findByRole('region', { name: 'Development against final' });
+    expect((await within(comparison).findByRole('img')).getAttribute('aria-label')).toContain('Annualized return, Sharpe, Worst fall, Trades a trading year');
+    fireEvent.click(within(comparison).getByRole('button', { name: 'Show as table' }));
+    expect(within(comparison).getAllByRole('row')[1].textContent).toMatch(/Annualized return\s*\+4\.2%\s*\+7\.5%\s*\+3\.3%/);
+    expect(within(screen.getByRole('region', { name: 'Final-test equity' })).getByRole('img').getAttribute('aria-label')).toContain('All-period fit +1.8%, Current settings +0.9%');
+    const months = screen.getByRole('region', { name: 'Final-test months' });
+    fireEvent.click(within(months).getByRole('button', { name: 'Show as table' }));
+    expect(within(months).getAllByRole('row')[1].textContent).toMatch(/Jan 2026\s*\+0\.7%\s*\+0\.4%/);
+  });
+
+  it('says which run of the pair has no final-test record instead of dropping it', async () => {
+    const { service } = await renderStep(studyDetail('awaiting_review'), (key) => (key === 'incumbent' ? null : finalRun(key)));
+    await screen.findByRole('region', { name: 'Development against final' });
+
+    expect(service.candidate).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/No final-test run is recorded for Current settings, so these charts show the other run only\./)).toBeTruthy();
+  });
+
+  it('reads the final-test runs once; a poll keeps them drawn', async () => {
+    const { view, service } = await renderStep(studyDetail('awaiting_review'));
+    await screen.findByRole('region', { name: 'Development against final' });
+
+    view.fixture.componentRef.setInput('study', studyDetail('awaiting_review', { revision: 4 }));
+    await view.fixture.whenStable();
+
+    expect(service.candidate).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('region', { name: 'Development against final' })).toBeTruthy();
+  });
+});
 
 describe('GoldenSearchDecisionStepComponent — before the final test', () => {
   it('judges a frequency plan by the floor its receipt froze for the final interval', async () => {
@@ -136,7 +173,9 @@ describe('GoldenSearchDecisionStepComponent — after the final test', () => {
     expect(rows[0].textContent).toMatch(/2026-01-01\s*–\s*2026-03-31/);
     expect(rows[1].textContent).toMatch(/All-period fit\s*\+1\.8%\s*3\.1%\s*36\s*0\.91/);
     expect(rows[2].textContent).toMatch(/Frozen incumbent\s*\+0\.9%\s*4\.2%\s*39\s*0\.54/);
-    expect(within(result).getByRole('list', { name: 'Final-test checks' }).textContent).toContain('Pass · At least the incumbent — Sharpe 0.91 against 0.54.');
+    expect(within(screen.getByRole('region', { name: 'Final-test checks' })).getByRole('list', { name: 'Final-test checks' }).textContent).toContain(
+      'Pass · At least the incumbent — Sharpe 0.91 against 0.54.',
+    );
     expect(result.textContent).toContain('61.0% — descriptive only, never a check');
     expect(screen.getByRole('region', { name: 'Research evidence' }).textContent).toContain('Meets the stated rules');
     expect(screen.getByRole('region', { name: 'Repeatability and coverage' }).textContent).toContain('Built during approval');

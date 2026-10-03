@@ -20,17 +20,24 @@ interface AlignedLine {
   readonly falls: readonly (number | null)[];
 }
 
-const LABEL = 'Development cumulative return and fall from peak';
+/** The period an equity chart draws: its name, whose fall the limit judges, and the note every hover ends with. */
+export interface EquityPeriod {
+  readonly label: string;
+  readonly judged: string;
+  readonly note: string;
+}
+
+export const DEVELOPMENT_EQUITY: EquityPeriod = { label: 'Development cumulative return and fall from peak', judged: 'The rules judge each run’s bar-by-bar fall', note: DEVELOPMENT_NOTE };
 
 /**
- * The Compare equity chart (#2821, V19): every candidate's cumulative
- * development return on top and its fall from its own peak beneath, on one
- * session axis. Both series are the server's, one value per session close;
+ * The equity chart (#2821): every run's cumulative return on top and its
+ * fall from its own peak beneath, on one session axis — Compare's candidates
+ * over the development period (V19), and the final test's two runs (V34). Both series are the server's, one value per session close;
  * a session a run did not record stays empty, never zero. The worst-fall
  * limit is drawn on the fall axis for reference: the rules judge the
  * engine's bar-by-bar fall, which can be deeper than these session closes.
  */
-export function equityChartSpec(lines: readonly EquityLine[], featured: CandidateKey, ceiling: number): ChartSpec {
+export function equityChartSpec(lines: readonly EquityLine[], featured: CandidateKey, ceiling: number, period: EquityPeriod = DEVELOPMENT_EQUITY): ChartSpec {
   const sessions = [...new Set(lines.flatMap((line) => [...line.returns.map((p) => p.ms), ...line.falls.map((p) => p.ms)]))].sort((a, b) => a - b);
   const dates = sessions.map((ms) => formatTimestampDisplay(ms, { mode: 'date-et' }));
   const aligned: AlignedLine[] = lines.map((line) => ({
@@ -41,12 +48,12 @@ export function equityChartSpec(lines: readonly EquityLine[], featured: Candidat
   }));
   const ends = aligned.map(({ line, recorded, returns }) => `${line.label} ${recorded ? signedPercentText(lastValue(returns)) : NOT_RECORDED}`);
   return {
-    label: LABEL,
+    label: period.label,
     summary: `Ends at ${ends.join(', ')}; beneath, each line's fall from its own peak at every session close.`,
     featured,
-    option: (theme) => option(aligned, dates, featured, ceiling, theme),
+    option: (theme) => option(aligned, dates, featured, ceiling, period, theme),
     table: {
-      caption: `${LABEL} at each session close (ET); — marks a value the run did not record`,
+      caption: `${period.label} at each session close (ET); — marks a value the run did not record`,
       columns: ['Session', ...lines.flatMap((line) => [`${line.label} return`, `${line.label} fall from peak`])],
       rows: sessions.map((ms, i) => ({
         key: String(ms),
@@ -56,7 +63,7 @@ export function equityChartSpec(lines: readonly EquityLine[], featured: Candidat
   };
 }
 
-function option(aligned: readonly AlignedLine[], dates: readonly string[], featured: CandidateKey, ceiling: number, theme: ChartTheme): ChartOption {
+function option(aligned: readonly AlignedLine[], dates: readonly string[], featured: CandidateKey, ceiling: number, period: EquityPeriod, theme: ChartTheme): ChartOption {
   const axisLabel = { color: theme.textSecondary, fontSize: 11 };
   const axisLine = { lineStyle: { color: theme.axis } };
   const splitLine = { lineStyle: { color: theme.gridLine } };
@@ -73,7 +80,7 @@ function option(aligned: readonly AlignedLine[], dates: readonly string[], featu
       trigger: 'axis',
       formatter: (params: unknown) => {
         const index = dataIndexOf(params);
-        return index === null ? '' : tooltip(aligned, dates[index], index, ceiling, theme);
+        return index === null ? '' : tooltip(aligned, dates[index], index, ceiling, period, theme);
       },
     },
     xAxis: [
@@ -124,7 +131,7 @@ function option(aligned: readonly AlignedLine[], dates: readonly string[], featu
   };
 }
 
-function tooltip(aligned: readonly AlignedLine[], date: string, index: number, ceiling: number, theme: ChartTheme): string {
+function tooltip(aligned: readonly AlignedLine[], date: string, index: number, ceiling: number, period: EquityPeriod, theme: ChartTheme): string {
   return tooltipHtml(
     {
       title: `${date} · at the session close`,
@@ -135,8 +142,8 @@ function tooltip(aligned: readonly AlignedLine[], date: string, index: number, c
         values: recorded ? [signedPercentOrNotRecorded(returns[index]), signedPercentOrNotRecorded(falls[index])] : [NOT_RECORDED, NOT_RECORDED],
       })),
       notes: [
-        `Worst-fall limit ${percentText(ceiling)}. The rules judge each run's bar-by-bar fall, which can be deeper than this session-close line.`,
-        DEVELOPMENT_NOTE,
+        `Worst-fall limit ${percentText(ceiling)}. ${period.judged}, which can be deeper than this session-close line.`,
+        period.note,
       ],
     },
     theme,

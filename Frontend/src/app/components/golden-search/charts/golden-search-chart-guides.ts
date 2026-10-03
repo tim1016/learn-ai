@@ -32,7 +32,11 @@ export type GoldenSearchChartId =
   | 'search-space'
   | 'workload'
   | 'trade-minimums'
-  | 'data-coverage';
+  | 'data-coverage'
+  | 'final-checks'
+  | 'final-comparison'
+  | 'final-equity'
+  | 'final-months';
 
 export interface WalkthroughStep {
   /** The step as the guide's "How to read it" list words it (the contract spec holds the step counts together). */
@@ -368,6 +372,46 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Green sessions are complete in the lake.', target: { kind: 'series', group: 'complete' } },
       { text: 'Amber is still fetching, teal stale, red failed, and grey not in the lake at all.', target: { kind: 'series', group: 'missing' } },
       { text: 'This is the lake now. The study ran on the data snapshot frozen at lock, which this cannot change.', target: null },
+    ],
+  },
+  'final-checks': {
+    title: 'Final-test checks',
+    question: 'Did the final test meet each rule, in words?',
+    steps: [
+      { text: 'Each line is one rule the final test is judged by, with its outcome first.', target: null },
+      { text: 'A pass meets the rule; a fail does not; “not available” means the run could not say.', target: null },
+      { text: 'Read the detail after the dash: the numbers the rule compared.', target: null },
+      { text: 'Retention is described beside the result, never checked: a big drop with every rule passed is still worth a second look.', target: null },
+    ],
+  },
+  'final-comparison': {
+    title: 'Development against final',
+    question: 'Which measures held up on the final test?',
+    steps: [
+      { text: 'Each block is one measure on its own scale: annualized return, Sharpe, worst fall, trades a year.', target: null },
+      { text: 'The teal bar is the development period: the data the study chose from.', target: { kind: 'series', group: 'development' } },
+      { text: 'The blue bar is the final test: data no step chose on.', target: { kind: 'series', group: 'final' } },
+      { text: 'Compare the candidate’s change with the current settings’: a drop both share is the market; a drop only the candidate shows is the fit.', target: null },
+    ],
+  },
+  'final-equity': {
+    title: 'Final-test equity',
+    question: 'How did the candidate and the current settings do through the final test?',
+    steps: [
+      { text: 'Read the labels at the right edge: where each run ended the final test.', target: { kind: 'point', group: 'equity', at: 'last' } },
+      { text: 'Follow each line: a steady climb is more convincing than one jump.', target: { kind: 'series', group: 'equity' } },
+      { text: 'Drop to the lower part and find its lowest point: the deepest fall from a peak at a session close.', target: { kind: 'point', group: 'fall', at: 'lowest' } },
+      { text: 'The amber dashed line labelled “limit” is the worst-fall limit. The final test reads the candidate’s fall bar by bar, which can be deeper than its line here.', target: null },
+    ],
+  },
+  'final-months': {
+    title: 'Final-test months',
+    question: 'Was the final result spread out, or carried by one month?',
+    steps: [
+      { text: 'Each pair of bars is one month of the final test: the candidate and the current settings.', target: { kind: 'series', group: 'months' } },
+      { text: 'Look for one month far taller than the rest: a final result carried by a single month is fragile.', target: null },
+      { text: 'Count the months each run won. Winning most months is steadier than winning one big one.', target: null },
+      { text: 'Hover a month for both returns.', target: null },
     ],
   },
 };

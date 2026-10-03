@@ -279,6 +279,9 @@ export type MeasuredConcentration = Schemas['GoldenSearchConcentrationMeasured']
 export type CandidateRef = Pick<EvidenceCandidate, 'key' | 'label'>;
 export type CandidateRunDetail = Schemas['GoldenSearchRunDetail'];
 
+/** A final-test run's measure beside the development period's, with the change. */
+export type FinalMeasure = Schemas['GoldenSearchFinalMeasure'];
+
 /** `GET /studies/{id}/charts/plan`: a locked study's frozen windows, search space, workload, trade minimums and lake coverage. */
 export type PlanCharts = Schemas['GoldenSearchPlanCharts'];
 export type PlanWindow = Schemas['GoldenSearchPlanWindow'];
