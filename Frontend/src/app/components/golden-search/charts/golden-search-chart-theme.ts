@@ -2,6 +2,7 @@ import { InjectionToken } from '@angular/core';
 import type { TooltipComponentOption } from 'echarts/components';
 
 import { themeColor } from '../../../shared/charts/theme-color';
+import { signedPercentText } from '../golden-search-display';
 import type { CandidateKey } from '../golden-search.types';
 
 /** The app's tokens as the colours a chart draws with, read from the element the chart sits in. */
@@ -75,6 +76,11 @@ export function tooltipFrame(theme: ChartTheme): TooltipComponentOption {
 
 /** How a tooltip, summary or table names a value the study did not record. */
 export const NOT_RECORDED = 'not recorded';
+
+/** A server fraction as a signed percent, or "not recorded" when it is missing. */
+export function signedPercentOrNotRecorded(value: number | null): string {
+  return value === null ? NOT_RECORDED : signedPercentText(value);
+}
 
 /** The hovered index from an axis tooltip's parameters (an array) or an item tooltip's (one object). */
 export function dataIndexOf(params: unknown): number | null {

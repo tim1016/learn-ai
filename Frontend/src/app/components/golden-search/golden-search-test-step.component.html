@@ -21,8 +21,8 @@
     }
     <ul class="pills" aria-label="Test-over-time summary">
       <li>{{ v.summary_pills.judged }}</li>
-      <li>{{ v.summary_pills.test_trades | number }} test trades</li>
-      <li>{{ v.summary_pills.median_retention === null ? 'Median retention not available' : (v.summary_pills.median_retention | number: '1.2-2') + ' median retention' }}</li>
+      <li>{{ v.summary_pills.test_trades === null ? 'Test trades not counted yet' : (v.summary_pills.test_trades | number) + ' test trades' }}</li>
+      <li>{{ v.summary_pills.median_retention === null ? 'Median retention not available' : (v.summary_pills.median_retention | percent: '1.0-0') + ' median retention' }}</li>
     </ul>
   } @else {
     <p class="pending" role="status">{{ pending() }}</p>
@@ -33,15 +33,20 @@
       <p>{{ message }}</p>
       <button type="button" class="link" (click)="retry()">Try again</button>
     </div>
-  } @else if (timeline(); as spec) {
+  } @else if (chartData(); as charts) {
+    @if (timeline(); as spec) {
     <app-golden-search-grid>
       <app-golden-search-panel chart="fold-timeline" data-span="12">
         <app-golden-search-chart [spec]="spec" [height]="timelineHeight()" />
-        <p caption class="caption">{{ v ? 'Each fold trained on its window, then tested its winner on the next.' : 'The folds the plan froze at lock; testing over time runs them after the search.' }}</p>
+        <p caption class="caption">{{ charts.planned ? 'The folds the plan froze at lock; testing over time runs them after the search.' : charts.in_progress ? (running() ? 'Testing over time is under way: each fold fills in as it finishes.' : 'Testing over time stopped before its verdict: these are the folds it finished.') : 'Each fold trained on its window, then tested its winner on the next.' }}</p>
       </app-golden-search-panel>
-      @if (v) {
+      @if (!charts.planned) {
         <app-golden-search-panel chart="linked-return" data-span="8">
-          @if (linked(); as spec) { <app-golden-search-chart [spec]="spec" [height]="240" /> }
+          @if (linked(); as spec) {
+            <app-golden-search-chart [spec]="spec" [height]="240" />
+          } @else {
+            <p class="muted">The linked return is drawn when testing over time finishes.</p>
+          }
           <p caption class="caption">Linked fold returns: each fold starts flat with fresh capital, and a missing fold breaks the line. This is not the fixed candidate's track record.</p>
         </app-golden-search-panel>
         <app-golden-search-panel chart="train-test-sharpe" data-span="4">
@@ -66,7 +71,8 @@
         </app-golden-search-panel>
       }
     </app-golden-search-grid>
-  } @else if (chartData() === null) {
+    }
+  } @else {
     <p class="muted" role="status">Loading the test-over-time charts…</p>
   }
 

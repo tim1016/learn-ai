@@ -140,6 +140,7 @@ export function fullPointEntries(point: Point, capability: StrategyCapability | 
 }
 
 const SIGNED_PERCENT = new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1, signDisplay: 'exceptZero' });
+const WHOLE_PERCENT = new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 0 });
 const PERCENT = new Intl.NumberFormat('en-US', { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const RATIO = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const SIGNED_USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0, signDisplay: 'exceptZero' });
@@ -175,6 +176,11 @@ export function signedPercentText(fraction: number | null | undefined): string {
 /** A server fraction as an unsigned percent (`0.064` → `6.4%`), e.g. a drawdown. */
 export function percentText(fraction: number | null | undefined): string {
   return fraction === null || fraction === undefined ? '—' : PERCENT.format(fraction);
+}
+
+/** A server fraction as a whole percent (`0.643` → `64%`), e.g. a retention. */
+export function wholePercentText(fraction: number): string {
+  return WHOLE_PERCENT.format(fraction);
 }
 
 /** A ratio such as Sharpe to two places. */

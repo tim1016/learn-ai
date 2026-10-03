@@ -296,7 +296,7 @@ def validation_view(stored: Mapping[str, Any]) -> dict[str, Any]:
             "median_retention": verdict["study_retention"],
         }
         if verdict is not None
-        else {"judged": f"0 of {len(folds)} folds judged", "test_trades": 0, "median_retention": None}
+        else {"judged": f"0 of {len(folds)} folds judged", "test_trades": None, "median_retention": None}
     )
     return {
         "folds": folds,

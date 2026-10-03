@@ -20587,6 +20587,18 @@
             "minimum": 0.0,
             "title": "Train Start Ms",
             "type": "integer"
+          },
+          "winner": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The settings the fold's training chose; null without a winner.",
+            "title": "Winner"
           }
         },
         "required": [
@@ -20595,6 +20607,7 @@
           "train_end_ms",
           "test_start_ms",
           "test_end_ms",
+          "winner",
           "status",
           "failure_reason",
           "train_sharpe",
@@ -24090,8 +24103,16 @@
             "title": "Median Retention"
           },
           "test_trades": {
-            "title": "Test Trades",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The verdict's test trades; null before it is computed.",
+            "title": "Test Trades"
           }
         },
         "required": [
@@ -24171,6 +24192,11 @@
             "description": "The trades all forward tests together must reach, as the verdict judged them.",
             "title": "Forward Minimum"
           },
+          "in_progress": {
+            "description": "Testing over time is running or stopped short of its verdict: totals count only the folds completed so far.",
+            "title": "In Progress",
+            "type": "boolean"
+          },
           "incumbent_linked": {
             "items": {
               "$ref": "#/components/schemas/GoldenSearchLinkedReturn"
@@ -24214,12 +24240,13 @@
                 "type": "null"
               }
             ],
-            "description": "Test trades over completed folds; null before testing over time ran.",
+            "description": "The verdict's test trades; while in progress, the completed folds' so far; null before testing over time ran.",
             "title": "Test Trades Total"
           }
         },
         "required": [
           "planned",
+          "in_progress",
           "folds",
           "linked",
           "incumbent_linked",

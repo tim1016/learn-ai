@@ -6,8 +6,12 @@ from typing import Any
 
 import pytest
 
-from app.research.golden_search.fold_charts import fold_view
+from app.research.golden_search.activity import activity_plan
+from app.research.golden_search.fold_charts import fold_charts, fold_view
+from app.research.golden_search.models import StudyRow
+from app.research.golden_search.planning import fold_windows, protocol_from_request
 from tests._helpers.golden_search import metrics
+from tests._helpers.golden_search_study import plan_request
 
 WINDOWS = {"fold_index": 0, "train_start_ms": 0, "train_end_ms": 10, "test_start_ms": 10, "test_end_ms": 20}
 
@@ -48,3 +52,38 @@ def test_a_planned_fold_has_its_windows_and_no_numbers() -> None:
     view = fold_view({**WINDOWS, "status": "planned"})
     assert view["status"] == "planned" and view["failure_reason"] is None
     assert _numbers(view) == (None,) * 8
+
+
+def _row(results: dict[str, Any]) -> StudyRow:
+    protocol = protocol_from_request(plan_request("SPY"))
+    receipt = {"folds": [fold.as_dict() for fold in fold_windows(protocol)], "activity": activity_plan(protocol)}
+    return StudyRow(
+        id="s1", parent_study_id=None, strategy_key="ema_crossover_signal", symbol="SPY", state="validation_running", revision=0,
+        status="running", attempt=1, job_id=None, pending_stage=None, stage_token=None, created_at_ms=0, updated_at_ms=0,
+        finished_at_ms=None, protocol=protocol.as_dict(), protocol_hash="h", receipt=receipt, results=results, candidate_key=None,
+        exam_locked=False, decision=None, budget_cap=5000, consumed_evaluations=0, cache_hits=0, invalid_points=0,
+        incomplete=False, failure_reason=None, hidden=False,
+    )  # fmt: skip
+
+
+def test_a_running_stage_counts_its_completed_folds_so_far_and_never_judges_them() -> None:
+    first, second = (fold.as_dict() for fold in fold_windows(protocol_from_request(plan_request("SPY"))))
+    # The first fold's winner leaves the hold at its declared default (5 bars) out of its canonical point.
+    winner = {"symbol": "SPY", "gap": 0.25, "rsi_min": 50.0, "rsi_max": 70.0}
+    folds = [
+        {**first, "status": "completed", "winner": winner, "train_metrics": metrics(1.2).as_dict(), "test_metrics": metrics(0.6, trades=11).as_dict(), "incumbent_test_metrics": None, "failure_reason": None},
+        {**second, "status": "pending", "winner": None, "train_metrics": None, "test_metrics": None, "incumbent_test_metrics": None, "failure_reason": None},
+    ]
+    charts = fold_charts(_row({"validation": {"folds": folds, "verdict": None, "linked": [], "incumbent_linked": []}}))
+
+    assert (charts["planned"], charts["in_progress"], charts["test_trades_total"], charts["median_retention"]) == (False, True, 11, None)
+    assert charts["forward_minimum"] is not None and charts["linked"] == []
+    drift = {knob["name"]: knob["folds"] for knob in charts["drift"]}
+    assert drift == {"gap": [pytest.approx(0.25, abs=1e-12), None], "hold_bars": [5, None]}
+    assert charts["folds"][0]["winner"] == winner and charts["folds"][1]["winner"] is None
+
+
+def test_before_testing_over_time_the_folds_are_the_receipts_plan() -> None:
+    charts = fold_charts(_row({}))
+    assert (charts["planned"], charts["in_progress"], charts["test_trades_total"]) == (True, False, None)
+    assert {fold["status"] for fold in charts["folds"]} == {"planned"}
