@@ -42,7 +42,7 @@ export class StrategyLabConfigStore {
   private readonly tickerCatalog = inject(TickerCatalogService);
   private readonly providerBounds = inject(ProviderBoundsService);
   private readonly calendar = inject(TradingCalendarService);
-  /** Whether the window has held dates yet; it is started once, never again after anything has set it. */
+  /** Whether the window has held both its dates yet; it is started once, never again after that. */
   private windowStarted = false;
   private readonly launchParams = toSignal(
     this.route.queryParamMap.pipe(map(parseEngineLaunchParams)),
@@ -253,16 +253,21 @@ export class StrategyLabConfigStore {
   constructor() {
     effect(() => persistNavOverride(this.configNavOverride()));
 
-    // Starts an empty window on the last month of what this run can read. A
-    // direct write, not `changeRange`: nobody chose these dates, so they must
-    // not clear a warning or release a restored selection.
+    // Starts the window on the last month of what this run can read. A launch
+    // link may name one end only: that end is kept and the other is filled, a
+    // month before the given end or on the last readable day. A direct write,
+    // not `changeRange`: nobody chose these dates, so they must not clear a
+    // warning or release a restored selection.
     effect(() => {
       const range = this.range();
-      if (range.from !== "" || range.to !== "") this.windowStarted = true;
+      if (range.from !== "" && range.to !== "") this.windowStarted = true;
       if (this.windowStarted) return;
-      const [lastMonth] = offerQuickRanges(["1M"], this.dateBounds(), this.calendar.sessions(), this.calendar.lastCompleted());
+      const bounds = this.dateBounds();
+      const endingOn = range.to === "" ? bounds : { ...bounds, max: range.to };
+      const [lastMonth] = offerQuickRanges(["1M"], endingOn, this.calendar.sessions(), this.calendar.lastCompleted());
       if (lastMonth.range === null) return;
-      const { from, to } = lastMonth.range;
+      const from = range.from === "" ? lastMonth.range.from : range.from;
+      const to = range.to === "" ? lastMonth.range.to : range.to;
       untracked(() => this.range.update((current) => ({ ...current, from, to })));
     });
 

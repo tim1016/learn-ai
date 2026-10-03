@@ -385,23 +385,50 @@ describe("StrategyLab configuration and runner", () => {
   });
 
   describe("the window a new lab starts on", () => {
-    it("is the last month of what the run can read, set once the calendar has been read and never again", () => {
-      const sessions = signal<TradingSessions | null>(null);
-      const lastCompleted = signal<string | null>(null);
+    const sessions = signal<TradingSessions | null>(null);
+    const lastCompleted = signal<string | null>(null);
+
+    /** A lab whose calendar has not been read yet; `calendarArrives` reads it. */
+    function labBeforeTheCalendar(): StrategyLabConfigStore {
+      sessions.set(null);
+      lastCompleted.set(null);
       TestBed.resetTestingModule();
       configureLab();
       TestBed.overrideProvider(TradingCalendarService, { useValue: { sessions, lastCompleted, problem: signal(null), retry: () => undefined } });
       TestBed.overrideProvider(ProviderBoundsService, {
         useValue: { bounds: computed(() => providerBounds(STANDARD_DATE_WORLD.providerFloor, lastCompleted())) },
       });
-      const store = TestBed.inject(StrategyLabConfigStore);
+      return TestBed.inject(StrategyLabConfigStore);
+    }
+
+    function calendarArrives(): void {
+      sessions.set(STANDARD_DATE_WORLD.sessions);
+      lastCompleted.set("2026-09-18");
+      TestBed.tick();
+    }
+
+    it.each([
+      // A launch link naming only the start keeps it and ends on the last readable day.
+      { given: { from: "2026-07-01" }, expected: { from: "2026-07-01", to: "2026-09-18" } },
+      // One naming only the end keeps it and starts a month before: 2026-05-30 is a Saturday, so Monday.
+      { given: { to: "2026-06-30" }, expected: { from: "2026-06-01", to: "2026-06-30" } },
+    ])("keeps the one date a launch link names and fills the other: $given", ({ given, expected }) => {
+      const store = labBeforeTheCalendar();
+      store.range.update((range) => ({ ...range, ...given }));
+      TestBed.tick();
+
+      calendarArrives();
+
+      expect(store.range()).toMatchObject(expected);
+    });
+
+    it("is the last month of what the run can read, set once the calendar has been read and never again", () => {
+      const store = labBeforeTheCalendar();
       store.configurationWarning.set("This strategy does not support daily data.");
       TestBed.tick();
       expect(store.range()).toMatchObject({ from: "", to: "" });
 
-      sessions.set(STANDARD_DATE_WORLD.sessions);
-      lastCompleted.set("2026-09-18");
-      TestBed.tick();
+      calendarArrives();
 
       expect(store.range()).toMatchObject({ from: "2026-08-18", to: "2026-09-18" });
       // Nobody chose these dates, so the warning stands.
