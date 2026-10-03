@@ -8,8 +8,8 @@ import { environment } from "../../../environments/environment";
 import { toDataPolicyPayload, type DataPolicy } from "../../models/data-policy";
 import { RESEARCH_DEFAULT_FILL_MODE, type FillModeName } from "../../models/fill-mode";
 import type { PriceAdjustmentMode } from "../../shared/data-lake";
+import { ProviderBoundsService, UNBOUNDED, heldBounds, type DateBounds } from "../../shared/date-picker";
 import { TickerCatalogService } from "../../shared/ticker-catalog";
-import { toMostRecentWeekday } from "../../shared/date/weekday";
 import type { TickerRange } from "../../shared/ticker-range-picker";
 import {
   leanValidationTemplateForStrategy,
@@ -40,6 +40,7 @@ export class StrategyLabConfigStore {
   private readonly http = inject(HttpClient);
   private readonly route = inject(ActivatedRoute);
   private readonly tickerCatalog = inject(TickerCatalogService);
+  private readonly providerBounds = inject(ProviderBoundsService);
   private readonly launchParams = toSignal(
     this.route.queryParamMap.pipe(map(parseEngineLaunchParams)),
     { initialValue: {} },
@@ -76,8 +77,10 @@ export class StrategyLabConfigStore {
   readonly paramValues = signal<Record<string, unknown>>({});
   readonly range = signal<TickerRange>({
     symbol: "SPY",
-    from: defaultStart(),
-    to: defaultEnd(),
+    // Empty until the date picker starts the window on its last-month range:
+    // only the trading calendar knows which days are sessions.
+    from: "",
+    to: "",
     resolution: "minute",
     autoFetch: true,
   });
@@ -197,6 +200,25 @@ export class StrategyLabConfigStore {
     if (!view.resolved() || view.unavailable() !== null) return false;
     return !view.pool().some((option) => option.symbol === this.effectiveSymbol());
   });
+
+  /**
+   * The dates this run can read. A run that fetches missing days (auto-fetch)
+   * is bounded by what the provider serves; a run that reads the tree as it
+   * stands is bounded by the days the tree holds for the symbol; a run that
+   * replays recorded bars reads no dates from the lake at all.
+   */
+  readonly dateBounds = computed<DateBounds>(() => {
+    if (!this.readsLake()) return UNBOUNDED;
+    if (this.autoFetch()) return this.providerBounds.bounds();
+    const mode = this.adjustmentMode();
+    const symbol = this.effectiveSymbol();
+    const view = untracked(() => this.tickerCatalog.viewFor(mode));
+    const held = view.pool().find((option) => option.symbol === symbol);
+    return heldBounds(symbol, held?.firstHeld ?? null, held?.lastHeld ?? null);
+  });
+
+  /** A date field holds no usable date: the picker hands over an empty one until it does. */
+  readonly datesMissing = computed(() => this.range().from === "" || this.range().to === "");
 
   readonly rerunBlocked = computed(() => {
     const name = this.selectedStrategyName();
@@ -554,30 +576,6 @@ function normalizeStrategyKey(value: string): string {
 
 function barLabel(bars: { timespan: string; multiplier: number }): string {
   return `${bars.multiplier}-${bars.timespan === "day" ? "day" : "minute"}`;
-}
-
-function yesterday(): Date {
-  const date = new Date();
-  date.setDate(date.getDate() - 1);
-  date.setHours(0, 0, 0, 0);
-  return date;
-}
-
-function toIso(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function defaultEnd(): string {
-  return toIso(toMostRecentWeekday(yesterday()));
-}
-
-function defaultStart(): string {
-  const start = yesterday();
-  start.setDate(start.getDate() - 30);
-  return toIso(toMostRecentWeekday(start));
 }
 
 function loadNavOverride(): "expanded" | "collapsed" | null {

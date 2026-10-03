@@ -42,6 +42,13 @@ export class DateRangePickerComponent {
   readonly ranges = input<readonly QuickRangeKey[]>(QUICK_RANGES);
   /** Whether both ends must be trading sessions. */
   readonly sessionsOnly = input(true);
+  /**
+   * The quick range to start on when the host hands over no dates. A host
+   * with no window of its own starts empty and names one, so its first
+   * window comes from the calendar rather than from day arithmetic that
+   * cannot see a holiday.
+   */
+  readonly fallback = input<QuickRangeKey | null>(null);
   /** The group's accessible name. */
   readonly label = input('Date range');
 
@@ -80,7 +87,19 @@ export class DateRangePickerComponent {
     return parts.length === 0 ? null : parts.join(' · ');
   });
 
+  /** Whether the fields have held dates yet; the fallback fills them once, never again after a host or a person has. */
+  private seeded = false;
+
   constructor() {
+    effect(() => {
+      const key = this.fallback();
+      if (this.fromText() !== '' || this.toText() !== '') this.seeded = true;
+      if (this.seeded || key === null) return;
+      const [offer] = offerQuickRanges([key], this.bounds(), this.calendar.sessions(), this.calendar.nowMs());
+      if (offer.range === null) return;
+      const { range } = offer;
+      untracked(() => this.setRange(range));
+    });
     effect(() => {
       const { from, to } = this.checked();
       untracked(() => {

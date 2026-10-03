@@ -363,6 +363,7 @@
           <app-ticker-range-picker
             [value]="pickerValue()"
             (valueChange)="onRangeChange($event)"
+            reads="provider"
             [hideSampling]="true"
             title="Backtest data"
           />

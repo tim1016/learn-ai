@@ -1,7 +1,10 @@
-import { signal, type Signal } from '@angular/core';
+import { signal, type Provider, type Signal } from '@angular/core';
 
 import { etMidnightMs } from '../../date/et-midnight';
 import { addDays, isWeekend, type IsoDate } from '../../date/iso-date';
+import type { DateBounds } from '../date-bounds';
+import { ProviderBoundsService } from '../provider-bounds.service';
+import { TradingCalendarService } from '../trading-calendar.service';
 import { TradingSessions } from '../trading-sessions';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -38,4 +41,40 @@ export function fakeTradingCalendar(sessions: TradingSessions | null, now: IsoDa
     retry: () => undefined,
     nowMs: () => etMidnightMs(now) + 12 * HOUR_MS,
   };
+}
+
+let standardSessions: TradingSessions | null = null;
+
+/** The date world a host spec gets unless it asks for another: built once per spec file, it is the same for every test. */
+export const STANDARD_DATE_WORLD = {
+  /** Monday; the last completed session is Friday 2026-09-18, the standard picker pool's last held day. */
+  now: '2026-09-21',
+  providerFloor: '2021-09-21',
+  get sessions(): TradingSessions {
+    standardSessions ??= fakeSessions('2021-01-01', '2027-12-31');
+    return standardSessions;
+  },
+} as const;
+
+/** The provider's bound as ``ProviderBoundsService`` would state it for ``calendar``. */
+export function fakeProviderBounds(calendar: FakeTradingCalendar, floor: IsoDate): DateBounds {
+  const last = calendar.sessions()?.lastCompleted(calendar.nowMs()) ?? null;
+  return {
+    min: floor,
+    max: last,
+    minReason: `The provider serves bars from ${floor}.`,
+    maxReason: last === null ? null : `The last completed session is ${last}.`,
+    unknown: null,
+  };
+}
+
+/**
+ * Stands in for the two services every date picker reads, so a host spec
+ * mounts no HTTP for the trading calendar or the provider's history floor.
+ */
+export function provideFakeDateWorld(calendar: FakeTradingCalendar = fakeTradingCalendar(STANDARD_DATE_WORLD.sessions, STANDARD_DATE_WORLD.now)): Provider[] {
+  return [
+    { provide: TradingCalendarService, useValue: calendar },
+    { provide: ProviderBoundsService, useValue: { bounds: signal(fakeProviderBounds(calendar, STANDARD_DATE_WORLD.providerFloor)) } },
+  ];
 }

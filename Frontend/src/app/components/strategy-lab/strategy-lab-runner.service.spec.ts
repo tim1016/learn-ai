@@ -5,6 +5,9 @@ import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
 import { of } from "rxjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { heldBounds } from "../../shared/date-picker";
+import { STANDARD_DATE_WORLD, provideFakeDateWorld } from "../../shared/date-picker/testing/fake-trading-calendar";
+import { fakeTickerCatalog, provideFakeTickerCatalog } from "../../shared/ticker-catalog/testing/fake-ticker-catalog";
 import { JobsService } from "../../services/jobs.service";
 import type { JobState, JobStatus } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
@@ -75,6 +78,8 @@ describe("StrategyLab configuration and runner", () => {
     TestBed.configureTestingModule({
       providers: [
         provideHttpClient(),
+        provideFakeTickerCatalog(fakeTickerCatalog([{ symbol: "SPY", name: "SPDR S&P 500 ETF Trust", firstHeld: "2024-01-02", lastHeld: "2026-09-18" }])),
+        ...provideFakeDateWorld(),
         StrategyLabConfigStore,
         StrategyLabRunner,
         { provide: ActivatedRoute, useValue: { queryParamMap: of(convertToParamMap({})) } },
@@ -126,6 +131,8 @@ describe("StrategyLab configuration and runner", () => {
     }));
     configureLab();
     config = TestBed.inject(StrategyLabConfigStore);
+    // The rail's date picker starts the window; a store on its own has none.
+    config.range.update((range) => ({ ...range, from: "2026-01-05", to: "2026-01-30" }));
     runner = TestBed.inject(StrategyLabRunner);
     config.strategies.set([STRATEGY]);
     config.selectStrategy(STRATEGY.name);
@@ -348,6 +355,23 @@ describe("StrategyLab configuration and runner", () => {
     expect(request).not.toHaveProperty("strategy_parameters");
   });
 
+  it("refuses to run while a date field holds no usable date, and says so", async () => {
+    config.range.update((range) => ({ ...range, to: "" }));
+
+    await runner.run();
+
+    expect(runner.runError()).toBe("A date field in the time window holds no usable date.");
+    expect(startJob).not.toHaveBeenCalled();
+  });
+
+  it("bounds the dates by what the run reads: the provider with auto-fetch, the tree's held days without", () => {
+    expect(config.dateBounds().minReason).toBe(`The provider serves bars from ${STANDARD_DATE_WORLD.providerFloor}.`);
+
+    config.range.update((range) => ({ ...range, autoFetch: false }));
+
+    expect(config.dateBounds()).toEqual(heldBounds("SPY", "2024-01-02", "2026-09-18"));
+  });
+
   it("rejects an empty custom source before probing the launcher", async () => {
     config.engine.set("lean");
     config.customLeanSource.set("  \n");
@@ -368,6 +392,7 @@ describe("StrategyLab configuration and runner", () => {
       vi.useFakeTimers();
       TestBed.resetTestingModule();
       configureLab();
+      TestBed.inject(StrategyLabConfigStore).range.update((range) => ({ ...range, from: "2026-01-05", to: "2026-01-30" }));
       visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
       refreshActive.mockClear();
       lab = TestBed.inject(StrategyLabRunner);

@@ -7,13 +7,14 @@
     <app-ticker-range-picker
       [value]="range()"
       (valueChange)="rangeChange.emit($event)"
+      reads="provider"
       [hideSampling]="true"
       [showAutoFetch]="false"
       presentation="card"
       title="Data Lab scope"
     />
     <div class="explore__drawer-actions">
-      <button type="button" class="explore__primary" (click)="apply.emit()">Apply scope</button>
+      <button type="button" class="explore__primary" [disabled]="range().from === '' || range().to === ''" (click)="apply.emit()">Apply scope</button>
       <button type="button" (click)="openChange.emit(false)">Cancel</button>
     </div>
   </section>

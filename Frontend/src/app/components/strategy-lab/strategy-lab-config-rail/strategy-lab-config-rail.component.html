@@ -47,7 +47,7 @@
       appearance="flat"
     />
 
-    <app-time-window-card [(value)]="range" appearance="flat" />
+    <app-time-window-card [(value)]="range" appearance="flat" [bounds]="dateBounds()" fallback="1M" />
 
     <section class="rail-field rail-field--strategy" aria-labelledby="strategy-label">
       <label class="rail-field__label" id="strategy-label" for="strategy-picker">Strategy</label>

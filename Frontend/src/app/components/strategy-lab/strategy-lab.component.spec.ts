@@ -1,3 +1,4 @@
+import { provideFakeDateWorld } from "../../shared/date-picker/testing/fake-trading-calendar";
 import {
   HttpErrorResponse,
   HttpResponse,
@@ -201,6 +202,7 @@ async function createLab(
       provideZonelessChangeDetection(),
       provideHttpClient(withInterceptors([bypassAuxiliaryChartRequests])),
       provideHttpClientTesting(),
+      ...provideFakeDateWorld(),
       {
         provide: ActivatedRoute,
         useValue: { queryParamMap, snapshot: { queryParamMap: queryParamMap.value } },
@@ -815,9 +817,9 @@ describe("Strategy Lab saved configuration", () => {
 
     expect(root.querySelector<HTMLElement>("[role='radio'][aria-checked='true']")?.textContent?.trim()).toBe("both");
     expect(root.querySelector("app-instrument-card .ticker-box__identity .asset-identity__symbol")?.textContent?.trim()).toBe("QQQ");
-    const dates = root.querySelectorAll<HTMLInputElement>("app-time-window-card input[type='date']");
-    expect(dates[0]?.value).toBe("2026-03-02");
-    expect(dates[1]?.value).toBe("2026-04-02");
+    const date = (name: string): string | undefined => root.querySelector<HTMLInputElement>(`app-time-window-card input[aria-label='${name}']`)?.value;
+    expect(date("Start date")).toBe("2026-03-02");
+    expect(date("End date")).toBe("2026-04-02");
 
     const advanced = root.querySelector<HTMLDetailsElement>("details.advanced");
     if (!advanced) throw new Error("Advanced configuration controls are missing");
