@@ -129,10 +129,17 @@ async def replay_warmup_bars(
     (unflagged) way -- only the one recreated candidate is flagged, the
     rest are silently caught up, until a bucket with a receipt is reached.
     A run decides its buckets in order and a crash leaves one staged, so
-    each stretch of buckets with no receipt holds one crash's candidate at
-    most: the first in it. Every stretch's candidate is returned (#2859).
-    Naming only the first in the whole replay left a later stretch's for a
-    later Resume, by which time the receipt window could have moved past it.
+    within one replay each stretch of buckets with no receipt has one
+    candidate named: the first in it. Every stretch's candidate is returned
+    (#2859). Naming only the first in the whole replay left a later
+    stretch's for a later Resume, by which time the receipt window could
+    have moved past it.
+
+    That is one candidate per stretch for one Resume, not for good. The
+    crash evidence written for a named bucket is itself a receipt, so at the
+    next Resume the stretch ends at that bucket, and the next bucket after it
+    that stages a candidate with no receipt is named in turn, on the same
+    conditions.
 
     With no decision on file a bucket is flagged only when the Clerk has an
     earlier run of this instance on record
