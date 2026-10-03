@@ -962,7 +962,12 @@ def _absence_lines(presented: ProjectedUnknownExitOrder, proof: _AbsenceProof) -
         )
     )
     if not proof.ended_foreign_orders:
-        others = f"Alpaca shows no other order to {side} {symbol} since this one was sent."
+        # Orders the Clerk placed itself, for another bot or by hand, may be
+        # listed too: the sentence is only about those it did not place.
+        others = (
+            f"Since this one was sent, Alpaca shows no order to {side} {symbol} that the Clerk "
+            "did not place."
+        )
     else:
         others = (
             f"Since this one was sent, Alpaca shows {_count_of_orders(len(proof.ended_foreign_orders))} "

@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage_policy import (
     coverage_resolution_decision,
     historical_exact_recovery_decision,
 )
+from app.broker.alpaca.clerk.sqlite.exit_resolution import RESEND_WAIT_CEILING_MS
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import (
     AccountCheckKind,
@@ -1127,11 +1128,11 @@ def _settlement(ctx: RecoveryPolicyContext, order: ProjectedUnknownExitOrder) ->
 
     The ticket says what the Clerk does meanwhile, which is not nothing. It
     starts no other closing order for the bot, but while the order's session
-    is open it sends this same order again by itself, after longer and longer
-    waits (``exit_resolution.resend_wait_ms``), and each send makes what the
-    operator saw at Alpaca, and the action they were presented, out of date.
-    An order Alpaca answered under another client order id is never sent
-    again.
+    is open it sends this same order again by itself, after waits that grow
+    to a ceiling and then stay there (``exit_resolution.resend_wait_ms``),
+    and each send makes what the operator saw at Alpaca, and the action they
+    were presented, out of date. An order Alpaca answered under another
+    client order id is never sent again.
     """
     side = "sell" if order.side.upper() == "SELL" else "buy"
     sent = (
@@ -1142,8 +1143,9 @@ def _settlement(ctx: RecoveryPolicyContext, order: ProjectedUnknownExitOrder) ->
     if order.answered_as_client_order_id is None:
         ticket = (
             f"{sent} and could not confirm it. It {holds}. While the order's session is open, "
-            "the Clerk sends this same order again by itself, waiting longer each time. If it "
-            "does, look at Alpaca again and open this action again."
+            "the Clerk sends this same order again by itself, after a wait that grows to "
+            f"{RESEND_WAIT_CEILING_MS // 60_000} minutes and then stays there. If it does, look "
+            "at Alpaca again and open this action again."
         )
     else:
         ticket = (

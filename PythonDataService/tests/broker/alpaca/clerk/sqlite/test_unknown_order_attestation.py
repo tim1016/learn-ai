@@ -701,6 +701,35 @@ async def test_a_sale_tried_by_hand_and_canceled_does_not_stand_in_the_way_of_no
     assert len(alpaca.sent) == 1
 
 
+async def test_the_check_speaks_only_of_orders_the_clerk_did_not_place_when_its_own_sales_are_listed(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """A sell the Clerk placed itself, for another bot or by hand, is listed since this one was sent.
+
+    No order the Clerk did not place is, and the check says exactly that. It
+    said "Alpaca shows no other order to sell SPY since this one was sent",
+    which the listed sell made false.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
+    await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    (in_the_clerks_records,) = repo.entry_orders_for_strategy(SID)
+    # Listed as a sell under a client order id the Clerk's own records hold: an order it placed.
+    alpaca.ended_orders = [
+        _elsewhere("a-sell-the-clerk-placed", client_order_id=in_the_clerks_records.order_ref, status="canceled")
+    ]
+    (order,) = repo.unknown_exit_orders(SID)
+
+    findings = await _facade(repo, alpaca).check_unknown_exit_order(
+        strategy_instance_id=SID, presented=order, attestation=ABSENT
+    )
+
+    assert findings.would_settle is True
+    assert findings.lines[2] == (
+        "Since this one was sent, Alpaca shows no order to sell SPY that the Clerk did not place."
+    )
+
+
 async def test_a_foreign_sale_that_filled_is_settled_only_under_a_recorded_drift_and_is_on_the_record(
     crashed_with_exposure,  # noqa: F811
 ) -> None:
