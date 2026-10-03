@@ -403,7 +403,7 @@ describe("StrategyLab configuration and runner", () => {
       lastCompleted.set("2026-09-18");
       TestBed.tick();
 
-      expect(store.range()).toMatchObject({ from: "2026-08-18", to: "2026-09-18" });
+      expect(store.range()).toMatchObject({ from: "2026-08-19", to: "2026-09-18" });
       // Nobody chose these dates, so the warning stands.
       expect(store.configurationWarning()).toBe("This strategy does not support daily data.");
 

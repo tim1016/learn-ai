@@ -1,9 +1,8 @@
 <div class="editor">
   <div class="editor__grid">
-    <label class="field">
-      <span>Symbol</span>
-      <input #symbolInput pInputText type="text" [value]="symbol()" (input)="setSymbol(symbolInput.value)" />
-    </label>
+    <div class="field">
+      <app-symbol-picker appearance="field" label="Symbol" [symbol]="symbol()" (symbolChange)="setSymbol($event)" />
+    </div>
 
     <label class="field">
       <span>Strategy</span>
@@ -14,14 +13,10 @@
       </select>
     </label>
 
-    <label class="field">
-      <span>From</span>
-      <input #fromInput pInputText type="date" [value]="fromDate()" (input)="setDate('from', fromInput.value)" />
-    </label>
-    <label class="field">
-      <span>To</span>
-      <input #toInput pInputText type="date" [value]="toDate()" (input)="setDate('to', toInput.value)" />
-    </label>
+    <div class="field field--window">
+      <span>Window</span>
+      <app-date-range-picker label="Window" [from]="fromDate()" [to]="toDate()" [bounds]="bounds()" [sessionsOnly]="false" (changed)="setDates($event)" />
+    </div>
   </div>
 
   @if (ineligible().length > 0) {

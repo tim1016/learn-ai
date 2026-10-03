@@ -8,8 +8,8 @@ import { environment } from "../../../environments/environment";
 import { toDataPolicyPayload, type DataPolicy } from "../../models/data-policy";
 import { RESEARCH_DEFAULT_FILL_MODE, type FillModeName } from "../../models/fill-mode";
 import type { PriceAdjustmentMode } from "../../shared/data-lake";
-import { ProviderBoundsService, TradingCalendarService, UNBOUNDED, heldBounds, offerQuickRanges, type DateBounds } from "../../shared/date-picker";
-import { TickerCatalogService } from "../../shared/ticker-catalog";
+import { ProviderBoundsService, TradingCalendarService, UNBOUNDED, offerQuickRanges, type DateBounds } from "../../shared/date-picker";
+import { TickerCatalogService, heldBoundsFor } from "../../shared/ticker-catalog";
 import type { TickerRange } from "../../shared/ticker-range-picker";
 import {
   leanValidationTemplateForStrategy,
@@ -215,13 +215,7 @@ export class StrategyLabConfigStore {
     if (this.autoFetch()) return this.providerBounds.bounds();
     const mode = this.adjustmentMode();
     const symbol = this.effectiveSymbol();
-    const view = untracked(() => this.tickerCatalog.viewFor(mode));
-    // Not a verdict until the tree has answered: say so rather than "no held days".
-    const unavailable = view.unavailable();
-    if (unavailable !== null) return { ...UNBOUNDED, unknown: `The lake's holdings could not be read: ${unavailable}` };
-    if (!view.resolved()) return { ...UNBOUNDED, unknown: "The lake's holdings are being read." };
-    const held = view.pool().find((option) => option.symbol === symbol);
-    return heldBounds(symbol, held?.firstHeld ?? null, held?.lastHeld ?? null);
+    return heldBoundsFor(untracked(() => this.tickerCatalog.viewFor(mode)), symbol);
   });
 
   /** A date field holds no usable date: the picker hands over an empty one until it does. */

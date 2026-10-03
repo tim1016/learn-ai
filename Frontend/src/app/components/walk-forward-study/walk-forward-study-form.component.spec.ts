@@ -1,3 +1,4 @@
+import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -44,6 +45,7 @@ async function renderForm(service: Partial<WalkForwardStudyService>, inputs: Rec
   return render(WalkForwardStudyFormComponent, {
     inputs: { strategies: [strategy()], preflightDebounceMs: 0, ...inputs },
     providers: [
+      ...fakePickerWorld().providers,
       { provide: WalkForwardStudyService, useValue: { preflight: vi.fn(async (_spec: WalkForwardStudySpecRequest) => PLAN), launch: vi.fn(async (_spec: WalkForwardStudySpecRequest) => 'job-1'), ...service } },
     ],
   });

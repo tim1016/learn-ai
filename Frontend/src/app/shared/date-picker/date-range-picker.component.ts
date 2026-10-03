@@ -65,7 +65,7 @@ export class DateRangePickerComponent {
   protected readonly calendarProblem = computed(() => (this.sessionsOnly() || this.ranges().length > 0 ? this.calendar.problem() : null));
   protected readonly checked = computed(() => checkRange(this.fromText(), this.toText(), { bounds: this.bounds(), sessions: this.sessions() }));
   protected readonly problem = computed(() => this.checked().from.problem ?? this.checked().to.problem);
-  protected readonly offers = computed(() => offerQuickRanges(this.ranges(), this.bounds(), this.calendar.sessions(), this.calendar.lastCompleted()));
+  protected readonly offers = computed(() => offerQuickRanges(this.ranges(), this.bounds(), this.calendar.sessions(), this.calendar.lastCompleted(), this.sessionsOnly()));
   protected readonly active = computed(() => activeQuickRange(this.offers(), this.checked().from.date, this.checked().to.date));
 
   /** How many sessions the range holds, and whether the page's data stops short of the market. */

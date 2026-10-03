@@ -18,7 +18,7 @@ const QQQ = heldBounds('QQQ', '2024-09-03', '2026-09-18');
   template: `<app-date-range-picker [(from)]="from" [(to)]="to" [bounds]="bounds()" [ranges]="ranges()" [sessionsOnly]="sessionsOnly()" />`,
 })
 class HostComponent {
-  readonly from = signal('2026-08-18');
+  readonly from = signal('2026-08-19');
   readonly to = signal('2026-09-18');
   readonly bounds = signal<DateBounds>(QQQ);
   readonly ranges = signal<readonly QuickRangeKey[]>(QUICK_RANGES);
@@ -44,7 +44,7 @@ describe('DateRangePickerComponent', () => {
   it("shows the host's dates and lights only the quick range they match exactly", async () => {
     const { start, end, quick } = await renderPicker();
 
-    expect([start.value, end.value]).toEqual(['2026-08-18', '2026-09-18']);
+    expect([start.value, end.value]).toEqual(['2026-08-19', '2026-09-18']);
     expect(quick('1M').getAttribute('aria-pressed')).toBe('true');
     expect(quick('3M').getAttribute('aria-pressed')).toBe('false');
   });
@@ -82,7 +82,7 @@ describe('DateRangePickerComponent', () => {
     expect(screen.getByText('QQQ is held from 2024-09-03.')).not.toBeNull();
     expect(host.from()).toBe('');
 
-    await retype(start, '2026-08-18');
+    await retype(start, '2026-08-19');
     await retype(end, '2026-09-07');
     expect(screen.getByText('2026-09-07 is a market holiday (Labor Day). The next session is 2026-09-08.')).not.toBeNull();
     expect(host.to()).toBe('');
@@ -94,8 +94,8 @@ describe('DateRangePickerComponent', () => {
 
     await userEvent.click(quick('1Y'));
 
-    expect([host.from(), host.to()]).toEqual(['2025-09-18', '2026-09-18']);
-    expect([start.value, end.value]).toEqual(['2025-09-18', '2026-09-18']);
+    expect([host.from(), host.to()]).toEqual(['2025-09-19', '2026-09-18']);
+    expect([start.value, end.value]).toEqual(['2025-09-19', '2026-09-18']);
     expect(quick('1Y').getAttribute('aria-pressed')).toBe('true');
   });
 
@@ -107,7 +107,7 @@ describe('DateRangePickerComponent', () => {
 
     await userEvent.click(quick('5Y'));
 
-    expect([host.from(), host.to()]).toEqual(['2026-08-18', '2026-09-18']);
+    expect([host.from(), host.to()]).toEqual(['2026-08-19', '2026-09-18']);
   });
 
   it('offers only the quick ranges the page asks for', async () => {
@@ -143,7 +143,7 @@ describe('DateRangePickerComponent', () => {
     await view.fixture.whenStable();
 
     expect(host.from()).toBe('');
-    expect(start.value).toBe('2026-08-18');
+    expect(start.value).toBe('2026-08-19');
     expect(screen.getByText('AAPL is held from 2026-09-01.')).not.toBeNull();
   });
 

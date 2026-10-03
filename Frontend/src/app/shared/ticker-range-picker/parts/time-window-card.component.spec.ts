@@ -11,7 +11,7 @@ const SPY = heldBounds('SPY', '2024-01-02', '2026-09-18');
 describe('TimeWindowCardComponent', () => {
   let fixture: ComponentFixture<TimeWindowCardComponent>;
 
-  const range = (overrides: Partial<TickerRange> = {}): TickerRange => ({ symbol: 'SPY', from: '2026-08-18', to: '2026-09-18', resolution: 'minute', ...overrides });
+  const range = (overrides: Partial<TickerRange> = {}): TickerRange => ({ symbol: 'SPY', from: '2026-08-19', to: '2026-09-18', resolution: 'minute', ...overrides });
   const quick = (key: string): HTMLButtonElement => {
     const button = [...fixture.nativeElement.querySelectorAll('.date-range__range')].find((el: HTMLElement) => el.textContent?.trim() === key);
     if (!(button instanceof HTMLButtonElement)) throw new Error(`no quick range ${key}`);
@@ -33,7 +33,7 @@ describe('TimeWindowCardComponent', () => {
     quick('3M').click();
     await fixture.whenStable();
 
-    expect(changes).toEqual([{ symbol: 'SPY', from: '2026-06-18', to: '2026-09-18', resolution: 'minute' }]);
+    expect(changes).toEqual([{ symbol: 'SPY', from: '2026-06-19', to: '2026-09-18', resolution: 'minute' }]);
   });
 
   it("gives the picker its host's bounds: a range the data cannot serve is greyed with the reason", async () => {

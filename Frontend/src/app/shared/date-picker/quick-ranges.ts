@@ -1,4 +1,4 @@
-import { shiftIsoDateByMonths } from '../date/et-midnight';
+import { isoDateAfter, shiftIsoDateByMonths } from '../date/et-midnight';
 import { addDays, type IsoDate } from '../date/iso-date';
 import type { DateBounds } from './date-bounds';
 import type { TradingSessions } from './trading-sessions';
@@ -20,27 +20,32 @@ export interface QuickRangeOffer {
   readonly unavailable: string | null;
 }
 
+/** The day ``months`` whole calendar months before the day after ``end``: the first day of a range of exactly that many months. */
+function monthsBefore(end: IsoDate, months: number): IsoDate {
+  return shiftIsoDateByMonths(isoDateAfter(end), -months);
+}
+
 /** Where ``key`` starts when it ends on ``end``, on the calendar and before any snap; null for the whole bound. */
 function calendarStart(key: QuickRangeKey, end: IsoDate): IsoDate | null {
   switch (key) {
     case '1D':
       return end;
     case '1W':
-      return addDays(end, -7);
+      return addDays(end, -6);
     case '1M':
-      return shiftIsoDateByMonths(end, -1);
+      return monthsBefore(end, 1);
     case '3M':
-      return shiftIsoDateByMonths(end, -3);
+      return monthsBefore(end, 3);
     case '6M':
-      return shiftIsoDateByMonths(end, -6);
+      return monthsBefore(end, 6);
     case 'YTD':
       return `${end.slice(0, 4)}-01-01`;
     case '1Y':
-      return shiftIsoDateByMonths(end, -12);
+      return monthsBefore(end, 12);
     case '2Y':
-      return shiftIsoDateByMonths(end, -24);
+      return monthsBefore(end, 24);
     case '5Y':
-      return shiftIsoDateByMonths(end, -60);
+      return monthsBefore(end, 60);
     case 'Max':
       return null;
   }
@@ -50,16 +55,20 @@ function calendarStart(key: QuickRangeKey, end: IsoDate): IsoDate | null {
  * What each quick range would set, or why it cannot be served.
  *
  * A range ends on the last day the page's run can read (``bounds.max``, else
- * ``lastCompleted``, the last session that has closed) and starts that span back on the calendar: 1M
- * is one calendar month, not thirty days. The start then moves forward to the
- * next session, so a range never reaches past its label. A range whose start
- * falls before ``bounds.min`` is refused with the bound's own reason.
+ * ``lastCompleted``, the last session that has closed) and is exactly its
+ * label, both ends included: 1Y ending 2026-09-18 starts 2025-09-19, and 1M
+ * is one calendar month, not thirty days. A range is therefore a whole number
+ * of months, which the fold planners require. With ``sessionsOnly`` the start
+ * then moves forward to the next session, so a range never reaches past its
+ * label. A range whose start falls before ``bounds.min`` is refused with the
+ * bound's own reason.
  */
 export function offerQuickRanges(
   keys: readonly QuickRangeKey[],
   bounds: DateBounds,
   sessions: TradingSessions | null,
   lastCompleted: IsoDate | null,
+  sessionsOnly = true,
 ): QuickRangeOffer[] {
   const refuseAll = (reason: string): QuickRangeOffer[] => keys.map((key) => ({ key, range: null, unavailable: reason }));
   if (bounds.unknown !== null) return refuseAll(bounds.unknown);
@@ -73,7 +82,7 @@ export function offerQuickRanges(
     const start = calendarStart(key, end) ?? bounds.min;
     if (start === null) return refuse('This page has no first day to start from.');
     if (!sessions.covers(start)) return refuse(`The trading calendar starts at ${sessions.from}.`);
-    const from = sessions.onOrAfter(start);
+    const from = sessionsOnly ? sessions.onOrAfter(start) : start;
     if (from === null || from > end) return refuse(`No trading session between ${start} and ${end}.`);
     if (bounds.min !== null && from < bounds.min) return refuse(bounds.minReason ?? `The first day is ${bounds.min}.`);
     return { key, range: { from, to: end }, unavailable: null };
