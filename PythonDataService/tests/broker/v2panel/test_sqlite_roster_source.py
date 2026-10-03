@@ -694,6 +694,11 @@ async def test_activated_catalog_never_scans_large_legacy_set(
     assert [row.strategy_instance_id for row in result] == ["active-spy"]
 
 
+async def _no_published_pass(_strategy_instance_id: str) -> None:
+    """The stand-in authority has published no account pass (#2839)."""
+    return None
+
+
 async def _resolved_account(_broker: str, account_id: str) -> str:
     return account_id
 
@@ -821,7 +826,10 @@ async def test_panel_evidence_retries_status_revision_race_with_verified_zero_ec
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = _Repository()
-    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository)
+    facade = SimpleNamespace(
+        account_id="paper-account", account_mode="paper", repository=repository,
+        published_pass=_no_published_pass,
+    )
     snapshot = replace(
         _economic_rollup_map("paper-account", ["active-spy"])["active-spy"],
         session_open_ms=None,
@@ -834,7 +842,7 @@ async def test_panel_evidence_retries_status_revision_race_with_verified_zero_ec
             assert received_facade is facade
             return cls()
 
-        def bot_snapshot(self, strategy_instance_id: str) -> SimpleNamespace:
+        def bot_snapshot(self, strategy_instance_id: str, *, published_pass: None) -> SimpleNamespace:
             return SimpleNamespace(
                 account_id="paper-account",
                 strategy_instance_id=strategy_instance_id,
@@ -1269,14 +1277,17 @@ async def test_panel_evidence_raises_bot_not_found_for_an_absent_projection(
     a SQLite authority that was already healthy.
     """
     repository = _Repository()
-    facade = SimpleNamespace(account_id="paper-account", account_mode="paper", repository=repository)
+    facade = SimpleNamespace(
+        account_id="paper-account", account_mode="paper", repository=repository,
+        published_pass=_no_published_pass,
+    )
 
     class _CustodyReader:
         @classmethod
         def from_facade(cls, _received: SimpleNamespace) -> _CustodyReader:
             return cls()
 
-        def bot_snapshot(self, _strategy_instance_id: str) -> None:
+        def bot_snapshot(self, _strategy_instance_id: str, *, published_pass: None) -> None:
             return None
 
         def close(self) -> None:

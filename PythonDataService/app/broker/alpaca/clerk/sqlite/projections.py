@@ -7,6 +7,7 @@ log read and uses a keyset-bounded immutable sequence window.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -54,6 +55,7 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     TimelinePage,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
+    PublishedPass,
     RecoveryPolicyContext,
     build_projection_guidance,
     build_recovery_catalog,
@@ -240,6 +242,37 @@ def _log_unreadable_once(row: Mapping[str, Any]) -> None:
     )
 
 
+async def read_recovery_context(
+    facade: SqliteAlpacaClerkFacade, *, strategy_instance_id: str | None
+) -> RecoveryPolicyContext | None:
+    """One scope's recovery context, read as a presentation and a commit both read it (#2839).
+
+    The Clerk's latest published pass is read first, then the snapshot. The
+    bot's newest custody transition in that snapshot is therefore no older
+    than the read of the pass, so a transition the pass did not see is always
+    in it and the safe-flatten gate refuses the pass. An account-scoped
+    context reads no pass.
+
+    The pass is read on the event loop, under the intake lock; the snapshot
+    is blocking SQLite work and runs off it. ``None`` for a bot this
+    authority does not carry.
+    """
+    published = (
+        None if strategy_instance_id is None else await facade.published_pass(strategy_instance_id)
+    )
+
+    def read() -> RecoveryPolicyContext | None:
+        reader = SqliteClerkProjectionReader.from_facade(facade)
+        try:
+            return reader.recovery_context(
+                strategy_instance_id=strategy_instance_id, published_pass=published
+            )
+        finally:
+            reader.close()
+
+    return await asyncio.to_thread(read)
+
+
 class SqliteClerkProjectionReader:
     """One reusable read-only connection over an already-verified authority.
 
@@ -376,7 +409,16 @@ class SqliteClerkProjectionReader:
         strategy_instance_id: str,
         *,
         operation_limit: int = DEFAULT_OPERATION_LIMIT,
+        published_pass: PublishedPass | None = None,
     ) -> ClerkProjection | None:
+        """One bot's fold projection, with the recovery catalog its page presents.
+
+        ``published_pass`` is the Clerk's latest published pass for this bot
+        (``SqliteAlpacaClerkFacade.published_pass``), read before this call
+        as :func:`read_recovery_context` reads it: the catalog's safe-flatten
+        gate may rest on it (#2839). Without one the gate accepts a Reconcile
+        now receipt only.
+        """
         operation_limit = projection_helpers.bounded_limit(
             operation_limit,
             maximum=MAX_OPERATION_LIMIT,
@@ -392,6 +434,7 @@ class SqliteClerkProjectionReader:
         return self._snapshot(
             strategy_instance_id=strategy_instance_id,
             operation_limit=operation_limit,
+            published_pass=published_pass,
         )
 
     def _snapshot(
@@ -399,6 +442,7 @@ class SqliteClerkProjectionReader:
         *,
         strategy_instance_id: str | None,
         operation_limit: int,
+        published_pass: PublishedPass | None = None,
     ) -> ClerkProjection:
         operation_limit = projection_helpers.bounded_limit(
             operation_limit,
@@ -412,6 +456,7 @@ class SqliteClerkProjectionReader:
                 strategy_instance_id=strategy_instance_id,
                 control_revision=meta["control_revision"],
                 now_ms=now_ms,
+                published_pass=published_pass,
             )
             operations = self._operations(strategy_instance_id, operation_limit)
             working_order_refs = (
@@ -455,7 +500,9 @@ class SqliteClerkProjectionReader:
         self,
         *,
         strategy_instance_id: str | None,
+        published_pass: PublishedPass | None = None,
     ) -> RecoveryPolicyContext | None:
+        """The recovery policy's context for one scope; ``published_pass`` as for :meth:`bot_snapshot`."""
         now_ms = self._clock()
         with self._read_transaction():
             self._verify_identity()
@@ -471,6 +518,7 @@ class SqliteClerkProjectionReader:
                 strategy_instance_id=strategy_instance_id,
                 control_revision=meta["control_revision"],
                 now_ms=now_ms,
+                published_pass=published_pass,
             )
 
     def _policy_context(
@@ -479,7 +527,16 @@ class SqliteClerkProjectionReader:
         strategy_instance_id: str | None,
         control_revision: int,
         now_ms: int,
+        published_pass: PublishedPass | None,
     ) -> RecoveryPolicyContext:
+        # The bot's newest custody transition is read only beside a pass, the
+        # one thing it is compared with (#2839): a catalog read of every bot
+        # hands none and pays for no extra query.
+        subject_custody_sequence = (
+            None
+            if published_pass is None or strategy_instance_id is None
+            else reads.last_custody_sequence(self._conn, strategy_instance_id)
+        )
         return RecoveryPolicyContext(
             account_id=self._account_id,
             strategy_instance_id=strategy_instance_id,
@@ -499,6 +556,8 @@ class SqliteClerkProjectionReader:
                 now_ms,
                 account_wide_only=True,
             ),
+            published_pass=None if strategy_instance_id is None else published_pass,
+            subject_custody_sequence=subject_custody_sequence,
         )
 
     def timeline_page(

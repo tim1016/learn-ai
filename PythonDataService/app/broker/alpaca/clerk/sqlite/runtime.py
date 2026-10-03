@@ -131,6 +131,7 @@ from app.broker.alpaca.clerk.sqlite.models import (
 )
 from app.broker.alpaca.clerk.sqlite.order_evidence import (
     is_working_order,
+    trade_port_folds_simulated_evidence,
     unresolved_order_refs,
     working_order_refs,
 )
@@ -141,7 +142,11 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     reconcile_account as reconcile_sqlite_account,
 )
-from app.broker.alpaca.clerk.sqlite.recovery_policy import SWEEP_LIVENESS_BOUND_MS, RecoveryPolicyContext
+from app.broker.alpaca.clerk.sqlite.recovery_policy import (
+    SWEEP_LIVENESS_BOUND_MS,
+    PublishedPass,
+    RecoveryPolicyContext,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.residue_discharge import (
     ResidueDischargeReceipt,
@@ -1625,14 +1630,51 @@ class SqliteAlpacaClerkFacade:
         """
         async with self._intake:
             published = self._last_published
-            if (
-                published is None
-                or published.cut is None
-                or self._repo.clock() - published.observed_at_ms > SWEEP_LIVENESS_BOUND_MS
-                or not self.reconciliation_covers(published.cut, strategy_instance_id)
-            ):
+            return None if published is None else self._published_proof(published, strategy_instance_id)
+
+    async def published_pass(self, strategy_instance_id: str) -> PublishedPass | None:
+        """The latest published pass, as an operator's Flatten gate may read it for one bot (#2839).
+
+        The same pass under the same tests as :meth:`published_custody`:
+        ``vouches`` is that proof standing and able to say what the bot holds.
+        Its time is the pass's own -- when its verdict was published -- never
+        the moment this value or that proof was built.
+
+        ``None`` before any pass reached a verdict. ``None`` too on an
+        authority whose trade port fills inside ``submit`` (a Dry Run's, a
+        Shadow's): its Flatten is not checked against an account as it is sent
+        (``exit_resolution._send_is_checked_against_the_account``), and only
+        that check lets a gate accept the Clerk's own pass, so there the gate
+        keeps asking for a Reconcile now.
+        """
+        if trade_port_folds_simulated_evidence(self._trade):
+            return None
+        async with self._intake:
+            published = self._last_published
+            if published is None or published.cut is None:
                 return None
-            return self._proof(strategy_instance_id, published.result)
+            proof = self._published_proof(published, strategy_instance_id)
+            return PublishedPass(
+                vouches=proof is not None and not proof.unprovable,
+                observed_at_ms=published.observed_at_ms,
+                through_sequence=published.cut.after_sequence,
+            )
+
+    def _published_proof(
+        self, published: _PublishedReconciliation, strategy_instance_id: str
+    ) -> InstanceCustodyProof | None:
+        """``published``'s proof of one bot, or ``None`` when that pass cannot stand for it.
+
+        The tests :meth:`published_custody` and :meth:`published_pass` share.
+        Read under the intake lock.
+        """
+        if (
+            published.cut is None
+            or self._repo.clock() - published.observed_at_ms > SWEEP_LIVENESS_BOUND_MS
+            or not self.reconciliation_covers(published.cut, strategy_instance_id)
+        ):
+            return None
+        return self._proof(strategy_instance_id, published.result)
 
     async def custody_snapshot(self, strategy_instance_id: str) -> ClerkCustodySnapshot:
         await self._reconcile()

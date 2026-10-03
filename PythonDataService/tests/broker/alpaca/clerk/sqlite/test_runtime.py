@@ -26,7 +26,8 @@ from app.broker.alpaca.clerk.sqlite.external_orders import (
     record_unfoldable_broker_order,
 )
 from app.broker.alpaca.clerk.sqlite.models import EffectOperationResource
-from app.broker.alpaca.clerk.sqlite.reconcile import ReconciliationLockOrderError
+from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult, ReconciliationLockOrderError
+from app.broker.alpaca.clerk.sqlite.recovery_policy import SWEEP_LIVENESS_BOUND_MS, PublishedPass
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import (
     ReentrantAsyncLock,
@@ -41,6 +42,7 @@ from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_acti
 from app.services.bot_carryover import configuration_hash, immutable_configuration_payload
 from app.services.strategy_validation_manifest import strategy_registry_seeds
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
+from tests.broker.alpaca.clerk.sqlite.conftest import _TestClock
 
 # #2596: these ENTERs run on the default clock; keep it inside a session.
 pytestmark = pytest.mark.usefixtures("wall_clock_in_session")
@@ -346,6 +348,121 @@ async def test_published_custody_covers_a_bot_that_moved_before_the_passs_final_
 
     assert await facade.published_custody("sid-1") is not None
     repo.close()
+
+
+_PASS_AT_MS = 1_700_060_400_000
+
+
+async def test_published_pass_is_dated_when_the_pass_ran_never_when_it_is_read(tmp_path: Path) -> None:
+    """#2839: an operator's Flatten gate ages the Clerk's pass from the pass itself.
+
+    Twenty seconds after the pass, the same pass is read again: it still
+    carries the pass's own time and the ledger point it saw through, while a
+    custody proof built from it is dated at the read. A gate that aged the
+    proof would never see a pass grow old.
+    """
+    clock = _TestClock(_PASS_AT_MS)
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path, clock=clock)
+    broker = _CountingBroker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    _finished_bot(repo, "sid-1")
+    assert await facade.published_pass("sid-1") is None, "no pass has run"
+
+    await facade.reconcile_once()
+    seen_through = repo.last_custody_sequence()
+    after_pass = broker.read_calls
+    clock.advance(20_000)
+    published = await facade.published_pass("sid-1")
+    proof = await facade.published_custody("sid-1")
+
+    assert published == PublishedPass(vouches=True, observed_at_ms=_PASS_AT_MS, through_sequence=seen_through)
+    assert proof is not None and proof.observed_at_ms == _PASS_AT_MS + 20_000
+    assert broker.read_calls == after_pass, "reading the pass reached the broker port"
+    repo.close()
+
+
+async def test_published_pass_stops_vouching_for_a_bot_that_moved_or_once_it_is_old(tmp_path: Path) -> None:
+    """A pass vouches for a bot only while it is recent and saw the bot's every record (#2839)."""
+    from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
+
+    clock = _TestClock(_PASS_AT_MS)
+    repo = ClerkSqliteRepository.initialize(
+        account_id="PA-TEST", artifacts_root=tmp_path, clock=clock, lease_ttl_ms=600_000
+    )
+    broker = _CountingBroker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    _finished_bot(repo, "moved")
+    _finished_bot(repo, "quiet")
+    await facade.reconcile_once()
+    seen_through = repo.last_custody_sequence()
+
+    submit_start_run(repo, account_id="PA-TEST", strategy_instance_id="moved", lifecycle_run_id="run-again")
+
+    # The moved bot's pass is the same pass, with the same time: it no longer vouches.
+    assert await facade.published_pass("moved") == PublishedPass(
+        vouches=False, observed_at_ms=_PASS_AT_MS, through_sequence=seen_through
+    )
+    quiet = await facade.published_pass("quiet")
+    assert quiet is not None and quiet.vouches
+
+    clock.advance(SWEEP_LIVENESS_BOUND_MS + 1)
+
+    assert await facade.published_pass("quiet") == PublishedPass(
+        vouches=False, observed_at_ms=_PASS_AT_MS, through_sequence=seen_through
+    )
+    repo.close()
+
+
+@pytest.mark.parametrize(
+    ("verdict", "intent_unresolved"),
+    [
+        pytest.param("position_drift", False, id="the-account-is-not-clean"),
+        pytest.param("clean", True, id="an-order-of-the-bots-is-unresolved"),
+    ],
+)
+async def test_published_pass_does_not_vouch_when_its_proof_cannot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, verdict: str, intent_unresolved: bool
+) -> None:
+    """The pass vouches exactly when the custody proof read from it can (``InstanceCustodyProof.unprovable``)."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _CountingBroker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    _finished_bot(repo, "sid-1")
+    if intent_unresolved:
+        monkeypatch.setattr(facade, "_unresolved_order_refs", lambda sid: ("intent:enter:1",))
+    facade.publish_sweep_reconciliation(
+        AccountReconciliationResult(verdict=verdict, through_sequence=repo.last_custody_sequence())
+    )
+
+    published = await facade.published_pass("sid-1")
+    proof = await facade.published_custody("sid-1")
+
+    assert published is not None and not published.vouches
+    assert proof is not None and proof.unprovable
+    repo.close()
+
+
+async def test_published_pass_is_never_read_where_a_flatten_is_not_checked_as_it_is_sent(tmp_path: Path) -> None:
+    """A Dry Run's or a Shadow's port fills inside ``submit``: no account is read as its Flatten goes out (#2839).
+
+    Only that read lets a Flatten gate accept the Clerk's own pass, so such an
+    authority hands its gate none -- though the same pass still proves the
+    bot's custody for a stop.
+    """
+
+    class _NoSubmitBroker(_CountingBroker):
+        submission_response_is_authoritative_evidence = True
+
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _NoSubmitBroker()
+    facade = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    _finished_bot(repo, "sid-1")
+    await facade.reconcile_once()
+
+    assert await facade.published_custody("sid-1") is not None
+    assert await facade.published_pass("sid-1") is None
+    repo.close()
+
 
 async def test_direct_facade_construction_guards_raw_broker_ports(tmp_path: Path) -> None:
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)

@@ -151,6 +151,28 @@ def control_meta_snapshot(conn: sqlite3.Connection) -> ControlMetaSnapshot:
     return ControlMetaSnapshot(**dict(row))
 
 
+def last_custody_sequence(conn: sqlite3.Connection, strategy_instance_id: str | None = None) -> int:
+    """The newest custody transition's sequence, the ledger's or one bot's; 0 when none.
+
+    Per bot it reads the ``(strategy_instance_id, sequence)`` index. Every
+    transition that moves a bot's orders, effects, fills or runs carries
+    its ``strategy_instance_id``; the untagged ones are account-level
+    (uncertainties, fee evidence, budgets, risk limits) or belong to
+    manual and outside orders, which are never a bot's custody.
+    """
+    if strategy_instance_id is None:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM custody_transitions"
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM custody_transitions "
+            "WHERE strategy_instance_id = ?",
+            (strategy_instance_id,),
+        ).fetchone()
+    return int(row["sequence"])
+
+
 def strategy_instances(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT strategy_instance_id, symbol, config_hash, created_at_ms, retired_at_ms "

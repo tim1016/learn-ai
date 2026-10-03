@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.sqlite.projections import (
     SqliteClerkProjectionReader,
     timeline_sequences,
 )
+from app.broker.alpaca.clerk.sqlite.recovery_policy import PublishedPass
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.uncertainty import raise_uncertainty
 from app.broker.alpaca.marketable_limit import ExtendedHoursAllowances
@@ -1070,3 +1071,31 @@ def test_related_account_and_bot_reads_share_one_revision(tmp_path: Path) -> Non
     finally:
         reader.close()
         repo.close()
+
+
+def test_a_published_pass_is_read_beside_the_bots_own_newest_custody_record(tmp_path: Path) -> None:
+    """#2839: the Flatten gate compares the Clerk's pass with this bot's newest record, read in one snapshot.
+
+    Another bot's later record never ages the pass for this one, and the
+    account's own actions are never judged against a pass.
+    """
+    repo = _repository(tmp_path, _Clock())
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=SID, lifecycle_run_id="run-1")
+    bots_newest = repo.last_custody_sequence(SID)
+    submit_start_run(repo, account_id=ACCOUNT_ID, strategy_instance_id=OTHER_SID, lifecycle_run_id="run-2")
+    ledgers_newest = repo.last_custody_sequence()
+    published = PublishedPass(vouches=True, observed_at_ms=1_700_000_000_000, through_sequence=bots_newest)
+    reader = SqliteClerkProjectionReader.from_repository(repo)
+    try:
+        bot = reader.recovery_context(strategy_instance_id=SID, published_pass=published)
+        account = reader.recovery_context(strategy_instance_id=None, published_pass=published)
+        unread = reader.recovery_context(strategy_instance_id=SID)
+    finally:
+        reader.close()
+        repo.close()
+
+    assert bot is not None and account is not None and unread is not None
+    assert 0 < bots_newest < ledgers_newest
+    assert (bot.published_pass, bot.subject_custody_sequence) == (published, bots_newest)
+    assert (account.published_pass, account.subject_custody_sequence) == (None, None)
+    assert (unread.published_pass, unread.subject_custody_sequence) == (None, None)

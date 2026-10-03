@@ -96,6 +96,28 @@ class AuthorityRecoveryProof:
 
 
 @dataclass(frozen=True)
+class PublishedPass:
+    """The Clerk's latest published check of the account, as one bot's Flatten gate reads it (#2839).
+
+    ``vouches`` is whether that pass proves what the bot holds: it is recent,
+    it saw the bot's every custody transition, it found the account clean,
+    and no order of the bot's is working or unresolved
+    (``SqliteAlpacaClerkFacade.published_pass``).
+
+    ``observed_at_ms`` is the pass's own time: when its verdict was published
+    as the pass completed. It is never when this value, or a proof read from
+    the pass, was built -- a pass is read many times after it ran.
+
+    ``through_sequence`` is the newest custody transition the pass's final
+    broker comparison saw (``AccountReconciliationResult.through_sequence``).
+    """
+
+    vouches: bool
+    observed_at_ms: int
+    through_sequence: int
+
+
+@dataclass(frozen=True)
 class RecoveryPolicyContext:
     account_id: str
     strategy_instance_id: str | None
@@ -112,6 +134,12 @@ class RecoveryPolicyContext:
     latest_account_reconciliation: ProjectedReconciliation | None
     execution_coverage_conflicts: tuple[ProjectedExecutionCoverageConflict, ...] = ()
     recovery_proof: AuthorityRecoveryProof = AuthorityRecoveryProof()
+    # The Clerk's latest published pass, read before this context's snapshot
+    # was taken, and the bot's newest custody transition read inside it
+    # (#2839). ``None`` for an account-scoped context and wherever no pass was
+    # read: the safe-flatten gate then accepts a Reconcile now receipt only.
+    published_pass: PublishedPass | None = None
+    subject_custody_sequence: int | None = None
 
 
 @dataclass(frozen=True)

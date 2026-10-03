@@ -27,7 +27,10 @@ from app.broker.alpaca.clerk.sqlite.models import (
 )
 from app.broker.alpaca.clerk.sqlite.projection_errors import ProjectionReadError
 from app.broker.alpaca.clerk.sqlite.projection_models import ClerkProjection
-from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
+from app.broker.alpaca.clerk.sqlite.projections import (
+    SqliteClerkProjectionReader,
+    read_recovery_context,
+)
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     RecoveryExecutionError,
     RecoveryExecutionRequest,
@@ -406,6 +409,10 @@ async def read_sqlite_panel_evidence(
 
     ``run`` also reads that run's fills and activity, at the same revision:
     the bot page summarizes its run and lists its fills (#2794).
+
+    The Clerk's latest published pass is read first, before any attempt's
+    snapshot, exactly as a commit reads it (``read_recovery_context``): the
+    Flatten this panel presents may rest on it (#2839).
     """
     facade = facade or active_sqlite_facade(broker)
     if facade is None:
@@ -413,13 +420,16 @@ async def read_sqlite_panel_evidence(
     if facade.account_id != account_id:
         raise ValueError("Requested account is not the active SQLite authority")
     session_window = current_trading_session_window(now_ms)
+    published_pass = await facade.published_pass(strategy_instance_id)
 
     def read_once() -> SqlitePanelEvidence | None:
         for _attempt in _spaced_attempts():
             custody_reader = SqliteClerkProjectionReader.from_facade(facade)
             economic_reader = SqliteEconomicProjectionReader.from_repository(facade.repository)
             try:
-                projection = custody_reader.bot_snapshot(strategy_instance_id)
+                projection = custody_reader.bot_snapshot(
+                    strategy_instance_id, published_pass=published_pass
+                )
                 economics = economic_reader.bot_session_economic_projection(
                     strategy_instance_id,
                     session_window=session_window,
@@ -1010,16 +1020,10 @@ async def execute_sqlite_panel_action(
         raise
 
     async def current_context():
-        def read_context():
-            reader = SqliteClerkProjectionReader.from_facade(facade)
-            try:
-                return reader.recovery_context(
-                    strategy_instance_id=strategy_instance_id
-                )
-            finally:
-                reader.close()
-
-        context = await asyncio.to_thread(read_context)
+        # Read afresh on every call, the Clerk's published pass included: a
+        # Flatten presented under a pass is committed only while that pass
+        # still stands (#2839).
+        context = await read_recovery_context(facade, strategy_instance_id=strategy_instance_id)
         if context is None:
             raise SqlitePanelBotNotFound.for_bot(strategy_instance_id)
         return context

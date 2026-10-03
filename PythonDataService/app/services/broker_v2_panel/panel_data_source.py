@@ -557,8 +557,8 @@ async def _get_panel_with_entries_from_authority(
         render_explanation=_explanation_renderer(binding),
     )
     # An uncleanly ended bot's notices take the Clerk's own latest pass as a
-    # check of what it holds (#2826). Only such a bot asks: the read takes the
-    # intake lock, which a running bot's page has no reason to wait on.
+    # check of what it holds (#2826). Only such a bot has notices to author,
+    # so only it asks for the proof.
     outcome = panel.health.duty_outcome
     pass_proof = (
         await facade.published_custody(sid)
