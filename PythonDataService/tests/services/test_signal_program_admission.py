@@ -785,7 +785,7 @@ def test_a_seal_naming_the_default_lookback_for_a_long_period_deploy_fails_close
     assert proof.state == "UNPROVEN"
     assert "warmup requirement" in proof.explanation
     # Re-qualifying cannot repair a seal; only a new deploy seals the new lookback.
-    assert proof.next_step == "Deploy the bot again: its warmup history is now sized from its periods."
+    assert proof.next_step == "Deploy the bot again."
 
 
 @pytest.mark.parametrize("resolution_minutes", [391, 1440])

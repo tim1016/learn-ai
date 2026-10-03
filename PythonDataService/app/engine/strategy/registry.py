@@ -289,7 +289,7 @@ class SignalProgramContract:
         decision_minutes = decision_timeframe_ms_for(params, qualified_ms=self.decision_timeframe_ms) // 60_000
         return (
             f"A {decision_minutes}-minute bar is longer than a regular trading session, so these periods "
-            f"cannot be warmed up from history. Use a bar of {_regular_session_ms() // 60_000} minutes or less."
+            "cannot be warmed up from history. Use a shorter bar."
         )
 
     def _warmup_lookback_days_sized_for(self, params: StrategyParamsBase) -> int | None:

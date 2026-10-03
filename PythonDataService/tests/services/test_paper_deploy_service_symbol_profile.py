@@ -200,7 +200,7 @@ def test_deploy_refuses_a_bar_longer_than_a_regular_session(resolution_minutes: 
         ValueError,
         match=(
             rf"Invalid strategy parameters: A {resolution_minutes}-minute bar is longer than a regular trading "
-            r"session, so these periods cannot be warmed up from history\. Use a bar of 390 minutes or less\."
+            r"session, so these periods cannot be warmed up from history\. Use a shorter bar\."
         ),
     ):
         resolve_deploy_strategy_params("sma_crossover", _SYMBOL, {"resolution_minutes": resolution_minutes})

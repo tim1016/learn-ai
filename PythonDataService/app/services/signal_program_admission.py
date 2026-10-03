@@ -817,7 +817,7 @@ def _seal_checks(
             "The sealed warmup requirement no longer matches the registered contract.",
             # A seal from before #2841 names the default days for periods that
             # now resolve more; qualifying the code again cannot change a seal.
-            next_step="Deploy the bot again: its warmup history is now sized from its periods.",
+            next_step="Deploy the bot again.",
         ),
         # `parameters_match_validated_settings` is deliberately not a row here.
         # It says whether the corpus *covers* this configuration, not whether
