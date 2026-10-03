@@ -1,5 +1,5 @@
 import { NgTemplateOutlet } from '@angular/common';
-import { ChangeDetectionStrategy, Component, Directive, ElementRef, computed, inject, input, output, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, Directive, ElementRef, computed, inject, input, output, signal, viewChild } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
 import type { AccountWorkspaceLink } from '../../../../fleet/account-workspace';
@@ -21,11 +21,10 @@ interface ToolbarGroup {
   readonly entries: readonly ToolbarActionView[];
 }
 
-/** One action as the bar or More draws it: whether its name shows, and whether it sits under More. */
+/** One action as the bar or More draws it, and whether its name shows. */
 interface ActionControlContext {
   readonly $implicit: ToolbarActionView;
   readonly labelled: boolean;
-  readonly inMore: boolean;
 }
 
 /** Types the toolbar's one action template, which the bar and More share, so it is checked like the rest. */
@@ -58,12 +57,12 @@ const ICONS: Readonly<Record<ToolbarActionId, string>> = {
 /** Money moves keep their words, whatever the Labels setting (#2794 story 15). */
 const ALWAYS_LABELLED: ReadonlySet<ToolbarActionId> = new Set(['stop_bot_decisions', 'prepare_safe_flatten']);
 
-/** How many icon-only buttons the bar shows before the rest move under More:
- * at 1440 px the workspace header fits this many beside the bot's name, its
- * figures, Stop and Sell. Named buttons always stay on the bar. */
-const MAX_ICON_BUTTONS = 5;
-
-const GROUP_ORDER: readonly ToolbarGroupKey[] = ['bot', 'fix', 'inspect'];
+/** Bot's and Fix's actions sit on the bar; Inspect's wait under More. A
+ * place follows the action's group alone, never which other actions are
+ * offered, so a poll cannot move a button -- and a confirmation open on it --
+ * between the bar and More. */
+const BAR_GROUPS: readonly ToolbarGroupKey[] = ['bot', 'fix'];
+const MORE_GROUP: ToolbarGroupKey = 'inspect';
 
 const AVAILABILITY_WORDS: Readonly<Record<ToolbarActionView['availability'], string>> = {
   available: 'Available',
@@ -137,15 +136,14 @@ function storedLabels(): boolean {
 /**
  * The bot page's toolbar (#2794 R2, R6), in the account workspace's header:
  * every action the owner can take on this bot right now, as icon buttons in
- * three unlabelled groups -- Bot, Fix, Inspect -- in the backend's order,
- * with its plain names, tones and primary.
+ * untitled groups -- Bot, Fix -- in the backend's order, with its plain
+ * names, tones and primary. Inspect's actions wait under More, named, with
+ * All actions -- every action, its availability, the backend's reason and its
+ * system name -- and the Labels setting, which names every icon. Stop and Sell
+ * are always named.
  *
  * An action the backend says is not needed stays out of the row; a needed
- * one it blocks shows disabled with its reason. Past `MAX_ICON_BUTTONS` icons
- * the rest wait under More, named, with All actions -- every action, its
- * availability, the backend's reason and its system name -- and the Labels
- * setting, which names every icon. Stop and Sell are always named and always
- * on the bar.
+ * one it blocks shows disabled with its reason.
  *
  * Custody actions run through the shared action button, so their
  * confirmations and blockers are the ones the backend presented; Deploy
@@ -160,7 +158,7 @@ function storedLabels(): boolean {
   styleUrl: './bot-toolbar.component.scss',
   host: {
     '(document:mousedown)': 'onDocumentMousedown($event)',
-    '(keydown.escape)': 'closeMenus()',
+    '(keydown.escape)': 'onEscape()',
   },
 })
 export class BotToolbarComponent {
@@ -184,37 +182,28 @@ export class BotToolbarComponent {
   protected readonly availabilityWords = AVAILABILITY_WORDS;
 
   protected readonly entries = computed(() => this.panel().bot_page?.toolbar ?? legacyToolbar(this.panel()));
+  private readonly offered = computed(() => this.entries().filter((entry) => entry.availability !== 'not_needed'));
 
-  /** The offered actions split between the bar and More: named ones always on the bar, icons up to the cap, in group order. */
-  private readonly placement = computed(() => {
-    const offered = GROUP_ORDER.flatMap((key) =>
-      this.entries().filter((entry) => entry.group === key && entry.availability !== 'not_needed'));
-    const onBar = new Set<ToolbarActionId>();
-    const more: ToolbarActionView[] = [];
-    let icons = 0;
-    for (const entry of offered) {
-      if (this.showLabel(entry)) onBar.add(entry.action_id);
-      else if (icons < MAX_ICON_BUTTONS) {
-        icons += 1;
-        onBar.add(entry.action_id);
-      } else more.push(entry);
-    }
-    return { offered, onBar, more };
-  });
-
-  protected readonly groups = computed((): readonly ToolbarGroup[] => {
-    const { offered, onBar } = this.placement();
-    return GROUP_ORDER
+  protected readonly groups = computed((): readonly ToolbarGroup[] =>
+    BAR_GROUPS
       .map((key) => ({
         key,
         label: GROUP_LABELS[key],
-        entries: offered.filter((entry) => entry.group === key && onBar.has(entry.action_id)),
+        entries: this.offered().filter((entry) => entry.group === key),
       }))
-      .filter((group) => group.entries.length > 0);
+      .filter((group) => group.entries.length > 0),
+  );
+
+  /** Inspect's offered actions, named, under More. */
+  protected readonly more = computed(() => this.offered().filter((entry) => entry.group === MORE_GROUP));
+
+  /** More's name says how many actions wait in it, not only its icon's count. */
+  protected readonly moreLabel = computed(() => {
+    const count = this.more().length;
+    return count === 0 ? 'More actions' : `More actions, ${count} not on the bar`;
   });
 
-  /** The offered actions with no room on the bar, named, under More. */
-  protected readonly more = computed(() => this.placement().more);
+  private readonly moreToggle = viewChild.required<ElementRef<HTMLButtonElement>>('moreToggle');
 
   private readonly actionsById = computed(
     () => new Map(this.panel().actions.map((action) => [action.action_id as string, action])),
@@ -239,22 +228,24 @@ export class BotToolbarComponent {
     return null;
   }
 
-  /** Change end and Build proof open the host's panels. */
+  /** Change end and Build proof open the host's panels; More closes behind them. */
   protected open(entry: ToolbarActionView): void {
     if (entry.availability !== 'available') return;
+    this.moreOpen.set(false);
     if (entry.action_id === 'change_end') this.changeEnd.emit();
     else if (entry.action_id === 'build_proof') this.buildProof.emit();
   }
 
-  /** An action taken from More closes it; one that asks to confirm has done so by now. */
+  /** An action taken closes More; one that asks to confirm has done so by now. */
   protected onTriggered(trigger: PanelActionTrigger): void {
     this.moreOpen.set(false);
     this.actionRequested.emit(trigger);
   }
 
-  protected openFromMore(entry: ToolbarActionView): void {
-    this.moreOpen.set(false);
-    this.open(entry);
+  /** More and All actions are never open together: one would cover the other's confirmations. */
+  protected toggleMore(): void {
+    this.allActionsOpen.set(false);
+    this.moreOpen.set(!this.moreOpen());
   }
 
   protected openAllActions(): void {
@@ -265,6 +256,13 @@ export class BotToolbarComponent {
   protected closeMenus(): void {
     this.moreOpen.set(false);
     this.allActionsOpen.set(false);
+  }
+
+  /** Escape closes More or All actions and puts the keyboard back on More. */
+  protected onEscape(): void {
+    if (!this.moreOpen() && !this.allActionsOpen()) return;
+    this.closeMenus();
+    this.moreToggle().nativeElement.focus();
   }
 
   /** A press outside the toolbar closes More and All actions; mousedown, so one press cannot both close and reopen one. */

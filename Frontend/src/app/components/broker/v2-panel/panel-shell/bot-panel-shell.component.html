@@ -35,7 +35,7 @@
       <!-- The bot's name, figures and actions: drawn in the account workspace's
            header when there is one (WorkspaceHeaderSlot), here otherwise. -->
       <ng-template #pageControls>
-        <section class="bot-page__controls" aria-label="This bot">
+        <section class="bot-page__controls" aria-label="This bot" [class.is-stale]="liveStall() !== null">
           <app-bot-page-header [panel]="panelData" [backRoute]="backRoute()" [backLabel]="backLabel" />
           <app-bot-toolbar
             [panel]="panelData"

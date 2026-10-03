@@ -2,6 +2,8 @@ import { fireEvent, render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import axe from 'axe-core';
 import { HttpErrorResponse } from '@angular/common/http';
+import { NgTemplateOutlet } from '@angular/common';
+import { Component, inject } from '@angular/core';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { MessageService } from 'primeng/api';
@@ -675,6 +677,24 @@ function fakeActionResult(overrides: Partial<PanelActionResult> = {}): PanelActi
 
 /** Renders the shell with a single unconfirmed command (Reconcile now) in its
  * header, so the fence tests only need to click one button. */
+/** The workspace's header as production gives it to the bot page: the slot's controls drawn above the page. */
+@Component({
+  selector: 'app-header-slot-host',
+  imports: [BotPanelShellComponent, NgTemplateOutlet],
+  providers: [WorkspaceHeaderSlot],
+  template: `
+    <header>
+      @if (slot.content(); as controls) {
+        <ng-container [ngTemplateOutlet]="controls" />
+      }
+    </header>
+    <app-bot-panel-shell broker="alpaca" clerkId="clrk_spec" accountId="DUM284968" sid="sid-001" />
+  `,
+})
+class HeaderSlotHostComponent {
+  protected readonly slot = inject(WorkspaceHeaderSlot);
+}
+
 async function renderShell(
   overrides: {
     directory?: FleetDirectoryDouble;
@@ -802,6 +822,8 @@ describe('BotPanelShellComponent', () => {
         { exact: false },
       )).toBeTruthy();
       expect(fixture.nativeElement.classList.contains('is-stale')).toBe(true);
+      // The bot's status and figures, drawn in the workspace header, go grey too.
+      expect(fixture.nativeElement.querySelector('.bot-page__controls').classList.contains('is-stale')).toBe(true);
       await showTape(fixture);
       expect(screen.getByRole('article', { name: 'Market tape for QQQ' })).toBeTruthy();
       expect(screen.getByRole('button', { name: 'Check against Alpaca' })).toBeTruthy();
@@ -812,6 +834,7 @@ describe('BotPanelShellComponent', () => {
 
       expect(screen.queryByRole('alert', { name: 'The live panel stopped updating.' })).toBeNull();
       expect(fixture.nativeElement.classList.contains('is-stale')).toBe(false);
+      expect(fixture.nativeElement.querySelector('.bot-page__controls').classList.contains('is-stale')).toBe(false);
     });
 
     it('keeps the action receipt when the post-action refresh finds the producer stalled', async () => {
@@ -1045,6 +1068,9 @@ describe('BotPanelShellComponent', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
+    // Inspect's actions wait under More.
+    fireEvent.click(screen.getByRole('button', { name: /^More actions/ }));
+    fixture.detectChanges();
     fireEvent.click(screen.getByRole('button', { name: 'Custody timeline' }));
 
     const queryParams = { timelineBot: 'sid-001', timelineUncertaintyId: 'uncertainty:17' };
@@ -1649,6 +1675,33 @@ describe('BotPanelShellComponent', () => {
       .toEqual(['bot-board__money', 'bot-board__orders', 'bot-board__setup']);
     expect(panels('.bot-board__column:last-child > .bot-board__panel'))
       .toEqual(['bot-board__decisions', 'bot-board__health']);
+  });
+
+  it('runs an action from the controls it drew in the workspace header', async () => {
+    const service = {
+      ...mockService,
+      getLiveSnapshot: vi.fn().mockResolvedValue(liveSnapshot({
+        ...PANEL, actions: [RECONCILE_ACTION], primary_action: 'reconcile_now',
+      })),
+    };
+    const { fixture, container } = await render(HeaderSlotHostComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: BrokerV2PanelService, useValue: service },
+        { provide: BrokersService, useValue: brokersMock },
+        { provide: MessageService, useValue: messageService },
+      ],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const header = container.querySelector('header');
+    if (!(header instanceof HTMLElement)) throw new Error('the host header did not render');
+    await userEvent.click(await within(header).findByRole('button', { name: 'Check against Alpaca' }));
+    await fixture.whenStable();
+
+    expect(service.runBotAction).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('app-bot-panel-shell app-bot-toolbar')).toBeNull();
   });
 
   it('hands its name, figures and actions to the workspace header, and takes them back when it goes', async () => {

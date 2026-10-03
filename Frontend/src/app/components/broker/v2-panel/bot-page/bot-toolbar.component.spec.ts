@@ -65,8 +65,9 @@ describe('BotToolbarComponent (#2794)', () => {
     await renderToolbar(runningPanel());
 
     const toolbar = screen.getByRole('toolbar', { name: 'Actions for this bot' });
+    // Inspect's actions wait under More.
     expect(within(toolbar).getAllByRole('group').map((group) => group.getAttribute('aria-label')))
-      .toEqual(['Bot', 'Fix', 'Inspect']);
+      .toEqual(['Bot', 'Fix']);
     const stop = within(toolbar).getByRole('button', { name: 'Stop' });
     expect(stop.textContent?.trim()).toBe('Stop');
     // Thermo on #2794: the primary is filled, and a filled Stop stays a danger action.
@@ -87,24 +88,26 @@ describe('BotToolbarComponent (#2794)', () => {
     expect(cancel.getAttribute('title')).toContain('No working order has both a durable Clerk reference and broker identity.');
   });
 
-  it('runs an offered custody action through the presented action, and opens Build proof', async () => {
+  it('runs an offered custody action through the presented action, and opens Build proof from More', async () => {
     const user = userEvent.setup();
     const { actionRequested, buildProof } = await renderToolbar(runningPanel());
 
     await user.click(screen.getByRole('button', { name: 'Check against Alpaca' }));
-    await user.click(screen.getByRole('button', { name: 'Build proof' }));
+    await user.click(screen.getByRole('button', { name: /^More actions/ }));
+    await user.click(within(screen.getByRole('group', { name: 'More actions for this bot' })).getByRole('button', { name: 'Build proof' }));
 
     expect(actionRequested).toHaveBeenCalledWith(expect.objectContaining({
       action: expect.objectContaining({ action_id: 'reconcile_now' }),
     }));
     expect(buildProof).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('group', { name: 'More actions for this bot' })).toBeNull();
   });
 
   it('lists every action in All actions -- available, blocked or not needed -- with its reason and system name', async () => {
     const user = userEvent.setup();
     await renderToolbar(runningPanel());
 
-    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    await user.click(screen.getByRole('button', { name: /^More actions/ }));
     await user.click(screen.getByRole('button', { name: 'All actions' }));
 
     const list = screen.getByRole('region', { name: 'All actions for this bot' });
@@ -113,20 +116,28 @@ describe('BotToolbarComponent (#2794)', () => {
       expect(sell?.textContent).toContain(words);
     }
     expect(within(list).getAllByRole('listitem')).toHaveLength(6);
+
+    // More and All actions are never open together; Escape hands the keyboard back to More.
+    const more = screen.getByRole('button', { name: /^More actions/ });
+    await user.click(more);
+    expect(screen.queryByRole('region', { name: 'All actions for this bot' })).toBeNull();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('group', { name: 'More actions for this bot' })).toBeNull();
+    expect(document.activeElement).toBe(more);
   });
 
   it('names every icon once Labels is on, and remembers it', async () => {
     const user = userEvent.setup();
     await renderToolbar(runningPanel());
 
-    await user.click(screen.getByRole('button', { name: 'More actions' }));
+    await user.click(screen.getByRole('button', { name: /^More actions/ }));
     await user.click(screen.getByRole('checkbox', { name: 'Labels' }));
 
     expect(screen.getByRole('button', { name: 'Check against Alpaca' }).textContent?.trim()).toBe('Check against Alpaca');
     expect(localStorage.getItem('bot-page.toolbar.labels.v1')).toBe('on');
   });
 
-  it('keeps five icons on the bar and names the rest under More; Stop and Sell always stay on the bar', async () => {
+  it('keeps every Bot and Fix action on the bar, whatever else is offered, and names Inspect’s under More', async () => {
     const user = userEvent.setup();
     const panel = runningPanel();
     await renderToolbar({
@@ -151,7 +162,7 @@ describe('BotToolbarComponent (#2794)', () => {
     expect(within(toolbar).getByRole('button', { name: 'Sell' }).textContent?.trim()).toBe('Sell');
     expect(within(toolbar).getByRole('button', { name: 'Write off missing shares' })).toBeTruthy();
     expect(within(toolbar).queryByRole('button', { name: 'Custody timeline' })).toBeNull();
-    const more = within(toolbar).getByRole('button', { name: 'More actions' });
+    const more = within(toolbar).getByRole('button', { name: 'More actions, 2 not on the bar' });
     expect(more.textContent?.trim()).toBe('2');
 
     await user.click(more);

@@ -1,5 +1,5 @@
 <!-- One action, on the bar or under More: `labelled` says whether its name shows. -->
-<ng-template #actionControl appBotToolbarAction let-entry let-labelled="labelled" let-inMore="inMore">
+<ng-template #actionControl appBotToolbarAction let-entry let-labelled="labelled">
   @let action = panelAction(entry);
   @if (action) {
     <app-panel-action-button
@@ -12,7 +12,7 @@
       [tone]="entry.tone"
       [filled]="entry.primary === true"
       [pending]="pending()"
-      (triggered)="inMore ? onTriggered($event) : actionRequested.emit($event)"
+      (triggered)="onTriggered($event)"
     />
   } @else if (opensHostPanel(entry)) {
     <!-- Change end and Build proof open the host's panels. -->
@@ -23,7 +23,7 @@
       [attr.aria-disabled]="entry.availability !== 'available'"
       [disabled]="pending()"
       [title]="entry.reason"
-      (click)="inMore ? openFromMore(entry) : open(entry)"
+      (click)="open(entry)"
     >
       <i [class]="'pi ' + icons[entry.action_id]" aria-hidden="true"></i>
       @if (labelled) { {{ entry.label }} }
@@ -58,7 +58,7 @@
       @for (entry of group.entries; track entry.action_id) {
         <ng-container
           [ngTemplateOutlet]="actionControl"
-          [ngTemplateOutletContext]="{ $implicit: entry, labelled: showLabel(entry), inMore: false }"
+          [ngTemplateOutletContext]="{ $implicit: entry, labelled: showLabel(entry) }"
         />
       }
     </div>
@@ -66,12 +66,13 @@
 
   <div class="toolbar__more">
     <button
+      #moreToggle
       type="button"
       class="toolbar__button toolbar__more-toggle"
-      aria-label="More actions"
+      [attr.aria-label]="moreLabel()"
       [title]="more().length > 0 ? more().length + ' more actions, All actions and Labels' : 'All actions and Labels'"
       [attr.aria-expanded]="moreOpen()"
-      (click)="moreOpen.set(!moreOpen())"
+      (click)="toggleMore()"
     >
       <i class="pi pi-ellipsis-h" aria-hidden="true"></i>
       @if (more().length > 0) {
@@ -86,7 +87,7 @@
             @for (entry of more(); track entry.action_id) {
               <ng-container
                 [ngTemplateOutlet]="actionControl"
-                [ngTemplateOutletContext]="{ $implicit: entry, labelled: true, inMore: true }"
+                [ngTemplateOutletContext]="{ $implicit: entry, labelled: true }"
               />
             }
           </div>

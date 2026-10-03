@@ -156,6 +156,13 @@
   filter: grayscale(0.7);
 }
 
+// The bot's status and figures in the workspace header go grey with the page.
+// The toolbar keeps its colour: a filter around it would pin its typed
+// confirmations to the header strip instead of the window.
+.bot-page__controls.is-stale app-bot-page-header {
+  filter: grayscale(0.7);
+}
+
 .loading-state {
   display: grid;
   min-height: 22rem;

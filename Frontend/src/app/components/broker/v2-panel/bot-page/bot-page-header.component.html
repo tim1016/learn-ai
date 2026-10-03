@@ -20,7 +20,7 @@
             class="bot-header__status"
             [attr.data-state]="lead.status.state"
             [attr.aria-expanded]="summaryOpen()"
-            [attr.aria-controls]="summaryId"
+            [attr.aria-controls]="summaryOpen() ? summaryId : null"
             (click)="summaryOpen.set(!summaryOpen())"
           >{{ lead.status.label }} <i class="pi pi-chevron-down" aria-hidden="true"></i></button>
           @if (summaryOpen()) {
