@@ -30,8 +30,8 @@
 
     <app-time-window-card
       [(value)]="value"
-      [availability]="availability()"
-      [legendTreatment]="legendTreatment()" />
+      [bounds]="bounds()"
+      [sessionsOnly]="sessionsOnly()" />
 
     @if (!hideSampling()) {
       <app-sampling-card
@@ -50,9 +50,7 @@
         <div
           class="advisory"
           [class.advisory--suggest]="a.kind === 'suggest'"
-          [class.advisory--warn]="a.kind === 'warn'"
           [class.advisory--bad]="a.kind === 'bad'"
-          [class.advisory--info]="a.kind === 'info'"
           role="status"
         >
           <i class="advisory__icon" [class]="a.icon" aria-hidden="true"></i>

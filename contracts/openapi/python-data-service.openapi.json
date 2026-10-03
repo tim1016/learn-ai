@@ -6960,6 +6960,27 @@
         "title": "BudgetStatementLine",
         "type": "object"
       },
+      "CalendarHoliday": {
+        "description": "A weekday the exchange is closed, anchored at 09:30 ET on that date.",
+        "properties": {
+          "date_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Date Ms",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date_ms",
+          "name"
+        ],
+        "title": "CalendarHoliday",
+        "type": "object"
+      },
       "CanaryActivationConfirmation": {
         "additionalProperties": false,
         "description": "The exact reviewed plan and its content-addressed confirmation.",
@@ -44901,6 +44922,43 @@
         "title": "TopOfBookQuote",
         "type": "object"
       },
+      "TradingCalendarWindow": {
+        "description": "The scheduled NYSE sessions in a window, oldest first.\n\nParallel arrays: session ``i`` opens at ``session_open_ms[i]`` and closes\nat ``session_close_ms[i]``. The close is the scheduled one, so a half-day\ncarries its early close.",
+        "properties": {
+          "holidays": {
+            "items": {
+              "$ref": "#/components/schemas/CalendarHoliday"
+            },
+            "title": "Holidays",
+            "type": "array"
+          },
+          "session_close_ms": {
+            "items": {
+              "maximum": 253402300799999.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "title": "Session Close Ms",
+            "type": "array"
+          },
+          "session_open_ms": {
+            "items": {
+              "maximum": 253402300799999.0,
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "title": "Session Open Ms",
+            "type": "array"
+          }
+        },
+        "required": [
+          "session_open_ms",
+          "session_close_ms",
+          "holidays"
+        ],
+        "title": "TradingCalendarWindow",
+        "type": "object"
+      },
       "TrainingCandidateResult": {
         "additionalProperties": false,
         "description": "Auditable train-window outcome for one parameter candidate.",
@@ -62930,6 +62988,62 @@
         "summary": "Get Today Statement",
         "tags": [
           "brokers-v2"
+        ]
+      }
+    },
+    "/api/calendar/sessions": {
+      "get": {
+        "description": "Every scheduled NYSE session between two instants, with the holidays between them.\n\nThe window is the ET calendar dates containing ``start_ms`` and\n``end_ms``, both included. The shared date picker reads it once so its\nquick ranges land on real sessions and its calendar greys out the days\nthe exchange is closed, without a second calendar in the browser.",
+        "operationId": "get_sessions_api_calendar_sessions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "start_ms",
+            "required": true,
+            "schema": {
+              "maximum": 253402300799999,
+              "minimum": 0,
+              "title": "Start Ms",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end_ms",
+            "required": true,
+            "schema": {
+              "maximum": 253402300799999,
+              "minimum": 0,
+              "title": "End Ms",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradingCalendarWindow"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Sessions",
+        "tags": [
+          "calendar"
         ]
       }
     },

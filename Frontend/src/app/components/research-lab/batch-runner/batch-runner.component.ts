@@ -174,7 +174,7 @@ export class BatchRunnerComponent {
   // shape (cross-sectional studies don't typically use sub-daily bars).
   range = signal<MultiTickerRange>({
     symbols: [...DEFAULT_TICKERS],
-    from: '2025-09-01',
+    from: '2025-09-02',
     to: '2025-12-01',
     resolution: 'daily',
     multiplier: 1,

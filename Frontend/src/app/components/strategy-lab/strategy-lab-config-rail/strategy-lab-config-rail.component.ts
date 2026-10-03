@@ -3,6 +3,7 @@ import { ChangeDetectionStrategy, Component, computed, input, model, output } fr
 
 import type { DataPolicy } from "../../../models/data-policy";
 import { FILL_MODE_OPTIONS, RESEARCH_DEFAULT_FILL_MODE, isFillModeName, type FillModeName } from "../../../models/fill-mode";
+import { UNBOUNDED, type DateBounds } from "../../../shared/date-picker";
 import { ExperimentalNoticeComponent } from "../../../shared/experimental-notice/experimental-notice.component";
 import { DEFAULT_ADJUSTMENT_MODE } from '../../../shared/ticker-catalog';
 import type { PriceAdjustmentMode } from '../../../shared/data-lake';
@@ -52,6 +53,8 @@ export class StrategyLabConfigRailComponent {
   readonly registryError = input<string | null>(null);
   /** The lake tree this run reads; the instrument card offers only that tree. */
   readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
+  /** The dates this run can read; the store works them out from the engine, auto-fetch and the tree. */
+  readonly dateBounds = input<DateBounds>(UNBOUNDED);
   readonly runBlocked = input(false);
   readonly launcherStatus = input<LeanLauncherStatus>("unknown");
   readonly launcherDetail = input("");

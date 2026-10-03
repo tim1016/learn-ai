@@ -232,7 +232,8 @@ export class SpecStrategyRunnerComponent {
   readonly errors = computed(() => this.issues().filter((i) => i.sev === 'error'));
   readonly warnings = computed(() => this.issues().filter((i) => i.sev === 'warn'));
   readonly infos = computed(() => this.issues().filter((i) => i.sev === 'info'));
-  readonly canRun = computed(() => this.errors().length === 0);
+  /** An empty date is the picker saying its field holds no usable one. */
+  readonly canRun = computed(() => this.errors().length === 0 && this.range().from !== '' && this.range().to !== '');
 
   /** Per-condition read/edit toggle state. Key format: "ctx:ruleIndex:index"
    * (ruleIndex = -1 for entry/exit; positive for manage rule). */

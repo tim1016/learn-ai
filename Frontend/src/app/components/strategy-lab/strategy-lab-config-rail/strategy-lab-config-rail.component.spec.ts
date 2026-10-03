@@ -1,3 +1,4 @@
+import { provideFakeDateWorld } from "../../../shared/date-picker/testing/fake-trading-calendar";
 import { provideZonelessChangeDetection } from "@angular/core";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { describe, expect, it, vi } from "vitest";
@@ -53,6 +54,7 @@ async function createRail(
       provideFakeTickerCatalog(
         fakeTickerCatalog([{ symbol: "SPY", name: "SPDR S&P 500 ETF Trust", exchange: "ARCA" }]),
       ),
+      ...provideFakeDateWorld(),
     ],
   }).compileComponents();
   const fixture = TestBed.createComponent(StrategyLabConfigRailComponent);
