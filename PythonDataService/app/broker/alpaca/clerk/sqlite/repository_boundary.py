@@ -9,6 +9,12 @@ Pure display and projection reads remain unfenced: they neither call a broker
 nor mutate custody.  A safety or authorization projection must instead use a
 single SQLite read transaction or carry and revalidate its control revision;
 it must not take intake merely to make an ordinary display eventually current.
+
+A fill has a boundary of its own (#2854).  ``append_transition`` accepts any
+kind, so a producer that handed it a fill directly would credit a position a
+discharge had already counted.  Every production site that builds a fill
+transition is therefore enumerated too, with the guarded append it goes
+through, and the same AST test rejects one that is not listed.
 """
 
 from __future__ import annotations
@@ -154,12 +160,55 @@ EXTERNAL_REPOSITORY_WRITER_CENSUS = (
 )
 
 
+#: The kinds whose fold credits a strategy's position for a fill.
+FILL_TRANSITION_KINDS = frozenset({"EXECUTION_SLICE_FILLED", "ORDER_FILL_OBSERVED"})
+#: The appends that ask whether a discharge already counted the fill:
+#: ``append_fill`` itself, and the exact-slice flow that ends in it.
+FILL_GUARDED_APPENDS = frozenset({"append_fill", "append_execution_slice_if_absent"})
+
+
+@dataclass(frozen=True)
+class FillTransitionProducer:
+    """One production site that builds a fill transition, and the guarded append it calls with it."""
+
+    path: str
+    owner: str
+    kind: str
+    through: str
+
+
+FILL_TRANSITION_PRODUCER_CENSUS = (
+    FillTransitionProducer(
+        path="app/broker/alpaca/clerk/sqlite/exact_execution_evidence.py",
+        owner="append_exact_execution_slice",
+        kind="EXECUTION_SLICE_FILLED",
+        through="append_execution_slice_if_absent",
+    ),
+    FillTransitionProducer(
+        path="app/broker/alpaca/clerk/sqlite/order_evidence.py",
+        owner="fold_order_evidence",
+        kind="ORDER_FILL_OBSERVED",
+        through="append_fill",
+    ),
+    FillTransitionProducer(
+        path="app/broker/alpaca/clerk/sqlite/repository_execution_coverage_api.py",
+        owner="ClerkSqliteRepositoryExecutionCoverageApi.recover_historical_execution_coverage",
+        kind="EXECUTION_SLICE_FILLED",
+        through="append_execution_slice_if_absent",
+    ),
+)
+
+
 __all__ = [
     "EXTERNAL_REPOSITORY_WRITER_CENSUS",
     "FACADE_WORKFLOW_HELPERS",
     "FACADE_WORKFLOW_METHODS",
+    "FILL_GUARDED_APPENDS",
+    "FILL_TRANSITION_KINDS",
+    "FILL_TRANSITION_PRODUCER_CENSUS",
     "REPOSITORY_MUTATION_HELPERS",
     "REPOSITORY_MUTATION_METHODS",
     "ExternalRepositoryWriter",
+    "FillTransitionProducer",
     "RepositoryWriterClassification",
 ]
