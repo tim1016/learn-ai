@@ -1,0 +1,103 @@
+// One fixed look, whatever theme the app is in: the painting sets the palette.
+:host {
+  --entry-ink: #0b0a0d;
+  --entry-gilt: #e0bb5c;
+  --entry-ember: rgb(228 72 47 / 70%);
+
+  display: block;
+}
+
+.entry {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: var(--entry-ink);
+}
+
+// The painting is wider than most screens, so it leaves bars above and below;
+// a blurred copy of it fills them.
+.entry__backdrop {
+  object-fit: cover;
+  filter: blur(36px) brightness(0.5);
+  transform: scale(1.12);
+}
+
+.entry__painting {
+  object-fit: contain;
+}
+
+.entry__scene {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+// The lettering people see is carved into the painting. This is the control
+// laid over it; the component keeps it on the carving as the scene shifts.
+.entry__enter {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--entry-panel-width, 0);
+  height: calc(var(--entry-panel-width, 0px) * var(--entry-panel-ratio));
+  padding: 0;
+  border: 0;
+  border-radius: 14% / 32%;
+  background: transparent;
+  cursor: pointer;
+  transform:
+    translate(calc(var(--entry-panel-x, 0px) - 50%), calc(var(--entry-panel-y, 0px) - 50%))
+    rotate(var(--entry-panel-tilt));
+
+  // The whole tablet answers the click, not only the carved panel.
+  &::before {
+    content: '';
+    position: absolute;
+    right: -12%;
+    bottom: -70%;
+    left: -14%;
+    height: 520%;
+    transform: skewX(6deg);
+    transform-origin: 50% 100%;
+  }
+
+  &:focus-visible {
+    outline: 3px solid var(--entry-ink);
+    outline-offset: 3px;
+    box-shadow: 0 0 0 2px var(--entry-gilt);
+  }
+}
+
+// Without the depth scene there is no glow drawn in the painting, so the
+// control shows its own.
+.entry--flat .entry__enter:hover {
+  box-shadow: 0 0 24px var(--entry-ember);
+}
+
+.entry::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--entry-ink);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.7s ease;
+}
+
+.entry--entering {
+  &::after {
+    opacity: 1;
+  }
+
+  .entry__enter {
+    pointer-events: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .entry::after {
+    transition: none;
+  }
+}
