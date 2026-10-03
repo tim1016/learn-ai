@@ -11,6 +11,7 @@ import { filter } from 'rxjs';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 import { AssetIdentityComponent } from '../../shared/asset-identity';
+import { DateRangePickerComponent, ProviderBoundsService, type QuickRangeKey, type QuickRangeOffer } from '../../shared/date-picker';
 import { PageHeaderComponent } from '../../shared/page-header/page-header.component';
 import { SymbolPickerComponent } from '../../shared/symbol-picker/symbol-picker.component';
 import { DEFAULT_ADJUSTMENT_MODE } from '../../shared/ticker-catalog';
@@ -96,11 +97,27 @@ const PRESET_DEFAULT_TIMEFRAMES: Record<string, string> = {
   '5D': '30m',
 };
 
+/** The shared quick-range label each server preset is shown under: five sessions are a week. */
+const PRESET_LABELS: Readonly<Record<string, QuickRangeKey>> = {
+  '1D': '1D',
+  '5D': '1W',
+  '1M': '1M',
+  '3M': '3M',
+  '6M': '6M',
+  '1Y': '1Y',
+  '2Y': '2Y',
+};
+
 /** Parse a strict YYYY-MM-DD string to int64 ms UTC at UTC midnight. The
  *  shared `parseYmd` builds LOCAL-midnight Dates, which would make stored
  *  MsUtc window boundaries shift with the viewer's timezone — every
  *  YMD→ms boundary in this shell therefore goes through `Date.UTC`. Pure;
  *  returns null for malformed or impossible calendar dates. */
+/** The UTC calendar date of a window boundary; empty for ms 0, which is "no window yet", not 1970. */
+function isoOrEmpty(ms: number): string {
+  return ms > 0 ? utcMsToIsoDate(ms) : '';
+}
+
 export function parseYmdMsUtc(s: string): number | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
   const [y, m, d] = s.split('-').map(Number);
@@ -137,6 +154,7 @@ export function parseYmdMsUtc(s: string): number | null {
     AssetIdentityComponent,
     RunDockComponent,
     SymbolPickerComponent,
+    DateRangePickerComponent,
   ],
   templateUrl: './data-lab.component.html',
   styleUrls: ['./data-lab.component.scss'],
@@ -270,8 +288,17 @@ export class DataLabComponent {
   readonly pickerAdjustmentMode = computed<PriceAdjustmentMode>(() =>
     this.store.draft().adjusted ? DEFAULT_ADJUSTMENT_MODE : 'raw',
   );
-  readonly draftFromIso = computed(() => utcMsToIsoDate(this.store.draft().window.startMsUtc));
-  readonly draftToIso = computed(() => utcMsToIsoDate(this.store.draft().window.endMsUtc));
+  /** The draft window's dates; empty while the draft has no window, which is ms 0, not 1970. */
+  readonly draftFromIso = computed(() => isoOrEmpty(this.store.draft().window.startMsUtc));
+  readonly draftToIso = computed(() => isoOrEmpty(this.store.draft().window.endMsUtc));
+  /**
+   * Data Lab charts the session still forming and takes any calendar day, so
+   * its dates run from the provider's oldest day with no last day, and need
+   * not be sessions.
+   */
+  protected readonly dateBounds = inject(ProviderBoundsService).openEnded;
+  /** A date field holds no usable date; the picker says why beside it. */
+  protected readonly datesUnusable = signal(false);
   readonly draftTimeframeValue = computed(() => {
     const d = this.store.draft();
     const match = BAR_TIMEFRAMES.find(
@@ -296,22 +323,14 @@ export class DataLabComponent {
     this.store.patchDraft({ ticker });
   }
 
-  onFromInput(event: Event): void {
-    const parsedMs = parseYmdMsUtc((event.target as HTMLInputElement).value);
-    if (parsedMs === null) return;
-    const draft = this.store.draft();
-    this.store.patchDraft({
-      window: { ...draft.window, startMsUtc: parsedMs },
-    });
-  }
-
-  onToInput(event: Event): void {
-    const parsedMs = parseYmdMsUtc((event.target as HTMLInputElement).value);
-    if (parsedMs === null) return;
-    const draft = this.store.draft();
-    this.store.patchDraft({
-      window: { ...draft.window, endMsUtc: utcDayEndMs(parsedMs) },
-    });
+  /** The picker's dates into the draft window: string dates become int64 ms here and nowhere else. */
+  onDatesChanged(dates: { readonly from: string; readonly to: string }): void {
+    this.datesUnusable.set(dates.from === '' || dates.to === '');
+    if (dates.from === this.draftFromIso() && dates.to === this.draftToIso()) return;
+    const start = parseYmdMsUtc(dates.from);
+    const end = parseYmdMsUtc(dates.to);
+    if (start === null || end === null) return;
+    this.store.patchDraft({ window: { startMsUtc: start, endMsUtc: utcDayEndMs(end) } });
   }
 
   onTimeframeChange(event: Event): void {
@@ -346,8 +365,8 @@ export class DataLabComponent {
   readonly rangePresets = signal<readonly ChartRangePreset[]>([]);
 
   private async loadRangePresets(): Promise<void> {
-    // A failed or empty load leaves the chip row hidden and the manual
-    // From/To inputs as the path of record. Logged, not silent — a backend
+    // A failed or empty load leaves the quick ranges hidden and the typed
+    // dates as the path of record. Logged, not silent — a backend
     // or network regression must be distinguishable from presets not
     // existing, and an unhandled rejection must not leak from a mount-time
     // nicety.
@@ -359,24 +378,18 @@ export class DataLabComponent {
     }
   }
 
-  /** Key of the preset whose resolved trading dates equal the committed
-   *  window — null when the window is not preset-shaped. Date comparison,
-   *  not ms equality, so any same-day anchors still match. */
-  readonly activePresetKey = computed<string | null>(() => {
-    const window = this.store.committedWindow();
-    if (!window) return null;
-    const from = utcMsToIsoDate(window.startMsUtc);
-    const to = utcMsToIsoDate(window.endMsUtc);
-    const match = this.rangePresets().find(
-      (p) => utcMsToIsoDate(p.start_ms_utc) === from && utcMsToIsoDate(p.end_ms_utc) === to,
-    );
-    return match ? match.key : null;
-  });
+  /** The server's presets as the shared picker's quick ranges: Python's resolved dates under the shared labels. */
+  protected readonly presetOffers = computed<readonly QuickRangeOffer[]>(() =>
+    this.rangePresets().flatMap((preset) => {
+      const key = PRESET_LABELS[preset.key];
+      return key === undefined ? [] : [{ key, range: { from: utcMsToIsoDate(preset.start_ms_utc), to: utcMsToIsoDate(preset.end_ms_utc) }, unavailable: null }];
+    }),
+  );
 
-  /** Chip tooltip text — display dates derived from the ms anchors at the
-   *  rendering boundary (the wire contract carries no date strings). */
-  presetTooltip(preset: ChartRangePreset): string {
-    return `${utcMsToIsoDate(preset.start_ms_utc)} → ${utcMsToIsoDate(preset.end_ms_utc)} · ${preset.session_count} sessions`;
+  /** A quick range was clicked: apply the server preset behind its label. */
+  onPresetPicked(key: QuickRangeKey): void {
+    const preset = this.rangePresets().find((candidate) => PRESET_LABELS[candidate.key] === key);
+    if (preset !== undefined) void this.applyRangePreset(preset);
   }
 
   /** Apply a server-resolved preset: window verbatim from Python, commit,
@@ -392,6 +405,7 @@ export class DataLabComponent {
     try {
       const fresh = await this.rangePresetsService.presets('rth');
       target = fresh.find(p => p.key === preset.key) ?? preset;
+      this.rangePresets.set(fresh);
     } catch (err) {
       // Offline or transient failure: the clicked preset's resolved window
       // still applies — a stale-but-correct range beats no action.

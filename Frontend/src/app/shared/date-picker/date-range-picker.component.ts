@@ -40,12 +40,20 @@ export class DateRangePickerComponent {
   readonly bounds = input<DateBounds>(UNBOUNDED);
   /** The quick ranges offered, in ``QUICK_RANGES`` order. A host leaves out what makes no sense for it. */
   readonly ranges = input<readonly QuickRangeKey[]>(QUICK_RANGES);
+  /**
+   * Quick ranges a host's server has already resolved, shown in place of the
+   * picker's own. For a host whose ranges are worked out server-side (Data
+   * Lab's end on the session still forming); the labels stay the shared ones.
+   */
+  readonly hostOffers = input<readonly QuickRangeOffer[] | null>(null);
   /** Whether both ends must be trading sessions. */
   readonly sessionsOnly = input(true);
   /** The group's accessible name. */
   readonly label = input('Date range');
   /** Both dates after any change, in one event, for a host that keeps them in one value. */
   readonly changed = output<{ readonly from: string; readonly to: string }>();
+  /** The quick range just clicked, for a host that does more on a click than take its dates. */
+  readonly picked = output<QuickRangeKey>();
 
   protected readonly noteId = `date-range-note-${nextNoteId++}`;
   /** What this picker last handed its host, so its own empty date is not read back as the host clearing the field. */
@@ -65,7 +73,9 @@ export class DateRangePickerComponent {
   protected readonly calendarProblem = computed(() => (this.sessionsOnly() || this.ranges().length > 0 ? this.calendar.problem() : null));
   protected readonly checked = computed(() => checkRange(this.fromText(), this.toText(), { bounds: this.bounds(), sessions: this.sessions() }));
   protected readonly problem = computed(() => this.checked().from.problem ?? this.checked().to.problem);
-  protected readonly offers = computed(() => offerQuickRanges(this.ranges(), this.bounds(), this.calendar.sessions(), this.calendar.lastCompleted(), this.sessionsOnly()));
+  protected readonly offers = computed(
+    () => this.hostOffers() ?? offerQuickRanges(this.ranges(), this.bounds(), this.calendar.sessions(), this.calendar.lastCompleted(), this.sessionsOnly()),
+  );
   protected readonly active = computed(() => activeQuickRange(this.offers(), this.checked().from.date, this.checked().to.date));
 
   /** How many sessions the range holds, and whether the page's data stops short of the market. */
@@ -105,7 +115,9 @@ export class DateRangePickerComponent {
   }
 
   protected applyOffer(offer: QuickRangeOffer): void {
-    if (offer.range !== null) this.setRange(offer.range);
+    if (offer.range === null) return;
+    this.setRange(offer.range);
+    this.picked.emit(offer.key);
   }
 
   protected retryCalendar(): void {

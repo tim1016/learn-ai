@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { heldBounds, type DateBounds } from './date-bounds';
 import { DateRangePickerComponent } from './date-range-picker.component';
-import { QUICK_RANGES, type QuickRangeKey } from './quick-ranges';
+import { QUICK_RANGES, type QuickRangeKey, type QuickRangeOffer } from './quick-ranges';
 import { fakeSessions, fakeTradingCalendar, type FakeTradingCalendar } from './testing/fake-trading-calendar';
 import { TradingCalendarService } from './trading-calendar.service';
 
@@ -15,9 +15,19 @@ const QQQ = heldBounds('QQQ', '2024-09-03', '2026-09-18');
 
 @Component({
   imports: [DateRangePickerComponent],
-  template: `<app-date-range-picker [(from)]="from" [(to)]="to" [bounds]="bounds()" [ranges]="ranges()" [sessionsOnly]="sessionsOnly()" />`,
+  template: `<app-date-range-picker
+    [(from)]="from"
+    [(to)]="to"
+    [bounds]="bounds()"
+    [ranges]="ranges()"
+    [sessionsOnly]="sessionsOnly()"
+    [hostOffers]="hostOffers()"
+    (picked)="picked.set($event)"
+  />`,
 })
 class HostComponent {
+  readonly hostOffers = signal<readonly QuickRangeOffer[] | null>(null);
+  readonly picked = signal<QuickRangeKey | null>(null);
   readonly from = signal('2026-08-19');
   readonly to = signal('2026-09-18');
   readonly bounds = signal<DateBounds>(QQQ);
@@ -118,6 +128,21 @@ describe('DateRangePickerComponent', () => {
 
     const row = screen.getByRole('group', { name: 'Quick ranges' });
     expect(within(row).getAllByRole('button').map((button) => button.textContent?.trim())).toEqual(['1Y', '2Y', 'Max']);
+  });
+
+  it("shows the ranges a host's server resolved in place of its own, and says which one was clicked", async () => {
+    const { view, host } = await renderPicker();
+    // The server ends its week on the session still forming, 2026-10-02, which the picker's own ranges never reach.
+    host.hostOffers.set([{ key: '1W', range: { from: '2026-09-28', to: '2026-10-02' }, unavailable: null }]);
+    host.bounds.set({ ...QQQ, max: null, maxReason: null });
+    await view.fixture.whenStable();
+    const row = screen.getByRole('group', { name: 'Quick ranges' });
+    expect(within(row).getAllByRole('button').map((button) => button.textContent?.trim())).toEqual(['1W']);
+
+    await userEvent.click(within(row).getByText('1W'));
+
+    expect([host.from(), host.to()]).toEqual(['2026-09-28', '2026-10-02']);
+    expect(host.picked()).toBe('1W');
   });
 
   it('says when the held data stops short of the market', async () => {

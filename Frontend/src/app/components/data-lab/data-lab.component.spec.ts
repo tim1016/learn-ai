@@ -1,6 +1,6 @@
 import { Component, signal } from '@angular/core';
 import { Router, RouterOutlet, Routes, provideRouter } from '@angular/router';
-import { render, screen, waitFor } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -285,8 +285,6 @@ describe('DataLabComponent (shell)', () => {
     // technology; the other is not.
     expect(screen.getByRole('button', { name: '6M' }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByRole('button', { name: '1D' }).getAttribute('aria-pressed')).toBe('false');
-    const active = document.querySelector('.dl-shell__preset--active');
-    expect(active?.textContent?.trim()).toBe('6M');
   });
 
   it('re-resolves the preset list on apply so a long-lived tab tracks the trading date', async () => {
@@ -369,6 +367,27 @@ describe('DataLabComponent (shell)', () => {
     });
     expect(store.chartRefreshRequests()).toBe(0);
     expect(screen.getByText('Ticker is required')).toBeTruthy();
+  });
+
+  it('takes typed dates into the draft window as UTC days, and holds Apply scope while a date is unusable (#2858)', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY' });
+    fixture.detectChanges();
+    const apply = screen.getByRole<HTMLButtonElement>('button', { name: 'Apply scope' });
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Start date' }), { target: { value: '2026-05-01' } });
+    // A Saturday: Data Lab takes any calendar day.
+    fireEvent.change(screen.getByRole('textbox', { name: 'End date' }), { target: { value: '2026-05-16' } });
+    await fixture.whenStable();
+
+    expect(store.draft().window).toEqual({ startMsUtc: Date.UTC(2026, 4, 1), endMsUtc: Date.UTC(2026, 4, 16) + 86_400_000 - 1 });
+    expect(apply.disabled).toBe(false);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'End date' }), { target: { value: '2026-05' } });
+    await fixture.whenStable();
+
+    expect(apply.disabled).toBe(true);
+    expect(store.draft().window.endMsUtc).toBe(Date.UTC(2026, 4, 16) + 86_400_000 - 1);
   });
 
   it('requests a chart refresh when Apply scope commits successfully', async () => {
