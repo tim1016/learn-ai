@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ProviderBoundsService, TradingCalendarService, heldBounds, type DataGaps, type TradingSessions } from "../../shared/date-picker";
 import { providerBounds } from "../../shared/date-picker/provider-bounds.service";
-import { STANDARD_DATE_WORLD, provideFakeDateWorld } from "../../shared/date-picker/testing/fake-trading-calendar";
+import { STANDARD_DATE_WORLD, provideFakeDateWorld, sessionOpenMs } from "../../shared/date-picker/testing/fake-trading-calendar";
 import { HeldGapsService } from "../../shared/ticker-catalog";
 import { fakeTickerCatalog, provideFakeTickerCatalog } from "../../shared/ticker-catalog/testing/fake-ticker-catalog";
 import { JobsService } from "../../services/jobs.service";
@@ -76,7 +76,7 @@ describe("StrategyLab configuration and runner", () => {
     });
   }
 
-  const GAPS: DataGaps = { unheld: new Set(["2025-03-03"]), problem: null };
+  const GAPS: DataGaps = { unheldMs: new Set([sessionOpenMs("2025-03-03")]), problem: null };
   const gapsFor = vi.fn(() => GAPS);
 
   function configureLab(): void {

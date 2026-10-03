@@ -77,7 +77,7 @@
       [to]="checked().to.date"
       [bounds]="bounds()"
       [sessions]="sessions()"
-      [marked]="gaps()?.unheld ?? null"
+      [marked]="unheldDays()"
       (picked)="setRange($event); popover.hide()"
     />
   </p-popover>

@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { heldBounds, type DataGaps, type DateBounds } from './date-bounds';
 import { DateRangePickerComponent } from './date-range-picker.component';
 import { QUICK_RANGES, type QuickRangeKey, type QuickRangeOffer } from './quick-ranges';
-import { fakeSessions, fakeTradingCalendar, type FakeTradingCalendar } from './testing/fake-trading-calendar';
+import { fakeSessions, fakeTradingCalendar, sessionOpenMs, type FakeTradingCalendar } from './testing/fake-trading-calendar';
 import { TradingCalendarService } from './trading-calendar.service';
 
 const SESSIONS = fakeSessions('2021-01-01', '2026-12-31', { '2026-09-07': 'Labor Day' });
@@ -161,7 +161,7 @@ describe('DateRangePickerComponent', () => {
   it('counts the sessions in the range that the data lacks, and underlines them in the calendar', async () => {
     const { view, host } = await renderPicker();
     // Two gaps inside 2026-08-19 to 2026-09-18, one before it.
-    host.gaps.set({ unheld: new Set(['2026-08-03', '2026-09-01', '2026-09-10']), problem: null });
+    host.gaps.set({ unheldMs: new Set(['2026-08-03', '2026-09-01', '2026-09-10'].map(sessionOpenMs)), problem: null });
     await view.fixture.whenStable();
 
     expect(screen.getByText(/^22 sessions, 2 not held/)).not.toBeNull();
@@ -182,11 +182,11 @@ describe('DateRangePickerComponent', () => {
 
   it('says the range is all held when it has no gap, and says so when the gaps could not be checked', async () => {
     const { view, host } = await renderPicker();
-    host.gaps.set({ unheld: new Set(['2026-08-03']), problem: null });
+    host.gaps.set({ unheldMs: new Set([sessionOpenMs('2026-08-03')]), problem: null });
     await view.fixture.whenStable();
     expect(screen.getByText(/^22 sessions, all held/)).not.toBeNull();
 
-    host.gaps.set({ unheld: new Set(), problem: 'The data plane did not respond.' });
+    host.gaps.set({ unheldMs: new Set(), problem: 'The data plane did not respond.' });
     await view.fixture.whenStable();
 
     expect(screen.getByText(/^22 sessions · .*Gaps could not be checked: The data plane did not respond\./)).not.toBeNull();

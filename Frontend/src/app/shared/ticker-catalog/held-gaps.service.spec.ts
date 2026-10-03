@@ -1,10 +1,10 @@
-import { ApplicationRef } from '@angular/core';
+import { ApplicationRef, computed, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DataLakeService, type CoverageQuery, type CoverageResponse, type CoverageStatus, type DataLakeRead } from '../data-lake';
 import { heldBounds, type DataGaps } from '../date-picker';
-import { etMidnightMs } from '../date/et-midnight';
+import { sessionOpenMs } from '../date-picker/testing/fake-trading-calendar';
 import { HeldGapsService } from './held-gaps.service';
 
 function coverage(days: Readonly<Record<string, CoverageStatus>>): DataLakeRead<CoverageResponse> {
@@ -17,8 +17,7 @@ function coverage(days: Readonly<Record<string, CoverageStatus>>): DataLakeRead<
       resolution: 'minute',
       provider: 'polygon',
       price_adjustment_mode: 'polygon_split_adjusted',
-      // Session open, 09:30 ET.
-      days: Object.entries(days).map(([day, status]) => ({ trading_date_ms: etMidnightMs(day) + 9.5 * 60 * 60 * 1000, status, artifact_id: null })),
+      days: Object.entries(days).map(([day, status]) => ({ trading_date_ms: sessionOpenMs(day), status, artifact_id: null })),
     },
   };
 }
@@ -51,7 +50,8 @@ describe('HeldGapsService', () => {
     );
 
     expect(before).toBeNull();
-    expect(after).toEqual({ unheld: new Set(['2026-09-15', '2026-09-16', '2026-09-17']), problem: null });
+    // Kept as the instants the route gave, not as date strings: the picker resolves them where it draws them.
+    expect(after).toEqual({ unheldMs: new Set(['2026-09-15', '2026-09-16', '2026-09-17'].map(sessionOpenMs)), problem: null });
     expect(asked).toEqual([{ symbol: 'QQQ', startTradingDate: '2026-09-14', endTradingDate: '2026-09-18', priceAdjustmentMode: 'polygon_split_adjusted' }]);
   });
 
@@ -68,7 +68,7 @@ describe('HeldGapsService', () => {
   it('says why when the gaps could not be read, instead of claiming there are none', async () => {
     const { after } = await gapsFor(() => ({ kind: 'unavailable', message: 'The data plane did not respond.' }), '2026-09-14', '2026-09-18');
 
-    expect(after).toEqual({ unheld: new Set(), problem: 'The data plane did not respond.' });
+    expect(after).toEqual({ unheldMs: new Set(), problem: 'The data plane did not respond.' });
   });
 
   it('asks nothing while the span has no first or last day', () => {
@@ -87,6 +87,36 @@ describe('HeldGapsService', () => {
     expect(read).not.toHaveBeenCalled();
   });
 
+  it('keeps the four newest spans: an older one is let go and read afresh when asked for again', async () => {
+    const read = vi.fn(async () => coverage({}));
+    TestBed.configureTestingModule({ providers: [{ provide: DataLakeService, useValue: { coverage: read } }] });
+    const service = TestBed.inject(HeldGapsService);
+    const span = heldBounds('X', '2026-09-14', '2026-09-18');
+    const symbol = signal('A');
+    // Asked from a computed, as the hosts do.
+    const gaps = computed(() => service.gapsFor('raw', symbol(), span, 'minute'));
+    const settle = async (): Promise<void> => {
+      gaps();
+      TestBed.tick();
+      await TestBed.inject(ApplicationRef).whenStable();
+    };
+
+    for (const next of ['A', 'B', 'C', 'D', 'E']) {
+      symbol.set(next);
+      await settle();
+    }
+    expect(read).toHaveBeenCalledTimes(5);
+
+    // E is still kept; A was the oldest of five.
+    symbol.set('E');
+    await settle();
+    expect(read).toHaveBeenCalledTimes(5);
+    symbol.set('A');
+    await settle();
+    expect(read).toHaveBeenCalledTimes(6);
+    expect(gaps()).toEqual({ unheldMs: new Set(), problem: null });
+  });
+
   it("reads a tree's gaps again when its holdings were read again: a filled gap goes, and a failed read is retried", async () => {
     let answer: DataLakeRead<CoverageResponse> = { kind: 'unavailable', message: 'The data plane did not respond.' };
     const { after, asked, service, settled } = await gapsFor(() => answer, '2026-09-14', '2026-09-18');
@@ -94,14 +124,14 @@ describe('HeldGapsService', () => {
 
     answer = coverage({ '2026-09-15': 'missing' });
     service.reload('polygon_split_adjusted');
-    expect(await settled()).toEqual({ unheld: new Set(['2026-09-15']), problem: null });
+    expect(await settled()).toEqual({ unheldMs: new Set([sessionOpenMs('2026-09-15')]), problem: null });
 
     // A backfill fills the gap; the span's first and last day are the same as before.
     answer = coverage({ '2026-09-15': 'complete' });
     service.reload('raw');
-    expect((await settled())?.unheld.size).toBe(1);
+    expect((await settled())?.unheldMs.size).toBe(1);
     service.reload('polygon_split_adjusted');
-    expect(await settled()).toEqual({ unheld: new Set(), problem: null });
+    expect(await settled()).toEqual({ unheldMs: new Set(), problem: null });
     expect(asked).toHaveLength(3);
   });
 });

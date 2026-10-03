@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { DateBounds } from '../../shared/date-picker';
+import { sessionOpenMs } from '../../shared/date-picker/testing/fake-trading-calendar';
 import { etIsoDate } from '../../shared/date/et-midnight';
 import { fakePickerWorld } from '../../shared/symbol-picker/testing/fake-picker-world';
 import { HeldGapsService } from '../../shared/ticker-catalog';
@@ -126,7 +127,7 @@ describe('GridSearchFormComponent', () => {
 
   it("reads the gaps in the symbol's held span and counts them under the window (#2858)", async () => {
     const gapsFor = vi.fn((_mode: string, symbol: string, bounds: DateBounds) =>
-      symbol === 'SPY' && bounds.max !== null ? { unheld: new Set(['2025-03-03', '2025-03-04']), problem: null } : null,
+      symbol === 'SPY' && bounds.max !== null ? { unheldMs: new Set(['2025-03-03', '2025-03-04'].map(sessionOpenMs)), problem: null } : null,
     );
     await render(GridSearchFormComponent, {
       inputs: { strategies: [strategy()], preflightDebounceMs: 0 },

@@ -2,6 +2,8 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, input, mo
 import { Popover } from 'primeng/popover';
 import { Tooltip } from 'primeng/tooltip';
 
+import { etIsoDate } from '../date/et-midnight';
+import type { IsoDate } from '../date/iso-date';
 import { UNBOUNDED, type DataGaps, type DateBounds } from './date-bounds';
 import { DateCalendarComponent } from './date-calendar.component';
 import { checkRange, fieldText } from './date-check';
@@ -76,6 +78,12 @@ export class DateRangePickerComponent {
   );
   protected readonly active = computed(() => activeQuickRange(this.offers(), this.checked().from.date, this.checked().to.date));
 
+  /** The sessions the host's data lacks, as the ET dates the fields and the calendar speak. */
+  protected readonly unheldDays = computed<ReadonlySet<IsoDate> | null>(() => {
+    const gaps = this.gaps();
+    return gaps === null ? null : new Set([...gaps.unheldMs].map(etIsoDate));
+  });
+
   /** How many sessions the range holds, and whether the page's data stops short of the market. */
   protected readonly summary = computed<string | null>(() => {
     const sessions = this.calendar.sessions();
@@ -87,7 +95,7 @@ export class DateRangePickerComponent {
       const counted = `${count} ${count === 1 ? 'session' : 'sessions'}`;
       if (gaps === null || gaps.problem !== null) parts.push(counted);
       else {
-        const unheld = [...gaps.unheld].filter((day) => from.date <= day && day <= to.date).length;
+        const unheld = [...(this.unheldDays() ?? [])].filter((day) => from.date <= day && day <= to.date).length;
         parts.push(`${counted}, ${unheld === 0 ? 'all held' : `${unheld} not held`}`);
       }
     }
