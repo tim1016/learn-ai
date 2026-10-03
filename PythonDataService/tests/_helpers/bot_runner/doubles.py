@@ -171,6 +171,11 @@ class _TestDecisionReceiptRepository:
         self._rows[(strategy_instance_id, bar_ref)] = row
         return row
 
+    def strategy_ran_before(self, *, strategy_instance_id: str, lifecycle_run_id: str) -> bool:
+        """This store keeps no run record: every run reads as the instance's first."""
+        del strategy_instance_id, lifecycle_run_id
+        return False
+
     def decision_receipt_tail(
         self,
         *,

@@ -604,19 +604,8 @@ _SMA_ENTER_MINUTE = 5
 """Minute whose close is the rising tape's fresh golden cross."""
 
 
-def _rising_tape_with_a_final_drop(*, minutes: int) -> list[MarketDataBar]:
-    """Flat, then rising from ``_SMA_ENTER_MINUTE`` on, then one falling minute.
-
-    ``sma_crossover`` at ``_SMA_ONE_MINUTE`` decides on every minute: the first
-    rising minute is a fresh golden cross (ENTER), every later rising minute
-    keeps the short average above the long one (hold), and the last minute's
-    fall puts it below (EXIT).
-    """
-    closes = [
-        Decimal("500") + Decimal("0.01") * max(0, minute - _SMA_ENTER_MINUTE + 1)
-        for minute in range(minutes - 1)
-    ]
-    closes.append(Decimal("400"))
+def _tape_closing_at(closes: Sequence[Decimal]) -> list[MarketDataBar]:
+    """Consecutive regular-session one-minute bars with the given closes."""
     return [
         MarketDataBar(
             symbol="SPY",
@@ -631,8 +620,23 @@ def _rising_tape_with_a_final_drop(*, minutes: int) -> list[MarketDataBar]:
             feed_id="fake-phase",
             session_phase="RTH",
         )
-        for start_ms, close in zip(_session_minute_starts(minutes), closes, strict=True)
+        for start_ms, close in zip(_session_minute_starts(len(closes)), closes, strict=True)
     ]
+
+
+def _rising_tape_with_a_final_drop(*, minutes: int) -> list[MarketDataBar]:
+    """Flat, then rising from ``_SMA_ENTER_MINUTE`` on, then one falling minute.
+
+    ``sma_crossover`` at ``_SMA_ONE_MINUTE`` decides on every minute: the first
+    rising minute is a fresh golden cross (ENTER), every later rising minute
+    keeps the short average above the long one (hold), and the last minute's
+    fall puts it below (EXIT).
+    """
+    closes = [
+        Decimal("500") + Decimal("0.01") * max(0, minute - _SMA_ENTER_MINUTE + 1)
+        for minute in range(minutes - 1)
+    ]
+    return _tape_closing_at([*closes, Decimal("400")])
 
 
 @pytest.mark.asyncio
@@ -672,6 +676,105 @@ async def test_resume_names_the_exit_a_crash_left_staged_when_its_enter_is_older
         assert [call["purpose"] for call in clerk.calls] == ["ENTER"]
         assert _crash_evidence_closes(repo) == [crash_close_ms]
         assert json.loads(_retained(repo)[-1].facts_json)["explanation"]["holding"] is True
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+# ---------------------------------------------------------------------------
+# A crash is named before the receipt window can move past it (#2859).
+# ---------------------------------------------------------------------------
+
+_SMA_SECOND_ENTER_MINUTE = 10
+"""Minute whose close is ``_two_cross_tape``'s second fresh golden cross."""
+
+
+def _two_cross_tape() -> list[MarketDataBar]:
+    """Flat, a golden cross at ``_SMA_ENTER_MINUTE``, a dip, a second at ``_SMA_SECOND_ENTER_MINUTE``.
+
+    Flat, ``sma_crossover`` at ``_SMA_ONE_MINUTE`` stages an ENTER on each
+    cross and nothing in between: the first is the very first live minute
+    after a flat warmup, so a run can stage it on its first decision.
+    """
+    closes = ["500"] * _SMA_ENTER_MINUTE + ["500.01", "500.02", "500.03", "499", "499", "501"]
+    assert len(closes) == _SMA_SECOND_ENTER_MINUTE + 1
+    return _tape_closing_at([Decimal(close) for close in closes])
+
+
+def _sma_binding(run_id: str) -> BrokerBotBinding:
+    return _binding(run_id=run_id, strategy_key=_SMA).model_copy(
+        update={"strategy_params": _SMA_ONE_MINUTE}
+    )
+
+
+@pytest.mark.asyncio
+async def test_resume_names_a_crash_on_the_first_ever_decision_from_the_clerks_run_record(
+    tmp_path: Path,
+) -> None:
+    """#2859: with no receipt on file, the Clerk's run record says a run was live.
+
+    The instance's first run died on its first decision, a staged ENTER, so
+    it left no receipt at all. The Clerk recorded that run before its runner
+    existed. The Resume reads that record and names the bucket at once; it
+    used to take an empty receipt store for a first start, name nothing, and
+    leave the bucket to a later Resume -- which never named it once this run
+    had written more receipts than the window retains.
+    """
+    repo, clerk = _sqlite_clerk(tmp_path)
+    set_alpaca_clerk(clerk)
+    try:
+        tape = _two_cross_tape()[:_SMA_SECOND_ENTER_MINUTE]
+        warmup = [bar.model_copy(update={"provenance": "history"}) for bar in tape[:_SMA_ENTER_MINUTE]]
+        crash_bar = tape[_SMA_ENTER_MINUTE]
+        await clerk.register_strategy_run(_sma_binding("run-1"))
+        await clerk.stop_strategy_run(strategy_instance_id=_SID, run_id="run-1")
+        resumed = _sma_binding("run-2")
+        await clerk.register_strategy_run(resumed)
+        assert _retained(repo) == []
+
+        await bot_trade_strategy.run_trade_bot(
+            resumed,
+            _PhaseFeed(retained_bars=[*warmup, crash_bar], live_bars=tape[_SMA_ENTER_MINUTE + 1 :]),
+        )
+
+        assert _crash_evidence_closes(repo) == [crash_bar.end_ms]
+        assert clerk.calls == []
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_names_every_runs_crash_not_only_the_oldest(tmp_path: Path) -> None:
+    """#2859: one Resume names the bucket each crashed run left staged.
+
+    An older bucket is still unnamed -- here because no run is on the Clerk's
+    record, so the Resume after it could not tell a crash from a first start.
+    That run then died on a staged ENTER of its own. The next Resume used to
+    name only the older bucket and leave the newer for the Resume after,
+    which never named it once the window had moved past it.
+    """
+    repo, clerk = _sqlite_clerk(tmp_path)
+    set_alpaca_clerk(clerk)
+    try:
+        tape = _two_cross_tape()
+        warmup = [bar.model_copy(update={"provenance": "history"}) for bar in tape[:_SMA_ENTER_MINUTE]]
+        first_crash = tape[_SMA_ENTER_MINUTE]
+        decided = tape[_SMA_ENTER_MINUTE + 1 : _SMA_SECOND_ENTER_MINUTE]
+        second_crash = tape[_SMA_SECOND_ENTER_MINUTE]
+
+        await bot_trade_strategy.run_trade_bot(
+            _sma_binding("run-2"), _PhaseFeed(retained_bars=[*warmup, first_crash], live_bars=decided)
+        )
+        assert [receipt.outcome for receipt in _retained(repo)] == ["no_action"] * len(decided)
+
+        await bot_trade_strategy.run_trade_bot(
+            _sma_binding("run-3"),
+            _PhaseFeed(retained_bars=[*warmup, first_crash, *decided, second_crash]),
+        )
+
+        assert _crash_evidence_closes(repo) == [first_crash.end_ms, second_crash.end_ms]
+        assert clerk.calls == []
     finally:
         set_alpaca_clerk(None)
         repo.close()

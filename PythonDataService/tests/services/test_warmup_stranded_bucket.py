@@ -110,7 +110,10 @@ async def test_resume_never_redecides_a_bucket_the_earlier_run_decided() -> None
             _binding(run_id="run-2"),
             feed,
             captured_decisions=CapturedDecisions(
-                outcomes={decided: "no_action"}, rotated_out_before_ms=None, run_first_closes_ms=frozenset()
+                outcomes={decided: "no_action"},
+                rotated_out_before_ms=None,
+                run_first_closes_ms=frozenset(),
+                ran_before=False,
             ),
         )
     )

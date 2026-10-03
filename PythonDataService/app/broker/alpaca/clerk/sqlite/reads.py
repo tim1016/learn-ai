@@ -332,6 +332,20 @@ def bot_config(conn: sqlite3.Connection, strategy_instance_id: str) -> BotConfig
     return BotConfigResource(**dict(row)) if row is not None else None
 
 
+def strategy_ran_before(
+    conn: sqlite3.Connection,
+    *,
+    strategy_instance_id: str,
+    lifecycle_run_id: str,
+) -> bool:
+    """Whether the instance has a run on record other than ``lifecycle_run_id`` (#2859)."""
+    row = conn.execute(
+        "SELECT 1 FROM runs WHERE strategy_instance_id = ? AND lifecycle_run_id != ? LIMIT 1",
+        (strategy_instance_id, lifecycle_run_id),
+    ).fetchone()
+    return row is not None
+
+
 def decision_receipt_tail(
     conn: sqlite3.Connection,
     *,

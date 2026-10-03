@@ -715,6 +715,17 @@ class SqliteDecisionReceipts:
             limit=MAX_DECISION_RECEIPTS_PER_STRATEGY,
         )
 
+    def ran_before(self, lifecycle_run_id: str) -> bool:
+        """Whether the Clerk has a run of this instance on record besides ``lifecycle_run_id`` (#2859).
+
+        A run is recorded before its runner can exist, so one that died on
+        its first decision is on record though it left no receipt.
+        """
+        return self._repository.strategy_ran_before(
+            strategy_instance_id=self._strategy_instance_id,
+            lifecycle_run_id=lifecycle_run_id,
+        )
+
     def entry_held_into(
         self, window: Sequence[DecisionReceiptResource]
     ) -> DecisionReceiptResource | None:
