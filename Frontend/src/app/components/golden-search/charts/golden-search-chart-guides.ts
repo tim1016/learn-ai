@@ -389,7 +389,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
     question: 'Which measures held up on the final test?',
     steps: [
       { text: 'Each block is one measure on its own scale: annualized return, Sharpe, worst fall, trades a year.', target: null },
-      { text: 'The grey bar is the development period, where the settings were chosen.', target: { kind: 'series', group: 'development' } },
+      { text: 'The teal bar is the development period: the data the study chose from.', target: { kind: 'series', group: 'development' } },
       { text: 'The blue bar is the final test: data no step chose on.', target: { kind: 'series', group: 'final' } },
       { text: 'Compare the candidate’s change with the current settings’: a drop both share is the market; a drop only the candidate shows is the fit.', target: null },
     ],
@@ -400,8 +400,8 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
     steps: [
       { text: 'Read the labels at the right edge: where each run ended the final test.', target: { kind: 'point', group: 'equity', at: 'last' } },
       { text: 'Follow each line: a steady climb is more convincing than one jump.', target: { kind: 'series', group: 'equity' } },
-      { text: 'Find each line’s lowest point: its deepest drop through the final test.', target: { kind: 'point', group: 'equity', at: 'lowest' } },
-      { text: 'This is one look: a short final test can swing either way by chance.', target: null },
+      { text: 'Drop to the lower part and find its lowest point: the deepest fall from a peak at a session close.', target: { kind: 'point', group: 'fall', at: 'lowest' } },
+      { text: 'The dashed line is the worst-fall limit. The final test judges the candidate’s fall bar by bar, which can be deeper than this line.', target: null },
     ],
   },
   'final-months': {

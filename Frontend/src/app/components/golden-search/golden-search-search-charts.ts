@@ -1,5 +1,5 @@
 import type { ChartSpec } from './charts/golden-search-chart-spec';
-import { dataIndexOf, NOT_RECORDED, seriesIndexOf, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
+import { axisText, dataIndexOf, NOT_RECORDED, seriesIndexOf, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
 import type { PairCellView, PairMapView } from './golden-search-compare';
 import { cellDetail } from './golden-search-compare';
@@ -63,7 +63,6 @@ function rulesNote(procedure: ProcedureCharts): string {
   return `The rules on this window: ${floor}, a worst fall within ${percentText(policy.max_drawdown_ceiling)}${net}.`;
 }
 
-const axisText = (theme: ChartTheme) => ({ color: theme.textSecondary, fontSize: 11 });
 
 // ---------------------------------------------------------------- V7 search path
 

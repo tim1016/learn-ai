@@ -2,7 +2,7 @@ import type { CustomSeriesOption } from 'echarts/charts';
 
 import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec } from './charts/golden-search-chart-spec';
-import { dataIndexOf, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
+import { axisText, dataIndexOf, monthAxisText, monthText, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
 import type { CoverageMonth, MinimumWindow, PlanCharts, PlanKnob, PlanWindow } from './golden-search.types';
 
@@ -15,10 +15,8 @@ import type { CoverageMonth, MinimumWindow, PlanCharts, PlanKnob, PlanWindow } f
  * study froze at lock.
  */
 
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
 const THREE_DECIMALS = new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 });
 
-const axisText = (theme: ChartTheme) => ({ color: theme.textSecondary, fontSize: 11 });
 
 function dateEt(ms: number): string {
   return formatTimestampDisplay(ms, { mode: 'date-et' });
@@ -366,9 +364,6 @@ const COVERAGE_PARTS = [
   { key: 'missing', name: 'Missing' },
 ] as const;
 
-function monthName(month: CoverageMonth): string {
-  return `${MONTH_NAMES[month.month - 1]} ${month.year}`;
-}
 
 /** Each month of the data span: its sessions split by what the lake holds for them. */
 export function coverageSpec(months: readonly CoverageMonth[]): ChartSpec {
@@ -376,13 +371,13 @@ export function coverageSpec(months: readonly CoverageMonth[]): ChartSpec {
   const last = months.at(-1);
   return {
     label: 'Data coverage',
-    summary: `The lake's minute bars for ${months.length} months, ${first === undefined || last === undefined ? 'none' : `${monthName(first)} to ${monthName(last)}`}: each month's sessions, complete or not.`,
+    summary: `The lake's minute bars for ${months.length} months, ${first === undefined || last === undefined ? 'none' : `${monthText(first)} to ${monthText(last)}`}: each month's sessions, complete or not.`,
     featured: null,
     option: (theme) => coverageOption(months, theme),
     table: {
       caption: 'Sessions per month by lake status',
       columns: ['Month', 'Sessions', ...COVERAGE_PARTS.map((part) => part.name)],
-      rows: months.map((month) => ({ key: String(month.month_start_ms), cells: [monthName(month), String(month.sessions), ...COVERAGE_PARTS.map((part) => String(month[part.key]))] })),
+      rows: months.map((month) => ({ key: String(month.month_start_ms), cells: [monthText(month), String(month.sessions), ...COVERAGE_PARTS.map((part) => String(month[part.key]))] })),
     },
   };
 }
@@ -400,10 +395,10 @@ function coverageOption(months: readonly CoverageMonth[], theme: ChartTheme): Ch
         if (month === undefined) return '';
         const rows: TooltipRow[] = [{ label: 'Sessions', values: [String(month.sessions)] }, ...COVERAGE_PARTS.map((part) => ({ label: part.name, values: [String(month[part.key])] }))];
         const notes = ['The lake’s coverage now; the study ran on the data snapshot frozen at lock.', 'Sessions are the trading calendar’s, so weekends and holidays never count as missing.'];
-        return tooltipHtml({ title: `${monthName(month)} · ${sessionsText(month.sessions)}`, columns: ['Sessions'], rows, notes }, theme);
+        return tooltipHtml({ title: `${monthText(month)} · ${sessionsText(month.sessions)}`, columns: ['Sessions'], rows, notes }, theme);
       },
     },
-    xAxis: { type: 'category', data: months.map((month) => `${MONTH_NAMES[month.month - 1]} ’${String(month.year).slice(-2)}`), axisLine: { lineStyle: { color: theme.axis } }, axisTick: { show: false }, axisLabel: { ...axisText(theme), hideOverlap: true } },
+    xAxis: { type: 'category', data: months.map((month) => monthAxisText(month)), axisLine: { lineStyle: { color: theme.axis } }, axisTick: { show: false }, axisLabel: { ...axisText(theme), hideOverlap: true } },
     yAxis: { type: 'value', minInterval: 1, splitNumber: 3, axisLabel: axisText(theme), splitLine: { lineStyle: { color: theme.gridLine } } },
     series: COVERAGE_PARTS.map((part) => ({
       id: `${part.key}:coverage`,

@@ -684,7 +684,7 @@ export function finalRun(key: CandidateKey): NonNullable<CandidateDetail['exam']
     metrics: metrics({ total_return_pct: end, sharpe_ratio: key === 'incumbent' ? 0.54 : 0.91, total_trades: key === 'incumbent' ? 39 : 36 }),
     cumulative_return: sessions.map((ms, i) => ({ ms, value: (end * (i + 1)) / sessions.length })),
     daily_equity: [],
-    drawdown: [],
+    drawdown: sessions.map((ms, i) => ({ ms, drawdown: i === 1 ? -end / 3 : 0 })),
     monthly: [
       { month_start_ms: etMidnightMs('2026-01-01'), year: 2026, month: 1, net_profit: end * 40_000, return_fraction: end * 0.4, trades: 12 },
       { month_start_ms: etMidnightMs('2026-02-01'), year: 2026, month: 2, net_profit: end * 60_000, return_fraction: end * 0.6, trades: 13 },
@@ -715,6 +715,7 @@ export function candidateDetail(key: CandidateKey, overrides: Partial<CandidateD
         { ms: days[2], value: end },
       ],
       daily_equity: [],
+      comparison: null,
       drawdown: [
         { ms: days[0], drawdown: 0 },
         { ms: days[1], drawdown: -end / 4 },

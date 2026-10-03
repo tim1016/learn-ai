@@ -35,7 +35,8 @@ def completed_net(metrics: Mapping[str, Any] | None) -> float | None:
     return None if net is None else float(net)
 
 
-def _completed_return(metrics: Mapping[str, Any] | None) -> float | None:
+def completed_return(metrics: Mapping[str, Any] | None) -> float | None:
+    """A completed run's net return as a fraction; None for a failed or missing run, or one without a return."""
     if metrics is None or metrics.get("status") != "completed":
         return None
     value = metrics.get("total_return_pct")
@@ -53,7 +54,7 @@ def trades_per_year(metrics: Mapping[str, Any] | None, years: Fraction) -> float
 
 def return_change(run: Mapping[str, Any] | None, reference: Mapping[str, Any] | None) -> float | None:
     """``run``'s net return less ``reference``'s; None unless both runs completed with a return."""
-    value, base = _completed_return(run), _completed_return(reference)
+    value, base = completed_return(run), completed_return(reference)
     return None if value is None or base is None else value - base
 
 

@@ -15214,7 +15214,7 @@ export interface components {
              * Comparison
              * @description A final-test run's measures beside development's; null on a development run.
              */
-            comparison?: components["schemas"]["GoldenSearchFinalMeasure"][] | null;
+            comparison: components["schemas"]["GoldenSearchFinalMeasure"][] | null;
             /** @description The development run's; null on a final-test run. */
             concentration_curve: components["schemas"]["GoldenSearchConcentrationCurve"] | null;
             /** Cumulative Return */

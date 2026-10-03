@@ -1272,7 +1272,7 @@ class GoldenSearchRunDetail(_Wire):
     monthly: list[GoldenSearchMonthlyResult]
     concentration_curve: GoldenSearchConcentrationCurve | None = Field(description="The development run's; null on a final-test run.")
     trade_charts: GoldenSearchTradeCharts | None = Field(description="The development run's; null on a final-test run.")
-    comparison: list[GoldenSearchFinalMeasure] | None = Field(default=None, description="A final-test run's measures beside development's; null on a development run.")
+    comparison: list[GoldenSearchFinalMeasure] | None = Field(description="A final-test run's measures beside development's; null on a development run.")
 
 
 class GoldenSearchCandidateDetail(_Wire):

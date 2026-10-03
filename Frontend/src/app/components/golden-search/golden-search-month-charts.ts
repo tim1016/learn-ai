@@ -1,6 +1,6 @@
 import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec, ChartTable } from './charts/golden-search-chart-spec';
-import { dataIndexOf, tooltipFrame, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
+import { dataIndexOf, MONTH_NAMES, monthAxisText, monthText, tooltipFrame, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
 import { compactUsdText, DEVELOPMENT_NOTE, signedPercentText, signedUsdText } from './golden-search-display';
 import type { CandidateRef, MonthlyResult } from './golden-search.types';
@@ -13,13 +13,9 @@ import type { CandidateRef, MonthlyResult } from './golden-search.types';
  * has no cell, never a $0 one.
  */
 
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
 /** A calendar cell's amount to two significant figures (`+$890`, `-$1.2K`), so it fits the cell; the tooltip and table give it in full. */
 const CELL_USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumSignificantDigits: 2, signDisplay: 'exceptZero' });
 
-function monthName(month: MonthlyResult): string {
-  return `${MONTH_NAMES[month.month - 1]} ${month.year}`;
-}
 
 function monthFrom(month: MonthlyResult): string {
   return formatTimestampDisplay(month.month_start_ms, { mode: 'date-et' });
@@ -40,7 +36,7 @@ function monthTable(caption: string, months: readonly MonthlyResult[]): ChartTab
 function monthTooltip(month: MonthlyResult, theme: ChartTheme): string {
   return tooltipHtml(
     {
-      title: monthName(month),
+      title: monthText(month),
       columns: ['Value'],
       rows: [
         { label: 'Net profit', values: [signedUsdText(month.net_profit)] },
@@ -56,7 +52,7 @@ function monthTooltip(month: MonthlyResult, theme: ChartTheme): string {
 function spanText(months: readonly MonthlyResult[]): string {
   const first = months[0];
   const last = months.at(-1);
-  return first === undefined || last === undefined ? 'no months' : `${monthName(first)} to ${monthName(last)}`;
+  return first === undefined || last === undefined ? 'no months' : `${monthText(first)} to ${monthText(last)}`;
 }
 
 // ---------------------------------------------------------------- V24 month calendar
@@ -141,7 +137,7 @@ function barsOption(candidate: CandidateRef, months: readonly MonthlyResult[], t
     },
     xAxis: {
       type: 'category',
-      data: months.map((month) => `${MONTH_NAMES[month.month - 1]} ’${String(month.year).slice(-2)}`),
+      data: months.map((month) => monthAxisText(month)),
       axisLine: { lineStyle: { color: theme.axis } },
       axisTick: { show: false },
       axisLabel: { ...axisLabel, hideOverlap: true },

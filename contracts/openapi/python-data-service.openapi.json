@@ -23504,7 +23504,8 @@
           "drawdown",
           "monthly",
           "concentration_curve",
-          "trade_charts"
+          "trade_charts",
+          "comparison"
         ],
         "title": "GoldenSearchRunDetail",
         "type": "object"

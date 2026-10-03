@@ -1,11 +1,11 @@
 """The final decision's comparison: each measure of a run on the development period beside the same on the final test (#2821).
 
-Formula, for one candidate's development run D and final-test run F, with
+Formula: for one candidate's development run D and final-test run F, with
 y_D and y_F their windows' trading years (``activity.trading_years``, as the
 receipt froze them on a frequency plan, else the calendar's):
-  * annualized return = (1 + r)^(1 / y) − 1 for a run's net return r over its
-    window's y trading years; none when r is missing or r ≤ −1 (a loss of the
-    whole account has no annual rate);
+  * annualized return = (1 + r)^(1 / y) − 1 for a run's net return r (a
+    fraction) over its window's y trading years; −100% for a loss of the
+    whole account (r = −1), none when r is missing or below −1;
   * trades per trading year = trades / y (``compare_measures.trades_per_year``);
   * Sharpe and worst fall as the engine reported them;
   * change = final − development, none unless both exist.
@@ -22,7 +22,7 @@ from collections.abc import Mapping
 from fractions import Fraction
 from typing import Any
 
-from app.research.golden_search.compare_measures import trades_per_year
+from app.research.golden_search.compare_measures import completed_return, trades_per_year
 
 
 def _completed(metrics: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
@@ -31,11 +31,8 @@ def _completed(metrics: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
 
 def annualized_return(metrics: Mapping[str, Any] | None, years: Fraction) -> float | None:
     """A completed run's net return as a yearly rate over its window's trading years."""
-    run = _completed(metrics)
-    if run is None or run.get("total_return_pct") is None:
-        return None
-    total = float(run["total_return_pct"])
-    if total <= -1.0:
+    total = completed_return(metrics)
+    if total is None or total < -1.0:
         return None
     if years <= 0:
         raise ValueError("A run's window must hold at least one trading session.")

@@ -2,16 +2,7 @@ import type { CustomSeriesOption } from 'echarts/charts';
 
 import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec } from './charts/golden-search-chart-spec';
-import {
-  dataIndexOf,
-  NOT_RECORDED,
-  seriesIndexOf,
-  signedPercentOrNotRecorded,
-  tooltipFrame,
-  tooltipHtml,
-  type ChartTheme,
-  type TooltipRow,
-} from './charts/golden-search-chart-theme';
+import { axisText, dataIndexOf, NOT_RECORDED, seriesIndexOf, signedPercentOrNotRecorded, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
 import { entryText, fullPointEntries, ratioText, signedPercentText, wholePercentText } from './golden-search-display';
 import type { FoldChart, KnobDrift, LinkedFoldReturn, StrategyCapability, TestOverTimeCharts } from './golden-search.types';
@@ -61,7 +52,6 @@ function retentionText(fold: FoldChart): string {
   return fold.retention === null ? (fold.status === 'completed' ? 'not defined' : NOT_RECORDED) : wholePercentText(fold.retention);
 }
 
-const axisText = (theme: ChartTheme) => ({ color: theme.textSecondary, fontSize: 11 });
 
 // ---------------------------------------------------------------- V12 fold timeline
 

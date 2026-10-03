@@ -52,8 +52,8 @@ const CHECK_ICONS: Readonly<Record<ExamCheck['status'], string>> = { pass: 'pi-c
         </app-golden-search-panel>
         @if (equity(); as spec) {
           <app-golden-search-panel chart="final-equity" data-span="6">
-            <app-golden-search-chart [spec]="spec" [height]="240" />
-            <p caption class="caption">Each run from its fresh starting capital, at every session close of the final test.</p>
+            <app-golden-search-chart [spec]="spec" [height]="300" />
+            <p caption class="caption">Each run from its fresh starting capital at every session close of the final test, and beneath, its fall from its own peak against the worst-fall limit.</p>
           </app-golden-search-panel>
         }
         @if (months(); as spec) {
@@ -77,7 +77,7 @@ const CHECK_ICONS: Readonly<Record<ExamCheck['status'], string>> = { pass: 'pi-c
     .checks li { display: flex; gap: var(--space-2); align-items: baseline; }
     .checks li[data-status='pass'] i { color: var(--bull); }
     .checks li[data-status='fail'] i { color: var(--bear); }
-    .checks li[data-status='not_available'] i { color: var(--text-secondary); }
+    .checks li[data-status='not_available'] i { color: var(--warn); }
     .failed { display: grid; gap: var(--space-1); color: var(--bear); font-size: var(--fs-sm); }
     .link { all: unset; justify-self: start; color: var(--accent-text); font-size: var(--fs-xs); cursor: pointer; }
     .link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -113,7 +113,7 @@ export class GoldenSearchFinalChartsComponent {
     return this.runs.value().flatMap(({ key, detail }) =>
       detail.exam === null
         ? []
-        : [{ key, label: key === 'incumbent' ? 'Current settings' : this.candidateLabel(), comparison: detail.exam.comparison ?? [], returns: detail.exam.cumulative_return, monthly: detail.exam.monthly }],
+        : [{ key, label: key === 'incumbent' ? 'Current settings' : this.candidateLabel(), comparison: detail.exam.comparison ?? [], returns: detail.exam.cumulative_return, falls: detail.exam.drawdown, monthly: detail.exam.monthly }],
     );
   });
   protected readonly comparison = computed(() => {
@@ -122,7 +122,7 @@ export class GoldenSearchFinalChartsComponent {
   }, { equal: sameChart });
   protected readonly equity = computed(() => {
     const runs = this.finalRuns();
-    return runs === null || runs.every((run) => run.returns.length === 0) ? null : finalEquitySpec(runs);
+    return runs === null || runs.every((run) => run.returns.length === 0) ? null : finalEquitySpec(runs, this.study().protocol.policy.max_drawdown_ceiling);
   }, { equal: sameChart });
   protected readonly months = computed(() => {
     const runs = this.finalRuns();

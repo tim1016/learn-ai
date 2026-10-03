@@ -16,8 +16,11 @@ def test_a_return_over_two_trading_years_is_its_square_root_rate_and_over_half_a
     assert annualized_return(metrics(1.0, total_return=0.1).as_dict(), Fraction(1, 2)) == pytest.approx(0.21, abs=1e-9, rel=0)
 
 
-def test_a_wiped_out_failed_or_missing_run_has_no_annual_rate() -> None:
-    assert annualized_return(metrics(1.0, total_return=-1.0).as_dict(), Fraction(1)) is None
+def test_a_wiped_out_account_loses_all_of_it_a_year_and_a_failed_missing_or_impossible_run_has_no_rate() -> None:
+    # 0^(1/2) − 1: the whole account lost is −100% a year over any span.
+    assert annualized_return(metrics(1.0, total_return=-1.0).as_dict(), Fraction(2)) == pytest.approx(-1.0, abs=1e-9, rel=0)
+    assert annualized_return(metrics(1.0, total_return=-1.2).as_dict(), Fraction(1)) is None
+    assert annualized_return(metrics(1.0, total_return=None).as_dict(), Fraction(1)) is None
     assert annualized_return(metrics(None, total_return=None, status="failed").as_dict(), Fraction(1)) is None
     assert annualized_return(None, Fraction(1)) is None
 

@@ -1062,6 +1062,9 @@ async def test_candidate_detail_and_the_evaluation_ledger_read_back_after_the_ex
     sharpe = comparison["sharpe_ratio"]
     assert sharpe["change"] == pytest.approx(sharpe["final"] - sharpe["development"], abs=1e-9, rel=0)
     assert chosen["development"]["comparison"] is None
+    # Development's rate is over development's own trading years: the same as Compare's.
+    compared = next(item for item in (await driver.detail(row))["results"]["evidence"]["candidates"] if item["key"] == "all_period")
+    assert comparison["trades_per_year"]["development"] == pytest.approx(compared["trades_per_year"], abs=1e-9, rel=0)
     assert (await service.candidate(row.id, "recent"))["exam"] is not None  # the same point
     assert (await service.candidate(row.id, "incumbent"))["exam"] is not None  # the benchmark
 

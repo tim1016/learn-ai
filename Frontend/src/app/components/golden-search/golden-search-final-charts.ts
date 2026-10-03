@@ -1,14 +1,15 @@
 import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec } from './charts/golden-search-chart-spec';
-import { dataIndexOf, NOT_RECORDED, seriesIndexOf, signedPercentOrNotRecorded, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
+import { axisText, dataIndexOf, monthAxisText, monthText, NOT_RECORDED, seriesIndexOf, signedPercentOrNotRecorded, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
 import { percentText, ratioText, signedPercentText } from './golden-search-display';
-import type { CandidateKey, CumulativeReturnPoint, FinalMeasure, MonthlyResult } from './golden-search.types';
+import { equityChartSpec, type EquityPeriod } from './golden-search-equity-chart';
+import type { CandidateKey, CumulativeReturnPoint, DrawdownPoint, FinalMeasure, MonthlyResult } from './golden-search.types';
 
 /**
  * The Final decision charts (#2821): each measure on the development period
  * beside the final test, for the candidate and the current settings (V33),
- * their returns through the final test (V34), and the final test month by
+ * their returns and falls from peak through the final test (V34), and the final test month by
  * month (V36). Every value is the server's; the final test is the one
  * out-of-sample look, so a run that failed or did not record shows nothing,
  * never zero.
@@ -20,15 +21,14 @@ export interface FinalRun {
   readonly label: string;
   readonly comparison: readonly FinalMeasure[];
   readonly returns: readonly CumulativeReturnPoint[];
+  readonly falls: readonly DrawdownPoint[];
   readonly monthly: readonly MonthlyResult[];
 }
 
 const FINAL = 'The final test: one look at data no step chose on.';
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
 const ONE_DECIMAL = new Intl.NumberFormat('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const ROW = 64;
 
-const axisText = (theme: ChartTheme) => ({ color: theme.textSecondary, fontSize: 11 });
 
 function measureText(measure: FinalMeasure, value: number | null): string {
   if (value === null) return NOT_RECORDED;
@@ -63,12 +63,12 @@ export function finalComparisonSpec(runs: readonly FinalRun[]): ChartSpec {
     table: {
       caption: 'Each measure on the development period and the final test; — marks a value not recorded',
       columns: ['Measure', ...runs.flatMap((run) => [`${run.label}, development`, `${run.label}, final`, `${run.label}, change`])],
-      rows: measures.map((measure, i) => ({
+      rows: measures.map((measure) => ({
         key: measure.key,
         cells: [
           measure.label,
           ...runs.flatMap((run) => {
-            const own = run.comparison[i];
+            const own = run.comparison.find((item) => item.key === measure.key);
             return own === undefined ? ['—', '—', '—'] : [cellText(measureText(own, own.development)), cellText(measureText(own, own.final)), cellText(changeText(own))];
           }),
         ],
@@ -85,7 +85,7 @@ export function comparisonHeight(count: number): number {
 function comparisonOption(runs: readonly FinalRun[], theme: ChartTheme): ChartOption {
   const measures = runs[0]?.comparison ?? [];
   const periods = [
-    { key: 'development', name: 'Development', color: theme.textSecondary },
+    { key: 'development', name: 'Development', color: theme.development },
     { key: 'final', name: 'Final test', color: theme.candidates.all_period },
   ] as const;
   return {
@@ -146,63 +146,17 @@ function comparisonOption(runs: readonly FinalRun[], theme: ChartTheme): ChartOp
 
 // ---------------------------------------------------------------- V34 final-year equity
 
-/** Each run's cumulative return through the final test, at every session close. */
-export function finalEquitySpec(runs: readonly FinalRun[]): ChartSpec {
-  const sessions = [...new Set(runs.flatMap((run) => run.returns.map((point) => point.ms)))].sort((a, b) => a - b);
-  const dates = sessions.map((ms) => formatTimestampDisplay(ms, { mode: 'date-et' }));
-  const aligned = runs.map((run) => {
-    const byMs = new Map(run.returns.map((point) => [point.ms, point.value]));
-    return sessions.map((ms) => byMs.get(ms) ?? null);
-  });
-  const ends = runs.map((run, i) => `${run.label} ${signedPercentOrNotRecorded(aligned[i].filter((value): value is number => value !== null).at(-1) ?? null)}`);
-  return {
-    label: 'Final-test equity',
-    summary: `Cumulative return through the final test: ${ends.join(', ')}.`,
-    featured: runs[0]?.key ?? null,
-    option: (theme) => equityOption(runs, aligned, dates, theme),
-    table: {
-      caption: 'Cumulative return at each session close of the final test (ET); — marks a session a run did not record',
-      columns: ['Session', ...runs.map((run) => run.label)],
-      rows: sessions.map((ms, i) => ({ key: String(ms), cells: [dates[i], ...aligned.map((values) => signedPercentText(values[i]))] })),
-    },
-  };
-}
+/** The final test on the shared equity chart: each run's return through it, and its fall from its own peak beneath. */
+export const FINAL_EQUITY: EquityPeriod = { label: 'Final-test cumulative return and fall from peak', note: FINAL };
 
-function equityOption(runs: readonly FinalRun[], aligned: readonly (readonly (number | null)[])[], dates: readonly string[], theme: ChartTheme): ChartOption {
-  return {
-    grid: { left: 52, right: 72, top: 12, bottom: 28 },
-    tooltip: {
-      ...tooltipFrame(theme),
-      trigger: 'axis',
-      formatter: (params: unknown) => {
-        const index = dataIndexOf(params);
-        if (index === null) return '';
-        const rows: TooltipRow[] = runs.map((run, i) => ({
-          label: run.label,
-          values: [signedPercentOrNotRecorded(aligned[i][index] ?? null)],
-          swatch: { color: theme.candidates[run.key], dashed: run.key === 'incumbent' },
-        }));
-        return tooltipHtml({ title: `${dates[index]} · at the session close`, columns: ['Return'], rows, notes: [FINAL] }, theme);
-      },
-    },
-    xAxis: { type: 'category', data: [...dates], boundaryGap: false, axisLine: { lineStyle: { color: theme.axis } }, axisLabel: { ...axisText(theme), hideOverlap: true } },
-    yAxis: { type: 'value', splitNumber: 4, axisLabel: { ...axisText(theme), formatter: (value: number) => signedPercentText(value) }, splitLine: { lineStyle: { color: theme.gridLine } } },
-    series: runs.map((run, i) => {
-      const color = theme.candidates[run.key];
-      return {
-        id: `equity:${run.key}`,
-        name: run.label,
-        type: 'line' as const,
-        data: aligned[i].map((value) => value ?? '-'),
-        showSymbol: false,
-        connectNulls: false,
-        lineStyle: { color, width: 2, type: run.key === 'incumbent' ? ('dashed' as const) : ('solid' as const) },
-        itemStyle: { color },
-        endLabel: { show: true, color, fontSize: 11, formatter: () => signedPercentOrNotRecorded(aligned[i].filter((value): value is number => value !== null).at(-1) ?? null) },
-        emphasis: { focus: 'series' as const, blurScope: 'global' as const },
-      };
-    }),
-  };
+/** Each run's cumulative return and fall from peak through the final test, against the worst-fall limit the final test is judged by. */
+export function finalEquitySpec(runs: readonly FinalRun[], ceiling: number): ChartSpec {
+  return equityChartSpec(
+    runs.map((run) => ({ key: run.key, label: run.label, returns: run.returns, falls: run.falls })),
+    runs[0]?.key ?? 'incumbent',
+    ceiling,
+    FINAL_EQUITY,
+  );
 }
 
 // ---------------------------------------------------------------- V36 final-year months
@@ -219,7 +173,7 @@ export function finalMonthsSpec(runs: readonly FinalRun[]): ChartSpec {
     table: {
       caption: 'Net return by final-test month (month from, ET); — marks a month a run did not record',
       columns: ['Month', ...runs.map((run) => run.label)],
-      rows: months.map((month) => ({ key: String(month.month_start_ms), cells: [`${MONTH_NAMES[month.month - 1]} ${month.year}`, ...runs.map((run) => signedPercentText(returnOf(run, month)))] })),
+      rows: months.map((month) => ({ key: String(month.month_start_ms), cells: [monthText(month), ...runs.map((run) => signedPercentText(returnOf(run, month)))] })),
     },
   };
 }
@@ -236,10 +190,10 @@ function monthsOption(runs: readonly FinalRun[], months: readonly MonthlyResult[
         if (month === undefined) return '';
         const rows: TooltipRow[] = runs.map((run) => ({ label: run.label, values: [signedPercentOrNotRecorded(returnOf(run, month))], swatch: { color: theme.candidates[run.key], dashed: false } }));
         const from = formatTimestampDisplay(month.month_start_ms, { mode: 'date-et' });
-        return tooltipHtml({ title: `${MONTH_NAMES[month.month - 1]} ${month.year}`, columns: ['Net return'], rows, notes: [`The month from ${from} (ET).`, FINAL] }, theme);
+        return tooltipHtml({ title: monthText(month), columns: ['Net return'], rows, notes: [`The month from ${from} (ET).`, FINAL] }, theme);
       },
     },
-    xAxis: { type: 'category', data: months.map((month) => `${MONTH_NAMES[month.month - 1]} ’${String(month.year).slice(-2)}`), axisLine: { lineStyle: { color: theme.axis } }, axisTick: { show: false }, axisLabel: axisText(theme) },
+    xAxis: { type: 'category', data: months.map((month) => monthAxisText(month)), axisLine: { lineStyle: { color: theme.axis } }, axisTick: { show: false }, axisLabel: axisText(theme) },
     yAxis: { type: 'value', splitNumber: 4, axisLabel: { ...axisText(theme), formatter: (value: number) => signedPercentText(value) }, splitLine: { lineStyle: { color: theme.gridLine } } },
     series: runs.map((run) => ({
       id: `months:${run.key}`,

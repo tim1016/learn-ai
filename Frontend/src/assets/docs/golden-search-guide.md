@@ -1083,7 +1083,7 @@ Which measures held up on the final test?
 
 #### What you're looking at
 
-A block for each measure, each on its own scale: annualized return, Sharpe, worst fall and trades a trading year. In each block, the candidate and the current settings each have a grey bar for the development period and a blue bar for the final test. Hover a bar for both values and the change.
+A block for each measure, each on its own scale: annualized return, Sharpe, worst fall and trades a trading year. In each block, the candidate and the current settings each have a teal bar for the development period and a blue bar for the final test. Hover a bar for both values and the change.
 
 The return and the trade count are put on a yearly basis so periods of different lengths compare:
 
@@ -1096,7 +1096,7 @@ Each window's trading years count its sessions in each calendar year against all
 #### How to read it
 
 1. Each block is one measure on its own scale: annualized return, Sharpe, worst fall, trades a year.
-2. The grey bar is the development period, where the settings were chosen.
+2. The teal bar is the development period: the data the study chose from.
 3. The blue bar is the final test: data no step chose on.
 4. Compare the candidate’s change with the current settings’: a drop both share is the market; a drop only the candidate shows is the fit.
 
@@ -1118,19 +1118,23 @@ How did the candidate and the current settings do through the final test?
 
 #### What you're looking at
 
-Each run's cumulative return through the final test, at every session close, from its own fresh starting capital: the candidate as a solid line and the current settings dashed. The label at the right edge is where each ended. Hover a session for both values.
+The same two-part chart as Compare's equity and fall from peak, drawn for the final test. On top, each run's cumulative return at every session close, from its own fresh starting capital: the candidate as a solid line and the current settings dashed, with the label at the right edge where each ended. Beneath, each run's fall from its own highest point so far, with the worst-fall limit dashed. Hover a session for both values of both runs.
+
+$$\text{fall from peak} = \frac{\text{equity today}}{\text{highest equity so far}} - 1$$
 
 #### How to read it
 
 1. Read the labels at the right edge: where each run ended the final test.
 2. Follow each line: a steady climb is more convincing than one jump.
-3. Find each line’s lowest point: its deepest drop through the final test.
-4. This is one look: a short final test can swing either way by chance.
+3. Drop to the lower part and find its lowest point: the deepest fall from a peak at a session close.
+4. The dashed line is the worst-fall limit. The final test judges the candidate’s fall bar by bar, which can be deeper than this line.
 
 #### Good signs and warning signs
 
-- Good: the candidate ahead for most of the test, not just at the end.
+- Good: the candidate ahead for most of the test, not just at the end, with shallow falls.
 - Warning: the candidate ahead only after one late jump.
+- Warning: a fall near the limit. The rule reads the bar-by-bar fall, which can cross the limit even when this line does not.
+- This is one look: a short final test can swing either way by chance.
 
 #### An everyday comparison
 
