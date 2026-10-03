@@ -18,6 +18,7 @@ from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.account_money import holdings_text
 from app.broker.alpaca.clerk.budgets import BudgetUnavailable
 from app.broker.alpaca.clerk.fills import FillRecord
+from app.broker.alpaca.clerk.models import InstanceCustodyProof
 from app.broker.alpaca.clerk.money import display_dollars
 from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.recovery_reduction import (
@@ -98,6 +99,7 @@ def adapt_sqlite_panel(
     economics: EconomicSnapshot | None = None,
     repository: ClerkSqliteRepository | None = None,
     flatten_verdict: SessionAuthorityState | LegRefusal | None = None,
+    pass_proof: InstanceCustodyProof | None = None,
 ) -> BotPanelView:
     """Replace JSONL-derived custody fields with one SQLite fold snapshot.
 
@@ -121,6 +123,9 @@ def adapt_sqlite_panel(
     session the generic Execute safe flatten button is not the way to flatten
     (#2007): see ``_flatten_session_blocker``.
 
+    ``pass_proof`` is the Clerk's latest published pass's proof of this bot
+    (``SqliteAlpacaClerkFacade.published_custody``), which an uncleanly ended
+    bot's exposure notices accept as a check of what it holds (#2826).
     """
     if economics is not None:
         _require_coherent_economic_snapshot(projection, economics)
@@ -141,7 +146,7 @@ def adapt_sqlite_panel(
     }
     return panel.model_copy(
         update={
-            "health": _with_terminal_exposure_notices(panel, projection),
+            "health": _with_terminal_exposure_notices(panel, projection, pass_proof),
             "updated_at_ms": projection.generated_at_ms,
             "revision": projection.control_revision,
             "mission_verdict": _mission_verdict(panel, projection),
@@ -779,17 +784,40 @@ def _clerk_needs_attention(projection: ClerkProjection) -> bool:
     return projection.authority_health != "healthy" or bool(projection.uncertainties) or bool(projection.holds)
 
 
-def _clerk_vouches_for_positions(projection: ClerkProjection) -> bool:
-    """Whether the Clerk's attributed positions can be taken as what the bot holds.
+def _vouched_holdings(
+    projection: ClerkProjection, sid: str, pass_proof: InstanceCustodyProof | None
+) -> dict[str, float] | None:
+    """What the Clerk vouches this bot holds, by symbol; ``None`` when it cannot vouch.
 
     Narrower than ``_clerk_needs_attention``: a hold blocks new exposure but
     leaves what is held known, while an unhealthy authority or an open
     uncertainty means the attribution itself may be wrong.
+
+    Either check of the account against Alpaca vouches (#2826):
+
+    - the Clerk's latest published pass, when it saw the bot's every custody
+      transition and can prove what the bot holds (``pass_proof``). The Clerk
+      runs one every 15 s, so this is the proof an ended bot normally has;
+    - a fresh account-wide Reconcile now receipt.
     """
+    if projection.authority_health != "healthy" or projection.uncertainties:
+        return None
+    if pass_proof is not None and not pass_proof.unprovable:
+        return dict(pass_proof.exposure)
+    if not _has_fresh_account_receipt(projection):
+        return None
+    return {
+        position.symbol: position.attributed_qty
+        for position in projection.positions
+        if position.strategy_instance_id == sid and position_quantity_is_nonzero(position.attributed_qty)
+    }
+
+
+def _has_fresh_account_receipt(projection: ClerkProjection) -> bool:
+    """Whether a Reconcile now receipt for the whole account is still fresh: what Flatten asks for."""
     reconciliation = projection.latest_reconciliation
     return (
-        projection.authority_health == "healthy" and not projection.uncertainties
-        and reconciliation is not None and reconciliation.outcome == "RESOLVED_SUCCESS"
+        reconciliation is not None and reconciliation.outcome == "RESOLVED_SUCCESS"
         and reconciliation.effect_operation_id is None and reconciliation.order_ref is None
         and 0 <= projection.generated_at_ms - reconciliation.attempted_at_ms <= FRESH_EVIDENCE_MAX_AGE_MS
     )
@@ -811,51 +839,70 @@ def _may_still_fill(order: ProjectedOrder) -> bool:
     return order.may_fill
 
 
-def _with_terminal_exposure_notices(panel: BotPanelView, projection: ClerkProjection) -> BotHealthCard:
+def _with_terminal_exposure_notices(
+    panel: BotPanelView, projection: ClerkProjection, pass_proof: InstanceCustodyProof | None
+) -> BotHealthCard:
     health = panel.health
     outcome = health.duty_outcome
     if outcome is None:
         return health
     notices = terminal_exposure_notices(
         projection, sid=panel.strategy_instance_id, symbol=panel.symbol,
-        kind=outcome.kind, reason_code=outcome.reason_code, running=health.running,
+        kind=outcome.kind, running=health.running, pass_proof=pass_proof,
     )
     return health.model_copy(update={"duty_outcome": outcome.model_copy(update={"exposure_notices": notices})})
 
 
+def ended_uncleanly(*, kind: str, running: bool) -> bool:
+    """Whether a bot's end owes exposure notices: its run is over and did not end cleanly."""
+    return not running and kind in UNCLEAN_DUTY_OUTCOMES
+
+
 def terminal_exposure_notices(
-    projection: ClerkProjection, *, sid: str, symbol: str, kind: str, reason_code: str, running: bool,
+    projection: ClerkProjection,
+    *,
+    sid: str,
+    symbol: str,
+    kind: str,
+    running: bool,
+    pass_proof: InstanceCustodyProof | None,
 ) -> list[ExposureNoticeView]:
-    """One backend-authored warning set shared by panel, account desk and bell."""
-    if running or kind not in UNCLEAN_DUTY_OUTCOMES:
+    """One backend-authored warning set shared by panel, account desk and bell.
+
+    ``pass_proof`` is the Clerk's latest published pass's proof of this bot, or
+    ``None`` when that pass did not see the bot's every transition.
+    """
+    if not ended_uncleanly(kind=kind, running=running):
         return []
     notices: list[ExposureNoticeView] = []
-    if not _clerk_vouches_for_positions(projection):
+    held = _vouched_holdings(projection, sid, pass_proof)
+    # Flatten still asks for a fresh Reconcile now receipt; the Clerk's own
+    # pass vouches for the notice only, so the notice never offers a Flatten
+    # the page would refuse.
+    flatten_ready = _has_fresh_account_receipt(projection)
+    if held is None:
         notices.append(_POSITION_UNVERIFIED)
-    else:
-        held = [
-            position
-            for position in projection.positions
-            if position.strategy_instance_id == sid and position_quantity_is_nonzero(position.attributed_qty)
-        ]
-        if held:
-            positions = ", ".join(f"{position.attributed_qty:g} {position.symbol}" for position in held)
+    elif held:
+        positions = ", ".join(f"{quantity:g} {held_symbol}" for held_symbol, quantity in held.items())
+        if exit_in_progress(projection, sid):
             closing = (
                 "The Clerk is still working this bot's exit order; Flatten becomes available "
                 "if that order ends without closing the position."
-                if exit_in_progress(projection, sid)
-                else "Use Flatten to close this position."
             )
-            notices.append(
-                ExposureNoticeView(
-                    kind="position_unmanaged",
-                    label="Bot is not managing this position",
-                    explanation=(
-                        f"The Clerk attributes {positions} to this bot. The run has ended and "
-                        f"will not make further decisions. {closing}"
-                    ),
-                )
+        elif flatten_ready:
+            closing = "Use Flatten to close this position."
+        else:
+            closing = "Reconcile now, then use Flatten to close this position."
+        notices.append(
+            ExposureNoticeView(
+                kind="position_unmanaged",
+                label="Bot is not managing this position",
+                explanation=(
+                    f"The Clerk attributes {positions} to this bot. The run has ended and "
+                    f"will not make further decisions. {closing}"
+                ),
             )
+        )
     if any(
         order.role == "ENTRY" and _may_still_fill(order)
         for operation in projection.operations
@@ -865,7 +912,7 @@ def terminal_exposure_notices(
         notices.append(_ENTRY_ORDER_WORKING)
     return [notice.model_copy(update={
         "strategy_instance_id": sid, "symbol": symbol,
-        "action_label": "Flatten" if notice.kind == "position_unmanaged" else "Open bot",
+        "action_label": "Flatten" if notice.kind == "position_unmanaged" and flatten_ready else "Open bot",
     }) for notice in notices]
 
 

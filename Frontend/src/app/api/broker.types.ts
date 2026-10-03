@@ -1715,7 +1715,8 @@ export interface paths {
          *     A protected read (the always-on data-plane secret gates the whole router).
          *     Transport only: resolve the account-scoped Clerk facade and delegate — the
          *     Clerk owns the journal-derived hold + verdict + outstanding-intent state.
-         *     It never reads the broker: every fact is the custody projection's.
+         *     It never reads the broker: every fact is the custody projection's, with
+         *     the time of the Clerk's own latest clean pass beside it.
          */
         get: operations["get_clerk_status_api_brokers__broker__clerk_status_get"];
         put?: never;
@@ -13017,12 +13018,16 @@ export interface components {
          * @description Judge a strategy's saved gates (and an unsaved draft) on these candles.
          *
          *     ``settings`` are the deployed settings the candles were decided under; a
-         *     gate naming a setting reads it from here.
+         *     gate naming a setting reads it from here. ``lead_in`` is the view's earlier
+         *     decision bars: a catalogue indicator warms up on them, and no gate is
+         *     judged on them (#2800).
          */
         GateEvaluationRequest: {
             /** Candles */
             candles: components["schemas"]["GateCandle"][];
             draft?: components["schemas"]["CustomGateInput"] | null;
+            /** Lead In */
+            lead_in?: components["schemas"]["LeadInBar"][];
             /** Settings */
             settings?: {
                 [key: string]: number | string | boolean | null;
@@ -17540,6 +17545,27 @@ export interface components {
              * @enum {string}
              */
             overall_status: "pass" | "warn" | "fail";
+        };
+        /**
+         * LeadInBar
+         * @description One decision bar from before the view's first candle, labelled by its close.
+         *
+         *     A catalogue indicator is computed over these and then the candles, so it
+         *     has warmed up by the first candle. A lead-in bar is never drawn or judged.
+         */
+        LeadInBar: {
+            /** Bar Close Ms */
+            bar_close_ms: number;
+            /** Close */
+            close: number;
+            /** High */
+            high: number;
+            /** Low */
+            low: number;
+            /** Open */
+            open: number;
+            /** Volume */
+            volume: number;
         };
         /**
          * LeanEngineRunJobRequest
@@ -23358,6 +23384,8 @@ export interface components {
             /** Decision Timeframe Ms */
             decision_timeframe_ms: number;
             declaration: components["schemas"]["StrategyViewDeclarationView"];
+            /** Lead In */
+            lead_in?: components["schemas"]["LeadInBar"][];
             /** Notices */
             notices?: string[];
             /** Run Id */

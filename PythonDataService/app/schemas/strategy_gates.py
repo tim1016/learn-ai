@@ -7,10 +7,12 @@ Strategy Lab, and it only shades candles; it never trades.
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.strategy_view import MAX_LEAD_IN_BARS, DecisionBarOhlcv, LeadInBar
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 GateSign = Literal["gt", "lt"]
@@ -75,17 +77,9 @@ class StrategyGateList(BaseModel):
     gates: list[CustomGate]
 
 
-class GateCandle(BaseModel):
+class GateCandle(DecisionBarOhlcv):
     """One decision candle a gate is judged on: its OHLCV and the bot's values by key."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    bar_close_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS)
-    open: FiniteFloat
-    high: FiniteFloat
-    low: FiniteFloat
-    close: FiniteFloat
-    volume: FiniteFloat = Field(ge=0)
     values: dict[str, FiniteFloat | None] = Field(default_factory=dict)
 
 
@@ -93,7 +87,9 @@ class GateEvaluationRequest(BaseModel):
     """Judge a strategy's saved gates (and an unsaved draft) on these candles.
 
     ``settings`` are the deployed settings the candles were decided under; a
-    gate naming a setting reads it from here.
+    gate naming a setting reads it from here. ``lead_in`` is the view's earlier
+    decision bars: a catalogue indicator warms up on them, and no gate is
+    judged on them (#2800).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -101,7 +97,17 @@ class GateEvaluationRequest(BaseModel):
     symbol: str = Field(min_length=1, max_length=20)
     settings: GateSettings = Field(default_factory=dict)
     candles: list[GateCandle] = Field(max_length=20_000)
+    lead_in: list[LeadInBar] = Field(default_factory=list, max_length=MAX_LEAD_IN_BARS)
     draft: CustomGateInput | None = None
+
+    @model_validator(mode="after")
+    def _lead_in_runs_up_to_the_candles(self) -> GateEvaluationRequest:
+        closes = [bar.bar_close_ms for bar in self.lead_in]
+        if any(later <= earlier for earlier, later in pairwise(closes)):
+            raise ValueError("Lead-in bars must be in time order, each closing after the one before it.")
+        if closes and self.candles and closes[-1] >= self.candles[0].bar_close_ms:
+            raise ValueError("Every lead-in bar must close before the first candle.")
+        return self
 
 
 class GateEvaluationResponse(BaseModel):

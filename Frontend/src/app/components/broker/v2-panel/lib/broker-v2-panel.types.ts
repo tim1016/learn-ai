@@ -160,6 +160,8 @@ export type ChartHistoryResponse = components['schemas']['ChartHistoryResponse']
 export type StrategyViewResponse = components['schemas']['StrategyViewResponse'];
 /** One decision bar, labelled by its close (`bar_close_ms`). */
 export type StrategyViewCandle = components['schemas']['StrategyViewCandle'];
+/** An earlier decision bar a catalogue indicator warms up on; never drawn or judged (#2800). */
+export type LeadInBar = components['schemas']['LeadInBar'];
 export type StrategyViewDeclarationView = components['schemas']['StrategyViewDeclarationView'];
 export type StrategyViewGateView = components['schemas']['StrategyViewGateView'];
 /** `pane` is `"price"` for an overlay, another id for its own pane, `null` for listed-only. */

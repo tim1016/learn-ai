@@ -112,6 +112,7 @@ from app.services.broker_v2_panel.panel_scope import (
 from app.services.broker_v2_panel.rehearsal_roster import finished_rehearsal_rows
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     adapt_sqlite_panel,
+    ended_uncleanly,
     exit_in_progress,
     has_bot_scoped_custody_problem,
 )
@@ -556,6 +557,15 @@ async def _get_panel_with_entries_from_authority(
         startup_join=None if source_evidence is None else source_evidence.startup_join,
         render_explanation=_explanation_renderer(binding),
     )
+    # An uncleanly ended bot's notices take the Clerk's own latest pass as a
+    # check of what it holds (#2826). Only such a bot asks: the read takes the
+    # intake lock, which a running bot's page has no reason to wait on.
+    outcome = panel.health.duty_outcome
+    pass_proof = (
+        await facade.published_custody(sid)
+        if outcome is not None and ended_uncleanly(kind=outcome.kind, running=panel.health.running)
+        else None
+    )
     # The rail reads the same binding-selected repository and send policy.
     panel = adapt_sqlite_panel(
         panel,
@@ -564,7 +574,7 @@ async def _get_panel_with_entries_from_authority(
         economics=economics,
         repository=facade.repository,
         flatten_verdict=facade.flatten_send_verdict(),
-
+        pass_proof=pass_proof,
     )
     panel = _with_bot_page(panel, evidence, run=run, facade=facade, now_ms=captured_now_ms)
     return panel, entries, session_fills

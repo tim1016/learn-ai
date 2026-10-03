@@ -25,6 +25,7 @@ from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_sto
 from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
 from app.broker.alpaca.clerk.sqlite.enter import accept_enter, submit_enter
 from app.broker.alpaca.clerk.sqlite.exit import accept_exit
+from app.broker.alpaca.clerk.sqlite.reconcile import AccountReconciliationResult
 from app.broker.alpaca.clerk.sqlite.reconciliation_sweep import ReconciliationSweep
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
@@ -1917,8 +1918,8 @@ async def test_a_bot_that_ended_holding_says_so_and_lists_its_runs_fill(api) -> 
     assert [(fill["side"], fill["quantity"]) for fill in body["run_fills"]] == [("buy", 1.0)]
 
 
-async def test_a_crashed_run_needs_attention_and_says_how_it_ended(api, monkeypatch: pytest.MonkeyPatch) -> None:
-    app, repo = api
+def _crash_the_run(repo: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch) -> None:
+    """End the fixture bot's run as a crash, in the registry and the Clerk's lifecycle projection."""
     submit_stop_run(repo, account_id=ACCT, strategy_instance_id=SID, lifecycle_run_id=_run_id(SID))
     registry = get_bot_task_registry()
     registry._running = False  # type: ignore[union-attr]
@@ -1934,12 +1935,38 @@ async def test_a_crashed_run_needs_attention_and_says_how_it_ended(api, monkeypa
         return replace(evidence, status=evidence.status.model_copy(update={"duty_outcome": crash}))
 
     monkeypatch.setattr(panel_data_source, "read_sqlite_panel_evidence", with_the_crash)
+
+
+async def test_a_crashed_run_needs_attention_and_says_how_it_ended(api, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, repo = api
+    _crash_the_run(repo, monkeypatch)
     async with _client(app) as client:
         page = (await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")).json()["bot_page"]
 
     assert page["status"]["state"] == "needs_attention"
     assert " · crashed · " in page["summary"]["text"]
     assert not any(entry["primary"] for entry in page["toolbar"] if entry["action_id"] == "deploy_again")
+
+
+async def test_a_crashed_bots_unverified_position_notice_clears_on_the_clerks_own_pass(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2826: the bot page counted only a Reconcile now receipt under 30 s old, so
+    the notice came back although the Clerk checks the whole account every 15 s."""
+    app, repo = api
+    _crash_the_run(repo, monkeypatch)
+    facade = get_active_clerk_runtime().clerk
+    url = f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel"
+
+    async with _client(app) as client:
+        before = (await client.get(url)).json()["health"]["duty_outcome"]["exposure_notices"]
+        facade.publish_sweep_reconciliation(AccountReconciliationResult(
+            verdict="clean", through_sequence=repo.last_custody_sequence(SID),
+        ))
+        after = (await client.get(url)).json()["health"]["duty_outcome"]["exposure_notices"]
+
+    assert [notice["kind"] for notice in before] == ["position_unverified"]
+    assert after == []
 
 
 async def test_a_hold_on_the_bots_own_custody_needs_attention(api) -> None:

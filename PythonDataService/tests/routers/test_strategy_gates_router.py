@@ -187,3 +187,53 @@ async def test_evaluate_judges_saved_gates_and_a_draft_on_the_callers_candles(cl
     body = judged.json()
     assert body["results"] == {gate["gate_id"]: [None, False, True], "draft": [True, True, True]}
     assert body["chart_computed"] == []
+
+
+def _lead_in_bar(close_ms: int, close: float) -> dict:
+    return {"bar_close_ms": close_ms, "open": close - 0.5, "high": close + 1, "low": close - 1, "close": close, "volume": 1000}
+
+
+async def test_evaluate_warms_a_catalogue_variable_up_on_the_callers_lead_in(client: httpx.AsyncClient) -> None:
+    first_close_ms = 1_790_700_000_000
+    request = {
+        "symbol": "SPY",
+        "candles": [_candle(first_close_ms + i * 900_000, 100.0 + i, None) for i in range(3)],
+        "draft": {"label": "draft", "expression": "close - SMA3", "sign": "gt"},
+    }
+    lead_in = [_lead_in_bar(first_close_ms - 1_800_000, 98.0), _lead_in_bar(first_close_ms - 900_000, 99.0)]
+    async with client:
+        cold = await client.post(f"{_EMA}/evaluate", json=request)
+        warmed = await client.post(f"{_EMA}/evaluate", json={**request, "lead_in": lead_in})
+
+    assert cold.json()["results"] == {"draft": [None, None, True]}
+    assert warmed.status_code == 200, warmed.text
+    assert warmed.json()["results"] == {"draft": [True, True, True]}
+    assert warmed.json()["chart_computed"] == ["SMA3"]
+
+
+@pytest.mark.parametrize(
+    ("lead_in_closes_before_first_candle_ms", "reason"),
+    [
+        ([900_000, 0], "must close before the first candle"),
+        ([900_000, 1_800_000], "must be in time order"),
+        ([900_000, 900_000], "must be in time order"),
+    ],
+)
+async def test_a_lead_in_that_overlaps_the_candles_or_is_out_of_order_is_refused(
+    client: httpx.AsyncClient, lead_in_closes_before_first_candle_ms: list[int], reason: str
+) -> None:
+    first_close_ms = 1_790_700_000_000
+    async with client:
+        refused = await client.post(
+            f"{_EMA}/evaluate",
+            json={
+                "symbol": "SPY",
+                "candles": [_candle(first_close_ms, 100.0, 50.0)],
+                "lead_in": [
+                    _lead_in_bar(first_close_ms - before_ms, 99.0) for before_ms in lead_in_closes_before_first_candle_ms
+                ],
+            },
+        )
+
+    assert refused.status_code == 422
+    assert reason in refused.json()["detail"][0]["msg"]
