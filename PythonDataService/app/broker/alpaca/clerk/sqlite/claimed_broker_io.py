@@ -6,7 +6,6 @@ import asyncio
 from dataclasses import dataclass
 
 from app.broker.alpaca.clerk.sqlite.account_open_work import (
-    MAX_OPEN_ORDER_SNAPSHOT,
     OpenOrdersThenPositions,
     read_open_orders_then_positions,
 )
@@ -193,27 +192,6 @@ class ClaimedBrokerIO:
             return exc
         self._renew()
         return observed
-
-    async def observe_orders_since(
-        self, read: BrokerReadPort, *, after_ms: int
-    ) -> list[BrokerOrder] | BrokerError:
-        """Every order the account was sent after ``after_ms``, in any state, or a value-domain error (#2854).
-
-        Read under the claim, with :meth:`observe_open_orders_then_positions`'s
-        shape: a failed read is the caller's to refuse on. One page of the
-        most a read returns, newest first; a full page may not be all of
-        them, and what that means is the caller's to decide.
-        """
-        self._renew()
-        try:
-            orders = await read.list_orders(
-                status="all", limit=MAX_OPEN_ORDER_SNAPSHOT, after_ms=after_ms
-            )
-        except BrokerError as exc:
-            self._renew()
-            return exc
-        self._renew()
-        return orders
 
     async def observe_exact(
         self, client_order_id: str

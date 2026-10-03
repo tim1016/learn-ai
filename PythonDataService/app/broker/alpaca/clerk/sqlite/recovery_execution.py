@@ -38,6 +38,7 @@ from app.broker.alpaca.clerk.sqlite.safe_flatten_execution import (
     SafeFlattenResult,
 )
 from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import (
+    AttestationFindings,
     OrderOutcomeAttestation,
     UnknownOrderSettlementReceipt,
     UnknownOrderSettlementRefused,
@@ -116,6 +117,14 @@ class ActiveSqliteRecoveryFacade(Protocol):
         operator: str,
         reason: str | None,
     ) -> UnknownOrderSettlementReceipt: ...
+
+    async def check_unknown_exit_order(
+        self,
+        *,
+        strategy_instance_id: str,
+        presented: ProjectedUnknownExitOrder,
+        attestation: OrderOutcomeAttestation,
+    ) -> AttestationFindings: ...
 
 
 @dataclass(frozen=True)
@@ -328,7 +337,7 @@ async def execute_recovery_action(
         )
     if request.action_id == "settle_unknown_exit_order":
         strategy_instance_id = _require_strategy_instance(context)
-        presented = presented_unknown_exit_order(context, capability, request.execution_ref)
+        presented = _presented_unknown_exit_order(context, capability, request.execution_ref)
         if request.attestation is None:
             raise RecoveryExecutionError(
                 "Say what Alpaca shows for this order: that it has no such order, or the order's "
@@ -361,7 +370,28 @@ async def execute_recovery_action(
     )
 
 
-def presented_unknown_exit_order(
+async def check_settlement_attestation(
+    facade: ActiveSqliteRecoveryFacade,
+    *,
+    context: RecoveryPolicyContext,
+    capability: RecoveryCapability,
+    attestation: OrderOutcomeAttestation,
+) -> AttestationFindings:
+    """What the Clerk reads at the broker now for ``attestation``, settling nothing (#2854).
+
+    ``capability`` is the settle action as ``context`` presents it, already
+    rechecked against the caller's token; the order asked about is the one
+    it authorizes. The reads a settlement would rest on are made and
+    answered; only :func:`execute_recovery_action` settles.
+    """
+    return await facade.check_unknown_exit_order(
+        strategy_instance_id=_require_strategy_instance(context),
+        presented=_presented_unknown_exit_order(context, capability, capability.execution_ref),
+        attestation=attestation,
+    )
+
+
+def _presented_unknown_exit_order(
     context: RecoveryPolicyContext,
     capability: RecoveryCapability,
     execution_ref: str | None,

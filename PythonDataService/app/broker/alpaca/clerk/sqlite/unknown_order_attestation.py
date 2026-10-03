@@ -59,14 +59,16 @@ from __future__ import annotations
 import json
 import logging
 import math
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from uuid import UUID
 
 from app.broker.alpaca.clerk.sqlite.account_open_work import (
+    MAX_OPEN_ORDER_SNAPSHOT,
     broker_order_in_flight,
     open_order_snapshot_is_full,
+    read_open_orders_then_positions,
 )
-from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
 from app.broker.alpaca.clerk.sqlite.exit_resolution import (
     ORDER_ATTESTED_ABSENT,
     attested_absent_exit_notice,
@@ -189,6 +191,26 @@ class _AccountRead:
 
 
 @dataclass(frozen=True)
+class _AbsentReads:
+    """What the Clerk read at Alpaca for "no such order": two rounds, the second after the first returned."""
+
+    rounds: tuple[_AccountRead, _AccountRead]
+    since_ms: int
+    observed_at_ms: int
+
+
+@dataclass(frozen=True)
+class _OrderRead:
+    """What the Clerk read at Alpaca for "it is the order under this id": that order."""
+
+    observed: BrokerOrder
+    observed_at_ms: int
+
+
+type _AlpacaRead = _AbsentReads | _OrderRead
+
+
+@dataclass(frozen=True)
 class _AbsenceProof:
     """What both rounds agreed on, and the attribution it was set against."""
 
@@ -203,11 +225,85 @@ class _AbsenceProof:
 
 
 @dataclass(frozen=True)
-class _Commit:
-    """Who settles the order, and why: absent for a check, which writes nothing."""
+class _Operator:
+    """Who settles the order, and why."""
 
     operator: str
     operator_reason: str | None
+
+
+def _no_claim_to_renew() -> None:
+    """A check holds no claim: it settles nothing, so it has nothing to keep."""
+
+
+@dataclass(frozen=True)
+class _AlpacaReads:
+    """Alpaca as an attestation reads it: reads only, and each one refuses when it fails.
+
+    ``around_each_read`` runs before and after every read. A settlement
+    renews the EXIT's claim there, as every broker contact of a resolution
+    does, so one that lost its claim reads no further and commits nothing. A
+    check holds no claim. Nothing here can send or cancel an order.
+    """
+
+    read: BrokerReadPort
+    trade: BrokerTradePort
+    around_each_read: Callable[[], None]
+
+    async def _answer[T](self, ask: Callable[[], Awaitable[T]]) -> T:
+        self.around_each_read()
+        try:
+            return await ask()
+        except BrokerError as error:
+            raise _broker_unreadable(error) from error
+        finally:
+            self.around_each_read()
+
+    async def order_sent_as(self, client_order_id: str) -> BrokerOrder | None:
+        """The order's exact lookup by the client order id it was sent under."""
+        observed = await self._answer(lambda: self.trade.get_order_by_client_order_id(client_order_id))
+        if observed is not None and observed.client_order_id != client_order_id:
+            raise _broker_unreadable(
+                BrokerError(
+                    f"broker returned client_order_id={observed.client_order_id!r}, "
+                    f"expected {client_order_id!r}"
+                )
+            )
+        return observed
+
+    async def order_with_id(self, broker_order_id: str) -> BrokerOrder | None:
+        """The order Alpaca has under ``broker_order_id``; ``None`` for an id it has no order under."""
+        self.around_each_read()
+        try:
+            observed = await self.trade.get_order_by_broker_order_id(broker_order_id)
+        except BrokerRequestInvalid:
+            # An id Alpaca could not take as an order id names no order it has.
+            return None
+        except BrokerError as error:
+            raise _broker_unreadable(error) from error
+        finally:
+            self.around_each_read()
+        if observed is not None and observed.order_id != broker_order_id:
+            raise _broker_unreadable(
+                BrokerError(f"broker returned order_id={observed.order_id!r}, expected {broker_order_id!r}")
+            )
+        return observed
+
+    async def open_orders_then_positions(self) -> tuple[list[BrokerOrder], list[BrokerPosition]]:
+        open_orders, positions = await self._answer(lambda: read_open_orders_then_positions(self.read))
+        if isinstance(positions, BrokerError):
+            raise _broker_unreadable(positions)
+        return open_orders, positions
+
+    async def orders_since(self, after_ms: int) -> list[BrokerOrder]:
+        """Every order the account was sent after ``after_ms``, in any state.
+
+        One page of the most a read returns, newest first; a full page may
+        not be all of them, and the proof refuses on one.
+        """
+        return await self._answer(
+            lambda: self.read.list_orders(status="all", limit=MAX_OPEN_ORDER_SNAPSHOT, after_ms=after_ms)
+        )
 
 
 async def settle_unknown_exit_order(
@@ -225,10 +321,13 @@ async def settle_unknown_exit_order(
     """Settle ``presented`` on the operator's attestation, once the Clerk's own reads agree.
 
     ``presented`` is the order as the catalog offered it; it is read again
-    under the claim and again as the settlement commits, and must still be
-    that order. ``operator`` is who attests, recorded with their reason.
-    Raises :class:`UnknownOrderSettlementRefused`, having written nothing,
-    whenever the Clerk's reads do not bear the attestation out.
+    before the claim is taken and again as the settlement commits, and must
+    still be that order. ``operator`` is who attests, recorded with their
+    reason. Raises :class:`UnknownOrderSettlementRefused`, having written
+    nothing, whenever the Clerk's reads do not bear the attestation out.
+
+    Everything the durable records alone refuse is refused first, before the
+    EXIT is claimed and before Alpaca is asked anything.
     """
     if not operator or len(operator) > 64:
         raise UnknownOrderSettlementRefused(
@@ -236,18 +335,50 @@ async def settle_unknown_exit_order(
             "A settled order records who settled it, and no operator identity was given. "
             "Nothing was changed.",
         )
-    settled = await _attest(
-        repo,
-        read=read,
-        trade=trade,
-        intake=intake,
-        strategy_instance_id=strategy_instance_id,
-        presented=presented,
-        attestation=attestation,
-        commit=_Commit(operator=operator, operator_reason=(operator_reason or "").strip() or None),
+    by = _Operator(operator=operator, operator_reason=(operator_reason or "").strip() or None)
+    _require_a_broker_account(trade)
+    await to_thread(
+        lambda: _require_settleable(
+            repo, strategy_instance_id=strategy_instance_id, presented=presented, kind=attestation.kind
+        )
     )
-    assert isinstance(settled, UnknownOrderSettlementReceipt)
-    return settled
+    try:
+        claim_token = repo.claim_before_broker_contact(presented.effect_operation_id).token
+    except OperationClaimError as busy:
+        raise _exit_is_busy() from busy
+
+    def renew_the_claim() -> None:
+        if not repo.renew_operation_claim(
+            effect_operation_id=presented.effect_operation_id, token=claim_token
+        ):
+            raise OperationClaimError(
+                f"effect_operation {presented.effect_operation_id!r} lost its broker-contact claim"
+            )
+
+    try:
+        alpaca_read = await _read_alpaca(
+            _AlpacaReads(read=read, trade=trade, around_each_read=renew_the_claim),
+            presented,
+            attestation,
+            clock=repo.clock,
+        )
+        return await intake.off_loop(
+            _commit,
+            repo,
+            strategy_instance_id=strategy_instance_id,
+            presented=presented,
+            alpaca_read=alpaca_read,
+            by=by,
+        )
+    except OperationClaimError as lost:
+        raise _exit_is_busy() from lost
+    finally:
+        await run_drained(
+            to_thread,
+            lambda: repo.release_operation_claim(
+                effect_operation_id=presented.effect_operation_id, token=claim_token
+            ),
+        )
 
 
 async def check_unknown_exit_order(
@@ -263,20 +394,33 @@ async def check_unknown_exit_order(
     """What the Clerk reads at Alpaca for ``attestation`` now, settling nothing.
 
     The same reads and the same rules as :func:`settle_unknown_exit_order`,
-    under the same claim, so what an operator is shown before they confirm is
-    what the settlement would rest on; the settlement reads it all again. A
-    refusal is an answer here, not an error.
+    so what an operator is shown before they confirm is what a settlement
+    made now would rest on; the settlement reads it all again. A refusal is
+    an answer here, not an error.
+
+    It is a read: it takes no claim on the EXIT and writes nothing, so a
+    check in flight never makes a pass of the Clerk defer the EXIT, or a
+    settlement find it busy.
     """
     try:
-        findings = await _attest(
+        _require_a_broker_account(trade)
+        await to_thread(
+            lambda: _require_settleable(
+                repo, strategy_instance_id=strategy_instance_id, presented=presented, kind=attestation.kind
+            )
+        )
+        alpaca_read = await _read_alpaca(
+            _AlpacaReads(read=read, trade=trade, around_each_read=_no_claim_to_renew),
+            presented,
+            attestation,
+            clock=repo.clock,
+        )
+        return await intake.off_loop(
+            _findings,
             repo,
-            read=read,
-            trade=trade,
-            intake=intake,
             strategy_instance_id=strategy_instance_id,
             presented=presented,
-            attestation=attestation,
-            commit=None,
+            alpaca_read=alpaca_read,
         )
     except UnknownOrderSettlementRefused as refused:
         return AttestationFindings(
@@ -286,79 +430,41 @@ async def check_unknown_exit_order(
             lines=(str(refused),),
             observed_at_ms=repo.clock(),
         )
-    assert isinstance(findings, AttestationFindings)
-    return findings
 
 
-async def _attest(
-    repo: ClerkSqliteRepository,
-    *,
-    read: BrokerReadPort,
-    trade: BrokerTradePort,
-    intake: ReentrantAsyncLock,
-    strategy_instance_id: str,
-    presented: ProjectedUnknownExitOrder,
-    attestation: OrderOutcomeAttestation,
-    commit: _Commit | None,
-) -> UnknownOrderSettlementReceipt | AttestationFindings:
-    """Read the broker under the EXIT's claim, then check -- and for a commit, settle -- in one fenced run."""
+def _require_a_broker_account(trade: BrokerTradePort) -> None:
     if trade_port_folds_simulated_evidence(trade):
         raise UnknownOrderSettlementRefused(
             "NOT_A_BROKER_ACCOUNT",
             "This bot trades in a simulation, which has no account at Alpaca to look at. "
             "Nothing was changed.",
         )
-    await to_thread(
-        lambda: _require_presented_order(
-            repo, strategy_instance_id=strategy_instance_id, presented=presented
-        )
-    )
-    try:
-        claim_token = repo.claim_before_broker_contact(presented.effect_operation_id).token
-    except OperationClaimError as busy:
-        raise _exit_is_busy() from busy
-    broker = ClaimedBrokerIO(
-        repo=repo,
-        effect_operation_id=presented.effect_operation_id,
-        claim_token=claim_token,
-        trade=trade,
-    )
-    try:
-        if attestation.kind == "exists":
-            assert attestation.broker_order_id is not None
-            return await intake.off_loop(
-                _settle_exists,
-                repo,
-                strategy_instance_id=strategy_instance_id,
-                presented=presented,
-                observed=await _read_order(broker, attestation.broker_order_id),
-                observed_at_ms=repo.clock(),
-                commit=commit,
+
+
+async def _read_alpaca(
+    alpaca: _AlpacaReads,
+    presented: ProjectedUnknownExitOrder,
+    attestation: OrderOutcomeAttestation,
+    *,
+    clock: Callable[[], int],
+) -> _AlpacaRead:
+    """Everything the Clerk reads at Alpaca for ``attestation``, dated when the last read returned."""
+    if attestation.kind == "exists":
+        assert attestation.broker_order_id is not None
+        observed = await alpaca.order_with_id(attestation.broker_order_id)
+        if observed is None:
+            raise UnknownOrderSettlementRefused(
+                "NO_SUCH_BROKER_ORDER",
+                f"Alpaca has no order with the id {attestation.broker_order_id!r}. Check the id at "
+                "Alpaca. Nothing was changed.",
             )
-        since_ms = presented.created_at_ms - ORDERS_SINCE_MARGIN_MS
-        rounds = (
-            await _read_account(broker, read, presented, since_ms=since_ms),
-            await _read_account(broker, read, presented, since_ms=since_ms),
-        )
-        return await intake.off_loop(
-            _settle_absent,
-            repo,
-            strategy_instance_id=strategy_instance_id,
-            presented=presented,
-            rounds=rounds,
-            since_ms=since_ms,
-            observed_at_ms=repo.clock(),
-            commit=commit,
-        )
-    except OperationClaimError as lost:
-        raise _exit_is_busy() from lost
-    finally:
-        await run_drained(
-            to_thread,
-            lambda: repo.release_operation_claim(
-                effect_operation_id=presented.effect_operation_id, token=claim_token
-            ),
-        )
+        return _OrderRead(observed=observed, observed_at_ms=clock())
+    since_ms = presented.created_at_ms - ORDERS_SINCE_MARGIN_MS
+    rounds = (
+        await _read_account(alpaca, presented, since_ms=since_ms),
+        await _read_account(alpaca, presented, since_ms=since_ms),
+    )
+    return _AbsentReads(rounds=rounds, since_ms=since_ms, observed_at_ms=clock())
 
 
 def _exit_is_busy() -> UnknownOrderSettlementRefused:
@@ -369,17 +475,22 @@ def _exit_is_busy() -> UnknownOrderSettlementRefused:
     )
 
 
-def _require_presented_order(
+def _require_settleable(
     repo: ClerkSqliteRepository,
     *,
     strategy_instance_id: str,
     presented: ProjectedUnknownExitOrder,
+    kind: SettlementAttestation,
 ) -> None:
-    """Refuse unless the order is still the one the catalog presented, and its bot is still stopped.
+    """Refuse on what the Clerk's own records say, before Alpaca is asked anything.
 
-    Read through the catalog's own read (``unknown_exit_orders``), so what is
-    checked here is what was offered. An order the Clerk sent again since
-    compares unequal: its latest send is part of it.
+    The order must still be the one the catalog presented, read through the
+    catalog's own read (``unknown_exit_orders``), so what is checked here is
+    what was offered: an order the Clerk sent again since compares unequal,
+    its latest send being part of it. Its bot must still be stopped. And
+    "no such order" waits out the submit-absence wait after the latest send:
+    an order sent moments ago may be at Alpaca and not yet show in a read,
+    which the Clerk's own re-send waits out too.
     """
     current = next(
         (
@@ -407,14 +518,20 @@ def _require_presented_order(
             "RUN_STILL_ACTIVE",
             "Stop the bot before settling its uncertain order. Nothing was changed.",
         )
+    if kind != "absent":
+        return
+    settles_at_ms = unknown_order_lookup_settles_at_ms(presented)
+    now_ms = repo.clock()
+    if now_ms < settles_at_ms:
+        raise UnknownOrderSettlementRefused(
+            "ORDER_LOOKUP_STILL_SETTLING",
+            "The Clerk sent this order moments ago, and Alpaca may not show it yet. Settle again "
+            f"after {et_when_words(settles_at_ms, now_ms=now_ms)}. Nothing was changed.",
+        )
 
 
 async def _read_account(
-    broker: ClaimedBrokerIO,
-    read: BrokerReadPort,
-    presented: ProjectedUnknownExitOrder,
-    *,
-    since_ms: int,
+    alpaca: _AlpacaReads, presented: ProjectedUnknownExitOrder, *, since_ms: int
 ) -> _AccountRead:
     """One round: the exact lookup, the open orders, then the positions, then every order since ``since_ms``.
 
@@ -423,21 +540,13 @@ async def _read_account(
     since if it has ended. Any read that fails refuses; so does the order's
     own exact lookup answering.
     """
-    exact = await broker.observe_exact(presented.order_ref)
-    if isinstance(exact, BrokerError):
-        raise _broker_unreadable(exact)
+    exact = await alpaca.order_sent_as(presented.order_ref)
     if exact is not None:
         raise _order_is_at_alpaca(exact)
-    account = await broker.observe_open_orders_then_positions(read)
-    if isinstance(account, BrokerError):
-        raise _broker_unreadable(account)
-    open_orders, positions = account
-    if isinstance(positions, BrokerError):
-        raise _broker_unreadable(positions)
-    orders_since = await broker.observe_orders_since(read, after_ms=since_ms)
-    if isinstance(orders_since, BrokerError):
-        raise _broker_unreadable(orders_since)
-    return _AccountRead(open_orders=open_orders, positions=positions, orders_since=orders_since)
+    open_orders, positions = await alpaca.open_orders_then_positions()
+    return _AccountRead(
+        open_orders=open_orders, positions=positions, orders_since=await alpaca.orders_since(since_ms)
+    )
 
 
 def _broker_unreadable(error: BrokerError) -> UnknownOrderSettlementRefused:
@@ -568,37 +677,93 @@ def _prove_absent(
     return proof
 
 
-def _settle_absent(
+def _prove(
     repo: ClerkSqliteRepository,
     *,
     strategy_instance_id: str,
     presented: ProjectedUnknownExitOrder,
-    rounds: tuple[_AccountRead, _AccountRead],
-    since_ms: int,
-    observed_at_ms: int,
-    commit: _Commit | None,
-) -> UnknownOrderSettlementReceipt | AttestationFindings:
-    """The fenced run of an ``absent`` attestation: every durable check, then -- for a commit -- the settlement."""
-    _require_presented_order(repo, strategy_instance_id=strategy_instance_id, presented=presented)
-    settles_at_ms = unknown_order_lookup_settles_at_ms(presented)
-    now_ms = repo.clock()
-    if now_ms < settles_at_ms:
-        # An order sent moments ago may be at Alpaca and not yet show in a
-        # read; the Clerk's own re-send waits out the same window.
-        raise UnknownOrderSettlementRefused(
-            "ORDER_LOOKUP_STILL_SETTLING",
-            "The Clerk sent this order moments ago, and Alpaca may not show it yet. Settle again "
-            f"after {et_when_words(settles_at_ms, now_ms=now_ms)}. Nothing was changed.",
+    alpaca_read: _AlpacaRead,
+) -> _AbsenceProof | None:
+    """Refuse unless the Clerk's records and what it read at Alpaca bear the attestation out. Writes nothing.
+
+    Run inside one fenced run by both callers, so every durable record is
+    read as one state. The proof of an absent order is returned; an order
+    Alpaca shows needs none beyond being this order.
+    """
+    if isinstance(alpaca_read, _AbsentReads):
+        _require_settleable(
+            repo, strategy_instance_id=strategy_instance_id, presented=presented, kind="absent"
         )
-    proof = _prove_absent(repo, presented, rounds)
-    if commit is None:
+        return _prove_absent(repo, presented, alpaca_read.rounds)
+    _require_settleable(
+        repo, strategy_instance_id=strategy_instance_id, presented=presented, kind="exists"
+    )
+    _require_same_order(presented, alpaca_read.observed)
+    return None
+
+
+def _findings(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    presented: ProjectedUnknownExitOrder,
+    alpaca_read: _AlpacaRead,
+) -> AttestationFindings:
+    """What a check answers when a settlement made now would go through: the Clerk's own sentences of what it read."""
+    proof = _prove(
+        repo, strategy_instance_id=strategy_instance_id, presented=presented, alpaca_read=alpaca_read
+    )
+    if isinstance(alpaca_read, _AbsentReads):
+        assert proof is not None
         return AttestationFindings(
             attestation="absent",
             would_settle=True,
             refusal_reason_code=None,
             lines=_absence_lines(presented, proof),
-            observed_at_ms=observed_at_ms,
+            observed_at_ms=alpaca_read.observed_at_ms,
         )
+    observed = alpaca_read.observed
+    return AttestationFindings(
+        attestation="exists",
+        would_settle=True,
+        refusal_reason_code=None,
+        lines=(
+            f"Alpaca order {observed.order_id}: {observed.side.lower()} {presented.quantity:g} "
+            f"{presented.symbol.upper()}, {observed.status}, {observed.filled_quantity:g} filled.",
+            "It carries this order's client order id, symbol, side and quantity.",
+            "The Clerk takes it up as this exit's order. Nothing is sent.",
+        ),
+        observed_at_ms=alpaca_read.observed_at_ms,
+    )
+
+
+def _commit(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    presented: ProjectedUnknownExitOrder,
+    alpaca_read: _AlpacaRead,
+    by: _Operator,
+) -> UnknownOrderSettlementReceipt:
+    """The fenced run of a settlement: every durable check again, then the settlement."""
+    proof = _prove(
+        repo, strategy_instance_id=strategy_instance_id, presented=presented, alpaca_read=alpaca_read
+    )
+    if isinstance(alpaca_read, _AbsentReads):
+        assert proof is not None
+        return _commit_absent(repo, presented=presented, reads=alpaca_read, proof=proof, by=by)
+    return _commit_order(repo, presented=presented, order_read=alpaca_read, by=by)
+
+
+def _commit_absent(
+    repo: ClerkSqliteRepository,
+    *,
+    presented: ProjectedUnknownExitOrder,
+    reads: _AbsentReads,
+    proof: _AbsenceProof,
+    by: _Operator,
+) -> UnknownOrderSettlementReceipt:
+    """End the EXIT of an order the Clerk's own reads bear out as absent: one write."""
     effect = repo.effect_operation(presented.effect_operation_id)
     assert effect is not None
     notice = attested_absent_exit_notice(
@@ -620,23 +785,23 @@ def _settle_absent(
         presented=presented,
         facts=OrderOutcomeAttestedFacts(
             attestation="absent",
-            operator=commit.operator,
-            operator_reason=commit.operator_reason,
+            operator=by.operator,
+            operator_reason=by.operator_reason,
             client_order_id=presented.order_ref,
             symbol=presented.symbol,
             side=presented.side,
             quantity=presented.quantity,
             latest_send_sequence=presented.latest_send_sequence,
             uncertainty_id=presented.uncertainty_id,
-            broker_observed_at_ms=observed_at_ms,
+            broker_observed_at_ms=reads.observed_at_ms,
             open_orders_read=proof.open_orders_read,
             orders_since_read=proof.orders_since_read,
-            orders_read_since_ms=since_ms,
+            orders_read_since_ms=reads.since_ms,
             broker_qty=proof.broker_qty,
             account_attributed_qty=proof.account_attributed_qty,
             exit_not_flat=None if notice is None else json.loads(notice.to_facts_json()),
         ),
-        observed_at_ms=observed_at_ms,
+        observed_at_ms=reads.observed_at_ms,
         operation_state="succeeded" if notice is None else "failed",
         summary_code=ORDER_ATTESTED_ABSENT,
         # A notice already open is refreshed, and joined to its own timeline
@@ -654,7 +819,7 @@ def _settle_absent(
             strategy_instance_id=effect.strategy_instance_id,
             evidence_refs=(presented.order_ref,),
         )
-    return _settled(repo, committed, presented, commit, attestation="absent")
+    return _settled(repo, committed, presented, by, attestation="absent")
 
 
 def _absence_lines(presented: ProjectedUnknownExitOrder, proof: _AbsenceProof) -> tuple[str, ...]:
@@ -717,7 +882,7 @@ def _settled(
     repo: ClerkSqliteRepository,
     committed: CommittedTransition,
     presented: ProjectedUnknownExitOrder,
-    commit: _Commit,
+    by: _Operator,
     *,
     attestation: SettlementAttestation,
 ) -> UnknownOrderSettlementReceipt:
@@ -732,7 +897,7 @@ def _settled(
             "effect_operation_id": effect.effect_operation_id,
             "order_ref": presented.order_ref,
             "attestation": attestation,
-            "operator": commit.operator,
+            "operator": by.operator,
             "exit_state": effect.state,
             "sequence": committed.sequence,
         },
@@ -743,21 +908,6 @@ def _settled(
         order_ref=presented.order_ref,
         attestation=attestation,
     )
-
-
-async def _read_order(broker: ClaimedBrokerIO, broker_order_id: str) -> BrokerOrder:
-    """The order Alpaca has under ``broker_order_id``, read under the claim; refuses when it has none."""
-    observed = await broker.observe_broker_order(broker_order_id)
-    # An id Alpaca could not take as an order id names no order it has.
-    if isinstance(observed, BrokerError) and not isinstance(observed, BrokerRequestInvalid):
-        raise _broker_unreadable(observed)
-    if not isinstance(observed, BrokerOrder):
-        raise UnknownOrderSettlementRefused(
-            "NO_SUCH_BROKER_ORDER",
-            f"Alpaca has no order with the id {broker_order_id!r}. Check the id at Alpaca. "
-            "Nothing was changed.",
-        )
-    return observed
 
 
 def _require_same_order(presented: ProjectedUnknownExitOrder, observed: BrokerOrder) -> None:
@@ -817,50 +967,34 @@ def _require_same_order(presented: ProjectedUnknownExitOrder, observed: BrokerOr
         )
 
 
-def _settle_exists(
+def _commit_order(
     repo: ClerkSqliteRepository,
     *,
-    strategy_instance_id: str,
     presented: ProjectedUnknownExitOrder,
-    observed: BrokerOrder,
-    observed_at_ms: int,
-    commit: _Commit | None,
-) -> UnknownOrderSettlementReceipt | AttestationFindings:
-    """The fenced run of an ``exists`` attestation: the order is this one, then -- for a commit -- it is taken up."""
-    _require_presented_order(repo, strategy_instance_id=strategy_instance_id, presented=presented)
-    _require_same_order(presented, observed)
-    if commit is None:
-        return AttestationFindings(
-            attestation="exists",
-            would_settle=True,
-            refusal_reason_code=None,
-            lines=(
-                f"Alpaca order {observed.order_id}: {observed.side.lower()} {presented.quantity:g} "
-                f"{presented.symbol.upper()}, {observed.status}, {observed.filled_quantity:g} filled.",
-                "It carries this order's client order id, symbol, side and quantity.",
-                "The Clerk takes it up as this exit's order. Nothing is sent.",
-            ),
-            observed_at_ms=observed_at_ms,
-        )
+    order_read: _OrderRead,
+    by: _Operator,
+) -> UnknownOrderSettlementReceipt:
+    """Take up the order Alpaca shows as this EXIT's own: one write, then the order's own evidence."""
+    observed = order_read.observed
     committed = _append_attestation(
         repo,
         presented=presented,
         facts=OrderOutcomeAttestedFacts(
             attestation="exists",
-            operator=commit.operator,
-            operator_reason=commit.operator_reason,
+            operator=by.operator,
+            operator_reason=by.operator_reason,
             client_order_id=presented.order_ref,
             symbol=presented.symbol,
             side=presented.side,
             quantity=presented.quantity,
             latest_send_sequence=presented.latest_send_sequence,
             uncertainty_id=presented.uncertainty_id,
-            broker_observed_at_ms=observed_at_ms,
+            broker_observed_at_ms=order_read.observed_at_ms,
             broker_order_id=observed.order_id,
             broker_state=observed.status,
             broker_filled_quantity=observed.filled_quantity,
         ),
-        observed_at_ms=observed_at_ms,
+        observed_at_ms=order_read.observed_at_ms,
         operation_state="unknown",
         summary_code=ORDER_OUTCOME_ATTESTED,
     )
@@ -872,7 +1006,7 @@ def _settle_exists(
     fold_exit_attested_order(
         repo, effect_operation_id=presented.effect_operation_id, observed=observed
     )
-    return _settled(repo, committed, presented, commit, attestation="exists")
+    return _settled(repo, committed, presented, by, attestation="exists")
 
 
 def recorded_settlement(

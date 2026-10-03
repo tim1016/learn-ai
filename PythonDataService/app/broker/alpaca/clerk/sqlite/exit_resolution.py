@@ -163,6 +163,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     uncertainty_envelope,
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause
+from app.broker.alpaca.clerk.sqlite.unknown_exit_orders import send_wait_from_ms
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
@@ -2735,10 +2736,9 @@ def _absence_grace_elapsed(repo: ClerkSqliteRepository, order_ref: str) -> bool:
         anchor_ms = created["recorded_at_ms"]
         sends = 0
     else:
-        anchor_ms = (
-            latest.requested["recorded_at_ms"]
-            if latest.answer is None
-            else max(latest.requested["recorded_at_ms"], latest.answer["recorded_at_ms"])
+        anchor_ms = send_wait_from_ms(
+            sent_at_ms=latest.requested["recorded_at_ms"],
+            answer_recorded_at_ms=None if latest.answer is None else latest.answer["recorded_at_ms"],
         )
         sends = repo.count_order_transitions(
             order_ref=order_ref, transition_kind="ORDER_SUBMIT_REQUESTED", at_most=_SENDS_COUNTED

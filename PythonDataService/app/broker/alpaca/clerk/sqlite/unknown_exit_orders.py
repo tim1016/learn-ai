@@ -57,6 +57,22 @@ def _one(
     return None if row is None else _Row(row["sequence"], row["recorded_at_ms"], row["facts_json"])
 
 
+def send_wait_from_ms(*, sent_at_ms: int, answer_recorded_at_ms: int | None) -> int:
+    """Where the wait after an order's latest send is counted from (#2845).
+
+    From the send's ``ORDER_SUBMIT_REQUESTED``, or from the first
+    ``ORDER_SUBMIT_UNCERTAIN`` after it -- that send's lost answer, or the
+    first pass to find the order absent -- whichever was recorded with the
+    later time. ``recorded_at_ms`` is wall time, so the later of the two is
+    not always the later by sequence: a host clock that steps backwards
+    between them must not shorten the wait.
+
+    The one rule for the Clerk's own re-send (``exit_resolution``) and for
+    when an operator may settle the order as absent.
+    """
+    return sent_at_ms if answer_recorded_at_ms is None else max(sent_at_ms, answer_recorded_at_ms)
+
+
 def _unknown_identities(episode: dict) -> frozenset[tuple[str, str]]:
     """The ``(effect, order)`` identities the open unknown-outcome episode names.
 
@@ -133,10 +149,9 @@ def read_unknown_exit_orders(
                 created_at_ms=created.recorded_at_ms,
                 first_sent_at_ms=first_send.recorded_at_ms,
                 latest_send_sequence=latest_send.sequence,
-                lookup_wait_from_ms=(
-                    latest_send.recorded_at_ms
-                    if answer is None
-                    else max(latest_send.recorded_at_ms, answer.recorded_at_ms)
+                lookup_wait_from_ms=send_wait_from_ms(
+                    sent_at_ms=latest_send.recorded_at_ms,
+                    answer_recorded_at_ms=None if answer is None else answer.recorded_at_ms,
                 ),
                 answered_as_client_order_id=(
                     None
@@ -151,4 +166,4 @@ def read_unknown_exit_orders(
     return tuple(orders)
 
 
-__all__ = ["read_unknown_exit_orders"]
+__all__ = ["read_unknown_exit_orders", "send_wait_from_ms"]

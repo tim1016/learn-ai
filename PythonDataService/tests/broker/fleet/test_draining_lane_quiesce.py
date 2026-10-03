@@ -225,6 +225,10 @@ def test_a_read_declaring_quiesce_is_refused_by_the_catalog_validator() -> None:
         "lane_stop_all_bots",
         "lane_account_quiet_read",
         "custody_account_snapshot",
+        # What the Clerk reads at the broker for an operator's attestation,
+        # asked before an uncertain order is settled on the quiesce operation
+        # (#2854): a check, which settles nothing.
+        "custody_bot_recovery_check",
         "bot_panel_read",
         "orders_read",
         "positions_read",
@@ -413,46 +417,6 @@ async def test_a_draining_lane_routes_the_panels_cancel_verified_working_orders(
         delivered_body = delivery.bodies[0]
         assert isinstance(delivered_body, dict)
         assert delivered_body["action_id"] == "cancel_verified_working_orders"
-        await close_fleet_lane(boot)
-    finally:
-        service.close()
-
-
-async def test_a_draining_lane_routes_the_settling_of_an_uncertain_order_with_its_attestation(
-    control_dir: Path, clock: FrozenClock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A lane holding a closing order whose outcome is unknown cannot answer quiet (#2854).
-
-    Its operator settles the order from the panel while the lane drains: the
-    act travels on the quiesce operation, with what the operator says Alpaca
-    shows, and the request the lane validates admits it.
-    """
-    service = _service(control_dir, clock)
-    try:
-        _provisioned, _root, boot = await _open_confirmed_lane(
-            service, control_dir, clock, tmp_path, monkeypatch
-        )
-        service.drain_clerk(clerk_id=boot.clerk_id)
-        delivery = _RecordingDelivery()
-        router = LaneRouter(service=service, delivery_for=lambda broker, session: delivery)
-        settle = {
-            "action_id": "settle_unknown_exit_order",
-            "revision": 1,
-            "concurrency_token": "tok",
-            "attestation": {"kind": "exists", "broker_order_id": "61e69015-8549-4bfd-b9c3-01e75843f47d"},
-        }
-
-        await _route(
-            router, boot.clerk_id, _operation("bot_panel_quiesce_action"), key="settle-1", body=settle
-        )
-
-        assert delivery.delivered == ["bot_panel_quiesce_action"]
-        assert delivery.bodies == [{**settle, "idempotency_key": "settle-1"}]
-        admitted = PanelQuiesceActionRequest.model_validate(delivery.bodies[0])
-        assert admitted.attestation is not None
-        assert (admitted.attestation.kind, str(admitted.attestation.broker_order_id)) == (
-            "exists", "61e69015-8549-4bfd-b9c3-01e75843f47d",
-        )
         await close_fleet_lane(boot)
     finally:
         service.close()

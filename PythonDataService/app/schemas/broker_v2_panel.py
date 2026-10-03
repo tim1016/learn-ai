@@ -41,6 +41,7 @@ from app.schemas.alpaca_clerk_sqlite import (
     ExposureNoticeView,
     RecoveryStatusResponse,
     UnknownOrderAttestationRequest,
+    require_attestation_fits,
 )
 from app.schemas.bot_end import BotEndView
 from app.schemas.bot_history import BotHistoryStatus
@@ -785,8 +786,7 @@ class PanelActionRequest(BaseModel):
 
     @model_validator(mode="after")
     def _attestation_settles_only_an_unknown_order(self) -> PanelActionRequest:
-        if self.attestation is not None and self.action_id != "settle_unknown_exit_order":
-            raise ValueError("attestation settles only a settle_unknown_exit_order action")
+        require_attestation_fits(self.action_id, self.attestation)
         return self
 
 

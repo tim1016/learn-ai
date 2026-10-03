@@ -522,6 +522,12 @@ async def test_an_order_sent_moments_ago_is_not_ended_as_absent_until_alpaca_wou
 
     with pytest.raises(RecoveryExecutionError, match="Alpaca may not show it yet"):
         await _settle(facade, current_context, ABSENT)
+    (order,) = repo.unknown_exit_orders(SID)
+    checked = await facade.check_unknown_exit_order(
+        strategy_instance_id=SID, presented=order, attestation=ABSENT
+    )
+    assert (checked.would_settle, checked.refusal_reason_code) == (False, "ORDER_LOOKUP_STILL_SETTLING")
+    assert alpaca.reads == [], "the wait is refused on the Clerk's own records, before Alpaca is asked anything"
 
     _walk_clock_to(repo, repo.clock() + WAIT_MS)
     alpaca.ended_orders = [
@@ -860,6 +866,82 @@ async def test_a_settlement_that_meets_a_pass_driving_the_exit_is_refused_before
     assert repo.release_operation_claim(effect_operation_id=exit_id, token=held_by_a_pass.token), (
         "the pass still holds its claim"
     )
+
+
+async def test_a_check_takes_no_claim_so_it_answers_while_a_pass_holds_the_exit(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """A check is a read: a pass that holds the EXIT's claim does not make it answer "busy".
+
+    It reads Alpaca and says what it found, writes nothing, and leaves the
+    pass its claim.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
+    exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    (order,) = repo.unknown_exit_orders(SID)
+    ledger = repo.custody_transitions()
+    held_by_a_pass = repo.claim_before_broker_contact(exit_id)
+
+    findings = await _facade(repo, alpaca).check_unknown_exit_order(
+        strategy_instance_id=SID, presented=order, attestation=ABSENT
+    )
+
+    assert (findings.would_settle, findings.refusal_reason_code) == (True, None)
+    assert alpaca.reads == ["lookup", "orders:open", "positions", "orders:all"] * 2
+    assert repo.custody_transitions() == ledger
+    assert repo.release_operation_claim(effect_operation_id=exit_id, token=held_by_a_pass.token), (
+        "the pass still holds its claim"
+    )
+
+
+async def test_a_check_in_flight_never_makes_a_pass_defer_the_exit_or_a_settlement_find_it_busy(
+    crashed_with_exposure,  # noqa: F811
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """While a check reads Alpaca's positions, a pass runs and an operator settles.
+
+    The check holds nothing: the pass drives the EXIT as it would have, and
+    the settlement that follows it goes through. The check, which read the
+    order before either, then answers that the order is no longer the one it
+    was asked about.
+
+    The order was sent twice, so a pass half a minute after its second send
+    looks it up and does not send it again; "no such order" may be settled
+    by then.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives", "never_arrives"))
+    exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    facade, current_context = _facade(repo, alpaca), _context_of(repo, SID)
+    await _passes(repo, _the_sweep(repo, alpaca), 1)
+    assert len(alpaca.sent) == 2
+    _walk_clock_to(repo, repo.clock() + WAIT_MS)
+    (order,) = repo.unknown_exit_orders(SID)
+    meanwhile: list[object] = []
+
+    async def a_pass_runs_and_the_operator_settles() -> None:
+        await reconcile_account(
+            repo, read=alpaca, trade=alpaca, trigger="AUTOMATIC", pricing=UNPRICEABLE_RECOVERY
+        )
+        meanwhile.append(await _settle(facade, current_context, ABSENT))
+
+    alpaca.while_positions_are_read = a_pass_runs_and_the_operator_settles
+
+    with caplog.at_level(logging.INFO, logger="app.broker.alpaca.clerk.sqlite.reconcile"):
+        findings = await facade.check_unknown_exit_order(
+            strategy_instance_id=SID, presented=order, attestation=ABSENT
+        )
+
+    assert not [
+        record for record in caplog.records if getattr(record, "action", None) == "reconcile_effect_deferred"
+    ], "the pass did not find the EXIT claimed"
+    (settled,) = meanwhile
+    assert isinstance(settled, RecoveryExecutionResult) and settled.applied is True
+    assert _exit_state(repo, exit_id) == "failed"
+    assert (findings.would_settle, findings.refusal_reason_code) == (False, "ORDER_NO_LONGER_UNKNOWN")
+    assert len(_attested(repo)) == 1
+    assert len(alpaca.sent) == 2
 
 
 async def test_an_order_the_clerk_sent_again_since_it_was_presented_is_not_settled(

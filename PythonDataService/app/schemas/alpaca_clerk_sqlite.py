@@ -559,9 +559,14 @@ class UnknownOrderAttestationRequest(BaseModel):
         )
 
 
-def _require_attestation_fits(
+def require_attestation_fits(
     action_id: str, attestation: UnknownOrderAttestationRequest | None
 ) -> None:
+    """Refuse an attestation carried by any action but the one it settles.
+
+    The one rule of every request that can carry one: the Clerk's check and
+    execute requests here, and the panel's action request.
+    """
     if attestation is not None and action_id != "settle_unknown_exit_order":
         raise ValueError("attestation settles only a settle_unknown_exit_order action")
 
@@ -588,7 +593,7 @@ class RecoveryActionCheckRequest(BaseModel):
 
     @model_validator(mode="after")
     def _attestation_settles_only_an_unknown_order(self) -> RecoveryActionCheckRequest:
-        _require_attestation_fits(self.action_id, self.attestation)
+        require_attestation_fits(self.action_id, self.attestation)
         return self
 
 
@@ -821,7 +826,7 @@ class RecoveryActionExecuteRequest(BaseModel):
     def _extended_limit_prices_only_a_flatten(self) -> RecoveryActionExecuteRequest:
         if self.extended_limit is not None and self.action_id != "execute_safe_flatten":
             raise ValueError("extended_limit prices only an execute_safe_flatten action")
-        _require_attestation_fits(self.action_id, self.attestation)
+        require_attestation_fits(self.action_id, self.attestation)
         return self
 
 
