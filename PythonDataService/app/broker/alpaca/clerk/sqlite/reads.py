@@ -753,6 +753,66 @@ def terminal_entry_orders_unproven_at_broker(
     return [row["order_ref"] for row in rows]
 
 
+def failed_exit_orders_unproven_at_broker(
+    conn: sqlite3.Connection,
+    *,
+    symbols: frozenset[str],
+    exclude_client_order_ids: frozenset[str],
+    rested_since_ms: int,
+    failed_since_ms: int,
+    limit: int,
+) -> list[str]:
+    """REDUCING orders of a failed EXIT that were sent and that no broker state ended (#2854).
+
+    The sweep's exact-lookup worklist for a closing order that may have
+    filled where the open-order snapshot cannot show it. An EXIT can fail
+    while its order's outcome is not known: an operator's Flatten refused by
+    the account check as it would be sent again, or a send made again that
+    its session no longer allows. The order had at least one
+    ``ORDER_SUBMIT_REQUESTED``, so it may be at the broker -- working, or
+    already ``filled`` and closed. One never sent cannot be, and one the
+    broker itself ended is proven; both are excluded. Narrowed to ``symbols``
+    (matched on the immutable ``EXIT_REDUCING_ORDER_CREATED`` facts).
+
+    Only an EXIT that failed at or after ``failed_since_ms`` is listed, so an
+    old one is not asked about for ever. The rotation is
+    :func:`terminal_entry_orders_unproven_at_broker`'s: least recently looked
+    up first, an order looked up after ``rested_since_ms`` rests, and orders
+    already in the open-order snapshot are dropped before ``limit``.
+    """
+    if not symbols:
+        return []
+    symbol_marks = ", ".join("?" for _ in symbols)
+    excluded = sorted(exclude_client_order_ids)
+    exclude_clause = (
+        f"AND o.client_order_id NOT IN ({', '.join('?' for _ in excluded)}) " if excluded else ""
+    )
+    rows = conn.execute(
+        "SELECT order_ref FROM ("
+        "SELECT o.order_ref, e.updated_at_ms, "
+        "(SELECT MAX(r.attempted_at_ms) FROM reconciliations r "
+        "WHERE r.effect_operation_id = o.effect_operation_id "
+        "AND r.order_ref = o.order_ref) AS last_lookup_ms "
+        "FROM orders o "
+        "JOIN effect_operations e ON e.effect_operation_id = o.effect_operation_id "
+        "JOIN custody_transitions t ON t.order_ref = o.order_ref "
+        "AND t.transition_kind = 'EXIT_REDUCING_ORDER_CREATED' "
+        "WHERE o.role = 'REDUCING' AND e.kind = 'EXIT' AND e.state IN ('failed', 'rejected') "
+        "AND e.updated_at_ms >= ? "
+        "AND (o.broker_state IS NULL OR LOWER(o.broker_state) NOT IN "
+        f"({_TERMINAL_BROKER_STATES_SQL})) "
+        "AND EXISTS (SELECT 1 FROM custody_transitions s WHERE s.order_ref = o.order_ref "
+        "AND s.transition_kind = 'ORDER_SUBMIT_REQUESTED') "
+        f"AND UPPER(json_extract(t.facts_json, '$.symbol')) IN ({symbol_marks}) "
+        f"{exclude_clause}"
+        ") WHERE last_lookup_ms IS NULL OR last_lookup_ms <= ? "
+        "ORDER BY last_lookup_ms IS NOT NULL, last_lookup_ms ASC, "
+        "updated_at_ms DESC, order_ref DESC LIMIT ?",
+        (failed_since_ms, *sorted(symbols), *excluded, rested_since_ms, limit),
+    ).fetchall()
+    return [row["order_ref"] for row in rows]
+
+
 def all_order_refs(conn: sqlite3.Connection) -> frozenset[str]:
     """Every immutable broker identity captured by this authority."""
     rows = conn.execute("SELECT order_ref FROM orders").fetchall()

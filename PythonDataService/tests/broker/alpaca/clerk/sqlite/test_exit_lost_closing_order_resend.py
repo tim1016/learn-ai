@@ -170,7 +170,8 @@ class _Alpaca(_Account):
 
     ``sent`` is every submit with the Clerk's clock as it left. ``reads``, the
     account's record of its reads, also names each submit where it fell
-    among them.
+    among them. ``looked_up`` is every exact lookup, by the client order id
+    it asked for.
     """
 
     def __init__(
@@ -183,6 +184,7 @@ class _Alpaca(_Account):
         self._has: dict[str, BrokerOrder] = {}
         self._unanswered: set[str] = set()
         self.sent: list[_Sent] = []
+        self.looked_up: list[str] = []
         self.cancel_calls: list[str] = []
         # What happens while a submit that times out is awaited, by which submit it is (the first is 1).
         self.while_awaited: dict[int, Callable[[], None]] = {}
@@ -225,6 +227,7 @@ class _Alpaca(_Account):
         self.cancel_calls.append(order_id)
 
     async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+        self.looked_up.append(client_order_id)
         clerk_order = self._repo.order(client_order_id)
         if clerk_order is not None and clerk_order.role == "ENTRY":
             assert clerk_order.broker_order_id is not None
@@ -252,6 +255,10 @@ class _Alpaca(_Account):
         self._unanswered.discard(client_order_id)
         if self._has[client_order_id] not in self.open_orders:
             self.open_orders.append(self._has[client_order_id])
+
+    def answers_its_lookup(self, client_order_id: str) -> None:
+        """The exact lookup now answers for the order as it stands; no other read changes."""
+        self._unanswered.discard(client_order_id)
 
     def loses_sight_of(self, client_order_id: str) -> None:
         """No read shows the order any more, though Alpaca acknowledged it."""

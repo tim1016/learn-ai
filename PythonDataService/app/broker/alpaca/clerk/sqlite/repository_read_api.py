@@ -551,6 +551,25 @@ class ClerkSqliteRepositoryReadApi:
                 limit=limit,
             )
 
+    def failed_exit_orders_unproven_at_broker(
+        self: ClerkSqliteRepository,
+        *,
+        symbols: frozenset[str],
+        exclude_client_order_ids: frozenset[str],
+        rested_since_ms: int,
+        failed_since_ms: int,
+        limit: int,
+    ) -> list[str]:
+        with self._write_lock:
+            return reads.failed_exit_orders_unproven_at_broker(
+                self._conn,
+                symbols=symbols,
+                exclude_client_order_ids=exclude_client_order_ids,
+                rested_since_ms=rested_since_ms,
+                failed_since_ms=failed_since_ms,
+                limit=limit,
+            )
+
     def all_order_refs(self: ClerkSqliteRepository) -> frozenset[str]:
         with self._write_lock:
             return reads.all_order_refs(self._conn)
