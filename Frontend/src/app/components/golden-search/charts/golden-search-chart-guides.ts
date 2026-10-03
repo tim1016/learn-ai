@@ -119,7 +119,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
     steps: [
       { text: 'A steep climb at the left means the best few trades carry much of the profit.', target: { kind: 'series', group: 'curve' } },
       { text: 'The marked dot shows the share of net profit the best 5% of trades make.', target: { kind: 'series', group: 'best' } },
-      { text: 'The peak is where the winning trades end. Its height is all the winners added together.', target: null },
+      { text: 'The peak is where the winning trades end. Its height is all the winners added together, as a share of the final net profit.', target: null },
       { text: 'The fall from the peak back to 100% is all the losing trades added together.', target: { kind: 'series', group: 'curve' } },
     ],
   },
@@ -161,12 +161,12 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Find where it rose most. Profit made in a few short stretches is less dependable than a steady climb.', target: null },
       { text: 'Find the line’s lowest point. Below $0 there means the trades had lost money overall by then.', target: { kind: 'point', group: 'running', at: 'lowest' } },
       { text: 'Read the bars beneath: each trade’s own net profit, at its exit.', target: { kind: 'series', group: 'trades' } },
-      { text: 'Hover a trade for its full record: times, prices, quantity, P&L before and after commission, bars held, RSI at entry and why it exited.', target: null },
+      { text: 'Hover a trade for its full record: times, prices, quantity, P&L before fees and net profit, bars held, RSI at entry and why it exited.', target: null },
     ],
   },
   'trade-histogram': {
     title: 'Trade net profit histogram',
-    question: 'What do the wins and losses look like, trade by trade?',
+    question: 'What do the wins and losses look like: many small ones, or a few big ones?',
     steps: [
       { text: 'Each bar counts the trades whose net profit falls in its range. Bars left of $0 are losing trades.', target: { kind: 'series', group: 'losses' } },
       { text: 'Read the winning side: are the wins many and small, or few and large?', target: { kind: 'series', group: 'wins' } },
@@ -186,7 +186,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
   },
   'entry-rsi': {
     title: 'RSI at entry against net profit',
-    question: 'Does a better RSI band exist inside the gates?',
+    question: 'Within the RSI gates the strategy enters between, do some RSI readings lead to better trades than others?',
     steps: [
       { text: 'Each dot is a trade: the RSI the strategy saw when it decided to enter, and the trade’s net profit.', target: { kind: 'series', group: 'trades' } },
       { text: 'The dashed lines are the RSI gates. Every entry falls between them.', target: null },
@@ -210,7 +210,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
     steps: [
       { text: 'Read each row as one fold: the grey bar is its training window, the coloured bar the test window right after it.', target: { kind: 'series', group: 'training' } },
       { text: 'The test windows follow one another in time, so together they cover a stretch the procedure never trained on before choosing.', target: { kind: 'series', group: 'test' } },
-      { text: 'A green test bar made money on its test window and a red one lost; an outlined bar is a fold that failed, and a grey one has not run yet.', target: null },
+      { text: 'A green test bar made money on its test window and a red one lost; an outlined bar is a fold that failed, and a grey one has not run yet or broke even.', target: null },
       { text: 'Hover a fold for its windows, both Sharpes, its retention, test return and trades.', target: null },
     ],
   },
@@ -251,7 +251,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Each fold has two bars: the return of the winner its training chose, and the current settings on the same test window.', target: { kind: 'series', group: 'procedure' } },
       { text: 'Compare them fold by fold. The grey bar is the benchmark.', target: { kind: 'series', group: 'incumbent' } },
       { text: 'Count the folds where the procedure leads. Winning a few folds by a lot is weaker than winning most of them.', target: null },
-      { text: 'A fold with only a grey bar is one whose winner failed; hover it for what the current settings did.', target: null },
+      { text: 'A fold with only a grey bar is one that failed; hover it for what the current settings did.', target: null },
     ],
   },
   'fold-activity': {
@@ -269,7 +269,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
     question: 'How did the search reach its winner, point by point?',
     steps: [
       { text: 'Each dot is a point the search scored, in the order it tried them; the first is the starting point.', target: { kind: 'series', group: 'eligible' } },
-      { text: 'Grey dots fail a rule: too few trades, too deep a fall or no profit. They can never win.', target: { kind: 'series', group: 'ineligible' } },
+      { text: 'Grey dots fail a rule: too few trades, too deep a fall or no profit. One wins only when nothing meets the rules.', target: { kind: 'series', group: 'ineligible' } },
       { text: 'The line is the best result so far that meets the rules. It only rises when a knob moves to a better value.', target: { kind: 'series', group: 'best' } },
       { text: 'A line that flattens early means later rounds found nothing better along the moves they tried — not that nothing better exists.', target: null },
     ],
@@ -300,15 +300,15 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
     steps: [
       { text: 'Each dot is a point scored on this window: across, its trades; up, its net profit.', target: null },
       { text: 'Blue dots meet the rules. The outlined one is the winner.', target: { kind: 'series', group: 'eligible' } },
-      { text: 'The other colours name the rule a point fails: too few trades, too deep a fall, no profit, or a run that failed.', target: { kind: 'series', group: 'trades' } },
+      { text: 'The other colours name the rule a point fails: amber too few trades, red too deep a fall, light blue no profit, grey nothing recorded.', target: null },
       { text: 'The dashed lines are the trade floor and $0. Many points just past them mean the rules shaped the choice.', target: null },
     ],
   },
   'pair-landscape': {
     title: 'Pair landscape',
-    question: 'Does the result survive nearby settings of two knobs together?',
+    question: 'Does the result hold across two knobs’ searched ranges together?',
     steps: [
-      { text: 'Each cell is one pair of values: rows for one knob, columns for the other, every other setting held at the candidate.', target: { kind: 'series', group: 'tested' } },
+      { text: 'Each cell is one pair of values: rows for one knob, columns for the other, every other setting held at the all-period winner’s.', target: { kind: 'series', group: 'tested' } },
       { text: 'Green cells made money and red cells lost it; each cell prints its net return.', target: null },
       { text: 'The outlined cell is the candidate itself. A plateau of similar cells around it is more robust than a lone peak.', target: null },
       { text: 'Grey cells have no return: an invalid pair (—), outside the legal range (·), never run (?), a failed run, or one that recorded none.', target: { kind: 'series', group: 'other' } },
