@@ -11,7 +11,8 @@ Formula:
     ``profit_m = E(last point of m) − E(last point of the previous month)``,
     the first month measured from the starting capital, and
     ``return_m = profit_m / that base``; ``trades_m`` counts trades whose
-    exit falls in ``m``. Months are labelled by their ET-midnight start.
+    exit falls in ``m``. Months are labelled by their ET-midnight start, and by
+    their ET year and month for the month calendar.
   * neighborhood — the center and the settings one neighbor step below and
     above it on one knob, each tested, failed, untested, invalid or outside
     the domain; one-sided when exactly one neighbor was tested.
@@ -80,6 +81,8 @@ def drawdown_series(daily: Sequence[tuple[int, float]]) -> list[tuple[int, float
 @dataclass(frozen=True)
 class MonthlyResult:
     month_start_ms: int
+    year: int
+    month: int
     net_profit: float
     return_fraction: float | None
     trades: int
@@ -87,6 +90,8 @@ class MonthlyResult:
     def as_dict(self) -> dict[str, Any]:
         return {
             "month_start_ms": self.month_start_ms,
+            "year": self.year,
+            "month": self.month,
             "net_profit": self.net_profit,
             "return_fraction": self.return_fraction,
             "trades": self.trades,
@@ -120,6 +125,8 @@ def monthly_results(
         results.append(
             MonthlyResult(
                 month_start_ms=et_midnight_ms(date(year, month, 1)),
+                year=year,
+                month=month,
                 net_profit=profit,
                 return_fraction=profit / base if base > 0 else None,
                 trades=trades[(year, month)],

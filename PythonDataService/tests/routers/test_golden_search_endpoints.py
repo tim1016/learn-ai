@@ -344,7 +344,7 @@ async def test_a_study_runs_from_lock_to_an_approved_golden_configuration_over_h
     candidate = await client.get(f"{BASE}/studies/{study['id']}/candidates/all_period")
     assert candidate.status_code == 200, candidate.text
     development = candidate.json()["development"]
-    assert development["cumulative_return"] and development["trades"] and candidate.json()["exam"] is None
+    assert development["cumulative_return"] and development["trade_charts"]["trades"] and candidate.json()["exam"] is None
     page = await client.get(f"{BASE}/studies/{study['id']}/evaluations", params={"stage": "search", "page": 1, "page_size": 5})
     assert page.status_code == 200 and page.json()["total"] > 5 and len(page.json()["rows"]) == 5
 

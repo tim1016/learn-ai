@@ -337,15 +337,20 @@ def test_a_detail_run_reads_back_as_cumulative_return_drawdown_and_months() -> N
     assert math.isclose(drawdown[1], 99_990.0 / 101_000.0 - 1.0, abs_tol=1e-12, rel_tol=0)
     january, february = detail["monthly"]
     assert (january["month_start_ms"], february["month_start_ms"]) == (et_midnight_ms(date(2025, 1, 1)), et_midnight_ms(date(2025, 2, 1)))
+    assert [(month["year"], month["month"]) for month in detail["monthly"]] == [(2025, 1), (2025, 2)]
     assert math.isclose(january["net_profit"], -10.0, abs_tol=1e-9, rel_tol=0)
     assert math.isclose(february["return_fraction"], 2_020.0 / 99_990.0, abs_tol=1e-12, rel_tol=0)
     assert (january["trades"], february["trades"]) == (0, 1)
     # The candidate read draws the development run's concentration curve from its trades, held back like the
     # stored measure for evidence recorded before it; this one trade nets $10 of the run's $2,010.
     stored = {"key": "all_period", "point": {"symbol": "SPY"}, "concentration": {"status": "missing", "reason": "r"}}
-    read = candidate_detail(stored, development=record, exam=None, commission_per_order=0.0)
+    read = candidate_detail(stored, strategy_key="ema_crossover_signal", development=record, exam=None, commission_per_order=0.0)
     assert read["development"]["concentration_curve"]["reason"].startswith("Its trades add up to $10.00")
-    legacy = candidate_detail({"key": "all_period", "point": {"symbol": "SPY"}}, development=record, exam=None, commission_per_order=0.0)
+    # The trade charts read the same trades, so they say the same.
+    assert read["development"]["trade_charts"]["reason"] == read["development"]["concentration_curve"]["reason"]
+    legacy = candidate_detail(
+        {"key": "all_period", "point": {"symbol": "SPY"}}, strategy_key="ema_crossover_signal", development=record, exam=None, commission_per_order=0.0
+    )
     assert legacy["development"]["concentration_curve"] == {"points": [], "best_count": None, "reason": NOT_MEASURED}
 
 

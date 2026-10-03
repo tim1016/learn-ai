@@ -18,11 +18,17 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
+
+from app.research.golden_search.guidance import usd
+from app.research.golden_search.selection import Metrics
 
 RECONCILE_ATOL = 0.01
 # A cent is not exactly representable, so a difference of exactly one cent may read a hair above it.
 _FLOAT_SLACK = 1e-9
+
+NOT_EVALUATED = "Not evaluated: the study's budget ran out before this candidate's development run."
 
 
 def trade_nets(trades: Sequence[Mapping[str, Any]], commission_per_order: float) -> list[float]:
@@ -33,3 +39,43 @@ def trade_nets(trades: Sequence[Mapping[str, Any]], commission_per_order: float)
 def reconciles(nets: Sequence[float], net_profit: float) -> bool:
     """Whether the trades add up to their run's net profit within a cent."""
     return abs(math.fsum(nets) - net_profit) <= RECONCILE_ATOL + _FLOAT_SLACK
+
+
+@dataclass(frozen=True)
+class ReconciledRun:
+    """A development detail run whose trades account for its net profit."""
+
+    net_profit: float
+    daily: list[tuple[int, float]]
+    capital: float
+    trades: list[Mapping[str, Any]]
+    # Each trade's net profit, in the run's trade order.
+    nets: list[float]
+
+
+def reconciled_run(metrics: Metrics | None, detail: Mapping[str, Any] | None, *, commission_per_order: float) -> ReconciledRun | str:
+    """The run with each trade's net profit, or why its trades cannot be read: the reason the trade charts and the concentration measure give."""
+    if metrics is None:
+        return NOT_EVALUATED
+    if metrics.status != "completed":
+        return "The development run failed, so there is nothing to measure."
+    if metrics.net_profit is None:
+        return "The development run recorded no net profit."
+    if detail is None:
+        return "The development run kept no trade list."
+    trades: list[Mapping[str, Any]] = list(detail["trades"])
+    if not trades:
+        return "The development run made no trades."
+    nets = trade_nets(trades, commission_per_order)
+    if not reconciles(nets, metrics.net_profit):
+        return (
+            f"Its trades add up to {usd(math.fsum(nets))} after commission, but the run's net profit is "
+            f"{usd(metrics.net_profit)}, so the trades do not account for the whole result."
+        )
+    return ReconciledRun(
+        net_profit=metrics.net_profit,
+        daily=[(int(ms), float(equity)) for ms, equity in detail["daily_equity"]],
+        capital=float(detail["initial_cash"]),
+        trades=trades,
+        nets=nets,
+    )

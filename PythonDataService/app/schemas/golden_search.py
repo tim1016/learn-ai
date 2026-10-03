@@ -906,21 +906,94 @@ class GoldenSearchDrawdownPoint(_Wire):
 
 class GoldenSearchMonthlyResult(_Wire):
     month_start_ms: InstantMs
+    year: int = Field(description="The month's ET calendar year.")
+    month: int = Field(ge=1, le=12, description="The month's ET calendar month, 1 for January.")
     net_profit: float
     return_fraction: float | None
     trades: int
 
 
-class GoldenSearchTrade(_Wire):
+class GoldenSearchTradeRecord(_Wire):
     entry_ms: InstantMs
     exit_ms: InstantMs
     entry_price: float
     exit_price: float
     quantity: int
     pnl: float = Field(description="Price change times filled quantity, before fees.")
-    pnl_pct: float
-    indicators: dict[str, float | None]
-    exit_reason: str | None
+    net_profit: float = Field(description="P&L before fees less the entry and exit commission.")
+    running_net_profit: float = Field(description="Net profit of this trade and every trade that exited before it.")
+    bars_held: int = Field(description="Decision bars that closed after the entry and by the exit, on the trading calendar.")
+    entry_rsi: float | None = Field(description="RSI the strategy recorded when it decided to enter; null when it recorded none.")
+    exit_kind: Literal["strategy", "window_end"]
+    exit_reason: str
+
+
+class GoldenSearchHistogramBin(_Wire):
+    low: float
+    high: float = Field(description="Exclusive, except for a single bin of trades that all net the same.")
+    trades: int
+    wins: int = Field(description="Trades in the bin that netted more than $0.")
+    losses: int = Field(description="Trades in the bin that netted less than $0.")
+
+
+class GoldenSearchHistogram(_Wire):
+    bin_width: float = Field(description="0 when every trade nets the same.")
+    bins: list[GoldenSearchHistogramBin] = Field(description="From the lowest to the highest, with $0 as an edge; empty bins between are kept.")
+
+
+class GoldenSearchRsiBand(_Wire):
+    low: float
+    high: float = Field(description="Exclusive, except for the last band, which ends at the upper gate.")
+    trades: int
+    mean_net_profit: float | None = Field(description="Null for a band no trade entered in.")
+
+
+class GoldenSearchEntryRsiMeasured(_Wire):
+    status: Literal["measured"]
+    gate_low: float
+    gate_high: float
+    bands: list[GoldenSearchRsiBand]
+    unbanded: int = Field(description="Trades with no RSI recorded at entry or one outside the gates.")
+
+
+class GoldenSearchEntryRsiMissing(_Wire):
+    status: Literal["missing"]
+    reason: str
+
+
+GoldenSearchEntryRsi = Annotated[GoldenSearchEntryRsiMeasured | GoldenSearchEntryRsiMissing, Field(discriminator="status")]
+
+
+class GoldenSearchEntryTimeCell(_Wire):
+    weekday: int = Field(description="Index into the weekdays.")
+    half_hour: int = Field(description="Index into the half hours.")
+    trades: int
+    mean_net_profit: float
+    total_net_profit: float
+    too_few: bool = Field(description="Fewer trades than the minimum, so its average means little.")
+
+
+class GoldenSearchEntryTimes(_Wire):
+    weekdays: list[str] = Field(description="The rows: ET weekdays the sessions hold, Monday first.")
+    half_hours: list[str] = Field(description="The columns: the ET half hours the sessions cover, as HH:MM.")
+    min_trades: int
+    cells: list[GoldenSearchEntryTimeCell] = Field(description="Only the cells a trade entered in.")
+
+
+class GoldenSearchTradeChartsMeasured(_Wire):
+    status: Literal["measured"]
+    trades: list[GoldenSearchTradeRecord] = Field(description="In exit order.")
+    histogram: GoldenSearchHistogram
+    entry_rsi: GoldenSearchEntryRsi
+    entry_times: GoldenSearchEntryTimes
+
+
+class GoldenSearchTradeChartsMissing(_Wire):
+    status: Literal["missing"]
+    reason: str
+
+
+GoldenSearchTradeCharts = Annotated[GoldenSearchTradeChartsMeasured | GoldenSearchTradeChartsMissing, Field(discriminator="status")]
 
 
 class GoldenSearchCurvePoint(_Wire):
@@ -943,8 +1016,8 @@ class GoldenSearchRunDetail(_Wire):
     daily_equity: list[GoldenSearchEquityPoint]
     drawdown: list[GoldenSearchDrawdownPoint]
     monthly: list[GoldenSearchMonthlyResult]
-    trades: list[GoldenSearchTrade]
     concentration_curve: GoldenSearchConcentrationCurve | None = Field(description="The development run's; null on a final-test run.")
+    trade_charts: GoldenSearchTradeCharts | None = Field(description="The development run's; null on a final-test run.")
 
 
 class GoldenSearchCandidateDetail(_Wire):

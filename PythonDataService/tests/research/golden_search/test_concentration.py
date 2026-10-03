@@ -11,12 +11,12 @@ import pytest
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.research.golden_search.concentration import (
     NO_PROFIT_TO_SHARE,
-    NOT_EVALUATED,
     best_count,
     concentration,
     concentration_curve,
 )
 from app.research.golden_search.selection import Metrics
+from app.research.golden_search.trade_net import NOT_EVALUATED
 from app.utils.session_anchors import et_midnight_ms
 from tests._helpers.golden_search import metrics
 
