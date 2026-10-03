@@ -7,6 +7,10 @@ write of a settlement in turn, and assert what the ledger holds afterwards:
 after the operator asks again, and after the Clerk's ordinary passes alone,
 the order is settled exactly as an uninterrupted settlement settles it.
 Nothing is sent in any of them.
+
+A process that dies releases nothing: the claim it held on the EXIT stands
+until it expires, and every pass before then defers the EXIT. So the passes
+here run until the first one after the claim's expiry.
 """
 
 from __future__ import annotations
@@ -23,13 +27,18 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     RecoveryActionUnavailableError,
     StaleRecoveryTokenError,
 )
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import (
+    DEFAULT_CLAIM_TTL_MS,
+    ClerkSqliteRepository,
+    OperationClaimError,
+)
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
     ORDER_OUTCOME_UNKNOWN_REASON_CODE,
 )
 from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import OrderOutcomeAttestation
 from tests.broker.alpaca.clerk.sqlite.test_exit_lost_closing_order_resend import (
+    SWEEP_INTERVAL_MS,
     _closing_order,
     _exit_state,
     _passes,
@@ -50,13 +59,15 @@ from tests.broker.alpaca.clerk.sqlite.test_unknown_order_attestation import (
     _open_episode,
     _presented,
     _settle,
+    _the_ledger_records_the_bots_shares_written_off,
 )
 
 # More durable writes than any settlement here makes: every window is covered
 # (``test_every_durable_write_of_a_settlement_is_a_window_these_tests_cover``).
 WRITES_COVERED = 6
-# A minute of the Clerk's passes, every 15 s.
-PASSES = 4
+# The Clerk's passes, every 15 s, up to the first one after a dead process's
+# claim on the EXIT has expired: the pass that finishes what it left.
+PASSES = DEFAULT_CLAIM_TTL_MS // SWEEP_INTERVAL_MS + 1
 
 
 class _ProcessDied(Exception):
@@ -65,9 +76,15 @@ class _ProcessDied(Exception):
 
 @contextmanager
 def _the_process_dies_after(repo: ClerkSqliteRepository, writes: int) -> Iterator[list[str]]:
-    """Inside the block, let ``writes`` transitions commit, then die. Yields the kinds written, as they are written."""
+    """Inside the block, let ``writes`` transitions commit, then die. Yields the kinds written, as they are written.
+
+    Dead, the process releases nothing. The exception that stands for its
+    death still unwinds the settlement's ``finally``, so from the death on a
+    release of an operation claim does nothing, and the claim the settlement
+    held is left as a death leaves it: held until it expires.
+    """
     written: list[str] = []
-    append = repo.append_transition
+    append, release = repo.append_transition, repo.release_operation_claim
 
     def append_transition(transition: TransitionInput, **kwargs: object) -> CommittedTransition:
         committed = append(transition, **kwargs)  # type: ignore[arg-type]
@@ -76,11 +93,18 @@ def _the_process_dies_after(repo: ClerkSqliteRepository, writes: int) -> Iterato
             raise _ProcessDied(f"died after {' → '.join(written)}")
         return committed
 
+    def release_operation_claim(*, effect_operation_id: str, token: str) -> bool:
+        if len(written) >= writes:
+            return False
+        return release(effect_operation_id=effect_operation_id, token=token)
+
     repo.append_transition = append_transition  # type: ignore[method-assign]
+    repo.release_operation_claim = release_operation_claim  # type: ignore[method-assign]
     try:
         yield written
     finally:
         repo.append_transition = append  # type: ignore[method-assign]
+        repo.release_operation_claim = release  # type: ignore[method-assign]
 
 
 @dataclass(frozen=True)
@@ -101,6 +125,15 @@ async def _alpaca_never_had_it(
     repo: ClerkSqliteRepository, alpaca: _AlpacaAccount
 ) -> tuple[str, OrderOutcomeAttestation]:
     return await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca), ABSENT
+
+
+async def _alpaca_never_had_it_and_the_bot_holds_nothing(
+    repo: ClerkSqliteRepository, alpaca: _AlpacaAccount
+) -> tuple[str, OrderOutcomeAttestation]:
+    exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    alpaca.holds = 0.0
+    _the_ledger_records_the_bots_shares_written_off(repo)
+    return exit_id, ABSENT
 
 
 async def _alpaca_filled_it(
@@ -135,6 +168,11 @@ SETTLEMENTS = [
         "never_arrives", _alpaca_never_had_it,
         _Settled("failed", held=10.0, exit_not_flat_is_open=True, filled=0.0, taken_up=False),
         id="absent",
+    ),
+    pytest.param(
+        "never_arrives", _alpaca_never_had_it_and_the_bot_holds_nothing,
+        _Settled("succeeded", held=0.0, exit_not_flat_is_open=False, filled=0.0, taken_up=False),
+        id="absent-and-the-bot-holds-nothing",
     ),
     pytest.param(
         "arrives_unanswered", _alpaca_filled_it,
@@ -202,10 +240,13 @@ async def test_a_settlement_the_process_dies_in_is_finished_by_a_retry_or_the_cl
     """The process dies right after the settlement's ``dies_after``-th durable write.
 
     Whichever write it was, the order ends where an uninterrupted settlement
-    leaves it: after a minute of the Clerk's ordinary passes alone, and when
-    the operator asks for the same settlement again first. Asked again, the
-    Clerk answers with the settlement's own record -- the one attestation row
-    there is -- and never with a record of something that did not happen.
+    leaves it: after the Clerk's ordinary passes alone, and when the operator
+    asks for the same settlement again first. The dead process's claim on
+    the EXIT is still held, as a death leaves it; the passes defer the EXIT
+    until it expires, and the first pass after that finishes the settlement.
+    Asked again, the Clerk answers with the settlement's own record -- the
+    one attestation row there is -- and never with a record of something
+    that did not happen. One send, and one credit of a fill, however it ends.
     """
     repo, clock = crashed_with_exposure
     alpaca = _AlpacaAccount(repo, clock, submits=(submit,))  # type: ignore[arg-type]
@@ -218,6 +259,9 @@ async def test_a_settlement_the_process_dies_in_is_finished_by_a_retry_or_the_cl
             await _settle(facade, current_context, attestation, presented=presented)
         except _ProcessDied:
             assert len(written) == dies_after
+            with pytest.raises(OperationClaimError):
+                # The dead process's claim on the EXIT still stands.
+                repo.claim_before_broker_contact(exit_id)
         else:
             assert len(written) < dies_after, "the settlement was whole before the process died"
 
