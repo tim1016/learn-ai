@@ -55,10 +55,12 @@ again nor refused: custody is retained until the order's exact lookup answers.
 A reducing order whose send was lost is sent again, under the same client
 order id, once an exact lookup has read it absent a whole submit-absence wait
 after its latest send (#2845). Each send made again waits longer than the
-last (:func:`resend_wait_ms`, #2854), and they go on only while the order's
-session is open: once it has ended the order is not sent, and the EXIT fails
-and releases custody (:func:`_created_leg_may_be_sent`). Three things guard a
-send made again. Whether
+last (:func:`resend_wait_ms`, #2854), and they go on only while the order may
+still be sent (:func:`_created_leg_may_be_sent`). Once its session has ended,
+a scheduled-end sale holds with custody kept and goes out again, under the
+same client order id, after the next open; any other EXIT fails and releases
+custody. An operator's Flatten the account no longer covers fails too (#2839).
+Three things guard a send made again. Whether
 the order ever reached the broker is read again in the run that records the
 send (:func:`_resend_still_proven_absent`). No refusal of a send made again
 fails the EXIT: an earlier send may have arrived, so custody is retained as an
@@ -2501,11 +2503,12 @@ def resend_wait_ms(sends: int) -> int:
     :data:`RESEND_WAIT_CEILING_MS` every time.
 
     A send made again can be refused for as long as its cause stands, and no
-    number of refusals ends the sends. Only the end of the order's session
-    does: the order is then no longer sent, and the EXIT fails and releases
-    custody (:func:`_created_leg_may_be_sent`). So the sends back off instead
-    of asking the broker twice a minute until then. Never shorter than the
-    submit-absence wait, whatever that is set to.
+    number of refusals ends the sends. Only the send-time rule does
+    (:func:`_created_leg_may_be_sent`): past the order's session a
+    scheduled-end sale holds for the next open, and any other EXIT fails and
+    releases custody. So the sends back off instead of asking the broker twice
+    a minute until then. Never shorter than the submit-absence wait, whatever
+    that is set to.
     """
     base_ms = submit_absence_grace_ms()
     if sends <= 1:
