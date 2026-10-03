@@ -54,14 +54,22 @@ again nor refused: custody is retained until the order's exact lookup answers.
 
 A reducing order whose send was lost is sent again, under the same client
 order id, once an exact lookup has read it absent a whole submit-absence wait
-after its latest send (#2845). Three things guard that second send. Whether
+after its latest send (#2845). Each send made again waits longer than the
+last (:func:`resend_wait_ms`, #2854), and they go on only while the order may
+still be sent (:func:`_created_leg_may_be_sent`). Once its session has ended,
+a scheduled-end sale holds with custody kept and goes out again, under the
+same client order id, after the next open; any other EXIT fails and releases
+custody. An operator's Flatten the account no longer covers fails too (#2839).
+Three things guard a send made again. Whether
 the order ever reached the broker is read again in the run that records the
 send (:func:`_resend_still_proven_absent`). No refusal of a send made again
 fails the EXIT: an earlier send may have arrived, so custody is retained as an
 unknown outcome (:func:`_fold_send_refused`). And an order whose latest send
 the broker answered under another client order id is never sent again: the
 same client order id cannot protect a second send from an order that may exist
-under a different one (:func:`_retain_answered_as_another_order`).
+under a different one (:func:`_retain_answered_as_another_order`). In both of
+those the broker answered, so the open unknown-outcome notice says what it
+answered instead of that a response was lost (#2854).
 """
 
 from __future__ import annotations
@@ -100,6 +108,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     OrderCancelRequestedFacts,
     OrderSubmitFailedFacts,
     OrderSubmitUncertainFacts,
+    UnknownOutcomeNotice,
 )
 from app.broker.alpaca.clerk.sqlite.flatten_cover import (
     FLATTEN_COVER_HEADLINES,
@@ -2067,13 +2076,18 @@ def _retain_refused_resend(
     sell it again under a new client order id while this order works. Custody
     is retained as an unknown outcome instead. The next pass's exact lookup
     folds the order once the broker shows it; while it stays absent, the wait
-    runs again from this answer and the same order is sent again.
+    runs again from this answer, longer each time (:func:`resend_wait_ms`),
+    and the same order is sent again while its session is open.
 
     What a first send's refusal records is not recorded here: the orders open
     on the other side of the symbol that the watchdog's re-drive waits behind
     (#2622), and the episode it re-drives. The order still goes out once that
     side clears, on the first send after it.
+
+    The open notice says so, in Alpaca's own words (#2854): it was opened as
+    a lost answer, and this send was answered.
     """
+    created = _reducing_order_facts(repo, reducing.order_ref)
     logger.warning(
         "the broker refused a reducing order sent again; an earlier send may have arrived, so custody is kept",
         extra={
@@ -2094,6 +2108,21 @@ def _retain_refused_resend(
             "it may have reached the broker, so the refusal does not prove nothing is working "
             "there. Custody is kept, and the order is sent again under the same client order id "
             f"while its exact lookup still reads it absent. The broker's answer: {error}"
+        ),
+        notice=UnknownOutcomeNotice(
+            explanation=(
+                f"Alpaca refused the order to {_the_reduction(created)} when the Clerk sent it again. "
+                "An earlier send of this order may have reached Alpaca, so while the order's "
+                "session is open the Clerk keeps custody of the position and sends the same order "
+                "again, under the same client order id, for as long as Alpaca shows no order under "
+                f"that id. Alpaca's answer: {error}"
+            ),
+            next_step=(
+                "Look at this account's orders and position at Alpaca. While the order's session "
+                "is open the Clerk sends the order again by itself, waiting longer after each "
+                f"refusal (up to {RESEND_WAIT_CEILING_MS // 60_000} minutes), and takes it up as "
+                "soon as Alpaca shows it."
+            ),
         ),
     )
 
@@ -2185,8 +2214,16 @@ def _fold_answered_as_another_order(
     and never taken as this order's: whose order it is is not known. An
     answer that names no client order id at all is recorded as the empty
     string: it does not name the one that was sent either.
+
+    The open notice says the order will not be sent again, and names the
+    order Alpaca answered with (#2854): the only thing an operator can do
+    about it today is look at that order at Alpaca.
     """
     answered_as = answer.client_order_id or ""
+    created = _reducing_order_facts(repo, reducing.order_ref)
+    answered_with = (
+        f"client order id {answered_as!r}" if answered_as else "no client order id"
+    ) + (f", Alpaca order id {answer.order_id!r}" if answer.order_id.strip() else "")
     logger.error(
         "the broker answered a reducing order's send under another client order id; the order will not be sent again",
         extra={
@@ -2207,6 +2244,20 @@ def _fold_answered_as_another_order(
             f"The answer's broker order id, {answer.order_id!r}, is not taken as this order's."
         ),
         answered_as_client_order_id=answered_as,
+        notice=UnknownOutcomeNotice(
+            explanation=(
+                f"The Clerk sent the order to {_the_reduction(created)} under client order id "
+                f"{reducing.client_order_id!r}, and Alpaca answered with an order under "
+                f"{answered_with}. An order may be at Alpaca under that other identity, and "
+                "sending the same client order id again could not guard against it, so the Clerk "
+                "will not send this order again. It keeps custody of the position."
+            ),
+            next_step=(
+                "Look at this account's orders at Alpaca for the order it answered with. The "
+                "Clerk takes this order up by itself only if Alpaca shows one under the client "
+                "order id that was sent."
+            ),
+        ),
     )
 
 
@@ -2427,8 +2478,52 @@ def _reducing_order_facts(repo: ClerkSqliteRepository, order_ref: str) -> ExitRe
     return ExitReducingOrderCreatedFacts.from_facts_json(transition["facts_json"])
 
 
+def _the_reduction(created: ExitReducingOrderCreatedFacts) -> str:
+    """A reducing order as a notice names it: its side, quantity and symbol."""
+    return f"{created.side.lower()} {created.quantity:g} {created.symbol}"
+
+
+RESEND_WAITS_AFTER_A_RESEND_MS: tuple[int, ...] = (60_000, 120_000)
+"""How long a reducing order waits to be sent again after its second send, then after its third (#2854)."""
+
+RESEND_WAIT_CEILING_MS = 300_000
+"""How long it waits after its fourth send, and after every later one (#2854)."""
+
+# Sends are counted this far and no further: every count from here on waits the ceiling.
+_SENDS_COUNTED = len(RESEND_WAITS_AFTER_A_RESEND_MS) + 2
+
+
+def resend_wait_ms(sends: int) -> int:
+    """How long a reducing order sent ``sends`` times waits, from its latest send, before it may be sent again (#2854).
+
+    The submit-absence wait itself after its first send -- and, for an order
+    never sent, from its creation -- so an order whose one send was lost goes
+    out again as soon as it did before the waits grew. Each later send waits
+    longer: :data:`RESEND_WAITS_AFTER_A_RESEND_MS`, then
+    :data:`RESEND_WAIT_CEILING_MS` every time.
+
+    A send made again can be refused for as long as its cause stands, and no
+    number of refusals ends the sends. Only the send-time rule does
+    (:func:`_created_leg_may_be_sent`): past the order's session a
+    scheduled-end sale holds for the next open, and any other EXIT fails and
+    releases custody. So the sends back off instead of asking the broker twice
+    a minute until then. Never shorter than the submit-absence wait, whatever
+    that is set to.
+    """
+    base_ms = submit_absence_grace_ms()
+    if sends <= 1:
+        return base_ms
+    later = sends - 2
+    return max(
+        base_ms,
+        RESEND_WAITS_AFTER_A_RESEND_MS[later]
+        if later < len(RESEND_WAITS_AFTER_A_RESEND_MS)
+        else RESEND_WAIT_CEILING_MS,
+    )
+
+
 def _absence_grace_elapsed(repo: ClerkSqliteRepository, order_ref: str) -> bool:
-    """Whether the submit-absence wait since this reducing order's latest send has passed (#2845).
+    """Whether the wait since this reducing order's latest send has passed (#2845).
 
     An order whose submit answer was lost may have reached the broker and not
     yet show in an exact lookup; sent again inside that window, it could sell
@@ -2441,12 +2536,17 @@ def _absence_grace_elapsed(repo: ClerkSqliteRepository, order_ref: str) -> bool:
     the later by sequence: a host clock that steps backwards between them
     must not shorten the wait. An order never sent waits from its creation.
 
+    How long the wait is depends on how many times the order has been sent
+    (:func:`resend_wait_ms`, #2854). That is the count of its
+    ``ORDER_SUBMIT_REQUESTED`` records, not a clock reading, so a clock step
+    cannot shorten the wait that way either.
+
     No later ``ORDER_SUBMIT_UNCERTAIN`` moves the wait. Those are this
     machine's own records that the order is still absent: each pass writes
     one, and the passes come more often than the wait is long, so a wait
     measured from the newest never ended and the order was never sent again
     while the passes kept running. Each read is one row off the order's
-    index (#1942).
+    index, and the count stops at the few sends it tells apart (#1942).
     """
     latest = _latest_send(repo, order_ref)
     if latest is None:
@@ -2456,13 +2556,17 @@ def _absence_grace_elapsed(repo: ClerkSqliteRepository, order_ref: str) -> bool:
         if created is None:
             raise AssertionError(f"no reducing-order creation transition for {order_ref!r}")
         anchor_ms = created["recorded_at_ms"]
+        sends = 0
     else:
         anchor_ms = (
             latest.requested["recorded_at_ms"]
             if latest.answer is None
             else max(latest.requested["recorded_at_ms"], latest.answer["recorded_at_ms"])
         )
-    return repo.clock() - anchor_ms >= submit_absence_grace_ms()
+        sends = repo.count_order_transitions(
+            order_ref=order_ref, transition_kind="ORDER_SUBMIT_REQUESTED", at_most=_SENDS_COUNTED
+        )
+    return repo.clock() - anchor_ms >= resend_wait_ms(sends)
 
 
 def _deterministic_intent_id(effect_operation_id: str) -> str:

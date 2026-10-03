@@ -7,7 +7,7 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from typing import Literal, Protocol
+from typing import Literal, NamedTuple, Protocol
 from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
@@ -110,7 +110,16 @@ MAX_TERMINAL_ENTER_LOOKUPS = 5
 #: Clerk-clock wait before a failed ENTER the broker answered is looked up
 #: again. Not "never": an absence answer does not prove the abandoned POST
 #: (#2342) cannot still land, so the order rotates back onto the worklist.
+#: A failed EXIT's closing order rests as long between its lookups (#2854).
 TERMINAL_ENTER_LOOKUP_RECHECK_MS = 30_000
+#: Exact lookups one pass spends on the closing orders of failed EXITs in
+#: drifted symbols (#2854).
+MAX_FAILED_EXIT_ORDER_LOOKUPS = 5
+#: How long after its EXIT failed a closing order is still looked up (#2854).
+#: Every reducing order is a DAY order, which the broker ends with its day's
+#: last session, so one the broker still does not show a day after its EXIT
+#: failed never reached it.
+FAILED_EXIT_ORDER_LOOKUP_WINDOW_MS = 24 * 60 * 60 * 1000
 
 _RECONCILIATION_LOCKS: WeakKeyDictionary[ClerkSqliteRepository, asyncio.Lock] = WeakKeyDictionary()
 _DIRECT_RECONCILIATION_INTAKES: WeakKeyDictionary[ClerkSqliteRepository, ReentrantAsyncLock] = (
@@ -679,7 +688,23 @@ def _resolve_flat_failed_enter_filled_fences(
         )
 
 
-async def _recover_fills_on_terminal_enters(
+class _LookupFailure(NamedTuple):
+    """How a failed exact lookup of one kind of ended order is logged."""
+
+    message: str
+    action: str
+
+
+_FAILED_ENTER_LOOKUP_FAILED = _LookupFailure(
+    "could not look up a failed ENTER in a drifted symbol", "terminal_enter_lookup_failed"
+)
+_FAILED_EXIT_ORDER_LOOKUP_FAILED = _LookupFailure(
+    "could not look up a failed EXIT's closing order in a drifted symbol",
+    "failed_exit_order_lookup_failed",
+)
+
+
+async def _recover_fills_on_failed_operations(
     repo: ClerkSqliteRepository,
     *,
     broker_orders: list[BrokerOrder],
@@ -689,7 +714,7 @@ async def _recover_fills_on_terminal_enters(
     trigger: Trigger,
     simulated_authority: bool,
 ) -> None:
-    """Exact-look-up failed ENTERs that may have filled where the snapshot cannot see (#2348).
+    """Exact-look-up the orders of failed operations that may have filled where the snapshot cannot see (#2348).
 
     The open-order snapshot omits a closed order, so a voided or
     duplicate-id-refused ENTER that landed and fully filled while
@@ -707,6 +732,19 @@ async def _recover_fills_on_terminal_enters(
     looked up first, each answered order rested for
     :data:`TERMINAL_ENTER_LOOKUP_RECHECK_MS`), so voids that never reached
     the broker cannot hold every slot and starve an older one that filled.
+
+    The closing order of a failed EXIT is asked about the same way (#2854).
+    An EXIT can fail while its reducing order's outcome is not known -- an
+    operator's Flatten the account check refused as it would be sent again,
+    told "nothing was sent" after its own lost order filled -- and nothing
+    else looks a failed EXIT's order up: its fill stayed unseen, and the drift
+    stood, until a stream frame arrived or the operator discharged it. An
+    answer is folded like a snapshot row, under the EXIT that owns the order,
+    exactly as a stream frame for it is: a fill is credited once, and the
+    order's broker state ends its lookups. Bounded three ways: only in a
+    drifted symbol, at most :data:`MAX_FAILED_EXIT_ORDER_LOOKUPS` a pass on
+    the same rotation, and only for
+    :data:`FAILED_EXIT_ORDER_LOOKUP_WINDOW_MS` after the EXIT failed.
     """
     attributed = await to_thread(repo.attributed_positions_by_symbol)
     drifted = _mismatched_symbols(broker_positions, attributed)
@@ -715,23 +753,36 @@ async def _recover_fills_on_terminal_enters(
     in_snapshot = frozenset(
         order.client_order_id for order in broker_orders if order.client_order_id is not None
     )
-    rested_since_ms = repo.clock() - TERMINAL_ENTER_LOOKUP_RECHECK_MS
-    candidates = await to_thread(
-        lambda: repo.terminal_entry_orders_unproven_at_broker(
+    now_ms = repo.clock()
+    rested_since_ms = now_ms - TERMINAL_ENTER_LOOKUP_RECHECK_MS
+
+    def _worklist() -> list[tuple[str, _LookupFailure]]:
+        entries = repo.terminal_entry_orders_unproven_at_broker(
             symbols=drifted,
             exclude_client_order_ids=in_snapshot,
             rested_since_ms=rested_since_ms,
             limit=MAX_TERMINAL_ENTER_LOOKUPS,
         )
-    )
-    for order_ref in candidates:
+        closing = repo.failed_exit_orders_unproven_at_broker(
+            symbols=drifted,
+            exclude_client_order_ids=in_snapshot,
+            rested_since_ms=rested_since_ms,
+            failed_since_ms=now_ms - FAILED_EXIT_ORDER_LOOKUP_WINDOW_MS,
+            limit=MAX_FAILED_EXIT_ORDER_LOOKUPS,
+        )
+        return [
+            *((order_ref, _FAILED_ENTER_LOOKUP_FAILED) for order_ref in entries),
+            *((order_ref, _FAILED_EXIT_ORDER_LOOKUP_FAILED) for order_ref in closing),
+        ]
+
+    for order_ref, lookup_failed in await to_thread(_worklist):
         try:
             observed = await trade.get_order_by_client_order_id(order_ref)
         except BrokerError as exc:
             logger.warning(
-                "could not look up a failed ENTER in a drifted symbol",
+                lookup_failed.message,
                 extra={
-                    "action": "terminal_enter_lookup_failed",
+                    "action": lookup_failed.action,
                     "account_id": repo.account_id,
                     "order_ref": order_ref,
                     "error": str(exc),
@@ -746,7 +797,7 @@ async def _recover_fills_on_terminal_enters(
                 simulated_authority=simulated_authority,
             )
         await _under_intake(
-            intake, _record_terminal_enter_lookup, repo, order_ref=order_ref, trigger=trigger
+            intake, _record_failed_operation_lookup, repo, order_ref=order_ref, trigger=trigger
         )
 
 
@@ -791,20 +842,21 @@ def _fold_external_order_lookup(
         observe_or_record_unfoldable(repo, order=observed)
 
 
-def _record_terminal_enter_lookup(
+def _record_failed_operation_lookup(
     repo: ClerkSqliteRepository, *, order_ref: str, trigger: Trigger
 ) -> None:
-    """Durably date one answered exact lookup of a failed ENTER (#2348).
+    """Durably date one answered exact lookup of a failed operation's order (#2348, #2854).
 
-    The ENTER stays ``failed``/``rejected`` whatever the answer (no fold
-    reopens it), so the attempt records ``RESOLVED_FAILURE`` -- the same
-    outcome :func:`_reconcile_effect` records for a terminally failed effect.
+    The ENTER, or the EXIT whose closing order it is, stays
+    ``failed``/``rejected`` whatever the answer (no fold reopens it), so the
+    attempt records ``RESOLVED_FAILURE`` -- the same outcome
+    :func:`_reconcile_effect` records for a terminally failed effect.
     """
     order = repo.order(order_ref)
     effect = None if order is None else repo.effect_operation(order.effect_operation_id)
     if order is None or effect is None:
         raise ReconciliationInvariantError(
-            f"looked-up failed ENTER {order_ref!r} has no order or owning effect"
+            f"looked-up order {order_ref!r} of a failed operation has no order or owning effect"
         )
     _record_reconciliation_attempt(
         repo,
@@ -1245,8 +1297,9 @@ async def _reconcile_account_serialized(
 
     # A failed ENTER that filled and closed while trade_updates was down is
     # absent from the open-order snapshot; fold it before the verdict so its
-    # detector can fence the fill (#2348).
-    await _recover_fills_on_terminal_enters(
+    # detector can fence the fill (#2348). So is a failed EXIT's closing
+    # order, whose fill the verdict then compares the broker against (#2854).
+    await _recover_fills_on_failed_operations(
         repo,
         broker_orders=broker_orders,
         broker_positions=broker_positions,
