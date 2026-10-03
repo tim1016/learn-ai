@@ -14,7 +14,7 @@ from app.research.golden_search.grid_procedure import run_grid
 from app.research.golden_search.models import EvaluationRecord
 from app.research.golden_search.planning import protocol_from_request
 from app.research.golden_search.protocol import GoldenSearchProtocol
-from app.research.golden_search.search_charts import GRID_PATH, NOT_REPLAYED, procedure_charts
+from app.research.golden_search.search_charts import GRID_PATH, NOT_REPLAYED, PARTIAL_ROUND, procedure_charts
 from app.research.golden_search.selection import Metrics
 from app.research.golden_search.zoom import BudgetExhausted, ProcedureResult, run_zoom
 from tests._helpers.golden_search import Landscape, metrics
@@ -153,6 +153,34 @@ def test_a_budget_stop_mid_search_still_rebuilds_the_winner(limit: int) -> None:
 
     assert result.stop_reason == "budget" and charts["convergence"]["status"] == "measured"
     assert [point_hash("ema_crossover_signal", item["point"]) for item in charts["convergence"]["tried"]] == [point_hash("ema_crossover_signal", p) for p in landscape.sent]
+
+
+class _PrefixBudget:
+    """Evaluates one point at a time and runs out partway through a batch, as the study's evaluator does: the prefix is stored, the round is not."""
+
+    def __init__(self, landscape: Landscape, limit: int) -> None:
+        self.landscape, self.limit = landscape, limit
+
+    def __call__(self, points: Sequence[dict[str, Any]]) -> list[Metrics]:
+        results = []
+        for point in points:
+            if len(self.landscape.sent) >= self.limit:
+                raise BudgetExhausted
+            results.extend(self.landscape([point]))
+        return results
+
+
+def test_a_budget_stop_partway_through_a_round_draws_no_path_short_of_the_points_it_scored() -> None:
+    protocol = _protocol_with_floor()
+    landscape = Landscape(_score)
+    # The seed, then three points of the first round's batch: stored, but no round records them.
+    result = run_zoom(declaration=EMA, protocol=protocol, seed=protocol.seed, evaluate=_PrefixBudget(landscape, 4), policy=_policy(protocol))
+    charts = _charts(protocol, result, landscape)
+
+    assert result.stop_reason == "budget" and not result.rounds and len(landscape.sent) == 4
+    assert charts["convergence"] == {"status": "missing", "reason": PARTIAL_ROUND}
+    # Every point scored is still on the eligibility map.
+    assert {item["point_hash"] for item in charts["points"]} == {point_hash("ema_crossover_signal", point) for point in landscape.sent}
 
 
 def test_with_nothing_eligible_the_winner_is_the_seed_and_the_path_has_no_best() -> None:

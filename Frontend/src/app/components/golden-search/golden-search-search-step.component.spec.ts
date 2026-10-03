@@ -131,9 +131,10 @@ describe('GoldenSearchSearchStepComponent', () => {
 
     const path = await screen.findByRole('region', { name: 'Search path' });
     expect(within(path).getByRole('img').getAttribute('aria-label')).toContain('All-period: 3 points tried in order, each by its Sharpe; the best eligible Sharpe so far ends at 1.18.');
-    expect(tableRows(path)[2]).toMatch(/Pass 1, Fast EMA length round 1\s*3\s*1\.60\s*too few trades\s*0\.90/);
+    // The table holds what the hover shows: the settings and every number.
+    expect(tableRows(path)[2]).toMatch(/Pass 1, Fast EMA length round 1\s*3.*Fast EMA length.*1\.60.*too few trades\s*0\.90/);
     expect(tableRows(screen.getByRole('region', { name: 'Knob moves' }))[1]).toMatch(/Fast EMA length\s*3 to 12\s*5\s*8\s*no/);
-    expect(tableRows(screen.getByRole('region', { name: 'One-knob profiles' })).at(-1)).toMatch(/Fast EMA length\s*8\s*1\.18\s*meets the rules\s*yes/);
+    expect(tableRows(screen.getByRole('region', { name: 'One-knob profiles' })).at(-1)).toMatch(/Fast EMA length\s*8\s*1\.18.*meets the rules\s*yes/);
     expect(tableRows(screen.getByRole('region', { name: 'Eligibility map' })).at(-1)).toContain('(winner)');
     // The recent fit's panels are named apart from the all-period search's.
     expect(screen.getByRole('region', { name: 'Search path · Recent window' })).not.toBeNull();
