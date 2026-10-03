@@ -1604,6 +1604,44 @@ async def test_the_same_settlement_asked_for_again_returns_its_receipt_and_does_
     assert repo.custody_transitions() == ledger
 
 
+async def test_a_settlement_asked_again_by_a_page_that_names_no_order_is_found_by_its_token(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """A bot's page sends the token it was presented, and names no order.
+
+    Asked again, that request is answered with its settlement's own record:
+    the spent token names the order, its latest send and the other id Alpaca
+    answered that send under, all still on the ledger. A request under any
+    other token is not that settlement, and gets no receipt.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=(_AnsweredAs(ANSWERED_AS),))
+    await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    alpaca.has_under_another_id(_answered_with(status="canceled"))
+    facade, current_context = _facade(repo, alpaca), _context_of(repo, SID)
+    presented = await _presented(current_context)
+    first = await _settle(facade, current_context, ABSENT, presented=presented)
+    ledger = repo.custody_transitions()
+    alpaca.reads.clear()
+
+    def naming_no_order(concurrency_token: str) -> RecoveryExecutionRequest:
+        return RecoveryExecutionRequest(
+            action_id=SETTLE, concurrency_token=concurrency_token, execution_ref=None, reason=None,
+            attestation=ABSENT, operator=OPERATOR,
+        )
+
+    again = await execute_recovery_action(
+        facade, request=naming_no_order(presented.concurrency_token), current_context=current_context
+    )
+    with pytest.raises(StaleRecoveryTokenError):
+        await execute_recovery_action(
+            facade, request=naming_no_order("0" * 64), current_context=current_context
+        )
+
+    assert (again.applied, again.receipt_id) == (False, first.receipt_id)
+    assert repo.custody_transitions() == ledger and alpaca.reads == []
+
+
 async def test_the_presented_token_outlives_the_clerks_passes_until_the_order_is_sent_again(
     crashed_with_exposure,  # noqa: F811
 ) -> None:

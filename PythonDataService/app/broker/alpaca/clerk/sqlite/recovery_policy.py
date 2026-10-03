@@ -13,7 +13,7 @@ import json
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Final, Literal, TypeGuard
+from typing import Final, Literal, NamedTuple, TypeGuard
 
 from app.broker.alpaca.clerk.account_authority import (
     is_shadow_account_id,
@@ -1163,6 +1163,30 @@ def _settlement(ctx: RecoveryPolicyContext, order: ProjectedUnknownExitOrder) ->
     )
 
 
+class SettleTokenOrder(NamedTuple):
+    """What the settle action's token names of the order it is offered for (#2854): the order and its latest send."""
+
+    effect_operation_id: str
+    order_ref: str
+    latest_send_sequence: int
+    answered_as_client_order_id: str | None
+    uncertainty_id: str
+
+
+def _settle_token_facts(order: SettleTokenOrder | None, active_run_ids: list[str]) -> dict[str, object]:
+    return {"order": order, "active_runs": active_run_ids}
+
+
+def settle_unknown_exit_order_token(ctx: RecoveryPolicyContext, order: SettleTokenOrder) -> str:
+    """The token the settle action carried while it was available for ``order`` (#2854).
+
+    Available, so with no ACTIVE run of the bot. A settled order is no
+    longer presented, and the token of the request that settled it is spent:
+    this is how that same request, asked again, is told from any other.
+    """
+    return _token(ctx, "settle_unknown_exit_order", _settle_token_facts(order, []))
+
+
 def _settle_unknown_exit_order_decision(ctx: RecoveryPolicyContext) -> _Decision:
     """Offer the settling of one bot's closing order whose outcome is unknown (#2854).
 
@@ -1234,20 +1258,18 @@ def _settle_unknown_exit_order_decision(ctx: RecoveryPolicyContext) -> _Decision
             )
         ),
         next_step=next_step,
-        token_facts={
-            "order": (
-                None
-                if order is None
-                else (
-                    order.effect_operation_id,
-                    order.order_ref,
-                    order.latest_send_sequence,
-                    order.answered_as_client_order_id,
-                    order.uncertainty_id,
-                )
+        token_facts=_settle_token_facts(
+            None
+            if order is None
+            else SettleTokenOrder(
+                effect_operation_id=order.effect_operation_id,
+                order_ref=order.order_ref,
+                latest_send_sequence=order.latest_send_sequence,
+                answered_as_client_order_id=order.answered_as_client_order_id,
+                uncertainty_id=order.uncertainty_id,
             ),
-            "active_runs": [run.run_id for run in active_runs],
-        },
+            [run.run_id for run in active_runs],
+        ),
         execution_ref=order.order_ref if available and order is not None else None,
         settlement=_settlement(ctx, order) if available and order is not None else None,
     )

@@ -8,6 +8,7 @@ cannot drift into separate guard implementations.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     RecoveryActionId,
     RecoveryPolicyContext,
     recheck_recovery_action,
+    settle_unknown_exit_order_token,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.residue_discharge import (
@@ -42,6 +44,7 @@ from app.broker.alpaca.clerk.sqlite.unknown_order_attestation import (
     OrderOutcomeAttestation,
     UnknownOrderSettlementReceipt,
     UnknownOrderSettlementRefused,
+    last_settled_order,
     recorded_settlement,
 )
 from app.broker.contract.errors import BrokerError
@@ -195,27 +198,11 @@ async def execute_recovery_action(
                 receipt_id=receipt.receipt_id,
                 recorded_at_ms=receipt.recorded_at_ms,
             )
-    if (
-        request.action_id == "settle_unknown_exit_order"
-        and request.execution_ref is not None
-        and request.attestation is not None
-        and context.strategy_instance_id is not None
-    ):
-        # The same settlement asked for again: a settled order is no longer
-        # presented, so its token is spent, and the recorded receipt answers.
-        settled = recorded_settlement(
-            facade.repository,
-            strategy_instance_id=context.strategy_instance_id,
-            order_ref=request.execution_ref,
-            attestation=request.attestation,
-        )
-        if settled is not None:
-            return RecoveryExecutionResult(
-                action_id=request.action_id,
-                applied=False,
-                receipt_id=f"transition:{settled.sequence}",
-                recorded_at_ms=settled.recorded_at_ms,
-            )
+    # The same settlement asked for again: a settled order is no longer
+    # presented, so its token is spent, and the recorded receipt answers.
+    settled_before = recorded_settlement_result(facade, context=context, request=request)
+    if settled_before is not None:
+        return settled_before
     capability = recheck_recovery_action(
         context,
         action_id=request.action_id,
@@ -367,6 +354,53 @@ async def execute_recovery_action(
     raise RecoveryExecutionError(
         f"{request.action_id} is navigation, preparation, or offline authority recovery; "
         "it has no direct broker mutation"
+    )
+
+
+def recorded_settlement_result(
+    facade: ActiveSqliteRecoveryFacade,
+    *,
+    context: RecoveryPolicyContext,
+    request: RecoveryExecutionRequest,
+) -> RecoveryExecutionResult | None:
+    """The receipt of the settlement ``request`` asks for, when the Clerk already made it (#2854). Reads only.
+
+    ``None`` for any other request, and for a settlement that is not on the
+    ledger. The Clerk's own route names the order it settles
+    (``execution_ref``). A bot's page names none and sends only the token it
+    was presented: its order is the bot's latest settled one, and only when
+    that token is the one the settle action carried for that order. So a
+    request about another order, or one that was refused, is never answered
+    with an earlier settlement's receipt.
+    """
+    strategy_instance_id = context.strategy_instance_id
+    if (
+        request.action_id != "settle_unknown_exit_order"
+        or request.attestation is None
+        or strategy_instance_id is None
+    ):
+        return None
+    order_ref = request.execution_ref
+    if order_ref is None:
+        last = last_settled_order(facade.repository, strategy_instance_id=strategy_instance_id)
+        if last is None or not hmac.compare_digest(
+            settle_unknown_exit_order_token(context, last), request.concurrency_token
+        ):
+            return None
+        order_ref = last.order_ref
+    settled = recorded_settlement(
+        facade.repository,
+        strategy_instance_id=strategy_instance_id,
+        order_ref=order_ref,
+        attestation=request.attestation,
+    )
+    if settled is None:
+        return None
+    return RecoveryExecutionResult(
+        action_id=request.action_id,
+        applied=False,
+        receipt_id=f"transition:{settled.sequence}",
+        recorded_at_ms=settled.recorded_at_ms,
     )
 
 

@@ -103,6 +103,7 @@ from app.broker.alpaca.clerk.sqlite.exit_resolution import (
 from app.broker.alpaca.clerk.sqlite.facts import (
     EndedForeignOrder,
     OrderOutcomeAttestedFacts,
+    OrderSubmitUncertainFacts,
     UncertaintyRaisedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -115,7 +116,10 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     SettlementAttestation,
 )
 from app.broker.alpaca.clerk.sqlite.reconcile import broker_symbol_reader
-from app.broker.alpaca.clerk.sqlite.recovery_policy import unknown_order_lookup_settles_at_ms
+from app.broker.alpaca.clerk.sqlite.recovery_policy import (
+    SettleTokenOrder,
+    unknown_order_lookup_settles_at_ms,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, OperationClaimError
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
     EXIT_NOT_FLAT_REASON_CODE,
@@ -1380,6 +1384,44 @@ def recorded_settlement(
     )
 
 
+def last_settled_order(
+    repo: ClerkSqliteRepository, *, strategy_instance_id: str
+) -> SettleTokenOrder | None:
+    """The order this bot's latest settlement settled, as the settle action's token named it.
+
+    For a request that names no order -- a bot's page sends only the token
+    it was presented -- so its settlement can be found by that token. What
+    the token named is all on the ledger: the attestation's own row, and the
+    answer of the send it names, read as the catalog read it
+    (``unknown_exit_orders``). ``None`` for a bot no order of which was
+    settled.
+    """
+    row = repo.last_strategy_transition(
+        strategy_instance_id=strategy_instance_id, transition_kind=ORDER_OUTCOME_ATTESTED
+    )
+    if row is None:
+        return None
+    facts = OrderOutcomeAttestedFacts.from_facts_json(row["facts_json"])
+    answer = repo.first_order_transition(
+        order_ref=row["order_ref"],
+        transition_kind="ORDER_SUBMIT_UNCERTAIN",
+        after_sequence=facts.latest_send_sequence,
+    )
+    return SettleTokenOrder(
+        effect_operation_id=row["effect_operation_id"],
+        order_ref=row["order_ref"],
+        latest_send_sequence=facts.latest_send_sequence,
+        answered_as_client_order_id=(
+            None
+            if answer is None
+            else OrderSubmitUncertainFacts.from_facts_json(
+                answer["facts_json"]
+            ).answered_as_client_order_id
+        ),
+        uncertainty_id=facts.uncertainty_id,
+    )
+
+
 __all__ = [
     "ORDER_OUTCOME_ATTESTED",
     "AttestationFindings",
@@ -1387,6 +1429,7 @@ __all__ = [
     "UnknownOrderSettlementReceipt",
     "UnknownOrderSettlementRefused",
     "check_unknown_exit_order",
+    "last_settled_order",
     "recorded_settlement",
     "settle_unknown_exit_order",
 ]

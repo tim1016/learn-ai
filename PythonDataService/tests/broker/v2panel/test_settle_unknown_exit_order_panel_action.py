@@ -71,8 +71,13 @@ async def _run_from_the_panel(
     *,
     attestation: UnknownOrderAttestationRequest | None,
     idempotency_key: str,
+    posted_again_with_token: str | None = None,
 ) -> PanelActionResult | None:
-    """The panel source runs the presented settle action for the operator ``desk-operator``."""
+    """The panel source runs the presented settle action for the operator ``desk-operator``.
+
+    ``posted_again_with_token`` is the token of a request posted again as it
+    was first sent, whatever the action presents now.
+    """
     presented = next(
         action
         for action in build_recovery_catalog(await _context_of(repo, settling.SID)())
@@ -85,7 +90,7 @@ async def _run_from_the_panel(
         request=PanelActionRequest(
             action_id=SETTLE,
             revision=1,
-            concurrency_token=presented.concurrency_token,
+            concurrency_token=posted_again_with_token or presented.concurrency_token,
             idempotency_key=idempotency_key,
             reason="Alpaca's order list shows no sell of SPY.",
             attestation=attestation,
@@ -158,6 +163,75 @@ async def test_a_key_sent_again_with_another_attestation_is_a_conflict_not_the_f
         )
         assert first is not None and again is not None
         assert (again.applied, again.receipt_id) == (False, first.receipt_id)
+
+    assert repo.custody_transitions() == ledger and alpaca.reads == []
+    assert len(alpaca.sent) == 1
+
+
+class _ProcessDied(Exception):
+    """The process is gone: the Clerk's ledger holds the settlement, and the panel's receipt ledger does not."""
+
+
+class _DiesBeforeItWritesTheReceipt(DurableIdempotencyStore):
+    async def complete(self, *_args: object, **_kwargs: object) -> None:
+        raise _ProcessDied
+
+
+async def test_a_settlement_the_process_died_after_is_answered_with_its_receipt_when_posted_again(
+    lost_closing_order, tmp_path: Path
+) -> None:
+    """The Clerk recorded the settlement, and the process stopped before the panel's receipt ledger did.
+
+    After the restart the key reloads with no receipt, and the settled order
+    is no longer presented. The same request posted again -- its key, its
+    token, its attestation -- was answered 409, "previously failed". It is
+    answered now with the settlement's own record: nothing is read at Alpaca
+    and nothing is written, and the key keeps that receipt from then on.
+
+    A key whose request the Clerk refused is still a failed key while no
+    settlement is on the ledger for it to be answered with.
+    """
+    repo, alpaca, facade = lost_closing_order
+    receipts = tmp_path / "panel_action_receipts.json"
+    absent = UnknownOrderAttestationRequest(kind="absent")
+    presented = next(
+        action
+        for action in build_recovery_catalog(await _context_of(repo, settling.SID)())
+        if action.action_id == SETTLE
+    )
+    alpaca.holds = 0.0
+    with pytest.raises(ActionNotAvailableError, match="has not recorded that difference"):
+        await _run_from_the_panel(
+            repo, facade, DurableIdempotencyStore(receipts, wait_timeout_s=0),
+            attestation=absent, idempotency_key="refused",
+        )
+    alpaca.holds = 10.0
+    with pytest.raises(ActionNotAvailableError, match="previously failed"):
+        await _run_from_the_panel(
+            repo, facade, DurableIdempotencyStore(receipts, wait_timeout_s=0),
+            attestation=absent, idempotency_key="refused",
+        )
+
+    with pytest.raises(_ProcessDied):
+        await _run_from_the_panel(
+            repo, facade, _DiesBeforeItWritesTheReceipt(receipts, wait_timeout_s=0),
+            attestation=absent, idempotency_key="settle-1",
+        )
+    ledger = repo.custody_transitions()
+    (settlement,) = [row for row in ledger if row["transition_kind"] == "ORDER_OUTCOME_ATTESTED"]
+    alpaca.reads.clear()
+
+    for after_a_restart in (
+        DurableIdempotencyStore(receipts, wait_timeout_s=0),
+        DurableIdempotencyStore(receipts, wait_timeout_s=0),
+    ):
+        again = await _run_from_the_panel(
+            repo, facade, after_a_restart, attestation=absent, idempotency_key="settle-1",
+            posted_again_with_token=presented.concurrency_token,
+        )
+        assert again is not None
+        assert (again.applied, again.receipt_id) == (False, f"transition:{settlement['sequence']}")
+        assert again.recorded_at_ms == settlement["recorded_at_ms"]
 
     assert repo.custody_transitions() == ledger and alpaca.reads == []
     assert len(alpaca.sent) == 1
