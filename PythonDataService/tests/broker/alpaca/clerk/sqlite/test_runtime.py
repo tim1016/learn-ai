@@ -1184,7 +1184,7 @@ async def test_working_order_refs_for_proof_includes_a_live_reducing_order(
     # The reducing order reaches the broker and is acked, but is still
     # working (not yet filled) — exactly the state the review comment flags.
     trade = _FakeTrade(submit_result=_broker_order("placeholder", status="accepted", filled_quantity=0.0, side="sell"))
-    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+    result = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
     assert result.reducing_order_ref is not None
     reducing_order = repo.order(result.reducing_order_ref)
     assert reducing_order is not None and reducing_order.role == "REDUCING"

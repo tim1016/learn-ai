@@ -27,6 +27,7 @@ import logging
 import math
 from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.sqlite.account_open_work import open_order_snapshot_is_full
 from app.broker.alpaca.clerk.sqlite.exit_watchdog import (
     BrokerSymbolReader,
     clerk_work_in_flight,
@@ -36,7 +37,6 @@ from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import TransitionInput
 from app.broker.alpaca.clerk.sqlite.reconcile import (
-    MAX_OPEN_ORDER_SNAPSHOT,
     broker_symbol_reader,
     read_account_open_work,
 )
@@ -93,7 +93,7 @@ async def discharge_attributed_residue(
     readers = []
     for _ in range(2):
         broker_orders, broker_positions = await read_account_open_work(read)
-        if len(broker_orders) >= MAX_OPEN_ORDER_SNAPSHOT:
+        if open_order_snapshot_is_full(broker_orders):
             raise ResidueDischargeRefused(
                 "OPEN_ORDER_SNAPSHOT_INCOMPLETE",
                 f"The broker returned {len(broker_orders)} open orders, the read's "

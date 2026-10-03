@@ -5,6 +5,10 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
+from app.broker.alpaca.clerk.sqlite.account_open_work import (
+    OpenOrdersThenPositions,
+    read_open_orders_then_positions,
+)
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
@@ -14,7 +18,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 )
 from app.broker.contract.errors import BrokerError
 from app.broker.contract.models import BrokerActivityEvidence, BrokerOrder, BrokerOrderLeg
-from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerTradePort
+from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerReadPort, BrokerTradePort
 
 
 @dataclass(frozen=True)
@@ -168,6 +172,26 @@ class ClaimedBrokerIO:
             return exc
         self._renew()
         return evidence
+
+    async def observe_open_orders_then_positions(
+        self, read: BrokerReadPort
+    ) -> OpenOrdersThenPositions | BrokerError:
+        """The account's open orders, then its positions, or a value-domain error (#2839).
+
+        Read under the claim like every other broker contact of a resolution,
+        with :meth:`observe_activity_evidence`'s shape: a failed read is the
+        caller's to refuse on and never escapes the pass. The error alone
+        means the open orders were not read; a positions read that failed
+        after them is the error beside the orders.
+        """
+        self._renew()
+        try:
+            observed = await read_open_orders_then_positions(read)
+        except BrokerError as exc:
+            self._renew()
+            return exc
+        self._renew()
+        return observed
 
     async def observe_exact(
         self, client_order_id: str

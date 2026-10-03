@@ -134,7 +134,11 @@ async def drive_close(
             forbid_active_run=True,
             regular_session_only=regular_session_only,
         )
-        return await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=pricing, off_loop=run)
+        # An ended run's close is not an operator's Flatten: it is sent with
+        # no account check of its own (#2839).
+        return await resolve_accepted_exit(
+            repo, accepted=accepted, trade=trade, pricing=pricing, read=None, off_loop=run
+        )
     except RecoveryRunActiveError:
         return CloseDeferred.RUN_ACTIVE
     except (OperationClaimError, AdmissionBlockedError):

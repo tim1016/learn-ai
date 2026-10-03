@@ -280,7 +280,7 @@ async def test_a_bot_fenced_by_one_orders_conflict_leaves_its_other_orders_and_o
             lifecycle_run_id="run-a", entry_order_ref=entry.order_ref,
         )
         sent = await resolve_exit(
-            repo, effect_operation_id=exit_.effect_operation_id, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY
+            repo, effect_operation_id=exit_.effect_operation_id, trade=_FakeTrade(), pricing=UNPRICEABLE_RECOVERY, read=None
         )
         exit_order = repo.order(sent.reducing_order_ref)
         assert exit_order is not None and exit_order.broker_order_id is not None

@@ -411,7 +411,11 @@ async def _recover_stale_exit(
                     "strategy_instance_id": sid, "symbol": cause.symbol, **accepted.facts,
                 })
             return RecoveryResult(outcome, accepted.reason_code, accepted.message)
-        resolved = await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=pricing, off_loop=run)
+        # ``_accept_admissible_redrive`` already checked the account for this
+        # re-drive; the Flatten's send-time check is not its own (#2839).
+        resolved = await resolve_accepted_exit(
+            repo, accepted=accepted, trade=trade, pricing=pricing, read=None, off_loop=run
+        )
         return await run(lambda: _redrive_result(repo, stale, resolved))
     except (OperationClaimError, AdmissionBlockedError, DurableConflictError):
         return RecoveryResult("hold", "RECOVERY_CUSTODY_BUSY", "Another custody operation owns this exit; the Clerk will check again.")

@@ -21,6 +21,11 @@ the authority's one send-time pricing seam (``recovery_pricing``), handed to
 the EXIT machine exactly as the sweep's re-drive of the same EXIT hands it, so
 a reduction that can no longer go out as recorded is treated the same whether
 this call or a later pass creates it (#2440).
+
+``read`` is the authority's read port, handed on the same way: as each
+reducing order is about to be sent, the EXIT machine checks that the broker's
+account covers it (#2839). A sale the account does not cover is not sent, and
+the operator is told so by code.
 """
 
 from __future__ import annotations
@@ -37,12 +42,15 @@ from app.broker.alpaca.clerk.sqlite.exit import (
     newest_reducible_entry,
     resolve_accepted_exit,
 )
-from app.broker.alpaca.clerk.sqlite.exit_resolution import RECOVERY_FLATTEN_DECISION_PREFIX
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    RECOVERY_FLATTEN_DECISION_PREFIX,
+    flatten_send_refusal,
+)
 from app.broker.alpaca.clerk.sqlite.intake_fence import ReentrantAsyncLock
 from app.broker.alpaca.clerk.sqlite.models import OrderResource
 from app.broker.alpaca.clerk.sqlite.projection_models import SafeFlattenPlan
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
-from app.broker.contract.ports import BrokerTradePort
+from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +59,8 @@ class SafeFlattenExecutionError(Exception):
     """The prepared plan cannot be executed against current custody.
 
     ``refusal`` names the typed reason when the shape of the reduction — not
-    custody — refused it (#2007), so the transport can say which one.
+    custody — refused it (#2007), or the check of the broker's account as it
+    was sent did (#2839), so the transport can say which one.
     """
 
     def __init__(self, message: str, *, refusal: LegRefusal | None = None) -> None:
@@ -87,6 +96,7 @@ async def execute_safe_flatten_plan(
     repo: ClerkSqliteRepository,
     *,
     plan: SafeFlattenPlan,
+    read: BrokerReadPort,
     trade: BrokerTradePort,
     intake: ReentrantAsyncLock,
     account_id: str,
@@ -162,11 +172,19 @@ async def execute_safe_flatten_plan(
                     "the flatten was presented; stop the bot and prepare a fresh plan."
                 ) from exc
         resolved = await resolve_accepted_exit(
-            repo, accepted=accepted, trade=trade, pricing=pricing
+            repo, accepted=accepted, trade=trade, pricing=pricing, read=read
         )
         assert accepted.effect_operation_id is not None
         effect = repo.effect_operation(accepted.effect_operation_id)
         if effect is not None and effect.state in _FAILED_EFFECT_STATES:
+            unsent = flatten_send_refusal(repo, accepted.effect_operation_id)
+            if unsent is not None:
+                # The Clerk's own check of the account refused the send
+                # (#2839): the broker was never asked, so the operator is told
+                # what the check found, under its own code.
+                raise SafeFlattenExecutionError(
+                    f"{unsent.explanation} {unsent.next_step}", refusal=unsent
+                )
             # The broker rejected this reduction (the order row exists but its
             # effect folded to failed). Never report success while exposure
             # remains — surface an honest failure.

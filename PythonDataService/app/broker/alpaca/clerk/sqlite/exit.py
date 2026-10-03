@@ -45,7 +45,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
     RefusalClass,
     classify_admission_refusal,
 )
-from app.broker.contract.ports import BrokerTradePort
+from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
 
 logger = logging.getLogger(__name__)
 
@@ -419,6 +419,7 @@ async def resolve_accepted_exit(
     accepted: ExitSubmission,
     trade: BrokerTradePort,
     pricing: RecoveryPricing,
+    read: BrokerReadPort | None,
     off_loop: OffLoop | None = None,
 ) -> ExitSubmission:
     """Drive a previously accepted EXIT outside the intake decision segment.
@@ -440,6 +441,11 @@ async def resolve_accepted_exit(
     (``SqliteAlpacaClerkFacade.recovery_pricing``), so the same EXIT cannot
     be re-priced by one caller and folded by another.
 
+    ``read`` is the port an operator's Flatten is checked against the account
+    with as it is sent (#2839; see ``resolve_exit``). It has no default: the
+    Flatten passes the authority's read port, and a caller that drives only
+    its own kind of EXIT says ``None``.
+
     ``off_loop`` is the sweep's worker-thread seam for the resolution spine
     (#1993); the default keeps the pre-#1993 inline behavior.
     """
@@ -450,6 +456,7 @@ async def resolve_accepted_exit(
             effect_operation_id=accepted.effect_operation_id,
             trade=trade,
             pricing=pricing,
+            read=read,
             off_loop=off_loop,
         )
     except OperationClaimError:

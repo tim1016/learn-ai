@@ -708,6 +708,7 @@ async def test_account_reconciliation_delegates_an_exit_owned_entry_to_resolve_e
         effect_operation_id=accepted.effect_operation_id,
         trade=_FakeTrade(cancel_error=BrokerUnavailable("timeout")),
         pricing=UNPRICEABLE_RECOVERY,
+        read=None,
     )
     effect_stuck = repo.effect_operation(accepted.effect_operation_id)
     assert effect_stuck is not None and effect_stuck.state == "unknown"

@@ -40,7 +40,7 @@ from app.broker.alpaca.clerk.trade_evidence import SqliteTradeUpdateEvidenceSink
 from app.broker.contract.errors import BrokerOrderRejected
 from app.broker.contract.models import BrokerOrderEvent, BrokerOrderLeg
 from tests.broker.alpaca.clerk.sqlite import test_safe_flatten_execution as safe_flatten
-from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _TestClock, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.conftest import NOON, _covering_read, _TestClock, _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_budget_claims import _record_sale
 from tests.broker.alpaca.clerk.sqlite.test_budget_commands import TERMS, _deploy, _gate, _new_budget_repo
 from tests.broker.alpaca.clerk.sqlite.test_envelope_reservations import _append_slice
@@ -266,7 +266,7 @@ async def test_a_flatten_the_watchdogs_redrive_finished_reads_as_flattened(
     flatten = await _owner_flattens(repo, safe_flatten._FakeTrade())
     await _broker_reports(repo, flatten, sold=4, state="expired")
     (order,) = flatten.orders
-    await resolve_exit(repo, effect_operation_id=order.effect_operation_id, trade=_acked(), pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=order.effect_operation_id, trade=_acked(), pricing=UNPRICEABLE_RECOVERY, read=_covering_read())
     _walk_clock_to(repo, repo.clock() + 10 * 60_000)
     await redrive_or_escalate_stale_exits(
         repo, trade=_acked(), intake=ReentrantAsyncLock(), pricing=_live_touch(),
@@ -318,14 +318,14 @@ async def test_a_flatten_a_later_redrive_finished_reads_as_flattened(
     flatten = await _owner_flattens(repo, safe_flatten._FakeTrade())
     await _broker_reports(repo, flatten, sold=4, state="expired")
     (order,) = flatten.orders
-    await resolve_exit(repo, effect_operation_id=order.effect_operation_id, trade=_acked(), pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=order.effect_operation_id, trade=_acked(), pricing=UNPRICEABLE_RECOVERY, read=_covering_read())
     await _watchdog_redrives(repo, remaining=6)
     (first,) = _redrives(repo)
     await _broker_reports_order(
         repo, first.order_ref, first.effect_operation_id, quantity=6, sold=2, state="expired",
         execution_id="redrive-exec-1",
     )
-    await resolve_exit(repo, effect_operation_id=first.effect_operation_id, trade=_acked(), pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=first.effect_operation_id, trade=_acked(), pricing=UNPRICEABLE_RECOVERY, read=None)
     await _watchdog_redrives(repo, remaining=4)
     (_, second) = _redrives(repo)
 
@@ -397,7 +397,7 @@ async def test_a_flatten_limit_that_expired_unsent_is_not_a_flatten(
     _walk_clock_to(repo, safe_flatten._JUST_AFTER_POST_CLOSE_MS)
     trade.lookups_fail = False
 
-    await resolve_exit(repo, effect_operation_id=active.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=active.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=_covering_read())
 
     assert trade.submit_calls == []
     assert not _only_run(repo).flattened

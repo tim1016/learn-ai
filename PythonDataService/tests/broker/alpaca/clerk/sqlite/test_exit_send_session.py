@@ -63,7 +63,7 @@ from app.broker.contract.models import OrderSide, OrderType, TimeInForce
 from app.schemas.market_liveness import SymbolTradingStatusEvidence, TopOfBookQuote
 from app.services.market_liveness import unknown_market_liveness
 from app.utils.timestamps import to_ms_utc
-from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _walk_clock_to
+from tests.broker.alpaca.clerk.sqlite.conftest import _clock_at, _covering_read, _walk_clock_to
 from tests.broker.alpaca.clerk.sqlite.test_exit import (
     ACCOUNT_ID,
     RUN_ID,
@@ -162,7 +162,7 @@ async def test_a_program_exit_first_driven_after_the_close_is_never_a_queued_mar
     _walk_clock_to(repo, _at(16, 1))
     trade = _acked()
 
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
 
     assert trade.submit_calls == [], "a market DAY reduction was submitted after the close"
     assert repo.position(SID, "SPY") == 10
@@ -222,7 +222,7 @@ async def test_a_program_exit_delayed_past_the_close_goes_out_as_an_after_hours_
             lookup_results=[_broker_order(entry_ref, status="partially_filled", filled_quantity=6)]
         )
         deferred = await resolve_exit(
-            repo, effect_operation_id=effect_operation_id, trade=still_working, pricing=_live_touch()
+            repo, effect_operation_id=effect_operation_id, trade=still_working, pricing=_live_touch(), read=None
         )
         assert deferred.reducing_order_ref is None and still_working.submit_calls == []
 
@@ -235,7 +235,7 @@ async def test_a_program_exit_delayed_past_the_close_goes_out_as_an_after_hours_
             submit_result=_broker_order("placeholder", side="sell", status="accepted"),
         )
         await resolve_exit(
-            repo, effect_operation_id=effect_operation_id, trade=sweep, pricing=_live_touch()
+            repo, effect_operation_id=effect_operation_id, trade=sweep, pricing=_live_touch(), read=None
         )
 
         ((leg, _client_order_id),) = sweep.submit_calls
@@ -269,7 +269,7 @@ async def test_a_market_leg_whose_submit_was_lost_before_the_close_is_not_resent
     effect_operation_id = _accept_program_exit(repo, entry_ref)
     lost = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
     first = await resolve_exit(
-        repo, effect_operation_id=effect_operation_id, trade=lost, pricing=_live_touch()
+        repo, effect_operation_id=effect_operation_id, trade=lost, pricing=_live_touch(), read=None
     )
     ((sent_leg, _),) = lost.submit_calls
     assert (sent_leg.order_type, sent_leg.extended_hours) == (OrderType.MARKET, False)
@@ -278,7 +278,7 @@ async def test_a_market_leg_whose_submit_was_lost_before_the_close_is_not_resent
     _walk_clock_to(repo, _at(16, 0, 40))  # past the 30 s submit-absence grace
     resumed = _FakeTrade(lookup_results=[None])
     await resolve_exit(
-        repo, effect_operation_id=effect_operation_id, trade=resumed, pricing=_live_touch()
+        repo, effect_operation_id=effect_operation_id, trade=resumed, pricing=_live_touch(), read=None
     )
 
     assert resumed.submit_calls == []
@@ -314,7 +314,7 @@ async def test_a_program_after_hours_limit_is_never_sent_past_the_session_it_was
     _walk_clock_to(repo, _at(20, 0, 30))
     trade = _acked()
 
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch(), read=None)
 
     assert trade.submit_calls == []
     episode = _exit_not_flat(repo)
@@ -345,7 +345,7 @@ async def test_a_pre_market_limit_deferred_into_the_regular_session_goes_out_at_
     trade = _acked()
 
     await resolve_exit(
-        repo, effect_operation_id=effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY
+        repo, effect_operation_id=effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None
     )
 
     ((leg, _),) = trade.submit_calls
@@ -361,7 +361,7 @@ async def test_an_exit_sent_inside_the_regular_session_is_unchanged(
     _walk_clock_to(repo, _at(15, 59, 30))
     trade = _acked()
 
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch(), read=None)
 
     ((leg, _),) = trade.submit_calls
     assert (leg.order_type, leg.time_in_force, leg.limit_price, leg.extended_hours, leg.quantity) == (
@@ -399,7 +399,10 @@ async def test_program_and_recovery_exits_follow_the_same_send_time_rule(
     _walk_clock_to(repo, _at(16, 1))
     trade = _acked()
 
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch())
+    await resolve_exit(
+        repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch(),
+        read=_covering_read() if recovery else None,
+    )
 
     ((leg, _),) = trade.submit_calls
     assert (leg.order_type, leg.limit_price, leg.extended_hours) == (OrderType.LIMIT, 99.8, True)
@@ -464,6 +467,7 @@ async def test_the_live_touch_is_read_on_the_event_loop_and_only_to_re_price(
         effect_operation_id=effect_operation_id,
         trade=trade,
         pricing=RecoveryPricing(policy_for=lambda _sid: _POLICY, quote_source=quote),
+        read=None,
         off_loop=to_thread,
     )
 
@@ -487,7 +491,7 @@ async def test_a_leg_the_clerk_prices_at_send_records_who_priced_it_and_its_refe
     trade = _acked()
 
     resolved = await resolve_exit(
-        repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch()
+        repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch(), read=None
     )
 
     assert resolved.reducing_order_ref is not None
@@ -535,7 +539,8 @@ async def test_a_clerk_priced_leg_that_expires_on_resubmit_never_claims_a_confir
     _walk_clock_to(repo, _at(19, 59, 50))
     lost = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
     first = await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=lost, pricing=_live_touch()
+        repo, effect_operation_id=accepted.effect_operation_id, trade=lost, pricing=_live_touch(),
+        read=_covering_read(),
     )
     ((sent, _),) = lost.submit_calls
     assert (sent.order_type, sent.limit_price, sent.extended_hours) == (OrderType.LIMIT, 99.8, True)
@@ -544,7 +549,8 @@ async def test_a_clerk_priced_leg_that_expires_on_resubmit_never_claims_a_confir
     _walk_clock_to(repo, _at(20, 0, 40))  # past the 30 s submit-absence grace and the POST close
     resumed = _FakeTrade(lookup_results=[None])
     await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=resumed, pricing=_live_touch()
+        repo, effect_operation_id=accepted.effect_operation_id, trade=resumed, pricing=_live_touch(),
+        read=_covering_read(),
     )
 
     assert resumed.submit_calls == []
@@ -595,7 +601,7 @@ async def test_a_market_leg_judged_within_the_guard_band_of_the_close_goes_out_a
     _walk_clock_to(repo, _at(15, 59, 57))
     trade = _acked()
 
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch(), read=None)
 
     ((sent, _),) = trade.submit_calls
     assert (sent.order_type, sent.extended_hours) == (OrderType.LIMIT, True)
@@ -627,7 +633,7 @@ async def test_a_limit_judged_within_the_guard_band_of_its_bound_is_not_sent(
     _walk_clock_to(repo, _at(19, 59, 57))
     trade = _acked()
 
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch(), read=None)
 
     assert trade.submit_calls == []
     episode = _exit_not_flat(repo)
@@ -709,7 +715,7 @@ async def test_a_working_exit_replaces_retry_eligibility_until_it_ends(
         valid_until_ms=_at(20, 0),
     )
     _walk_clock_to(repo, _at(19, 59, 57))
-    await resolve_exit(repo, effect_operation_id=program_exit, trade=_acked(), pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=program_exit, trade=_acked(), pricing=_live_touch(), read=None)
     await evaluate()
     assert _projected_notice(repo) == (_at(4, 0, 0, day=thursday), False)
 
@@ -734,8 +740,10 @@ async def test_a_working_exit_replaces_retry_eligibility_until_it_ends(
         confirmed_shape=priced,
     )
     assert working.effect_operation_id is not None
+    # Only the operator's flatten is checked against the account as it is sent (#2839).
+    account = _covering_read() if decision_id.startswith(RECOVERY_FLATTEN_DECISION_PREFIX) else None
     sent = await resolve_exit(
-        repo, effect_operation_id=working.effect_operation_id, trade=_acked(), pricing=_live_touch()
+        repo, effect_operation_id=working.effect_operation_id, trade=_acked(), pricing=_live_touch(), read=account
     )
     assert sent.reducing_order_ref is not None
     for read_at_ms in (_at(4, 0, 30, day=thursday), _at(9, 35, day=thursday)):
@@ -750,7 +758,7 @@ async def test_a_working_exit_replaces_retry_eligibility_until_it_ends(
         ]
     )
     await resolve_exit(
-        repo, effect_operation_id=working.effect_operation_id, trade=expired, pricing=_live_touch()
+        repo, effect_operation_id=working.effect_operation_id, trade=expired, pricing=_live_touch(), read=account
     )
     assert repo.position(SID, "SPY") == 10
     await evaluate()
@@ -782,7 +790,7 @@ async def test_an_exit_delayed_past_a_half_days_after_hours_close_is_not_sent(
         trade = _acked()
 
         await resolve_exit(
-            repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch()
+            repo, effect_operation_id=effect_operation_id, trade=trade, pricing=_live_touch(), read=None
         )
 
         assert trade.submit_calls == [], "a limit was sent after the half-day's after-hours close"
@@ -812,7 +820,7 @@ async def test_a_half_days_after_hours_limit_is_bounded_by_the_calendar_close(
         _walk_clock_to(repo, _at(13, 0, 30, day=_EARLY_CLOSE_DAY))
 
         resolved = await resolve_exit(
-            repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch()
+            repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch(), read=None
         )
 
         assert resolved.reducing_order_ref is not None
@@ -871,7 +879,7 @@ async def test_a_reducing_order_still_working_past_its_session_tells_the_operato
         valid_until_ms=None if valid_until is None else _at(*valid_until),
     )
     sent = await resolve_exit(
-        repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch()
+        repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch(), read=None
     )
     assert sent.reducing_order_ref is not None
 
@@ -881,11 +889,11 @@ async def test_a_reducing_order_still_working_past_its_session_tells_the_operato
         )
 
     _walk_clock_to(repo, _at(*quiet_at))
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch(), read=None)
     assert _exit_not_flat(repo) is None, "raised inside the grace the broker has to end the order"
 
     _walk_clock_to(repo, _at(*alarm_at))
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch(), read=None)
     episode = _exit_not_flat(repo)
     assert episode is not None
     assert episode["headline"] == (
@@ -897,7 +905,7 @@ async def test_a_reducing_order_still_working_past_its_session_tells_the_operato
     writes = _raised_episode_writes(repo)
 
     _walk_clock_to(repo, _at(alarm_at[0], alarm_at[1] + 1))
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch(), read=None)
     assert _raised_episode_writes(repo) == writes, "the alarm was raised again"
 
 
@@ -952,8 +960,10 @@ async def test_an_authored_limit_working_into_regular_session_is_not_replaced(
                 valid_until_ms=_at(20 if day == date(2026, 9, 3) else 17, 0, day=day),
             )
         assert effect_operation_id is not None
+        # Only the operator's flatten is checked against the account as it is sent (#2839).
+        account = _covering_read() if authored_by == "operator" else None
         sent = await resolve_exit(
-            repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch()
+            repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch(), read=account
         )
         assert sent.reducing_order_ref is not None
 
@@ -965,19 +975,19 @@ async def test_an_authored_limit_working_into_regular_session_is_not_replaced(
         for quiet in quiet_at:
             _walk_clock_to(repo, _at(*quiet, day=day))
             await resolve_exit(
-                repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch()
+                repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch(), read=account
             )
             assert _exit_not_flat(repo) is None, f"alarmed at {quiet} while the broker still works the limit"
 
         _walk_clock_to(repo, _at(*alarm_at, day=day))
         await resolve_exit(
-            repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch()
+            repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch(), read=account
         )
         assert _exit_not_flat(repo) is not None
         writes = _raised_episode_writes(repo)
         _walk_clock_to(repo, _at(alarm_at[0], alarm_at[1] + 1, day=day))
         await resolve_exit(
-            repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch()
+            repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch(), read=account
         )
         assert _raised_episode_writes(repo) == writes, "the alarm was raised again"
     finally:
@@ -999,11 +1009,11 @@ async def test_a_lost_submit_refused_after_the_close_keeps_its_notice_and_next_a
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
     effect_operation_id = _accept_program_exit(repo, entry_ref)
     lost = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=lost, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=lost, pricing=_live_touch(), read=None)
 
     _walk_clock_to(repo, _at(16, 10))  # past the regular close by more than the 5 min alarm grace
     resumed = _FakeTrade(lookup_results=[None])
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=resumed, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=resumed, pricing=_live_touch(), read=None)
 
     assert resumed.submit_calls == []
     effect = repo.effect_operation(effect_operation_id)
@@ -1037,25 +1047,25 @@ async def test_a_market_exit_re_sent_the_next_morning_is_dated_from_the_send_tha
     entry_ref = await _make_entry(repo, status="filled", filled_quantity=10)
     effect_operation_id = _accept_program_exit(repo, entry_ref)
     lost = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=lost, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=lost, pricing=_live_touch(), read=None)
 
     _walk_clock_to(repo, _at(16, 10))
     unobservable = _FakeTrade(lookup_error=BrokerUnavailable("down"))
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=unobservable, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=unobservable, pricing=_live_touch(), read=None)
 
     _walk_clock_to(repo, _at(9, 35, day=thursday))
     resent = _FakeTrade(
         lookup_results=[None],
         submit_result=_broker_order("placeholder", side="sell", status="accepted"),
     )
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=resent, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=resent, pricing=_live_touch(), read=None)
     assert len(resent.submit_calls) == 1, "the order proven absent was not sent again"
 
     _walk_clock_to(repo, _at(9, 45, day=thursday))
     still_working = _FakeTrade(
         lookup_results=[_broker_order("placeholder", side="sell", status="accepted")]
     )
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=still_working, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=still_working, pricing=_live_touch(), read=None)
 
     assert _exit_not_flat(repo) is None, "a regular-session exit was alarmed against yesterday's close"
     assert repo.active_exit_for_order(entry_ref) is not None
@@ -1085,14 +1095,14 @@ async def test_a_failed_lookup_past_the_session_raises_no_working_order_alarm(
         valid_until_ms=_at(20, 0),
     )
     sent = await resolve_exit(
-        repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch()
+        repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch(), read=None
     )
     assert sent.reducing_order_ref is not None
 
     _walk_clock_to(repo, _at(20, 6))
     unobservable = _FakeTrade(lookup_error=BrokerUnavailable("down"))
     await resolve_exit(
-        repo, effect_operation_id=effect_operation_id, trade=unobservable, pricing=_live_touch()
+        repo, effect_operation_id=effect_operation_id, trade=unobservable, pricing=_live_touch(), read=None
     )
 
     assert _exit_not_flat(repo) is None, "a failed lookup raised the still-working alarm"
@@ -1113,7 +1123,7 @@ async def test_a_reducing_order_the_broker_refuses_tells_the_operator(
     effect_operation_id = _accept_program_exit(repo, entry_ref)
     refused = _FakeTrade(submit_error=BrokerOrderRejected("insufficient qty available for order"))
 
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=refused, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=refused, pricing=_live_touch(), read=None)
 
     assert len(refused.submit_calls) == 1
     effect = repo.effect_operation(effect_operation_id)
@@ -1147,7 +1157,7 @@ async def test_a_completed_exit_that_left_exposure_says_when_the_watchdog_tries_
     effect_operation_id = _accept_program_exit(repo, entry_ref)
     canceled = _FakeTrade(submit_result=_broker_order("placeholder", side="sell", status="canceled"))
 
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=canceled, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=canceled, pricing=_live_touch(), read=None)
 
     episode = _exit_not_flat(repo)
     assert episode is not None
@@ -1182,7 +1192,7 @@ async def test_a_lost_submit_is_never_resent_into_a_flat_position(
     effect_operation_id = _accept_program_exit(repo, entry_ref)
     lost = _FakeTrade(submit_error=BrokerUnavailable("timeout"))
     first = await resolve_exit(
-        repo, effect_operation_id=effect_operation_id, trade=lost, pricing=_live_touch()
+        repo, effect_operation_id=effect_operation_id, trade=lost, pricing=_live_touch(), read=None
     )
     assert len(lost.submit_calls) == 1
     assert _open_unknown_outcome(repo) is not None
@@ -1192,7 +1202,7 @@ async def test_a_lost_submit_is_never_resent_into_a_flat_position(
     monkeypatch.setattr(repo, "position", lambda strategy_instance_id, symbol: 0.0)
     _walk_clock_to(repo, _at(*resumed_at))  # past the 30 s submit-absence grace
     resumed = _FakeTrade(lookup_results=[None])
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=resumed, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=resumed, pricing=_live_touch(), read=None)
 
     assert resumed.submit_calls == [], "a reduction was resent into a flat position"
     effect = repo.effect_operation(effect_operation_id)
@@ -1228,7 +1238,8 @@ async def test_a_clerk_that_cannot_price_after_hours_says_so_on_a_recovery_exit(
     trade = _acked()
 
     await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY
+        repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY,
+        read=_covering_read(),
     )
 
     assert trade.submit_calls == []
@@ -1247,7 +1258,7 @@ async def test_reductions_never_use_guard_band_to_open_a_session_early(
     effect = _accept_program_exit(repo, entry_ref)
     _walk_clock_to(repo, _at(hour, minute, second, day=date(2026, 9, 3)))
     trade = _acked()
-    await resolve_exit(repo, effect_operation_id=effect, trade=trade, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect, trade=trade, pricing=_live_touch(), read=None)
     assert trade.submit_calls == []
 
 
@@ -1281,7 +1292,7 @@ async def test_live_market_exceptions_gate_program_exits_and_watchdog(
 
     pricing = replace(_live_touch(), liveness_source=liveness)
     trade = _acked()
-    await resolve_exit(repo, effect_operation_id=effect, trade=trade, pricing=pricing)
+    await resolve_exit(repo, effect_operation_id=effect, trade=trade, pricing=pricing, read=None)
     assert bool(trade.submit_calls) is not blocked
     if blocked:
         _walk_clock_to(repo, repo.clock() + 180_000)
@@ -1293,7 +1304,7 @@ async def test_live_market_exceptions_gate_program_exits_and_watchdog(
         assert _exit_not_flat(repo) is None
         assert repo.active_exit_for_strategy(SID).effect_operation_id == effect
         assert repo.last_strategy_transition(strategy_instance_id=SID, transition_kind="EXIT_MARKET_HOLD") is not None
-        await resolve_exit(repo, effect_operation_id=effect, trade=trade, pricing=_live_touch())
+        await resolve_exit(repo, effect_operation_id=effect, trade=trade, pricing=_live_touch(), read=None)
         assert len(trade.submit_calls) == 1
         assert repo.active_exit_for_strategy(SID).effect_operation_id == effect
         assert _exit_not_flat(repo) is None
@@ -1316,7 +1327,7 @@ async def test_regular_open_replacement_requires_exact_cancel_proof(
     )
     effect = accepted.effect_operation_id
     assert effect is not None
-    sent = await resolve_exit(repo, effect_operation_id=effect, trade=_acked(), pricing=_live_touch())
+    sent = await resolve_exit(repo, effect_operation_id=effect, trade=_acked(), pricing=_live_touch(), read=None)
     assert sent.reducing_order_ref is not None
     original = repo.order(sent.reducing_order_ref)
     assert original is not None
@@ -1329,7 +1340,7 @@ async def test_regular_open_replacement_requires_exact_cancel_proof(
             filled_quantity=filled_quantity, filled_avg_price=100.0 if filled_quantity else None,
         ),
     ])
-    await resolve_exit(repo, effect_operation_id=effect, trade=trade, pricing=_live_touch())
+    await resolve_exit(repo, effect_operation_id=effect, trade=trade, pricing=_live_touch(), read=None)
     assert trade.cancel_calls == ([] if cancel_result == "pending_cancel" else [original.broker_order_id])
     assert trade.submit_calls == []
     replacement = _acked()
@@ -1370,7 +1381,7 @@ async def test_reconciliation_replaces_at_open_using_post_cancel_position(repo: 
         decision_id=f"{EXIT_REDRIVE_DECISION_PREFIX}premarket",
         entry_order_ref=entry_ref, confirmed_shape=priced,
     )
-    original_exit = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_acked(), pricing=_live_touch())
+    original_exit = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_acked(), pricing=_live_touch(), read=None)
     original = repo.order(original_exit.reducing_order_ref)
     assert original is not None
     orders = {original.client_order_id: _broker_order(
@@ -1426,9 +1437,9 @@ async def test_failed_extended_limit_waits_for_next_eligible_session_without_cha
         decision_id=f"{EXIT_REDRIVE_DECISION_PREFIX}premarket",
         entry_order_ref=entry_ref, confirmed_shape=priced,
     )
-    sent = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_acked(), pricing=_live_touch())
+    sent = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_acked(), pricing=_live_touch(), read=None)
     await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, pricing=_live_touch(),
+        repo, effect_operation_id=accepted.effect_operation_id, pricing=_live_touch(), read=None,
         trade=_FakeTrade(lookup_results=[_broker_order(sent.reducing_order_ref, side="sell", status="rejected")]),
     )
     _walk_clock_to(repo, repo.clock() + 180_000)

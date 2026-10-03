@@ -365,6 +365,7 @@ async def test_an_unknown_enter_is_left_to_its_own_route_so_its_episode_resolves
         effect_operation_id=accepted.effect_operation_id,
         trade=_FakeTrade(lookup_results=[dead] * 5),
         pricing=UNPRICEABLE_RECOVERY,
+        read=None,
     )
     assert repo.active_exit_for_order(entry_ref) is None
 
@@ -517,7 +518,7 @@ async def test_exit_reducing_order_cancelled_unfilled_is_an_uncertainty_immediat
     assert accepted.effect_operation_id is not None
 
     ack_trade = _FakeTrade(submit_result=_broker_order("placeholder", side="sell", status="accepted"))
-    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=ack_trade, pricing=UNPRICEABLE_RECOVERY)
+    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=ack_trade, pricing=UNPRICEABLE_RECOVERY, read=None)
     assert first.reducing_order_ref is not None
 
     cancel_trade = _FakeTrade(
@@ -525,7 +526,7 @@ async def test_exit_reducing_order_cancelled_unfilled_is_an_uncertainty_immediat
             _broker_order(first.reducing_order_ref, side="sell", status="canceled", filled_quantity=0.0)
         ]
     )
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=cancel_trade, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=cancel_trade, pricing=UNPRICEABLE_RECOVERY, read=None)
 
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None
@@ -576,7 +577,7 @@ async def test_an_after_hours_exit_unfilled_at_the_session_end_tells_the_operato
     )
     assert accepted.effect_operation_id is not None
     working = _FakeTrade(submit_result=_broker_order("placeholder", side="sell", status="accepted"))
-    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=working, pricing=UNPRICEABLE_RECOVERY)
+    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=working, pricing=UNPRICEABLE_RECOVERY, read=None)
     assert first.reducing_order_ref is not None
     assert repo.active_uncertainties() == []
 
@@ -586,7 +587,7 @@ async def test_an_after_hours_exit_unfilled_at_the_session_end_tells_the_operato
             _broker_order(first.reducing_order_ref, side="sell", status="expired", filled_quantity=0.0)
         ]
     )
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=expired, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=expired, pricing=UNPRICEABLE_RECOVERY, read=None)
 
     assert expired.submit_calls == []
     assert repo.position(SID, "SPY") == 10
@@ -626,14 +627,14 @@ async def test_next_exit_decision_reissues_at_the_new_anchor(
     )
     assert accepted.effect_operation_id is not None
     ack_trade = _FakeTrade(submit_result=_broker_order("placeholder", side="sell", status="accepted"))
-    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=ack_trade, pricing=UNPRICEABLE_RECOVERY)
+    first = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=ack_trade, pricing=UNPRICEABLE_RECOVERY, read=None)
     assert first.reducing_order_ref is not None
     cancel_trade = _FakeTrade(
         lookup_results=[
             _broker_order(first.reducing_order_ref, side="sell", status="canceled", filled_quantity=0.0)
         ]
     )
-    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=cancel_trade, pricing=UNPRICEABLE_RECOVERY)
+    await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=cancel_trade, pricing=UNPRICEABLE_RECOVERY, read=None)
     effect = repo.effect_operation(accepted.effect_operation_id)
     assert effect is not None and effect.state == "failed"
 
@@ -672,6 +673,7 @@ async def test_next_exit_decision_reissues_at_the_new_anchor(
         effect_operation_id=second_accepted.effect_operation_id,
         trade=second_trade,
         pricing=UNPRICEABLE_RECOVERY,
+        read=None,
     )
 
     assert second.reducing_order_ref is not None

@@ -207,7 +207,7 @@ async def test_each_bots_exit_sells_only_its_own_attributed_shares(
     trade = _FakeTradePort()
 
     await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=trade,
-                       pricing=UNPRICEABLE_RECOVERY)
+                       pricing=UNPRICEABLE_RECOVERY, read=None)
 
     assert [(leg.side, leg.quantity) for leg in trade.submitted_legs] == [(OrderSide.SELL, 3)]
 
@@ -241,7 +241,7 @@ async def test_shares_sold_outside_the_clerk_strand_whichever_bot_exits_second(
     accepted = accept_exit(repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID,
                            decision_id="a-sell", lifecycle_run_id=WATCHDOG_RUN, entry_order_ref=ref_a)
     sent = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(),
-                              pricing=UNPRICEABLE_RECOVERY)
+                              pricing=UNPRICEABLE_RECOVERY, read=None)
     assert sent.reducing_order_ref is not None
     fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=_broker_order(
         sent.reducing_order_ref, order_id="bo-a-sell", side="sell", status="filled", quantity=3.0,
@@ -391,7 +391,7 @@ async def _a_sells(repo: ClerkSqliteRepository, *, fills: bool) -> str:
     accepted = accept_exit(repo, account_id=ACCOUNT_ID, strategy_instance_id=WATCHDOG_SID,
                            decision_id="a-sell", lifecycle_run_id=WATCHDOG_RUN, entry_order_ref=ref_a)
     sent = await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=_FakeTrade(),
-                              pricing=UNPRICEABLE_RECOVERY)
+                              pricing=UNPRICEABLE_RECOVERY, read=None)
     assert sent.reducing_order_ref is not None
     if fills:
         fold_order_evidence(repo, effect_operation_id=accepted.effect_operation_id, order=_broker_order(
@@ -624,7 +624,7 @@ async def _as_sell_is_refused(
 
     refusing = _FakeTradePort(submit_error=_wash_trade_rejection() if refusal is None else refusal)
     await resolve_exit(repo, effect_operation_id=accepted.effect_operation_id, trade=refusing,
-                       pricing=UNPRICEABLE_RECOVERY if program_leg is None else _live_touch())
+                       pricing=UNPRICEABLE_RECOVERY if program_leg is None else _live_touch(), read=None)
 
     [sent] = refusing.submitted_legs
     assert (sent.side, sent.quantity, sent.extended_hours) == (OrderSide.SELL, 10, program_leg is not None)
