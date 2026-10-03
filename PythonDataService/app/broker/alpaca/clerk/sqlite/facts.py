@@ -238,12 +238,25 @@ class EnterAcceptedFacts:
 
 @dataclass(frozen=True)
 class OrderSubmitUncertainFacts:
-    """A lost/timed-out broker response — R4's ``why`` explanation."""
+    """A lost/timed-out broker response — R4's ``why`` explanation.
+
+    ``answered_as_client_order_id`` is recorded only when the broker answered
+    a submit with an order under a client order id other than the one sent
+    (#2845): an order may exist at the broker under that other identity, so
+    the order this row belongs to is never sent again on the Clerk's own
+    initiative. It is the empty string when that answer named no client order
+    id at all. It is omitted from the canonical JSON when ``None``, so every
+    other row -- and every row written before it existed -- hashes
+    identically (hash-chained schema evolution)."""
 
     why: str
+    answered_as_client_order_id: str | None = None
 
     def to_facts_json(self) -> str:
-        return canonicalize(asdict(self))
+        facts = asdict(self)
+        if self.answered_as_client_order_id is None:
+            facts.pop("answered_as_client_order_id")
+        return canonicalize(facts)
 
     @classmethod
     def from_facts_json(cls, facts_json: str) -> OrderSubmitUncertainFacts:
