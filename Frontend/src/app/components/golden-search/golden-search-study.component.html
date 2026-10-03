@@ -8,17 +8,22 @@
     <app-golden-search-study-strip [study]="d" [capability]="capability()" />
     @if (stage(); as current) { <app-golden-search-process [current]="current" /> }
 
-    <nav class="steps" aria-label="Research steps">
-      <ol>
-        @for (step of steps(); track step.id; let i = $index) {
-          <li>
-            <button type="button" [attr.aria-current]="step.id === selectedStep() ? 'step' : null" [attr.data-progress]="step.progress" (click)="selectStep(step.id)">
-              <span class="num" aria-hidden="true">{{ i + 1 }}</span>{{ step.label }} <span class="sr-only">{{ progressText[step.progress] }}</span>
-            </button>
-          </li>
-        }
-      </ol>
-    </nav>
+    <div class="steps-bar">
+      <nav class="steps" aria-label="Research steps">
+        <ol>
+          @for (step of steps(); track step.id; let i = $index) {
+            <li>
+              <button type="button" [attr.aria-current]="step.id === selectedStep() ? 'step' : null" [attr.data-progress]="step.progress" (click)="selectStep(step.id)">
+                <span class="num" aria-hidden="true">{{ i + 1 }}</span>{{ step.label }} <span class="sr-only">{{ progressText[step.progress] }}</span>
+              </button>
+            </li>
+          }
+        </ol>
+      </nav>
+      <button #reviewButton type="button" class="review" [attr.aria-expanded]="reviewing() !== null" (click)="toggleReview()">
+        <i class="pi pi-compass" aria-hidden="true"></i> Review this study
+      </button>
+    </div>
 
     <app-golden-search-scope-line [scope]="d.scope" />
     <section class="guidance" aria-labelledby="gs-guidance-title">
@@ -71,6 +76,12 @@
     </div>
 
     <footer class="footer"><span>{{ d.scope.data_source }}</span><span>{{ footerState() }}</span></footer>
+
+    @if (reviewing() !== null) {
+      <div class="review-tour">
+        <app-golden-search-walkthrough [steps]="reviewSteps()" label="Review this study" (stepChange)="visitStop($event)" (closed)="endReview()" />
+      </div>
+    }
   } @else if (loadError() === null) {
     <p class="muted" role="status">Loading the study…</p>
   }

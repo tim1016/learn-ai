@@ -450,6 +450,30 @@ describe('GoldenSearchStudyComponent', () => {
     await waitFor(() => expect(live?.textContent?.trim()).toBe('Building the proof. Qualification is running.'));
   });
 
+  it('Review this study walks the key charts in research order, opening the step that holds each, and Esc returns to the button', async () => {
+    const view = await renderStudy(fakeService(studyDetail('awaiting_candidate')));
+    const button = screen.getByRole('button', { name: 'Review this study' });
+    fireEvent.click(button);
+
+    // Before the final test there is nothing to review on its step: Plan, Search, Test over time and Compare hold 13 stops.
+    const tour = await screen.findByRole('group', { name: 'Review this study' });
+    expect(tour.textContent).toContain('Step 1 of 13');
+    expect(tour.textContent).toContain('Plan · Window map. Which months does each part of the study use?');
+    expect(currentStep()).toMatch(/Plan/);
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Window map' }).getAttribute('data-review')).toBe('current'));
+
+    fireEvent.keyDown(tour, { key: 'ArrowRight' });
+    fireEvent.keyDown(tour, { key: 'ArrowRight' });
+    await view.fixture.whenStable();
+    expect(tour.textContent).toContain('Search · Search path.');
+    expect(currentStep()).toMatch(/Search/);
+
+    fireEvent.keyDown(tour, { key: 'Escape' });
+    await view.fixture.whenStable();
+    expect(screen.queryByRole('group', { name: 'Review this study' })).toBeNull();
+    expect(document.activeElement).toBe(button);
+  });
+
   it('passes axe on the Compare and Final decision steps', async () => {
     const view = await renderStudy(fakeService(studyDetail('awaiting_review')));
     const nav = within(screen.getByRole('navigation', { name: 'Research steps' }));

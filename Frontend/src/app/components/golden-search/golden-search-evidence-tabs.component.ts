@@ -1,10 +1,11 @@
-import { afterNextRender, ChangeDetectionStrategy, Component, computed, inject, Injector, input, output, signal, viewChildren } from '@angular/core';
+import { afterNextRender, ChangeDetectionStrategy, Component, computed, effect, inject, Injector, input, output, signal, untracked, viewChildren } from '@angular/core';
 
 import { GoldenSearchChartComponent } from './charts/golden-search-chart.component';
 import type { GoldenSearchChartId } from './charts/golden-search-chart-guides';
 import { sameChart, type ChartSpec } from './charts/golden-search-chart-spec';
 import { GoldenSearchGridComponent } from './charts/golden-search-grid.component';
 import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
+import { GoldenSearchReviewTour } from './charts/golden-search-review-tour';
 import type { CandidateRow } from './golden-search-compare';
 import { concentrationCurveSpec, withoutBestSpec } from './golden-search-concentration-charts';
 import { monthCalendarSpec, monthlyNetSpec } from './golden-search-month-charts';
@@ -49,6 +50,7 @@ export class GoldenSearchEvidenceTabsComponent {
   readonly retry = output();
 
   private readonly injector = inject(Injector);
+  private readonly review = inject(GoldenSearchReviewTour, { optional: true });
   private readonly panels = viewChildren(GoldenSearchPanelComponent);
 
   protected readonly tabs = EVIDENCE_TABS;
@@ -122,6 +124,14 @@ export class GoldenSearchEvidenceTabsComponent {
   private tradeChart(spec: (candidate: CandidateRow['candidate'], charts: MeasuredTradeCharts) => ChartSpec | null): ChartSpec | null {
     const charts = this.tradeCharts();
     return charts === null ? null : spec(this.selected().candidate, charts);
+  }
+
+  constructor() {
+    // The study review opens the tab that holds the chart it is on.
+    effect(() => {
+      const tab = this.review?.stop()?.tab ?? null;
+      if (tab !== null) untracked(() => this.open(tab));
+    });
   }
 
   open(tab: EvidenceTab): void {

@@ -1,8 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, contentChild, effect, ElementRef, inject, input, signal, untracked, viewChild } from '@angular/core';
 
 import { MarkdownDrawerService } from '../../../shared/markdown-drawer/markdown-drawer.service';
-import { GoldenSearchChartComponent } from './golden-search-chart.component';
+import { GoldenSearchChartComponent, reducedMotion } from './golden-search-chart.component';
 import { CHART_GUIDES, type GoldenSearchChartId } from './golden-search-chart-guides';
+import { GoldenSearchReviewTour } from './golden-search-review-tour';
 import { GoldenSearchWalkthroughComponent } from './golden-search-walkthrough.component';
 
 /**
@@ -11,7 +12,8 @@ import { GoldenSearchWalkthroughComponent } from './golden-search-walkthrough.co
  * ways to learn to read it — "About this chart" opens its guide section in
  * the drawer beside the live chart, and "Walk me through it" steps through
  * the guide's reading steps, lighting up each one on the chart. Its span on
- * the page grid is set where it is placed (`data-span`).
+ * the page grid is set where it is placed (`data-span`). When the study
+ * review reaches its chart, it marks itself and comes into view.
  */
 @Component({
   selector: 'app-golden-search-panel',
@@ -19,7 +21,7 @@ import { GoldenSearchWalkthroughComponent } from './golden-search-walkthrough.co
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-panel.component.html',
   styleUrl: './golden-search-panel.component.scss',
-  host: { role: 'region', '[attr.aria-labelledby]': 'headingId()' },
+  host: { role: 'region', '[attr.aria-labelledby]': 'headingId()', '[attr.data-review]': "reviewed() ? 'current' : null" },
 })
 export class GoldenSearchPanelComponent {
   readonly chart = input.required<GoldenSearchChartId>();
@@ -27,6 +29,8 @@ export class GoldenSearchPanelComponent {
   readonly instance = input<string | null>(null);
 
   private readonly drawer = inject(MarkdownDrawerService);
+  private readonly review = inject(GoldenSearchReviewTour, { optional: true });
+  private readonly element = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly host = contentChild(GoldenSearchChartComponent);
   private readonly walkButton = viewChild.required<ElementRef<HTMLButtonElement>>('walk');
   private readonly heading = viewChild.required<ElementRef<HTMLHeadingElement>>('heading');
@@ -41,6 +45,8 @@ export class GoldenSearchPanelComponent {
     return instance === null ? `gs-chart-${this.chart()}` : `gs-chart-${this.chart()}-${instance.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
   });
   protected readonly walking = signal(false);
+  /** The study review is on this chart (the all-period panel, where a page holds two). */
+  protected readonly reviewed = computed(() => this.instance() === null && this.review?.stop()?.chart === this.chart());
   /** The walkthrough's current step; null when no walkthrough is open. */
   private readonly step = signal<number | null>(null);
 
@@ -50,6 +56,10 @@ export class GoldenSearchPanelComponent {
       const host = this.host();
       const step = this.step();
       if (host !== undefined) untracked(() => host.highlight(step === null ? null : this.guide().steps[step].target));
+    });
+    // A panel the review reaches comes into view, including one that appears after the review got there (its read still loading).
+    effect(() => {
+      if (this.reviewed()) untracked(() => this.element.nativeElement.scrollIntoView({ block: 'center', behavior: reducedMotion() ? 'auto' : 'smooth' }));
     });
   }
 
