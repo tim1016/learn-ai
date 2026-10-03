@@ -340,9 +340,9 @@ async def test_an_absent_order_ends_its_exit_as_not_sent_and_nothing_is_sent(
 ) -> None:
     """The lost closing order never reached Alpaca, and the operator says so.
 
-    The Clerk reads the account twice -- the order's exact lookup, the open
-    orders, the positions, every order since -- finds nothing, and ends the
-    EXIT as not sent. The unknown outcome closes, ``EXIT_NOT_FLAT`` says the
+    The Clerk reads the account twice -- the order's exact lookup, every order
+    since, the open orders, the positions -- finds nothing, and ends the EXIT
+    as not sent. The unknown outcome closes, ``EXIT_NOT_FLAT`` says the
     position is still open, the entry is free to be exited again, and the
     bot still holds its 10 SPY. Who settled it, and what the Clerk read, is
     on the record. No order left the Clerk.
@@ -364,7 +364,7 @@ async def test_an_absent_order_ends_its_exit_as_not_sent_and_nothing_is_sent(
 
     assert result.applied is True
     assert len(alpaca.sent) == 1, "settling never sends an order"
-    assert alpaca.reads == ["lookup", "orders:open", "positions", "orders:all"] * 2
+    assert alpaca.reads == ["lookup", "orders:all", "orders:open", "positions"] * 2
     assert alpaca.asked_since_ms == [closing.updated_at_ms - ORDERS_SINCE_MARGIN_MS] * 2
 
     assert _exit_state(repo, exit_id) == "failed"
@@ -700,7 +700,7 @@ async def test_an_order_alpaca_answered_under_another_id_is_settled_as_absent_on
         "Since this one was sent, Alpaca shows no other order to sell SPY that the Clerk did not place."
     )
     # Each round reads the order Alpaca answered with by its own id: twice for the check, twice to settle.
-    assert alpaca.reads == ["lookup", "lookup:other-id", "orders:open", "positions", "orders:all"] * 4
+    assert alpaca.reads == ["lookup", "lookup:other-id", "orders:all", "orders:open", "positions"] * 4
     assert _exit_state(repo, exit_id) == "failed"
     (recorded,) = _attested(repo)
     assert recorded.answered_as_order == EndedForeignOrder(ANSWERED_ORDER_ID, "canceled", 0.0)
@@ -1040,10 +1040,62 @@ async def test_the_symbols_orders_since_are_read_a_page_at_a_time_to_their_end(
 
     oldest_of_the_first_page_ms = newest_ms - (page - 1)
     assert alpaca.pages_asked == [(("SPY",), None), (("SPY",), oldest_of_the_first_page_ms + 1)] * 2
-    assert alpaca.reads == ["lookup", "orders:open", "positions", "orders:all", "orders:all"] * 2
+    assert alpaca.reads == ["lookup", "orders:all", "orders:all", "orders:open", "positions"] * 2
     assert _exit_state(repo, exit_id) == "failed"
     (recorded,) = _attested(repo)
     assert recorded.orders_since_read == page + 200
+    assert len(alpaca.sent) == 1
+
+
+async def test_a_sale_that_fills_while_the_last_round_is_read_is_never_set_against_a_position_from_before_it(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The regression (#2854 review): a sale made by hand filled while the Clerk read its last round.
+
+    A round read the positions before the symbol's orders. The sale reached
+    Alpaca after the last round's open orders were read and filled after its
+    positions were, so the round listed it ended beside a position read
+    before it sold: 10 SPY at Alpaca against the Clerk's 10, with none of
+    them left there. "No such order" was taken on that position.
+
+    A round reads the symbol's orders first now, so an order it lists ended
+    was over before its positions were read. Here the last round's positions
+    show what the sale sold, the two rounds disagree, and the check and the
+    settlement both refuse with nothing written.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("never_arrives",))
+    exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    facade = _facade(repo, alpaca)
+    (order,) = repo.unknown_exit_orders(SID)
+    ledger = repo.custody_transitions()
+    original = alpaca.list_orders
+    rounds_read = 0
+
+    async def list_orders(**kwargs: object) -> list[BrokerOrder]:
+        nonlocal rounds_read
+        if kwargs.get("status") == "all":
+            rounds_read += 1
+            if rounds_read % 2 == 0:
+                # Sent and filled since the read before this one: the last round's orders list it ended.
+                alpaca.ended_orders = [_elsewhere(BY_HAND_ORDER_ID, status="filled", filled_quantity=10.0)]
+                alpaca.holds = 0.0
+        return await original(**kwargs)  # type: ignore[arg-type]
+
+    alpaca.list_orders = list_orders  # type: ignore[method-assign]
+
+    with pytest.raises(UnknownOrderSettlementRefused) as refused:
+        await facade.settle_unknown_exit_order(
+            strategy_instance_id=SID, presented=order, attestation=ABSENT, operator=OPERATOR, reason=None,
+        )
+    alpaca.ended_orders, alpaca.holds = [], 10.0
+    checked = await facade.check_unknown_exit_order(strategy_instance_id=SID, presented=order, attestation=ABSENT)
+
+    assert refused.value.reason_code == "BROKER_SNAPSHOT_UNSETTLED"
+    assert (checked.would_settle, checked.refusal_reason_code) == (False, "BROKER_SNAPSHOT_UNSETTLED")
+    assert repo.custody_transitions() == ledger
+    assert _attested(repo) == []
+    assert _exit_state(repo, exit_id) == "unknown"
     assert len(alpaca.sent) == 1
 
 
@@ -1437,7 +1489,7 @@ async def test_a_check_takes_no_claim_so_it_answers_while_a_pass_holds_the_exit(
     )
 
     assert (findings.would_settle, findings.refusal_reason_code) == (True, None)
-    assert alpaca.reads == ["lookup", "orders:open", "positions", "orders:all"] * 2
+    assert alpaca.reads == ["lookup", "orders:all", "orders:open", "positions"] * 2
     assert repo.custody_transitions() == ledger
     assert repo.release_operation_claim(effect_operation_id=exit_id, token=held_by_a_pass.token), (
         "the pass still holds its claim"
@@ -1546,7 +1598,7 @@ async def test_an_order_alpaca_acknowledges_while_the_clerk_reads_is_not_ended_a
     )
     rounds_read = 0
 
-    async def the_stream_acknowledges_it_after_the_second_round() -> None:
+    async def the_stream_acknowledges_it_while_the_second_round_is_read() -> None:
         await _the_stream_reports(
             repo, working,
             BrokerOrderEvent(event_type="new", occurred_at_ms=clock.value, price=None, quantity=None),
@@ -1560,7 +1612,7 @@ async def test_an_order_alpaca_acknowledges_while_the_clerk_reads_is_not_ended_a
         if kwargs.get("status") == "all":
             rounds_read += 1
             if rounds_read == 2:
-                await the_stream_acknowledges_it_after_the_second_round()
+                await the_stream_acknowledges_it_while_the_second_round_is_read()
         return answer
 
     alpaca.list_orders = list_orders  # type: ignore[method-assign]

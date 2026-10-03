@@ -16,12 +16,13 @@ agree. It never sends an order.
 Attestation ``absent`` -- "Alpaca has no such order". The Clerk reads the
 account twice, the second time after the first returned (the re-read rule of
 ``residue_discharge``, for the same reason: one round reads its lists with no
-consistency fence between them). Each round is the order's exact lookup, the
-open orders, then the positions, then every order of any state in the
-order's symbol since the closing order was created, a page at a time. The
-order is ended as not sent only when every read answered and was read to its
-end, no order carries its client order id, and no order is working on its
-symbol.
+consistency fence between them). Each round is the order's exact lookup,
+every order of any state in the order's symbol since the closing order was
+created, a page at a time, then the open orders, then the positions: last,
+so that every order a round lists as ended was over before the position it
+is set against was read. The order is ended as not sent only when every read
+answered and was read to its end, no order carries its client order id, and
+no order is working on its symbol.
 
 An order on its side of its symbol that the Clerk did not place may be this
 one under another identity. While it works it refuses. Once it has ended it
@@ -623,14 +624,22 @@ def _require_settleable(
 async def _read_account(
     alpaca: _AlpacaReads, presented: ProjectedUnknownExitOrder, *, since_ms: int
 ) -> _AccountRead:
-    """One round: the exact lookup, the open orders, then the positions, then the symbol's orders since ``since_ms``.
+    """One round: the exact lookup, the symbol's orders since ``since_ms``, then the open orders, then the positions.
 
-    In that sequence an order that arrives between two reads of a round is
-    in a later one: among the open orders if it works, among the orders
-    since if it has ended. Any read that fails refuses; so does the order's
-    own exact lookup answering. The open orders are the whole account's; the
-    orders since are asked for in the closing order's symbol only, so a busy
-    account's other symbols cannot crowd them out.
+    The positions are read last, because they are what answers for every
+    ended order the round lists: an order the symbol's orders show ended was
+    over before the open orders and the positions were read, so whatever it
+    sold is in those positions. Read the other way round, an order that
+    filled after the positions were read was listed ended beside a position
+    from before its fill. An order that arrives after the symbol's orders
+    were read is among the open orders if it still works, and in the
+    positions if it has filled, where the other round's positions show the
+    change.
+
+    Any read that fails refuses; so does the order's own exact lookup
+    answering. The open orders are the whole account's; the orders since are
+    asked for in the closing order's symbol only, so a busy account's other
+    symbols cannot crowd them out.
 
     A send Alpaca answered under another client order id is followed by the
     exact lookup of that id too: what that order did is what "no such order"
@@ -641,11 +650,12 @@ async def _read_account(
         raise _order_is_at_alpaca(exact)
     answered_as = presented.answered_as_client_order_id
     answered_order = await alpaca.order_sent_as(answered_as) if answered_as else None
+    orders_since = await alpaca.symbol_orders_since(presented.symbol.upper(), since_ms)
     open_orders, positions = await alpaca.open_orders_then_positions()
     return _AccountRead(
         open_orders=open_orders,
         positions=positions,
-        orders_since=await alpaca.symbol_orders_since(presented.symbol.upper(), since_ms),
+        orders_since=orders_since,
         answered_order=answered_order,
     )
 
