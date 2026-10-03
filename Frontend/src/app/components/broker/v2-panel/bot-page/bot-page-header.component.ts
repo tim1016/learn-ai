@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, ElementRef, computed, input, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, afterRenderEffect, computed, input, signal, viewChild } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
 import { LANE_MODE_WORDING } from '../../../../services/alpaca-live-verdict.service';
@@ -7,6 +7,7 @@ import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { AuthoredUsdPipe } from '../../../../shared/pipes/authored-usd.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp/timestamp-display.component';
 import type { BotPanelView } from '../lib/broker-v2-panel.types';
+import { keepInsideViewport } from '../strategy-view/popover-placement';
 
 /** One holding as the header names it: "1 SPY". */
 interface HeldFigure {
@@ -58,6 +59,15 @@ export class BotPageHeaderComponent {
   protected readonly summaryOpen = signal(false);
   protected readonly summaryId = `bot-run-summary-${nextSummaryId++}`;
   private readonly statusAnchor = viewChild<ElementRef<HTMLElement>>('statusAnchor');
+  private readonly summary = viewChild<ElementRef<HTMLElement>>('summary');
+
+  constructor() {
+    // On a phone the status sits mid-row, and its summary would run off the right edge.
+    afterRenderEffect(() => {
+      const summary = this.summary();
+      if (summary !== undefined) keepInsideViewport(summary.nativeElement);
+    });
+  }
 
   /** A press anywhere outside the status closes its summary; mousedown, so one press cannot both close it and toggle it back open. */
   protected onDocumentMousedown(event: MouseEvent): void {

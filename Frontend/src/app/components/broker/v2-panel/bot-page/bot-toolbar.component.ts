@@ -1,5 +1,19 @@
 import { NgTemplateOutlet } from '@angular/common';
-import { ChangeDetectionStrategy, Component, Directive, ElementRef, computed, inject, input, output, signal, viewChild } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  Directive,
+  ElementRef,
+  Injector,
+  afterNextRender,
+  afterRenderEffect,
+  computed,
+  inject,
+  input,
+  output,
+  signal,
+  viewChild,
+} from '@angular/core';
 import { RouterLink } from '@angular/router';
 
 import type { AccountWorkspaceLink } from '../../../../fleet/account-workspace';
@@ -11,6 +25,7 @@ import type {
   ToolbarActionView,
 } from '../lib/broker-v2-panel.types';
 import { PanelActionButtonComponent } from '../panel-action-button/panel-action-button.component';
+import { keepInsideViewport } from '../strategy-view/popover-placement';
 
 type ToolbarGroupKey = ToolbarActionView['group'];
 type ToolbarActionId = ToolbarActionView['action_id'];
@@ -21,9 +36,11 @@ interface ToolbarGroup {
   readonly entries: readonly ToolbarActionView[];
 }
 
-/** One action as the bar or More draws it, and whether its name shows. */
+/** One action as the bar or More draws it, and whether its name shows. Named
+ * `entry`, not the implicit slot, whose `$`-prefixed key reads as a GraphQL
+ * variable to the contract scan of the Frontend's sources. */
 interface ActionControlContext {
-  readonly $implicit: ToolbarActionView;
+  readonly entry: ToolbarActionView;
   readonly labelled: boolean;
 }
 
@@ -168,6 +185,7 @@ function storedLabels(): boolean {
 })
 export class BotToolbarComponent {
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly injector = inject(Injector);
 
   readonly panel = input.required<BotPanelView>();
   readonly pending = input(false);
@@ -209,6 +227,17 @@ export class BotToolbarComponent {
   });
 
   private readonly moreToggle = viewChild.required<ElementRef<HTMLButtonElement>>('moreToggle');
+  private readonly moreMenu = viewChild<ElementRef<HTMLElement>>('moreMenu');
+  private readonly allActionsPanel = viewChild<ElementRef<HTMLElement>>('allActionsPanel');
+
+  constructor() {
+    // On a phone More and All actions open near the window's edge.
+    afterRenderEffect(() => {
+      for (const panel of [this.moreMenu(), this.allActionsPanel()]) {
+        if (panel !== undefined) keepInsideViewport(panel.nativeElement);
+      }
+    });
+  }
 
   private readonly actionsById = computed(
     () => new Map(this.panel().actions.map((action) => [action.action_id as string, action])),
@@ -253,9 +282,16 @@ export class BotToolbarComponent {
     this.moreOpen.set(!this.moreOpen());
   }
 
+  /** All actions takes the keyboard when it opens, so Escape reaches it. */
   protected openAllActions(): void {
     this.moreOpen.set(false);
     this.allActionsOpen.set(true);
+    afterNextRender(() => this.allActionsPanel()?.nativeElement.focus(), { injector: this.injector });
+  }
+
+  protected closeAllActions(): void {
+    this.allActionsOpen.set(false);
+    this.moreToggle().nativeElement.focus();
   }
 
   protected closeMenus(): void {

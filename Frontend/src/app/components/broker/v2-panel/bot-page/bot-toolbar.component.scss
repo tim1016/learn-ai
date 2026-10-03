@@ -68,6 +68,8 @@
   gap: var(--space-2);
   width: max-content;
   min-width: 13rem;
+  // The window less both of keepInsideViewport's 8 px margins.
+  max-width: calc(100vw - 16px);
   padding: var(--space-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
@@ -119,7 +121,7 @@
   z-index: 30;
   top: calc(100% + var(--space-2));
   right: 0;
-  width: min(36rem, calc(100vw - 2 * var(--space-4)));
+  width: min(36rem, calc(100vw - 16px));
   max-height: 70vh;
   overflow: auto;
   padding: var(--space-3);

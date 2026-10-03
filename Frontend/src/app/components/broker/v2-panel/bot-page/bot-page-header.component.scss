@@ -113,7 +113,8 @@
   display: grid;
   gap: var(--space-1);
   width: max-content;
-  max-width: 24rem;
+  // The window less both of keepInsideViewport's 8 px margins.
+  max-width: min(24rem, calc(100vw - 16px));
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
@@ -162,5 +163,4 @@
 @media (max-width: 720px) {
   .bot-header { flex-wrap: wrap; }
   .bot-header__figures { text-align: left; }
-  .bot-header__summary { max-width: calc(100vw - 2 * var(--space-4)); }
 }

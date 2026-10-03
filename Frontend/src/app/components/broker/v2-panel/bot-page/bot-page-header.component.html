@@ -24,7 +24,7 @@
             (click)="summaryOpen.set(!summaryOpen())"
           >{{ lead.status.label }} <i class="pi pi-chevron-down" aria-hidden="true"></i></button>
           @if (summaryOpen()) {
-            <div class="bot-header__summary" [id]="summaryId" role="region" aria-label="Run summary">
+            <div #summary class="bot-header__summary" [id]="summaryId" role="region" aria-label="Run summary">
               <p>{{ lead.summary.text }}</p>
               @if (panel().health.running) {
                 <p class="bot-header__feed">

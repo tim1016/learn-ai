@@ -205,8 +205,8 @@ const RUN_TAPE_PADDING_MS = 15 * 60_000;
  * the chart (the strategy's own decision candles, the market tape one tab
  * away) on the left at the window's height, and on the right two columns of
  * panels as tall as their content: money, orders and setup; decisions and
- * health. The page scrolls; the chart stays put and no panel scrolls inside
- * itself.
+ * health. The right half scrolls as one; the chart stays put and no panel
+ * scrolls inside itself.
  *
  * ## Shell responsibilities
  * - Route parameter extraction (broker, clerk, account, sid).
@@ -666,20 +666,18 @@ export class BotPanelShellComponent {
         onCleanup(() => slot.clear(controls));
       });
     }
-    // The chart fills the window below whatever sits above the board -- a
-    // receipt, the holding warning -- and stays put while the panels beside
-    // it scroll with the page; no panel scrolls inside itself.
+    // The page fits the window below the workspace's header, and the board
+    // fills it below whatever sits above -- a receipt, the holding warning --
+    // so the chart reaches the window's bottom while the panels beside it
+    // scroll; no panel scrolls inside itself.
     afterRenderEffect((onCleanup) => {
       const board = this.boardView()?.nativeElement;
       if (board === undefined || typeof ResizeObserver === 'undefined') return;
       const host = this.host.nativeElement;
       const fit = (): void => {
-        // The page itself ends at the window's bottom and scrolls inside, under the header.
+        // The page ends at the window's bottom: where it starts with nothing scrolled, to the window's edge.
         const hostTop = host.getBoundingClientRect().top + window.scrollY;
         host.style.setProperty('--bot-page-height', `${window.innerHeight - hostTop - spaceBelow(host)}px`);
-        // Where the board starts with nothing scrolled: the window's scroll and the host's own.
-        const top = board.getBoundingClientRect().top + window.scrollY + host.scrollTop;
-        host.style.setProperty('--bot-chart-height', `${window.innerHeight - top - spaceBelow(board)}px`);
       };
       // A frame later, so a fit never resizes what the observer is reporting on.
       let frame = 0;

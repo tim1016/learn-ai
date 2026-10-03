@@ -1,5 +1,5 @@
-// The page scrolls inside itself, fitted to the window below the workspace's
-// header, so the header stays in view and the chart can stay put.
+// The page fits the window below the workspace's header, so the header stays
+// in view; it scrolls inside itself only when the window is too short or narrow.
 :host {
   display: flex;
   flex-direction: column;
@@ -31,13 +31,16 @@
   border-left: 1px solid var(--border-light);
 }
 
-// The chart takes the left half at the window's height and stays put while
-// the page scrolls; the panels stack in two columns on the right, each as
-// tall as its content, so none scrolls inside itself.
+// The board fills the page below whatever sits above it. The chart takes the
+// left half down to the window's bottom; the panels stack in two columns on
+// the right, each as tall as its content, so none scrolls inside itself --
+// the right half scrolls as one, and the chart stays where it is.
 .bot-board {
   display: grid;
+  flex: 1 1 auto;
+  min-height: 26rem;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
+  grid-template-rows: minmax(0, 1fr);
   gap: var(--space-2);
 }
 
@@ -49,7 +52,13 @@
   gap: var(--space-2);
 }
 
-.bot-board__side { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.bot-board__side {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 
 .bot-board__panel {
   min-width: 0;
@@ -72,10 +81,7 @@
 }
 
 .bot-board__chart {
-  position: sticky;
-  top: var(--space-2);
-  height: var(--bot-chart-height, 32rem);
-  min-height: 26rem;
+  min-height: 0;
   padding: 0;
   overflow: hidden;
 }
@@ -172,10 +178,17 @@
 
 .flatten-quote-error { margin: var(--space-2) 0 0; color: var(--bear); font-size: var(--fs-xs); }
 
-// Narrow windows: the chart across the top, then the two columns, then one.
+// Narrow windows: the chart across the top, then the two columns, then one,
+// and the page scrolls as a whole.
 @media (max-width: 1100px) {
-  .bot-board { grid-template-columns: minmax(0, 1fr); }
-  .bot-board__chart { position: static; height: 28rem; }
+  .bot-board {
+    flex: none;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+  }
+
+  .bot-board__chart { height: 28rem; }
+  .bot-board__side { overflow-y: visible; }
 }
 
 @media (max-width: 720px) {

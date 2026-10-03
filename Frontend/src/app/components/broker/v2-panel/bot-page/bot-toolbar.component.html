@@ -1,5 +1,5 @@
 <!-- One action, on the bar or under More: `labelled` says whether its name shows. -->
-<ng-template #actionControl appBotToolbarAction let-entry let-labelled="labelled">
+<ng-template #actionControl appBotToolbarAction let-entry="entry" let-labelled="labelled">
   @let action = panelAction(entry);
   @if (action) {
     <app-panel-action-button
@@ -58,7 +58,7 @@
       @for (entry of group.entries; track entry.action_id) {
         <ng-container
           [ngTemplateOutlet]="actionControl"
-          [ngTemplateOutletContext]="{ $implicit: entry, labelled: showLabel(entry) }"
+          [ngTemplateOutletContext]="{ entry: entry, labelled: showLabel(entry) }"
         />
       }
     </div>
@@ -81,13 +81,13 @@
     </button>
 
     @if (moreOpen()) {
-      <div class="toolbar__menu" role="group" aria-label="More actions for this bot">
+      <div #moreMenu class="toolbar__menu" role="group" aria-label="More actions for this bot">
         @if (more().length > 0) {
           <div class="toolbar__menu-actions">
             @for (entry of more(); track entry.action_id) {
               <ng-container
                 [ngTemplateOutlet]="actionControl"
-                [ngTemplateOutletContext]="{ $implicit: entry, labelled: true }"
+                [ngTemplateOutletContext]="{ entry: entry, labelled: true }"
               />
             }
           </div>
@@ -107,10 +107,10 @@
 </div>
 
 @if (allActionsOpen()) {
-  <section class="all-actions" aria-labelledby="all-actions-title">
+  <section #allActionsPanel class="all-actions" aria-labelledby="all-actions-title" tabindex="-1">
     <header class="all-actions__head">
       <h3 id="all-actions-title">All actions for this bot</h3>
-      <button type="button" class="all-actions__close" aria-label="Close all actions" (click)="allActionsOpen.set(false)">×</button>
+      <button type="button" class="all-actions__close" aria-label="Close all actions" (click)="closeAllActions()">×</button>
     </header>
     <ul class="all-actions__list">
       @for (entry of entries(); track entry.action_id) {

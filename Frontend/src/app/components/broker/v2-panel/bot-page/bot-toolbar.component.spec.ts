@@ -117,8 +117,16 @@ describe('BotToolbarComponent (#2794)', () => {
     }
     expect(within(list).getAllByRole('listitem')).toHaveLength(6);
 
-    // More and All actions are never open together; Escape hands the keyboard back to More.
+    // The list takes the keyboard, so Escape closes it and hands the keyboard back to More.
+    await vi.waitFor(() => expect(document.activeElement).toBe(list));
     const more = screen.getByRole('button', { name: /^More actions/ });
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('region', { name: 'All actions for this bot' })).toBeNull();
+    expect(document.activeElement).toBe(more);
+
+    // More and All actions are never open together.
+    await user.click(more);
+    await user.click(screen.getByRole('button', { name: 'All actions' }));
     await user.click(more);
     expect(screen.queryByRole('region', { name: 'All actions for this bot' })).toBeNull();
     await user.keyboard('{Escape}');
