@@ -120,11 +120,10 @@ describe('CoverageQueryBarComponent', () => {
   });
 
   it('refuses an inverted window', async () => {
-    const { applied } = await renderBar();
+    const { applied, fixture } = await renderBar();
 
-    fireEvent.input(screen.getByLabelText('Start trading date'), {
-      target: { value: '2026-05-30' },
-    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Start date' }), { target: { value: '2026-05-30' } });
+    await fixture.whenStable();
 
     expect(screen.getByText('The start date is after the end date.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Load coverage' }));

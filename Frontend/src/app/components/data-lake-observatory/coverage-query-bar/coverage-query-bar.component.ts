@@ -9,6 +9,7 @@ import {
   untracked,
 } from '@angular/core';
 
+import { DateRangePickerComponent, QUICK_RANGES } from '../../../shared/date-picker';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { parseSymbols } from '../lib/coverage-board';
 import { DataLakeDataType, MAX_TRADING_RANGE_DAYS, PriceAdjustmentMode, tradingRangeRejection } from '../../../shared/data-lake';
@@ -35,10 +36,6 @@ function selectValue(event: Event): string {
   return (event.target as HTMLSelectElement).value;
 }
 
-function inputValue(event: Event): string {
-  return (event.target as HTMLInputElement).value;
-}
-
 /**
  * The window the heatmap answers for.
  *
@@ -59,7 +56,7 @@ function inputValue(event: Event): string {
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './coverage-query-bar.component.html',
   styleUrl: './coverage-query-bar.component.scss',
-  imports: [ReceiptLabelPipe, MultiInstrumentCardComponent],
+  imports: [ReceiptLabelPipe, MultiInstrumentCardComponent, DateRangePickerComponent],
 })
 export class CoverageQueryBarComponent {
   readonly initial = input.required<ObservatoryQuery>();
@@ -121,12 +118,11 @@ export class CoverageQueryBarComponent {
     this.catalogView().retryVendor();
   }
 
-  protected onStart(event: Event): void {
-    this.patch({ startTradingDate: inputValue(event) });
-  }
+  /** A coverage question can be asked of any window, so there is no first day and no Max. */
+  protected readonly quickRanges = QUICK_RANGES.filter((key) => key !== 'Max');
 
-  protected onEnd(event: Event): void {
-    this.patch({ endTradingDate: inputValue(event) });
+  protected onDates(dates: { readonly from: string; readonly to: string }): void {
+    this.patch({ startTradingDate: dates.from, endTradingDate: dates.to });
   }
 
   protected onDataType(event: Event): void {

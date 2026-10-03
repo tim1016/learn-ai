@@ -1,6 +1,8 @@
 import { signal } from '@angular/core';
 import { fireEvent, render, screen, within } from '@testing-library/angular';
 import userEvent from '@testing-library/user-event';
+
+import { provideFakeDateWorld } from '../../../shared/date-picker/testing/fake-trading-calendar';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -101,6 +103,7 @@ async function renderPanel(options: PanelOptions = {}) {
       },
       provideFakeVendorCatalog(alpaca),
       provideFakeTickerCatalog(lake),
+      ...provideFakeDateWorld(),
     ],
     componentInputs: {
       defaults: options.defaults === undefined ? DEFAULTS : options.defaults,
@@ -128,9 +131,9 @@ describe('LakeBackfillPanelComponent', () => {
 
     // The seed symbol arrives as a picked chip, not hand-typed text.
     expect(screen.getByRole('button', { name: 'SPY (remove)' })).toBeTruthy();
-    expect((screen.getByLabelText('Backfill start date') as HTMLInputElement).value).toBe(
-      '2026-05-18',
-    );
+    const dates = within(screen.getByRole('group', { name: 'Backfill dates' }));
+    expect(dates.getByRole<HTMLInputElement>('textbox', { name: 'Start date' }).value).toBe('2026-05-18');
+    expect(dates.getByRole<HTMLInputElement>('textbox', { name: 'End date' }).value).toBe('2026-05-22');
   });
 
   it('picks additional symbols from the vendor catalog, not free text', async () => {

@@ -1,3 +1,4 @@
+import { DateRangePickerComponent, UNBOUNDED, type DateBounds } from '../../../shared/date-picker';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -40,10 +41,6 @@ import {
   tradingRangeRejection,
 } from '../../../shared/data-lake';
 
-function inputValue(event: Event): string {
-  return (event.target as HTMLInputElement).value;
-}
-
 /**
  * Submits a backfill and narrates it to completion.
  *
@@ -63,7 +60,7 @@ function inputValue(event: Event): string {
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './lake-backfill-panel.component.html',
   styleUrl: './lake-backfill-panel.component.scss',
-  imports: [ReceiptLabelPipe, BackfillRunLogComponent, MultiInstrumentCardComponent],
+  imports: [ReceiptLabelPipe, BackfillRunLogComponent, MultiInstrumentCardComponent, DateRangePickerComponent],
   providers: [DataLakeBackfillStore],
 })
 export class LakeBackfillPanelComponent implements OnInit {
@@ -198,15 +195,19 @@ export class LakeBackfillPanelComponent implements OnInit {
       this.endTradingDate(),
       this.defaults()?.max_trading_range_days ?? MAX_TRADING_RANGE_DAYS,
     );
-    if (rejection !== null) return rejection;
-    // The cap is not the only bound on a window. A start before the provider
-    // serves aborts the whole run on its oldest day (#2241); the data plane
-    // refuses it too, so this only spares the operator the round trip.
+    return rejection;
+  });
+
+  /**
+   * The dates a backfill can ask for. The cap is not the only bound on a
+   * window: a start before the provider serves aborts the whole run on its
+   * oldest day (#2241), so the picker refuses one with the reason; the data
+   * plane refuses it too. There is no last day: the data plane judges the end.
+   */
+  protected readonly dateBounds = computed<DateBounds>(() => {
     const floor = this.providerHistoryStart();
-    if (floor !== null && this.startTradingDate() < floor) {
-      return `The market-data provider serves no bars before ${floor}. Start on or after that date.`;
-    }
-    return null;
+    if (floor === null) return UNBOUNDED;
+    return { ...UNBOUNDED, min: floor, minReason: `The market-data provider serves no bars before ${floor}. Start on or after that date.` };
   });
 
   /** The oldest day the provider serves, as the data plane reports it. */
@@ -293,12 +294,9 @@ export class LakeBackfillPanelComponent implements OnInit {
     });
   }
 
-  protected onStart(event: Event): void {
-    this.startTradingDate.set(inputValue(event));
-  }
-
-  protected onEnd(event: Event): void {
-    this.endTradingDate.set(inputValue(event));
+  protected onDates(dates: { readonly from: string; readonly to: string }): void {
+    this.startTradingDate.set(dates.from);
+    this.endTradingDate.set(dates.to);
   }
 
   protected onIncludeQuotes(event: Event): void {
