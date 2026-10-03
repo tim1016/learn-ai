@@ -2063,6 +2063,33 @@ async def test_an_entry_whose_outcome_is_unknown_is_never_offered_for_settling(
     assert presented.unavailable_reason_code == "NO_UNKNOWN_EXIT_ORDER"
 
 
+async def test_an_order_alpaca_answered_with_no_client_order_id_is_not_offered_and_neither_choice_runs(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """Alpaca answered the send with an order that names no client order id: the Clerk has no id to read it by.
+
+    Neither attestation could settle it, so the action is not offered, and a
+    request for either is refused before Alpaca is asked anything. Nothing
+    is written and the EXIT keeps custody.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=(_AnsweredAs(None),))
+    exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    facade, current_context = _facade(repo, alpaca), _context_of(repo, SID)
+    ledger = repo.custody_transitions()
+
+    presented = await _presented(current_context)
+    assert (presented.available, presented.unavailable_reason_code) == (False, "ANSWERED_ORDER_NAMES_NO_ID")
+    for attestation in (ABSENT, OrderOutcomeAttestation(kind="exists", broker_order_id=NO_SUCH_ORDER_ID)):
+        with pytest.raises(RecoveryActionUnavailableError):
+            await _settle(facade, current_context, attestation, presented=presented)
+
+    assert repo.custody_transitions() == ledger
+    assert alpaca.reads == []
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert len(alpaca.sent) == 1
+
+
 async def test_a_settlement_names_its_operator_and_the_dispatcher_refuses_one_that_names_none(
     crashed_with_exposure,  # noqa: F811
 ) -> None:
