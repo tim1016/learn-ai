@@ -21,6 +21,7 @@ import {
   type IChartApi,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
+  type ITimeScaleApi,
   type SeriesMarker,
   type SeriesType,
   type Time,
@@ -53,6 +54,9 @@ import {
 } from '../../../../shared/trading-chart';
 import type { IndicatorPickerAdd } from '../../../../shared/indicator-picker/indicator-picker.component';
 import { PanelInstrumentQuoteComponent } from '../instrument-quote/panel-instrument-quote.component';
+import { placeLanes, type ChartLane, type PlacedLane } from '../strategy-view/chart-lanes';
+import { ChartLanesComponent } from '../strategy-view/chart-lanes.component';
+import type { LogicalCoordinateScale } from '../strategy-view/strategy-chart-overlay';
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
 import { chartIndicatorCatalog } from './chart-indicator-catalog';
 import {
@@ -222,6 +226,26 @@ export const DUAL_PANE_CHART_FACTORY = new InjectionToken<typeof createAppChart>
 );
 
 /**
+ * The tape's time scale, read by a bar's place among the candles.
+ *
+ * An indicator line can hold times the candles do not (its warmup bars), so
+ * the library's own logical index is not a candle's index: each bar is found
+ * by its time. Up to a bar past either end continues at the bar spacing.
+ */
+function barCoordinateScale(timeScale: ITimeScaleApi<Time>, bars: readonly ChartBar[]): LogicalCoordinateScale {
+  const xOf = (index: number): number | null => timeScale.timeToCoordinate(toCandle(bars[index]).time);
+  return {
+    logicalToCoordinate: (logical) => {
+      if (bars.length === 0) return null;
+      if (logical >= 0 && logical < bars.length) return xOf(logical);
+      const edge = logical < 0 ? 0 : bars.length - 1;
+      const at = xOf(edge);
+      return at === null ? null : at + (logical - edge) * timeScale.options().barSpacing;
+    },
+  };
+}
+
+/**
  * Source-tabbed market tape for one bot symbol.
  *
  * One chart instance keeps the price canvas spacious while a source rail
@@ -229,12 +253,16 @@ export const DUAL_PANE_CHART_FACTORY = new InjectionToken<typeof createAppChart>
  * interval and Polygon range are independent controls. Fill markers are
  * projected onto the containing live candle using int64 millisecond UTC input;
  * conversion to the chart library's seconds happens only at the render edge.
+ *
+ * On the bot page the run's lanes sit under the chart, placed on whichever
+ * pane is showing: the live bars or the delayed tape (#2808).
  */
 @Component({
   selector: 'app-dual-pane-chart',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     ChartIndicatorRailComponent,
+    ChartLanesComponent,
     PanelInstrumentQuoteComponent,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
@@ -286,6 +314,8 @@ export class DualPaneChartComponent implements AfterViewInit {
 
   /** The pane the chart opens on: the bot page opens a finished run on its delayed 1-minute tape (#2794 R7). */
   readonly initialPane = input<ChartPane>('live');
+  /** The run's events, drawn under the chart on the active pane's clock (#2808). The Strategy Lab passes none. */
+  readonly lanes = input<readonly ChartLane[]>([]);
   protected readonly activePane = linkedSignal(() => this.initialPane());
   protected readonly fullscreen = signal(false);
   protected readonly timeZone = signal<ChartTimeZone>(persistedChartTimeZone());
@@ -406,6 +436,22 @@ export class DualPaneChartComponent implements AfterViewInit {
       this.indicatorColorOverrides(),
     ),
   );
+  /** Bumped when the visible bars or the chart's width change: lane marks move with the candles. */
+  private readonly geometry = signal(0);
+  private readonly plotWidth = signal(0);
+  protected readonly placedLanes = computed((): readonly PlacedLane[] => {
+    this.geometry();
+    const bars = this.activeBars();
+    const timeScale = this.chart?.timeScale();
+    return placeLanes(
+      this.lanes(),
+      bars.map((bar) => ({ startMs: bar.start_ms, closeMs: bar.end_ms })),
+      timeScale === undefined ? undefined : barCoordinateScale(timeScale, bars),
+      this.plotWidth(),
+      'off',
+    );
+  });
+
   private chart: IChartApi | null = null;
   private series: ISeriesApi<'Candlestick'> | null = null;
   private markers: ISeriesMarkersPluginApi<Time> | null = null;
@@ -455,6 +501,9 @@ export class DualPaneChartComponent implements AfterViewInit {
     });
     this.series = this.chart.addSeries(CandlestickSeries, {});
     this.markers = createSeriesMarkers(this.series, []);
+    const measure = () => this.measure();
+    this.chart.timeScale().subscribeSizeChange(measure);
+    this.chart.timeScale().subscribeVisibleLogicalRangeChange(measure);
     this.applyTimeZoneFormatting();
     this.renderActivePane();
     this.renderIndicators(
@@ -587,6 +636,11 @@ export class DualPaneChartComponent implements AfterViewInit {
       if (!sameBar(previous[index], next[index])) return index;
     }
     return sharedLength;
+  }
+
+  private measure(): void {
+    this.plotWidth.set(this.chart?.timeScale().width() ?? 0);
+    this.geometry.update((tick) => tick + 1);
   }
 
   private cleanup(): void {

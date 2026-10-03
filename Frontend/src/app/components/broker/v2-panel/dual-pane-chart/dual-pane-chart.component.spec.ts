@@ -12,6 +12,7 @@ import {
   toSeriesMarkers,
 } from './dual-pane-chart.component';
 import type { ChartBar } from '../lib/broker-v2-panel.types';
+import type { ChartLane } from '../strategy-view/chart-lanes';
 import { IndicatorCatalogService } from '../../../../shared/indicator-catalog/indicator-catalog.service';
 import { BotChartIndicatorService } from './bot-chart-indicator.service';
 import type { ChartIndicatorBatchResponse } from './dual-pane-chart-indicators';
@@ -24,6 +25,8 @@ const chartMocks = vi.hoisted(() => ({
   setData: vi.fn(),
   update: vi.fn(),
   fitContent: vi.fn(),
+  subscribeSizeChange: vi.fn(),
+  timeToCoordinate: vi.fn(),
   addSeries: vi.fn(),
   calculateIndicators: vi.fn(),
   supportedIndicators: vi.fn(),
@@ -47,7 +50,14 @@ vi.mock('lightweight-charts', () => {
 });
 
 function createMockChart(): object {
-  const mockTimeScale = { fitContent: chartMocks.fitContent };
+  const mockTimeScale = {
+    fitContent: chartMocks.fitContent,
+    subscribeSizeChange: chartMocks.subscribeSizeChange,
+    subscribeVisibleLogicalRangeChange: vi.fn(),
+    width: () => 600,
+    timeToCoordinate: chartMocks.timeToCoordinate,
+    options: () => ({ barSpacing: 10 }),
+  };
   const createMockSeries = () => ({
     setData: chartMocks.setData,
     update: chartMocks.update,
@@ -138,6 +148,8 @@ describe('DualPaneChartComponent', () => {
     chartMocks.setData.mockClear();
     chartMocks.update.mockClear();
     chartMocks.fitContent.mockClear();
+    chartMocks.subscribeSizeChange.mockClear();
+    chartMocks.timeToCoordinate.mockReset();
     chartMocks.addSeries.mockReset();
     chartMocks.calculateIndicators.mockReset();
     chartMocks.calculateIndicators.mockReturnValue(of({ symbol: 'SPY', indicators: [] }));
@@ -265,6 +277,79 @@ describe('DualPaneChartComponent', () => {
 
       expect(screen.queryByRole('status', { name: 'Chart feed starting' })).toBeNull();
       expect(screen.getByText('Refreshes every 5s')).toBeTruthy();
+    });
+  });
+
+  describe('the run’s lanes under the tape (#2808)', () => {
+    const T0 = 1_700_000_040_000;
+    const minuteBar = (index: number): ChartBar => liveBar(T0 + index * 60_000, T0 + (index + 1) * 60_000);
+    const lanes: ChartLane[] = [{
+      key: 'decisions',
+      title: 'Decisions',
+      marks: [
+        // Halfway through the second 1-minute bar; the first 5-second bar's close.
+        { key: 'mid', atMs: T0 + 90_000, endMs: null, glyph: 'up', tone: 'bull', label: 'Enter' },
+        { key: 'first', atMs: T0 + 5_000, endMs: null, glyph: 'dot', tone: 'neutral', label: 'Hold' },
+        { key: 'early', atMs: T0 - 3_600_000, endMs: null, glyph: 'ring', tone: 'muted', label: 'Before start' },
+      ],
+    }];
+
+    /** A tape whose candle starting at `T0` sits at x 100, ten pixels a minute; the chart has measured itself. */
+    async function renderTape(inputs: Record<string, unknown>) {
+      chartMocks.timeToCoordinate.mockImplementation((time: number) => 100 + ((time * 1000 - T0) / 60_000) * 10);
+      const rendered = await render(DualPaneChartComponent, { inputs: { symbol: 'SPY', lanes, ...inputs } });
+      await waitFor(() => expect(chartMocks.subscribeSizeChange).toHaveBeenCalled());
+      for (const [measure] of chartMocks.subscribeSizeChange.mock.calls) measure();
+      rendered.fixture.detectChanges();
+      return rendered;
+    }
+
+    it('places each mark on the delayed tape’s own 1-minute bars', async () => {
+      await renderTape({
+        liveBars: [],
+        histBars: [minuteBar(0), minuteBar(1), minuteBar(2)],
+        historyDataTimeframe: '1m',
+        initialPane: 'polygon',
+      });
+
+      const decisions = within(screen.getByRole('group', { name: 'The run’s events on the chart’s clock' }))
+        .getByRole('list', { name: 'Decisions' });
+      // Bar 1's candle is centred at x 110; halfway through it is its centre.
+      expect(within(decisions).getByRole('listitem', { name: 'Enter' }).style.left).toBe('110px');
+    });
+
+    it('places the same marks on the live bars when that pane is showing', async () => {
+      await renderTape({
+        liveBars: [liveBar(T0), liveBar(T0 + 5_000)],
+        histBars: [minuteBar(0), minuteBar(1), minuteBar(2)],
+        historyDataTimeframe: '1m',
+        initialPane: 'live',
+      });
+
+      // The first 5-second bar closes on its candle's right edge, halfway to the next candle's centre.
+      const first = screen.getByRole('listitem', { name: 'Hold' });
+      expect(Number.parseFloat(first.style.left)).toBeCloseTo(100 + (2_500 / 60_000) * 10, 6);
+    });
+
+    it('keeps a mark off the tape’s bars for screen readers, without placing it', async () => {
+      await renderTape({
+        liveBars: [],
+        histBars: [minuteBar(0), minuteBar(1), minuteBar(2)],
+        historyDataTimeframe: '1m',
+        initialPane: 'polygon',
+      });
+
+      const early = screen.getByRole('listitem', { name: 'Before start' });
+      expect(early.className).toContain('chart-lanes__mark--off');
+      expect(early.style.left).toBe('');
+    });
+
+    it('draws no lanes when the host passes none, as in the Strategy Lab', async () => {
+      await render(DualPaneChartComponent, {
+        inputs: { symbol: 'SPY', liveBars: [liveBar(T0)], histBars: [] },
+      });
+
+      expect(screen.queryByRole('group', { name: 'The run’s events on the chart’s clock' })).toBeNull();
     });
   });
 

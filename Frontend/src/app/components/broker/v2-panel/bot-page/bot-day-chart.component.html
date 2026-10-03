@@ -19,6 +19,7 @@
     [historyDataTimeframe]="histChart()?.timeframe ?? null"
     [historyTimeframe]="historyTimeframe()"
     [initialPane]="initialPane()"
+    [lanes]="lanes()"
     (historyTimeframeChange)="historyTimeframeChange.emit($event)"
     (liveResolutionChange)="liveResolutionChange.emit($event)"
     (historyRetry)="historyRetry.emit()"
