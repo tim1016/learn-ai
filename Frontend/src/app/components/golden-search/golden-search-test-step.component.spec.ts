@@ -1,132 +1,102 @@
-import { render, screen, within } from '@testing-library/angular';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
+import axe from 'axe-core';
+import { describe, expect, it, vi } from 'vitest';
 
 import { GoldenSearchTestStepComponent } from './golden-search-test-step.component';
-import type { StudyDetail, ValidationView } from './golden-search.types';
-import { emaCapability, INCUMBENT_PARAMS, studyDetail, validationView } from './testing/fixtures';
+import { GoldenSearchService } from './golden-search.service';
+import type { StudyDetail, TestOverTimeCharts } from './golden-search.types';
+import { fakeCharts } from './testing/fake-charts';
+import { emaCapability, plannedTestOverTimeCharts, studyDetail, testOverTimeCharts, validationView } from './testing/fixtures';
 
-async function renderStep(study: StudyDetail) {
-  return render(GoldenSearchTestStepComponent, { inputs: { study, capability: emaCapability() } });
+async function renderStep(study: StudyDetail, charts: () => Promise<TestOverTimeCharts> = async () => testOverTimeCharts()) {
+  const library = fakeCharts();
+  const service = { testOverTimeCharts: vi.fn(charts) };
+  const view = await render(GoldenSearchTestStepComponent, {
+    inputs: { study, capability: emaCapability() },
+    providers: [{ provide: GoldenSearchService, useValue: service }, ...library.providers],
+  });
+  return { view, service, charts: library.charts };
 }
 
-function withValidation(validation: ValidationView): StudyDetail {
-  const study = studyDetail('awaiting_candidate');
-  return { ...study, results: { ...study.results, validation } };
+function region(name: string): HTMLElement {
+  return screen.getByRole('region', { name });
 }
 
-function foldRow(index: number): HTMLElement {
-  const table = screen.getByRole('table', { name: /training winner and its test result/i });
-  const row = within(table).getByRole('rowheader', { name: String(index) }).closest('tr');
-  if (row === null) throw new Error(`no row for fold ${index}`);
-  return row;
+function tableRows(panel: string): string[] {
+  fireEvent.click(within(region(panel)).getByRole('button', { name: 'Show as table' }));
+  return within(region(panel)).getAllByRole('row').map((row) => row.textContent ?? '');
 }
 
 describe('GoldenSearchTestStepComponent', () => {
-  it('lists every fold, a failed one included, with the winner’s change from the starting point and both results', async () => {
+  it('charts every fold, a failed one included, with its reason, retention, returns and trades against the forward minimum', async () => {
     await renderStep(studyDetail('awaiting_candidate'));
 
-    const first = foldRow(1);
-    expect(first.textContent).toContain('Fast EMA length 8');
-    expect(first.textContent).not.toContain('Crossover gap');
-    expect(first.textContent).toMatch(/Sharpe\s*1\.40/);
-    expect(first.textContent).toMatch(/Sharpe\s*0\.90/);
+    const timeline = await screen.findByRole('region', { name: 'Fold timeline' });
+    expect(within(timeline).getByRole('img').getAttribute('aria-label')).toContain('2 folds, each a training window followed by a test window; 1 completed.');
+    const folds = tableRows('Fold timeline');
+    expect(folds[1]).toMatch(/Fold 1.*Completed.*Fast EMA length.*8.*1\.40\s*0\.90\s*64%\s*\+2\.1%\s*42/);
+    expect(folds[2]).toContain("Failed: No setting met your rules in this fold's training window.");
 
-    const second = foldRow(2);
-    expect(second.textContent).toContain('Failed');
-    expect(second.textContent).toContain("No setting met your rules in this fold's training window.");
-    expect(second.textContent).toContain('No winner');
-    expect(second.textContent).toContain('No result recorded.');
+    expect(tableRows('Linked test return')[2]).toMatch(/Fold 2.*fold missing\s*\+0\.3%/);
+    expect(tableRows('Test return per fold')[1]).toMatch(/Fold 1\s*\+2\.1%\s*\+0\.7%\s*\+1\.4%/);
+    expect(region('Test activity per fold').querySelector('[role=img]')?.getAttribute('aria-label')).toContain('together 42 against a minimum of 30');
+    expect(tableRows('Parameter drift')[1]).toMatch(/Fast EMA length\s*8\s*—\s*8\s*5/);
   });
 
-  it('reads every fold against the frozen incumbent on the same test months, a failed fold included', async () => {
-    await renderStep(studyDetail('awaiting_candidate'));
+  it('reads the charts once per study revision, not on every poll', async () => {
+    const study = studyDetail('awaiting_candidate');
+    const { view, service } = await renderStep(study);
+    await screen.findByRole('region', { name: 'Fold timeline' });
 
-    const benchmark = (index: number): string => foldRow(index).querySelectorAll('td')[6]?.textContent ?? '';
-    expect(benchmark(1)).toMatch(/Trades\s*17/);
-    expect(benchmark(1)).toMatch(/Sharpe\s*0\.41/);
-    expect(benchmark(2)).toMatch(/Sharpe\s*-0\.20/);
-
-    const linked = within(screen.getByRole('table', { name: /linked test-period return by fold/i })).getAllByRole('row');
-    expect(linked[1].textContent).toMatch(/2\.10%\s*0\.70%/);
-    expect(linked[2].textContent).toMatch(/Fold missing\s*0\.30%/);
-  });
-
-  it('reads a key the canonical point omits as its declared default, so an explicit default is no change', async () => {
-    const base = validationView();
-    // The frozen seed omits fast_period (identity-neutral default 5); this winner states it explicitly.
-    const winner = { ...INCUMBENT_PARAMS, fast_period: 5 };
-    await renderStep(withValidation({ ...base, folds: [{ ...base.folds[0], winner }] }));
-
-    expect(foldRow(1).textContent).toContain('Same as the starting point');
-  });
-
-  it('a test over time cut short by the budget says some folds are missing; a complete one says nothing', async () => {
-    const view = await renderStep(withValidation(validationView({ incomplete: true })));
-    const note = /testing over time stopped at its evaluation budget, so some folds are missing/i;
-
-    expect(screen.getByText(note)).not.toBeNull();
-    view.fixture.componentRef.setInput('study', withValidation(validationView()));
+    view.fixture.componentRef.setInput('study', { ...study });
     await view.fixture.whenStable();
-    expect(screen.queryByText(note)).toBeNull();
+    expect(service.testOverTimeCharts).toHaveBeenCalledTimes(1);
+    view.fixture.componentRef.setInput('study', { ...study, revision: study.revision + 1 });
+    await waitFor(() => expect(service.testOverTimeCharts).toHaveBeenCalledTimes(2));
   });
 
-  it('shows the legacy verdict with the folds it is based on', async () => {
-    await renderStep(studyDetail('awaiting_candidate'));
+  it('while testing over time runs, counts the trades so far without judging them, and holds back the linked return', async () => {
+    const running = async () => testOverTimeCharts({ in_progress: true, test_trades_total: 12, forward_minimum: 30, below_minimum: null, linked: [], incumbent_linked: [] });
+    await renderStep(studyDetail('awaiting_candidate'), running);
 
-    const verdict = screen.getByRole('region', { name: /could not be judged/i });
-    expect(verdict.textContent).toContain('based on 1 of 2 folds');
-    expect(verdict.textContent).toMatch(/Median fold retention\s*—/);
+    const activity = (await screen.findByRole('region', { name: 'Test activity per fold' })).querySelector('[role=img]')?.getAttribute('aria-label') ?? '';
+    expect(activity).toContain('so far 12, before the verdict');
+    expect(activity).not.toContain('minimum');
+    expect(region('Linked test return').textContent).toContain('drawn when testing over time finishes');
   });
 
-  it('breaks the linked line at a missing fold instead of joining across it, with the table as its alternative', async () => {
-    const view = await renderStep(studyDetail('awaiting_candidate'));
+  it('before testing over time runs, shows the planned folds and says what will happen', async () => {
+    await renderStep(studyDetail('awaiting_validation'), async () => plannedTestOverTimeCharts());
 
-    const table = screen.getByRole('table', { name: /linked test-period return by fold/i });
-    expect(within(table).getAllByRole('row')[1].textContent).toContain('2.10%');
-    expect(within(table).getAllByRole('row')[2].textContent).toContain('Fold missing');
-    const svg = view.container.querySelector('app-golden-search-linked-line svg');
-    expect(svg?.getAttribute('aria-hidden')).toBe('true');
-    expect(svg?.querySelectorAll('path.line')).toHaveLength(0);
-    expect(svg?.querySelectorAll('circle')).toHaveLength(1);
-    expect(svg?.querySelectorAll('path.benchmark')).toHaveLength(1);
+    expect(screen.getByText(/has not been tested over time yet/)).not.toBeNull();
+    const timeline = await screen.findByRole('region', { name: 'Fold timeline' });
+    expect(within(timeline).getByRole('img').getAttribute('aria-label')).toContain('2 planned folds');
+    expect(screen.queryByRole('region', { name: 'Linked test return' })).toBeNull();
   });
 
-  it('names the missing fold, and says a later completed fold is cut off by it rather than missing itself', async () => {
-    const base = validationView();
-    const [completed, failed] = base.folds;
-    // The first fold failed; the second completed but sits after the break.
-    const folds = [
-      { ...failed, fold_index: 0, test_end_ms: completed.test_end_ms },
-      { ...completed, fold_index: 1, test_end_ms: failed.test_end_ms },
-    ];
-    const linked = folds.map((fold) => ({ fold_index: fold.fold_index, test_end_ms: fold.test_end_ms, linked_return: null, fold_missing: fold.status !== 'completed' }));
-    await renderStep(withValidation({ ...base, folds, linked }));
+  it('keeps the legacy verdict and the cut-short note beside the charts', async () => {
+    const study = studyDetail('awaiting_candidate');
+    await renderStep({ ...study, results: { ...study.results, validation: validationView({ incomplete: true }) } });
 
-    const rows = within(screen.getByRole('table', { name: /linked test-period return by fold/i })).getAllByRole('row');
-    expect(rows[1].textContent).toContain('Fold missing');
-    expect(rows[2].textContent).toContain('Line broken by an earlier missing fold');
-    expect(rows[2].textContent).not.toContain('Fold missing');
-  });
-
-  it('draws one unbroken segment when every fold has a linked value', async () => {
-    const base = validationView();
-    const view = await renderStep(withValidation({ ...base, linked: [{ ...base.linked[0] }, { ...base.linked[1], linked_return: -0.013 }] }));
-
-    expect(view.container.querySelectorAll('app-golden-search-linked-line path.line')).toHaveLength(1);
-  });
-
-  it('summarizes the folds judged, the test trades and the median retention as the server worded them', async () => {
-    await renderStep(withValidation(validationView({ summary_pills: { judged: '5 of 6 folds judged', test_trades: 142, median_retention: 0.61 } })));
-
-    const pills = screen.getByRole('list', { name: 'Test-over-time summary' });
-    expect(within(pills).getAllByRole('listitem').map((item) => item.textContent?.trim())).toEqual(['5 of 6 folds judged', '142 test trades', '0.61 median retention']);
+    expect(screen.getByRole('region', { name: /could not be judged/i }).textContent).toContain('based on 1 of 2 folds');
+    expect(screen.getByText(/testing over time stopped at its evaluation budget/i)).not.toBeNull();
     expect(screen.getByText(/not a probability of future profit/i)).not.toBeNull();
   });
 
-  it('before the procedure is tested over time, says what will happen instead of showing empty results', async () => {
-    await renderStep(studyDetail('awaiting_validation'));
+  it('a chart read that fails says so, and Try again reads it again', async () => {
+    const fails = vi.fn().mockRejectedValueOnce(new Error('down')).mockResolvedValue(testOverTimeCharts());
+    await renderStep(studyDetail('awaiting_candidate'), fails);
 
-    expect(screen.getByRole('status').textContent).toContain('has not been tested over time yet');
-    expect(screen.queryByRole('table')).toBeNull();
+    fireEvent.click(within(await screen.findByRole('alert')).getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('region', { name: 'Fold timeline' })).not.toBeNull();
+  });
+
+  it('passes axe with every chart drawn and every table open', async () => {
+    const { view } = await renderStep(studyDetail('awaiting_candidate'));
+    await screen.findByRole('region', { name: 'Fold timeline' });
+    for (const toggle of screen.getAllByRole('button', { name: 'Show as table' })) fireEvent.click(toggle);
+
+    const results = await axe.run(view.container, { rules: { 'color-contrast': { enabled: false } } });
+    expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([]);
   });
 });

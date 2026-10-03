@@ -1,6 +1,6 @@
 import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec } from './charts/golden-search-chart-spec';
-import { dataIndexOf, NOT_RECORDED, tooltipFrame, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
+import { dataIndexOf, NOT_RECORDED, signedPercentOrNotRecorded, tooltipFrame, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
 import { DEVELOPMENT_NOTE, percentText, signedPercentText } from './golden-search-display';
 import type { CandidateKey, CumulativeReturnPoint, DrawdownPoint } from './golden-search.types';
@@ -132,7 +132,7 @@ function tooltip(aligned: readonly AlignedLine[], date: string, index: number, c
       rows: aligned.map(({ line, recorded, returns, falls }) => ({
         label: line.label,
         swatch: { color: theme.candidates[line.key], dashed: line.key === 'incumbent' },
-        values: recorded ? [orNotRecorded(returns[index]), orNotRecorded(falls[index])] : [NOT_RECORDED, NOT_RECORDED],
+        values: recorded ? [signedPercentOrNotRecorded(returns[index]), signedPercentOrNotRecorded(falls[index])] : [NOT_RECORDED, NOT_RECORDED],
       })),
       notes: [
         `Worst-fall limit ${percentText(ceiling)}. The rules judge each run's bar-by-bar fall, which can be deeper than this session-close line.`,
@@ -146,10 +146,6 @@ function tooltip(aligned: readonly AlignedLine[], date: string, index: number, c
 /** ECharts' empty point is `'-'`: a session the run did not record leaves a gap, never a zero. */
 function plotted(values: readonly (number | null)[]): (number | '-')[] {
   return values.map((value) => value ?? '-');
-}
-
-function orNotRecorded(value: number | null): string {
-  return value === null ? NOT_RECORDED : signedPercentText(value);
 }
 
 /** Each session's value, or null where this run recorded none. */

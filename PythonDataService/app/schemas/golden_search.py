@@ -626,9 +626,54 @@ class GoldenSearchLinkedReturn(_Wire):
     fold_missing: bool = Field(description="This fold has no test return of its own (a null linked_return after it is the broken line).")
 
 
+class GoldenSearchFoldChart(_Wire):
+    fold_index: int
+    train_start_ms: InstantMs
+    train_end_ms: InstantMs
+    test_start_ms: InstantMs
+    test_end_ms: InstantMs
+    winner: dict[str, Any] | None = Field(description="The settings the fold's training chose; null without a winner.")
+    status: Literal["planned", "pending", "completed", "failed"] = Field(description="planned: from the receipt, before testing over time ran.")
+    failure_reason: str | None
+    train_sharpe: float | None = Field(description="The fold winner's training Sharpe; null without a winner.")
+    test_sharpe: float | None = Field(description="Its test Sharpe; null unless the fold completed.")
+    retention: float | None = Field(description="Test Sharpe over training Sharpe as the verdict reads it; null unless the fold completed with a positive training Sharpe.")
+    test_return: float | None = Field(description="The winner's test return, a fraction of the fold's fresh capital.")
+    incumbent_return: float | None = Field(description="The frozen incumbent's return on the same test window.")
+    return_difference: float | None = Field(description="test_return less incumbent_return; null unless both exist.")
+    test_trades: int | None
+    incumbent_trades: int | None
+    incumbent_failure: str | None = Field(description="Why the incumbent's run on this test window failed; null when it completed or never ran.")
+
+
+class GoldenSearchKnobDrift(_Wire):
+    name: str
+    label: str
+    unit: str
+    low: float = Field(description="The searched range's low end.")
+    high: float
+    current: float = Field(description="The frozen incumbent's value.")
+    all_period: float | None = Field(description="The all-period winner's value; null before the search finished.")
+    folds: list[float | None] = Field(description="Each fold winner's value, in fold order; null for a fold without a winner.")
+
+
+class GoldenSearchTestOverTimeCharts(_Wire):
+    planned: bool = Field(description="Testing over time has not run: the folds are the receipt's plan.")
+    in_progress: bool = Field(description="Testing over time is running or stopped short of its verdict: totals count only the folds completed so far.")
+    folds: list[GoldenSearchFoldChart]
+    linked: list[GoldenSearchLinkedReturn]
+    incumbent_linked: list[GoldenSearchLinkedReturn]
+    retention_threshold: float
+    median_retention: float | None
+    test_trades_total: int | None = Field(description="The verdict's test trades; while in progress, the completed folds' so far; null before testing over time ran.")
+    forward_minimum: int | None = Field(description="The trades all forward tests together must reach, as the verdict judged them.")
+    below_minimum: bool | None = Field(description="The finished verdict's total is under the forward minimum; null while in progress or when either is missing.")
+    drift: list[GoldenSearchKnobDrift] = Field(description="Each searched knob, in the plan's order.")
+
+
 class GoldenSearchSummaryPills(_Wire):
     judged: str
-    test_trades: int
+    test_trades: int | None = Field(description="The verdict's test trades; null before it is computed.")
     median_retention: float | None
 
 

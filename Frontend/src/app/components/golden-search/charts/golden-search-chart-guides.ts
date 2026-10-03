@@ -15,7 +15,13 @@ export type GoldenSearchChartId =
   | 'trade-histogram'
   | 'hold-time'
   | 'entry-rsi'
-  | 'entry-time';
+  | 'entry-time'
+  | 'fold-timeline'
+  | 'linked-return'
+  | 'train-test-sharpe'
+  | 'parameter-drift'
+  | 'fold-returns'
+  | 'fold-activity';
 
 export interface WalkthroughStep {
   /** The step as the guide's "How to read it" list words it (the contract spec holds the step counts together). */
@@ -181,6 +187,66 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Read the coloured cells: green where those trades made money on average, red where they lost.', target: { kind: 'series', group: 'enough' } },
       { text: 'Grey cells hold too few trades to judge. Don’t read a pattern into them.', target: { kind: 'series', group: 'few' } },
       { text: 'Look for a row or column that is red or green across several cells. A real pattern shows in more than one cell.', target: null },
+    ],
+  },
+  'fold-timeline': {
+    title: 'Fold timeline',
+    question: 'Which months did each fold train on and test on, and how did each end?',
+    steps: [
+      { text: 'Read each row as one fold: the grey bar is its training window, the coloured bar the test window right after it.', target: { kind: 'series', group: 'training' } },
+      { text: 'The test windows follow one another in time, so together they cover a stretch the procedure never trained on before choosing.', target: { kind: 'series', group: 'test' } },
+      { text: 'A green test bar made money on its test window and a red one lost; an outlined bar is a fold that failed, and a grey one has not run yet.', target: null },
+      { text: 'Hover a fold for its windows, both Sharpes, its retention, test return and trades.', target: null },
+    ],
+  },
+  'linked-return': {
+    title: 'Linked test return',
+    question: 'If the search procedure had chosen fresh settings before each test window, how would its test results have added up?',
+    steps: [
+      { text: 'Follow the solid line: each fold’s test return, linked one after another.', target: { kind: 'series', group: 'procedure' } },
+      { text: 'Compare the dashed line: the current settings on the same test windows.', target: { kind: 'series', group: 'incumbent' } },
+      { text: 'A gap in a line is a missing fold. Everything after it is cut off, because linking needs every fold.', target: null },
+      { text: 'Remember what it judges: the procedure that chose the settings, not any one candidate.', target: null },
+    ],
+  },
+  'train-test-sharpe': {
+    title: 'Training against test Sharpe',
+    question: 'How much of each fold’s training Sharpe survived on its test window?',
+    steps: [
+      { text: 'Each fold has two bars: the winner’s Sharpe on its training window, then on its test window.', target: { kind: 'series', group: 'training' } },
+      { text: 'Read the label above each test bar: the share of the training Sharpe it kept, its retention.', target: { kind: 'series', group: 'test' } },
+      { text: 'The verdict takes the median retention over folds and asks for 50% or more.', target: null },
+      { text: 'A fold with no label has no defined retention: it failed, or its training Sharpe was not above 0.', target: null },
+    ],
+  },
+  'parameter-drift': {
+    title: 'Parameter drift',
+    question: 'Did the search choose similar settings in every fold?',
+    steps: [
+      { text: 'Each row is one searched knob on its own range; the dots are the value each fold’s training chose.', target: { kind: 'series', group: 'winners' } },
+      { text: 'The dashed line is the all-period winner and the dotted line the current settings.', target: null },
+      { text: 'Dots that stay close together mean the search found the same answer each time.', target: null },
+      { text: 'Dots that jump around, or sit at the edge of the range, mean the best value depends on the period, or lies outside what was searched.', target: null },
+    ],
+  },
+  'fold-returns': {
+    title: 'Test return per fold',
+    question: 'Fold by fold, did the procedure’s winner beat the current settings on the same test window?',
+    steps: [
+      { text: 'Each fold has two bars: the return of the winner its training chose, and the current settings on the same test window.', target: { kind: 'series', group: 'procedure' } },
+      { text: 'Compare them fold by fold. The grey bar is the benchmark.', target: { kind: 'series', group: 'incumbent' } },
+      { text: 'Count the folds where the procedure leads. Winning a few folds by a lot is weaker than winning most of them.', target: null },
+      { text: 'A fold with only a grey bar is one whose winner failed; hover it for what the current settings did.', target: null },
+    ],
+  },
+  'fold-activity': {
+    title: 'Test activity per fold',
+    question: 'Did the folds trade enough on their test windows to judge?',
+    steps: [
+      { text: 'Each bar on the left is one fold’s test trades.', target: { kind: 'series', group: 'folds' } },
+      { text: 'The bar on the right is all completed folds together.', target: { kind: 'series', group: 'total' } },
+      { text: 'The dashed line is the forward minimum: the trades all forward tests must reach together. It applies to the total, not to each fold.', target: null },
+      { text: 'A total below the line turns red: too few test trades to judge the procedure.', target: null },
     ],
   },
 };
