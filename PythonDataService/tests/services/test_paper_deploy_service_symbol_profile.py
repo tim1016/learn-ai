@@ -12,6 +12,8 @@ from __future__ import annotations
 import pytest
 
 from app.engine.indicators.macd import MovingAverageConvergenceDivergence
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
+from app.marketdata.feed import MAX_WARMUP_LOOKBACK_DAYS
 from app.schemas.run_admission import StrategyValidationAdmissionFact
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.broker_v2_panel.paper_deploy_service import resolve_deploy_strategy_params
@@ -159,3 +161,35 @@ def test_deploy_refuses_exactly_the_macd_periods_the_indicator_cannot_build(
         MovingAverageConvergenceDivergence("probe", fast, slow, 9)
     with pytest.raises(ValueError, match=rf"macd_fast \({fast}\) must be less than macd_slow \({slow}\)"):
         resolve_deploy_strategy_params(strategy_key, _SYMBOL, overrides)
+
+
+@pytest.mark.parametrize(
+    ("long_window", "lookback_days", "loads"),
+    [(200, 18, True), (258, 20, True), (259, 24, False), (500, 39, False)],
+    ids=["sma_50_200", "at_the_limit", "first_past_the_limit", "long_past_the_limit"],
+)
+def test_deploy_refuses_exactly_the_periods_whose_warmup_history_a_bot_cannot_load(
+    long_window: int, lookback_days: int, loads: bool
+) -> None:
+    """#2841: a lookback longer than any history request that returns was sealed, then refused at Start.
+
+    SMA on its default 15-minute bars. Each case first asks the contract how
+    many days these periods would seal.
+    """
+    registration = _STRATEGY_REGISTRY["sma_crossover"]
+    contract = registration.signal_program_contract
+    assert contract is not None
+    overrides = {"short_window": 50, "long_window": long_window}
+    assert contract.resolved_warmup_lookback_days(registration.param_schema(**overrides)) == lookback_days
+
+    if loads:
+        assert resolve_deploy_strategy_params("sma_crossover", _SYMBOL, overrides).effective["long_window"] == long_window
+        return
+    with pytest.raises(ValueError, match=rf"need {lookback_days} days .* at most {MAX_WARMUP_LOOKBACK_DAYS}\b"):
+        resolve_deploy_strategy_params("sma_crossover", _SYMBOL, overrides)
+
+
+@pytest.mark.parametrize("strategy_key", sorted(_STRATEGY_REGISTRY))
+def test_deploy_accepts_every_registered_strategy_at_its_own_defaults(strategy_key: str) -> None:
+    """#2841: the lookback limit must never refuse the periods a strategy is registered with."""
+    assert resolve_deploy_strategy_params(strategy_key, _SYMBOL, {}).diverges_from_defaults == ()

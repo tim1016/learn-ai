@@ -65,6 +65,9 @@ NO_BAR_WARNING_MAX_INTERVAL_S = 300.0
 # phase opened is not a stall and cannot kill the run or re-request the line.
 REALTIME_BAR_STALL_TIMEOUT_S = 60.0
 _HISTORICAL_BARS_TIMEOUT_S = 15.0
+# Measured: 10 days of 1-minute history returned in 0.6 s; 20 days took 48 s (#2841).
+_HISTORICAL_BARS_FIXED_TIMEOUT_DAYS = 10
+_HISTORICAL_BARS_TIMEOUT_S_PER_FURTHER_DAY = 6.0
 _REALTIME_BAR_MAX_NEW_REQUESTS = 60
 _REALTIME_BAR_REQUEST_WINDOW_S = 600.0
 _REALTIME_BAR_DEFAULT_MAX_ACTIVE = 100
@@ -775,6 +778,16 @@ def _contract_venue(contract: object) -> str | None:
     return venue or None
 
 
+def historical_bars_timeout_s(lookback_days: int) -> float:
+    """How long a ``lookback_days`` request for 1-minute history is given to answer.
+
+    The fixed timeout up to ten days, the longest request measured to return
+    at once; six more seconds for each day past that.
+    """
+    further_days = max(lookback_days - _HISTORICAL_BARS_FIXED_TIMEOUT_DAYS, 0)
+    return _HISTORICAL_BARS_TIMEOUT_S + _HISTORICAL_BARS_TIMEOUT_S_PER_FURTHER_DAY * further_days
+
+
 async def fetch_historical_minute_bars(
     client: IbkrClient,
     symbol: str,
@@ -782,6 +795,7 @@ async def fetch_historical_minute_bars(
     duration: str = "1 D",
     end_datetime: str = "",
     use_rth: bool = True,
+    timeout_s: float = _HISTORICAL_BARS_TIMEOUT_S,
 ) -> list[IbkrMinuteBar]:
     """Fetch read-only IBKR historical 1-minute TRADES bars with provenance."""
     client.require_connected()
@@ -800,7 +814,7 @@ async def fetch_historical_minute_bars(
                 formatDate=2,
                 keepUpToDate=False,
             ),
-            timeout=_HISTORICAL_BARS_TIMEOUT_S,
+            timeout=timeout_s,
         )
     except TimeoutError as exc:
         raise IBKRBarStreamError(f"IBKR historical bars timed out for {symbol}.") from exc

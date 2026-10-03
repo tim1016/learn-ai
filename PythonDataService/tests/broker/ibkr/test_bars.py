@@ -17,6 +17,7 @@ from app.broker.ibkr.bars import (
     IBKRBarSubscriptionStalled,
     MinuteAssembler,
     fetch_historical_minute_bars,
+    historical_bars_timeout_s,
     stream_minute_bars,
     stream_raw_5s_bars,
 )
@@ -635,6 +636,33 @@ async def test_fetch_historical_minute_bars_refuses_an_impossible_bar(
 
     with pytest.raises(IBKRImpossibleBarError, match=violation):
         await fetch_historical_minute_bars(client, "SPY", use_rth=False)
+
+
+@pytest.mark.parametrize(
+    ("lookback_days", "timeout_s"),
+    [(1, 15.0), (5, 15.0), (10, 15.0), (11, 21.0), (18, 63.0), (20, 75.0)],
+)
+def test_historical_bars_timeout_grows_only_past_ten_days(lookback_days: int, timeout_s: float) -> None:
+    """#2841: IBKR took 48 s to serve 20 days of 1-minute history, so a long
+    lookback is given longer. Ten days or fewer -- every bot running a default
+    lookback -- keep the 15 s they have always had."""
+    assert historical_bars_timeout_s(lookback_days) == pytest.approx(timeout_s, abs=1e-9, rel=0)
+
+
+@pytest.mark.asyncio
+async def test_fetch_historical_minute_bars_gives_up_at_the_timeout_it_is_given() -> None:
+    """#2841: the wait is the caller's to size. A request still unanswered when
+    it runs out is refused then, not at the fixed 15 s."""
+    client = _FakeClient()
+
+    async def never_answers(_contract, **_kwargs):
+        await asyncio.Event().wait()
+
+    client.ib.reqHistoricalDataAsync = never_answers
+
+    async with asyncio.timeout(5):
+        with pytest.raises(IBKRBarStreamError, match="timed out"):
+            await fetch_historical_minute_bars(client, "SPY", timeout_s=0.01)
 
 
 @pytest.mark.asyncio
