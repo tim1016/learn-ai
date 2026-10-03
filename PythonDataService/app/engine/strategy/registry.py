@@ -390,8 +390,9 @@ _EMA_LENGTHS_PROVENANCE = NumericalProvenanceContract(
     ),
     # The trace/decision identity is Decimal-exact and
     # SHA-256-compared (signal_program.py), not
-    # tolerance-compared — see test_validated_ema_settings_corpus_
-    # has_a_pinned_trace_root's byte-exact trace_root assertion.
+    # tolerance-compared — see
+    # test_validated_settings_corpus_has_a_pinned_trace_root[ema_crossover_signal]'s
+    # byte-exact trace_root assertion.
     equivalence_level="bit_exact",
     # One level down (the EMA/RSI *value* parity against LEAN,
     # not the trace-identity hash above): documented absolute
@@ -439,6 +440,152 @@ def _ema_parameter_schema_version_for(params: StrategyParamsBase) -> str:
     if params.at_reference_lengths():
         return params.REFERENCE_PARAMETER_SCHEMA_VERSION
     return params.PARAMETER_SCHEMA_VERSION
+
+
+# ── Sealed series that follow a program's own periods (#2796) ────────────────
+# One resolver per program whose indicator periods are parameters: the series
+# its ``initialize()`` builds for these parameters, in the static tuple's
+# order. ``warmup_bars`` is each indicator's own ``is_ready`` threshold
+# (app/engine/indicators/).
+
+
+def _rsi_series(period: int) -> SignalSeriesContract:
+    """Wilders RSI: ready at ``period + 1`` samples (one extra for the first delta)."""
+    return SignalSeriesContract(
+        name="rsi", indicator="rsi_wilders", field="close", period=period, warmup_bars=period + 1
+    )
+
+
+def _adx_series(period: int) -> SignalSeriesContract:
+    """Wilders ADX, read off the full bar: ready at ``2 * period`` samples."""
+    return SignalSeriesContract(
+        name="adx", indicator="adx_wilders", field="high_low_close", period=period, warmup_bars=2 * period
+    )
+
+
+def _macd_series(slow_period: int, signal_period: int) -> SignalSeriesContract:
+    """MACD: its ``period`` and its readiness are both ``slow + signal - 1``, when the signal EMA turns ready.
+
+    The fast length moves the MACD line but neither number; a seal carries it
+    as the ``macd_fast`` parameter only.
+    """
+    warmup = slow_period + signal_period - 1
+    return SignalSeriesContract(name="macd", indicator="macd", field="close", period=warmup, warmup_bars=warmup)
+
+
+def _sma_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
+    """The two SMAs ``SmaCrossoverAlgorithm.initialize()`` builds; each is ready at its period."""
+    assert isinstance(params, SmaCrossoverParams)
+    short, long = params.short_window, params.long_window
+    return (
+        SignalSeriesContract(name="sma_short", indicator="sma", field="close", period=short, warmup_bars=short),
+        SignalSeriesContract(name="sma_long", indicator="sma", field="close", period=long, warmup_bars=long),
+    )
+
+
+def _rsi_mean_reversion_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
+    """The one RSI ``RsiMeanReversionAlgorithm.initialize()`` builds."""
+    assert isinstance(params, RsiMeanReversionParams)
+    return (_rsi_series(params.window),)
+
+
+def _spy_strategy_a_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
+    """The five indicators ``SpyStrategyAAlgorithm`` builds; an EMA is ready at its period."""
+    assert isinstance(params, RsiRangeStrategyAParams)
+    fast, slow = params.ema_fast_period, params.ema_slow_period
+    return (
+        SignalSeriesContract(name="ema_fast", indicator="ema", field="close", period=fast, warmup_bars=fast),
+        SignalSeriesContract(name="ema_slow", indicator="ema", field="close", period=slow, warmup_bars=slow),
+        _macd_series(params.macd_slow, params.macd_signal),
+        _rsi_series(params.rsi_period),
+        _adx_series(params.adx_period),
+    )
+
+
+def _spy_strategy_b_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
+    """The four indicators ``SpyStrategyBAlgorithm`` builds.
+
+    Supertrend is ready at its ATR period. Its multiplier moves the line but
+    not that number; a seal carries it as the ``supertrend_multiplier``
+    parameter only.
+    """
+    assert isinstance(params, RsiRangeStrategyBParams)
+    atr = params.supertrend_atr_period
+    return (
+        _rsi_series(params.rsi_period),
+        _adx_series(params.adx_period),
+        SignalSeriesContract(
+            name="supertrend", indicator="supertrend", field="high_low_close", period=atr, warmup_bars=atr
+        ),
+        _macd_series(params.macd_slow, params.macd_signal),
+    )
+
+
+def _spy_strategy_c_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
+    """The two indicators ``SpyStrategyCAlgorithm`` builds (via ``RsiRangeStrategy``)."""
+    assert isinstance(params, RsiRangeStrategyCParams)
+    return (_rsi_series(params.rsi_period), _adx_series(params.adx_period))
+
+
+# Strategy C's formula names its periods outright, so it holds only while both
+# sit at 14: every seal there records exactly this.
+_SPY_STRATEGY_C_DEFAULT_PERIODS_PROVENANCE = NumericalProvenanceContract(
+    formula=(
+        "Long-only. While flat: enter when RSI(14) is within [rsi_low_gate, "
+        "rsi_high_gate], ADX(14) > adx_entry_threshold (default 20), AND ADX is "
+        "strictly rising bar-over-bar (ADX[i] > ADX[i-1]). While in position: exit "
+        "the instant ADX(14) < adx_exit_threshold (default 15)."
+    ),
+    reference=(
+        "Internal -- no external port reference; RSI per LEAN Wilder's method "
+        "(app/engine/indicators/rsi.py), ADX per Wilder, J. Welles, New Concepts in "
+        "Technical Trading Systems (1978) (app/engine/indicators/adx.py). No LEAN or "
+        "TradingView reconciliation exists for this promotion -- Polygon live data is "
+        "unavailable, so per PRD direction this program is qualified against its own "
+        "deterministic replay of the committed cross-engine-study cells "
+        "(Polygon-captured one-minute bars) only, with no cross-engine "
+        "parity claim."
+    ),
+    canonical_implementation=(
+        "app/engine/strategy/algorithms/spy_strategy_c.py::SpyStrategyCAlgorithm "
+        "(extends app/engine/strategy/algorithms/_rsi_range_base.py::RsiRangeStrategy)"
+    ),
+    validated_against=(
+        "app/engine/tests/test_strategies_abc.py; "
+        "tests/fixtures/test_strategy_parity_fixtures.py (ENG-008 self-equivalence); "
+        "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
+        "[spy_strategy_c]"
+    ),
+    # The trace/decision identity is Decimal-exact and
+    # SHA-256-compared (signal_program.py), not
+    # tolerance-compared -- see
+    # test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_c]'s
+    # byte-exact trace_root assertion. Same as sma_crossover:
+    # no second, one-level-down LEAN-value-parity claim here
+    # (no tolerance_atol/tolerance_rtol/parity_fixture_ids) --
+    # nothing beyond this corpus's own self-consistency has
+    # been established for this promotion.
+    equivalence_level="bit_exact",
+)
+
+_SPY_STRATEGY_C_PERIODS_PROVENANCE = _SPY_STRATEGY_C_DEFAULT_PERIODS_PROVENANCE.model_copy(
+    update={
+        "formula": (
+            "Long-only. While flat: enter when RSI(rsi_period) is within [rsi_low_gate, "
+            "rsi_high_gate], ADX(adx_period) > adx_entry_threshold (default 20), AND ADX is "
+            "strictly rising bar-over-bar (ADX[i] > ADX[i-1]). While in position: exit "
+            "the instant ADX(adx_period) < adx_exit_threshold (default 15)."
+        ),
+    }
+)
+
+
+def _spy_strategy_c_numerical_provenance_for(params: StrategyParamsBase) -> NumericalProvenanceContract:
+    """The 14/14 formula while both periods sit there; the same rule in parameter names elsewhere."""
+    assert isinstance(params, RsiRangeStrategyCParams)
+    if params.rsi_period == 14 and params.adx_period == 14:
+        return _SPY_STRATEGY_C_DEFAULT_PERIODS_PROVENANCE
+    return _SPY_STRATEGY_C_PERIODS_PROVENANCE
 
 
 # ── Strategy views (#2639) ───────────────────────────────────────────────────
@@ -736,11 +883,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # RSI(14) is fixed in this program version. warmup_bars mirrors
             # each indicator's own is_ready threshold
             # (app/engine/indicators/base.py: samples >= period; RSI
-            # overrides to period + 1 for its first delta) — any drift
-            # between these constants and the real indicators would already
-            # change the golden trace root and fail
-            # test_validated_ema_settings_corpus_has_a_pinned_trace_root, so
-            # this cannot silently go stale.
+            # overrides to period + 1 for its first delta);
+            # test_contract_series_and_hold_describe_the_program_these_parameters_build
+            # holds the series to the indicators the program builds.
             signals=(
                 SignalSeriesContract(name="ema_fast", indicator="ema", field="close", period=5, warmup_bars=5),
                 SignalSeriesContract(name="ema_slow", indicator="ema", field="close", period=10, warmup_bars=10),
@@ -952,6 +1097,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # 2-session minimum, covering weekends/holidays -- the same
             # margin-over-minimum convention as ema_crossover_signal's 5-day
             # buffer over its own (smaller, ~0.6-session) RSI(14) warmup.
+            # Sized at the default periods; the lookback is not resolved per deploy.
             warmup_lookback_days=7,
             # SmaCrossoverAlgorithm.initialize() constructs exactly these two
             # named series (SMA{short_window}, SMA{long_window}), each fed
@@ -960,11 +1106,14 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # samples >= period like every other indicator
             # (app/engine/indicators/base.py), so warmup_bars == period for
             # both series -- unlike EMA's RSI, there is no period+1 warmup
-            # override to account for.
+            # override to account for. These static values are the 10/30
+            # default point; the windows are parameters, so a seal records
+            # `signals_for` resolved against its own (#2796).
             signals=(
                 SignalSeriesContract(name="sma_short", indicator="sma", field="close", period=10, warmup_bars=10),
                 SignalSeriesContract(name="sma_long", indicator="sma", field="close", period=30, warmup_bars=30),
             ),
+            signals_for=_sma_signals_for,
             decision_streams=tuple(kind.value for kind in SignalIntentKind),
             bar_integrity=SignalBarIntegrityContract(),
             # SmaCrossoverAlgorithm.evaluate_signal_bar exits the instant its
@@ -1006,7 +1155,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 # The trace/decision identity is Decimal-exact and
                 # SHA-256-compared (signal_program.py), not
                 # tolerance-compared -- see
-                # test_validated_sma_settings_corpus_has_a_pinned_trace_root's
+                # test_validated_settings_corpus_has_a_pinned_trace_root[sma_crossover]'s
                 # byte-exact trace_root assertion. Unlike EMA, there is no
                 # second, one-level-down LEAN-value-parity claim here (no
                 # tolerance_atol/tolerance_rtol/parity_fixture_ids) --
@@ -1114,6 +1263,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # series) before is_ready. 5 calendar days is the same
             # margin-over-minimum buffer ema_crossover_signal uses for that
             # identical ~0.6-session warmup.
+            # Sized at the default periods; the lookback is not resolved per deploy.
             warmup_lookback_days=5,
             # RsiMeanReversionAlgorithm.initialize() constructs exactly this
             # one named series (RSI{window}), fed bar.close at bar.end_ms.
@@ -1121,9 +1271,13 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # overrides the base Indicator's samples >= period to
             # samples >= period + 1 (app/engine/indicators/rsi.py), the same
             # override ema_crossover_signal's own "rsi" series declares.
+            # This static value is the window=14 default point; the window
+            # is a parameter, so a seal records `signals_for` resolved
+            # against its own (#2796).
             signals=(
                 SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
             ),
+            signals_for=_rsi_mean_reversion_signals_for,
             decision_streams=tuple(kind.value for kind in SignalIntentKind),
             bar_integrity=SignalBarIntegrityContract(),
             # RsiMeanReversionAlgorithm.evaluate_signal_bar exits the instant
@@ -1163,7 +1317,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 # The trace/decision identity is Decimal-exact and
                 # SHA-256-compared (signal_program.py), not
                 # tolerance-compared -- see
-                # test_validated_rsi_mean_reversion_settings_corpus_has_a_pinned_trace_root's
+                # test_validated_settings_corpus_has_a_pinned_trace_root[rsi_mean_reversion]'s
                 # byte-exact trace_root assertion. Same as sma_crossover:
                 # no second, one-level-down LEAN-value-parity claim here --
                 # nothing beyond this corpus's own self-consistency has been
@@ -1469,6 +1623,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # past 2 full sessions -- 9 calendar days is a slightly larger
             # buffer than sma_crossover's 7 for that reason, still covering
             # weekends/holidays.
+            # Sized at the default periods; the lookback is not resolved per deploy.
             warmup_lookback_days=9,
             # SpyStrategyAAlgorithm.initialize() and _init_extra_indicators()
             # construct exactly these five named indicators, each fed
@@ -1480,10 +1635,12 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # 2 * period; MovingAverageConvergenceDivergence's own `period`
             # bookkeeping value already equals slow_period + signal_period -
             # 1, the sample count at which its internal signal EMA becomes
-            # ready) -- any drift between these constants and the real
-            # indicators would already change the golden trace root and fail
-            # test_validated_spy_strategy_a_settings_corpus_has_a_pinned_trace_root,
-            # so this cannot silently go stale.
+            # ready);
+            # test_resolved_series_are_exactly_the_indicators_these_parameters_build
+            # holds the series to the indicators the program builds. These
+            # static values are the default point; every period is a
+            # parameter, so a seal records `signals_for` resolved against its
+            # own (#2796).
             signals=(
                 SignalSeriesContract(name="ema_fast", indicator="ema", field="close", period=20, warmup_bars=20),
                 SignalSeriesContract(name="ema_slow", indicator="ema", field="close", period=50, warmup_bars=50),
@@ -1497,6 +1654,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                     name="adx", indicator="adx_wilders", field="high_low_close", period=14, warmup_bars=28
                 ),
             ),
+            signals_for=_spy_strategy_a_signals_for,
             decision_streams=tuple(kind.value for kind in SignalIntentKind),
             bar_integrity=SignalBarIntegrityContract(),
             # SpyStrategyAAlgorithm/RsiRangeStrategy.evaluate_signal_bar exits
@@ -1539,7 +1697,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 # The trace/decision identity is Decimal-exact and
                 # SHA-256-compared (signal_program.py), not
                 # tolerance-compared -- see
-                # test_validated_spy_strategy_a_settings_corpus_has_a_pinned_trace_root's
+                # test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_a]'s
                 # byte-exact trace_root assertion. Same as sma_crossover:
                 # nothing beyond this corpus's own self-consistency has been
                 # established for this promotion, so no
@@ -1668,7 +1826,11 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # session (390 min) but under two. 7 calendar days is the same
             # comfortable buffer-over-2-session-minimum convention as
             # sma_crossover's own 7-day figure, covering weekends/holidays.
+            # Sized at the default periods; the lookback is not resolved per deploy.
             warmup_lookback_days=7,
+            # These static values are the default point; every period is a
+            # parameter, so a seal records `signals_for` resolved against
+            # its own (#2796).
             # Each series' warmup_bars is its own is_ready threshold
             # (app/engine/indicators/base.py: samples >= period, except RSI's
             # period + 1 override and ADX's 2 * period override -- see each
@@ -1676,10 +1838,9 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # slow_period + signal_period - 1 = 34 at construction
             # (app/engine/indicators/macd.py), which is also its own
             # is_ready threshold since MACD delegates is_ready to its
-            # internal signal EMA. Any drift between these constants and the
-            # real indicators would already change the golden trace root and
-            # fail test_validated_spy_strategy_b_settings_corpus_has_a_pinned_trace_root,
-            # so this cannot silently go stale.
+            # internal signal EMA.
+            # test_resolved_series_are_exactly_the_indicators_these_parameters_build
+            # holds the series to the indicators the program builds.
             signals=(
                 SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
                 SignalSeriesContract(
@@ -1690,6 +1851,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 ),
                 SignalSeriesContract(name="macd", indicator="macd", field="close", period=34, warmup_bars=34),
             ),
+            signals_for=_spy_strategy_b_signals_for,
             decision_streams=tuple(kind.value for kind in SignalIntentKind),
             bar_integrity=SignalBarIntegrityContract(),
             # RsiRangeStrategy.evaluate_signal_bar exits the instant its
@@ -1732,7 +1894,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 # The trace/decision identity is Decimal-exact and
                 # SHA-256-compared (signal_program.py), not
                 # tolerance-compared -- see
-                # test_validated_spy_strategy_b_settings_corpus_has_a_pinned_trace_root's
+                # test_validated_settings_corpus_has_a_pinned_trace_root[spy_strategy_b]'s
                 # byte-exact trace_root assertion. Same as sma_crossover: no
                 # second, one-level-down LEAN-value-parity claim exists for
                 # this promotion (no tolerance_atol/tolerance_rtol/
@@ -1865,6 +2027,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # sma_crossover's own SMA(30) warmup. 7 calendar days is the
             # same comfortable buffer over that 2-session minimum,
             # covering weekends/holidays.
+            # Sized at the default periods; the lookback is not resolved per deploy.
             warmup_lookback_days=7,
             # SpyStrategyCAlgorithm.initialize() (via RsiRangeStrategy)
             # builds RSI(rsi_period=14) and ADX(adx_period=14) -- the only
@@ -1876,16 +2039,19 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # samples >= 2 * period (app/engine/indicators/adx.py -- true
             # range and directional movement both need a *prior* bar
             # before the Wilder smoothing itself needs `period` more
-            # samples). Any drift between these constants and the real
-            # indicators would already change the golden trace root and
-            # fail test_validated_spy_strategy_c_settings_corpus_has_a_pinned_trace_root,
-            # so this cannot silently go stale.
+            # samples).
+            # test_resolved_series_are_exactly_the_indicators_these_parameters_build
+            # holds the series to the indicators the program builds. These
+            # static values are the 14/14 default point; both periods are
+            # parameters, so a seal records `signals_for` resolved against
+            # its own (#2796).
             signals=(
                 SignalSeriesContract(name="rsi", indicator="rsi_wilders", field="close", period=14, warmup_bars=15),
                 SignalSeriesContract(
                     name="adx", indicator="adx_wilders", field="high_low_close", period=14, warmup_bars=28
                 ),
             ),
+            signals_for=_spy_strategy_c_signals_for,
             decision_streams=tuple(kind.value for kind in SignalIntentKind),
             bar_integrity=SignalBarIntegrityContract(),
             # SpyStrategyCAlgorithm.evaluate_signal_bar (via RsiRangeStrategy)
@@ -1899,44 +2065,10 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
                 rule="level_true",
                 countdown_state_persistable=False,
             ),
-            numerical_provenance=NumericalProvenanceContract(
-                formula=(
-                    "Long-only. While flat: enter when RSI(14) is within [rsi_low_gate, "
-                    "rsi_high_gate], ADX(14) > adx_entry_threshold (default 20), AND ADX is "
-                    "strictly rising bar-over-bar (ADX[i] > ADX[i-1]). While in position: exit "
-                    "the instant ADX(14) < adx_exit_threshold (default 15)."
-                ),
-                reference=(
-                    "Internal -- no external port reference; RSI per LEAN Wilder's method "
-                    "(app/engine/indicators/rsi.py), ADX per Wilder, J. Welles, New Concepts in "
-                    "Technical Trading Systems (1978) (app/engine/indicators/adx.py). No LEAN or "
-                    "TradingView reconciliation exists for this promotion -- Polygon live data is "
-                    "unavailable, so per PRD direction this program is qualified against its own "
-                    "deterministic replay of the committed cross-engine-study cells "
-                    "(Polygon-captured one-minute bars) only, with no cross-engine "
-                    "parity claim."
-                ),
-                canonical_implementation=(
-                    "app/engine/strategy/algorithms/spy_strategy_c.py::SpyStrategyCAlgorithm "
-                    "(extends app/engine/strategy/algorithms/_rsi_range_base.py::RsiRangeStrategy)"
-                ),
-                validated_against=(
-                    "app/engine/tests/test_strategies_abc.py; "
-                    "tests/fixtures/test_strategy_parity_fixtures.py (ENG-008 self-equivalence); "
-                    "tests/engine/strategy/test_signal_program_qualification_matrix.py::test_validated_settings_corpus_has_a_pinned_trace_root"
-                    "[spy_strategy_c]"
-                ),
-                # The trace/decision identity is Decimal-exact and
-                # SHA-256-compared (signal_program.py), not
-                # tolerance-compared -- see
-                # test_validated_spy_strategy_c_settings_corpus_has_a_pinned_trace_root's
-                # byte-exact trace_root assertion. Same as sma_crossover:
-                # no second, one-level-down LEAN-value-parity claim here
-                # (no tolerance_atol/tolerance_rtol/parity_fixture_ids) --
-                # nothing beyond this corpus's own self-consistency has
-                # been established for this promotion.
-                equivalence_level="bit_exact",
-            ),
+            # The 14/14 default point's provenance; `numerical_provenance_for`
+            # resolves a seal's own.
+            numerical_provenance=_SPY_STRATEGY_C_DEFAULT_PERIODS_PROVENANCE,
+            numerical_provenance_for=_spy_strategy_c_numerical_provenance_for,
             parameter_units={
                 "symbol": "ticker",
                 "adx_entry_threshold": "adx_points",

@@ -1,0 +1,22 @@
+@if (lanes().length > 0) {
+  <div class="chart-lanes" role="group" aria-label="The run’s events on the chart’s clock">
+    @for (lane of lanes(); track lane.key) {
+      <div class="chart-lanes__row" role="list" [attr.aria-label]="lane.title" [attr.data-lane]="lane.key">
+        <span class="chart-lanes__title" aria-hidden="true">{{ lane.title }}</span>
+        @for (mark of lane.marks; track mark.key) {
+          <span
+            role="listitem"
+            class="chart-lanes__mark"
+            [class.chart-lanes__mark--off]="mark.left === null"
+            [attr.data-glyph]="mark.glyph"
+            [attr.data-tone]="mark.tone"
+            [style.left.px]="mark.left"
+            [style.width.px]="mark.width"
+            [attr.aria-label]="mark.label"
+            [title]="mark.label"
+          ></span>
+        }
+      </div>
+    }
+  </div>
+}

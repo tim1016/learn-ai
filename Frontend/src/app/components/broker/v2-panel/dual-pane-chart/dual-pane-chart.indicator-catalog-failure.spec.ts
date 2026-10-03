@@ -45,7 +45,12 @@ vi.mock('lightweight-charts', () => {
 });
 
 function createMockChart(): object {
-  const mockTimeScale = { fitContent: vi.fn() };
+  const mockTimeScale = {
+    fitContent: vi.fn(),
+    subscribeSizeChange: vi.fn(),
+    subscribeVisibleLogicalRangeChange: vi.fn(),
+    width: vi.fn().mockReturnValue(0),
+  };
   const createMockSeries = () => ({
     setData: vi.fn(),
     update: vi.fn(),

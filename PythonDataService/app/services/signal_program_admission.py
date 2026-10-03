@@ -236,8 +236,9 @@ def build_start_program_seal(
         # Copied straight from the registry contract — the same objects, not
         # a re-derivation — so these can never fall out of sync with it.
         # Series, exit rule, parameter-schema version and provenance are
-        # resolved for these parameters: an EMA length or hold is a parameter,
-        # and a seal at the reference lengths stays byte-identical (#2696).
+        # resolved for these parameters: an indicator period or a hold is a
+        # parameter, and a seal at the default point stays byte-identical
+        # (#2696, #2796).
         signals=contract.resolved_signals(validated),
         decision_streams=contract.decision_streams,
         bar_integrity=contract.bar_integrity,
