@@ -759,14 +759,10 @@ def failed_exit_orders_unproven_at_broker(
     (matched on the immutable ``EXIT_REDUCING_ORDER_CREATED`` facts).
 
     An order leaves the list for good once an operator discharged its
-    strategy's position in its symbol (``ATTRIBUTED_RESIDUE_DISCHARGED``)
-    after the order was created. The discharge wrote off whatever the order
-    did to that position, so a fill found afterwards would be credited on top
-    of it and leave the strategy attributed a position the broker does not
-    hold. A discharge is refused while any operation on the symbol is
-    unfinished, so one recorded after the order's creation was made after its
-    EXIT failed. Read from the transitions themselves, so it holds for a
-    discharge made before this list existed.
+    strategy's position in its symbol after the order was created
+    (:func:`residue_discharge_since_order_created` states the rule). The
+    discharge wrote off whatever the order did to that position, and a fill
+    of it found afterwards moves no position, so no lookup is spent on it.
 
     Only an EXIT that failed at or after ``failed_since_ms`` is listed, so an
     old one is not asked about for ever. The rotation is
@@ -784,11 +780,13 @@ def failed_exit_orders_unproven_at_broker(
             "AND e.updated_at_ms >= ? "
             "AND EXISTS (SELECT 1 FROM custody_transitions s WHERE s.order_ref = o.order_ref "
             "AND s.transition_kind = 'ORDER_SUBMIT_REQUESTED') "
-            "AND NOT EXISTS (SELECT 1 FROM custody_transitions d "
-            "WHERE d.strategy_instance_id = e.strategy_instance_id AND d.sequence > t.sequence "
-            "AND d.transition_kind = 'ATTRIBUTED_RESIDUE_DISCHARGED' "
-            "AND UPPER(json_extract(d.facts_json, '$.symbol')) "
-            "= UPPER(json_extract(t.facts_json, '$.symbol'))) "
+            "AND NOT EXISTS (SELECT 1 "
+            + _residue_discharges_after(
+                strategy="e.strategy_instance_id",
+                sequence="t.sequence",
+                symbol="json_extract(t.facts_json, '$.symbol')",
+            )
+            + ") "
         ),
         also_params=(failed_since_ms,),
         symbols=symbols,
@@ -796,6 +794,60 @@ def failed_exit_orders_unproven_at_broker(
         rested_since_ms=rested_since_ms,
         limit=limit,
     )
+
+
+def _residue_discharges_after(*, strategy: str, sequence: str, symbol: str) -> str:
+    """The ``FROM ... WHERE`` of one strategy's discharges in a symbol past a ledger point (#2854).
+
+    The one spelling of "this position was discharged since": every
+    ``ATTRIBUTED_RESIDUE_DISCHARGED`` of ``strategy`` in ``symbol`` recorded
+    after ``sequence``, as ``d``. Each argument is a SQL expression over the
+    caller's own rows, or a ``?`` the caller binds -- in the order strategy,
+    sequence, symbol. Read from the transitions themselves, so it holds for a
+    discharge made before any caller existed.
+    """
+    return (
+        "FROM custody_transitions d "
+        f"WHERE d.strategy_instance_id = {strategy} AND d.sequence > {sequence} "
+        "AND d.transition_kind = 'ATTRIBUTED_RESIDUE_DISCHARGED' "
+        f"AND UPPER(json_extract(d.facts_json, '$.symbol')) = UPPER({symbol})"
+    )
+
+
+def residue_discharge_since_order_created(
+    conn: sqlite3.Connection,
+    *,
+    order_ref: str,
+    strategy_instance_id: str | None,
+    symbol: str,
+) -> int | None:
+    """The newest discharge of this strategy's position in ``symbol`` since the order was created (#2854).
+
+    Its ledger sequence, or ``None`` when the position was not discharged
+    after the order's first transition.
+
+    A discharge is admitted only when nothing is working on the symbol, at
+    the broker or in the Clerk, and it sets the strategy's position to what
+    the broker then held. So it already accounts for whatever an order
+    created before it had done, on either side and whether the order opened
+    the position or closed it. A fill of that order credited afterwards is
+    counted twice, and leaves the strategy attributed a position the broker
+    does not hold.
+
+    A manual order has no strategy, and no discharge is ever its own.
+    """
+    if strategy_instance_id is None:
+        return None
+    row = conn.execute(
+        "SELECT MAX(d.sequence) AS sequence "
+        + _residue_discharges_after(
+            strategy="?",
+            sequence="(SELECT MIN(c.sequence) FROM custody_transitions c WHERE c.order_ref = ?)",
+            symbol="?",
+        ),
+        (strategy_instance_id, order_ref, symbol),
+    ).fetchone()
+    return row["sequence"]
 
 
 def _failed_operation_orders_unproven_at_broker(

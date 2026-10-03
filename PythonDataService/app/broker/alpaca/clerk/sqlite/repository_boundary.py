@@ -39,6 +39,7 @@ class ExternalRepositoryWriter:
 REPOSITORY_MUTATION_METHODS = frozenset(
     {
         "append_transition",
+        "append_fill",
         "append_execution_slice_if_absent",
         "register_strategy_instance",
     }

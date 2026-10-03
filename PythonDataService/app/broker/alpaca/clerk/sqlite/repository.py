@@ -61,6 +61,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
 )
 from app.broker.alpaca.clerk.sqlite.folds import (
     DEFAULT_FOLD_REGISTRY,
+    FILL_CREDIT_WITHHELD_BY_DISCHARGE,
     FoldRegistry,
 )
 from app.broker.alpaca.clerk.sqlite.hashchain import (
@@ -611,6 +612,59 @@ class ClerkSqliteRepository(
                 control_revision=control_revision,
             )
 
+    def append_fill(self, transition: TransitionInput, *, symbol: str) -> CommittedTransition:
+        """Append a fill of one of this authority's orders, crediting its position unless it was discharged (#2854).
+
+        The one append every fill that can move a position goes through: an
+        exact execution slice (:meth:`append_execution_slice_if_absent`) and
+        a cumulative total (``order_evidence.fold_order_evidence``) alike,
+        whichever read brought it -- a stream frame, a reconnect's replay, an
+        open-order snapshot or an exact lookup.
+
+        An operator's discharge sets a strategy's position in a symbol to
+        what the broker then held, so it already accounts for every order
+        created before it (``reads.residue_discharge_since_order_created``).
+        A fill of such an order that arrives afterwards is still recorded --
+        the execution is evidence, and the order's fills must add up or it
+        would be asked about for ever -- but under
+        :data:`FILL_CREDIT_WITHHELD_BY_DISCHARGE`, and its fold moves no
+        position. Crediting it would count it twice.
+
+        The read and the append share the write coordinator, so a discharge
+        cannot land between them. The order may also have been live after
+        all and filled after the discharge, which no record here can tell
+        apart: its credit is withheld the same, and the difference stands as
+        a position drift for the operator.
+        """
+        if transition.order_ref is None:
+            raise ValueError("a fill names the order that executed")
+        with self._write_lock:
+            discharged_at = reads.residue_discharge_since_order_created(
+                self._conn,
+                order_ref=transition.order_ref,
+                strategy_instance_id=transition.strategy_instance_id,
+                symbol=symbol,
+            )
+            if discharged_at is None:
+                return self.append_transition(transition)
+            committed = self.append_transition(
+                replace(transition, summary_code=FILL_CREDIT_WITHHELD_BY_DISCHARGE)
+            )
+        logger.warning(
+            "a fill of an order whose position was discharged was recorded without crediting it",
+            extra={
+                "action": "fill_credit_withheld_residue_discharged",
+                "account_id": self._account_id,
+                "strategy_instance_id": transition.strategy_instance_id,
+                "order_ref": transition.order_ref,
+                "symbol": symbol.upper(),
+                "transition_kind": transition.transition_kind,
+                "discharge_sequence": discharged_at,
+                "sequence": committed.sequence,
+            },
+        )
+        return committed
+
     def append_execution_slice_if_absent(
         self,
         *,
@@ -754,12 +808,12 @@ class ClerkSqliteRepository(
                 )
                 return "coverage_conflict_raised"
             transition = build_transition()
-            self._validated_execution_slice_transition(
+            facts = self._validated_execution_slice_transition(
                 transition,
                 execution_id=execution_id,
                 order_ref=order_ref,
             )
-            self.append_transition(transition)
+            self.append_fill(transition, symbol=facts.symbol)
             return "appended"
 
     def exact_execution_contradicts_record(self, *, order_ref: str, facts: ExecutionSliceFilledFacts) -> bool:

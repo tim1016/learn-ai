@@ -19,6 +19,12 @@ operator-confirmed ``ATTRIBUTED_RESIDUE_DISCHARGED`` transition (the typed
 confirmation is the acknowledgement; the operator's reason is recorded when
 given), after which the strategy's EXIT fences resolve through the existing
 attributed-flat proof.
+
+The discharge is the Clerk's account of every order the strategy had in the
+symbol by then: the position is set to what the broker held with nothing
+working. One of those orders may have filled unseen, and its fill can still
+arrive. It is then recorded and not credited (#2854,
+``ClerkSqliteRepository.append_fill``); credited, it would be counted twice.
 """
 
 from __future__ import annotations
