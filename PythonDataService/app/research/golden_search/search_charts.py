@@ -17,9 +17,10 @@ window, with the window's frozen selection policy (``TradeFloors.policy``):
     an edge hit when the retained value is the range's low or high end;
   * profiles — Zoom: every value a knob's rounds evaluated in the last pass
     that searched it, every other knob held at its value then; Grid: every
-    scored point that matches the winner on every other knob;
+    point the grid itself scored that matches the winner on every other knob;
   * eligibility map — every completed base-scenario evaluation on the
-    window, with its ineligibility under the same policy.
+    window, with its ineligibility under the same policy; a failed run keeps
+    its code and has no numbers (its zeros are placeholders, never results).
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2821 "Server work by
   chart" (V7–V10); the procedures are app/research/golden_search/zoom.py and
   grid_procedure.py, judged by selection.py.
@@ -54,11 +55,16 @@ NOT_REPLAYED = "The recorded path does not rebuild the recorded winner, so the s
 GRID_PATH = "Grid scores every combination at once, so it has no path to draw."
 
 
+_NO_NUMBERS = {"sharpe_ratio": None, "net_profit": None, "total_return_pct": None, "total_trades": None, "max_drawdown_pct": None, "objective": None}
+
+
 def _scored(metrics: Metrics | None, policy: SelectionPolicy) -> dict[str, Any]:
-    """A scored point's numbers, or none when the window has no result for it."""
+    """A scored point's numbers, or none when the window has no result for it or its run failed (a failed run's zeros are placeholders)."""
     if metrics is None:
-        return {"sharpe_ratio": None, "net_profit": None, "total_return_pct": None, "total_trades": None, "max_drawdown_pct": None, "ineligibility": "NOT_EVALUATED", "objective": None}
+        return {**_NO_NUMBERS, "ineligibility": "NOT_EVALUATED"}
     code = ineligibility(metrics, policy)
+    if metrics.status != "completed":
+        return {**_NO_NUMBERS, "ineligibility": code}
     return {
         "sharpe_ratio": metrics.sharpe_ratio,
         "net_profit": metrics.net_profit,
@@ -149,7 +155,9 @@ def _zoom_profiles(declaration: SearchDeclaration, protocol: GoldenSearchProtoco
 
 def _grid_profiles(declaration: SearchDeclaration, protocol: GoldenSearchProtocol, result: ProcedureResult, records: Sequence[EvaluationRecord], policy: SelectionPolicy) -> list[dict[str, Any]]:
     winner = knob_values(declaration, result.winner)
-    scored = [(knob_values(declaration, record.point), metrics_of(record)) for record in records]
+    # Only the grid's own points: a pair audit or neighbor probe on the same window is no part of its lattice.
+    own = set(result.evaluated_hashes)
+    scored = [(knob_values(declaration, record.point), metrics_of(record)) for record in records if record.point_hash in own]
     profiles = []
     for plan in protocol.search_knobs:
         knob = declaration.knob(plan.name)

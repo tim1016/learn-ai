@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from itertools import pairwise
 from typing import Any
 
 import pytest
@@ -15,7 +16,7 @@ from app.research.golden_search.planning import protocol_from_request
 from app.research.golden_search.protocol import GoldenSearchProtocol
 from app.research.golden_search.search_charts import GRID_PATH, NOT_REPLAYED, procedure_charts
 from app.research.golden_search.selection import Metrics
-from app.research.golden_search.zoom import ProcedureResult, run_zoom
+from app.research.golden_search.zoom import BudgetExhausted, ProcedureResult, run_zoom
 from tests._helpers.golden_search import Landscape, metrics
 from tests._helpers.golden_search_study import plan_request
 
@@ -30,14 +31,14 @@ def _score(point: Mapping[str, Any]) -> Metrics:
     return metrics(sharpe, trades=50 if hold >= 4 else 5)
 
 
-def _records(landscape: Landscape) -> list[EvaluationRecord]:
-    """One evaluation row per distinct point scored, in the order first asked for."""
+def _records(landscape: Landscape, score: Any = _score) -> list[EvaluationRecord]:
+    """One evaluation row per distinct point scored by ``score``, in the order first asked for."""
     rows: dict[str, EvaluationRecord] = {}
     for point in landscape.sent:
         hashed = point_hash("ema_crossover_signal", point)
         if hashed in rows:
             continue
-        scored = _score(point)
+        scored = score(point)
         rows[hashed] = EvaluationRecord(
             study_id="s", evaluation_key=hashed, point_hash=hashed, point=dict(point), window_start_ms=0, window_end_ms=1, scenario="base",
             detail=False, stage="search", fold_index=None, status="completed", attempt=1, retries=0, total_trades=scored.total_trades,
@@ -47,9 +48,9 @@ def _records(landscape: Landscape) -> list[EvaluationRecord]:
     return list(rows.values())
 
 
-def _charts(protocol: GoldenSearchProtocol, result: ProcedureResult, landscape: Landscape) -> dict[str, Any]:
+def _charts(protocol: GoldenSearchProtocol, result: ProcedureResult, landscape: Landscape, score: Any = _score) -> dict[str, Any]:
     record = {"window": {"start_ms": 0, "end_ms": 1}, "procedure": result.as_dict()}
-    return procedure_charts(key="search", record=record, declaration=EMA, protocol=protocol, policy=_policy(protocol), records=_records(landscape))
+    return procedure_charts(key="search", record=record, declaration=EMA, protocol=protocol, policy=_policy(protocol), records=_records(landscape, score))
 
 
 def _policy(protocol: GoldenSearchProtocol) -> Any:
@@ -81,7 +82,7 @@ def test_best_so_far_climbs_to_the_winners_objective_and_counts_only_eligible_po
     tried = _charts(protocol, result, landscape)["convergence"]["tried"]
 
     best = [item["best_so_far"] for item in tried]
-    assert all(later >= earlier for earlier, later in zip(best, best[1:], strict=False) if earlier is not None)
+    assert all(later >= earlier for earlier, later in pairwise(best) if earlier is not None)
     assert best[-1] == pytest.approx(result.winner_metrics.sharpe_ratio, abs=1e-9, rel=0)
     # A 2- or 3-bar hold trades 5 times, under the floor of 30: ineligible, so it never raises the best.
     short = [item for item in tried if item["knob"] == "hold_bars" and item["value"] < 4]
@@ -129,3 +130,57 @@ def test_grid_slices_its_scored_points_through_the_winner_and_draws_no_path() ->
     assert gap["pass_index"] is None and len(gap["points"]) == 13  # 0.0 to 0.6 by 0.05, the hold at the winner's 7
     assert [point["value"] for point in gap["points"] if point["retained"]] == [pytest.approx(0.3, abs=1e-12)]
     assert sum(point["winner"] for point in charts["points"]) == 1 and len(charts["points"]) == len(landscape.sent)
+
+
+class _Budget:
+    """An evaluate callback that scores like ``landscape`` until ``limit`` points, then runs out of budget."""
+
+    def __init__(self, landscape: Landscape, limit: int) -> None:
+        self.landscape, self.limit = landscape, limit
+
+    def __call__(self, points: Sequence[dict[str, Any]]) -> list[Metrics]:
+        if len(self.landscape.sent) + len(points) > self.limit:
+            raise BudgetExhausted
+        return self.landscape(points)
+
+
+@pytest.mark.parametrize("limit", [1, 4, 9])
+def test_a_budget_stop_mid_search_still_rebuilds_the_winner(limit: int) -> None:
+    protocol = _protocol_with_floor()
+    landscape = Landscape(_score)
+    result = run_zoom(declaration=EMA, protocol=protocol, seed=protocol.seed, evaluate=_Budget(landscape, limit), policy=_policy(protocol))
+    charts = _charts(protocol, result, landscape)
+
+    assert result.stop_reason == "budget" and charts["convergence"]["status"] == "measured"
+    assert [point_hash("ema_crossover_signal", item["point"]) for item in charts["convergence"]["tried"]] == [point_hash("ema_crossover_signal", p) for p in landscape.sent]
+
+
+def test_with_nothing_eligible_the_winner_is_the_seed_and_the_path_has_no_best() -> None:
+    protocol = _protocol_with_floor()
+    def too_few(point: Mapping[str, Any]) -> Metrics:
+        return metrics(1.0, trades=5)
+
+    landscape = Landscape(too_few)
+    result = run_zoom(declaration=EMA, protocol=protocol, seed=protocol.seed, evaluate=landscape, policy=_policy(protocol))
+    charts = _charts(protocol, result, landscape, too_few)
+
+    assert result.stop_reason == "no_eligible" and charts["convergence"]["status"] == "measured"
+    assert {item["best_so_far"] for item in charts["convergence"]["tried"]} == {None}
+
+
+def test_a_failed_run_has_no_numbers_only_its_rule() -> None:
+    protocol = _protocol_with_floor()
+    failed = metrics(None, net=None, total_return=None, status="failed")
+    landscape = Landscape(lambda point: failed if float(point["gap"]) == 0.0 else _score(point))
+    result = run_zoom(declaration=EMA, protocol=protocol, seed=protocol.seed, evaluate=landscape, policy=_policy(protocol))
+    record = {"window": {"start_ms": 0, "end_ms": 1}, "procedure": result.as_dict()}
+    rows = _records(landscape)
+    rows = [replace(row, status="failed", total_trades=0, net_profit=None) if float(row.point["gap"]) == 0.0 else row for row in rows]
+    points = procedure_charts(key="search", record=record, declaration=EMA, protocol=protocol, policy=_policy(protocol), records=rows)["points"]
+
+    gap_zero = [point for point in points if float(point["point"]["gap"]) == 0.0]
+    assert gap_zero and all(point["total_trades"] is None and point["ineligibility"] == "FAILED" for point in gap_zero)
+
+
+def _protocol_with_floor() -> GoldenSearchProtocol:
+    return protocol_from_request(plan_request("SPY"))

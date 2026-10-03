@@ -1,33 +1,12 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, resource, untracked } from '@angular/core';
-import { DecimalPipe, NgTemplateOutlet } from '@angular/common';
+import { DecimalPipe } from '@angular/common';
 
 import { extractServerMessage } from '../broker/operation-error';
-import { GoldenSearchChartComponent } from './charts/golden-search-chart.component';
-import type { ChartSpec } from './charts/golden-search-chart-spec';
-import { GoldenSearchGridComponent } from './charts/golden-search-grid.component';
-import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
 import { pairAudit } from './golden-search-compare';
-import { GoldenSearchPairLandscapeComponent } from './golden-search-pair-landscape.component';
+import { GoldenSearchProcedureChartsComponent } from './golden-search-procedure-charts.component';
 import { GoldenSearchProcedureComponent } from './golden-search-procedure.component';
-import { convergenceSpec, eligibilityMapSpec, knobMovesSpec, profilesMinWidth, profilesSpec } from './golden-search-search-charts';
 import { GoldenSearchService } from './golden-search.service';
-import type { ProcedureCharts, SearchCharts, StrategyCapability, StudyDetail } from './golden-search.types';
-
-/** One procedure's charts as the step lays them out. */
-export interface ProcedureChartsView {
-  /** Null for the all-period search; names the recent fit's panels apart from it. */
-  readonly instance: string | null;
-  readonly zoom: boolean;
-  readonly path: ChartSpec | null;
-  /** Why a Zoom path is not drawn, in the server's words. */
-  readonly pathNote: string | null;
-  readonly moves: ChartSpec | null;
-  readonly profiles: ChartSpec | null;
-  readonly profilesMinWidth: number;
-  readonly eligibility: ChartSpec | null;
-}
-
-const LABELS: Readonly<Record<ProcedureCharts['key'], string>> = { search: 'All-period', recent: 'Recent window' };
+import { isLive, type SearchCharts, type StrategyCapability, type StudyDetail } from './golden-search.types';
 
 /**
  * The Search step (#2696): the all-period procedure fitted on the whole
@@ -40,15 +19,7 @@ const LABELS: Readonly<Record<ProcedureCharts['key'], string>> = { search: 'All-
  */
 @Component({
   selector: 'app-golden-search-search-step',
-  imports: [
-    DecimalPipe,
-    GoldenSearchChartComponent,
-    GoldenSearchGridComponent,
-    GoldenSearchPairLandscapeComponent,
-    GoldenSearchPanelComponent,
-    GoldenSearchProcedureComponent,
-    NgTemplateOutlet,
-  ],
+  imports: [DecimalPipe, GoldenSearchProcedureChartsComponent, GoldenSearchProcedureComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-search-step.component.html',
   styleUrl: './golden-search-search-step.component.scss',
@@ -73,15 +44,16 @@ export class GoldenSearchSearchStepComponent {
     return error === undefined ? null : extractServerMessage(error, 'The search charts could not be loaded.');
   });
   /** Each recorded procedure's charts, by key. */
-  protected readonly views = computed(() => {
-    const capability = this.capability();
-    return new Map((this.chartData()?.procedures ?? []).map((procedure) => [procedure.key, viewOf(procedure, capability)] as const));
-  });
+  protected readonly procedures = computed(() => new Map((this.chartData()?.procedures ?? []).map((procedure) => [procedure.key, procedure] as const)));
 
   protected readonly pending = computed(() => {
     const study = this.study();
     if (study.state === 'locked') return 'The search has not started. Start it once the frozen plan is what you want to test.';
-    if (study.state === 'search_running') return 'The search is running; its path appears here when it finishes.';
+    if (study.state === 'search_running') {
+      return isLive(study.presented_status)
+        ? 'The search is running; its path appears here when it finishes.'
+        : 'The search stopped before it finished; its path appears here once it does.';
+    }
     return 'No search result is recorded for this study.';
   });
   protected readonly recentDescription = computed(
@@ -93,30 +65,22 @@ export class GoldenSearchSearchStepComponent {
 
   constructor() {
     // A new revision reloads the charts; a reload keeps what is drawn, where a change of params would blank it.
+    // The first read starts at the revision of creation; a change during any read waits for it to settle, then reloads.
     let seen: number | null = null;
     effect(() => {
       const revision = this.revision();
-      if (seen !== null && revision !== seen && this.request() !== undefined) untracked(() => this.charts.reload());
+      const loading = this.charts.isLoading();
+      if (seen === null) {
+        seen = revision;
+        return;
+      }
+      if (loading || revision === seen || this.request() === undefined) return;
       seen = revision;
+      untracked(() => this.charts.reload());
     });
   }
 
   protected retry(): void {
     this.charts.reload();
   }
-}
-
-function viewOf(procedure: ProcedureCharts, capability: StrategyCapability | null): ProcedureChartsView {
-  const label = LABELS[procedure.key];
-  const convergence = procedure.convergence;
-  return {
-    instance: procedure.key === 'search' ? null : label,
-    zoom: procedure.method === 'zoom',
-    path: convergence.status === 'measured' ? convergenceSpec(procedure, convergence.tried, capability, label) : null,
-    pathNote: convergence.status === 'missing' ? convergence.reason : null,
-    moves: procedure.moves.length === 0 ? null : knobMovesSpec(procedure, label),
-    profiles: procedure.profiles.length === 0 ? null : profilesSpec(procedure, label),
-    profilesMinWidth: profilesMinWidth(procedure.profiles.length),
-    eligibility: procedure.points.length === 0 ? null : eligibilityMapSpec(procedure, capability, label),
-  };
 }

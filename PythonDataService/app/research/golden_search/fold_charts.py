@@ -10,7 +10,7 @@ fold windows the study's receipt froze at lock):
     the same test window; their difference test − incumbent when both exist;
   * test trades — the winner's test trades on a completed fold; the forward
     total is the verdict's out-of-sample trade count against the forward
-    minimum ``TradeFloors.at`` it used. While the stage runs (folds stored, no
+    minimum ``TradeFloors.at`` it used, below it when total < minimum. While the stage runs (folds stored, no
     verdict yet) the total sums the folds completed so far and is marked in
     progress, so it is never judged against the minimum;
   * drift — each searched knob's value in each fold's winner, the all-period
@@ -49,7 +49,8 @@ def fold_view(fold: Mapping[str, Any]) -> dict[str, Any]:
     completed = fold["status"] == "completed"
     train = _metrics(fold.get("train_metrics"))
     test = _metrics(fold.get("test_metrics")) if completed else None
-    incumbent = _completed(_metrics(fold.get("incumbent_test_metrics")))
+    incumbent_run = _metrics(fold.get("incumbent_test_metrics"))
+    incumbent = _completed(incumbent_run)
     test_return = fold_return(test)
     incumbent_return = fold_return(incumbent)
     return {
@@ -69,6 +70,8 @@ def fold_view(fold: Mapping[str, Any]) -> dict[str, Any]:
         "return_difference": None if test_return is None or incumbent_return is None else test_return - incumbent_return,
         "test_trades": None if test is None else test.total_trades,
         "incumbent_trades": None if incumbent is None else incumbent.total_trades,
+        # A benchmark run that ran and failed says so; one never run has no record at all.
+        "incumbent_failure": None if incumbent_run is None or incumbent_run.status == "completed" else (incumbent_run.error or "no reason recorded"),
     }
 
 
@@ -118,6 +121,8 @@ def fold_charts(row: StudyRow) -> dict[str, Any]:
     forward = (stored[0]["test_start_ms"], stored[-1]["test_end_ms"]) if stored else None
     completed = [fold for fold in folds if fold["status"] == "completed"]
     in_progress = validation is not None and verdict is None
+    total = verdict["oos_trade_count"] if verdict is not None else sum(fold["test_trades"] for fold in completed) if in_progress else None
+    minimum = None if forward is None else _forward_minimum(protocol, row.receipt, forward)
     return {
         "planned": validation is None,
         "in_progress": in_progress,
@@ -126,7 +131,9 @@ def fold_charts(row: StudyRow) -> dict[str, Any]:
         "incumbent_linked": [] if validation is None else list(validation.get("incumbent_linked", [])),
         "retention_threshold": RETENTION_THRESHOLD if verdict is None else verdict["retention_threshold"],
         "median_retention": None if verdict is None else verdict["study_retention"],
-        "test_trades_total": verdict["oos_trade_count"] if verdict is not None else sum(fold["test_trades"] for fold in completed) if in_progress else None,
-        "forward_minimum": None if forward is None else _forward_minimum(protocol, row.receipt, forward),
+        "test_trades_total": total,
+        "forward_minimum": minimum,
+        # The verdict's trade-floor fact (its rule 4), judged only on a finished verdict's total.
+        "below_minimum": None if verdict is None or total is None or minimum is None else total < minimum,
         "drift": _drift(row, protocol, list(stored)),
     }

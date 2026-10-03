@@ -14228,6 +14228,11 @@ export interface components {
             /** Fold Index */
             fold_index: number;
             /**
+             * Incumbent Failure
+             * @description Why the incumbent's run on this test window failed; null when it completed or never ran.
+             */
+            incumbent_failure: string | null;
+            /**
              * Incumbent Return
              * @description The frozen incumbent's return on the same test window.
              */
@@ -15641,6 +15646,11 @@ export interface components {
         };
         /** GoldenSearchTestOverTimeCharts */
         GoldenSearchTestOverTimeCharts: {
+            /**
+             * Below Minimum
+             * @description The finished verdict's total is under the forward minimum; null while in progress or when either is missing.
+             */
+            below_minimum: boolean | null;
             /**
              * Drift
              * @description Each searched knob, in the plan's order.

@@ -132,6 +132,7 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     # The charts read the stored folds: each fold's retention is the verdict's, and the trades add up to its count.
     charts = await service.test_over_time_charts(row.id)
     assert not charts["planned"] and charts["test_trades_total"] == validation["verdict"]["oos_trade_count"]
+    assert charts["below_minimum"] is (charts["test_trades_total"] < charts["forward_minimum"])
     for fold, stored in zip(charts["folds"], validation["folds"], strict=True):
         train, test = stored["train_metrics"]["sharpe_ratio"], stored["test_metrics"]["sharpe_ratio"]
         assert fold["retention"] == (pytest.approx(test / train, abs=1e-9, rel=0) if train > 0 else None)

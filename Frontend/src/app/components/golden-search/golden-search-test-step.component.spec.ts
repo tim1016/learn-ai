@@ -6,13 +6,13 @@ import { GoldenSearchTestStepComponent } from './golden-search-test-step.compone
 import { GoldenSearchService } from './golden-search.service';
 import type { StudyDetail, TestOverTimeCharts } from './golden-search.types';
 import { fakeCharts } from './testing/fake-charts';
-import { plannedTestOverTimeCharts, studyDetail, testOverTimeCharts, validationView } from './testing/fixtures';
+import { emaCapability, plannedTestOverTimeCharts, studyDetail, testOverTimeCharts, validationView } from './testing/fixtures';
 
 async function renderStep(study: StudyDetail, charts: () => Promise<TestOverTimeCharts> = async () => testOverTimeCharts()) {
   const library = fakeCharts();
   const service = { testOverTimeCharts: vi.fn(charts) };
   const view = await render(GoldenSearchTestStepComponent, {
-    inputs: { study },
+    inputs: { study, capability: emaCapability() },
     providers: [{ provide: GoldenSearchService, useValue: service }, ...library.providers],
   });
   return { view, service, charts: library.charts };
@@ -34,7 +34,7 @@ describe('GoldenSearchTestStepComponent', () => {
     const timeline = await screen.findByRole('region', { name: 'Fold timeline' });
     expect(within(timeline).getByRole('img').getAttribute('aria-label')).toContain('2 folds, each a training window followed by a test window; 1 completed.');
     const folds = tableRows('Fold timeline');
-    expect(folds[1]).toMatch(/Fold 1.*Completed\s*1\.40\s*0\.90\s*64%\s*\+2\.1%\s*42/);
+    expect(folds[1]).toMatch(/Fold 1.*Completed.*Fast EMA length.*8.*1\.40\s*0\.90\s*64%\s*\+2\.1%\s*42/);
     expect(folds[2]).toContain("Failed: No setting met your rules in this fold's training window.");
 
     expect(tableRows('Linked test return')[2]).toMatch(/Fold 2.*fold missing\s*\+0\.3%/);
@@ -56,7 +56,7 @@ describe('GoldenSearchTestStepComponent', () => {
   });
 
   it('while testing over time runs, counts the trades so far without judging them, and holds back the linked return', async () => {
-    const running = async () => testOverTimeCharts({ in_progress: true, test_trades_total: 12, forward_minimum: 30, linked: [], incumbent_linked: [] });
+    const running = async () => testOverTimeCharts({ in_progress: true, test_trades_total: 12, forward_minimum: 30, below_minimum: null, linked: [], incumbent_linked: [] });
     await renderStep(studyDetail('awaiting_candidate'), running);
 
     const activity = (await screen.findByRole('region', { name: 'Test activity per fold' })).querySelector('[role=img]')?.getAttribute('aria-label') ?? '';

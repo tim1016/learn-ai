@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/angular';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/angular';
 import axe from 'axe-core';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -8,12 +8,14 @@ import type { PlanCharts } from './golden-search.types';
 import { fakeCharts } from './testing/fake-charts';
 import { emaCapability, planCharts, studyDetail } from './testing/fixtures';
 
-async function renderPlan(charts: () => Promise<PlanCharts> = async () => planCharts()) {
+async function renderPlan(charts: () => Promise<PlanCharts> = async () => planCharts(), study = studyDetail('locked')) {
   const library = fakeCharts();
-  return render(GoldenSearchPlanSummaryComponent, {
-    inputs: { study: studyDetail('locked'), capability: emaCapability() },
-    providers: [{ provide: GoldenSearchService, useValue: { planCharts: vi.fn(charts) } }, ...library.providers],
+  const service = { planCharts: vi.fn(charts) };
+  const view = await render(GoldenSearchPlanSummaryComponent, {
+    inputs: { study, capability: emaCapability() },
+    providers: [{ provide: GoldenSearchService, useValue: service }, ...library.providers],
   });
+  return { view, service };
 }
 
 function tableRows(name: string): string[] {
@@ -35,6 +37,18 @@ describe('GoldenSearchPlanSummaryComponent', () => {
     expect(tableRows('Data coverage')[1]).toMatch(/Jun 2024\s*19\s*18\s*0\s*0\s*1/);
   });
 
+  it('reads the charts again when a running stage uses more engine runs, not on every poll', async () => {
+    const study = studyDetail('search_running');
+    const { view, service } = await renderPlan(undefined, study);
+    await screen.findByRole('region', { name: 'Workload' });
+
+    view.fixture.componentRef.setInput('study', { ...study });
+    await view.fixture.whenStable();
+    expect(service.planCharts).toHaveBeenCalledTimes(1);
+    view.fixture.componentRef.setInput('study', { ...study, consumed_evaluations: study.consumed_evaluations + 5 });
+    await waitFor(() => expect(service.planCharts).toHaveBeenCalledTimes(2));
+  });
+
   it('a lake it cannot read says so instead of drawing empty months', async () => {
     await renderPlan(async () => planCharts({ coverage: { status: 'missing', reason: 'The data lake catalog could not be read, so coverage is not shown.' } }));
 
@@ -44,7 +58,7 @@ describe('GoldenSearchPlanSummaryComponent', () => {
   });
 
   it('passes axe with every chart drawn and every table open', async () => {
-    const view = await renderPlan();
+    const { view } = await renderPlan();
     await screen.findByRole('region', { name: 'Window map' });
     for (const toggle of screen.getAllByRole('button', { name: 'Show as table' })) fireEvent.click(toggle);
 

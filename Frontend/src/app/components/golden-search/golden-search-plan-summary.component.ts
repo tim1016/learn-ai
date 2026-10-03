@@ -33,7 +33,7 @@ import type { PlanCharts, StrategyCapability, StudyDetail } from './golden-searc
  * way to change it: Revise starts a new linked study from this plan. The
  * study itself never changes. Its charts (#2821) — the plan at a glance, its
  * windows, search space, workload, trade minimums and the lake's coverage —
- * come from their own read, read again when the study's revision moves.
+ * come from their own read, read again when the study's revision or its run count moves.
  */
 @Component({
   selector: 'app-golden-search-plan-summary',
@@ -60,7 +60,8 @@ export class GoldenSearchPlanSummaryComponent {
 
   private readonly service = inject(GoldenSearchService);
   private readonly studyId = computed(() => this.study().id);
-  private readonly revision = computed(() => this.study().revision);
+  /** What moves the charts: a new revision, or a running stage reserving runs (which leaves the revision alone). */
+  private readonly progress = computed(() => `${this.study().revision}:${this.study().consumed_evaluations}`);
   private readonly charts = resource({
     params: () => ({ studyId: this.studyId() }),
     loader: ({ params }) => this.service.planCharts(params.studyId),
@@ -117,13 +118,19 @@ export class GoldenSearchPlanSummaryComponent {
   protected readonly incumbent = computed(() => incumbentLabel(this.study().protocol.incumbent));
 
   constructor() {
-    // A new revision reloads the charts (the workload moves as stages reserve runs); a reload keeps what is drawn.
-    let seen: number | null = null;
+    // A reload keeps the drawn charts while it reads; a change of params would blank them.
+    // The first read starts with the progress at creation; a change during any read waits for it to settle, then reloads.
+    let seen: string | null = null;
     effect(() => {
-      const revision = this.revision();
-      if (this.charts.isLoading()) return;
-      if (seen !== null && revision !== seen) untracked(() => this.charts.reload());
-      seen = revision;
+      const progress = this.progress();
+      const loading = this.charts.isLoading();
+      if (seen === null) {
+        seen = progress;
+        return;
+      }
+      if (loading || progress === seen) return;
+      seen = progress;
+      untracked(() => this.charts.reload());
     });
   }
 

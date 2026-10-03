@@ -295,7 +295,7 @@ Which of the points scored meet the rules, and what stops the rest?
 
 #### What you're looking at
 
-Every point scored on the window, with its trades across and its net profit up. The colour names the rule a point fails: blue meets the rules, amber has too few trades, red falls too deep, light blue makes no profit, and grey failed or has no objective. The outlined dot is the winner. The dashed lines are the window's trade floor and $0.
+Every point scored on the window, with its trades across and its net profit up. The colour names the rule a point fails: blue meets the rules, amber has too few trades, red falls too deep, light blue makes no profit, and grey failed or has no objective or worst fall recorded. A failed run has no numbers, so it appears only in the table. The outlined dot is the winner. The dashed lines are the window's trade floor and, when the plan requires a profit, $0.
 
 The rules are the plan's frozen ones, with this window's trade floor. Hover a dot for its settings and numbers.
 
@@ -324,7 +324,7 @@ Does the result survive nearby settings of two knobs together?
 
 #### What you're looking at
 
-A grid of cells, one per pair of values: rows for one knob, columns for the other, every other setting held at the candidate's. Each cell prints the development net return and is coloured by it: green for a gain, red for a loss, with 0% in the middle. The outlined cell is the candidate itself. Grey cells were not tested: an invalid pair (—), a value outside the legal range (·), or a pair never run (?). When the plan audited more than one pair, buttons above the chart switch between them.
+A grid of cells, one per pair of values: rows for one knob, columns for the other, every other setting held at the candidate's. Each cell prints the development net return and is coloured by it: green for a gain, red for a loss, with 0% in the middle. The outlined cell is the candidate itself. Grey cells have no return: an invalid pair (—), a value outside the legal range (·), a pair never run (?), a run that failed (Failed), or one that recorded no return (no return). When the plan audited more than one pair, buttons above the chart switch between them.
 
 The landscape is a two-knob slice: it says nothing about combinations of the other knobs.
 
@@ -333,7 +333,7 @@ The landscape is a two-knob slice: it says nothing about combinations of the oth
 1. Each cell is one pair of values: rows for one knob, columns for the other, every other setting held at the candidate.
 2. Green cells made money and red cells lost it; each cell prints its net return.
 3. The outlined cell is the candidate itself. A plateau of similar cells around it is more robust than a lone peak.
-4. Grey cells were not tested: an invalid pair (—), outside the legal range (·), or never run (?).
+4. Grey cells have no return: an invalid pair (—), outside the legal range (·), never run (?), a failed run, or one that recorded none.
 
 #### Good signs and warning signs
 
