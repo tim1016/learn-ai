@@ -68,7 +68,13 @@ from app.research.golden_search.planning import (
     review_plan,
     study_id_for,
 )
-from app.research.golden_search.protocol import DEFAULT_IMPORTANCE, IMPORTANCE_HIGH, IMPORTANCE_LOW, GoldenSearchProtocol, IncumbentRef
+from app.research.golden_search.protocol import (
+    DEFAULT_IMPORTANCE,
+    IMPORTANCE_HIGH,
+    IMPORTANCE_LOW,
+    GoldenSearchProtocol,
+    IncumbentRef,
+)
 from app.research.golden_search.search_charts import procedure_windows, search_charts
 from app.research.golden_search.stages import ApprovalBinding, StageOutcome, execute_stage, stage_refusal, stage_total
 from app.research.golden_search.views import candidate_detail, study_detail, study_summary
