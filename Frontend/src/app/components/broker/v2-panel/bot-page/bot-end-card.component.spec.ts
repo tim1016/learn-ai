@@ -173,7 +173,7 @@ describe('BotEndCardComponent (#2607)', () => {
     const [year, month, day] = localWallClock(END_AT).date.split('-').map(Number);
     expect(market.textContent).toContain(etTime(new Date(year, month - 1, day, 12, 30).getTime()));
 
-    fireEvent.input(within(fields).getByLabelText('End date'), { target: { value: '' } });
+    fireEvent.change(within(fields).getByLabelText('End date'), { target: { value: '' } });
 
     expect(market.textContent).not.toContain('ET');
   });
@@ -216,7 +216,7 @@ describe('BotEndCardComponent (#2607)', () => {
   it('sends nothing it cannot read, and says what the date needs', async () => {
     const { save, fixture } = await renderCard(SCHEDULED);
     const fields = await openEditor(fixture);
-    fireEvent.input(within(fields).getByLabelText('End date'), { target: { value: '' } });
+    fireEvent.change(within(fields).getByLabelText('End date'), { target: { value: '' } });
 
     fireEvent.click(within(fields).getByRole('button', { name: 'Save end' }));
 

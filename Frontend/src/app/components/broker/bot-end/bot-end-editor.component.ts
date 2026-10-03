@@ -1,7 +1,8 @@
 import { ChangeDetectionStrategy, Component, ElementRef, computed, input, model, viewChild } from '@angular/core';
 import { FormField, disabled, form, validate, type FieldState } from '@angular/forms/signals';
 
-import { isCalendarDate, isClockMinute, localWallClockMs } from '../../../shared/date/local-wall-clock';
+import { DateFieldComponent } from '../../../shared/date-picker';
+import { isCalendarDate, isClockMinute, localWallClock, localWallClockMs } from '../../../shared/date/local-wall-clock';
 import { TimestampDisplayComponent } from '../../../shared/timestamp/timestamp-display.component';
 import type { BotEndFields } from './bot-end-fields';
 
@@ -23,7 +24,7 @@ let nextEditorId = 0;
 @Component({
   selector: 'app-bot-end-editor',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormField, TimestampDisplayComponent],
+  imports: [FormField, TimestampDisplayComponent, DateFieldComponent],
   templateUrl: './bot-end-editor.component.html',
   styleUrl: './bot-end-editor.component.scss',
 })
@@ -34,7 +35,14 @@ export class BotEndEditorComponent {
   readonly locked = input(false);
 
   private readonly id = nextEditorId++;
+  protected readonly dateId = `bot-end-editor-${this.id}-date`;
   protected readonly marketId = `bot-end-editor-${this.id}-market`;
+  /**
+   * The viewer's own today: the first day the calendar offers. An end that has
+   * passed is still shown and can be typed, because the backend says why it
+   * refuses one, in its own words.
+   */
+  protected readonly today = localWallClock(Date.now()).date;
   protected readonly errorId = `bot-end-editor-${this.id}-error`;
 
   protected readonly endForm = form(this.fields, (end) => {
@@ -65,17 +73,16 @@ export class BotEndEditorComponent {
   });
 
   protected readonly dateError = computed(() => shownError(this.endForm.date()));
+  /** The time's problem, in the sentence under the fields; the date's is said under the date. */
   protected readonly clockError = computed(() => shownError(this.endForm.clock()));
-  /** The one sentence under the fields: the date's problem, else the time's. */
-  protected readonly error = computed(() => this.dateError() ?? this.clockError());
 
-  private readonly dateInput = viewChild.required<ElementRef<HTMLInputElement>>('date');
+  private readonly dateField = viewChild.required(DateFieldComponent);
   private readonly noEndInput = viewChild.required<ElementRef<HTMLInputElement>>('noEnd');
 
   /** Moves the keyboard to the first field that takes it, e.g. when the editor opens. */
   focus(): void {
-    const date = this.dateInput().nativeElement;
-    (date.disabled ? this.noEndInput().nativeElement : date).focus();
+    if (this.endForm.date().disabled()) this.noEndInput().nativeElement.focus();
+    else this.dateField().focus();
   }
 
   /** Says what each field needs now, e.g. when the owner asks to save fields that name no minute. */

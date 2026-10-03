@@ -13,7 +13,16 @@ import { TradingCalendarService } from './trading-calendar.service';
   imports: [DateFieldComponent],
   template: `
     <label for="dev-start">Development from</label>
-    <app-date-field [(value)]="value" [bounds]="bounds()" [sessionsOnly]="sessionsOnly()" [hostProblem]="hostProblem()" inputId="dev-start" />
+    <app-date-field
+      [(value)]="value"
+      [bounds]="bounds()"
+      [sessionsOnly]="sessionsOnly()"
+      [hostProblem]="hostProblem()"
+      [pickFrom]="pickFrom()"
+      [disabled]="disabled()"
+      inputId="dev-start"
+      (touch)="touches.set(touches() + 1)"
+    />
   `,
 })
 class HostComponent {
@@ -21,6 +30,9 @@ class HostComponent {
   readonly bounds = signal<DateBounds>(UNBOUNDED);
   readonly sessionsOnly = signal(false);
   readonly hostProblem = signal<string | null>(null);
+  readonly pickFrom = signal<string | null>(null);
+  readonly disabled = signal(false);
+  readonly touches = signal(0);
 }
 
 /** A calendar that fails the test if anything reads it. */
@@ -133,6 +145,40 @@ describe('DateFieldComponent', () => {
 
     expect(host.value()).toBe('2022-11-15');
     expect(field.value).toBe('2022-11-15');
+  });
+
+  it('offers no day before the first day its host names, yet takes an earlier date that is typed', async () => {
+    const { view, host, retype } = await renderField();
+    host.pickFrom.set('2022-11-10');
+    await view.fixture.whenStable();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open the calendar' }));
+    const calendar = await screen.findByRole('dialog', { name: 'Calendar' });
+    const day = (dayOfMonth: number): boolean => calendar.querySelector(`span[data-date="2022-10-${dayOfMonth}"]`)?.classList.contains('p-disabled') ?? false;
+    expect([day(9), day(10)]).toEqual([true, false]);
+
+    // The host's server judges a date that has passed, in its own words.
+    await retype('2022-11-02');
+    expect(host.value()).toBe('2022-11-02');
+  });
+
+  it('checks nothing and hands nothing back while disabled, and says when it has been left', async () => {
+    const { view, host, field } = await renderField();
+    host.bounds.set({ ...UNBOUNDED, min: '2026-10-03', minReason: 'Too early.' });
+    host.disabled.set(true);
+    await view.fixture.whenStable();
+
+    expect(field.disabled).toBe(true);
+    expect(host.value()).toBe('2022-11-01');
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    host.disabled.set(false);
+    await view.fixture.whenStable();
+    field.focus();
+    await userEvent.tab();
+
+    expect(host.touches()).toBe(1);
+    expect(host.value()).toBe('');
   });
 
   it('has no accessibility violations', async () => {

@@ -13,9 +13,11 @@
     [value]="text()"
     [attr.aria-invalid]="problem() !== null"
     [attr.aria-describedby]="problem() === null ? null : noteId"
+    [disabled]="disabled()"
     (change)="text.set(field.value.trim())"
+    (blur)="touch.emit()"
   />
-  <button type="button" class="date-control__open" aria-label="Open the calendar" aria-haspopup="dialog" (click)="popover.toggle($event, anchor)">
+  <button type="button" class="date-control__open" aria-label="Open the calendar" aria-haspopup="dialog" [disabled]="disabled()" (click)="popover.toggle($event, anchor)">
     <i class="pi pi-calendar" aria-hidden="true"></i>
   </button>
 </span>
@@ -23,5 +25,5 @@
   <p class="date-control__note date-control__note--problem" [id]="noteId" role="alert">{{ message }}</p>
 }
 <p-popover #popover ariaLabel="Calendar">
-  <app-date-calendar [from]="checked().date" [bounds]="bounds()" [sessions]="sessions()" (picked)="text.set($event.from); popover.hide()" />
+  <app-date-calendar [from]="entry().date" [bounds]="calendarBounds()" [sessions]="sessions()" (picked)="text.set($event.from); popover.hide()" />
 </p-popover>

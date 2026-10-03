@@ -26,6 +26,16 @@
   input { @include filled-field; }
 }
 
+// The date: its label above the shared date field, which draws its own input.
+.bot-end-editor__field {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  align-content: start;
+
+  > label { @include field-label; }
+}
+
 // Under the time field, in its column: the minute it names in market time.
 .bot-end-editor__market {
   grid-column: 2;
