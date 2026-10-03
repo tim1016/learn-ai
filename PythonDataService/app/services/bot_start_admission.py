@@ -16,6 +16,7 @@ from app.broker.alpaca.clerk.active_runtime import terminal_startup_recovery
 from app.broker.alpaca.clerk.models import ClerkCustodySnapshot, ReconciliationCut, RecoveryEvaluationObservation
 from app.broker.alpaca.clerk.program_leg import ProgramLegPolicy
 from app.broker.alpaca.clerk.sqlite.custody_subjects import bot_subject_id
+from app.broker.alpaca.clerk.sqlite.recovery_policy import SWEEP_LIVENESS_BOUND_MS
 from app.broker.contract.capabilities import ExtendedHoursWindow
 from app.marketdata.feed import MarketDataFeed
 from app.research.golden_search.qualifications import Coverage
@@ -75,10 +76,10 @@ RecoveryEvaluationProbe = Callable[[], RecoveryEvaluationObservation | None]
 #: still unresolved is a real outstanding intent, not evaluation latency.
 RECOVERY_EVALUATION_WINDOW_MS = 120_000
 
-#: The wait-state must not outlive the sweep that produced it (#1808): a
-#: sweep pass publishes roughly every 15 s, so a last completed pass older
-#: than this proves the sweep is no longer evaluating anything.
-RECOVERY_SWEEP_LIVENESS_BOUND_MS = 60_000
+#: The wait-state must not outlive the sweep that produced it (#1808): a last
+#: completed pass older than the sweep's liveness bound proves the sweep is no
+#: longer evaluating anything.
+RECOVERY_SWEEP_LIVENESS_BOUND_MS = SWEEP_LIVENESS_BOUND_MS
 
 type AdmissionCustodyCut = tuple[ClerkCustodySnapshot, ProgramLegPolicy, ExitTerms | None]
 CustodyGuard = Callable[[BrokerBotBinding], AbstractAsyncContextManager[AdmissionCustodyCut]]

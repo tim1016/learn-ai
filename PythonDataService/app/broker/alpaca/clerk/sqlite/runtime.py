@@ -141,7 +141,7 @@ from app.broker.alpaca.clerk.sqlite.reconcile import (
 from app.broker.alpaca.clerk.sqlite.reconcile import (
     reconcile_account as reconcile_sqlite_account,
 )
-from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
+from app.broker.alpaca.clerk.sqlite.recovery_policy import SWEEP_LIVENESS_BOUND_MS, RecoveryPolicyContext
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.residue_discharge import (
     ResidueDischargeReceipt,
@@ -1614,12 +1614,18 @@ class SqliteAlpacaClerkFacade:
         own cut): then its verdict proves the bot's custody as a fresh pass
         would. A stop at a bot's end reads this instead of reconciling, so
         every bot ending on one pass is proven by that pass alone.
+
+        A pass older than the sweep's liveness bound is ``None`` too (#2826):
+        the account can change at Alpaca with no transition of the bot's (a
+        manual sale, a liquidation), and only the next pass would see it. A
+        sweep that has stopped publishing must not go on vouching.
         """
         async with self._intake:
             published = self._last_published
             if (
                 published is None
                 or published.cut is None
+                or self._repo.clock() - published.observed_at_ms > SWEEP_LIVENESS_BOUND_MS
                 or not self.reconciliation_covers(published.cut, strategy_instance_id)
             ):
                 return None
@@ -1649,6 +1655,19 @@ class SqliteAlpacaClerkFacade:
         return await self._custody_from_result(
             strategy_instance_id, *self._published()
         )
+
+    def last_clean_pass_at_ms(self) -> int | None:
+        """When the latest published pass found the account clean against Alpaca.
+
+        ``None`` before this process has published a pass, or when the latest
+        one was not clean. The 15 s sweep writes no durable receipt, so a
+        status line that asks "when was this account last checked?" reads
+        this beside the durable rows (#2826).
+        """
+        published = self._last_published
+        if published is None or published.result.verdict != "clean":
+            return None
+        return published.observed_at_ms
 
     def _published(self) -> tuple[AccountReconciliationResult, int]:
         """The last published verdict and its own observation time.
