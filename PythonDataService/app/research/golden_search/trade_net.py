@@ -31,6 +31,11 @@ _FLOAT_SLACK = 1e-9
 NOT_EVALUATED = "Not evaluated: the study's budget ran out before this candidate's development run."
 
 
+def to_cent(value: float) -> float:
+    """``value`` rounded to the cent; adding 0.0 turns a rounded -0.0 into 0.0, which reads "$0.00" and is neither a win nor a loss."""
+    return round(value, 2) + 0.0
+
+
 def trade_nets(trades: Sequence[Mapping[str, Any]], commission_per_order: float) -> list[float]:
     """Each trade's net profit: its P&L before fees less its entry and exit commission."""
     return [float(trade["pnl"]) - 2.0 * commission_per_order for trade in trades]

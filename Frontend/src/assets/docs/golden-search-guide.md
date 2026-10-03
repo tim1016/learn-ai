@@ -363,7 +363,7 @@ When did the selected candidate make its development profit, trade by trade?
 
 #### What you're looking at
 
-Two parts share one time axis, in Eastern dates. The upper line is the running net profit: after each trade exits, the net profit of that trade and every trade before it. It steps at each exit and stays level until the next. A dashed line marks $0. Beneath it, each trade is a thin bar at its exit time, as tall as its own net profit: green for a gain, red for a loss.
+Two parts share one time axis, dated in your local time. The upper line is the running net profit: after each trade exits, the net profit of that trade and every trade before it. It steps at each exit and stays level until the next. A dashed line marks $0. Beneath it, each trade is a thin bar at its exit time, as tall as its own net profit: green for a gain, red for a loss.
 
 $$\text{running net profit after trade } k = \sum_{i \le k} \text{net profit of trade } i$$
 

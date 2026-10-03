@@ -71,7 +71,7 @@
             @if (histogram(); as spec) {
               <app-golden-search-chart [spec]="spec" [height]="220" />
             }
-            <p caption class="caption">Bins by the Freedman–Diaconis rule, with $0 as an edge.</p>
+            <p caption class="caption">Equal-width bins with $0 as an edge; hover a bar for the rule that set the width.</p>
           </app-golden-search-panel>
           <app-golden-search-panel chart="hold-time" data-span="4">
             @if (holdTime(); as spec) {

@@ -102,10 +102,10 @@ function calendarOption(candidate: CandidateRef, months: readonly MonthlyResult[
           color: theme.text,
           fontSize: 10,
           formatter: (params: { dataIndex: number }) => {
-          const month = months[params.dataIndex];
-          return month === undefined ? '' : CELL_USD.format(month.net_profit);
+            const month = months[params.dataIndex];
+            return month === undefined ? '' : CELL_USD.format(month.net_profit);
+          },
         },
-      },
         itemStyle: { borderColor: theme.gridLine, borderWidth: 1 },
         emphasis: { itemStyle: { borderColor: theme.text, borderWidth: 2 } },
       },

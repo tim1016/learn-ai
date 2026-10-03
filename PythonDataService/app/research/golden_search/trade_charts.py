@@ -57,7 +57,7 @@ from app.engine.strategy.strategy_view import ChartParamRef
 from app.lean_sidecar.trading_calendar import SessionWindow, session_windows_ms_utc
 from app.research.golden_search.evaluator import EXIT_AT_WINDOW_END
 from app.research.golden_search.selection import Metrics
-from app.research.golden_search.trade_net import reconciled_run
+from app.research.golden_search.trade_net import reconciled_run, to_cent
 from app.utils.session_anchors import et_date_at_ms
 from app.utils.timestamps import ny_datetime
 
@@ -152,11 +152,6 @@ def bars_held(entry_ms: int, exit_ms: int, closes: Sequence[int]) -> int:
 # ── Histogram ────────────────────────────────────────────────────────────
 
 
-def _cents(value: float) -> float:
-    # Adding 0.0 turns a rounded -0.0 into 0.0, which is neither a win nor a loss.
-    return round(value, 2) + 0.0
-
-
 def _bin(low: float, high: float, nets: Sequence[float]) -> dict[str, Any]:
     return {
         "low": low,
@@ -185,7 +180,7 @@ def bin_width(nets: Sequence[float]) -> tuple[float, BinRule]:
 
 def histogram(nets: Sequence[float]) -> dict[str, Any]:
     """The trades' net profits, to the cent, in bins with $0 as an edge, each with its trades, wins and losses."""
-    cents = [_cents(net) for net in nets]
+    cents = [to_cent(net) for net in nets]
     width, rule = bin_width(cents)
     if width == 0:
         return {"bin_width": 0.0, "rule": rule, "bins": [_bin(cents[0], cents[0], cents)]}

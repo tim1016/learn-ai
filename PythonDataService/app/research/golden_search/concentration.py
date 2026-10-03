@@ -33,7 +33,7 @@ from typing import Any
 
 from app.research.golden_search.evidence import monthly_results
 from app.research.golden_search.selection import Metrics
-from app.research.golden_search.trade_net import ReconciledRun, reconciled_run
+from app.research.golden_search.trade_net import ReconciledRun, reconciled_run, to_cent
 
 NOT_MEASURED = "Not measured for this study: its evidence was recorded before concentration was measured."
 NO_PROFIT_TO_SHARE = "It did not make money over the development period, so there is no profit to take a share of."
@@ -42,11 +42,6 @@ NO_PROFIT_TO_SHARE = "It did not make money over the development period, so ther
 def best_count(trades: int) -> int:
     """How many trades make the best 5% of ``trades``: one in twenty, rounded up."""
     return -(-trades // 20)
-
-
-def _cents(value: float) -> float:
-    # Adding 0.0 turns a rounded -0.0 into 0.0, which reads "$0.00".
-    return round(value, 2) + 0.0
 
 
 def _ranked(run: ReconciledRun) -> list[tuple[float, Mapping[str, Any]]]:
@@ -71,8 +66,8 @@ def concentration(metrics: Metrics | None, detail: Mapping[str, Any] | None, *, 
     ranked = _ranked(run)
     removed = ranked[: best_count(len(ranked))]
     removed_net = math.fsum(net for net, _ in removed)
-    without_month = _cents(run.net_profit - best_month.net_profit)
-    without_trades = _cents(run.net_profit - removed_net)
+    without_month = to_cent(run.net_profit - best_month.net_profit)
+    without_trades = to_cent(run.net_profit - removed_net)
     return {
         "status": "concern" if without_month <= 0 or without_trades <= 0 else "meets",
         "net_profit": run.net_profit,
