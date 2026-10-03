@@ -19,6 +19,7 @@ from fastapi import FastAPI
 
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.facts import OrderOutcomeAttestedFacts
+from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
 from app.broker.alpaca.clerk.sqlite.recovery_policy import build_recovery_catalog
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
@@ -28,6 +29,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     ActionNotAvailableError,
     IdempotencyStore,
 )
+from app.services.broker_v2_panel.sqlite_panel_adapter import _catalog_row_action, _recovery_cure
 from app.services.broker_v2_panel.sqlite_panel_source import execute_sqlite_panel_action
 from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 from tests.broker.alpaca.clerk.sqlite import test_unknown_order_attestation as settling
@@ -139,6 +141,32 @@ async def test_a_settle_posted_without_saying_what_alpaca_shows_is_refused_and_w
     assert repo.custody_transitions() == ledger
     assert alpaca.reads == []
     assert len(alpaca.sent) == 1
+
+
+def test_no_row_and_no_page_names_settling_as_the_bots_cure_while_no_page_can_run_it(
+    lost_closing_order,
+) -> None:
+    """A roster row's command and a bot page's primary command are the bot's cure.
+
+    No page can collect an attestation yet, so the cure of a bot whose
+    closing order is unknown is still the one a row and a page can run:
+    Reconcile now. Settling is offered by the Clerk's catalog all the same.
+    """
+    repo, _alpaca, _facade = lost_closing_order
+    reader = SqliteClerkProjectionReader.from_repository(repo, clock=repo.clock)
+    try:
+        projection = reader.bot_snapshot(settling.SID)
+    finally:
+        reader.close()
+    assert projection is not None
+
+    row_action = _catalog_row_action(projection, row_needs_attention=True)
+    cure = _recovery_cure(projection, bot_owns_problem=True)
+
+    assert row_action is not None and row_action.action_id == "reconcile_now"
+    assert cure is not None and cure.action_id == "reconcile_now"
+    settle = next(action for action in projection.recovery_actions if action.action_id == SETTLE)
+    assert (settle.available, settle.primary) == (True, False)
 
 
 async def test_the_quiesce_route_carries_the_attestation_and_acts_as_the_configured_operator(

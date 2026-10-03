@@ -1277,7 +1277,8 @@ async def test_the_check_route_answers_what_the_clerk_reads_for_an_attestation_a
         )
         plain = await client.post(check_route, json=token)
 
-    assert action["available"] is True and action["primary"] is True
+    assert action["available"] is True
+    assert action["primary"] is False, "no page can run it yet, so nothing points an operator at it"
     assert action["settlement"]["ticket"].startswith("The Clerk sent an order to sell 10 SPY on ")
     assert [choice["attestation"] for choice in action["settlement"]["choices"]] == ["absent", "exists"]
     assert absent.status_code == not_there.status_code == plain.status_code == 200, absent.text
