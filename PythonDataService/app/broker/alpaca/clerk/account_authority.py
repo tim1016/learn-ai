@@ -116,12 +116,14 @@ def require_shadow_account_id(account_id: str) -> str:
 def authority_kind_for_account(
     account_id: str,
     *,
-    account_mode: Literal["paper", "live"] = "paper",
+    account_mode: Literal["paper", "live"],
 ) -> AccountAuthorityKind:
     """Derive the closed read-contract kind from a namespace and a learned mode.
 
     ``account_mode`` is what the caller positively learned from the broker for
-    a real account; it is never guessed from the id's shape.
+    a real account; it is never guessed from the id's shape and has no
+    default, so a live account cannot be labelled ``real_paper`` by omission
+    (#2823).
     """
     if is_synthetic_account_id(account_id):
         return "synthetic"

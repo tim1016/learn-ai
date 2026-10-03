@@ -12,6 +12,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.account_money import holdings_text
@@ -93,11 +94,16 @@ def adapt_sqlite_panel(
     panel: BotPanelView,
     projection: ClerkProjection,
     *,
+    account_mode: Literal["paper", "live"],
     economics: EconomicSnapshot | None = None,
     repository: ClerkSqliteRepository | None = None,
     flatten_verdict: SessionAuthorityState | LegRefusal | None = None,
 ) -> BotPanelView:
     """Replace JSONL-derived custody fields with one SQLite fold snapshot.
+
+    ``account_mode`` is the mode the projection's authority learned from the
+    broker (the facade's ``account_mode``); it labels each fill ``real_paper``
+    or ``real_live`` and has no default (#2823).
 
     Active callers supply ``economics`` at the identical SQLite revision as
     ``projection``.  The optional form remains only for narrow historical
@@ -175,6 +181,7 @@ def adapt_sqlite_panel(
                     recent_fill_view(
                         fill,
                         authority_account_id=projection.account_id,
+                        account_mode=account_mode,
                         repository=repository,
                     )
                     for fill in economics.recent_fills
@@ -939,6 +946,7 @@ def recent_fill_view(
     fill: FillRecord,
     *,
     authority_account_id: str,
+    account_mode: Literal["paper", "live"],
     repository: ClerkSqliteRepository | None = None,
 ) -> RecentFillView:
     """Adapt one S2 fill record to the existing panel wire contract.
@@ -953,7 +961,7 @@ def recent_fill_view(
     flatten (#2007), or a limit the Clerk priced itself (#2229, #2440) — also
     carries its realized slippage from the quote the limit was priced against.
     """
-    kind = authority_kind_for_account(authority_account_id)
+    kind = authority_kind_for_account(authority_account_id, account_mode=account_mode)
     reference_price = (
         None
         if repository is None

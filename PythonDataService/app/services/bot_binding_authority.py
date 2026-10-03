@@ -20,8 +20,8 @@ from typing import Any
 
 from app.broker.alpaca.clerk.account_authority import (
     AccountAuthorityKind,
-    authority_kind_for_account,
     evidence_account_id_for,
+    is_shadow_account_id,
     synthetic_account_id_for_strategy,
 )
 from app.broker.alpaca.clerk.active_authority import (
@@ -652,7 +652,7 @@ class BindingAuthoritySelector:
         """
         if foreign_account_id is None:
             return self.for_binding(binding)
-        if authority_kind_for_account(foreign_account_id) != "shadow":
+        if not is_shadow_account_id(foreign_account_id):
             return None
         return SealedShadowBindingAuthority(
             binding=binding,

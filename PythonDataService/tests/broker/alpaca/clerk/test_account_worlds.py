@@ -73,13 +73,17 @@ def test_shadow_requires_the_shadow_namespace_and_names_one_account() -> None:
 
 
 def test_authority_kind_takes_mode_as_input_never_from_shape() -> None:
-    assert authority_kind_for_account("sim:ema-1") == "synthetic"
-    assert authority_kind_for_account("shadow:9LIVE0001") == "shadow"
-    assert authority_kind_for_account("PA0SANITIZED00001") == "real_paper"
-    # A live-shaped id under the default (paper) mode is still real_paper: the
-    # shape never grants live. Only the caller's positive mode does.
-    assert authority_kind_for_account("9LIVE0001") == "real_paper"
+    assert authority_kind_for_account("sim:ema-1", account_mode="paper") == "synthetic"
+    assert authority_kind_for_account("shadow:9LIVE0001", account_mode="live") == "shadow"
+    assert authority_kind_for_account("PA0SANITIZED00001", account_mode="paper") == "real_paper"
+    # A live-shaped id under paper mode is still real_paper: the shape never
+    # grants live. Only the caller's positive mode does.
+    assert authority_kind_for_account("9LIVE0001", account_mode="paper") == "real_paper"
     assert authority_kind_for_account("9LIVE0001", account_mode="live") == "real_live"
+    # The mode has no default (#2823): a caller that omits it cannot label a
+    # live account paper.
+    with pytest.raises(TypeError, match="account_mode"):
+        authority_kind_for_account("9LIVE0001")
 
 
 def test_shadow_account_id_derives_from_the_live_account() -> None:

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from decimal import Decimal
+from typing import Literal
 
 from app.broker.alpaca.clerk.account_authority import authority_kind_for_account
 from app.broker.alpaca.clerk.fills import project_instance_fills
@@ -676,6 +677,7 @@ def build_panel(
     program_build: ProgramBuildAdmissionFact,
     dry_run_activity: list[DryRunActivity] | None = None,
     authority_account_id: str | None = None,
+    account_mode: Literal["paper", "live"],
     market_pulse: MarketPulseView,
     bot_status: BotHistoryStatus,
     feed_continuity_events: Sequence[RetainedContinuityEvent] | None = (),
@@ -702,6 +704,11 @@ def build_panel(
     ``tests/broker/v2panel/test_panel_projection.py``) omit it, and it falls
     back to the Dry Run synthetic authority implied by ``status.mode`` /
     ``status.strategy_instance_id``, or to ``account_id`` otherwise.
+
+    ``account_mode`` is the mode that authority learned from the broker (the
+    facade's ``account_mode``). It decides ``real_paper`` against
+    ``real_live`` on every decision and fill row, and is required: a default
+    would label a live account's rows paper (#2823).
 
     ``bot_status`` is where the bot is now by its custody's own facts
     (``catalog_projection_service.custody_bot_status``); the projection only
@@ -774,7 +781,9 @@ def build_panel(
         decision_receipts,
         activity,
         authority_account_id=resolved_authority_account_id,
-        authority_kind=authority_kind_for_account(resolved_authority_account_id),
+        authority_kind=authority_kind_for_account(
+            resolved_authority_account_id, account_mode=account_mode
+        ),
         render_explanation=render_explanation,
     )
 

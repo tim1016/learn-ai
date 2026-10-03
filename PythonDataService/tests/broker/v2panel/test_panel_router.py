@@ -1754,6 +1754,22 @@ async def test_panel_decision_rows_explain_themselves(api) -> None:
     assert older["explanation"] is None
 
 
+async def test_a_live_accounts_panel_labels_its_decisions_real_live(
+    api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#2823: the served panel takes the world from the Clerk's learned mode, never a paper default."""
+    app, repo = api
+    _append_no_action(repo, _T0, explanation=None)
+    monkeypatch.setattr(get_active_clerk_runtime().clerk, "_account_mode", "live")
+
+    async with _client(app) as client:
+        response = await client.get(f"/api/brokers/alpaca/accounts/{ACCT}/bots/{SID}/panel")
+
+    assert response.status_code == 200, response.text
+    decisions = response.json()["recent_decisions"]
+    assert [(row["authority_account_id"], row["authority_kind"]) for row in decisions] == [(ACCT, "real_live")]
+
+
 async def test_saved_settings_that_no_longer_validate_never_take_the_panel_down(
     api, monkeypatch: pytest.MonkeyPatch
 ) -> None:
