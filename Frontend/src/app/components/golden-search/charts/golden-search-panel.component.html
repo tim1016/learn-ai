@@ -1,7 +1,7 @@
 @let g = guide();
 <div class="head">
   <div class="titles">
-    <h3 #heading [id]="headingId()" tabindex="-1">{{ g.title }}</h3>
+    <h3 #heading [id]="headingId()" tabindex="-1">{{ title() }}</h3>
     <p class="question">{{ g.question }}</p>
   </div>
   <ng-content select="[legend]" />
@@ -13,5 +13,5 @@
   <button #walk type="button" class="link" [attr.aria-expanded]="walking()" (click)="toggleWalk()"><i class="pi pi-directions" aria-hidden="true"></i> Walk me through it</button>
 </div>
 @if (walking()) {
-  <app-golden-search-walkthrough [steps]="g.steps" [label]="'Walkthrough of ' + g.title" (stepChange)="showStep($event)" (closed)="endWalk()" />
+  <app-golden-search-walkthrough [steps]="g.steps" [label]="'Walkthrough of ' + title()" (stepChange)="showStep($event)" (closed)="endWalk()" />
 }

@@ -16,6 +16,165 @@ A few rules hold for every chart:
 - **Every number comes from the study.** The charts draw values the research recorded; the page computes none of its own.
 - **Show as table.** Every chart can show its values as a table, for reading without a mouse or with a screen reader.
 
+## Search
+
+Search fits the settings. The all-period search runs on the whole development period from the frozen starting point; when the plan asks for it, the recent fit runs the same way on only the last few months. Every number here is in-sample: these runs chose the settings, so they show how the choice was made, not how well it will hold.
+
+### Search path {#search-path}
+
+#### The question it answers
+
+How did the search reach its winner, point by point?
+
+#### What you're looking at
+
+Zoom improves the settings one knob at a time. Each dot is a point it scored, left to right in the order it tried them; the first is the starting point. Up is the plan's objective (Sharpe, unless the plan chose another). Blue dots meet the rules; grey dots fail one and can never win.
+
+The line is the best objective so far among the points that meet the rules:
+
+$$\text{best so far after point } k = \max \{ \text{objective of point } i : i \le k, \ i \text{ meets the rules} \}$$
+
+The chart rebuilds the path from the procedure's own record. If the rebuilt path does not end at the recorded winner, the panel says so and draws nothing. Grid scores every combination at once, so a Grid study has no path.
+
+Hover a dot for its step (pass, knob and round), the value tried, its full settings, and its Sharpe, return, profit, trades and worst fall.
+
+#### How to read it
+
+1. Each dot is a point the search scored, in the order it tried them; the first is the starting point.
+2. Grey dots fail a rule: too few trades, too deep a fall or no profit. They can never win.
+3. The line is the best result so far that meets the rules. It only rises when a knob moves to a better value.
+4. A line that flattens early means later rounds found nothing better along the moves they tried — not that nothing better exists.
+
+#### Good signs and warning signs
+
+- Good: the line climbs in a few steps and many nearby dots score close to it.
+- Warning: the line jumps once to a value no other dot comes near. One lucky point carried the choice.
+- Warning: most dots grey. The rules rejected most of what was tried.
+
+#### An everyday comparison
+
+Tuning a radio one knob at a time: turn the frequency until the signal peaks, then the volume. You find a good setting, but not necessarily the best one a different order would have found.
+
+### Knob moves {#knob-moves}
+
+#### The question it answers
+
+Where did each searched knob start, and where did it end within its range?
+
+#### What you're looking at
+
+A row for each searched knob, its searched range drawn from its low end to its high end. The hollow dot is the starting value; the filled dot is the value the search kept, labelled with its value. A kept value at either end of its range is amber: the best value may lie outside what was searched.
+
+$$\text{position} = \frac{\text{value} - \text{low}}{\text{high} - \text{low}}$$
+
+Hover a row for the range and both values.
+
+#### How to read it
+
+1. Each row is a searched knob, its range drawn from low to high.
+2. The hollow dot is where the knob started.
+3. The filled dot is the value the search kept, labelled with that value.
+4. An amber dot sits at an end of its range: a better value may lie outside what was searched.
+
+#### Good signs and warning signs
+
+- Good: kept values well inside their ranges.
+- Warning: a kept value at an edge. Widen the range in a new plan before trusting it.
+- Warning: every knob far from where it started. The result depends on a big change from settings you know.
+
+#### An everyday comparison
+
+Adjusting a car seat: if you end up with the seat pushed all the way back, the rail is too short, and a longer one might fit better still.
+
+### One-knob profiles {#knob-profiles}
+
+#### The question it answers
+
+How did the result change as each knob moved on its own?
+
+#### What you're looking at
+
+A small chart for each searched knob: its objective at every value tried, every other knob held. The blue dot is the value kept; hollow dots fail a rule.
+
+For Zoom, each profile is the knob's last pass, and the other knobs are held at the values they had when this knob was searched — not at the final winner, since later knobs may have moved after. For Grid, each profile is a slice of the grid through the winner: every scored point that matches the winner on every other knob.
+
+Hover a dot for its numbers and the values the other knobs were held at.
+
+#### How to read it
+
+1. Each small chart is one knob: its result at every value tried, every other knob held.
+2. The blue dot is the value kept. Hollow dots fail a rule.
+3. A smooth rise and fall around the kept value is reassuring; a lone spike next to poor neighbours is not.
+4. Hover a dot to see what the other knobs were held at: for Zoom, their values when this knob was searched, not the final winner.
+
+#### Good signs and warning signs
+
+- Good: a broad hill with the kept value near its top.
+- Warning: a narrow spike. A small change from the kept value gives a much worse result.
+- Warning: a flat line. The knob barely matters, and the kept value is close to arbitrary.
+
+#### An everyday comparison
+
+Seasoning a soup one spice at a time while the rest stay fixed. If the taste swings wildly with a pinch more or less, the recipe is fragile.
+
+### Eligibility map {#eligibility-map}
+
+#### The question it answers
+
+Which of the points scored meet the rules, and what stops the rest?
+
+#### What you're looking at
+
+Every point scored on the window, with its trades across and its net profit up. The colour names the rule a point fails: blue meets the rules, amber has too few trades, red falls too deep, light blue makes no profit, and grey failed or has no objective. The outlined dot is the winner. The dashed lines are the window's trade floor and $0.
+
+The rules are the plan's frozen ones, with this window's trade floor. Hover a dot for its settings and numbers.
+
+#### How to read it
+
+1. Each dot is a point scored on this window: across, its trades; up, its net profit.
+2. Blue dots meet the rules. The outlined one is the winner.
+3. The other colours name the rule a point fails: too few trades, too deep a fall, no profit, or a run that failed.
+4. The dashed lines are the trade floor and $0. Many points just past them mean the rules shaped the choice.
+
+#### Good signs and warning signs
+
+- Good: plenty of blue dots, the winner among many similar ones.
+- Warning: the winner alone in its corner. Few settings behave like it.
+- Warning: a crowd of dots just below the trade floor. The floor, not the strategy, decided much of the search.
+
+#### An everyday comparison
+
+Job applicants plotted by experience and test score, with the hiring bar drawn in. A hire surrounded by many strong applicants is a safer choice than one standing far apart.
+
+### Pair landscape {#pair-landscape}
+
+#### The question it answers
+
+Does the result survive nearby settings of two knobs together?
+
+#### What you're looking at
+
+A grid of cells, one per pair of values: rows for one knob, columns for the other, every other setting held at the candidate's. Each cell prints the development net return and is coloured by it: green for a gain, red for a loss, with 0% in the middle. The outlined cell is the candidate itself. Grey cells were not tested: an invalid pair (—), a value outside the legal range (·), or a pair never run (?). When the plan audited more than one pair, buttons above the chart switch between them.
+
+The landscape is a two-knob slice: it says nothing about combinations of the other knobs.
+
+#### How to read it
+
+1. Each cell is one pair of values: rows for one knob, columns for the other, every other setting held at the candidate.
+2. Green cells made money and red cells lost it; each cell prints its net return.
+3. The outlined cell is the candidate itself. A plateau of similar cells around it is more robust than a lone peak.
+4. Grey cells were not tested: an invalid pair (—), outside the legal range (·), or never run (?).
+
+#### Good signs and warning signs
+
+- Good: the candidate sits inside a broad green area.
+- Warning: the candidate is a green island surrounded by red.
+- Warning: a sharp diagonal edge. The two knobs only work together in a narrow combination.
+
+#### An everyday comparison
+
+A topographic map around a campsite. A campsite on a wide plateau is safe if you wander a little; one on a narrow ridge is not.
+
 ## Test over time
 
 Test over time checks the search procedure itself. It cuts the development period into folds. Each fold searches again, from the same starting point and the same ranges, on its own training window only, then tests the winner it chose on the months right after. The current settings run on every test window too, as a benchmark. Every test result here is out-of-sample for the winner that produced it, and none of it judges a single candidate: it judges the way candidates are chosen.

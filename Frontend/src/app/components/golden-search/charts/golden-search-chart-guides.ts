@@ -21,7 +21,12 @@ export type GoldenSearchChartId =
   | 'train-test-sharpe'
   | 'parameter-drift'
   | 'fold-returns'
-  | 'fold-activity';
+  | 'fold-activity'
+  | 'search-path'
+  | 'knob-moves'
+  | 'knob-profiles'
+  | 'eligibility-map'
+  | 'pair-landscape';
 
 export interface WalkthroughStep {
   /** The step as the guide's "How to read it" list words it (the contract spec holds the step counts together). */
@@ -247,6 +252,56 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'The bar on the right is all completed folds together.', target: { kind: 'series', group: 'total' } },
       { text: 'The dashed line is the forward minimum: the trades all forward tests must reach together. It applies to the total, not to each fold.', target: null },
       { text: 'A total below the line turns red: too few test trades to judge the procedure.', target: null },
+    ],
+  },
+  'search-path': {
+    title: 'Search path',
+    question: 'How did the search reach its winner, point by point?',
+    steps: [
+      { text: 'Each dot is a point the search scored, in the order it tried them; the first is the starting point.', target: { kind: 'series', group: 'eligible' } },
+      { text: 'Grey dots fail a rule: too few trades, too deep a fall or no profit. They can never win.', target: { kind: 'series', group: 'ineligible' } },
+      { text: 'The line is the best result so far that meets the rules. It only rises when a knob moves to a better value.', target: { kind: 'series', group: 'best' } },
+      { text: 'A line that flattens early means later rounds found nothing better along the moves they tried — not that nothing better exists.', target: null },
+    ],
+  },
+  'knob-moves': {
+    title: 'Knob moves',
+    question: 'Where did each searched knob start, and where did it end within its range?',
+    steps: [
+      { text: 'Each row is a searched knob, its range drawn from low to high.', target: null },
+      { text: 'The hollow dot is where the knob started.', target: { kind: 'series', group: 'start' } },
+      { text: 'The filled dot is the value the search kept, labelled with that value.', target: { kind: 'series', group: 'retained' } },
+      { text: 'An amber dot sits at an end of its range: a better value may lie outside what was searched.', target: null },
+    ],
+  },
+  'knob-profiles': {
+    title: 'One-knob profiles',
+    question: 'How did the result change as each knob moved on its own?',
+    steps: [
+      { text: 'Each small chart is one knob: its result at every value tried, every other knob held.', target: { kind: 'series', group: 'profile' } },
+      { text: 'The blue dot is the value kept. Hollow dots fail a rule.', target: null },
+      { text: 'A smooth rise and fall around the kept value is reassuring; a lone spike next to poor neighbours is not.', target: null },
+      { text: 'Hover a dot to see what the other knobs were held at: for Zoom, their values when this knob was searched, not the final winner.', target: null },
+    ],
+  },
+  'eligibility-map': {
+    title: 'Eligibility map',
+    question: 'Which of the points scored meet the rules, and what stops the rest?',
+    steps: [
+      { text: 'Each dot is a point scored on this window: across, its trades; up, its net profit.', target: null },
+      { text: 'Blue dots meet the rules. The outlined one is the winner.', target: { kind: 'series', group: 'eligible' } },
+      { text: 'The other colours name the rule a point fails: too few trades, too deep a fall, no profit, or a run that failed.', target: { kind: 'series', group: 'trades' } },
+      { text: 'The dashed lines are the trade floor and $0. Many points just past them mean the rules shaped the choice.', target: null },
+    ],
+  },
+  'pair-landscape': {
+    title: 'Pair landscape',
+    question: 'Does the result survive nearby settings of two knobs together?',
+    steps: [
+      { text: 'Each cell is one pair of values: rows for one knob, columns for the other, every other setting held at the candidate.', target: { kind: 'series', group: 'tested' } },
+      { text: 'Green cells made money and red cells lost it; each cell prints its net return.', target: null },
+      { text: 'The outlined cell is the candidate itself. A plateau of similar cells around it is more robust than a lone peak.', target: null },
+      { text: 'Grey cells were not tested: an invalid pair (—), outside the legal range (·), or never run (?).', target: { kind: 'series', group: 'other' } },
     ],
   },
 };

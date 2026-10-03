@@ -23,6 +23,8 @@ import { GoldenSearchWalkthroughComponent } from './golden-search-walkthrough.co
 })
 export class GoldenSearchPanelComponent {
   readonly chart = input.required<GoldenSearchChartId>();
+  /** Tells apart two panels of one chart on a page (the all-period search's and the recent fit's): it suffixes the title and the heading's id. */
+  readonly instance = input<string | null>(null);
 
   private readonly drawer = inject(MarkdownDrawerService);
   private readonly host = contentChild(GoldenSearchChartComponent);
@@ -30,7 +32,14 @@ export class GoldenSearchPanelComponent {
   private readonly heading = viewChild.required<ElementRef<HTMLHeadingElement>>('heading');
 
   protected readonly guide = computed(() => CHART_GUIDES[this.chart()]);
-  protected readonly headingId = computed(() => `gs-chart-${this.chart()}`);
+  protected readonly title = computed(() => {
+    const instance = this.instance();
+    return instance === null ? this.guide().title : `${this.guide().title} · ${instance}`;
+  });
+  protected readonly headingId = computed(() => {
+    const instance = this.instance();
+    return instance === null ? `gs-chart-${this.chart()}` : `gs-chart-${this.chart()}-${instance.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  });
   protected readonly walking = signal(false);
   /** The walkthrough's current step; null when no walkthrough is open. */
   private readonly step = signal<number | null>(null);

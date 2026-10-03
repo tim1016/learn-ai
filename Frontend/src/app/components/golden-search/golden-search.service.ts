@@ -19,6 +19,7 @@ import type {
   StudyCommandRequest,
   StudyDetail,
   StudyListFilters,
+  SearchCharts,
   StudySummary,
   TestOverTimeCharts,
 } from './golden-search.types';
@@ -156,6 +157,11 @@ export class GoldenSearchService {
     if (query.stage) params = params.set('stage', query.stage);
     if (query.fold_index !== undefined) params = params.set('fold_index', String(query.fold_index));
     return firstValueFrom(this.http.get<EvaluationPage>(`${this.base}/studies/${encodeURIComponent(id)}/evaluations`, { params }));
+  }
+
+  /** The Search step's charts: each recorded procedure's path, knob moves, profiles and scored points. */
+  async searchCharts(id: string): Promise<SearchCharts> {
+    return firstValueFrom(this.http.get<SearchCharts>(`${this.base}/studies/${encodeURIComponent(id)}/charts/search`));
   }
 
   /** The Test over time step's charts: every fold, planned or run. */

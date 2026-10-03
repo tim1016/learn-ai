@@ -279,6 +279,16 @@ export type MeasuredConcentration = Schemas['GoldenSearchConcentrationMeasured']
 export type CandidateRef = Pick<EvidenceCandidate, 'key' | 'label'>;
 export type CandidateRunDetail = Schemas['GoldenSearchRunDetail'];
 
+/** `GET /studies/{id}/charts/search`: each recorded procedure's path, knob moves, profiles and scored points. */
+export type TriedPoint = Omit<Schemas['GoldenSearchTriedPoint'], 'point'> & { point: Point };
+export type ScoredPoint = Omit<Schemas['GoldenSearchScoredPoint'], 'point'> & { point: Point };
+export type KnobProfile = Schemas['GoldenSearchKnobProfile'];
+type Convergence = Schemas['GoldenSearchConvergenceMissing'] | (Omit<Schemas['GoldenSearchConvergenceMeasured'], 'tried'> & { tried: TriedPoint[] });
+export type ProcedureCharts = Omit<Schemas['GoldenSearchProcedureCharts'], 'convergence' | 'points'> & { convergence: Convergence; points: ScoredPoint[] };
+export interface SearchCharts {
+  procedures: ProcedureCharts[];
+}
+
 /** `GET /studies/{id}/charts/test-over-time`: every fold, from the receipt's plan before testing over time ran. */
 export type TestOverTimeCharts = Schemas['GoldenSearchTestOverTimeCharts'];
 export type FoldChart = Schemas['GoldenSearchFoldChart'];

@@ -9,31 +9,34 @@
       [method]="s.method"
       [capability]="capability()"
     />
+    @if (chartsError(); as message) {
+      <div role="alert" class="failed">
+        <p>{{ message }}</p>
+        <button type="button" class="link" (click)="retry()">Try again</button>
+      </div>
+    }
+    <ng-container *ngTemplateOutlet="procedureCharts; context: { $implicit: views().get('search'), maps: pairMaps() }" />
 
     @if (search.pair_maps_incomplete) {
       <p class="note" role="note"><i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
         <span>The pair audit stopped at its evaluation budget, so some cells are missing and are shown as untested.</span></p>
     }
     @if (pairMaps().length > 0) {
-      <div class="columns">
-        <section class="panel" aria-label="Pair landscape">
-          <app-golden-search-pair-map [maps]="pairMaps()" [capability]="capability()" [center]="search.winner" centerLabel="the all-period result" headingId="gs-search-map" />
-        </section>
-        <aside class="aside" aria-labelledby="gs-pair-aside-title">
-          <h3 id="gs-pair-aside-title">{{ s.method === 'zoom' ? 'Use Grid to challenge Zoom' : 'Read the pair landscape' }}</h3>
-          <p>{{ s.method === 'zoom' ? 'Two knobs can change each other’s effect. A small pair grid checks combinations the one-knob path did not visit.' : 'Each map holds every other setting at the all-period result: a slice of the search space, not all of it.' }}</p>
-          <dl class="rules">
-            @for (audit of audits(); track audit.id) { <div><dt>Pair audit · {{ audit.title }}</dt><dd>{{ audit.valid }} valid / {{ audit.invalid }} invalid</dd></div> }
-            <div><dt>Other settings</dt><dd>Held fixed</dd></div>
-            <div><dt>Global optimum</dt><dd>Not established</dd></div>
-          </dl>
-        </aside>
-      </div>
+      <aside class="aside" aria-labelledby="gs-pair-aside-title">
+        <h3 id="gs-pair-aside-title">{{ s.method === 'zoom' ? 'Use Grid to challenge Zoom' : 'Read the pair landscape' }}</h3>
+        <p>{{ s.method === 'zoom' ? 'Two knobs can change each other’s effect. A small pair grid checks combinations the one-knob path did not visit.' : 'Each map holds every other setting at the all-period result: a slice of the search space, not all of it.' }}</p>
+        <dl class="rules">
+          @for (audit of audits(); track audit.id) { <div><dt>Pair audit · {{ audit.title }}</dt><dd>{{ audit.valid }} valid / {{ audit.invalid }} invalid</dd></div> }
+          <div><dt>Other settings</dt><dd>Held fixed</dd></div>
+          <div><dt>Global optimum</dt><dd>Not established</dd></div>
+        </dl>
+      </aside>
     }
 
     @if (s.protocol.recent_window) {
       @if (s.results.recent; as recent) {
         <app-golden-search-procedure headingId="gs-search-recent" heading="Recent window" [description]="recentDescription()" [procedure]="recent" [method]="s.method" [capability]="capability()" />
+        <ng-container *ngTemplateOutlet="procedureCharts; context: { $implicit: views().get('recent'), maps: [] }" />
       } @else {
         <p class="muted">The recent-window procedure has no result yet.</p>
       }
@@ -50,3 +53,41 @@
     </dl>
   </section>
 </div>
+
+<ng-template #procedureCharts let-view let-maps="maps">
+  @if (view) {
+    <app-golden-search-grid>
+      @if (view.zoom) {
+        <app-golden-search-panel chart="search-path" data-span="8" [instance]="view.instance">
+          @if (view.path; as spec) {
+            <app-golden-search-chart [spec]="spec" [height]="260" />
+          } @else if (view.pathNote; as note) {
+            <p class="muted">{{ note }}</p>
+          }
+          <p caption class="caption">Each dot is a point the search scored, in order; the line is the best result so far that meets the rules.</p>
+        </app-golden-search-panel>
+      }
+      <app-golden-search-panel chart="knob-moves" [attr.data-span]="view.zoom ? 4 : 6" [instance]="view.instance">
+        @if (view.moves; as spec) { <app-golden-search-chart [spec]="spec" [height]="220" /> }
+        <p caption class="caption">Hollow: the starting value. Filled: the value kept; amber at an end of its range.</p>
+      </app-golden-search-panel>
+      <app-golden-search-panel chart="eligibility-map" data-span="6" [instance]="view.instance">
+        @if (view.eligibility; as spec) { <app-golden-search-chart [spec]="spec" [height]="260" /> }
+        <p caption class="caption">Every point scored on this window, the winner outlined. The dashed lines are the trade floor and $0.</p>
+      </app-golden-search-panel>
+      @if (maps.length > 0) {
+        <app-golden-search-pair-landscape data-span="6" [maps]="maps" [capability]="capability()" [center]="study().results.search?.winner ?? null" centerLabel="the all-period result" [instance]="view.instance" />
+      }
+      <app-golden-search-panel chart="knob-profiles" data-span="12" [instance]="view.instance">
+        @if (view.profiles; as spec) {
+          <app-golden-search-chart [spec]="spec" [height]="220" [minWidth]="view.profilesMinWidth" />
+        } @else {
+          <p class="muted">No profile can be drawn: the search path could not be rebuilt.</p>
+        }
+        <p caption class="caption">{{ view.zoom ? 'Each knob as its last pass searched it, the other knobs held at their values then — not at the final winner.' : 'Each knob through the winner, the other knobs at the winner’s values.' }}</p>
+      </app-golden-search-panel>
+    </app-golden-search-grid>
+  } @else if (!chartsError()) {
+    <p class="muted" role="status">Loading the search charts…</p>
+  }
+</ng-template>

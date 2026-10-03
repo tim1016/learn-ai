@@ -8,7 +8,7 @@ import { GoldenSearchPanelComponent } from './charts/golden-search-panel.compone
 import type { CandidateRow } from './golden-search-compare';
 import { concentrationCurveSpec, withoutBestSpec } from './golden-search-concentration-charts';
 import { monthCalendarSpec, monthlyNetSpec } from './golden-search-month-charts';
-import { GoldenSearchPairMapComponent } from './golden-search-pair-map.component';
+import { GoldenSearchPairLandscapeComponent } from './golden-search-pair-landscape.component';
 import { entryRsiSpec, entryTimeSpec, histogramSpec, holdTimeSpec, tradeTimelineSpec } from './golden-search-trade-charts';
 import type { CandidateDetail, CandidateKey, MeasuredTradeCharts, PairMap, Point, StrategyCapability } from './golden-search.types';
 
@@ -31,7 +31,7 @@ export const EVIDENCE_TABS: readonly { id: EvidenceTab; label: string }[] = [
  */
 @Component({
   selector: 'app-golden-search-evidence-tabs',
-  imports: [GoldenSearchChartComponent, GoldenSearchGridComponent, GoldenSearchPairMapComponent, GoldenSearchPanelComponent],
+  imports: [GoldenSearchChartComponent, GoldenSearchGridComponent, GoldenSearchPairLandscapeComponent, GoldenSearchPanelComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-evidence-tabs.component.html',
   styleUrl: './golden-search-evidence-tabs.component.scss',

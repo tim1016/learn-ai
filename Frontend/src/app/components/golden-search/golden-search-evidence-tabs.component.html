@@ -8,7 +8,7 @@
 @switch (active()) {
   @case ('map') {
     @if (pairMaps().length > 0) {
-      <app-golden-search-pair-map [maps]="pairMaps()" [capability]="capability()" [center]="mapCenter()" [centerLabel]="mapCenterLabel()" headingId="gs-compare-map" />
+      <app-golden-search-pair-landscape [maps]="pairMaps()" [capability]="capability()" [center]="mapCenter()" [centerLabel]="mapCenterLabel()" />
     } @else {
       <p class="muted">No pair audit was recorded for this study.</p>
     }
