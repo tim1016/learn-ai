@@ -2,7 +2,7 @@ import { NgTemplateOutlet } from "@angular/common";
 import { ChangeDetectionStrategy, Component, computed, input, model, output } from "@angular/core";
 
 import type { DataPolicy } from "../../../models/data-policy";
-import { FILL_MODE_OPTIONS, isFillModeName, type FillModeName } from "../../../models/fill-mode";
+import { FILL_MODE_OPTIONS, RESEARCH_DEFAULT_FILL_MODE, isFillModeName, type FillModeName } from "../../../models/fill-mode";
 import { ExperimentalNoticeComponent } from "../../../shared/experimental-notice/experimental-notice.component";
 import { DEFAULT_ADJUSTMENT_MODE } from '../../../shared/ticker-catalog';
 import type { PriceAdjustmentMode } from '../../../shared/data-lake';
@@ -41,7 +41,7 @@ export class StrategyLabConfigRailComponent {
   readonly strategies = input<readonly StrategyInfo[]>([]);
   readonly selectedStrategyName = input<string | null>(null);
   readonly paramValues = input<Record<string, unknown>>({});
-  readonly fillMode = input<FillModeName>("signal_bar_close");
+  readonly fillMode = input<FillModeName>(RESEARCH_DEFAULT_FILL_MODE);
   readonly initialCash = input(100000);
   readonly commissionPerOrder = input(0);
   readonly running = input(false);

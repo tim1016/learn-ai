@@ -2,6 +2,8 @@ import { provideRouter } from '@angular/router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
+import { RESEARCH_DEFAULT_FILL_MODE } from '../../models/fill-mode';
+import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import { JobsService } from '../../services/jobs.service';
 import { GridSearchService } from '../grid-search/grid-search.service';
 import { gridSearchDetail } from '../grid-search/testing/fixtures';
@@ -88,6 +90,13 @@ describe('WalkForwardStudyResultComponent', () => {
     expect(screen.getAllByText('67%').length).toBe(2); // the verdict's median and fold 1's own retention
     expect(screen.getByText(/no candidate was eligible/)).not.toBeNull();
     expect(screen.getByText(/out of sample/)).not.toBeNull();
+  });
+
+  it.each(['signal_bar_close', 'next_bar_open'] as const)("names the fill rule the study ran under (%s), not today's default (#2599)", async (ranUnder) => {
+    await renderResult(detail({ request: { ...detail().request, fill_mode: ranUnder } }));
+
+    expect(await screen.findByText(new RegExp(formatReceiptLabel(ranUnder)))).not.toBeNull();
+    expect(screen.queryByText(new RegExp(formatReceiptLabel(RESEARCH_DEFAULT_FILL_MODE)))).toBeNull();
   });
 
   it('opens a fold sweep in place through the Grid Search result view and returns to the study', async () => {

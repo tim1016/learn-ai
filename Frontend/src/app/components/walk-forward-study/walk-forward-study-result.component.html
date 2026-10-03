@@ -14,6 +14,7 @@
           <app-timestamp-display [value]="d.window_start_ms" mode="date-et" /> → <app-timestamp-display [value]="d.window_end_ms - 1" mode="date-et" />
           · train {{ d.training_months }} mo / test {{ d.test_months }} mo · {{ d.fold_count }} folds
           · ranked by {{ d.measure | receiptLabel }} · min {{ d.min_trades }} trades
+          · fill mode: {{ fillMode() | receiptLabel }}
           · launched <app-timestamp-display [value]="d.created_at_ms" mode="local" />
         </p>
       } @else { <h2 id="walk-forward-result-title">Study</h2> }

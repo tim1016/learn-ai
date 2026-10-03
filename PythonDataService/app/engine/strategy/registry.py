@@ -1335,7 +1335,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    action plan binds ENTER/EXIT to one long stock leg\n"
             "\n"
             "Execution\n"
-            "    fill_mode = signal_bar_close (LEAN default) | next_bar_open"
+            "    fill_mode = signal_bar_close (LEAN default) | next_bar_open | decision_minute_open"
         ),
         gotchas=[
             "Window sizes are in BARS, not minutes. With "
@@ -1497,7 +1497,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    action plan binds ENTER/EXIT to one long stock leg\n"
             "\n"
             "Execution\n"
-            "    fill_mode = signal_bar_close | next_bar_open"
+            "    fill_mode = signal_bar_close | next_bar_open | decision_minute_open"
         ),
         gotchas=[
             "Uses Wilders smoothing — first average gain/loss is a plain "
@@ -1703,9 +1703,10 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    intended fill_mode = next_bar_open"
         ),
         gotchas=[
-            "Run this strategy with fill_mode=next_bar_open. The global "
-            "Engine Lab default is signal_bar_close for legacy LEAN parity, "
-            "but this validation strategy's timing spec is next-bar-open.",
+            "Run this strategy with fill_mode=next_bar_open. The Strategy Lab "
+            "starts on decision_minute_open and the Engine API on "
+            "signal_bar_close, but this validation strategy's timing spec is "
+            "next-bar-open.",
             "A green bar means close > open, not close > previous close.",
             "Detection begins on the 09:45 ET bar close and stops at 15:45 ET. "
             "The 15:45 barrier also flattens any open position.",
@@ -2105,7 +2106,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
             "\n"
             "Execution\n"
-            "    fill_mode = signal_bar_close (default) | next_bar_open"
+            "    fill_mode = signal_bar_close | next_bar_open | decision_minute_open"
         ),
         gotchas=[
             "Supertrend here uses the pandas-ta direction convention "
@@ -2259,7 +2260,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
             "\n"
             "Execution\n"
-            "    fill_mode = signal_bar_close (default) | next_bar_open"
+            "    fill_mode = signal_bar_close | next_bar_open | decision_minute_open"
         ),
         gotchas=[
             "'ADX rising' is strictly greater than the prior bar. Flat ADX "

@@ -15,6 +15,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
+from app.engine.execution.fill_mode_names import RESEARCH_DEFAULT_FILL_MODE, FillModeName
 from app.research.grid_search.models import GridSearchSpec
 from app.research.sweep.grid import LowHighStepRange, ParamRange, ValueListRange
 from app.research.sweep.ranking import RankingMeasure
@@ -22,7 +23,6 @@ from app.schemas.engine_backtest import COMMISSION_PER_ORDER_DESCRIPTION
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 SYMBOL_PATTERN = r"^[A-Z][A-Z0-9.\-]{0,11}$"
-FillModeName = Literal["signal_bar_close", "next_bar_open", "decision_minute_open"]
 
 
 class _CamelTolerantModel(BaseModel):
@@ -57,7 +57,7 @@ class GridSearchSpecRequest(_CamelTolerantModel):
     start_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS, description="Half-open window start, int64 ms UTC")
     end_ms: int = Field(ge=0, le=MAX_TIMESTAMP_MS, description="Half-open window end, int64 ms UTC")
     resolution: Literal["minute", "daily"] = "minute"
-    fill_mode: FillModeName = "signal_bar_close"
+    fill_mode: FillModeName = RESEARCH_DEFAULT_FILL_MODE
     commission_per_order: float = Field(0.0, ge=0, description=COMMISSION_PER_ORDER_DESCRIPTION)
     slippage_per_share: float = Field(0.0, ge=0)
     initial_cash: float = Field(100_000.0, gt=0)

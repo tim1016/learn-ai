@@ -62,6 +62,7 @@ from app.research.runs import (
     run_strategy_spec,
     save_run,
 )
+from app.services.fill_mode_request import fill_mode_or_400
 from app.services.spec_run_data import SpecDataSourceFactory, materialize_spec_data_source
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -84,7 +85,7 @@ class StrategyRunRequest(BaseModel):
     start_date: str = Field(..., description="YYYY-MM-DD")
     end_date: str = Field(..., description="YYYY-MM-DD")
     initial_cash: float = Field(100_000.0, ge=0)
-    fill_mode: str = Field("signal_bar_close", description="signal_bar_close or next_bar_open")
+    fill_mode: str = Field("signal_bar_close", description="signal_bar_close, next_bar_open or decision_minute_open")
     commission_per_order: float = Field(0.0, ge=0)
     slippage_per_share: float = Field(
         0.0,
@@ -159,15 +160,6 @@ def _parse_date(s: str, field: str) -> Date:
         ) from exc
 
 
-def _validate_fill_mode(s: str) -> None:
-    norm = s.lower().replace("-", "_")
-    if norm not in {"signal_bar_close", "next_bar_open"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"unknown fill_mode {s!r} — expected signal_bar_close or next_bar_open",
-        )
-
-
 # ---------------------------------------------------------------------------
 # Endpoints.
 # ---------------------------------------------------------------------------
@@ -185,7 +177,7 @@ def create_run(
     """
     start_d = _parse_date(request.start_date, "start_date")
     end_d = _parse_date(request.end_date, "end_date")
-    _validate_fill_mode(request.fill_mode)
+    fill_mode = fill_mode_or_400(request.fill_mode)
     if start_d >= end_d:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -198,7 +190,7 @@ def create_run(
         start_ms=run_date_to_ms(start_d),
         end_ms=run_date_to_ms(end_d),
         initial_cash=request.initial_cash,
-        fill_mode=request.fill_mode,
+        fill_mode=fill_mode.value,
         commission_per_order=request.commission_per_order,
         slippage_per_share=request.slippage_per_share,
         random_seed=request.random_seed,

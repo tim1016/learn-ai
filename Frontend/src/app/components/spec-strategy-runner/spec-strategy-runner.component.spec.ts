@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, Mock, vi } from 'vitest';
 import completedRun from '@repo-contracts/fixtures/spec-strategy-backtest-response-v1.json';
 
 import type { SpecStrategyBacktestResult } from '../../graphql/spec-strategy.models';
+import { FILL_MODE_OPTIONS } from '../../models/fill-mode';
 import { SpecStrategyService } from '../../services/spec-strategy.service';
 import { SpecStrategyRunnerComponent } from './spec-strategy-runner.component';
 import { CANONICAL_FIXTURES } from './canonical-fixtures';
@@ -260,6 +261,21 @@ describe('SpecStrategyRunnerComponent', () => {
       initialCash: 100000,
       fillMode: 'signal_bar_close',
     });
+  });
+
+  it('offers every fill mode research names and runs under the one picked (#2599)', async () => {
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const select = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll('select'))
+      .find((candidate) => candidate.closest('label')?.textContent?.includes('Fill mode'));
+    if (!select) throw new Error('the fill mode picker did not render');
+    expect(Array.from(select.options, (option) => option.value)).toEqual(FILL_MODE_OPTIONS.map((option) => option.value));
+
+    select.value = 'decision_minute_open';
+    select.dispatchEvent(new Event('change'));
+    await component.runBacktest();
+
+    expect(runBacktest).toHaveBeenCalledWith(component.spec(), expect.objectContaining({ fillMode: 'decision_minute_open' }));
   });
 
   it('runBacktest swallows a rejected run — the service error signal is what the user sees', async () => {

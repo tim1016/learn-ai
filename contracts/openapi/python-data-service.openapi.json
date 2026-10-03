@@ -26368,7 +26368,7 @@
             "type": "integer"
           },
           "fillMode": {
-            "default": "signal_bar_close",
+            "default": "decision_minute_open",
             "enum": [
               "signal_bar_close",
               "next_bar_open",
@@ -26545,7 +26545,7 @@
             "type": "integer"
           },
           "fillMode": {
-            "default": "signal_bar_close",
+            "default": "decision_minute_open",
             "enum": [
               "signal_bar_close",
               "next_bar_open",
@@ -40722,7 +40722,7 @@
           },
           "fill_mode": {
             "default": "signal_bar_close",
-            "description": "signal_bar_close or next_bar_open",
+            "description": "signal_bar_close, next_bar_open or decision_minute_open",
             "title": "Fill Mode",
             "type": "string"
           },
@@ -42442,7 +42442,7 @@
           },
           "fill_mode": {
             "default": "signal_bar_close",
-            "description": "signal_bar_close or next_bar_open",
+            "description": "signal_bar_close, next_bar_open or decision_minute_open",
             "title": "Fill Mode",
             "type": "string"
           },
@@ -46212,7 +46212,7 @@
             "type": "integer"
           },
           "fillMode": {
-            "default": "signal_bar_close",
+            "default": "decision_minute_open",
             "enum": [
               "signal_bar_close",
               "next_bar_open",
@@ -46416,7 +46416,7 @@
             "type": "integer"
           },
           "fillMode": {
-            "default": "signal_bar_close",
+            "default": "decision_minute_open",
             "enum": [
               "signal_bar_close",
               "next_bar_open",

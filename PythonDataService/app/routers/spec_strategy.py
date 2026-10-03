@@ -33,9 +33,9 @@ from app.data_lake.run_materialization import LakeMaterializationError
 from app.engine.data.availability import MissingSessionsError
 from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine, pin_strategy_window
 from app.engine.execution.fill_model import FillModel
-from app.engine.execution.order import FillMode
 from app.engine.strategy.base import LoggedTrade
 from app.engine.strategy.spec import SpecAlgorithm, StrategySpec
+from app.services.fill_mode_request import fill_mode_or_400
 from app.services.spec_run_data import (
     MaterializedSpecReader,
     SpecDataSourceFactory,
@@ -60,7 +60,7 @@ class SpecBacktestRequest(BaseModel):
     start_date: str = Field(..., description="YYYY-MM-DD")
     end_date: str = Field(..., description="YYYY-MM-DD")
     initial_cash: float = Field(100000.0, ge=0)
-    fill_mode: str = Field("signal_bar_close", description="signal_bar_close or next_bar_open")
+    fill_mode: str = Field("signal_bar_close", description="signal_bar_close, next_bar_open or decision_minute_open")
     commission_per_order: float = Field(0.0, ge=0)
 
 
@@ -131,18 +131,6 @@ def _parse_date(s: str, field: str) -> Date:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"{field} must be YYYY-MM-DD: {s!r}",
         ) from exc
-
-
-def _parse_fill_mode(s: str) -> FillMode:
-    norm = s.lower().replace("-", "_")
-    if norm == "signal_bar_close":
-        return FillMode.SIGNAL_BAR_CLOSE
-    if norm == "next_bar_open":
-        return FillMode.NEXT_BAR_OPEN
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"unknown fill_mode {s!r} — expected signal_bar_close or next_bar_open",
-    )
 
 
 def _failed_response(request: SpecBacktestRequest, error: str) -> SpecBacktestResponse:
@@ -241,7 +229,7 @@ def run_spec_backtest(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"end_date must not precede start_date (got start={start_d.isoformat()}, end={end_d.isoformat()})",
         )
-    fill_mode = _parse_fill_mode(request.fill_mode)
+    fill_mode = fill_mode_or_400(request.fill_mode)
     symbol = spec.symbols[0]
 
     try:

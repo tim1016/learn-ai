@@ -14,6 +14,12 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
+from app.engine.execution.fill_mode_names import (
+    ENGINE_BACKTEST_ALIASES,
+    REQUEST_FILL_MODES,
+    UnknownFillModeError,
+    parse_fill_mode,
+)
 from app.jobs.progress import CancellationCheck, JobCancelled, ProgressEmitter
 from app.research.persistence.db import run_sync, with_connection
 from app.research.recency import repository as repo
@@ -49,6 +55,19 @@ class RecencyLaunchConflict(ValueError):
 class ValidatedLaunch:
     config: RecencyLaunchConfig
     expected_runs: int
+
+
+def canonical_fill_mode(raw: str) -> str:
+    """The name a NEW launch runs, stores and fingerprints its trades under (#2599).
+
+    Recency runs on the engine backtest, so it takes that surface's spellings.
+    Never applied to a stored launch: a resume keeps the spelling its recorded
+    cells were fingerprinted under.
+    """
+    try:
+        return parse_fill_mode(raw, allowed=REQUEST_FILL_MODES, aliases=ENGINE_BACKTEST_ALIASES).value
+    except UnknownFillModeError as exc:
+        raise RecencyLaunchRejected(str(exc)) from exc
 
 
 def validate_launch(
