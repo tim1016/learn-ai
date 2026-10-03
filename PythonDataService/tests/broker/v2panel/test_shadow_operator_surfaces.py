@@ -458,6 +458,7 @@ async def test_a_shadow_binding_reads_its_own_authority_and_renders_simulated_fi
             [fill_entry(sid=SID, intent="a", ts_ms=NOW_MS, account_id=SHADOW_ACCT)],
             account_id=LIVE_ACCT,
             authority_account_id=selected.account_id,
+            account_mode=selected.account_mode,
             exposure={},
             fills_today=1,
             realized_pnl_today=0.0,

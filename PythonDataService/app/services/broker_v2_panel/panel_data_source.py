@@ -501,6 +501,7 @@ async def _get_panel_with_entries_from_authority(
         bot_status=custody_bot_status(facade.repository, sid, running=status.running),
         account_id=resolved,
         authority_account_id=authority_account_id,
+        account_mode=facade.account_mode,
         exposure=dict(economics.exposure),
         fills_today=economics.fills_today,
         realized_pnl_today=economics.realized_pnl_today,
@@ -541,6 +542,7 @@ async def _get_panel_with_entries_from_authority(
     panel = adapt_sqlite_panel(
         panel,
         projection,
+        account_mode=facade.account_mode,
         economics=economics,
         repository=facade.repository,
         flatten_verdict=facade.flatten_send_verdict(),

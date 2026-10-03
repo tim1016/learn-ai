@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from decimal import Decimal
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
@@ -88,7 +89,9 @@ from app.services.broker_v2_panel.panel_projection_service import (
     select_primary_action,
 )
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
-    adapt_sqlite_panel,
+    adapt_sqlite_panel as _adapt_sqlite_panel,
+)
+from app.services.broker_v2_panel.sqlite_panel_adapter import (
     build_sqlite_catalog,
     recent_fill_view,
 )
@@ -106,6 +109,10 @@ from tests.broker.v2panel.fixtures import (
 )
 
 _NOW = 1_700_000_000_000
+
+# The adapter requires the account's learned mode (#2823); these cases read a
+# paper account unless they pass their own.
+adapt_sqlite_panel = partial(_adapt_sqlite_panel, account_mode="paper")
 
 # _status()'s default fixture strategy. Must be a strategy with no registered
 # Signal Program: _default_program_build() below fails closed (deliberately,
@@ -265,6 +272,7 @@ def test_sqlite_fill_adapter_stamps_a_shadow_authority_row_as_simulated() -> Non
             fee=None,
         ),
         authority_account_id="shadow:9LIVE0001",
+        account_mode="live",
     )
 
     assert (row.simulated, row.authority_kind) == (True, "shadow")
@@ -372,6 +380,7 @@ def _panel(
     sealed_program=None,
     program_build: ProgramBuildAdmissionFact | None = None,
     authority_account_id: str | None = None,
+    account_mode: Literal["paper", "live"] = "paper",
     feed_continuity_events: tuple[RetainedContinuityEvent, ...] | None = (),
 ):
     resolved_exposure = {"SPY": 100.0} if exposure is None else exposure
@@ -381,6 +390,7 @@ def _panel(
         entries,
         account_id=ACCT,
         authority_account_id=authority_account_id,
+        account_mode=account_mode,
         exposure=resolved_exposure,
         fills_today=0,
         realized_pnl_today=0.0,
@@ -1877,6 +1887,7 @@ def test_build_panel_requires_program_build_evidence() -> None:
             _clerk_status(),
             [],
             account_id=ACCT,
+            account_mode="paper",
             exposure={"SPY": 100.0},
             fills_today=0,
             realized_pnl_today=0.0,
@@ -2369,6 +2380,49 @@ def test_real_paper_decisions_and_fills_carry_real_paper_account_authority() -> 
     assert panel.recent_decisions[0].simulated is False
     assert panel.recent_fills[0].authority_account_id == ACCT
     assert panel.recent_fills[0].authority_kind == "real_paper"
+
+
+def test_live_account_decisions_and_fills_carry_real_live_account_authority() -> None:
+    """#2823: a Live account's rows are ``real_live``, in the projector and the adapter.
+
+    The kind was derived without the account's mode, so every decision and
+    fill on a real-money account read ``real_paper``.
+    """
+    decision = decision_receipt(seq=1, ts_ms=_NOW, outcome="entered", reason_code="CROSS_UP")
+    entries = [
+        intent_entry(sid=SID, intent="open", ts_ms=_NOW - 1_000),
+        submit_acked_entry(sid=SID, intent="open", ts_ms=_NOW - 900),
+        fill_entry(sid=SID, intent="open", ts_ms=_NOW - 800),
+    ]
+
+    panel = _panel(_status(mode="trade"), _clerk_status(), entries, decision, account_mode="live")
+
+    assert [(row.authority_account_id, row.authority_kind, row.simulated) for row in panel.recent_decisions] == [
+        (ACCT, "real_live", False)
+    ]
+    assert [(row.authority_account_id, row.authority_kind, row.simulated) for row in panel.recent_fills] == [
+        (ACCT, "real_live", False)
+    ]
+
+    adapter_fill = recent_fill_view(
+        FillRecord(
+            account_id=ACCT,
+            sid=SID,
+            intent_id="open",
+            order_ref="order:spy",
+            event_key="exec-spy-1",
+            symbol="SPY",
+            side=OrderSide.BUY,
+            quantity=1.0,
+            fill_price=500.0,
+            filled_at_ms=_NOW - 800,
+            fee=None,
+        ),
+        authority_account_id=ACCT,
+        account_mode="live",
+    )
+
+    assert (adapter_fill.authority_kind, adapter_fill.simulated) == ("real_live", False)
 
 
 def test_build_panel_honors_the_explicit_authority_account_id_from_the_selected_facade() -> None:

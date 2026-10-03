@@ -946,7 +946,7 @@ async def test_a_pre_market_flatten_sends_the_operators_confirmed_limit(
         event_key="execution:flatten-1", symbol="SPY", side=OrderSide.SELL, quantity=10.0,
         fill_price=99.90, filled_at_ms=_PRE_MARKET_MS + 1_000, fee=None,
     )
-    view = recent_fill_view(fill, authority_account_id=ACCOUNT_ID, repository=repo)
+    view = recent_fill_view(fill, authority_account_id=ACCOUNT_ID, account_mode="paper", repository=repo)
     assert view.slippage_reference_price == 100.00
     assert view.slippage_bps == pytest.approx(10.0, abs=1e-9, rel=0)
 
