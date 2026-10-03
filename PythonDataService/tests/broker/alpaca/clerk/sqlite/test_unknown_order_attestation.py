@@ -48,7 +48,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import (
     StaleRecoveryTokenError,
     build_recovery_catalog,
 )
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.repository import DEFAULT_CLAIM_TTL_MS, ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.residue_discharge import ATTRIBUTED_RESIDUE_DISCHARGED
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.uncertainty import (
@@ -1467,6 +1467,82 @@ async def test_a_settlement_that_meets_a_pass_driving_the_exit_is_refused_before
     assert repo.release_operation_claim(effect_operation_id=exit_id, token=held_by_a_pass.token), (
         "the pass still holds its claim"
     )
+
+
+class _IntakeWaitedFor(ReentrantAsyncLock):
+    """An intake fence a settlement waits for: ``meanwhile`` happens before its fenced run starts."""
+
+    def __init__(self, meanwhile: Callable[[], None]) -> None:
+        super().__init__()
+        self._meanwhile = meanwhile
+
+    async def off_loop[LocalResult](
+        self, operation: Callable[..., LocalResult], *args: object, **kwargs: object
+    ) -> LocalResult:
+        self._meanwhile()
+        return await super().off_loop(operation, *args, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "attested",
+    [
+        pytest.param(lambda _alpaca, _closing: ABSENT, id="absent"),
+        pytest.param(
+            lambda alpaca, closing: OrderOutcomeAttestation(
+                kind="exists", broker_order_id=alpaca.order_id_of(closing)
+            ),
+            id="exists",
+        ),
+    ],
+)
+async def test_a_settlement_whose_claim_a_pass_took_over_before_its_commit_is_refused_and_writes_nothing(
+    crashed_with_exposure,  # noqa: F811
+    attested: Callable[[_AlpacaAccount, str], OrderOutcomeAttestation],
+) -> None:
+    """The regression (#2854 review): the settlement read Alpaca, then waited for intake longer than its claim lives.
+
+    Its claim on the EXIT expired in that wait and a pass took it: a pass
+    that finds the order absent sends it again. The commit rechecked the
+    order, which the pass had not written to yet, and not the claim, so it
+    settled an order the pass was about to send.
+
+    The commit now renews its own claim inside its fenced run, before it
+    writes. The claim is the pass's, so the settlement is refused in words
+    that say so, nothing is written, and the pass keeps its claim.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("arrives_unanswered",))
+    exit_id = await _a_stopped_bot_whose_closing_order_was_lost(repo, alpaca)
+    closing = _closing_order(repo)
+    (order,) = repo.unknown_exit_orders(SID)
+    ledger = repo.custody_transitions()
+    taken_over: list[str] = []
+
+    def the_claim_expires_and_a_pass_takes_it() -> None:
+        _walk_clock_to(repo, repo.clock() + DEFAULT_CLAIM_TTL_MS + 1)
+        taken_over.append(repo.claim_before_broker_contact(exit_id).token)
+
+    with pytest.raises(UnknownOrderSettlementRefused) as refused:
+        await settle_unknown_exit_order(
+            repo, read=alpaca, trade=alpaca, intake=_IntakeWaitedFor(the_claim_expires_and_a_pass_takes_it),
+            strategy_instance_id=SID, presented=order, attestation=attested(alpaca, closing.client_order_id),
+            operator=OPERATOR, operator_reason=None,
+        )
+
+    assert refused.value.reason_code == "EXIT_CLAIM_LOST"
+    assert str(refused.value) == (
+        "This settlement took too long, and another check of this exit may have started "
+        "meanwhile. Nothing was changed. Try again in a few seconds."
+    )
+    assert repo.custody_transitions() == ledger
+    assert _attested(repo) == []
+    assert _exit_state(repo, exit_id) == "unknown"
+    assert repo.unknown_exit_orders(SID) == (order,), "the order is still offered for settling"
+    (the_pass,) = taken_over
+    assert repo.release_operation_claim(effect_operation_id=exit_id, token=the_pass), (
+        "the pass still holds its claim"
+    )
+    assert len(alpaca.sent) == 1
 
 
 async def test_a_check_takes_no_claim_so_it_answers_while_a_pass_holds_the_exit(

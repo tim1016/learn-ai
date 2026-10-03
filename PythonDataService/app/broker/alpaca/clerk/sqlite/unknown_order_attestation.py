@@ -67,8 +67,10 @@ Clerk's own records refuse is refused before the claim is taken and before
 Alpaca is asked anything. Every durable check and every write happen in one
 fenced run, which reads the order again as the catalog presented it: an
 order sent again, acknowledged or filled since refuses, and nothing is
-written. A check makes the same reads and applies the same rules with no
-claim, and writes nothing.
+written. That run renews the claim before it writes: a settlement whose claim
+ran out while it waited for the fence may have lost the EXIT to a pass that
+is about to send the order again, and writes nothing. A check makes the same
+reads and applies the same rules with no claim, and writes nothing.
 
 One ``ORDER_OUTCOME_ATTESTED`` transition records who attested what and
 what the Clerk read, and its own fold settles the order: an ``absent`` one
@@ -434,10 +436,13 @@ async def settle_unknown_exit_order(
     except OperationClaimError as busy:
         raise _exit_is_busy() from busy
 
-    def renew_the_claim() -> None:
-        if not repo.renew_operation_claim(
+    def keeps_the_claim() -> bool:
+        return repo.renew_operation_claim(
             effect_operation_id=presented.effect_operation_id, token=claim_token
-        ):
+        )
+
+    def renew_the_claim() -> None:
+        if not keeps_the_claim():
             raise OperationClaimError(
                 f"effect_operation {presented.effect_operation_id!r} lost its broker-contact claim"
             )
@@ -456,6 +461,7 @@ async def settle_unknown_exit_order(
             presented=presented,
             alpaca_read=alpaca_read,
             by=by,
+            keeps_the_claim=keeps_the_claim,
         )
     except OperationClaimError as lost:
         raise _exit_is_busy() from lost
@@ -559,6 +565,14 @@ def _exit_is_busy() -> UnknownOrderSettlementRefused:
         "EXIT_BUSY",
         "The Clerk is working on this exit right now. Try again in a few seconds. "
         "Nothing was changed.",
+    )
+
+
+def _claim_was_lost() -> UnknownOrderSettlementRefused:
+    return UnknownOrderSettlementRefused(
+        "EXIT_CLAIM_LOST",
+        "This settlement took too long, and another check of this exit may have started "
+        "meanwhile. Nothing was changed. Try again in a few seconds.",
     )
 
 
@@ -1046,11 +1060,23 @@ def _commit(
     presented: ProjectedUnknownExitOrder,
     alpaca_read: _AlpacaRead,
     by: _Operator,
+    keeps_the_claim: Callable[[], bool],
 ) -> UnknownOrderSettlementReceipt:
-    """The fenced run of a settlement: every durable check again, then the settlement."""
+    """The fenced run of a settlement: every durable check again, the claim again, then the settlement.
+
+    ``keeps_the_claim`` renews the EXIT's claim and answers whether it is
+    still this settlement's. Every read of Alpaca renewed it, but the wait
+    for this run is no read: a claim that ran out in it may be a pass's by
+    now, and a pass that finds the order absent sends it again. The order's
+    own records do not show that until the pass writes, so the claim itself
+    is asked here, in the run that writes. Held, it keeps every pass off the
+    EXIT until the settlement is written.
+    """
     proof = _prove(
         repo, strategy_instance_id=strategy_instance_id, presented=presented, alpaca_read=alpaca_read
     )
+    if not keeps_the_claim():
+        raise _claim_was_lost()
     if isinstance(alpaca_read, _AbsentReads):
         assert proof is not None
         return _commit_absent(repo, presented=presented, reads=alpaca_read, proof=proof, by=by)
