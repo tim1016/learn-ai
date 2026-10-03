@@ -471,9 +471,11 @@ export function tradeCharts(trades: Partial<TradeRecord>[] = [{}, {}]): Measured
   return {
     status: 'measured',
     bar_span_ms: 15 * 60_000,
+    hold_reason: null,
     trades: trades.map((overrides, i) => ({ ...base[i], ...overrides })),
     histogram: {
       bin_width: 200,
+      rule: 'freedman_diaconis',
       bins: [
         { low: -200, high: 0, trades: 1, wins: 0, losses: 1 },
         { low: 0, high: 200, trades: 0, wins: 0, losses: 0 },

@@ -2,8 +2,8 @@ import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec, ChartTable } from './charts/golden-search-chart-spec';
 import { dataIndexOf, tooltipFrame, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
-import { signedPercentText, signedUsdText } from './golden-search-display';
-import type { EvidenceCandidate, MonthlyResult } from './golden-search.types';
+import { compactUsdText, DEVELOPMENT_NOTE, signedPercentText, signedUsdText } from './golden-search-display';
+import type { CandidateRef, MonthlyResult } from './golden-search.types';
 
 /**
  * The Compare evidence's month charts (#2821): the selected candidate's
@@ -13,12 +13,7 @@ import type { EvidenceCandidate, MonthlyResult } from './golden-search.types';
  * has no cell, never a $0 one.
  */
 
-type Candidate = Pick<EvidenceCandidate, 'key' | 'label'>;
-
-const DEVELOPMENT = 'Development data, used for choosing.';
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
-/** An axis tick as short signed dollars (`+$1.1K`). */
-const COMPACT_USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1, signDisplay: 'exceptZero' });
 /** A calendar cell's amount to two significant figures (`+$890`, `-$1.2K`), so it fits the cell; the tooltip and table give it in full. */
 const CELL_USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumSignificantDigits: 2, signDisplay: 'exceptZero' });
 
@@ -52,7 +47,7 @@ function monthTooltip(month: MonthlyResult, theme: ChartTheme): string {
         { label: 'Net return', values: [signedPercentText(month.return_fraction)] },
         { label: 'Trades closed', values: [String(month.trades)] },
       ],
-      notes: [`The month from ${monthFrom(month)} (ET). A trade counts in the month it exits.`, DEVELOPMENT],
+      notes: [`The month from ${monthFrom(month)} (ET). A trade counts in the month it exits.`, DEVELOPMENT_NOTE],
     },
     theme,
   );
@@ -67,7 +62,7 @@ function spanText(months: readonly MonthlyResult[]): string {
 // ---------------------------------------------------------------- V24 month calendar
 
 /** The months as a calendar: a row per year, a column per month, coloured by net profit. */
-export function monthCalendarSpec(candidate: Candidate, months: readonly MonthlyResult[]): ChartSpec {
+export function monthCalendarSpec(candidate: CandidateRef, months: readonly MonthlyResult[]): ChartSpec {
   return {
     label: `${candidate.label} month calendar`,
     summary: `${candidate.label}'s development net profit for each of its ${months.length} months, ${spanText(months)}, a row per year.`,
@@ -77,7 +72,7 @@ export function monthCalendarSpec(candidate: Candidate, months: readonly Monthly
   };
 }
 
-function calendarOption(candidate: Candidate, months: readonly MonthlyResult[], theme: ChartTheme): ChartOption {
+function calendarOption(candidate: CandidateRef, months: readonly MonthlyResult[], theme: ChartTheme): ChartOption {
   const years = [...new Set(months.map((month) => month.year))].sort((a, b) => a - b);
   // Display scale only: the colour runs from the deepest loss or gain to its mirror, with $0 in the middle.
   const reach = Math.max(1, ...months.map((month) => Math.abs(month.net_profit)));
@@ -102,7 +97,15 @@ function calendarOption(candidate: Candidate, months: readonly MonthlyResult[], 
         type: 'heatmap',
         data: months.map((month) => [month.month - 1, years.indexOf(month.year), month.net_profit]),
         // The signed amount in each cell, so colour is never the only cue.
-        label: { show: true, color: theme.text, fontSize: 10, formatter: (params: { dataIndex: number }) => CELL_USD.format(months[params.dataIndex]?.net_profit ?? 0) },
+        label: {
+          show: true,
+          color: theme.text,
+          fontSize: 10,
+          formatter: (params: { dataIndex: number }) => {
+          const month = months[params.dataIndex];
+          return month === undefined ? '' : CELL_USD.format(month.net_profit);
+        },
+      },
         itemStyle: { borderColor: theme.gridLine, borderWidth: 1 },
         emphasis: { itemStyle: { borderColor: theme.text, borderWidth: 2 } },
       },
@@ -113,7 +116,7 @@ function calendarOption(candidate: Candidate, months: readonly MonthlyResult[], 
 // ---------------------------------------------------------------- V25 monthly net profit
 
 /** The months as bars in time order: above $0 a gain, below a loss. */
-export function monthlyNetSpec(candidate: Candidate, months: readonly MonthlyResult[]): ChartSpec {
+export function monthlyNetSpec(candidate: CandidateRef, months: readonly MonthlyResult[]): ChartSpec {
   return {
     label: `${candidate.label} monthly net profit`,
     summary: `${candidate.label}'s development net profit in each of its ${months.length} months, ${spanText(months)}.`,
@@ -123,7 +126,7 @@ export function monthlyNetSpec(candidate: Candidate, months: readonly MonthlyRes
   };
 }
 
-function barsOption(candidate: Candidate, months: readonly MonthlyResult[], theme: ChartTheme): ChartOption {
+function barsOption(candidate: CandidateRef, months: readonly MonthlyResult[], theme: ChartTheme): ChartOption {
   const axisLabel = { color: theme.textSecondary, fontSize: 11 };
   return {
     grid: { left: 56, right: 12, top: 12, bottom: 28 },
@@ -143,7 +146,7 @@ function barsOption(candidate: Candidate, months: readonly MonthlyResult[], them
       axisTick: { show: false },
       axisLabel: { ...axisLabel, hideOverlap: true },
     },
-    yAxis: { type: 'value', splitNumber: 4, axisLabel: { ...axisLabel, formatter: (value: number) => COMPACT_USD.format(value) }, splitLine: { lineStyle: { color: theme.gridLine } } },
+    yAxis: { type: 'value', splitNumber: 4, axisLabel: { ...axisLabel, formatter: (value: number) => compactUsdText(value) }, splitLine: { lineStyle: { color: theme.gridLine } } },
     series: [
       {
         id: `bars:${candidate.key}`,

@@ -76,6 +76,8 @@
           <app-golden-search-panel chart="hold-time" data-span="4">
             @if (holdTime(); as spec) {
               <app-golden-search-chart [spec]="spec" [height]="220" />
+            } @else if (holdNote(); as note) {
+              <p class="muted">{{ note }}</p>
             }
             <p caption class="caption">Decision bars counted on the trading calendar: nights, weekends and holidays hold none.</p>
           </app-golden-search-panel>

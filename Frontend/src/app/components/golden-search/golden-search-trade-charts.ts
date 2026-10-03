@@ -2,8 +2,8 @@ import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec } from './charts/golden-search-chart-spec';
 import { dataIndexOf, seriesIndexOf, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
-import { centsText, signedCentsText } from './golden-search-display';
-import type { EntryTimes, EvidenceCandidate, MeasuredEntryRsi, MeasuredTradeCharts, TradeHistogram, TradeRecord } from './golden-search.types';
+import { centsText, compactUsdText, DEVELOPMENT_NOTE, signedCentsText } from './golden-search-display';
+import type { CandidateRef, EntryTimes, MeasuredEntryRsi, MeasuredTradeCharts, TradeHistogram, TradeRecord } from './golden-search.types';
 
 /**
  * The Compare evidence's trade charts (#2821): the selected candidate's
@@ -15,12 +15,7 @@ import type { EntryTimes, EvidenceCandidate, MeasuredEntryRsi, MeasuredTradeChar
  * cells — is the server's; the charts only draw and label them.
  */
 
-type Candidate = Pick<EvidenceCandidate, 'key' | 'label'>;
-
-const DEVELOPMENT = 'Development data, used for choosing.';
 const NET_OF_COMMISSION = 'Net profit is the trade’s P&L less its entry and exit commission.';
-/** An axis tick or bin edge as short signed dollars (`+$1.1K`, `-$43.8`). */
-const COMPACT_USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1, signDisplay: 'exceptZero' });
 const ONE_DECIMAL = new Intl.NumberFormat('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
 function tradesText(count: number): string {
@@ -35,28 +30,29 @@ function rsiText(value: number | null): string {
   return value === null ? 'not recorded' : ONE_DECIMAL.format(value);
 }
 
-function barsText(count: number): string {
+function barsText(count: number | null): string {
+  if (count === null) return 'not counted';
   return count === 1 ? '1 decision bar' : `${count} decision bars`;
 }
 
-/** What one decision bar is, from the server's bar length. */
-function barNote(barSpanMs: number): string {
-  return barSpanMs >= 86_400_000
-    ? 'A decision bar is one trading session.'
-    : `A decision bar is ${barSpanMs / 60_000} minutes of a trading session; nights, weekends and holidays hold none.`;
+/** What one decision bar is, from the server's bar length, or why hold times are not counted. */
+function barNote(charts: MeasuredTradeCharts): string {
+  const span = charts.bar_span_ms;
+  if (span === null) return charts.hold_reason ?? 'Hold times are not counted.';
+  return span >= 86_400_000 ? 'A decision bar is one trading session.' : `A decision bar is ${span / 60_000} minutes of a trading session; nights, weekends and holidays hold none.`;
 }
 
-const usdAxis = (theme: ChartTheme) => ({ color: theme.textSecondary, fontSize: 11, formatter: (value: number) => COMPACT_USD.format(value) });
+const usdAxis = (theme: ChartTheme) => ({ color: theme.textSecondary, fontSize: 11, formatter: (value: number) => compactUsdText(value) });
 
-/** A dashed line at $0 on a value axis. */
-function zeroLine(theme: ChartTheme, axis: 'xAxis' | 'yAxis' = 'yAxis') {
-  return { silent: true, symbol: 'none', label: { show: false }, lineStyle: { color: theme.textSecondary, type: 'dashed' as const, width: 1 }, data: [{ [axis]: 0 }] };
+/** A dashed line at $0 on the value axis. */
+function zeroLine(theme: ChartTheme) {
+  return { silent: true, symbol: 'none', label: { show: false }, lineStyle: { color: theme.textSecondary, type: 'dashed' as const, width: 1 }, data: [{ yAxis: 0 }] };
 }
 
 // ---------------------------------------------------------------- V29 trade timeline
 
 /** Every trade at its exit, with the running net profit above. */
-export function tradeTimelineSpec(candidate: Candidate, charts: MeasuredTradeCharts): ChartSpec {
+export function tradeTimelineSpec(candidate: CandidateRef, charts: MeasuredTradeCharts): ChartSpec {
   const trades = charts.trades;
   const last = trades.at(-1);
   return {
@@ -78,7 +74,7 @@ export function tradeTimelineSpec(candidate: Candidate, charts: MeasuredTradeCha
           signedCentsText(trade.pnl),
           signedCentsText(trade.net_profit),
           signedCentsText(trade.running_net_profit),
-          String(trade.bars_held),
+          trade.bars_held === null ? '—' : String(trade.bars_held),
           rsiText(trade.entry_rsi),
           trade.exit_reason,
         ],
@@ -87,12 +83,13 @@ export function tradeTimelineSpec(candidate: Candidate, charts: MeasuredTradeCha
   };
 }
 
-function timelineOption(candidate: Candidate, charts: MeasuredTradeCharts, theme: ChartTheme): ChartOption {
+function timelineOption(candidate: CandidateRef, charts: MeasuredTradeCharts, theme: ChartTheme): ChartOption {
   const trades = charts.trades;
   const color = theme.candidates[candidate.key];
   const axisLine = { lineStyle: { color: theme.axis } };
   const splitLine = { lineStyle: { color: theme.gridLine } };
-  const dateLabel = { color: theme.textSecondary, fontSize: 11, hideOverlap: true, formatter: (value: number) => formatTimestampDisplay(value, { mode: 'date-et' }) };
+  // The axis ticks are instants on the viewer's clock, so they are labelled with the viewer's local date.
+  const dateLabel = { color: theme.textSecondary, fontSize: 11, hideOverlap: true, formatter: (value: number) => formatTimestampDisplay(value, { mode: 'local', granularity: 'date' }) };
   return {
     grid: [
       { left: 60, right: 16, top: 12, height: '50%' },
@@ -105,7 +102,7 @@ function timelineOption(candidate: Candidate, charts: MeasuredTradeCharts, theme
       formatter: (params: unknown) => {
         const index = dataIndexOf(params);
         const trade = trades[index ?? -1];
-        return index === null || trade === undefined ? '' : tradeTooltip(trade, `Trade ${index + 1} of ${trades.length}`, charts.bar_span_ms, theme);
+        return index === null || trade === undefined ? '' : tradeTooltip(trade, `Trade ${index + 1} of ${trades.length}`, charts, theme);
       },
     },
     xAxis: [
@@ -146,7 +143,7 @@ function timelineOption(candidate: Candidate, charts: MeasuredTradeCharts, theme
   };
 }
 
-function tradeTooltip(trade: TradeRecord, title: string, barSpanMs: number, theme: ChartTheme): string {
+function tradeTooltip(trade: TradeRecord, title: string, charts: MeasuredTradeCharts, theme: ChartTheme): string {
   const rows: TooltipRow[] = [
     { label: 'Entered', values: [instant(trade.entry_ms)] },
     { label: 'Exited', values: [instant(trade.exit_ms)] },
@@ -159,10 +156,18 @@ function tradeTooltip(trade: TradeRecord, title: string, barSpanMs: number, them
     { label: 'Held', values: [barsText(trade.bars_held)] },
     { label: 'RSI at entry', values: [rsiText(trade.entry_rsi)] },
   ];
-  return tooltipHtml({ title, columns: ['Value'], rows, notes: [`${trade.exit_reason}.`, barNote(barSpanMs), NET_OF_COMMISSION, DEVELOPMENT] }, theme);
+  return tooltipHtml({ title, columns: ['Value'], rows, notes: [`${trade.exit_reason}.`, barNote(charts), NET_OF_COMMISSION, DEVELOPMENT_NOTE] }, theme);
 }
 
 // ---------------------------------------------------------------- V28 trade P&L histogram
+
+/** What set the bins' width, as the server names it. */
+const RULE_TEXT: Readonly<Record<TradeHistogram['rule'], string>> = {
+  freedman_diaconis: 'the Freedman–Diaconis rule',
+  sturges: 'Sturges’ rule: the middle half of the trades netted the same',
+  capped: 'widened so there are at most 60 bins: a few trades sit far from the rest',
+  single: 'one bin',
+};
 
 function binRange(histogram: TradeHistogram, index: number): string {
   const bin = histogram.bins[index];
@@ -170,7 +175,7 @@ function binRange(histogram: TradeHistogram, index: number): string {
 }
 
 /** The trades' net profits in the server's bins, losses left of $0. */
-export function histogramSpec(candidate: Candidate, charts: MeasuredTradeCharts): ChartSpec {
+export function histogramSpec(candidate: CandidateRef, charts: MeasuredTradeCharts): ChartSpec {
   const histogram = charts.histogram;
   const width = histogram.bin_width === 0 ? 'one bin, as every trade netted the same' : `${histogram.bins.length} bins ${centsText(histogram.bin_width)} wide`;
   return {
@@ -193,7 +198,7 @@ function histogramOption(histogram: TradeHistogram, theme: ChartTheme): ChartOpt
     { group: 'losses', name: 'Losing trades', color: theme.loss, takes: (low: number) => low < 0 },
     { group: 'wins', name: 'Trades at $0 or more', color: theme.gain, takes: (low: number) => low >= 0 },
   ];
-  const width = histogram.bin_width === 0 ? 'Every trade netted the same.' : `Bins ${centsText(histogram.bin_width)} wide (the Freedman–Diaconis rule), with $0 as an edge, so no bin mixes wins and losses.`;
+  const width = histogram.bin_width === 0 ? 'Every trade netted the same, to the cent.' : `Bins ${centsText(histogram.bin_width)} wide (${RULE_TEXT[histogram.rule]}), with $0 as an edge, so no bin mixes wins and losses.`;
   return {
     grid: { left: 40, right: 12, top: 12, bottom: 28 },
     tooltip: {
@@ -209,12 +214,12 @@ function histogramOption(histogram: TradeHistogram, theme: ChartTheme): ChartOpt
           { label: 'Wins', values: [String(bin.wins)] },
           { label: 'Losses', values: [String(bin.losses)] },
         ];
-        return tooltipHtml({ title: binRange(histogram, index), columns: ['Count'], rows, notes: [width, NET_OF_COMMISSION, DEVELOPMENT] }, theme);
+        return tooltipHtml({ title: binRange(histogram, index), columns: ['Count'], rows, notes: [width, NET_OF_COMMISSION, DEVELOPMENT_NOTE] }, theme);
       },
     },
     xAxis: {
       type: 'category',
-      data: bins.map((bin) => COMPACT_USD.format(bin.low)),
+      data: bins.map((bin) => compactUsdText(bin.low)),
       axisLine: { lineStyle: { color: theme.axis } },
       axisTick: { show: false },
       axisLabel: { color: theme.textSecondary, fontSize: 11, hideOverlap: true },
@@ -241,7 +246,8 @@ const EXIT_KINDS = [
 ] as const;
 
 /** Each trade at the decision bars it was held and its net profit, by how it exited. */
-export function holdTimeSpec(candidate: Candidate, charts: MeasuredTradeCharts): ChartSpec {
+export function holdTimeSpec(candidate: CandidateRef, charts: MeasuredTradeCharts): ChartSpec | null {
+  if (charts.hold_reason !== null) return null;
   return {
     label: `${candidate.label} hold time against net profit`,
     summary: `${candidate.label}'s ${tradesText(charts.trades.length)} by decision bars held and net profit; trades closed by the end of the tested window are diamonds.`,
@@ -252,13 +258,13 @@ export function holdTimeSpec(candidate: Candidate, charts: MeasuredTradeCharts):
       columns: ['Entered', 'Bars held', 'Net profit', 'Exit'],
       rows: charts.trades.map((trade) => ({
         key: `${trade.entry_ms}|${trade.exit_ms}`,
-        cells: [instant(trade.entry_ms), String(trade.bars_held), signedCentsText(trade.net_profit), trade.exit_reason],
+        cells: [instant(trade.entry_ms), trade.bars_held === null ? '—' : String(trade.bars_held), signedCentsText(trade.net_profit), trade.exit_reason],
       })),
     },
   };
 }
 
-function holdOption(candidate: Candidate, charts: MeasuredTradeCharts, theme: ChartTheme): ChartOption {
+function holdOption(candidate: CandidateRef, charts: MeasuredTradeCharts, theme: ChartTheme): ChartOption {
   const byKind = EXIT_KINDS.map((exit) => charts.trades.filter((trade) => trade.exit_kind === exit.kind));
   const axisLabel = { color: theme.textSecondary, fontSize: 11 };
   return {
@@ -268,7 +274,7 @@ function holdOption(candidate: Candidate, charts: MeasuredTradeCharts, theme: Ch
       trigger: 'item',
       formatter: (params: unknown) => {
         const trade = byKind[seriesIndexOf(params) ?? -1]?.[dataIndexOf(params) ?? -1];
-        return trade === undefined ? '' : tradeTooltip(trade, `Held ${barsText(trade.bars_held)}`, charts.bar_span_ms, theme);
+        return trade === undefined ? '' : tradeTooltip(trade, `Held ${barsText(trade.bars_held)}`, charts, theme);
       },
     },
     xAxis: {
@@ -289,7 +295,7 @@ function holdOption(candidate: Candidate, charts: MeasuredTradeCharts, theme: Ch
       type: 'scatter' as const,
       symbol: exit.symbol,
       symbolSize: exit.kind === 'strategy' ? 7 : 10,
-      data: byKind[i].map((trade) => [trade.bars_held, trade.net_profit]),
+      data: byKind[i].map((trade) => [trade.bars_held ?? '-', trade.net_profit]),
       itemStyle: { color: exit.kind === 'strategy' ? theme.candidates[candidate.key] : theme.warn, opacity: 0.75 },
       emphasis: { focus: 'series' as const, blurScope: 'global' as const },
       ...(i === 0 ? { markLine: zeroLine(theme) } : {}),
@@ -304,7 +310,7 @@ function bandName(low: number, high: number): string {
 }
 
 /** Each trade at its RSI at entry and net profit, with each band's average between the gates. */
-export function entryRsiSpec(candidate: Candidate, charts: MeasuredTradeCharts, rsi: MeasuredEntryRsi): ChartSpec {
+export function entryRsiSpec(candidate: CandidateRef, charts: MeasuredTradeCharts, rsi: MeasuredEntryRsi): ChartSpec {
   const gates = `${ONE_DECIMAL.format(rsi.gate_low)}–${ONE_DECIMAL.format(rsi.gate_high)}`;
   const outside = rsi.unbanded > 0 ? ` ${tradesText(rsi.unbanded)} have no RSI recorded or one outside the gates, so sit in no band.` : '';
   return {
@@ -320,8 +326,9 @@ export function entryRsiSpec(candidate: Candidate, charts: MeasuredTradeCharts, 
   };
 }
 
-function rsiOption(candidate: Candidate, charts: MeasuredTradeCharts, rsi: MeasuredEntryRsi, theme: ChartTheme): ChartOption {
-  const entered = charts.trades.filter((trade) => trade.entry_rsi !== null);
+function rsiOption(candidate: CandidateRef, charts: MeasuredTradeCharts, rsi: MeasuredEntryRsi, theme: ChartTheme): ChartOption {
+  // The trades with an RSI recorded at entry, each with that RSI.
+  const entered = charts.trades.flatMap((trade) => (trade.entry_rsi === null ? [] : [{ trade, rsi: trade.entry_rsi }]));
   // Each band's average as a level segment across the band; a gap after each, and none for an empty band.
   const segments: { value: [number, number | '-']; band: number | null; symbol?: string }[] = rsi.bands.flatMap((band, i) =>
     band.mean_net_profit === null
@@ -342,8 +349,8 @@ function rsiOption(candidate: Candidate, charts: MeasuredTradeCharts, rsi: Measu
       formatter: (params: unknown) => {
         const index = dataIndexOf(params) ?? -1;
         if (seriesIndexOf(params) === 0) {
-          const trade = entered[index];
-          return trade === undefined ? '' : tradeTooltip(trade, `RSI ${rsiText(trade.entry_rsi)} at entry`, charts.bar_span_ms, theme);
+          const trade = entered[index]?.trade;
+          return trade === undefined ? '' : tradeTooltip(trade, `RSI ${rsiText(trade.entry_rsi)} at entry`, charts, theme);
         }
         const band = rsi.bands[segments[index]?.band ?? -1];
         if (band === undefined) return '';
@@ -351,7 +358,7 @@ function rsiOption(candidate: Candidate, charts: MeasuredTradeCharts, rsi: Measu
           { label: 'Trades', values: [String(band.trades)] },
           { label: 'Average net profit', values: [signedCentsText(band.mean_net_profit)] },
         ];
-        return tooltipHtml({ title: bandName(band.low, band.high), columns: ['Value'], rows, notes: ['A band runs up to, not including, its upper edge; the last one includes the upper gate.', NET_OF_COMMISSION, DEVELOPMENT] }, theme);
+        return tooltipHtml({ title: bandName(band.low, band.high), columns: ['Value'], rows, notes: ['A band runs up to, not including, its upper edge; the last one includes the upper gate.', NET_OF_COMMISSION, DEVELOPMENT_NOTE] }, theme);
       },
     },
     xAxis: {
@@ -373,7 +380,7 @@ function rsiOption(candidate: Candidate, charts: MeasuredTradeCharts, rsi: Measu
         id: `trades:${candidate.key}`,
         name: 'Trades',
         type: 'scatter',
-        data: entered.map((trade) => [trade.entry_rsi ?? 0, trade.net_profit]),
+        data: entered.map(({ trade, rsi }) => [rsi, trade.net_profit]),
         symbolSize: 6,
         itemStyle: { color, opacity: 0.6 },
         emphasis: { focus: 'series', blurScope: 'global' },
@@ -408,7 +415,7 @@ function cellName(times: EntryTimes, weekday: number, halfHour: number): string 
 }
 
 /** Trades by entry weekday and Eastern half hour: each cell's count, coloured by its average net profit unless it holds too few. */
-export function entryTimeSpec(candidate: Candidate, charts: MeasuredTradeCharts): ChartSpec {
+export function entryTimeSpec(candidate: CandidateRef, charts: MeasuredTradeCharts): ChartSpec {
   const times = charts.entry_times;
   return {
     label: `${candidate.label} entry time and weekday`,
@@ -454,7 +461,7 @@ function entryTimeOption(times: EntryTimes, theme: ChartTheme): ChartOption {
           { label: 'Total net profit', values: [signedCentsText(cell.total_net_profit)] },
         ];
         const few = cell.too_few ? [`Fewer than ${times.min_trades} trades: too few for the average to mean much.`] : [];
-        return tooltipHtml({ title: cellName(times, cell.weekday, cell.half_hour), columns: ['Value'], rows, notes: [...few, NET_OF_COMMISSION, DEVELOPMENT] }, theme);
+        return tooltipHtml({ title: cellName(times, cell.weekday, cell.half_hour), columns: ['Value'], rows, notes: [...few, NET_OF_COMMISSION, DEVELOPMENT_NOTE] }, theme);
       },
     },
     xAxis: { type: 'category', data: [...times.half_hours], axisLine: { lineStyle: { color: theme.axis } }, axisTick: { show: false }, axisLabel: { ...axisLabel, hideOverlap: true } },
