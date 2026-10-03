@@ -1,6 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject } from '@angular/core';
 import { Title } from '@angular/platform-browser';
-import { ActivatedRouteSnapshot, Router, RouterOutlet } from '@angular/router';
+import { ActivatedRouteSnapshot, RouterOutlet } from '@angular/router';
 import { Toast } from 'primeng/toast';
 import { AlpacaLiveBannerComponent } from './shell/alpaca-live-banner.component';
 import { LaneAttentionBellComponent } from './shell/lane-attention-bell.component';
@@ -107,22 +107,24 @@ import { laneDisplayNameText } from './fleet/fleet-directory.types';
   `],
   template: `
     <div class="shell">
-      <app-top-bar [accountMode]="shellAccountMode()">
-        <app-menubar shell-nav />
-        <!-- Beside the menu, where the bar has room: the account pills'
-             row scrolls and would clip it at narrow widths. -->
-        <app-ibkr-feed-pill shell-nav />
-        <nav class="shell-actions" shell-connection aria-label="Accounts">
-          @for (lane of alpacaLanes(); track lane.clerk_id) {
-            <app-alpaca-live-banner [lane]="lane" />
-            <app-lane-attention-bell [lane]="lane" />
-          } @empty {
-            <!-- Never zero badges. An unresolved roster is itself an
-                 undetermined mode, and the banner says so loudly. -->
-            <app-alpaca-live-banner [lane]="null" />
-          }
-        </nav>
-      </app-top-bar>
+      @if (!isChromelessRoute()) {
+        <app-top-bar [accountMode]="shellAccountMode()">
+          <app-menubar shell-nav />
+          <!-- Beside the menu, where the bar has room: the account pills'
+               row scrolls and would clip it at narrow widths. -->
+          <app-ibkr-feed-pill shell-nav />
+          <nav class="shell-actions" shell-connection aria-label="Accounts">
+            @for (lane of alpacaLanes(); track lane.clerk_id) {
+              <app-alpaca-live-banner [lane]="lane" />
+              <app-lane-attention-bell [lane]="lane" />
+            } @empty {
+              <!-- Never zero badges. An unresolved roster is itself an
+                   undetermined mode, and the banner says so loudly. -->
+              <app-alpaca-live-banner [lane]="null" />
+            }
+          </nav>
+        </app-top-bar>
+      }
       <main class="main">
         <div class="main-content">
           <app-page-body [fullBleed]="isFullBleedRoute()">
@@ -141,8 +143,8 @@ export class AppComponent {
   private readonly ibkrFeed = inject(IbkrFeedService);
   private readonly fleetDirectory = inject(FleetDirectoryService);
   private readonly title = inject(Title);
-  private readonly router = inject(Router);
   private readonly currentUrl = inject(CurrentUrlService).url;
+  private readonly activeRoute = inject(CurrentUrlService).activeRoute;
   private readonly titleContext = inject(WorkspaceTitleContextService);
 
   /** Inside an account workspace the window names what is open and the account
@@ -190,10 +192,15 @@ export class AppComponent {
       ? 'paper'
       : 'live';
   });
-  protected readonly isFullBleedRoute = computed(() => {
-    this.currentUrl();
-    return activeRouteHasData(this.router.routerState.snapshot.root, 'fullBleed');
-  });
+  protected readonly isFullBleedRoute = computed(() =>
+    activeRouteHasData(this.activeRoute(), 'fullBleed'),
+  );
+  /** The entry page stands alone: no top bar, so no account-mode badges. It
+   * is the one page allowed to drop them (ADR 0059 Decision 8, amended
+   * 2026-10-03), because nothing on it reads or acts on an account. */
+  protected readonly isChromelessRoute = computed(() =>
+    activeRouteHasData(this.activeRoute(), 'chromeless'),
+  );
 
   constructor() {
     effect(() => this.title.setTitle(this.pageTitle() ?? 'Botasur'));

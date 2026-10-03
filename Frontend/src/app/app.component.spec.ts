@@ -48,6 +48,7 @@ describe('AppComponent', () => {
       imports: [
         AppComponent,
         RouterModule.forRoot([
+          { path: '', pathMatch: 'full', component: ShellSmokeRouteComponent, data: { chromeless: true } },
           { path: 'data-lab', component: ShellSmokeRouteComponent },
           { path: 'options-lab', component: ShellSmokeRouteComponent, data: { fullBleed: true } },
           { path: 'research-lab/strategy-runs/:id', component: ShellSmokeRouteComponent },
@@ -283,6 +284,22 @@ describe('AppComponent', () => {
       expect(fixture.nativeElement.querySelector('app-top-bar')).toBeTruthy();
       expect(fixture.nativeElement.textContent).toContain('Route body');
     }
+  });
+
+  it('shows the entry page alone and brings the top bar back inside the app', async () => {
+    const router = TestBed.inject(Router);
+
+    // The one page allowed to drop the account-mode badges (ADR 0059
+    // Decision 8, amended 2026-10-03): nothing on it acts on an account.
+    await router.navigateByUrl('/');
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('app-top-bar')).toBeNull();
+    expect(fixture.nativeElement.textContent).toContain('Route body');
+
+    await router.navigateByUrl('/data-lab');
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('app-top-bar')).toBeTruthy();
+    expect(fixture.nativeElement.querySelector('app-alpaca-live-banner')).toBeTruthy();
   });
 
   it('renders global status controls, with no Bots/Gallery shortcuts, in the top-bar connection region', () => {
