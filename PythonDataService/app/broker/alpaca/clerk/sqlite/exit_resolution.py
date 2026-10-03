@@ -1641,6 +1641,8 @@ async def _refresh_or_resume_reducing_order(
     run: OffLoop,
 ) -> None:
     observed = await broker.observe_exact(reducing.client_order_id)
+    if observed is None and reducing.broker_order_id is not None:
+        observed = await _observe_by_broker_order_id(broker, reducing)
     if isinstance(observed, BrokerError):
         await run(
             lambda: fold_uncertain(
@@ -1718,6 +1720,31 @@ async def _refresh_or_resume_reducing_order(
         read=read,
         run=run,
     )
+
+
+async def _observe_by_broker_order_id(
+    broker: ClaimedBrokerIO, reducing: OrderResource
+) -> BrokerOrder | BrokerError | None:
+    """The reducing order read by the broker order id the Clerk recorded for it (#2854).
+
+    Asked only when the order's exact lookup by client order id reads absent
+    while the Clerk holds a broker order id for it: the broker acknowledged
+    the order, or an operator pointed the Clerk at it
+    (:func:`fold_exit_attested_order`), so "absent" is a lookup that does not
+    show an order the broker has. Without this the order, working or filled,
+    folded back to ``unknown`` on every pass.
+
+    The answer is evidence only for the order it names: one that carries
+    another client order id is an error, never this order's state.
+    """
+    assert reducing.broker_order_id is not None
+    observed = await broker.observe_broker_order(reducing.broker_order_id)
+    if isinstance(observed, BrokerOrder) and observed.client_order_id != reducing.client_order_id:
+        return BrokerError(
+            f"broker order {reducing.broker_order_id!r} carries "
+            f"client_order_id={observed.client_order_id!r}, expected {reducing.client_order_id!r}"
+        )
+    return observed
 
 
 async def _submit_reducing_order(
@@ -2405,6 +2432,43 @@ def fold_exit_attested_absent(
     )
 
 
+def fold_exit_attested_order(
+    repo: ClerkSqliteRepository, *, effect_operation_id: str, observed: BrokerOrder
+) -> None:
+    """Take up a closing order an operator pointed the Clerk at by its Alpaca order id (#2854).
+
+    The caller read the order by that id and checked it is this EXIT's own:
+    it carries the reducing order's client order id, symbol, side and
+    quantity (``unknown_order_attestation``). From here it is folded exactly
+    as the answer of the order's own exact lookup is
+    (:func:`_fold_observed_reducing_order`), and the EXIT is finalized on it.
+    A working order is followed. A fill is credited from the order's
+    cumulative total, by its difference from what is already recorded, so
+    never twice. An order that ended unfilled fails the EXIT through
+    ``EXIT_NOT_FLAT``.
+
+    The acknowledgement records the order's broker order id, which later
+    passes read it by while its client-id lookup still reads absent
+    (:func:`_observe_by_broker_order_id`).
+    """
+    reducing = _read_exit_claim_state(repo, effect_operation_id).reducing
+    if reducing is None or observed.client_order_id != reducing.client_order_id:
+        raise AssertionError(
+            f"broker order {observed.order_id!r} is not EXIT {effect_operation_id!r}'s reducing order"
+        )
+    _fold_observed_reducing_order(
+        repo,
+        effect_operation_id=effect_operation_id,
+        reducing=reducing,
+        observed=observed,
+        simulated_authority=False,
+    )
+    # Read again: the fold above settled the unknown outcome this EXIT was in.
+    _finalize_claimed_exit(
+        repo, effect_operation_id, _read_exit_claim_state(repo, effect_operation_id), reducing
+    )
+
+
 def priced_reduction_reference_price(repo: ClerkSqliteRepository, order_ref: str) -> float | None:
     """The bid (sell) or ask (cover) a priced reducing leg's fills are measured from.
 
@@ -2661,6 +2725,7 @@ __all__ = [
     "cancel_and_prove_owned_entry",
     "flatten_send_refusal",
     "fold_exit_attested_absent",
+    "fold_exit_attested_order",
     "priced_reduction_reference_price",
     "resolve_exit",
 ]

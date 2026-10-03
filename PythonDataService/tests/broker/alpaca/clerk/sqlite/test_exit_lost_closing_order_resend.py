@@ -236,6 +236,17 @@ class _Alpaca(_Account):
             return None
         return self._has.get(client_order_id)
 
+    async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
+        """An order by its Alpaca order id, shown exactly when its exact lookup shows it (#2854)."""
+        return next(
+            (
+                order
+                for client_order_id, order in self._has.items()
+                if order.order_id == order_id and client_order_id not in self._unanswered
+            ),
+            None,
+        )
+
     def lists_among_its_open_orders(self, client_order_id: str) -> None:
         """The account's open orders now list the order; its exact lookup still answers absent."""
         self.open_orders.append(self._has[client_order_id])

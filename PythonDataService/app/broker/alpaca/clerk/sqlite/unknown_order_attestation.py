@@ -26,6 +26,16 @@ the symbol; that episode is what then keeps the Clerk from selling shares
 Alpaca does not hold. The EXIT fails releasably through ``EXIT_NOT_FLAT``
 and the attributed quantity is never changed.
 
+Attestation ``exists`` -- "Alpaca shows it, under this Alpaca order id". The
+Clerk reads that order by its broker id and takes it up only when it is this
+order: it carries exactly the client order id the Clerk sent, and the
+symbol, side and quantity the order was created with. Then it is folded as
+the answer of the order's own exact lookup would be: a working order is
+followed, a fill is credited once, an order that ended unfilled fails the
+EXIT through ``EXIT_NOT_FLAT``. A wrong id, another bot's order, or an order
+under another client order id is refused. Taking up an order Alpaca booked
+under another client order id is not done here.
+
 Everything runs under the EXIT's exclusive operation claim, the one
 ``resolve_exit`` takes: a pass of the Clerk that meets it defers the EXIT,
 so the order cannot be sent again while it is being settled. Every durable
@@ -48,7 +58,10 @@ from app.broker.alpaca.clerk.sqlite.account_open_work import (
     open_order_snapshot_is_full,
 )
 from app.broker.alpaca.clerk.sqlite.claimed_broker_io import ClaimedBrokerIO
-from app.broker.alpaca.clerk.sqlite.exit_resolution import fold_exit_attested_absent
+from app.broker.alpaca.clerk.sqlite.exit_resolution import (
+    fold_exit_attested_absent,
+    fold_exit_attested_order,
+)
 from app.broker.alpaca.clerk.sqlite.facts import (
     OrderOutcomeAttestedFacts,
     UncertaintyRaisedFacts,
@@ -280,10 +293,16 @@ async def _attest(
         trade=trade,
     )
     try:
-        if attestation.kind != "absent":
-            raise UnknownOrderSettlementRefused(
-                "ATTESTATION_NOT_SUPPORTED",
-                "The Clerk cannot yet take up an order by its Alpaca order id. Nothing was changed.",
+        if attestation.kind == "exists":
+            assert attestation.broker_order_id is not None
+            return await intake.off_loop(
+                _settle_exists,
+                repo,
+                strategy_instance_id=strategy_instance_id,
+                presented=presented,
+                observed=await _read_order(broker, attestation.broker_order_id.strip()),
+                observed_at_ms=repo.clock(),
+                commit=commit,
             )
         since_ms = presented.created_at_ms - ORDERS_SINCE_MARGIN_MS
         rounds = (
@@ -659,6 +678,128 @@ def _settled(
         order_ref=presented.order_ref,
         attestation=attestation,
     )
+
+
+async def _read_order(broker: ClaimedBrokerIO, broker_order_id: str) -> BrokerOrder:
+    """The order Alpaca has under ``broker_order_id``, read under the claim; refuses when it has none."""
+    observed = await broker.observe_broker_order(broker_order_id)
+    if isinstance(observed, BrokerError):
+        raise _broker_unreadable(observed)
+    if observed is None:
+        raise UnknownOrderSettlementRefused(
+            "NO_SUCH_BROKER_ORDER",
+            f"Alpaca has no order with the id {broker_order_id!r}. Check the id at Alpaca. "
+            "Nothing was changed.",
+        )
+    return observed
+
+
+def _require_same_order(presented: ProjectedUnknownExitOrder, observed: BrokerOrder) -> None:
+    """Refuse unless the order Alpaca returned is this closing order, readable in full.
+
+    It is the same order only when it carries exactly the client order id
+    this order was sent under, and the symbol, side and quantity it was
+    created with. Another bot's order, an order placed at Alpaca by hand, and
+    an order Alpaca booked under another client order id all fail the first
+    test, whatever else matches.
+
+    An order the Clerk could not read in full is refused too, before
+    anything is written: its fold would otherwise withhold it and record
+    only that the outcome is still unknown.
+    """
+    order_id = observed.order_id
+    named = all(value.strip() for value in (order_id, observed.status, observed.symbol, observed.side))
+    if observed.unreadable_fields or not named:
+        raise UnknownOrderSettlementRefused(
+            "ORDER_UNREADABLE",
+            f"The Clerk could not read all of Alpaca order {order_id!r}, so it cannot tell whether "
+            "it is this order. Nothing was changed.",
+        )
+    if observed.client_order_id != presented.order_ref:
+        raise UnknownOrderSettlementRefused(
+            "NOT_THIS_ORDER",
+            f"Alpaca order {order_id!r} is not this order: Alpaca holds it under client order id "
+            f"{observed.client_order_id!r}, and the Clerk sent this order under "
+            f"{presented.order_ref!r}. Nothing was changed.",
+        )
+    quantity = observed.quantity
+    if (
+        observed.symbol.upper() != presented.symbol.upper()
+        or observed.side.lower() != presented.side.lower()
+        or quantity is None
+        or not math.isfinite(quantity)
+        or position_quantity_is_nonzero(quantity - presented.quantity)
+    ):
+        raise UnknownOrderSettlementRefused(
+            "NOT_THIS_ORDER",
+            f"Alpaca order {order_id!r} is to {observed.side.lower()} "
+            f"{'an unstated number of' if quantity is None else format(quantity, 'g')} "
+            f"{observed.symbol}, and this order is to {presented.side.lower()} "
+            f"{presented.quantity:g} {presented.symbol}. Nothing was changed.",
+        )
+    filled, price = observed.filled_quantity, observed.filled_avg_price
+    if (
+        not math.isfinite(filled)
+        or filled < 0
+        or position_quantity_is_nonzero(max(filled - quantity, 0.0))
+        or (position_quantity_is_nonzero(filled) and (price is None or not math.isfinite(price) or price <= 0))
+    ):
+        raise UnknownOrderSettlementRefused(
+            "ORDER_UNREADABLE",
+            f"Alpaca reports a filled quantity or price for order {order_id!r} that the Clerk "
+            "cannot record. Nothing was changed.",
+        )
+
+
+def _settle_exists(
+    repo: ClerkSqliteRepository,
+    *,
+    strategy_instance_id: str,
+    presented: ProjectedUnknownExitOrder,
+    observed: BrokerOrder,
+    observed_at_ms: int,
+    commit: _Commit | None,
+) -> UnknownOrderSettlementReceipt | AttestationFindings:
+    """The fenced run of an ``exists`` attestation: the order is this one, then -- for a commit -- it is taken up."""
+    _require_presented_order(repo, strategy_instance_id=strategy_instance_id, presented=presented)
+    _require_same_order(presented, observed)
+    if commit is None:
+        return AttestationFindings(
+            attestation="exists",
+            would_settle=True,
+            refusal_reason_code=None,
+            lines=(
+                f"Alpaca order {observed.order_id}: {observed.side.lower()} {presented.quantity:g} "
+                f"{presented.symbol.upper()}, {observed.status}, {observed.filled_quantity:g} filled.",
+                "It carries this order's client order id, symbol, side and quantity.",
+                "The Clerk takes it up as this exit's order. Nothing is sent.",
+            ),
+            observed_at_ms=observed_at_ms,
+        )
+    committed = _append_attestation(
+        repo,
+        presented=presented,
+        facts=OrderOutcomeAttestedFacts(
+            attestation="exists",
+            operator=commit.operator,
+            operator_reason=commit.operator_reason,
+            client_order_id=presented.order_ref,
+            symbol=presented.symbol,
+            side=presented.side,
+            quantity=presented.quantity,
+            latest_send_sequence=presented.latest_send_sequence,
+            uncertainty_id=presented.uncertainty_id,
+            broker_observed_at_ms=observed_at_ms,
+            broker_order_id=observed.order_id,
+            broker_state=observed.status,
+            broker_filled_quantity=observed.filled_quantity,
+        ),
+        observed_at_ms=observed_at_ms,
+    )
+    fold_exit_attested_order(
+        repo, effect_operation_id=presented.effect_operation_id, observed=observed
+    )
+    return _settled(repo, committed, presented, commit, attestation="exists")
 
 
 def recorded_settlement(

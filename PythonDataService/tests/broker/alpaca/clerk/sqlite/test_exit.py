@@ -215,6 +215,7 @@ class _FakeTrade:
         self.submit_calls: list[tuple[BrokerOrderLeg, str]] = []
         self.cancel_calls: list[str] = []
         self.lookup_calls: list[str] = []
+        self.broker_id_lookup_calls: list[str] = []
 
     async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
         self.submit_calls.append((leg, client_order_id))
@@ -249,6 +250,11 @@ class _FakeTrade:
         return _broker_order(client_order_id, status="canceled").model_copy(
             update={"order_id": f"bo-{client_order_id}"}
         )
+
+    async def get_order_by_broker_order_id(self, order_id: str) -> BrokerOrder | None:
+        """No read by broker order id shows an order here: every test states what the exact lookup answers."""
+        self.broker_id_lookup_calls.append(order_id)
+        return None
 
 
 class _NoReconciler:
