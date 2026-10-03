@@ -9,6 +9,9 @@ regardless of which tier produced them.
 
 from __future__ import annotations
 
+import pytest
+
+from app.engine.indicators.macd import MovingAverageConvergenceDivergence
 from app.schemas.run_admission import StrategyValidationAdmissionFact
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.broker_v2_panel.paper_deploy_service import resolve_deploy_strategy_params
@@ -136,3 +139,23 @@ def test_qualified_presets_resolve_to_the_exact_registry_corpus_without_changing
         assert "symbol" not in preset.parameters
         for symbol in contract.validated_symbols:
             assert _qualified_configuration(key, symbol).symbol == symbol
+
+
+@pytest.mark.parametrize("strategy_key", ["spy_strategy_a", "spy_strategy_b"])
+@pytest.mark.parametrize(("fast", "slow", "builds"), [(25, 26, True), (26, 26, False), (30, 26, False)])
+def test_deploy_refuses_exactly_the_macd_periods_the_indicator_cannot_build(
+    strategy_key: str, fast: int, slow: int, builds: bool
+) -> None:
+    """#2841: each period passed its own bounds, so the deploy sealed and the bot then raised on start.
+
+    The rule is the indicator's own, so each case first asks the indicator.
+    """
+    overrides = {"macd_fast": fast, "macd_slow": slow}
+    if builds:
+        MovingAverageConvergenceDivergence("probe", fast, slow, 9)
+        assert resolve_deploy_strategy_params(strategy_key, _SYMBOL, overrides).effective["macd_fast"] == fast
+        return
+    with pytest.raises(ValueError, match="must be < slow_period"):
+        MovingAverageConvergenceDivergence("probe", fast, slow, 9)
+    with pytest.raises(ValueError, match=rf"macd_fast \({fast}\) must be less than macd_slow \({slow}\)"):
+        resolve_deploy_strategy_params(strategy_key, _SYMBOL, overrides)

@@ -268,6 +268,11 @@ class StrategyRegistration:
     # Compatibility registrations remain runnable for existing ledgers but
     # must not appear as duplicate choices in the Engine Lab strategy picker.
     catalog_visible: bool = True
+    # A rule between parameters that per-field bounds cannot state: a plain
+    # refusal, or ``None``. Deploy checks it before anything is sealed
+    # (#2841). It lives here because a program's parameter module is a sealed
+    # source.
+    params_refusal: Callable[[StrategyParamsBase], str | None] | None = None
     # Engine Lab parity — the LEAN trusted-sample template that implements
     # the same rules as this strategy, if one exists. When set, every raw
     # minute-resolution Python run auto-spawns a LEAN validating companion
@@ -338,6 +343,14 @@ def hidden_params_present(
     """Return the submitted parameter names this registration hides, sorted."""
     hidden = reg.hidden_params | extra_hidden
     return sorted(hidden.intersection(params))
+
+
+def _macd_periods_refusal(params: StrategyParamsBase) -> str | None:
+    """MACD refuses to build unless its fast period is shorter than its slow one."""
+    assert isinstance(params, RsiRangeStrategyAParams | RsiRangeStrategyBParams)
+    if params.macd_fast < params.macd_slow:
+        return None
+    return f"macd_fast ({params.macd_fast}) must be less than macd_slow ({params.macd_slow})."
 
 
 def _ema_signals_for(params: StrategyParamsBase) -> tuple[SignalSeriesContract, ...]:
@@ -1599,6 +1612,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "spy_strategy_a": StrategyRegistration(
         display_name="Strategy A — EMA-gap + MACD + RSI-range",
         deploy_code="sa",
+        params_refusal=_macd_periods_refusal,
         signal_program_contract=SignalProgramContract(
             program_version=SPY_STRATEGY_A_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,
@@ -1805,6 +1819,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
     "spy_strategy_b": StrategyRegistration(
         display_name="Strategy B — Supertrend + ADX + MACD + RSI-range",
         deploy_code="sb",
+        params_refusal=_macd_periods_refusal,
         signal_program_contract=SignalProgramContract(
             program_version=SPY_STRATEGY_B_SIGNAL_PROGRAM_VERSION,
             protocol_version=SignalSession.PROTOCOL_VERSION,

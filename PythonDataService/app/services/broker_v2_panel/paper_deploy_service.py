@@ -127,7 +127,8 @@ def resolve_deploy_strategy_params(
     default, not a fabricated dataset.
 
     Raises ``ValueError`` with a human-readable message for an unknown
-    strategy, a hidden/live-only parameter, or a schema validation failure —
+    strategy, a hidden/live-only parameter, a schema validation failure, or a
+    combination the strategy's own rule refuses (``params_refusal``) —
     callers translate this into their own typed error shape.
     """
     registration = _STRATEGY_REGISTRY.get(strategy_key)
@@ -144,6 +145,9 @@ def resolve_deploy_strategy_params(
             f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors()
         )
         raise ValueError(f"Invalid strategy parameters: {problems}.") from exc
+    refusal = None if registration.params_refusal is None else registration.params_refusal(validated)
+    if refusal is not None:
+        raise ValueError(f"Invalid strategy parameters: {refusal}")
     defaults = registration.param_schema().model_dump(exclude={"symbol"})
     effective = validated.model_dump(exclude={"symbol"})
     diverges = tuple(sorted(name for name, value in effective.items() if value != defaults.get(name)))
