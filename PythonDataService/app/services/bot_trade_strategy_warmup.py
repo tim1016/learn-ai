@@ -19,9 +19,13 @@ runtime/binding types this module duck-types against.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from app.broker.alpaca.clerk.sqlite.decision_receipts import SqliteDecisionReceipts
+from app.broker.alpaca.clerk.sqlite.decision_receipts import (
+    SqliteDecisionReceipts,
+    rotated_out_before_ms,
+)
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import EvaluationMode, EvaluationStage, Settlement
@@ -91,7 +95,7 @@ async def replay_warmup_bars(
     feed: MarketDataFeed,
     binding: BrokerBotBinding,
     *,
-    captured_decisions: Mapping[str, str] | None,
+    captured_decisions: CapturedDecisions | None,
     record_before_start: Callable[[Sequence[DecisionExplanationRecord]], None] | None = None,
 ) -> tuple[MarketDataBar, EvaluationStage] | None:
     """Replay recent closed bars so indicators are ready before live
@@ -99,8 +103,9 @@ async def replay_warmup_bars(
     known Clerk disposition so position-lifecycle state -- not just
     indicator math -- carries forward correctly (FR-016).
 
-    ``captured_decisions`` maps this strategy instance's own recently
-    durable decision identities to their outcomes (``None`` or empty when
+    ``captured_decisions`` is one read of this instance's retained decision
+    receipts (:class:`CapturedDecisions`); its ``outcomes`` map recently
+    durable decision identities to their outcomes (``None``, or empty, when
     it has never captured one). Every bucket whose evaluation identity is
     present is reapplied exactly as it was originally disposed -- COMMIT
     for an effect-bearing outcome, DISCARD otherwise -- so a bucket later
@@ -130,6 +135,15 @@ async def replay_warmup_bars(
     ``_build_signal_strategy`` refuses a strategy with no registered
     Signal Program rather than returning a runtime that cannot stage.
 
+    A bucket the read no longer covers (:meth:`CapturedDecisions.covers`)
+    is never flagged either (#2850). A Resume replays every retained bar
+    back to the instance's warm floor (#2314), and a long-lived instance
+    has decided more buckets over that span than the receipt window
+    retains: such a bucket is missing from ``captured_decisions`` because
+    its receipt rotated out, not because a crash left it staged. The bucket
+    a crash did leave staged closed after every decision made before the
+    crash, so the read always covers it.
+
     Returns the ``(bar, stage)`` pair for the one bucket a crash left
     staged but uncaptured, or ``None`` when replay found no such bucket.
     The caller (``bot_trade_strategy._warm_up_signal_strategy``) shapes a
@@ -150,7 +164,11 @@ async def replay_warmup_bars(
     warmup_bars = await feed.recent_closed_bars(
         binding.symbol, use_rth=binding.use_rth, lookback_days=_warmup_lookback_days_for(binding)
     )
-    captured = captured_decisions or {}
+    captured = (
+        captured_decisions
+        if captured_decisions is not None
+        else CapturedDecisions(outcomes={}, rotated_out_before_ms=None)
+    )
     uncaptured: tuple[MarketDataBar, EvaluationStage] | None = None
     before_start: list[DecisionExplanationRecord] = []
     for market_bar in warmup_bars:
@@ -165,7 +183,7 @@ async def replay_warmup_bars(
                 record = DecisionExplanationRecord.from_decision(stage.bar, stage.decision)
                 if record is not None:
                     before_start.append(record)
-            known_outcome = captured.get(stage.trace.evaluation_id)
+            known_outcome = captured.outcomes.get(stage.trace.evaluation_id)
             if known_outcome is not None:
                 runtime.settle(
                     Settlement.COMMIT
@@ -175,12 +193,14 @@ async def replay_warmup_bars(
             else:
                 # Only a bucket some run decided live can be a crash artifact:
                 # history (a fresh deploy's warmup, or #2314's hole fill) was
-                # never decided, so its candidates are ordinary catch-up.
+                # never decided, so its candidates are ordinary catch-up. Nor
+                # is a bucket whose receipt has rotated out (#2850).
                 if (
-                    captured
+                    captured.outcomes
                     and uncaptured is None
                     and stage.decision.intent is not None
                     and market_bar.provenance != "history"
+                    and captured.covers(stage.trace.bar_close_ms)
                 ):
                     uncaptured = (market_bar, stage)
                 runtime.settle(Settlement.DISCARD)
@@ -192,25 +212,60 @@ async def replay_warmup_bars(
     return uncaptured
 
 
-def captured_decision_outcomes(receipts: SqliteDecisionReceipts) -> dict[str, str]:
-    """Return this instance's own recently durable decisions, by identity.
+@dataclass(frozen=True)
+class CapturedDecisions:
+    """What one read of the retained decision receipts tells a Resume.
+
+    ``outcomes`` is each retained decision's disposition, by evaluation
+    identity. ``rotated_out_before_ms`` is the decision-bar close before
+    which a bucket's receipt may have rotated out of that same read, or
+    ``None`` while the read still holds every receipt the instance wrote
+    (``decision_receipts.rotated_out_before_ms``). Neither has a default: a
+    caller that names decisions also says how far back they reach, because
+    replay reads the two together (#2850).
+    """
+
+    outcomes: Mapping[str, str]
+    rotated_out_before_ms: int | None
+
+    def covers(self, bar_close_ms: int) -> bool:
+        """Whether this read reaches back to a bucket that closed at ``bar_close_ms``.
+
+        Only then does a bucket missing from ``outcomes`` mean it was never
+        receipted. One that closed before ``rotated_out_before_ms`` may have
+        lost its receipt to rotation instead, so its absence is not evidence
+        of a crash.
+        """
+        return self.rotated_out_before_ms is None or bar_close_ms >= self.rotated_out_before_ms
+
+
+def captured_decision_outcomes(receipts: SqliteDecisionReceipts) -> CapturedDecisions:
+    """Return this instance's own recently durable decisions, by identity,
+    and how far back that record reaches.
 
     FR-016: every appended receipt's ``intent_id`` mirrors its evaluation
     identity (see the atomic-effect and refusal/no-action append sites in
-    ``bot_trade_strategy.py``), so this is exactly the lookup
+    ``bot_trade_strategy.py``), so ``outcomes`` is exactly the lookup
     :func:`replay_warmup_bars` needs to reapply each bucket's own known
     disposition and recognize the one bucket that has none.
     The read is the full retention window, not the presentation cap: a
     one-minute program (``deployment_validation``) writes more receipts
     over its warmup than ``MAX_DECISION_RECEIPT_READ`` returns, and any
     bucket the read cannot see would be replayed as uncaptured (#1740).
-    ``tests/services/test_signal_program_retention_floor.py`` pins that the
-    window covers every sealed program's warmup plus one open session. An
-    empty result means this instance has never captured a decision --
-    there is no crash to recover from.
+    The window does not cover everything a Resume replays, and no window
+    could: a Resume replays every retained bar back to its warm floor
+    (#2314), and a long-lived instance has decided more buckets over that
+    span than the window retains. ``rotated_out_before_ms`` marks where
+    the window stops reaching, so replay judges absence only for the
+    buckets it still covers (#2850). An empty result means this instance
+    has never captured a decision -- there is no crash to recover from.
     """
-    return {
-        receipt.intent_id: receipt.outcome
-        for receipt in receipts.retained_window()
-        if receipt.intent_id is not None
-    }
+    window = receipts.retained_window()
+    return CapturedDecisions(
+        outcomes={
+            receipt.intent_id: receipt.outcome
+            for receipt in window
+            if receipt.intent_id is not None
+        },
+        rotated_out_before_ms=rotated_out_before_ms(window),
+    )

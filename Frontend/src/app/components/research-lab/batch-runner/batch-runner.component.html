@@ -37,7 +37,7 @@
       label="Run Cross-Sectional Study"
       icon="pi pi-play"
       [loading]="loading()"
-      [disabled]="loading() || range().symbols.length === 0"
+      [disabled]="loading() || range().symbols.length === 0 || range().from === '' || range().to === ''"
       (onClick)="runBatch()"
     />
     @if (loading()) {

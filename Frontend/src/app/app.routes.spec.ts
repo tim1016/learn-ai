@@ -18,6 +18,7 @@ import { AlpacaAccountListPageComponent } from './components/brokers/alpaca-desk
 import { AlpacaHomeComponent } from './components/brokers/alpaca-home/alpaca-home.component';
 import { AlpacaActivityPageComponent } from './components/brokers/alpaca-desk/activity/alpaca-activity-page.component';
 import { BotPanelShellComponent } from './components/broker/v2-panel/panel-shell/bot-panel-shell.component';
+import { EntryComponent } from './components/entry/entry.component';
 import { alpacaSurfaceRedirectGuard } from './fleet/alpaca-surface-redirect.guard';
 import { accountWorkspaceFixRoute, type AccountWorkspaceFixDestination } from './fleet/account-workspace';
 import { routes } from './app.routes';
@@ -81,6 +82,16 @@ describe('routes', () => {
     await router.navigateByUrl(url);
 
     expect(router.url).toBe('/data-lab/explore');
+  });
+
+  it('opens on the entry page at the root address instead of jumping into the app', async () => {
+    TestBed.configureTestingModule({ providers: [provideRouter(routes)] });
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl('/');
+
+    expect(router.url).toBe('/');
+    expect(router.routerState.snapshot.root.firstChild?.component).toBe(EntryComponent);
   });
 
   it('resolves the legacy engine/runs/:id bookmark onto the one-page workbench', async () => {

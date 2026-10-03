@@ -516,7 +516,7 @@ async def test_history_buckets_are_never_flagged_as_crash_candidates() -> None:
 
     from app.engine.execution.portfolio import Portfolio
     from app.engine.strategy.base import StrategyContext
-    from app.services.bot_trade_strategy_warmup import replay_warmup_bars
+    from app.services.bot_trade_strategy_warmup import CapturedDecisions, replay_warmup_bars
     from tests.services.test_bot_trade_strategy_warmup import _binding
 
     class _StagingRuntime:
@@ -527,7 +527,7 @@ async def test_history_buckets_are_never_flagged_as_crash_candidates() -> None:
         def replay_closed_bar(self, context: object, bar: MarketDataBar, *, mode: object) -> None:
             del context, mode
             self._stage = SimpleNamespace(
-                trace=SimpleNamespace(evaluation_id=f"ev-{bar.start_ms}"),
+                trace=SimpleNamespace(evaluation_id=f"ev-{bar.start_ms}", bar_close_ms=bar.end_ms),
                 decision=SimpleNamespace(intent="ENTER"),
             )
 
@@ -553,7 +553,9 @@ async def test_history_buckets_are_never_flagged_as_crash_candidates() -> None:
         StrategyContext(portfolio=Portfolio(initial_cash=Decimal(0))),
         _Feed(),  # type: ignore[arg-type]
         _binding(strategy_key="sma_crossover"),
-        captured_decisions={"ev-earlier": "EXECUTED"},
+        captured_decisions=CapturedDecisions(
+            outcomes={"ev-earlier": "EXECUTED"}, rotated_out_before_ms=None
+        ),
     )
 
     assert uncaptured is not None

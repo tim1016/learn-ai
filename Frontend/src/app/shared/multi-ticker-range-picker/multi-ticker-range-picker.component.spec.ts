@@ -1,3 +1,4 @@
+import { provideFakeDateWorld } from '../date-picker/testing/fake-trading-calendar';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MultiTickerRangePickerComponent } from './multi-ticker-range-picker.component';
@@ -52,6 +53,7 @@ describe('MultiTickerRangePickerComponent', () => {
         provideFakeTickerCatalog(catalog),
         provideFakeVendorCatalog(vendor),
         provideFakeEnsureCoverage(coverage),
+        ...provideFakeDateWorld(),
       ],
       imports: [MultiTickerRangePickerComponent],
     }).compileComponents();

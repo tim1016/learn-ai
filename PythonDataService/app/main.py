@@ -82,6 +82,7 @@ from app.routers import (
     strategy_gates,
     strategy_validation,
     tickers,
+    trading_calendar,
     walk_forward,
     walk_forward_study,
 )
@@ -1229,6 +1230,7 @@ if _ROLE_RUNS_DATA_PLANE_CORE:
     app.include_router(options.router, prefix="/api/options", tags=["options"])
     app.include_router(snapshot.router, prefix="/api/snapshot", tags=["snapshot"])
     app.include_router(tickers.router, prefix="/api/tickers", tags=["tickers"])
+    app.include_router(trading_calendar.router, prefix="/api/calendar", tags=["calendar"])
     app.include_router(news.router, prefix="/api/news", tags=["news"])
     app.include_router(strategy.router, prefix="/api/strategy", tags=["strategy"])
     app.include_router(spec_strategy.router, prefix="/api/spec-strategy", tags=["spec-strategy"])

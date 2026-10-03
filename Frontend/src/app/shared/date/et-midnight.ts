@@ -21,20 +21,34 @@ const ET_PARTS = new Intl.DateTimeFormat('en-US', {
   hourCycle: 'h23',
 });
 
+/**
+ * The ms instant of a UTC wall clock. Unlike ``Date.UTC``, it keeps the year
+ * it is given: ``Date.UTC`` reads years 0–99 as 1900–1999, which turns the
+ * half-typed year a date field reports (``0022``) into 1922.
+ */
+function utcMs(year: number, monthIndex: number, day: number, hour = 0, minute = 0): number {
+  const date = new Date(0);
+  date.setUTCFullYear(year, monthIndex, day);
+  date.setUTCHours(hour, minute, 0, 0);
+  return date.getTime();
+}
+
 function etWallClockAsUtc(ms: number): number {
   const parts: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = {};
   for (const part of ET_PARTS.formatToParts(new Date(ms))) {
     if (part.type !== 'literal') parts[part.type] = part.value;
   }
   const hour = parts.hour === '24' ? 0 : Number(parts.hour);
-  return Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), hour, Number(parts.minute));
+  return utcMs(Number(parts.year), Number(parts.month) - 1, Number(parts.day), hour, Number(parts.minute));
 }
 
 /** ``YYYY-MM-DD`` → the ms instant of ET midnight on that calendar date. */
 export function etMidnightMs(isoDate: string): number {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate);
   if (match === null) throw new Error(`expected YYYY-MM-DD, got ${isoDate}`);
-  const wanted = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  // Year 0 is 1 BC: the ET formatter reports it as year 1, so the instant would land a year off.
+  if (match[1] === '0000') throw new Error(`year 0000 is not a calendar year, got ${isoDate}`);
+  const wanted = utcMs(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
   // Guess the instant as if ET were UTC-5, then correct by however far the
   // ET wall clock at that guess sits from the midnight we want. One
   // correction suffices because ET's offset changes only at 02:00 local.
@@ -57,13 +71,13 @@ export function etIsoDate(ms: number): string {
 /** The calendar date after ``isoDate`` (``YYYY-MM-DD`` arithmetic, no zone involved). */
 export function isoDateAfter(isoDate: string): string {
   const [y, m, d] = isoDate.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d) + MS_PER_DAY).toISOString().slice(0, 10);
+  return new Date(utcMs(y, m - 1, d) + MS_PER_DAY).toISOString().slice(0, 10);
 }
 
 /** ``isoDate`` moved by whole calendar months, the day clamped to the target month's length (as the fold planner does). */
 export function shiftIsoDateByMonths(isoDate: string, months: number): string {
   const [y, m, d] = isoDate.split('-').map(Number);
-  const first = new Date(Date.UTC(y, m - 1 + months, 1));
-  const lastDay = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
-  return new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), Math.min(d, lastDay))).toISOString().slice(0, 10);
+  const first = new Date(utcMs(y, m - 1 + months, 1));
+  const lastDay = new Date(utcMs(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  return new Date(utcMs(first.getUTCFullYear(), first.getUTCMonth(), Math.min(d, lastDay))).toISOString().slice(0, 10);
 }

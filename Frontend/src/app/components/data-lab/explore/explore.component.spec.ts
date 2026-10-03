@@ -1,3 +1,4 @@
+import { provideFakeDateWorld } from '../../../shared/date-picker/testing/fake-trading-calendar';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
@@ -38,6 +39,7 @@ async function renderExplore() {
   const result = await render(ExploreComponent, {
     providers: [
       provideRouter([]),
+      ...provideFakeDateWorld(),
       provideHttpClient(),
       provideHttpClientTesting(),
       { provide: DataLabWorkspaceStore, useFactory: createDataLabWorkspaceStore },
@@ -175,6 +177,7 @@ describe('ExploreComponent', () => {
     const result = await render(ExploreComponent, {
       providers: [
         provideRouter([]),
+        ...provideFakeDateWorld(),
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: DataLabWorkspaceStore, useValue: store },
@@ -211,6 +214,7 @@ describe('ExploreComponent', () => {
     const result = await render(ExploreComponent, {
       providers: [
         provideRouter([]),
+        ...provideFakeDateWorld(),
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: DataLabWorkspaceStore, useValue: store },
@@ -402,6 +406,7 @@ describe('ExploreComponent', () => {
     const result = await render(ExploreComponent, {
       providers: [
         provideRouter([]),
+        ...provideFakeDateWorld(),
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: DataLabWorkspaceStore, useValue: store },

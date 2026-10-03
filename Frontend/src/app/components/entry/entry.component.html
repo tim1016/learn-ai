@@ -1,0 +1,30 @@
+<section
+  #stage
+  class="entry"
+  [class.entry--flat]="flat()"
+  [class.entry--entering]="entering()"
+  aria-label="Botasur entry"
+>
+  <img class="entry__backdrop" [ngSrc]="paintingSrc" fill alt="" aria-hidden="true" />
+  <img
+    class="entry__painting"
+    [ngSrc]="paintingSrc"
+    fill
+    priority
+    alt="A horned devil stands on a rock above a crowd of traders, holding a stone tablet that reads “Buy fear, sell greed”, with “I’m in” carved beneath."
+  />
+  <canvas #scene class="entry__scene" aria-hidden="true"></canvas>
+  <button
+    #enterButton
+    type="button"
+    class="entry__enter"
+    aria-label="I'm In"
+    [style.--entry-panel-ratio]="panelRatio"
+    [style.--entry-panel-tilt]="panelTilt"
+    (click)="enter()"
+    (pointerenter)="point(true)"
+    (pointerleave)="point(false)"
+    (focus)="point(true)"
+    (blur)="point(false)"
+  ></button>
+</section>

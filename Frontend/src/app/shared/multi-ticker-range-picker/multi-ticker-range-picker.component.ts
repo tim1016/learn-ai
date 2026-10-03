@@ -9,10 +9,8 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
-import {
-  TimeWindowCardComponent,
-  type LegendTreatment,
-} from '../ticker-range-picker/parts/time-window-card.component';
+import { ProviderBoundsService } from '../date-picker';
+import { TimeWindowCardComponent } from '../ticker-range-picker/parts/time-window-card.component';
 import {
   SamplingCardComponent,
   type SessionMode,
@@ -42,6 +40,10 @@ import type { MultiTickerRange } from './multi-ticker-range-picker.types';
  * its backfill inside the card — a batch over symbols the lake cannot
  * read would refuse its own data otherwise. Hosts name the tree their
  * run reads through `adjustmentMode`.
+ *
+ * The dates take the provider's bound: the one host, the cross-sectional
+ * study, fetches its bars from the provider. A host whose run reads the lake
+ * as it stands would need the overlap of its symbols' held spans instead.
  */
 @Component({
   selector: 'app-multi-ticker-range-picker',
@@ -69,9 +71,9 @@ export class MultiTickerRangePickerComponent {
   readonly sessionMode = input<SessionMode>('preview');
   readonly showAutoFetch = input(true);
   readonly title = input('Cross-sectional data');
-  readonly legendTreatment = input<LegendTreatment>('tinted-bold');
 
   private readonly symbols = inject(SymbolCatalogService);
+  protected readonly bounds = inject(ProviderBoundsService).bounds;
   protected readonly view = computed(() => {
     // `viewFor` creates the mode's resource on first ask, and `resource()`
     // installs an effect — illegal inside a reactive context (NG0602).

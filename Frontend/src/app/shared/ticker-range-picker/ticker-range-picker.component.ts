@@ -1,87 +1,70 @@
-import {
-  ChangeDetectionStrategy,
-  Component,
-  computed,
-  input,
-  model,
-  output,
-} from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { ChangeDetectionStrategy, Component, computed, inject, input, model } from '@angular/core';
 
+import { ProviderBoundsService, type DateBounds } from '../date-picker';
+import type { PriceAdjustmentMode } from '../data-lake';
+import { DEFAULT_ADJUSTMENT_MODE } from '../ticker-catalog';
+import { InstrumentCardComponent } from './parts/instrument-card.component';
+import { SamplingCardComponent, type SessionMode } from './parts/sampling-card.component';
+import { TimeWindowCardComponent } from './parts/time-window-card.component';
 import {
   computeAdvisories,
-  daysBetween,
-  summarizeAvailability,
-  weekdaysBetween,
   type Advisory,
   type AdvisoryAction,
-  type AvailabilityCell,
   type Resolution,
+  type TickerOption,
   type TickerRange,
 } from './ticker-range-picker.types';
-import { InstrumentCardComponent } from './parts/instrument-card.component';
-import { DEFAULT_ADJUSTMENT_MODE } from '../ticker-catalog';
-import type { PriceAdjustmentMode } from '../data-lake';
-import type { TickerOption } from './ticker-range-picker.types';
-import {
-  TimeWindowCardComponent,
-  type LegendTreatment,
-} from './parts/time-window-card.component';
-import {
-  SamplingCardComponent,
-  type SessionMode,
-} from './parts/sampling-card.component';
 
-export type { LegendTreatment, SessionMode };
+export type { SessionMode };
 type TickerRangePickerPresentation = 'card' | 'embedded';
 
 /**
- * Shared ticker + range picker.
+ * Shared ticker + range picker: the one way a page picks an instrument and
+ * its dates together.
  *
  * Composes three child components under ``parts/``:
- *   <app-instrument-card>   — symbol combobox + dropdown + cache hint
- *   <app-time-window-card>  — date inputs + presets + availability strip + legend
+ *   <app-instrument-card>   — symbol combobox + dropdown + held span
+ *   <app-time-window-card>  — the shared date range picker
  *   <app-sampling-card>     — resolution toggle + opt-in multiplier + session + auto-fetch
  *
  * Owns the cross-card concerns: the optional outer card frame, the summary
- * header, and the advisory cluster. Sub-component state is encapsulated
- * (open/query for the dropdown, presets list, etc.). Both two-way
- * bindings flow through the same ``value`` model.
+ * header and the advisory cluster. The host states what bounds its dates,
+ * because only the host knows what its run reads.
  */
 @Component({
   selector: 'app-ticker-range-picker',
-  imports: [
-    CommonModule,
-    InstrumentCardComponent,
-    TimeWindowCardComponent,
-    SamplingCardComponent,
-  ],
+  imports: [InstrumentCardComponent, TimeWindowCardComponent, SamplingCardComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './ticker-range-picker.component.html',
   styleUrls: ['./ticker-range-picker.component.scss'],
 })
 export class TickerRangePickerComponent {
+  private readonly provider = inject(ProviderBoundsService);
+
   /** A host-supplied universe, for pickers whose subject is not lake bars
    *  (a live options snapshot, say). `null` means "ask the lake". */
   readonly universe = input<readonly TickerOption[] | null>(null);
   /** The lake tree this page's run will read. */
   readonly adjustmentMode = input<PriceAdjustmentMode>(DEFAULT_ADJUSTMENT_MODE);
   readonly value = model.required<TickerRange>();
+  /**
+   * What bounds the dates. Required, because a wrong guess offers dates the
+   * run cannot read. ``provider`` is a run that fetches its own bars, or
+   * materializes the missing days before it reads: the provider's oldest day
+   * to the last completed session. Any other host hands over its own bound.
+   */
+  readonly dateBounds = input.required<'provider' | DateBounds>();
+  /** Whether both dates must be trading sessions. */
+  readonly sessionsOnly = input(true);
 
-  readonly availability = input<readonly AvailabilityCell[]>([]);
-
-  readonly availableResolutions = input<readonly Resolution[]>([
-    'minute',
-    'hour',
-    'daily',
-  ]);
+  readonly availableResolutions = input<readonly Resolution[]>(['minute', 'hour', 'daily']);
   readonly availableMultipliers = input<readonly number[]>([]);
 
   readonly showAutoFetch = input(true);
 
   /** Hides the entire Sampling card. Used when the host owns its own,
    *  richer resolution control (e.g. Data Lab's bar-timeframe dropdown)
-   *  and only needs the picker for symbol/date/availability/advisories. */
+   *  and only needs the picker for symbol/date/advisories. */
   readonly hideSampling = input(false);
 
   /**
@@ -91,45 +74,17 @@ export class TickerRangePickerComponent {
   readonly presentation = input<TickerRangePickerPresentation>('card');
 
   readonly title = input('Backtest data');
-  readonly legendTreatment = input<LegendTreatment>('tinted-bold');
   readonly sessionMode = input<SessionMode>('preview');
 
-  readonly advisoryAction = output<AdvisoryAction>();
-
-  // Advisories are computed at this layer — they read the union of
-  // (range state, availability summary), neither of which is owned by
-  // a single sub-component. The TimeWindowCard recomputes its own
-  // summary independently for the legend display; this is intentional
-  // duplication that keeps each component self-contained.
-  readonly summary = computed(() => summarizeAvailability(this.availability()));
-  readonly advisories = computed<readonly Advisory[]>(() =>
-    computeAdvisories(this.value(), this.summary()),
-  );
-
-  // Kept as readonly accessors for any host that reads them directly
-  // (e.g. tests verifying the picker's range arithmetic). The values
-  // are also rendered by the TimeWindowCard's own internal computeds
-  // for header display.
-  readonly spanDays = computed(() => {
-    const v = this.value();
-    return daysBetween(v.from, v.to);
-  });
-  readonly spanBusinessDays = computed(() => {
-    const summaryDays = this.summary().weekdays;
-    if (summaryDays > 0) return summaryDays;
-    const v = this.value();
-    return weekdaysBetween(v.from, v.to);
+  protected readonly bounds = computed<DateBounds>(() => {
+    const bounds = this.dateBounds();
+    return bounds === 'provider' ? this.provider.bounds() : bounds;
   });
 
-  /**
-   * Click handler for an advisory's action button. Applies the patch
-   * (if any) to ``value`` and re-emits the action so the host can honor
-   * side-effect flags like ``triggerRun``.
-   */
+  readonly advisories = computed<readonly Advisory[]>(() => computeAdvisories(this.value()));
+
+  /** Applies an advisory's one-click patch to ``value``. */
   onAdvisoryAction(action: AdvisoryAction): void {
-    if (action.patch) {
-      this.value.set({ ...this.value(), ...action.patch });
-    }
-    this.advisoryAction.emit(action);
+    this.value.set({ ...this.value(), ...action.patch });
   }
 }
