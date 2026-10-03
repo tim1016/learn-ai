@@ -125,7 +125,7 @@ Which of the points scored meet the rules, and what stops the rest?
 
 #### What you're looking at
 
-Every point scored on the window, with its trades across and its net profit up. The colour names the rule a point fails: blue meets the rules, amber has too few trades, red falls too deep, light blue makes no profit, and grey failed or has no objective. The outlined dot is the winner. The dashed lines are the window's trade floor and $0.
+Every point scored on the window, with its trades across and its net profit up. The colour names the rule a point fails: blue meets the rules, amber has too few trades, red falls too deep, light blue makes no profit, and grey failed or has no objective or worst fall recorded. A failed run has no numbers, so it appears only in the table. The outlined dot is the winner. The dashed lines are the window's trade floor and, when the plan requires a profit, $0.
 
 The rules are the plan's frozen ones, with this window's trade floor. Hover a dot for its settings and numbers.
 

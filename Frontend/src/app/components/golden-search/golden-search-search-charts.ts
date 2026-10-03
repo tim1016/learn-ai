@@ -7,8 +7,9 @@ import {
   compactUsdText,
   DEVELOPMENT_NOTE,
   entryText,
+  fullPointEntries,
+  knobsByName,
   percentText,
-  pointEntries,
   ratioText,
   ruleWords,
   signedPercentText,
@@ -38,8 +39,9 @@ function axisValue(objective: Objective, value: number): string {
   return objective === 'sharpe_ratio' ? ratioText(value) : objective === 'total_return_pct' ? signedPercentText(value) : compactUsdText(value);
 }
 
+/** Every knob's value, a default the canonical point leaves out included. */
 function pointText(point: Point, capability: StrategyCapability | null): string {
-  return pointEntries(point, capability).map(entryText).join(' · ');
+  return fullPointEntries(point, capability).map(entryText).join(' · ');
 }
 
 /** The scored numbers every tooltip lists, under the window's rules. */
@@ -65,8 +67,12 @@ const axisText = (theme: ChartTheme) => ({ color: theme.textSecondary, fontSize:
 
 // ---------------------------------------------------------------- V7 search path
 
-function stepText(point: TriedPoint): string {
-  return point.knob === null ? 'The starting point' : `Pass ${(point.pass_index ?? 0) + 1}, ${point.knob} round ${(point.round_index ?? 0) + 1}`;
+function knobLabel(name: string, capability: StrategyCapability | null): string {
+  return knobsByName(capability).get(name)?.label ?? name;
+}
+
+function stepText(point: TriedPoint, capability: StrategyCapability | null): string {
+  return point.knob === null ? 'The starting point' : `Pass ${(point.pass_index ?? 0) + 1}, ${knobLabel(point.knob, capability)} round ${(point.round_index ?? 0) + 1}`;
 }
 
 /** Every point Zoom tried, in order, with the best eligible result so far. */
@@ -86,7 +92,7 @@ export function convergenceSpec(procedure: ProcedureCharts, tried: readonly Trie
         key: String(point.order),
         cells: [
           String(point.order + 1),
-          stepText(point),
+          stepText(point, capability),
           point.value === null ? '—' : String(point.value),
           objectiveText(objective, point.objective),
           ruleWords(point.ineligibility),
@@ -113,8 +119,8 @@ function convergenceOption(procedure: ProcedureCharts, tried: readonly TriedPoin
         const point = series === 2 ? tried[dataIndexOf(params) ?? -1] : groups[series]?.points[dataIndexOf(params) ?? -1];
         if (point === undefined) return '';
         const rows: TooltipRow[] = [...scoredRows(point), { label: `Best ${OBJECTIVE_NAMES[objective]} so far`, values: [objectiveText(objective, point.best_so_far)] }];
-        const value = point.knob === null ? [] : [`Tried ${point.knob} = ${point.value}, every other knob as it stood.`];
-        return tooltipHtml({ title: `Point ${point.order + 1} · ${stepText(point)}`, columns: ['Value'], rows, notes: [...value, pointText(point.point, capability), rulesNote(procedure), DEVELOPMENT_NOTE] }, theme);
+        const value = point.knob === null ? [] : [`Tried ${knobLabel(point.knob, capability)} = ${point.value}, every other knob as it stood.`];
+        return tooltipHtml({ title: `Point ${point.order + 1} · ${stepText(point, capability)}`, columns: ['Value'], rows, notes: [...value, pointText(point.point, capability), rulesNote(procedure), DEVELOPMENT_NOTE] }, theme);
       },
     },
     xAxis: { type: 'value', min: 0, max: Math.max(1, tried.length - 1), minInterval: 1, name: 'Points tried, in order', nameLocation: 'middle', nameGap: 24, nameTextStyle: axisText(theme), axisLine: { lineStyle: { color: theme.axis } }, axisLabel: { ...axisText(theme), formatter: (value: number) => String(value + 1) }, splitLine: { show: false } },
@@ -164,6 +170,10 @@ export function knobMovesSpec(procedure: ProcedureCharts, label: string): ChartS
   };
 }
 
+function positions(moves: ProcedureCharts['moves']): number[] {
+  return moves.flatMap((move) => [move.start_position, move.retained_position]).filter((value): value is number => value !== null);
+}
+
 function movesOption(procedure: ProcedureCharts, theme: ChartTheme): ChartOption {
   const moves = procedure.moves;
   const ends = [
@@ -187,7 +197,16 @@ function movesOption(procedure: ProcedureCharts, theme: ChartTheme): ChartOption
         return tooltipHtml({ title: `${move.label} (${move.unit})`, columns: ['Value'], rows, notes: [...edge, move.moved ? 'The search moved it.' : 'The search kept its starting value.', DEVELOPMENT_NOTE] }, theme);
       },
     },
-    xAxis: { type: 'value', min: 0, max: 1, splitNumber: 2, axisLine: { lineStyle: { color: theme.axis } }, axisLabel: { ...axisText(theme), formatter: (value: number) => (value === 0 ? 'low' : value === 1 ? 'high' : '') }, splitLine: { lineStyle: { color: theme.gridLine } } },
+    // A start outside the searched range (the seed need not lie in it) stays on the axis.
+    xAxis: {
+      type: 'value',
+      min: Math.min(0, ...positions(moves)),
+      max: Math.max(1, ...positions(moves)),
+      splitNumber: 2,
+      axisLine: { lineStyle: { color: theme.axis } },
+      axisLabel: { ...axisText(theme), formatter: (value: number) => (value === 0 ? 'low' : value === 1 ? 'high' : '') },
+      splitLine: { lineStyle: { color: theme.gridLine } },
+    },
     yAxis: { type: 'category', data: moves.map((move) => move.label), inverse: true, axisLine: { lineStyle: { color: theme.axis } }, axisTick: { show: false }, axisLabel: { ...axisText(theme), width: 100, overflow: 'truncate' } },
     series: ends.map((end) => ({
       id: `${end.group}:moves`,
@@ -263,8 +282,8 @@ function profilesOption(procedure: ProcedureCharts, theme: ChartTheme): ChartOpt
     xAxis: profiles.map((profile, i) => ({
       type: 'value' as const,
       gridIndex: i,
-      min: profile.low,
-      max: profile.high,
+      min: Math.min(profile.low, ...profile.points.map((point) => point.value)),
+      max: Math.max(profile.high, ...profile.points.map((point) => point.value)),
       splitNumber: 2,
       name: profile.label,
       nameLocation: 'middle' as const,
@@ -312,9 +331,9 @@ interface RuleGroup {
 const RULE_GROUPS: readonly RuleGroup[] = [
   { group: 'eligible', name: 'Meets the rules', codes: [null] },
   { group: 'trades', name: 'Too few trades', codes: ['TOO_FEW_TRADES', 'NO_TRADES'] },
-  { group: 'fall', name: 'Worst fall too deep', codes: ['DRAWDOWN_ABOVE_CEILING', 'DRAWDOWN_UNDEFINED'] },
+  { group: 'fall', name: 'Worst fall too deep', codes: ['DRAWDOWN_ABOVE_CEILING'] },
   { group: 'loss', name: 'Not profitable', codes: ['NOT_PROFITABLE'] },
-  { group: 'other', name: 'Failed or undefined', codes: ['FAILED', 'OBJECTIVE_UNDEFINED', 'NOT_EVALUATED'] },
+  { group: 'other', name: 'Failed or undefined', codes: ['FAILED', 'OBJECTIVE_UNDEFINED', 'DRAWDOWN_UNDEFINED', 'NOT_EVALUATED'] },
 ];
 
 function groupOf(code: string | null): string {
@@ -364,7 +383,18 @@ function eligibilityOption(procedure: ProcedureCharts, capability: StrategyCapab
         );
       },
     },
-    xAxis: { type: 'value', name: 'Trades', nameLocation: 'middle', nameGap: 24, nameTextStyle: axisText(theme), axisLine: { lineStyle: { color: theme.axis } }, axisLabel: axisText(theme), splitLine: { show: false } },
+    xAxis: {
+      type: 'value',
+      // The trade floor stays on the axis even when every point trades less.
+      max: (extent: { max: number }) => Math.max(extent.max, floor ?? 0),
+      name: 'Trades',
+      nameLocation: 'middle',
+      nameGap: 24,
+      nameTextStyle: axisText(theme),
+      axisLine: { lineStyle: { color: theme.axis } },
+      axisLabel: axisText(theme),
+      splitLine: { show: false },
+    },
     yAxis: { type: 'value', splitNumber: 4, axisLabel: { ...axisText(theme), formatter: (value: number) => compactUsdText(value) }, splitLine: { lineStyle: { color: theme.gridLine } } },
     series: groups.map((group, i) => ({
       id: `${group.group}:points`,
@@ -443,8 +473,9 @@ function landscapeOption(view: PairMapView, cells: readonly PairCellView[], them
       id: `${group.group}:cells`,
       name: group.name,
       type: 'heatmap' as const,
+      // A status cell's third value only picks its fixed grey (a heatmap skips an empty one); its mark is its label.
       data: group.cells.map((cell) => ({
-        value: [cell.column, cell.row, returnOf(cell) ?? '-'],
+        value: [cell.column, cell.row, returnOf(cell) ?? 0],
         itemStyle: cell.center ? { borderColor: theme.text, borderWidth: 2 } : { borderColor: theme.gridLine, borderWidth: 1 },
       })),
       // The return or the status mark in every cell, so colour is never the only cue.

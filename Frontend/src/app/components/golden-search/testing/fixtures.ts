@@ -283,7 +283,7 @@ export function procedureCharts(key: ProcedureCharts['key'] = 'search', override
     total_trades: trades,
     max_drawdown_pct: 0.06,
     ineligibility,
-    objective: ineligibility === null ? sharpe : null,
+    objective: sharpe,
   });
   const start = { ...INCUMBENT_PARAMS };
   const kept = { ...INCUMBENT_PARAMS, fast_period: 8 };
