@@ -268,16 +268,32 @@ def account_eligibility(
 def sqlite_clerk_status(
     projection: ClerkProjection,
     *,
+    last_clean_pass_at_ms: int | None,
     channel_healths: Sequence[ChannelHealth] | None = None,
 ) -> ClerkStatus:
     """Compose the Clerk status: the hold, the latest reconciliation verdict,
-    the commands still resolving, and the submission-gate channels."""
+    the commands still resolving, and the submission-gate channels.
+
+    ``last_clean_pass_at_ms`` is when the Clerk's own latest pass found the
+    account clean (``SqliteAlpacaClerkFacade.last_clean_pass_at_ms``). The
+    status names the later of it and the newest durable receipt as the time
+    the account was last checked: the 15 s sweep checks the whole account but
+    writes no receipt (#2826).
+    """
     hold = projection.holds[0] if projection.holds else None
     unresolved = sum(
         _operation_requires_reconciliation(operation)
         for operation in projection.operations
     )
     latest = projection.latest_reconciliation
+    checked_at_ms = max(
+        (
+            at_ms
+            for at_ms in (None if latest is None else latest.attempted_at_ms, last_clean_pass_at_ms)
+            if at_ms is not None
+        ),
+        default=None,
+    )
     if projection.uncertainties:
         verdict = "stale"
     elif hold is not None:
@@ -300,8 +316,8 @@ def sqlite_clerk_status(
             "since_ms": hold.opened_at_ms if hold is not None else None,
         },
         latest_reconciliation=(
-            {"verdict": verdict, "recorded_at_ms": latest.attempted_at_ms}
-            if latest is not None
+            {"verdict": verdict, "recorded_at_ms": checked_at_ms}
+            if checked_at_ms is not None
             else None
         ),
         outstanding_intents=unresolved,

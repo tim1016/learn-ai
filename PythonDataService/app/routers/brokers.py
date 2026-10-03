@@ -635,6 +635,7 @@ async def get_clerk_status(broker: str) -> ClerkStatus:
     projection = await _read_sqlite_account_projection(sqlite)
     return sqlite_clerk_status(
         projection,
+        last_clean_pass_at_ms=sqlite.last_clean_pass_at_ms(),
         channel_healths=sqlite.channel_health_snapshot(),
     )
 

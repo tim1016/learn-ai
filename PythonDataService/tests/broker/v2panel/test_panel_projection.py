@@ -24,6 +24,7 @@ from app.broker.alpaca.clerk.models import (
     ChannelHealth,
     ClerkStatus,
     HoldState,
+    InstanceCustodyProof,
     ReconciliationSummary,
 )
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
@@ -1355,14 +1356,14 @@ def test_sqlite_status_does_not_count_a_filled_entry_as_outstanding() -> None:
         ),
     )
 
-    assert sqlite_clerk_status(projection).outstanding_intents == 0
+    assert sqlite_clerk_status(projection, last_clean_pass_at_ms=None).outstanding_intents == 0
 
 
 def test_sqlite_status_names_the_real_paper_authority_for_a_real_account_id() -> None:
     """The kind is derived from the custody id, so a real account still says ``real_paper``."""
     projection = _rail_projection(orders=())
 
-    assert sqlite_clerk_status(projection).authority_kind == "real_paper"
+    assert sqlite_clerk_status(projection, last_clean_pass_at_ms=None).authority_kind == "real_paper"
 
 
 def test_sqlite_status_counts_a_working_entry_as_outstanding() -> None:
@@ -1380,7 +1381,7 @@ def test_sqlite_status_counts_a_working_entry_as_outstanding() -> None:
         ),
     )
 
-    assert sqlite_clerk_status(projection).outstanding_intents == 1
+    assert sqlite_clerk_status(projection, last_clean_pass_at_ms=None).outstanding_intents == 1
 
 
 def test_trade_health_uses_decision_bar_reference_for_last_evaluated_bar() -> None:
@@ -2847,8 +2848,9 @@ def _notices(
     projection: ClerkProjection,
     *,
     startup_join: RetainedStartupJoin | None = None,
+    pass_proof: InstanceCustodyProof | None = None,
 ) -> list[tuple[str, str]]:
-    outcome = adapt_sqlite_panel(panel, projection).health.duty_outcome
+    outcome = adapt_sqlite_panel(panel, projection, pass_proof=pass_proof).health.duty_outcome
     assert outcome is not None
     return [(notice.kind, notice.label) for notice in outcome.exposure_notices]
 
@@ -3001,6 +3003,106 @@ def test_a_stale_position_after_a_crash_is_unverified(age_ms: int) -> None:
     assert _notices(_refused_panel("CRASHED"), projection) == [
         ("position_unverified", "Position could not be verified")
     ]
+
+
+def _unreceipted_projection(**changes: object) -> ClerkProjection:
+    """The account as the 15 s sweep leaves it: its last Reconcile now receipt is days old."""
+    projection = _exposure_projection(orders=())
+    return replace(projection, latest_reconciliation=replace(
+        projection.latest_reconciliation, attempted_at_ms=_NOW - 864_000_000,
+    ), **changes)
+
+
+def _pass_proof(
+    *,
+    verdict: str = "clean",
+    exposure: dict[str, float] | None = None,
+    working: tuple[str, ...] = (),
+    unresolved: tuple[str, ...] = (),
+    freeze: AccountFreezeState | None = None,
+) -> InstanceCustodyProof:
+    """The Clerk's latest published pass's proof of the bot (``published_custody``)."""
+    return InstanceCustodyProof(
+        account_id=ACCT, strategy_instance_id=SID, reconciliation_verdict=verdict,
+        freeze=freeze or AccountFreezeState(), exposure=exposure or {},
+        working_order_refs=working, unresolved_intent_refs=unresolved, observed_at_ms=_NOW - 5_000,
+    )
+
+
+def test_the_clerks_own_pass_vouches_for_a_flat_bot_with_no_fresh_receipt() -> None:
+    """#2826: the 15 s pass checks the whole account but writes no receipt, so
+    the notice came back 30 s after every Reconcile now."""
+    assert _notices(_refused_panel("CRASHED"), _unreceipted_projection(), pass_proof=_pass_proof()) == []
+
+
+def test_the_clerks_own_pass_names_what_the_ended_bot_still_holds() -> None:
+    outcome = adapt_sqlite_panel(
+        _refused_panel("CRASHED"), _unreceipted_projection(), pass_proof=_pass_proof(exposure={"SPY": 3.0})
+    ).health.duty_outcome
+
+    assert outcome is not None
+    (notice,) = outcome.exposure_notices
+    assert (notice.kind, notice.action_label) == ("position_unmanaged", "Flatten")
+    assert "3 SPY" in notice.explanation
+
+
+@pytest.mark.parametrize(
+    "proof",
+    [
+        pytest.param(None, id="no-pass-saw-the-bots-newest-record"),
+        pytest.param(_pass_proof(verdict="missing_intent"), id="unclean-pass"),
+        pytest.param(_pass_proof(working=("order:exit",)), id="an-order-still-working"),
+        pytest.param(_pass_proof(unresolved=("intent:enter:1",)), id="an-intent-unresolved"),
+        pytest.param(
+            _pass_proof(freeze=AccountFreezeState(
+                active=True, category="ACCOUNT_STATE_UNPROVABLE", explanation="Alpaca could not be read.",
+                next_step="Reconcile now.", observed_at_ms=_NOW - 5_000,
+            )),
+            id="account-frozen",
+        ),
+    ],
+)
+def test_a_pass_that_cannot_prove_the_bot_leaves_its_position_unverified(proof: InstanceCustodyProof | None) -> None:
+    projection = _unreceipted_projection(positions=_held(3.0))
+
+    assert _notices(_refused_panel("CRASHED"), projection, pass_proof=proof) == [
+        ("position_unverified", "Position could not be verified")
+    ]
+
+
+def test_a_clean_pass_never_vouches_over_an_unhealthy_authority() -> None:
+    projection = _unreceipted_projection(authority_health="degraded_to_mirror")
+
+    assert _notices(_refused_panel("CRASHED"), projection, pass_proof=_pass_proof()) == [
+        ("position_unverified", "Position could not be verified")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("receipt_at_ms", "pass_at_ms", "checked_at_ms"),
+    [
+        pytest.param(_NOW - 100, None, _NOW - 100, id="only-a-receipt"),
+        pytest.param(_NOW - 864_000_000, _NOW - 4_000, _NOW - 4_000, id="the-pass-is-newer"),
+        pytest.param(_NOW - 100, _NOW - 4_000, _NOW - 100, id="a-reconcile-now-is-newer"),
+        pytest.param(None, _NOW - 4_000, _NOW - 4_000, id="no-receipt-ever"),
+    ],
+)
+def test_sqlite_status_dates_the_last_check_by_the_newest_of_receipt_and_pass(
+    receipt_at_ms: int | None, pass_at_ms: int | None, checked_at_ms: int
+) -> None:
+    """#2826: "last checked" read days old while the Clerk had checked the account seconds before."""
+    projection = _exposure_projection(orders=())
+    projection = replace(projection, latest_reconciliation=(
+        None if receipt_at_ms is None else replace(projection.latest_reconciliation, attempted_at_ms=receipt_at_ms)
+    ))
+
+    status = sqlite_clerk_status(projection, last_clean_pass_at_ms=pass_at_ms)
+
+    assert status.latest_reconciliation == ReconciliationSummary(verdict="clean", recorded_at_ms=checked_at_ms)
+
+
+def test_sqlite_status_has_no_last_check_before_any_receipt_or_clean_pass() -> None:
+    assert sqlite_clerk_status(_rail_projection(orders=()), last_clean_pass_at_ms=None).latest_reconciliation is None
 
 
 def test_operator_stop_keeps_its_own_copy_even_with_exposure() -> None:

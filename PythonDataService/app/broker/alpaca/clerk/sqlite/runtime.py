@@ -1650,6 +1650,19 @@ class SqliteAlpacaClerkFacade:
             strategy_instance_id, *self._published()
         )
 
+    def last_clean_pass_at_ms(self) -> int | None:
+        """When the latest published pass found the account clean against Alpaca.
+
+        ``None`` before this process has published a pass, or when the latest
+        one was not clean. The 15 s sweep writes no durable receipt, so a
+        status line that asks "when was this account last checked?" reads
+        this beside the durable rows (#2826).
+        """
+        published = self._last_published
+        if published is None or published.result.verdict != "clean":
+            return None
+        return published.observed_at_ms
+
     def _published(self) -> tuple[AccountReconciliationResult, int]:
         """The last published verdict and its own observation time.
 
