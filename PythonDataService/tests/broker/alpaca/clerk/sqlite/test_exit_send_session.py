@@ -740,10 +740,10 @@ async def test_a_working_exit_replaces_retry_eligibility_until_it_ends(
         confirmed_shape=priced,
     )
     assert working.effect_operation_id is not None
+    # Only the operator's flatten is checked against the account as it is sent (#2839).
+    account = _covering_read() if decision_id.startswith(RECOVERY_FLATTEN_DECISION_PREFIX) else None
     sent = await resolve_exit(
-        repo, effect_operation_id=working.effect_operation_id, trade=_acked(), pricing=_live_touch(),
-        # Only the operator's flatten is checked against the account as it is sent (#2839).
-        read=_covering_read() if decision_id.startswith(RECOVERY_FLATTEN_DECISION_PREFIX) else None,
+        repo, effect_operation_id=working.effect_operation_id, trade=_acked(), pricing=_live_touch(), read=account
     )
     assert sent.reducing_order_ref is not None
     for read_at_ms in (_at(4, 0, 30, day=thursday), _at(9, 35, day=thursday)):
@@ -758,7 +758,7 @@ async def test_a_working_exit_replaces_retry_eligibility_until_it_ends(
         ]
     )
     await resolve_exit(
-        repo, effect_operation_id=working.effect_operation_id, trade=expired, pricing=_live_touch(), read=None
+        repo, effect_operation_id=working.effect_operation_id, trade=expired, pricing=_live_touch(), read=account
     )
     assert repo.position(SID, "SPY") == 10
     await evaluate()
@@ -960,10 +960,10 @@ async def test_an_authored_limit_working_into_regular_session_is_not_replaced(
                 valid_until_ms=_at(20 if day == date(2026, 9, 3) else 17, 0, day=day),
             )
         assert effect_operation_id is not None
+        # Only the operator's flatten is checked against the account as it is sent (#2839).
+        account = _covering_read() if authored_by == "operator" else None
         sent = await resolve_exit(
-            repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch(),
-            # Only the operator's flatten is checked against the account as it is sent (#2839).
-            read=_covering_read() if authored_by == "operator" else None,
+            repo, effect_operation_id=effect_operation_id, trade=_acked(), pricing=_live_touch(), read=account
         )
         assert sent.reducing_order_ref is not None
 
@@ -975,19 +975,19 @@ async def test_an_authored_limit_working_into_regular_session_is_not_replaced(
         for quiet in quiet_at:
             _walk_clock_to(repo, _at(*quiet, day=day))
             await resolve_exit(
-                repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch(), read=None
+                repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch(), read=account
             )
             assert _exit_not_flat(repo) is None, f"alarmed at {quiet} while the broker still works the limit"
 
         _walk_clock_to(repo, _at(*alarm_at, day=day))
         await resolve_exit(
-            repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch(), read=None
+            repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch(), read=account
         )
         assert _exit_not_flat(repo) is not None
         writes = _raised_episode_writes(repo)
         _walk_clock_to(repo, _at(alarm_at[0], alarm_at[1] + 1, day=day))
         await resolve_exit(
-            repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch(), read=None
+            repo, effect_operation_id=effect_operation_id, trade=still_working(), pricing=_live_touch(), read=account
         )
         assert _raised_episode_writes(repo) == writes, "the alarm was raised again"
     finally:
@@ -1238,7 +1238,8 @@ async def test_a_clerk_that_cannot_price_after_hours_says_so_on_a_recovery_exit(
     trade = _acked()
 
     await resolve_exit(
-        repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None
+        repo, effect_operation_id=accepted.effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY,
+        read=_covering_read(),
     )
 
     assert trade.submit_calls == []

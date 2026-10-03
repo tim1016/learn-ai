@@ -2128,7 +2128,7 @@ async def test_a_wrong_side_confirmed_limit_folds_releasably_outside_the_regular
     )
 
     with caplog.at_level(_logging.WARNING):
-        await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=pricing, read=None)
+        await resolve_accepted_exit(repo, accepted=accepted, trade=trade, pricing=pricing, read=_covering_read())
 
     # The side reconciliation happened, and the market leg it produced folded.
     assert any(

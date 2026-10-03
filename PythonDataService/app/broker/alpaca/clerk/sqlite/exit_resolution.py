@@ -48,7 +48,9 @@ order is sized from the Clerk's own record, so just before it is submitted --
 first or resumed, by the Flatten itself or by the sweep that carries on a
 deferred one -- the Clerk reads the account's open orders, then its
 positions, and sends only a sale the account covers (``flatten_cover``).
-Otherwise nothing is sent and the EXIT folds as a broker's refusal does.
+Otherwise nothing is sent and the EXIT folds as a broker's refusal does. A
+resumed send that finds its own order among those open orders is neither sent
+again nor refused: custody is retained until the order's exact lookup answers.
 """
 
 from __future__ import annotations
@@ -88,7 +90,9 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     OrderSubmitFailedFacts,
 )
 from app.broker.alpaca.clerk.sqlite.flatten_cover import (
+    FLATTEN_COVER_HEADLINES,
     FLATTEN_COVER_NEXT_STEPS,
+    account_lists_order,
     flatten_cover_refusal,
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
@@ -969,7 +973,6 @@ def _created_leg_may_be_sent(
     created: ExitReducingOrderCreatedFacts,
     order_ref: str,
     liveness: MarketLivenessFact | None,
-    uncovered: LegRefusal | None,
 ) -> bool:
     """The send-time rule at (re)submission: ``True`` only to send the created order now.
 
@@ -982,12 +985,6 @@ def _created_leg_may_be_sent(
     its client identity, so its leg is never re-priced here: it is replayed
     exactly or not at all. No longer sendable, it is not sent — the EXIT
     folds releasably for the operator.
-
-    ``uncovered`` is the refusal of an operator's Flatten the broker's account
-    does not cover (#2839), read for this send; ``None`` for a covered one and
-    for every send outside that check. It refuses only an order this rule
-    would otherwise send, so a flat position or an ended session is still
-    told as itself.
     """
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
@@ -1005,17 +1002,7 @@ def _created_leg_may_be_sent(
         _fold_market_hold(repo, effect_operation_id, order_ref, created.symbol, verdict)
         return False
     if verdict == "send":
-        if uncovered is None:
-            return True
-        _fold_flatten_uncovered(
-            repo,
-            effect_operation_id=effect_operation_id,
-            order_ref=order_ref,
-            symbol=created.symbol,
-            remaining_qty=remaining_qty,
-            refusal=uncovered,
-        )
-        return False
+        return True
     _fold_unsendable_leg(
         repo,
         effect_operation_id=effect_operation_id,
@@ -1726,12 +1713,27 @@ async def _submit_reducing_order(
             _accepted_facts(repo, effect_operation_id), broker.trade
         ),
     ))
-    # Read here, on the event loop and outside intake, where the submit below
-    # also runs: the guarded read port refuses contact under the fence. The
-    # verdict is applied inside the one run that records the send (#2839).
-    uncovered = (
-        await _account_cover_refusal(created, broker=broker, read=read) if checked else None
-    )
+    uncovered: LegRefusal | None = None
+    if checked:
+        # Read here, on the event loop and outside intake, where the submit
+        # below also runs: the guarded read port refuses contact under the
+        # fence. With no read port nothing is read, and the rule refuses: a
+        # Flatten never goes to a real broker unchecked (#2839).
+        account = None if read is None else await broker.observe_open_orders_then_positions(read)
+        if account_lists_order(account, client_order_id=reducing.client_order_id):
+            await run(
+                lambda: _retain_flatten_already_at_broker(
+                    repo, effect_operation_id=effect_operation_id, reducing=reducing
+                )
+            )
+            return
+        # The verdict is applied inside the one run that records the send.
+        uncovered = flatten_cover_refusal(
+            symbol=created.symbol,
+            side=OrderSide(created.side.lower()),
+            quantity=created.quantity,
+            observed=account,
+        )
     now_ms = repo.clock()
     liveness = pricing.read_liveness(created.symbol, now_ms)
 
@@ -1754,8 +1756,15 @@ async def _submit_reducing_order(
             created=facts,
             order_ref=reducing.order_ref,
              liveness=liveness,
-            uncovered=uncovered,
         ):
+            return None
+        # The account does not cover an operator's Flatten (#2839). Refused
+        # only once the send-time rule would send it, so a flat position or an
+        # ended session is still told as itself.
+        if uncovered is not None:
+            _fold_flatten_uncovered(
+                repo, effect_operation_id=effect_operation_id, reducing=reducing, refusal=uncovered
+            )
             return None
         # An EXIT with no decision bar is priced by the port before it is sent:
         # a no-submit world binds the price it fills at, or nothing goes out.
@@ -1844,23 +1853,35 @@ def _send_is_checked_against_the_account(facts: ExitAcceptedFacts, trade: Broker
     ) and not trade_port_folds_simulated_evidence(trade)
 
 
-async def _account_cover_refusal(
-    created: ExitReducingOrderCreatedFacts,
-    *,
-    broker: ClaimedBrokerIO,
-    read: BrokerReadPort | None,
-) -> LegRefusal | None:
-    """Read the account for an operator's Flatten about to be sent: its refusal, or ``None`` when covered.
+def _retain_flatten_already_at_broker(
+    repo: ClerkSqliteRepository, *, effect_operation_id: str, reducing: OrderResource
+) -> None:
+    """A Flatten about to be sent again found its own order among the account's open orders (#2839).
 
-    The order's own created quantity is what must be covered. With no read
-    port nothing is read and the send is refused: a Flatten never goes to a
-    real broker unchecked.
+    The exact lookup answered that the order never reached the broker, and
+    the account read made for the send then listed it: it arrived in between.
+    It is not sent a second time, and it is not a competing sale the Flatten
+    is refused behind -- that fold would tell the operator nothing was sent
+    while the order works. Custody is retained as an unknown outcome, so the
+    next pass's exact lookup folds the order as any acknowledged one.
     """
-    return flatten_cover_refusal(
-        symbol=created.symbol,
-        side=OrderSide(created.side.lower()),
-        quantity=created.quantity,
-        observed=None if read is None else await broker.observe_open_orders_then_positions(read),
+    logger.warning(
+        "an operator's flatten found its own order at the broker as it was about to be sent again",
+        extra={
+            "action": "flatten_resend_found_own_order",
+            "account_id": repo.account_id,
+            "effect_operation_id": effect_operation_id,
+            "order_ref": reducing.order_ref,
+        },
+    )
+    fold_uncertain(
+        repo,
+        effect_operation_id=effect_operation_id,
+        order_ref=reducing.order_ref,
+        why=(
+            "The account's open orders, read before sending, list this reducing order; "
+            "retaining custody until its exact lookup answers."
+        ),
     )
 
 
@@ -1868,9 +1889,7 @@ def _fold_flatten_uncovered(
     repo: ClerkSqliteRepository,
     *,
     effect_operation_id: str,
-    order_ref: str,
-    symbol: str,
-    remaining_qty: float,
+    reducing: OrderResource,
     refusal: LegRefusal,
 ) -> None:
     """The Clerk would not send an operator's Flatten the broker's account does not cover (#2839).
@@ -1882,30 +1901,34 @@ def _fold_flatten_uncovered(
     the refusal's own code and words, never a broker's: the broker was not
     asked. :func:`flatten_send_refusal` reads them back for the operator.
     """
+    created = _reducing_order_facts(repo, reducing.order_ref)
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None
+    held = repo.position(effect.strategy_instance_id, created.symbol)
     logger.warning(
         "an operator's flatten was not sent: the account check before the send refused it",
         extra={
             "action": "flatten_send_refused_by_account_check",
             "account_id": repo.account_id,
             "effect_operation_id": effect_operation_id,
-            "order_ref": order_ref,
-            "symbol": symbol,
+            "order_ref": reducing.order_ref,
+            "symbol": created.symbol,
             "reason_code": refusal.reason_code,
             "explanation": refusal.explanation,
-            "attributed_qty": remaining_qty,
+            "attributed_qty": held,
         },
     )
     _fold_exit_not_flat(
         repo,
         effect_operation_id=effect_operation_id,
-        order_ref=order_ref,
-        symbol=symbol,
-        attributed_qty=remaining_qty,
+        order_ref=reducing.order_ref,
+        symbol=created.symbol,
+        attributed_qty=held,
         summary_code=refusal.reason_code,
         reason=refusal.explanation,
-        headline="A flatten was not sent after the Clerk checked the Alpaca account; the position is still open",
+        headline=FLATTEN_COVER_HEADLINES[refusal.reason_code],
         explanation=(
-            f"{refusal.explanation} The Clerk still attributes {remaining_qty:g} {symbol} to this bot."
+            f"{refusal.explanation} The Clerk still attributes {held:g} {created.symbol} to this bot."
         ),
         next_step=refusal.next_step,
     )

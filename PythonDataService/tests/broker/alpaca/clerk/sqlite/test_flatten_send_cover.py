@@ -10,11 +10,13 @@ reconciliation that offers the Flatten and the send.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Awaitable, Callable
+from decimal import Decimal
 
 import pytest
 
-from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY
+from app.broker.alpaca.clerk.recovery_reduction import UNPRICEABLE_RECOVERY, ConfirmedRecoveryLimit
 from app.broker.alpaca.clerk.sqlite.account_open_work import MAX_OPEN_ORDER_SNAPSHOT
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run, submit_stop_run
 from app.broker.alpaca.clerk.sqlite.exit import (
@@ -63,9 +65,10 @@ SIBLING_RUN_ID = "sibling-run-1"
 class _Account:
     """The Alpaca account an operator's Flatten is checked against.
 
-    What it holds, what is open there and whether it answers are the test's
-    to change between the reconciliation that offers the Flatten and the
-    send. Every read it answers is recorded, in order.
+    What it holds (a negative ``holds`` is a short), what is open there and
+    whether it answers are the test's to change between the reconciliation
+    that offers the Flatten and the send. Every read it answers is recorded,
+    in order.
     """
 
     def __init__(self, *, holds: float = 10.0) -> None:
@@ -86,7 +89,9 @@ class _Account:
         self.reads.append("positions")
         if self.unreadable is not None:
             raise self.unreadable
-        return [safe_flatten._position("SPY", quantity=self.holds)] if self.holds else []
+        if not self.holds:
+            return []
+        return [safe_flatten._position("SPY", quantity=self.holds, side="short" if self.holds < 0 else "long")]
 
 
 class _TradeIntoAccount(safe_flatten._FakeTrade):
@@ -132,19 +137,36 @@ def _context_of(repo: ClerkSqliteRepository, sid: str) -> _Context:
 
 
 async def _stopped_bot_offered_its_flatten(
-    repo: ClerkSqliteRepository, *, account: _Account, trade: safe_flatten._FakeTrade
+    repo: ClerkSqliteRepository,
+    *,
+    account: _Account,
+    trade: safe_flatten._FakeTrade,
+    entry_side: str = "buy",
+    pre_market: bool = False,
 ) -> tuple[SqliteAlpacaClerkFacade, _Context]:
     """A stopped bot holding 10 SPY, reconciled clean against ``account``, so its Flatten is offered.
+
+    ``entry_side="sell"`` makes it a short of 10. ``pre_market`` moves the
+    clock to 07:00 ET under an extended-hours window with a live quote, where
+    a Flatten goes out only as the operator's confirmed limit (#2007).
 
     The account's reads so far are forgotten: what is left in ``account.reads``
     afterwards is what the Flatten itself read.
     """
-    await safe_flatten._held_position(repo)
+    await safe_flatten._held_position(repo, side=entry_side)
     submit_stop_run(
         repo, account_id=ACCOUNT_ID, strategy_instance_id=SID,
         lifecycle_run_id=RUN_ID, operator_reason="operator_stop",
     )
-    facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=account, trade=trade)
+    if pre_market:
+        _walk_clock_to(repo, safe_flatten._PRE_MARKET_MS)
+        facade = SqliteAlpacaClerkFacade(
+            account_mode="paper", repo=repo, read=account, trade=trade,
+            program_leg_policy=safe_flatten._XH_POLICY,
+            quote_source=lambda _symbol, now_ms: safe_flatten._live_quote(now_ms),
+        )
+    else:
+        facade = SqliteAlpacaClerkFacade(account_mode="paper", repo=repo, read=account, trade=trade)
     result = await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
     assert result.verdict == "clean"
     account.reads.clear()
@@ -197,6 +219,10 @@ def _an_open_sell_states_no_quantity(account: _Account) -> None:
     account.open_orders = [_open_sell("notional-sell-1", quantity=None)]
 
 
+def _the_position_is_not_a_number(account: _Account) -> None:
+    account.holds = math.nan
+
+
 @pytest.mark.parametrize(
     ("at_alpaca", "reason_code", "told"),
     [
@@ -231,6 +257,11 @@ def _an_open_sell_states_no_quantity(account: _Account) -> None:
             _an_open_sell_states_no_quantity, FLATTEN_COVER_UNPROVEN,
             "An open SPY order at Alpaca (notional-sell-1) states no share quantity",
             id="an-open-sell-states-no-quantity",
+        ),
+        pytest.param(
+            _the_position_is_not_a_number, FLATTEN_COVER_UNPROVEN,
+            "Alpaca reported its SPY position as nan, which is not a finite number of shares",
+            id="the-position-is-not-a-number",
         ),
     ],
 )
@@ -267,6 +298,13 @@ async def test_a_flatten_the_account_does_not_cover_is_refused_and_nothing_is_se
     episode = _exit_not_flat(repo)
     assert episode is not None
     assert told in episode["explanation"]
+    # The headline says what the check found -- and never that the Clerk
+    # checked the account when it could not.
+    assert (
+        "the Alpaca account holds less than the flatten would close"
+        if reason_code == FLATTEN_NOT_COVERED_AT_BROKER
+        else "the Clerk could not confirm what the Alpaca account holds"
+    ) in episode["headline"]
     # Never recorded as sent: the watchdog counts no broker attempt against it.
     (reducing,) = [order for order in repo.orders_for_strategy(SID) if order.role == "REDUCING"]
     assert not repo.has_order_transition(
@@ -303,6 +341,75 @@ async def test_a_flatten_is_sent_past_another_orders_open_sell_that_leaves_cover
 
     assert result.applied is True
     assert [(leg.side, leg.quantity) for leg in trade.submitted_legs] == [("sell", 10)]
+
+
+async def test_a_confirmed_limit_the_account_does_not_cover_is_refused_and_nothing_is_sent(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """A pre-market Flatten goes out as the operator's confirmed limit (#2007), and is checked like any other."""
+    repo, _clock = crashed_with_exposure
+    account, trade = _Account(holds=10.0), safe_flatten._FakeTrade()
+    facade, current_context = await _stopped_bot_offered_its_flatten(
+        repo, account=account, trade=trade, pre_market=True
+    )
+    account.holds = 6.0
+
+    with pytest.raises(RecoveryExecutionError) as refused:
+        await safe_flatten._execute(
+            facade, current_context,
+            confirmed_limit=ConfirmedRecoveryLimit(
+                limit_price=Decimal("99.95"), quote_observed_at_ms=safe_flatten._PRE_MARKET_MS
+            ),
+        )
+
+    assert trade.submit_calls == []
+    assert account.reads == ["orders", "positions"]
+    assert refused.value.refusal is not None
+    assert refused.value.refusal.reason_code == FLATTEN_NOT_COVERED_AT_BROKER
+    assert "Alpaca holds 6 SPY, less than the 10 this flatten would sell; nothing was sent." in str(refused.value)
+
+
+async def test_a_flatten_of_a_short_alpaca_covers_buys_it_back(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The mirrored rule end to end: the bot is short 10 SPY, Alpaca is short 10, and the Flatten buys 10."""
+    repo, _clock = crashed_with_exposure
+    account, trade = _Account(holds=-10.0), safe_flatten._FakeTrade()
+    facade, current_context = await _stopped_bot_offered_its_flatten(
+        repo, account=account, trade=trade, entry_side="sell"
+    )
+    assert repo.position(SID, "SPY") == -10
+
+    result = await _flatten(facade, current_context)
+
+    assert result.applied is True
+    assert [(leg.side, leg.quantity) for leg in trade.submitted_legs] == [("buy", 10)]
+    assert account.reads == ["orders", "positions"]
+
+
+async def test_a_flatten_of_a_short_alpaca_does_not_cover_is_refused_and_nothing_is_bought(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """Alpaca is short only 6 by the time the buy is sent: buying 10 would leave the account long 4."""
+    repo, _clock = crashed_with_exposure
+    account, trade = _Account(holds=-10.0), safe_flatten._FakeTrade()
+    facade, current_context = await _stopped_bot_offered_its_flatten(
+        repo, account=account, trade=trade, entry_side="sell"
+    )
+    account.holds = -6.0
+
+    with pytest.raises(RecoveryExecutionError) as refused:
+        await _flatten(facade, current_context)
+
+    assert trade.submit_calls == []
+    assert refused.value.refusal is not None
+    assert refused.value.refusal.reason_code == FLATTEN_NOT_COVERED_AT_BROKER
+    assert (
+        "Alpaca holds a short of 6 SPY, which does not cover the 10 this flatten would buy back; "
+        "nothing was sent."
+    ) in str(refused.value)
+    assert repo.position(SID, "SPY") == -10
+    assert _exit_not_flat(repo) is not None
 
 
 async def _two_stopped_bots_on_spy(
@@ -461,6 +568,135 @@ async def test_a_resumed_flatten_is_checked_again_before_it_is_sent_again(
     assert resumed.submit_calls == []
     refusal = flatten_send_refusal(repo, effect_operation_id)
     assert refusal is not None and refusal.reason_code == FLATTEN_NOT_COVERED_AT_BROKER
+
+
+async def test_a_resumed_flatten_that_finds_its_own_order_at_alpaca_is_neither_sent_again_nor_refused(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """A lost submit did reach Alpaca, a moment after the exact lookup answered that it had not.
+
+    The account read made for the resend lists the Flatten's own order. It
+    used to be counted as a competing sell, so the EXIT failed with "nothing
+    was sent" while its order was working. Now nothing is sent a second time,
+    custody is retained, and the next pass's exact lookup folds the order.
+    """
+    repo, clock = crashed_with_exposure
+    account = _Account(holds=10.0)
+    lost = safe_flatten._FakeTrade(submit_error=BrokerUnavailable("timeout"))
+    facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=account, trade=lost)
+    await _flatten(facade, current_context)
+    assert len(lost.submit_calls) == 1
+    effect_operation_id = _flatten_exit(repo)
+    (reducing,) = [order for order in repo.orders_for_strategy(SID) if order.role == "REDUCING"]
+    own_order = safe_flatten._broker_order(
+        reducing.client_order_id, order_id="alpaca-own-1", status="new", side="sell"
+    )
+
+    class _ExactLookup(safe_flatten._FakeTrade):
+        """Alpaca's exact lookup: absent until ``answer`` is the order."""
+
+        answer: BrokerOrder | None = None
+
+        async def get_order_by_client_order_id(self, client_order_id: str) -> BrokerOrder | None:
+            self.lookup_calls.append(client_order_id)
+            return self.answer
+
+    # Past the 30 s submit-absence grace the exact lookup still answers
+    # absent, and the open orders read for the resend show the order.
+    _walk_clock_to(repo, clock.value + 40_000)
+    account.open_orders = [own_order]
+    resumed = _ExactLookup()
+    await resolve_exit(
+        repo, effect_operation_id=effect_operation_id, trade=resumed,
+        pricing=UNPRICEABLE_RECOVERY, read=account,
+    )
+
+    assert resumed.submit_calls == []
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None and effect.state == "unknown"
+    assert flatten_send_refusal(repo, effect_operation_id) is None
+    assert _exit_not_flat(repo) is None
+    assert repo.active_exit_for_strategy(SID) is not None
+
+    _walk_clock_to(repo, clock.value + 15_000)
+    resumed.answer = own_order
+    await resolve_exit(
+        repo, effect_operation_id=effect_operation_id, trade=resumed,
+        pricing=UNPRICEABLE_RECOVERY, read=account,
+    )
+
+    assert resumed.submit_calls == []
+    folded = repo.order(reducing.order_ref)
+    assert folded is not None
+    assert (folded.broker_order_id, folded.broker_state) == ("alpaca-own-1", "new")
+    effect = repo.effect_operation(effect_operation_id)
+    assert effect is not None and effect.state == "in_progress"
+
+
+def _nothing_is_open(account: _Account) -> None:
+    account.open_orders = []
+
+
+def _the_account_answers_again(account: _Account) -> None:
+    account.unreadable = None
+
+
+@pytest.mark.parametrize(
+    ("at_alpaca", "put_right", "reason_code"),
+    [
+        pytest.param(
+            _an_unknown_sell_takes_four, _nothing_is_open, FLATTEN_NOT_COVERED_AT_BROKER, id="not-covered"
+        ),
+        pytest.param(
+            _account_cannot_be_read, _the_account_answers_again, FLATTEN_COVER_UNPROVEN, id="cover-unproven"
+        ),
+    ],
+)
+async def test_a_refused_flatten_is_told_again_until_a_new_reconcile_makes_a_new_plan(
+    crashed_with_exposure,  # noqa: F811
+    at_alpaca: Callable[[_Account], None],
+    put_right: Callable[[_Account], None],
+    reason_code: str,
+) -> None:
+    """The step both refusals name is the one that works: Reconcile now, then prepare the flatten again.
+
+    A refusal changes nothing the plan is made from. Prepared again with no
+    new reconciliation, the Flatten is the same plan and the same EXIT, which
+    has failed: the operator is told the stored refusal, the account is not
+    read and nothing is sent -- although the account covers the sale by then.
+    A new reconciliation makes a new plan, whose Flatten reads the account and
+    sends.
+    """
+    repo, clock = crashed_with_exposure
+    account, trade = _Account(holds=10.0), safe_flatten._FakeTrade()
+    facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=account, trade=trade)
+    at_alpaca(account)
+    with pytest.raises(RecoveryExecutionError) as refused:
+        await _flatten(facade, current_context)
+    assert refused.value.refusal is not None
+    assert refused.value.refusal.reason_code == reason_code
+    assert refused.value.refusal.next_step == "Run Reconcile now, then prepare the flatten again."
+    put_right(account)
+    account.reads.clear()
+
+    with pytest.raises(RecoveryExecutionError) as told_again:
+        await _flatten(facade, current_context)
+
+    assert str(told_again.value) == str(refused.value)
+    assert told_again.value.refusal == refused.value.refusal
+    assert account.reads == []
+    assert trade.submit_calls == []
+
+    _walk_clock_to(repo, clock.value + 5_000)
+    result = await facade.reconcile_account(trigger="OPERATOR_RECONCILE_NOW")
+    assert result.verdict == "clean"
+    assert trade.submit_calls == []
+    account.reads.clear()
+    sent = await _flatten(facade, current_context)
+
+    assert sent.applied is True
+    assert account.reads == ["orders", "positions"]
+    assert [(leg.side, leg.quantity) for leg in trade.submitted_legs] == [("sell", 10)]
 
 
 async def test_a_refused_flatten_is_left_to_the_watchdog_which_sends_once_the_account_agrees(
@@ -629,6 +865,14 @@ def test_a_buy_that_covers_a_short_is_held_to_the_mirrored_rule(
             10.0, [_open_order("sell", quantity=10.0).model_copy(update={"status": "canceled"})], True,
             id="an-ended-sell-takes-none",
         ),
+        # Alpaca lists a multi-leg parent with no symbol (and no side), and its
+        # legs as orders of their own (#2363): the legs are what take cover. A
+        # parent that refused instead would freeze every Flatten on the account
+        # while one such order rests there -- the exit freeze #2363 ended.
+        pytest.param(
+            10.0, [_open_order("", quantity=10.0, symbol="")], True,
+            id="an-order-naming-no-symbol-takes-none",
+        ),
         pytest.param(10.0 - POSITION_QTY_EPSILON / 2, [], True, id="short-by-less-than-the-custody-epsilon"),
         pytest.param(10.0 - POSITION_QTY_EPSILON * 2, [], False, id="short-by-more-than-the-custody-epsilon"),
     ],
@@ -639,3 +883,64 @@ def test_a_sells_cover_counts_only_what_can_still_take_its_shares(
     code = _refusal_code(side=OrderSide.SELL, quantity=10.0, holds=holds, open_orders=open_orders)
 
     assert code == (None if covered else FLATTEN_NOT_COVERED_AT_BROKER)
+
+
+def _position_reported_as(quantity: float) -> BrokerPosition:
+    return safe_flatten._position("SPY", quantity=quantity, side="short" if quantity < 0 else "long")
+
+
+@pytest.mark.parametrize("side", [OrderSide.SELL, OrderSide.BUY], ids=["sell", "buy-to-cover"])
+@pytest.mark.parametrize("reported", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "minus-inf"])
+def test_a_position_that_is_not_a_finite_number_is_never_covered(side: OrderSide, reported: float) -> None:
+    """A NaN position compared false both ways and read as covered; an infinite one covered any sale."""
+    refusal = flatten_cover_refusal(
+        symbol="SPY", side=side, quantity=10.0, observed=([], [_position_reported_as(reported)])
+    )
+
+    assert refusal is not None
+    assert refusal.reason_code == FLATTEN_COVER_UNPROVEN
+    assert "which is not a finite number of shares" in refusal.explanation
+    assert "nothing was sent" in refusal.explanation
+
+
+@pytest.mark.parametrize(
+    ("quantity", "filled"),
+    [
+        pytest.param(math.nan, 0.0, id="nan-quantity"),
+        pytest.param(math.inf, 0.0, id="inf-quantity"),
+        pytest.param(10.0, math.nan, id="nan-filled"),
+        pytest.param(10.0, math.inf, id="inf-filled"),
+        pytest.param(10.0, -math.inf, id="minus-inf-filled"),
+    ],
+)
+def test_an_open_order_whose_quantity_is_not_a_finite_number_is_never_subtracted(
+    quantity: float, filled: float
+) -> None:
+    """An open sell of 10 leaves 5 of the 15 held, short of the sale -- unless its numbers hide it.
+
+    A NaN made the sum NaN, which read as covered, and an infinite fill made
+    the order take nothing.
+    """
+    order = _open_order("sell", quantity=10.0).model_copy(
+        update={"quantity": quantity, "filled_quantity": filled}
+    )
+
+    refusal = flatten_cover_refusal(
+        symbol="SPY", side=OrderSide.SELL, quantity=10.0,
+        observed=([order], [_position_reported_as(15.0)]),
+    )
+
+    assert refusal is not None
+    assert refusal.reason_code == FLATTEN_COVER_UNPROVEN
+    assert "states a quantity that is not a finite number" in refusal.explanation
+
+
+@pytest.mark.parametrize("own_quantity", [math.nan, math.inf, -math.inf], ids=["nan", "inf", "minus-inf"])
+def test_a_flatten_whose_own_quantity_is_not_a_finite_number_is_never_covered(own_quantity: float) -> None:
+    refusal = flatten_cover_refusal(
+        symbol="SPY", side=OrderSide.SELL, quantity=own_quantity,
+        observed=([], [_position_reported_as(10.0)]),
+    )
+
+    assert refusal is not None
+    assert refusal.reason_code == FLATTEN_COVER_UNPROVEN

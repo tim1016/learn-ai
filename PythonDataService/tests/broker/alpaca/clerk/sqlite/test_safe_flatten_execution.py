@@ -188,20 +188,21 @@ class _NoReconciler:
         raise AssertionError(f"unexpected reconciliation trigger: {trigger}")
 
 
-async def _held_position(repo: ClerkSqliteRepository) -> str:
-    """Filled 10-share SPY entry with an exact execution slice -> attributed +10."""
+async def _held_position(repo: ClerkSqliteRepository, *, side: str = "buy") -> str:
+    """Filled 10-share SPY entry with an exact execution slice -> attributed +10
+    (or -10 for ``side="sell"``)."""
     submission = await submit_enter(
         repo,
         account_id=ACCOUNT_ID,
         strategy_instance_id=SID,
         decision_id="enter-1",
         lifecycle_run_id=RUN_ID,
-        leg=_leg(quantity=10),
+        leg=_leg(quantity=10, side=side),
         trade=_FakeTrade(),
     )
     assert submission.order_ref is not None
     filled = _broker_order(
-        submission.order_ref, status="filled", quantity=10.0,
+        submission.order_ref, status="filled", side=side, quantity=10.0,
         filled_quantity=10, filled_avg_price=100.0,
     )
     fold_order_evidence(repo, effect_operation_id=submission.effect_operation_id, order=filled)
@@ -1019,7 +1020,7 @@ async def test_a_confirmed_limit_never_goes_out_after_its_session_ends(
 
     _walk_clock_to(repo, _JUST_AFTER_POST_CLOSE_MS)
     trade.lookups_fail = False
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
+    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=_covering_read())
 
     assert trade.submit_calls == []
     effect = repo.effect_operation(effect_operation_id)
@@ -1064,7 +1065,11 @@ async def test_a_confirmed_price_never_reduces_a_quantity_the_operator_never_saw
     # reduction is fifteen where ten was confirmed.
     await _late_entry_slice(repo, entry.order_ref, quantity=5)
     trade.lookups_fail = False
-    await resolve_exit(repo, effect_operation_id=effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY, read=None)
+    # The account holds all fifteen, so only the quantity rule stops the send (#2839).
+    await resolve_exit(
+        repo, effect_operation_id=effect_operation_id, trade=trade, pricing=UNPRICEABLE_RECOVERY,
+        read=_covering_read(quantity=15.0),
+    )
 
     assert trade.submit_calls == []
     effect = repo.effect_operation(effect_operation_id)

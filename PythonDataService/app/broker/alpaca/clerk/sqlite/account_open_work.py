@@ -20,6 +20,9 @@ from app.broker.contract.ports import BrokerReadPort
 
 MAX_OPEN_ORDER_SNAPSHOT = 500
 
+type AccountOpenWork = tuple[list[BrokerOrder], list[BrokerPosition]]
+"""The account's open orders and its positions, as one read returned them."""
+
 
 def broker_quantity_by_symbol(broker_positions: list[BrokerPosition]) -> dict[str, float]:
     """The broker's signed position per upper-cased symbol."""
@@ -42,9 +45,7 @@ def open_order_snapshot_is_full(broker_orders: list[BrokerOrder]) -> bool:
     return len(broker_orders) >= MAX_OPEN_ORDER_SNAPSHOT
 
 
-async def read_account_open_work(
-    read: BrokerReadPort,
-) -> tuple[list[BrokerOrder], list[BrokerPosition]]:
+async def read_account_open_work(read: BrokerReadPort) -> AccountOpenWork:
     """The account's open orders and positions, as the broker reports them.
 
     Whole-account broker truth, read together: reconciliation folds it into
@@ -61,9 +62,7 @@ async def read_account_open_work(
     return broker_orders, broker_positions
 
 
-async def read_open_orders_then_positions(
-    read: BrokerReadPort,
-) -> tuple[list[BrokerOrder], list[BrokerPosition]]:
+async def read_open_orders_then_positions(read: BrokerReadPort) -> AccountOpenWork:
     """The account's open orders, then its positions: one read after the other (#2839).
 
     For a caller that sets a position against what the open orders may still
@@ -80,6 +79,7 @@ async def read_open_orders_then_positions(
 
 __all__ = [
     "MAX_OPEN_ORDER_SNAPSHOT",
+    "AccountOpenWork",
     "broker_order_in_flight",
     "broker_quantity_by_symbol",
     "open_order_snapshot_is_full",

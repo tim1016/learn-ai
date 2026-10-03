@@ -19,38 +19,54 @@ unknown open sell takes cover away.
 
 from __future__ import annotations
 
+import math
+
 from app.broker.alpaca.clerk.program_leg import LegRefusal
 from app.broker.alpaca.clerk.sqlite.account_open_work import (
+    AccountOpenWork,
     broker_order_in_flight,
     broker_quantity_by_symbol,
     open_order_snapshot_is_full,
 )
-from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
+from app.broker.alpaca.clerk.sqlite.folds import POSITION_QTY_EPSILON, position_quantity_is_nonzero
 from app.broker.contract.errors import BrokerError
-from app.broker.contract.models import BrokerOrder, BrokerPosition, OrderSide
+from app.broker.contract.models import OrderSide
 
 FLATTEN_NOT_COVERED_AT_BROKER = "FLATTEN_NOT_COVERED_AT_BROKER"
 """Alpaca holds less than the Flatten would sell, once its open orders are set against the position."""
 
 FLATTEN_COVER_UNPROVEN = "FLATTEN_COVER_UNPROVEN"
-"""The Clerk could not work out what Alpaca holds free: no read, a full order page, an order with no quantity."""
+"""The Clerk could not work out what Alpaca holds free.
+
+No read, a full order page, an open order with no quantity, or a quantity that is not a finite number.
+"""
+
+_RECONCILE_THEN_PREPARE_AGAIN = "Run Reconcile now, then prepare the flatten again."
 
 FLATTEN_COVER_NEXT_STEPS: dict[str, str] = {
-    FLATTEN_NOT_COVERED_AT_BROKER: (
-        "Run Reconcile now to see what differs at Alpaca, then prepare the flatten again."
-    ),
-    FLATTEN_COVER_UNPROVEN: (
-        "Prepare the flatten again; if it is refused again, run Reconcile now."
-    ),
+    FLATTEN_NOT_COVERED_AT_BROKER: _RECONCILE_THEN_PREPARE_AGAIN,
+    FLATTEN_COVER_UNPROVEN: _RECONCILE_THEN_PREPARE_AGAIN,
 }
 """What the operator can do about each refusal, keyed by its code.
 
-One step per code, so a refusal read back from the EXIT it failed
-(``exit_resolution.flatten_send_refusal``) carries the step it was raised with.
+The same step for both. A refused Flatten is the one EXIT of the plan it was
+prepared as, and a refusal changes nothing that plan is made from: preparing
+again before a new reconciliation presents the same plan, which is told this
+refusal again with no new read of the account. Only a new reconciliation makes
+a new plan, whose Flatten reads the account afresh.
 """
 
-type AccountOpenWork = tuple[list[BrokerOrder], list[BrokerPosition]]
-"""The account's open orders and positions, read in that sequence."""
+FLATTEN_COVER_HEADLINES: dict[str, str] = {
+    FLATTEN_NOT_COVERED_AT_BROKER: (
+        "A flatten was not sent: counting its open orders, the Alpaca account holds less than "
+        "the flatten would close; the position is still open"
+    ),
+    FLATTEN_COVER_UNPROVEN: (
+        "A flatten was not sent: the Clerk could not confirm what the Alpaca account holds; "
+        "the position is still open"
+    ),
+}
+"""The notice's headline for each refusal: what the check found, never that it checked when it could not."""
 
 
 def cover_after_open_orders(*, position: float, side: OrderSide, competing_unfilled: float) -> float:
@@ -60,12 +76,14 @@ def cover_after_open_orders(*, position: float, side: OrderSide, competing_unfil
       for a sell and ``-1`` for a buy that covers a short, and
       ``competing_unfilled = sum_i max(quantity_i - filled_i, 0)`` over every
       open order ``i`` in the symbol that is not on the other side. A
-      reduction of ``q`` is covered when ``q - cover < POSITION_QTY_EPSILON``.
+      reduction of ``q`` is covered when ``q - cover < POSITION_QTY_EPSILON``,
+      every quantity being finite.
     Reference: issue #2839 (owner decision: the sale is covered at Alpaca).
     Canonical implementation: this file.
     Validated against:
-      ``tests/broker/alpaca/clerk/sqlite/test_flatten_send_cover.py::test_a_sells_cover_counts_only_what_can_still_take_its_shares``
-      and ``::test_a_buy_that_covers_a_short_is_held_to_the_mirrored_rule``.
+      ``tests/broker/alpaca/clerk/sqlite/test_flatten_send_cover.py::test_a_sells_cover_counts_only_what_can_still_take_its_shares``,
+      ``::test_a_buy_that_covers_a_short_is_held_to_the_mirrored_rule`` and
+      ``::test_a_position_that_is_not_a_finite_number_is_never_covered``.
     """
     signed = position if side is OrderSide.SELL else -position
     return signed - competing_unfilled
@@ -90,7 +108,18 @@ def flatten_cover_refusal(
     refuses the send, because what it takes cannot be subtracted. An order
     naming no symbol at all (a multi-leg parent, whose legs are listed as
     their own orders) competes for nothing.
+
+    Every quantity in the rule must be a finite number -- the position, each
+    competing order's quantity and filled quantity, and the reduction's own.
+    One that is not refuses as unproven: a ``NaN`` compares false both ways
+    and an infinite position would cover anything, so neither may read as
+    covered.
     """
+    if not math.isfinite(quantity):
+        return _unproven(
+            f"This flatten's own {symbol} quantity ({quantity:g}) is not a finite number of shares; "
+            "nothing was sent."
+        )
     selling = side is OrderSide.SELL
     unconfirmed = (
         "so the Clerk could not confirm the account "
@@ -131,12 +160,24 @@ def flatten_cover_refusal(
                 f"An open {symbol} order at Alpaca ({order.order_id}) states no share quantity, "
                 f"so how much of the position it takes is unknown, and {unconfirmed}"
             )
+        if not (math.isfinite(order.quantity) and math.isfinite(order.filled_quantity)):
+            return _unproven(
+                f"An open {symbol} order at Alpaca ({order.order_id}) states a quantity that is not "
+                f"a finite number, so how much of the position it takes is unknown, and {unconfirmed}"
+            )
         competing_unfilled += max(order.quantity - order.filled_quantity, 0.0)
     position = broker_quantity_by_symbol(broker_positions).get(symbol.upper(), 0.0)
+    if not math.isfinite(position):
+        return _unproven(
+            f"Alpaca reported its {symbol} position as {position:g}, which is not a finite number "
+            f"of shares, {unconfirmed}"
+        )
     shortfall = quantity - cover_after_open_orders(
         position=position, side=side, competing_unfilled=competing_unfilled
     )
-    if shortfall <= 0 or not position_quantity_is_nonzero(shortfall):
+    # Covered only when this is affirmatively true: every quantity above is
+    # finite, and a comparison that is not true refuses.
+    if shortfall < POSITION_QTY_EPSILON:
         return None
     already_taken = (
         f" with {competing_unfilled:g} of it already in open {side.value} orders"
@@ -158,6 +199,22 @@ def flatten_cover_refusal(
     )
 
 
+def account_lists_order(
+    observed: AccountOpenWork | BrokerError | None, *, client_order_id: str
+) -> bool:
+    """Whether the account read lists an order carrying ``client_order_id`` (#2839).
+
+    Asked of the Flatten's own reducing order before the cover rule: an order
+    the read shows under that identity reached the broker, after an exact
+    lookup answered that it had not. It is the sale itself, not a competitor
+    for the position, so the caller neither sends it again nor refuses it.
+    """
+    if observed is None or isinstance(observed, BrokerError):
+        return False
+    broker_orders, _broker_positions = observed
+    return any(order.client_order_id == client_order_id for order in broker_orders)
+
+
 def _unproven(explanation: str) -> LegRefusal:
     return LegRefusal(
         reason_code=FLATTEN_COVER_UNPROVEN,
@@ -174,10 +231,11 @@ def _held_text(position: float, symbol: str) -> str:
 
 
 __all__ = [
+    "FLATTEN_COVER_HEADLINES",
     "FLATTEN_COVER_NEXT_STEPS",
     "FLATTEN_COVER_UNPROVEN",
     "FLATTEN_NOT_COVERED_AT_BROKER",
-    "AccountOpenWork",
+    "account_lists_order",
     "cover_after_open_orders",
     "flatten_cover_refusal",
 ]

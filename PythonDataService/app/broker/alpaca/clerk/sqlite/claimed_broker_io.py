@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from app.broker.alpaca.clerk.sqlite.account_open_work import read_open_orders_then_positions
+from app.broker.alpaca.clerk.sqlite.account_open_work import (
+    AccountOpenWork,
+    read_open_orders_then_positions,
+)
 from app.broker.alpaca.clerk.sqlite.order_evidence import fold_uncertain
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteRepository,
@@ -14,12 +17,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
     OperationClaimError,
 )
 from app.broker.contract.errors import BrokerError
-from app.broker.contract.models import (
-    BrokerActivityEvidence,
-    BrokerOrder,
-    BrokerOrderLeg,
-    BrokerPosition,
-)
+from app.broker.contract.models import BrokerActivityEvidence, BrokerOrder, BrokerOrderLeg
 from app.broker.contract.ports import BrokerActivityEvidencePort, BrokerReadPort, BrokerTradePort
 
 
@@ -177,7 +175,7 @@ class ClaimedBrokerIO:
 
     async def observe_open_orders_then_positions(
         self, read: BrokerReadPort
-    ) -> tuple[list[BrokerOrder], list[BrokerPosition]] | BrokerError:
+    ) -> AccountOpenWork | BrokerError:
         """The account's open orders, then its positions, or a value-domain error (#2839).
 
         Read under the claim like every other broker contact of a resolution,
