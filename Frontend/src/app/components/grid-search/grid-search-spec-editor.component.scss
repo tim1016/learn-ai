@@ -1,7 +1,12 @@
 :host { display: block; }
 .editor { display: grid; gap: var(--space-4); }
 .muted { color: var(--text-secondary); font-size: var(--fs-xs); }
-.editor__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-3); }
+// The instrument picker needs room for the symbol and its name, so it gets the
+// wider of two columns; the window takes the row underneath.
+.editor__grid { display: grid; grid-template-columns: minmax(280px, 26rem) minmax(180px, 20rem); justify-content: start; align-items: start; gap: var(--space-3); }
+@media (max-width: 600px) {
+  .editor__grid { grid-template-columns: minmax(0, 1fr); }
+}
 .field { display: grid; gap: var(--space-1); font-size: var(--fs-xs); }
 .field select, .field input { min-width: 0; }
 // The window takes a row of its own: two dates, their calendar and the quick ranges.
