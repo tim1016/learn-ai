@@ -33,6 +33,7 @@ from app.broker.alpaca.clerk.sqlite.recovery_policy import RecoveryPolicyContext
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.alpaca.clerk.sqlite.uncertainty import POSITION_DRIFT_REASON_CODE
+from app.broker.contract.models import BrokerPosition
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 from app.utils.session_anchors import et_date_at_ms
 from tests.broker.alpaca.clerk.sqlite.conftest import _TestClock, _walk_clock_to
@@ -55,6 +56,7 @@ from tests.broker.alpaca.clerk.sqlite.test_safe_flatten_execution import (
     ACCOUNT_ID,
     SID,
     _held_position,
+    _position,
     crashed_with_exposure,  # noqa: F401 -- the repository, in the regular session, these tests reuse
 )
 
@@ -347,6 +349,102 @@ async def test_a_failed_exits_closing_order_that_was_never_sent_is_not_looked_up
 
     assert [result.verdict for result in drifted] == ["position_drift"] * 3
     assert closing.client_order_id not in alpaca.looked_up
+
+
+async def _a_flatten_failed_uncovered_after_its_send_was_lost(
+    repo: ClerkSqliteRepository, alpaca: _Alpaca
+) -> tuple[SqliteAlpacaClerkFacade, OrderResource]:
+    """An operator's Flatten is lost, and refused when it would be sent again: Alpaca then holds 6 of the 10.
+
+    The pass that refuses it fails the EXIT and looks its closing order up
+    once, while the symbol reads as drifted. Returns the account's facade and
+    the closing order.
+    """
+    facade, current_context = await _stopped_bot_offered_its_flatten(repo, account=alpaca, trade=alpaca)
+    await _flatten(facade, current_context)
+    closing = _closing_order(repo)
+    alpaca.holds = 6.0
+    _walk_clock_to(repo, repo.clock() + RESEND_AFTER_MS - SWEEP_INTERVAL_MS)
+    refused = await _one_pass(repo, facade)
+
+    assert refused.verdict == "position_drift"
+    assert _exit_state(repo, closing.effect_operation_id) == "failed"
+    assert len(alpaca.sent) == 1
+    return facade, closing
+
+
+class _AlpacaHoldingAnotherSymbol(_Alpaca):
+    """Alpaca with shares of a second symbol that no bot holds, from when the test says so."""
+
+    also_holds: tuple[BrokerPosition, ...] = ()
+
+    async def list_positions(self) -> list[BrokerPosition]:
+        return [*await super().list_positions(), *self.also_holds]
+
+
+async def test_a_failed_exits_closing_order_is_looked_up_only_while_its_own_symbol_is_drifted(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """Only a drifted symbol can hide a closing order's fill, so only its orders are asked about.
+
+    The failed Flatten's symbol agrees with Alpaca again, and another symbol
+    reads as drifted: shares no bot holds. The account is drifted, and the
+    SPY closing order is still not looked up, however long it has rested.
+    It is looked up again on the first pass that reads SPY itself as drifted.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaHoldingAnotherSymbol(repo, clock, submits=("never_arrives",))
+    facade, closing = await _a_flatten_failed_uncovered_after_its_send_was_lost(repo, alpaca)
+
+    alpaca.holds = 10.0
+    alpaca.also_holds = (_position("QQQ", quantity=5.0),)
+    _walk_clock_to(repo, repo.clock() + REST_BETWEEN_LOOKUPS_MS)
+    looked_up_before = alpaca.looked_up.count(closing.client_order_id)
+    elsewhere = [await _one_pass(repo, facade) for _ in range(3)]
+
+    assert [(result.verdict, result.drifted_symbols) for result in elsewhere] == [
+        ("position_drift", ("QQQ",))
+    ] * 3
+    assert alpaca.looked_up.count(closing.client_order_id) == looked_up_before
+
+    alpaca.holds = 6.0
+    both = await _one_pass(repo, facade)
+
+    assert set(both.drifted_symbols) == {"QQQ", "SPY"}
+    assert alpaca.looked_up.count(closing.client_order_id) == looked_up_before + 1
+    assert len(alpaca.sent) == 1
+
+
+async def test_a_failed_exits_closing_order_the_open_orders_list_is_not_looked_up_as_well(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """An order the account's open orders show is folded from that read, and spends no exact lookup.
+
+    The failed Flatten's lost order reached Alpaca after all, and its open
+    orders now list it. Every pass folds it from that list, and none asks
+    for it by its id, however long it has rested. Once the open orders no
+    longer list it, it is looked up again.
+    """
+    repo, clock = crashed_with_exposure
+    alpaca = _Alpaca(repo, clock, submits=("arrives_unanswered",))
+    facade, closing = await _a_flatten_failed_uncovered_after_its_send_was_lost(repo, alpaca)
+
+    alpaca.lists_among_its_open_orders(closing.client_order_id)
+    _walk_clock_to(repo, repo.clock() + REST_BETWEEN_LOOKUPS_MS)
+    looked_up_before = alpaca.looked_up.count(closing.client_order_id)
+    for _ in range(3):
+        await _one_pass(repo, facade)
+
+    listed = repo.order(closing.order_ref)
+    assert listed is not None
+    assert (listed.broker_order_id, listed.broker_state) == (f"alpaca-{closing.client_order_id}", "new")
+    assert alpaca.looked_up.count(closing.client_order_id) == looked_up_before
+
+    alpaca.loses_sight_of(closing.client_order_id)
+    await _one_pass(repo, facade)
+
+    assert alpaca.looked_up.count(closing.client_order_id) == looked_up_before + 1
+    assert len(alpaca.sent) == 1
 
 
 async def test_an_exit_released_at_its_sessions_end_whose_lost_order_filled_is_found_too(
