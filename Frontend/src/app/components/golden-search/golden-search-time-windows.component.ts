@@ -2,10 +2,11 @@ import { ChangeDetectionStrategy, Component, computed, input, output } from '@an
 import { InputText } from 'primeng/inputtext';
 
 import { etIsoDate } from '../../shared/date/et-midnight';
+import { DateFieldComponent } from '../../shared/date-picker';
 import { TimestampDisplayComponent } from '../../shared/timestamp';
 import { EXPOSURE_CLAIMS, EXPOSURE_LABELS } from './golden-search-display';
-import { dateProblemKey, numberProblemKey, type PlanEdit, type ProtocolDateField, type ProtocolNumberField } from './golden-search-plan-draft';
-import { dateInputId, numberInputId } from './golden-search-plan-problems';
+import { numberProblemKey, type PlanEdit, type ProtocolDateField, type ProtocolNumberField } from './golden-search-plan-draft';
+import { dateInputId, numberInputId, type PlanProblem } from './golden-search-plan-problems';
 import type { GoldenSearchPreflight, ProtocolRequest } from './golden-search.types';
 
 interface Span {
@@ -22,14 +23,15 @@ function percentAlong(ms: number, start: number, end: number): number {
 
 /**
  * The plan's time windows (#2696): the fold and final-test lengths in months
- * (the server lays the dates out from them), the dates themselves on
- * request, and a bar showing development, the folds' test windows and the
+ * (the server lays the dates out from them), the three dates themselves with
+ * the server's refusal of each under its field (#2858), and a bar showing
+ * development, the folds' test windows and the
  * sealed final test as the server laid them out, with the final test's
  * exposure and the warmup every run is primed with.
  */
 @Component({
   selector: 'app-golden-search-time-windows',
-  imports: [InputText, TimestampDisplayComponent],
+  imports: [InputText, TimestampDisplayComponent, DateFieldComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-time-windows.component.html',
   styleUrls: ['./golden-search-plan-card.scss', './golden-search-time-windows.component.scss'],
@@ -43,6 +45,8 @@ export class GoldenSearchTimeWindowsComponent {
   /** The server's answer to the current plan: its folds, exposure and run-up; null until checked. */
   readonly preflight = input<GoldenSearchPreflight | null>(null);
   readonly problems = input<ReadonlyMap<string, string>>(new Map());
+  /** The server's refusals of the plan; the ones that name a date are shown under that date. */
+  readonly refusals = input<readonly PlanProblem[]>([]);
   readonly edit = output<PlanEdit>();
 
   protected readonly numberId = numberInputId;
@@ -70,8 +74,11 @@ export class GoldenSearchTimeWindowsComponent {
     return this.problems().has(numberProblemKey(field));
   }
 
-  protected dateInvalid(field: ProtocolDateField): boolean {
-    return this.problems().has(dateProblemKey(field));
+  /** What the server refused about this date, in its own words; null when it refused nothing. */
+  protected refusalFor(field: ProtocolDateField): string | null {
+    const target = dateInputId(field);
+    const texts = this.refusals().filter((refusal) => refusal.target === target).map((refusal) => refusal.text);
+    return texts.length === 0 ? null : texts.join(' ');
   }
 
   protected onNumber(field: ProtocolNumberField, raw: string): void {

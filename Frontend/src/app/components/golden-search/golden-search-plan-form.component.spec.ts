@@ -602,20 +602,41 @@ describe('GoldenSearchPlanFormComponent', () => {
     expect(service.preflight).toHaveBeenCalledTimes(2);
   });
 
-  it('leaves a date field alone while its year is typed, then sends the whole date (#2858)', async () => {
+  it('takes a typed date when its field is left; a half-typed one stays in the field and the plan keeps its date (#2858)', async () => {
     const service = fakeService();
     const { view } = await renderForm(service);
     await pickSpy(service, view);
     const field = screen.getByLabelText('Development from') as HTMLInputElement;
+    const planned = service.preflight.mock.lastCall?.[0].development_start_ms;
 
-    // What the browser reports for the keys 1 1 0 1 2 0 2 2: the year arrives one digit at a time.
-    for (const typed of ['0002-11-01', '0020-11-01', '0202-11-01', '2022-11-01']) {
-      fireEvent.input(field, { target: { value: typed } });
-      await view.fixture.whenStable();
-      expect(field.value).toBe(typed);
-    }
+    fireEvent.change(field, { target: { value: '2022-11' } });
+    await view.fixture.whenStable();
+
+    expect(field.value).toBe('2022-11');
+    expect(field.getAttribute('aria-invalid')).toBe('true');
+    expect(service.preflight.mock.lastCall?.[0].development_start_ms).toBe(planned);
+    expect(lockButton().disabled).toBe(true);
+
+    fireEvent.change(field, { target: { value: '2022-11-01' } });
 
     await waitFor(() => expect(service.preflight.mock.lastCall?.[0].development_start_ms).toBe(etMidnightMs('2022-11-01')));
+    expect(field.getAttribute('aria-invalid')).toBe('false');
+  });
+
+  it("shows the server's refusal of a date under the date it names, where the fold rule can be read (#2858)", async () => {
+    const service = fakeService();
+    const { view } = await renderForm(service);
+    await pickSpy(service, view);
+    const message = '45 months do not divide into whole folds of 2 months after 6 months of training; nearest valid end dates (inclusive): 2025-09-30, 2025-11-30';
+    service.preflight.mockResolvedValueOnce(preflightFixture({ refusals: [{ code: 'FOLDS_INVALID', field: 'development_end_ms', message }] }));
+
+    fireEvent.change(screen.getByLabelText('Development from'), { target: { value: '2022-01-01' } });
+
+    const boundary = screen.getByLabelText('Final test from (development ends the day before)');
+    await waitFor(() => expect(boundary.getAttribute('aria-invalid')).toBe('true'));
+    const note = view.container.querySelector(`[id="${boundary.getAttribute('aria-describedby')}"]`);
+    expect(note?.textContent).toContain(message);
+    expect(screen.getByLabelText('Development from').getAttribute('aria-invalid')).toBe('false');
   });
 
   it('a date typed by hand while dates are being laid out wins: the late layout is dropped and the month count cleared', async () => {
@@ -627,7 +648,7 @@ describe('GoldenSearchPlanFormComponent', () => {
 
     fireEvent.input(screen.getByLabelText('Final test (months)'), { target: { value: '4' } });
     await waitFor(() => expect(service.defaults).toHaveBeenCalledTimes(2));
-    fireEvent.input(screen.getByLabelText('Final test from (development ends the day before)'), { target: { value: '2025-10-01' } });
+    fireEvent.change(screen.getByLabelText('Final test from (development ends the day before)'), { target: { value: '2025-10-01' } });
     await waitFor(() => expect(service.preflight).toHaveBeenCalledTimes(2));
     pending.resolve(fourMonthDefaults());
     await view.fixture.whenStable();
