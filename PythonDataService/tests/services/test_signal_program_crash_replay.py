@@ -491,7 +491,9 @@ async def test_replay_warmup_bars_is_idempotent_for_an_already_blocked_candidate
         context,
         _StaticWarmupFeed(replay_bars),
         binding,
-        captured_decisions=CapturedDecisions(outcomes=captured, rotated_out_before_ms=None),
+        captured_decisions=CapturedDecisions(
+            outcomes=captured, rotated_out_before_ms=None, run_first_closes_ms=frozenset()
+        ),
     )
 
     assert recovered is None, f"'{key}' re-flagged an already-captured (blocked) candidate as a crash window"
@@ -549,7 +551,9 @@ async def test_warmup_replay_then_live_loop_never_duplicates_broker_contact(key:
         context,
         _StaticWarmupFeed(warmup_bars),
         binding,
-        captured_decisions=CapturedDecisions(outcomes=captured, rotated_out_before_ms=None),
+        captured_decisions=CapturedDecisions(
+            outcomes=captured, rotated_out_before_ms=None, run_first_closes_ms=frozenset()
+        ),
     )
     assert recovered is None, f"'{key}' flagged a crash candidate in a fully-captured warmup window"
     assert runtime.program is not None
@@ -631,7 +635,9 @@ async def test_replay_warmup_bars_names_the_candidate_without_disposition(key: s
         context,
         _StaticWarmupFeed(replay_bars),
         binding,
-        captured_decisions=CapturedDecisions(outcomes=captured, rotated_out_before_ms=None),
+        captured_decisions=CapturedDecisions(
+            outcomes=captured, rotated_out_before_ms=None, run_first_closes_ms=frozenset()
+        ),
     )
 
     assert recovered is not None, (
@@ -696,7 +702,9 @@ async def test_replay_warmup_bars_does_not_flag_a_bucket_that_closed_before_the_
         _StaticWarmupFeed(replay_bars),
         binding,
         captured_decisions=CapturedDecisions(
-            outcomes=captured, rotated_out_before_ms=retained[0].bar_close_ms
+            outcomes=captured,
+            rotated_out_before_ms=retained[0].bar_close_ms,
+            run_first_closes_ms=frozenset(),
         ),
     )
 
@@ -737,7 +745,9 @@ async def test_replay_warmup_bars_still_flags_a_bucket_that_closed_at_the_rotati
         _StaticWarmupFeed(replay_bars),
         binding,
         captured_decisions=CapturedDecisions(
-            outcomes=captured, rotated_out_before_ms=target_trace.bar_close_ms
+            outcomes=captured,
+            rotated_out_before_ms=target_trace.bar_close_ms,
+            run_first_closes_ms=frozenset(),
         ),
     )
 

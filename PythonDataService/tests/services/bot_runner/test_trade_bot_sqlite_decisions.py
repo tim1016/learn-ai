@@ -19,6 +19,10 @@ from app.broker.alpaca.clerk import set_alpaca_clerk
 from app.broker.alpaca.clerk.account_authority import (
     paper_evidence_account_id_for_strategy,
 )
+from app.broker.alpaca.clerk.sqlite.decision_receipts import (
+    SqliteDecisionReceipts,
+    run_first_closes_ms,
+)
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.engine.execution.portfolio import Portfolio
@@ -83,6 +87,17 @@ async def test_real_trade_runner_routes_enter_and_exit_through_sqlite_facade(
         assert "EXIT_ACCEPTED" in transition_kinds
         assert broker.orders
         assert all(order.client_order_id in repo.all_order_refs() for order in broker.orders.values())
+        # One run wrote every receipt: the runner under its lifecycle run id,
+        # the Clerk under its own. A Resume reads them as one run, or it would
+        # drop the position at every effect it replays (#2859).
+        run = repo.active_run(_SID)
+        assert run is not None
+        window = SqliteDecisionReceipts(repo, strategy_instance_id=_SID).retained_window()
+        assert {json.loads(receipt.facts_json)["run_id"] for receipt in window} == {
+            run.lifecycle_run_id,
+            run.run_id,
+        }
+        assert run_first_closes_ms(window) == frozenset()
         await registry.stop("alpaca", _SID)
         assert repo.active_run(_SID) is None
     finally:

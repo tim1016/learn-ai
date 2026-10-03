@@ -499,3 +499,94 @@ async def test_a_bucket_older_than_every_receipt_is_still_named_while_none_has_r
     finally:
         set_alpaca_clerk(None)
         repo.close()
+
+
+# ---------------------------------------------------------------------------
+# Replay follows each run's own position, not the instance's (#2859).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resume_after_a_stop_in_position_names_no_exit_the_next_run_never_staged(
+    tmp_path: Path,
+) -> None:
+    """#2859: a run starts flat, so replay drops the position the run before it held.
+
+    The first run enters and is stopped holding the position. The second
+    starts flat, decides two quiet minutes and dies on a third, which staged
+    nothing. Replay used to carry the first run's ENTER through the second
+    run's bars, count its exit down, and name the quiet minute as an EXIT the
+    crash left staged -- one no live run staged.
+    """
+    repo, clerk = _sqlite_clerk(tmp_path)
+    set_alpaca_clerk(clerk)
+    try:
+        tape = _red_tape(minutes=_EARLY_ENTER_MINUTE + 5, enter_minutes=[_EARLY_ENTER_MINUTE])
+        first_run = tape[: _EARLY_ENTER_MINUTE + 2]
+        second_run = tape[_EARLY_ENTER_MINUTE + 2 : _EARLY_ENTER_MINUTE + 4]
+
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-1", strategy_key=_DV), _PhaseFeed(live_bars=first_run)
+        )
+        assert [call["purpose"] for call in clerk.calls] == ["ENTER"]
+
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-2", strategy_key=_DV),
+            _PhaseFeed(retained_bars=first_run, live_bars=second_run),
+        )
+        before_resume = _retained(repo)
+        assert [receipt.outcome for receipt in before_resume[-2:]] == ["no_action", "no_action"]
+
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-3", strategy_key=_DV), _PhaseFeed(retained_bars=tape)
+        )
+
+        assert _retained(repo) == before_resume
+        assert [call["purpose"] for call in clerk.calls] == ["ENTER"]
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_names_the_exit_a_later_run_left_staged_after_an_earlier_run_stopped_in_position(
+    tmp_path: Path,
+) -> None:
+    """#2859: the earlier run's position must not stand in for the later run's own.
+
+    The second run starts flat, enters on its own signal and dies on the bar
+    that stages its EXIT. Replay used to reach the second run's ENTER still
+    holding the first run's position, stage an EXIT there, commit that in
+    the ENTER's place, and so arrive flat at the crash bucket: the EXIT the
+    crash left staged went unnamed.
+    """
+    repo, clerk = _sqlite_clerk(tmp_path)
+    set_alpaca_clerk(clerk)
+    try:
+        second_enter_minute = _EARLY_ENTER_MINUTE + 5
+        crash_minute = second_enter_minute + 3
+        tape = _red_tape(
+            minutes=crash_minute + 1, enter_minutes=[_EARLY_ENTER_MINUTE, second_enter_minute]
+        )
+        first_run = tape[: _EARLY_ENTER_MINUTE + 2]
+
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-1", strategy_key=_DV), _PhaseFeed(live_bars=first_run)
+        )
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-2", strategy_key=_DV),
+            _PhaseFeed(retained_bars=first_run, live_bars=tape[len(first_run) : crash_minute]),
+        )
+        assert [call["purpose"] for call in clerk.calls] == ["ENTER", "ENTER"]
+        assert clerk.calls[1]["decision_evidence"].decision_bar_close_ms == tape[second_enter_minute].end_ms
+
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-3", strategy_key=_DV), _PhaseFeed(retained_bars=tape)
+        )
+
+        assert [call["purpose"] for call in clerk.calls] == ["ENTER", "ENTER"]
+        assert _crash_evidence_closes(repo) == [tape[crash_minute].end_ms]
+        assert json.loads(_retained(repo)[-1].facts_json)["explanation"]["holding"] is True
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()

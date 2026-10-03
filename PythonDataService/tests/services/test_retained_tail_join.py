@@ -554,7 +554,7 @@ async def test_history_buckets_are_never_flagged_as_crash_candidates() -> None:
         _Feed(),  # type: ignore[arg-type]
         _binding(strategy_key="sma_crossover"),
         captured_decisions=CapturedDecisions(
-            outcomes={"ev-earlier": "EXECUTED"}, rotated_out_before_ms=None
+            outcomes={"ev-earlier": "EXECUTED"}, rotated_out_before_ms=None, run_first_closes_ms=frozenset()
         ),
     )
 

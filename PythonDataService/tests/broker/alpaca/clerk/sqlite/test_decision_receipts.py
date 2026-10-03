@@ -19,6 +19,7 @@ from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     DecisionReceiptConflictError,
     SqliteDecisionReceipts,
     rotated_out_before_ms,
+    run_first_closes_ms,
 )
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 
@@ -244,6 +245,7 @@ def _receipt_bucket(
     *,
     outcome: DecisionOutcome = "no_action",
     records_close: bool = True,
+    run_id: str | None = None,
 ) -> None:
     """Receipt the bucket that closed at ``minute``, the way a runner or the Clerk does.
 
@@ -254,6 +256,8 @@ def _receipt_bucket(
     facts: dict[str, str | int] = {"bar_ref": f"SPY@{minute}"}
     if records_close:
         facts["decision_bar_close_ms"] = _close_ms(minute)
+    if run_id is not None:
+        facts["run_id"] = run_id
     receipts.append(
         outcome=outcome,
         symbol="SPY",
@@ -342,6 +346,25 @@ def test_a_rotated_window_that_records_no_bar_close_names_no_boundary_and_says_s
     ]
     assert record.strategy_instance_id == "spy-bot"
     assert (record.first_retained_seq, record.last_retained_seq) == (2, 4)
+
+
+def test_a_run_starts_at_its_first_decision_not_at_the_crash_evidence_it_wrote(
+    receipts: SqliteDecisionReceipts,
+) -> None:
+    """A Resume names a bucket an earlier run left staged before it decides
+    anything itself, and that bucket can be older than the run in between
+    (#2859). Read as the Resume's first decision, the crash evidence would
+    put its start before that whole run, and replay would carry the run's
+    position into the Resume's own buckets. A row that names no run says
+    nothing either way."""
+    _receipt_bucket(receipts, 2, run_id="run-2")
+    _receipt_bucket(receipts, 3, outcome="enter_intent", run_id="spy-bot:run-2")
+    _receipt_bucket(receipts, 4)
+    _receipt_bucket(receipts, 1, outcome=CRASH_CANDIDATE_OUTCOME, run_id="run-3")
+    _receipt_bucket(receipts, 5, run_id="run-3")
+    _receipt_bucket(receipts, 6, run_id="run-3")
+
+    assert run_first_closes_ms(receipts.retained_window()) == frozenset({_close_ms(5)})
 
 
 def test_receipts_do_not_advance_custody_transition_or_control_revision(

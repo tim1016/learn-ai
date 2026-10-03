@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     SqliteDecisionReceipts,
     rotated_out_before_ms,
+    run_first_closes_ms,
 )
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
@@ -155,6 +156,16 @@ async def replay_warmup_bars(
     Reapplying known dispositions only makes the *replayed math* accurate;
     it does not resurrect exposure.
 
+    Every earlier run started flat the same way, so replay drops the position
+    it has rebuilt wherever the read shows a later run's first decision
+    (:attr:`CapturedDecisions.run_first_closes_ms`, #2859). Carried across
+    that boundary, a position the earlier run was stopped holding would stage
+    exits in the later run's buckets that no live run staged, and the first
+    one without a receipt would be named as crash evidence. Replay drops it
+    before the bar that closes that first bucket; the run itself dropped it
+    before its first live bar, inside the same bucket, and a position is
+    read only when a bucket is decided.
+
     ``record_before_start`` receives every replayed bucket's explanation once
     replay ends (#2639): these are the run's before-start evaluations, shown
     behind the "bot started" line and never acted on. They are handed over
@@ -167,11 +178,15 @@ async def replay_warmup_bars(
     captured = (
         captured_decisions
         if captured_decisions is not None
-        else CapturedDecisions(outcomes={}, rotated_out_before_ms=None)
+        else CapturedDecisions(outcomes={}, rotated_out_before_ms=None, run_first_closes_ms=frozenset())
     )
     uncaptured: tuple[MarketDataBar, EvaluationStage] | None = None
     before_start: list[DecisionExplanationRecord] = []
+    later_run_starts = sorted(captured.run_first_closes_ms, reverse=True)
     for market_bar in warmup_bars:
+        if _reaches_a_run_start(later_run_starts, market_bar.end_ms):
+            # The run that decided the bucket this bar closes started flat.
+            runtime.strategy.on_force_flat()
         # DECIDE, not OBSERVE_ONLY: OBSERVE_ONLY auto-discards
         # unconditionally inside `advance()` before this loop ever gets a
         # say, which is exactly the blanket-discard behavior FR-016 needs
@@ -212,6 +227,21 @@ async def replay_warmup_bars(
     return uncaptured
 
 
+def _reaches_a_run_start(later_run_starts: list[int], bar_end_ms: int) -> bool:
+    """Whether a bar ending at ``bar_end_ms`` reaches a later run's first decision.
+
+    ``later_run_starts`` holds the starts replay has not reached yet, latest
+    first; the ones this bar reaches are taken off it. A start is reached by
+    the bar that closes its bucket, or by the first bar after that close when
+    the closing minute itself is missing from the replay.
+    """
+    reached = False
+    while later_run_starts and later_run_starts[-1] <= bar_end_ms:
+        later_run_starts.pop()
+        reached = True
+    return reached
+
+
 @dataclass(frozen=True)
 class CapturedDecisions:
     """What one read of the retained decision receipts tells a Resume.
@@ -220,13 +250,17 @@ class CapturedDecisions:
     identity. ``rotated_out_before_ms`` is the decision-bar close before
     which a bucket's receipt may have rotated out of that same read, or
     ``None`` while the read still holds every receipt the instance wrote
-    (``decision_receipts.rotated_out_before_ms``). Neither has a default: a
-    caller that names decisions also says how far back they reach, because
-    replay reads the two together (#2850).
+    (``decision_receipts.rotated_out_before_ms``). ``run_first_closes_ms``
+    is the decision-bar close of each later run's first decision in the read
+    (``decision_receipts.run_first_closes_ms``, #2859). None of the three
+    has a default: a caller that names decisions also says how far back they
+    reach and which runs made them, because replay reads them together
+    (#2850).
     """
 
     outcomes: Mapping[str, str]
     rotated_out_before_ms: int | None
+    run_first_closes_ms: frozenset[int]
 
     def covers(self, bar_close_ms: int) -> bool:
         """Whether this read reaches back to a bucket that closed at ``bar_close_ms``.
@@ -257,8 +291,10 @@ def captured_decision_outcomes(receipts: SqliteDecisionReceipts) -> CapturedDeci
     (#2314), and a long-lived instance has decided more buckets over that
     span than the window retains. ``rotated_out_before_ms`` marks where
     the window stops reaching, so replay judges absence only for the
-    buckets it still covers (#2850). An empty result means this instance
-    has never captured a decision -- there is no crash to recover from.
+    buckets it still covers (#2850). ``run_first_closes_ms`` marks where
+    each later run in the window took over, so replay starts it flat, as
+    the run itself did (#2859). An empty result means this instance has
+    never captured a decision -- there is no crash to recover from.
     """
     window = receipts.retained_window()
     return CapturedDecisions(
@@ -268,4 +304,5 @@ def captured_decision_outcomes(receipts: SqliteDecisionReceipts) -> CapturedDeci
             if receipt.intent_id is not None
         },
         rotated_out_before_ms=rotated_out_before_ms(window),
+        run_first_closes_ms=run_first_closes_ms(window),
     )

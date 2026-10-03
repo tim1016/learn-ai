@@ -578,7 +578,9 @@ class _FakeClerk:
                 "bar_ref": decision_evidence.bar_ref,
                 "decision_id": decision_evidence.evaluation_id,
                 "evaluation_id": decision_evidence.evaluation_id,
-                "run_id": run_id,
+                # The real Clerk names its own run id on an effect and the
+                # lifecycle run id on a refusal; a Resume reads both (#2859).
+                "run_id": run_id if rejected else f"{strategy_instance_id}:{run_id}",
                 "reason_code": (
                     "CLERK_ADMISSION_REJECTED"
                     if rejected

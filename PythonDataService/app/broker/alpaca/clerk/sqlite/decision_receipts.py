@@ -457,14 +457,7 @@ def rotated_out_before_ms(window: Sequence[DecisionReceiptResource]) -> int | No
     """
     if not window or window[0].seq == 1:
         return None
-    oldest_decided = next(
-        (
-            receipt
-            for receipt in window
-            if receipt.intent_id is not None and receipt.outcome != CRASH_CANDIDATE_OUTCOME
-        ),
-        None,
-    )
+    oldest_decided = next((receipt for receipt in window if _written_when_decided(receipt)), None)
     if oldest_decided is not None:
         close_ms = json.loads(oldest_decided.facts_json).get("decision_bar_close_ms")
         if isinstance(close_ms, int):
@@ -479,6 +472,57 @@ def rotated_out_before_ms(window: Sequence[DecisionReceiptResource]) -> int | No
         },
     )
     return None
+
+
+def run_first_closes_ms(receipts: Sequence[DecisionReceiptResource]) -> frozenset[int]:
+    """The decision-bar close of every run's first decision in ``receipts``, but the first run's (#2859).
+
+    ``receipts`` is in sequence order. A run starts flat: the runner drops
+    whatever position its warmup rebuilt before it takes its first live bar,
+    and that bar belongs to the first bucket the run decides. A Resume that
+    replays these decisions drops the position the run before it left at
+    that bucket, and no earlier: the earlier run keeps its position up to
+    there, through the bucket a crash may have left it staging.
+
+    A run is read from the run id its own decisions carry, never from a gap
+    in time. A row :func:`rotated_out_before_ms` passes over was not written
+    when its bucket was decided, so it does not say which run decided that
+    bucket; a row that names no run or no bar close is not evidence of
+    either. The first run in ``receipts`` is left out: nothing here says
+    where it started.
+
+    A run that receipted no decision leaves no boundary here.
+    """
+    closes: set[int] = set()
+    deciding_run: str | None = None
+    for receipt in receipts:
+        if not _written_when_decided(receipt):
+            continue
+        facts = json.loads(receipt.facts_json)
+        run = _lifecycle_run_id(facts.get("run_id"), strategy_instance_id=receipt.strategy_instance_id)
+        close_ms = facts.get("decision_bar_close_ms")
+        if run is None or not isinstance(close_ms, int):
+            continue
+        if deciding_run is not None and run != deciding_run:
+            closes.add(close_ms)
+        deciding_run = run
+    return frozenset(closes)
+
+
+def _written_when_decided(receipt: DecisionReceiptResource) -> bool:
+    """Whether ``receipt`` was written when its bucket was decided, by the run that decided it."""
+    return receipt.intent_id is not None and receipt.outcome != CRASH_CANDIDATE_OUTCOME
+
+
+def _lifecycle_run_id(run_id: object, *, strategy_instance_id: str) -> str | None:
+    """The lifecycle run a receipt names, whichever writer wrote it.
+
+    The runner records the lifecycle run id; the Clerk records its own run
+    id on an effect, ``<instance>:<lifecycle run>``.
+    """
+    if not isinstance(run_id, str) or not run_id:
+        return None
+    return run_id.removeprefix(f"{strategy_instance_id}:")
 
 
 def _bar_ref(facts_json: str) -> str | None:
