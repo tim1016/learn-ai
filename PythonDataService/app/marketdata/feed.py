@@ -110,6 +110,11 @@ def warmup_window_start_ms(lookback_days: int, *, now_ms: int) -> int:
     return now_ms - lookback_days * 86_400_000
 
 
+MAX_WARMUP_LOOKBACK_DAYS = 20
+"""The longest warmup lookback a deploy may seal: the longest 1-minute history
+request measured to return (20 days, 48 s) (#2841)."""
+
+
 WarmupRefusalReason = Literal[
     "WARMUP_HISTORY_UNAVAILABLE", "RESUME_HOLE_AFTER_HOURS", "RESUME_HOLE_UNFILLED"
 ]

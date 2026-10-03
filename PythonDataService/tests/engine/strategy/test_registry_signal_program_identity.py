@@ -290,6 +290,22 @@ def test_static_series_and_exit_rule_describe_each_program_s_default_point() -> 
         assert contract.resolved_numerical_provenance(defaults) == contract.numerical_provenance, key
 
 
+def test_static_warmup_lookback_is_what_each_program_s_default_and_validated_points_resolve() -> None:
+    """A seal's warmup lookback follows its own periods (#2841); at the default
+    and validated points it must stay the static value. A longer one there
+    would move every seal at those points, the running bots' included.
+    """
+    for key, registration in _STRATEGY_REGISTRY.items():
+        contract = registration.signal_program_contract
+        if contract is None:
+            continue
+        defaults = registration.param_schema()
+        validated = registration.param_schema(**contract.validated_settings)
+
+        assert contract.resolved_warmup_lookback_days(defaults) == contract.warmup_lookback_days, key
+        assert contract.resolved_warmup_lookback_days(validated) == contract.warmup_lookback_days, key
+
+
 def test_validated_settings_a_dump_omits_are_their_schema_defaults() -> None:
     """``registry_point_matches`` reads a name absent from a dump as its validated value.
 

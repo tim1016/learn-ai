@@ -12,11 +12,14 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from dataclasses import field as dc_field
+from datetime import date
+from functools import lru_cache
 from typing import Any, Literal
 
 from app.engine.strategy.base import Strategy
 from app.engine.strategy.params import (
     StrategyParamsBase,
+    decision_timeframe_ms_for,
 )
 from app.engine.strategy.program_sources import (
     DEPLOYMENT_VALIDATION_ARTIFACT_PATHS,
@@ -83,6 +86,7 @@ from app.engine.strategy.strategy_view import (
     ViewGate,
     ViewValue,
 )
+from app.lean_sidecar.trading_calendar import session_windows_ms_utc
 from app.schemas.signal_program_seal import (
     ExitEligibilityContract,
     NumericalProvenanceContract,
@@ -98,6 +102,77 @@ class StrategyBarCadence:
 
     timespan: Literal["minute", "day"]
     multiplier: int | ChartParamRef
+
+
+# ── Warmup lookback that follows a program's own periods (#2841) ─────────────
+
+#: The year whose longest scheduled session is read as the regular session.
+_REGULAR_SESSION_REFERENCE_YEAR = 2026
+#: Each of the lookback window's two edges can cut one decision bar.
+_WINDOW_EDGE_BARS = 2
+_DAYS_PER_WEEK = 7
+_WEEKEND_DAYS = 2
+#: Five weekdays, less the one holiday a scheduled week can hold.
+_SESSIONS_PER_WEEK = 4
+#: Set aside once: a holiday beside an early close (Thanksgiving and the Friday
+#: after it; Christmas Eve and Christmas Day).
+_HOLIDAY_AND_EARLY_CLOSE_DAYS = 2
+
+
+@lru_cache(maxsize=1)
+def _regular_session_ms() -> int:
+    """A regular NYSE session's span: the longest one the canonical calendar schedules in the reference year."""
+    first = date(_REGULAR_SESSION_REFERENCE_YEAR, 1, 1)
+    last = date(_REGULAR_SESSION_REFERENCE_YEAR, 12, 31)
+    return max(window.close_ms_utc - window.open_ms_utc for window in session_windows_ms_utc(first, last))
+
+
+def _warmup_lookback_days_holding(bars: int, decision_timeframe_ms: int) -> int | None:
+    """The calendar days of lookback that hold ``bars`` whole decision bars, whenever the run starts.
+
+    A lookback is the ``days`` × 24 hours before the start
+    (``app.marketdata.feed.warmup_window_start_ms``). Cut at any time of day,
+    that window holds every session of some ``days`` dates in a row, less the
+    bar each of its two edges cuts. The count is the worst the scheduled
+    calendar produces, not an average week:
+
+    * only regular sessions count, at the whole decision bars one holds; an
+      early close counts for nothing;
+    * seven dates hold five weekdays and at most one scheduled holiday, so a
+      week counts four sessions, behind its weekend;
+    * two more weekdays are set aside once, for a holiday beside an early
+      close.
+
+    The result depends on the bars and the cadence alone, never on the date,
+    so a seal's lookback resolves to the same number whenever it is checked.
+
+    Zero when no bar is needed. ``None`` when bars are needed and the decision
+    bar is longer than a regular session: the consolidator still closes bars
+    at such a cadence, but not on a grid that lines up with the session, so
+    how many one session closes is not defined and no lookback can be
+    promised to warm them.
+
+    Two things sit outside the count. An unscheduled closure of several days
+    can leave the window short; the run then starts unready and warms on live
+    bars. November's clock change moves the window's first edge by an hour;
+    no closure is scheduled within two weeks of it, so the weekdays set aside
+    cover that hour.
+
+    Formula: sessions = ceil((bars + 2) / (regular session // decision bar));
+      weeks, rest = divmod(sessions + 2 - 1, 4); days = 7 × weeks + 2 + rest + 1
+    Reference: repository-internal (owner decision 2026-10-03, #2841); session
+      structure from the canonical NYSE calendar.
+    Canonical implementation: this file.
+    Validated against: tests/engine/strategy/test_signal_program_warmup_lookback.py
+    """
+    if bars <= 0:
+        return 0
+    bars_per_session = _regular_session_ms() // decision_timeframe_ms
+    if bars_per_session == 0:
+        return None
+    sessions = -(-(bars + _WINDOW_EDGE_BARS) // bars_per_session)
+    whole_weeks, last_week_sessions = divmod(sessions + _HOLIDAY_AND_EARLY_CLOSE_DAYS - 1, _SESSIONS_PER_WEEK)
+    return _DAYS_PER_WEEK * whole_weeks + _WEEKEND_DAYS + last_week_sessions + 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,7 +194,9 @@ class SignalProgramContract:
     part of the sealed identity rather than a second list that can silently
     fall out of sync. ``signals`` and ``exit_eligibility`` are sealed through
     ``resolved_signals``/``resolved_exit_eligibility``: the static value,
-    unless the program declares how its parameters change them.
+    unless the program declares how its parameters change them. The warmup
+    lookback is sealed through ``resolved_warmup_lookback_days``: the static
+    value, or more when the resolved series need it.
     """
 
     program_version: str
@@ -134,6 +211,7 @@ class SignalProgramContract:
     provider: str
     base_timeframe_ms: int
     decision_timeframe_ms: int
+    # Sized for the default periods; a seal records `resolved_warmup_lookback_days`.
     warmup_lookback_days: int
     signals: tuple[SignalSeriesContract, ...]
     decision_streams: tuple[str, ...]
@@ -187,6 +265,38 @@ class SignalProgramContract:
         if self.numerical_provenance_for is None:
             return self.numerical_provenance
         return self.numerical_provenance_for(params)
+
+    def resolved_warmup_lookback_days(self, params: StrategyParamsBase) -> int:
+        """The calendar days of history a program built from ``params`` loads before it decides.
+
+        Never fewer than the static value. More when the longest series these
+        parameters build needs it, at the cadence they run (#2841). It follows
+        from the resolved series and cadence, so a program declares nothing
+        more for it. The static value too when no lookback can be sized
+        (``warmup_lookback_refusal``), so a seal built at such a point reads
+        as it always has.
+        """
+        return max(self.warmup_lookback_days, self._warmup_lookback_days_sized_for(params) or 0)
+
+    def warmup_lookback_refusal(self, params: StrategyParamsBase) -> str | None:
+        """Why no warmup lookback can be sized for ``params``, or ``None`` when one can (#2841).
+
+        A deploy refuses such parameters: the bot would start unwarmed, or
+        never decide.
+        """
+        if self._warmup_lookback_days_sized_for(params) is not None:
+            return None
+        decision_minutes = decision_timeframe_ms_for(params, qualified_ms=self.decision_timeframe_ms) // 60_000
+        return (
+            f"A {decision_minutes}-minute bar is longer than a regular trading session, so these periods "
+            "cannot be warmed up from history. Use a shorter bar."
+        )
+
+    def _warmup_lookback_days_sized_for(self, params: StrategyParamsBase) -> int | None:
+        """The days the longest series ``params`` build needs at their cadence; ``None`` when they cannot be counted."""
+        bars = max((series.warmup_bars for series in self.resolved_signals(params)), default=0)
+        decision_ms = decision_timeframe_ms_for(params, qualified_ms=self.decision_timeframe_ms)
+        return _warmup_lookback_days_holding(bars, decision_ms)
 
     def __post_init__(self) -> None:
         # An empty wiring list is the dangerous shape, not a harmless one: it
@@ -1110,7 +1220,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # 2-session minimum, covering weekends/holidays -- the same
             # margin-over-minimum convention as ema_crossover_signal's 5-day
             # buffer over its own (smaller, ~0.6-session) RSI(14) warmup.
-            # Sized at the default periods; the lookback is not resolved per deploy.
+            # Sized at the default periods; a deploy at longer ones seals the
+            # days they need (`resolved_warmup_lookback_days`, #2841).
             warmup_lookback_days=7,
             # SmaCrossoverAlgorithm.initialize() constructs exactly these two
             # named series (SMA{short_window}, SMA{long_window}), each fed
@@ -1276,7 +1387,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # series) before is_ready. 5 calendar days is the same
             # margin-over-minimum buffer ema_crossover_signal uses for that
             # identical ~0.6-session warmup.
-            # Sized at the default periods; the lookback is not resolved per deploy.
+            # Sized at the default periods; a deploy at longer ones seals the
+            # days they need (`resolved_warmup_lookback_days`, #2841).
             warmup_lookback_days=5,
             # RsiMeanReversionAlgorithm.initialize() constructs exactly this
             # one named series (RSI{window}), fed bar.close at bar.end_ms.
@@ -1638,7 +1750,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # past 2 full sessions -- 9 calendar days is a slightly larger
             # buffer than sma_crossover's 7 for that reason, still covering
             # weekends/holidays.
-            # Sized at the default periods; the lookback is not resolved per deploy.
+            # Sized at the default periods; a deploy at longer ones seals the
+            # days they need (`resolved_warmup_lookback_days`, #2841).
             warmup_lookback_days=9,
             # SpyStrategyAAlgorithm.initialize() and _init_extra_indicators()
             # construct exactly these five named indicators, each fed
@@ -1842,7 +1955,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # session (390 min) but under two. 7 calendar days is the same
             # comfortable buffer-over-2-session-minimum convention as
             # sma_crossover's own 7-day figure, covering weekends/holidays.
-            # Sized at the default periods; the lookback is not resolved per deploy.
+            # Sized at the default periods; a deploy at longer ones seals the
+            # days they need (`resolved_warmup_lookback_days`, #2841).
             warmup_lookback_days=7,
             # These static values are the default point; every period is a
             # parameter, so a seal records `signals_for` resolved against
@@ -2043,7 +2157,8 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             # sma_crossover's own SMA(30) warmup. 7 calendar days is the
             # same comfortable buffer over that 2-session minimum,
             # covering weekends/holidays.
-            # Sized at the default periods; the lookback is not resolved per deploy.
+            # Sized at the default periods; a deploy at longer ones seals the
+            # days they need (`resolved_warmup_lookback_days`, #2841).
             warmup_lookback_days=7,
             # SpyStrategyCAlgorithm.initialize() (via RsiRangeStrategy)
             # builds RSI(rsi_period=14) and ADX(adx_period=14) -- the only
