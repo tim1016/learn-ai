@@ -431,7 +431,9 @@ def _qualified_configuration(
 
     The stock's active Golden Search default comes first when it is READY
     (#2696): its exact approved tuple, named by approval date and study.
-    Otherwise the registry's validated point, unchanged.
+    Otherwise the registry's validated point, unchanged. A READY default
+    Deploy itself would refuse is not offered: the registry point is, and
+    its explanation says why (#2841).
     """
     registration = _STRATEGY_REGISTRY.get(strategy_key)
     contract = registration.signal_program_contract if registration is not None else None
@@ -439,13 +441,17 @@ def _qualified_configuration(
         return None
     lookup_symbol = requested_symbol or (contract.validated_symbols[0] if contract.validated_symbols else None)
     golden = (golden_defaults or {}).get((strategy_key, lookup_symbol.upper())) if lookup_symbol else None
+    undeployable: str | None = None
     if golden is not None and golden.status == "ready":
-        return QualifiedDeployConfiguration(
-            symbol=golden.qualification.symbol,
-            parameters=public_parameters(golden.qualification),
-            explanation=golden.explanation,
-            golden_qualification_id=golden.qualification.id,
-        )
+        parameters = public_parameters(golden.qualification)
+        undeployable = _deploy_refusal(strategy_key, golden.qualification.symbol, parameters)
+        if undeployable is None:
+            return QualifiedDeployConfiguration(
+                symbol=golden.qualification.symbol,
+                parameters=parameters,
+                explanation=golden.explanation,
+                golden_qualification_id=golden.qualification.id,
+            )
     if not contract.validated_symbols:
         return None
     symbol = requested_symbol if requested_symbol in contract.validated_symbols else contract.validated_symbols[0]
@@ -459,8 +465,24 @@ def _qualified_configuration(
             "This exact symbol and parameter configuration is covered by the registered qualification corpus. "
             "Using it changes the form only; current evidence, account access, budget, and safety checks still apply. "
             "Other configurations can be explored in Dry Run."
+            + (
+                ""
+                if undeployable is None or golden is None
+                else f" The Golden Search default for {golden.qualification.symbol} is not offered: {undeployable}"
+            )
         ),
     )
+
+
+def _deploy_refusal(strategy_key: str, symbol: str, parameters: dict[str, object]) -> str | None:
+    """Why Deploy would refuse an approved tuple's deploy-time parameters; ``None`` when it takes them."""
+    hidden = hidden_params_present(_STRATEGY_REGISTRY[strategy_key], parameters, extra_hidden=frozenset({"symbol"}))
+    editable = {name: value for name, value in parameters.items() if name not in hidden}
+    try:
+        resolve_deploy_strategy_params(strategy_key, symbol, editable)
+    except ValueError as exc:
+        return str(exc).removeprefix("Invalid strategy parameters: ")
+    return None
 
 
 def _strategy_views(
