@@ -307,7 +307,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       { text: 'Each cell is one pair of values: rows for one knob, columns for the other, every other setting held at the candidate.', target: { kind: 'series', group: 'tested' } },
       { text: 'Green cells made money and red cells lost it; each cell prints its net return.', target: null },
       { text: 'The outlined cell is the candidate itself. A plateau of similar cells around it is more robust than a lone peak.', target: null },
-      { text: 'Grey cells were not tested: an invalid pair (—), outside the legal range (·), or never run (?).', target: { kind: 'series', group: 'other' } },
+      { text: 'Grey cells have no return: an invalid pair (—), outside the legal range (·), never run (?), a failed run, or one that recorded none.', target: { kind: 'series', group: 'other' } },
     ],
   },
   'plan-tiles': {

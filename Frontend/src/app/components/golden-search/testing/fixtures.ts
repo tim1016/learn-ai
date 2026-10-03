@@ -324,7 +324,7 @@ export function procedureCharts(key: ProcedureCharts['key'] = 'search', override
     total_trades: trades,
     max_drawdown_pct: 0.06,
     ineligibility,
-    objective: ineligibility === null ? sharpe : null,
+    objective: sharpe,
   });
   const start = { ...INCUMBENT_PARAMS };
   const kept = { ...INCUMBENT_PARAMS, fast_period: 8 };
@@ -395,6 +395,7 @@ export function testOverTimeCharts(overrides: Partial<TestOverTimeCharts> = {}):
         return_difference: 0.014,
         test_trades: 42,
         incumbent_trades: 17,
+        incumbent_failure: null,
       },
       {
         ...second,
@@ -409,6 +410,7 @@ export function testOverTimeCharts(overrides: Partial<TestOverTimeCharts> = {}):
         return_difference: null,
         test_trades: null,
         incumbent_trades: 15,
+        incumbent_failure: null,
       },
     ],
     linked: validation.linked,
@@ -417,6 +419,7 @@ export function testOverTimeCharts(overrides: Partial<TestOverTimeCharts> = {}):
     median_retention: 0.9 / 1.4,
     test_trades_total: 42,
     forward_minimum: 30,
+    below_minimum: false,
     drift: [{ name: 'fast_period', label: 'Fast EMA length', unit: 'decision bars', low: 3, high: 12, current: 5, all_period: 8, folds: [8, null] }],
     ...overrides,
   };
@@ -424,7 +427,7 @@ export function testOverTimeCharts(overrides: Partial<TestOverTimeCharts> = {}):
 
 /** The same read before testing over time ran: the receipt's planned folds, nothing measured. */
 export function plannedTestOverTimeCharts(): TestOverTimeCharts {
-  const blank = { winner: null, status: 'planned' as const, failure_reason: null, train_sharpe: null, test_sharpe: null, retention: null, test_return: null, incumbent_return: null, return_difference: null, test_trades: null, incumbent_trades: null };
+  const blank = { winner: null, status: 'planned' as const, failure_reason: null, train_sharpe: null, test_sharpe: null, retention: null, test_return: null, incumbent_return: null, return_difference: null, test_trades: null, incumbent_trades: null, incumbent_failure: null };
   return testOverTimeCharts({
     planned: true,
     folds: preflight().folds.map((fold) => ({ ...fold, ...blank })),
@@ -432,6 +435,7 @@ export function plannedTestOverTimeCharts(): TestOverTimeCharts {
     incumbent_linked: [],
     median_retention: null,
     test_trades_total: null,
+    below_minimum: null,
     drift: [{ name: 'fast_period', label: 'Fast EMA length', unit: 'decision bars', low: 3, high: 12, current: 5, all_period: 8, folds: [null, null] }],
   });
 }

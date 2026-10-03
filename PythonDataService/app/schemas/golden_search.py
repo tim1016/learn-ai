@@ -836,6 +836,7 @@ class GoldenSearchFoldChart(_Wire):
     return_difference: float | None = Field(description="test_return less incumbent_return; null unless both exist.")
     test_trades: int | None
     incumbent_trades: int | None
+    incumbent_failure: str | None = Field(description="Why the incumbent's run on this test window failed; null when it completed or never ran.")
 
 
 class GoldenSearchKnobDrift(_Wire):
@@ -859,6 +860,7 @@ class GoldenSearchTestOverTimeCharts(_Wire):
     median_retention: float | None
     test_trades_total: int | None = Field(description="The verdict's test trades; while in progress, the completed folds' so far; null before testing over time ran.")
     forward_minimum: int | None = Field(description="The trades all forward tests together must reach, as the verdict judged them.")
+    below_minimum: bool | None = Field(description="The finished verdict's total is under the forward minimum; null while in progress or when either is missing.")
     drift: list[GoldenSearchKnobDrift] = Field(description="Each searched knob, in the plan's order.")
 
 
