@@ -147,6 +147,13 @@ describe('BotEndCardComponent (#2607)', () => {
 
       expect(date.value).toBe('2026-09-29');
       expect(within(fields).queryByRole('group', { name: 'Calendar' })).toBeNull();
+
+      // Left open as the fields close, the calendar is not there when they open again.
+      fireEvent.click(within(fields).getByRole('button', { name: 'Open the calendar' }));
+      await fixture.whenStable();
+      toggleEditor('closed');
+      await fixture.whenStable();
+      expect(within(fields).queryByRole('group', { name: 'Calendar' })).toBeNull();
     } finally {
       vi.useRealTimers();
     }

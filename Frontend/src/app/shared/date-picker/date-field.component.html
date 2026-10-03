@@ -17,6 +17,7 @@
     (blur)="touch.emit()"
   />
   <button
+    #opener
     type="button"
     class="date-control__open"
     aria-label="Open the calendar"
@@ -33,7 +34,7 @@
 }
 @if (calendar() === 'inline') {
   @if (open()) {
-    <div class="date-field__inline" role="group" aria-label="Calendar">
+    <div class="date-field__inline" role="group" aria-label="Calendar" (keydown.escape)="dismissCalendar()">
       <app-date-calendar [from]="entry().date" [bounds]="calendarBounds()" (picked)="pick($event.from)" />
     </div>
   }
