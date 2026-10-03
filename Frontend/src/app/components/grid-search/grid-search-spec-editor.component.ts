@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, DestroyRef, effect, inject, input, output, signal, untracked } from '@angular/core';
 import { InputText } from 'primeng/inputtext';
 
-import { FILL_MODE_OPTIONS, RESEARCH_DEFAULT_FILL_MODE, isFillModeName, type FillModeName } from '../../models/fill-mode';
+import { FILL_MODE_OPTIONS, RESEARCH_DEFAULT_FILL_MODE, isFillModeName, storedFillMode, type FillModeName } from '../../models/fill-mode';
 import { etDayEndMs, etIsoDate, etMidnightMs, isoDateAfter, shiftIsoDateByMonths } from '../../shared/date/et-midnight';
 import { ParamRangeInputComponent } from '../../shared/param-range/param-range-input.component';
 import { defaultNumericValue, numericStrategyParams, rangeVaries, type ParamRange, rangeProblem } from '../../shared/param-range/param-range';
@@ -241,7 +241,8 @@ export class GridSearchSpecEditorComponent {
     this.symbol.set(initial.symbol);
     this.fromDate.set(etIsoDate(initial.start_ms));
     this.toDate.set(etIsoDate(initial.end_ms - 1));
-    this.fillMode.set(initial.fill_mode);
+    // A search saved before it recorded its fill mode ran under the unrecorded rule, not today's default (#2599).
+    this.fillMode.set(storedFillMode(initial.fill_mode));
     this.resolution.set(initial.resolution);
     this.commissionPerOrder.set(initial.commission_per_order);
     this.slippagePerShare.set(initial.slippage_per_share);

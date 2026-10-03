@@ -3,7 +3,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GridSearchResultComponent } from './grid-search-result.component';
-import { RESEARCH_DEFAULT_FILL_MODE, fillModeLabel } from '../../models/fill-mode';
+import { RESEARCH_DEFAULT_FILL_MODE } from '../../models/fill-mode';
+import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import { JobsService } from '../../services/jobs.service';
 import { GridSearchService } from './grid-search.service';
 import { gridSearchDetail as detail } from './testing/fixtures';
@@ -55,8 +56,8 @@ describe('GridSearchResultComponent', () => {
     const get = vi.fn(async (_id: string) => detail({ request: { ...detail().request, fill_mode: ranUnder } }));
     await renderResult({ get });
 
-    expect(await screen.findByText(new RegExp(fillModeLabel(ranUnder)))).not.toBeNull();
-    expect(screen.queryByText(new RegExp(fillModeLabel(RESEARCH_DEFAULT_FILL_MODE)))).toBeNull();
+    expect(await screen.findByText(new RegExp(formatReceiptLabel(ranUnder)))).not.toBeNull();
+    expect(screen.queryByText(new RegExp(formatReceiptLabel(RESEARCH_DEFAULT_FILL_MODE)))).toBeNull();
   });
 
   it('marks the leader, the ranking measure, and labels zero-trade and failed cells', async () => {

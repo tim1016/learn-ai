@@ -129,4 +129,14 @@ describe('WalkForwardStudyFormComponent', () => {
     await waitFor(() => expect(preflight.mock.lastCall?.[0].fill_mode).toBe('signal_bar_close'));
     expect((screen.getByLabelText('Fill mode') as HTMLSelectElement).value).toBe('signal_bar_close');
   });
+
+  it('seeds a search saved before it recorded a fill mode at the rule it ran under, not the default (#2599)', async () => {
+    const preflight = vi.fn(async (_spec: WalkForwardStudySpecRequest) => PLAN);
+    const { fill_mode: _unrecorded, ...saved } = PREFILL;
+    await renderForm({ preflight }, { prefill: saved });
+
+    await waitFor(() => expect(preflight.mock.lastCall?.[0].symbol).toBe('QQQ'));
+    expect(preflight.mock.lastCall?.[0].fill_mode).toBe('signal_bar_close');
+    expect((screen.getByLabelText('Fill mode') as HTMLSelectElement).value).toBe('signal_bar_close');
+  });
 });
