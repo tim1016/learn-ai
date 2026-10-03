@@ -42,7 +42,7 @@ from typing import Any
 from app.lean_sidecar.trading_calendar import session_windows_ms_utc, trading_session_count
 from app.research.golden_search.activity import TradeFloors, trading_years
 from app.research.golden_search.declarations import declaration_for, knob_values, to_decimal
-from app.research.golden_search.models import StudyRow
+from app.research.golden_search.models import ESTIMATE_ROW_OF_STEP, StudyRow
 from app.research.golden_search.protocol import GoldenSearchProtocol, knob_value_counts, recent_window_ms
 from app.research.grid_search.service import window_dates
 from app.utils.session_anchors import et_midnight_ms
@@ -125,10 +125,6 @@ def search_space(row: StudyRow, protocol: GoldenSearchProtocol) -> list[dict[str
             }
         )
     return knobs
-
-
-# The estimate row (``budget.estimate``) that plans each evaluation step's runs.
-ESTIMATE_ROW_OF_STEP = {"search": "search", "pair_audit": "search", "recent": "recent", "validation": "validation", "evidence": "evidence", "exam": "exam"}
 
 
 def runs_used(rows_by_step: Mapping[str, int], proof_units: int) -> dict[str, int]:

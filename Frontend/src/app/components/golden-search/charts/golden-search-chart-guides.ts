@@ -336,7 +336,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
     steps: [
       { text: 'Each row is a knob, drawn across its whole legal range.', target: null },
       { text: 'The band is the range the search may try; a held knob is a single grey mark.', target: { kind: 'series', group: 'range' } },
-      { text: 'The diamond is the current settings; the ring is where Zoom starts. Grid tries only the band. Zoom keeps its starting value in every round, so it can end there even outside the band.', target: { kind: 'series', group: 'current' } },
+      { text: 'The diamond is the current settings; the ring is where Zoom starts. Grid tries only the band. Zoom weighs the value it holds in every round, so it can end where it started even outside the band.', target: { kind: 'series', group: 'current' } },
       { text: 'Hover a knob for its step, how many values it can take and its importance: higher importance is searched first.', target: null },
     ],
   },

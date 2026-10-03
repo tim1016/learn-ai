@@ -82,7 +82,7 @@ How much of each knob's legal range does the search explore?
 
 #### What you're looking at
 
-A row for each knob, drawn across its whole legal range, in the order the search takes them. The blue band is the range the search may try; a held knob is a single grey mark at its value. The diamond is the current settings. On a Zoom plan, the ring is where Zoom starts: the plan's seed, which is the current settings unless the plan names another. Hover a knob for its step, how many values it can take, and its importance.
+A row for each knob, drawn across its whole legal range, in the order the search takes them. The blue band is the range the search may try; a held knob is a single grey mark at its value. The diamond is the current settings. On a Zoom plan, the ring is where Zoom starts: the plan's starting point, often the current settings. Hover a knob for its step, how many values it can take, and its importance.
 
 $$\text{position} = \frac{\text{value} - \text{legal low}}{\text{legal high} - \text{legal low}}$$
 
@@ -90,13 +90,13 @@ $$\text{position} = \frac{\text{value} - \text{legal low}}{\text{legal high} - \
 
 1. Each row is a knob, drawn across its whole legal range.
 2. The band is the range the search may try; a held knob is a single grey mark.
-3. The diamond is the current settings; the ring is where Zoom starts. Grid tries only the band. Zoom keeps its starting value in every round, so it can end there even outside the band.
+3. The diamond is the current settings; the ring is where Zoom starts. Grid tries only the band. Zoom weighs the value it holds in every round, so it can end where it started even outside the band.
 4. Hover a knob for its step, how many values it can take and its importance: higher importance is searched first.
 
 #### Good signs and warning signs
 
 - Good: bands that include the current settings, so the search weighs today's values against the alternatives.
-- Warning: a narrow band far from the current settings. Grid can only move away; Zoom moves into the band only when a value there does strictly better than where it starts.
+- Warning: a narrow band far from the current settings. Grid can only move away; Zoom moves into the band only when a value there does better than the one it holds, or the one it holds breaks a rule.
 
 #### An everyday comparison
 
