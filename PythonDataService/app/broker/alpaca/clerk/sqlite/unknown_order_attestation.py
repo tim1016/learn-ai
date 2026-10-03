@@ -80,7 +80,11 @@ attestation that did not take effect, or an effect with no attestation,
 wherever the process stops. What an order taken up by its id then did -- a
 fill, its ending -- is folded in writes of their own, as any answer about
 the Clerk's own order is; a process that stops between those leaves an order
-the Clerk's next pass reads by that id and finishes.
+the Clerk's next pass reads by that id and finishes. The attestation records
+what the Clerk read of the order -- its state, how much had filled, at what
+price, and Alpaca's time for it -- so an order that had ended by then is
+finished from that record should Alpaca answer that it no longer has an
+order under the id. A read that fails is never such an answer.
 """
 
 from __future__ import annotations
@@ -1404,6 +1408,14 @@ def _commit_order(
             broker_order_id=observed.order_id,
             broker_state=observed.status,
             broker_filled_quantity=observed.filled_quantity,
+            # The price ``_require_same_order`` checked: stated only for an
+            # order that had filled anything.
+            broker_filled_avg_price=(
+                observed.filled_avg_price
+                if position_quantity_is_nonzero(observed.filled_quantity)
+                else None
+            ),
+            broker_updated_at_ms=observed.updated_at_ms,
         ),
         observed_at_ms=order_read.observed_at_ms,
         operation_state="unknown",
@@ -1413,7 +1425,10 @@ def _commit_order(
     # What that order did is folded as the Clerk folds any answer about its
     # own order, in writes that each commit alone. Should the process stop
     # between them, the Clerk's next pass reads the order by that id and
-    # folds what is left (``exit_resolution._observe_by_broker_order_id``).
+    # folds what is left (``exit_resolution._observe_by_broker_order_id``);
+    # and should Alpaca then have no order under that id, an order that had
+    # ended is finished from what the write above recorded of it
+    # (``exit_resolution._attested_order_as_recorded``).
     fold_exit_attested_order(
         repo, effect_operation_id=presented.effect_operation_id, observed=observed
     )

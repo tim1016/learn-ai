@@ -136,7 +136,8 @@ class _AlpacaAccount(_Alpaca):
     An order's Alpaca order id always finds an order Alpaca has, even one
     its exact lookup by client order id does not show -- the state an
     operator who can see the order at Alpaca settles. ``by_broker_id`` states
-    what any other id answers.
+    what any other id answers, and ``has_no_order_under`` the ids Alpaca
+    answers it has no order under, whatever it showed for them before.
 
     Alpaca names every order with a UUID, and the read by order id takes
     nothing else: an id that is not one is refused before Alpaca is asked,
@@ -155,6 +156,7 @@ class _AlpacaAccount(_Alpaca):
         self.pages_asked: list[tuple[tuple[str, ...] | None, int | None]] = []
         self.holds_per_read: list[float] = []
         self.by_broker_id: dict[str, BrokerOrder | BrokerError] = {}
+        self.has_no_order_under: set[str] = set()
 
     def _read(self, name: str) -> None:
         self.reads.append(name)
@@ -235,6 +237,8 @@ class _AlpacaAccount(_Alpaca):
         except ValueError as exc:
             raise BrokerRequestInvalid(f"{order_id!r} is not an Alpaca order id.") from exc
         self.reads.append("by-id")
+        if order_id in self.has_no_order_under:
+            return None
         stated = self.by_broker_id.get(order_id)
         if isinstance(stated, BrokerError):
             raise stated
@@ -2138,6 +2142,23 @@ async def test_an_attestation_records_only_what_its_own_reads_found(
     ]
 
 
+async def test_an_attestation_of_an_order_that_filled_nothing_records_no_fill_price(
+    crashed_with_exposure,  # noqa: F811
+) -> None:
+    """The price of a fill is a fact only of an order that had filled anything: a working, unfilled one records none."""
+    repo, clock = crashed_with_exposure
+    alpaca = _AlpacaAccount(repo, clock, submits=("arrives_unanswered",))
+    _exit_id, it_is_this_order = await _a_stopped_bot_whose_closing_order_alpaca_has_unseen(repo, alpaca)
+
+    await _settle(_facade(repo, alpaca), _context_of(repo, SID), it_is_this_order)
+
+    assert set(json.loads(_attestation_row(repo)["facts_json"])) == {
+        "attestation", "operator", "client_order_id", "symbol", "side", "quantity",
+        "latest_send_sequence", "uncertainty_id", "broker_observed_at_ms",
+        "broker_order_id", "broker_state", "broker_filled_quantity", "broker_updated_at_ms",
+    }
+
+
 def _the_ledger_records_the_bots_shares_written_off(repo: ClerkSqliteRepository) -> None:
     """A write-off of the bot's 10 SPY, put on the ledger as its own transition.
 
@@ -2233,7 +2254,12 @@ async def test_an_absent_order_ends_its_exit_under_the_notice_its_bot_already_ca
 
 
 async def test_a_mirror_rebuild_replays_an_order_taken_up_by_its_alpaca_id(tmp_path: Path) -> None:
-    """The mirror alone rebuilds the order's Alpaca order id, its fill and the flat EXIT, row for row."""
+    """The mirror alone rebuilds the order's Alpaca order id, its fill and the flat EXIT, row for row.
+
+    The attestation's own row carries what the Clerk read of the order,
+    with the price of its fill and Alpaca's time for it, and is rebuilt the
+    same.
+    """
     clock = _clock_at(FIXTURE_RTH_MS)
     repo = ClerkSqliteRepository.initialize(
         account_id=ACCOUNT_ID, artifacts_root=tmp_path, clock=clock, lease_ttl_ms=300_000
@@ -2248,6 +2274,11 @@ async def test_a_mirror_rebuild_replays_an_order_taken_up_by_its_alpaca_id(tmp_p
     alpaca.fills(closing.client_order_id)
     await _settle(_facade(repo, alpaca), _context_of(repo, SID), it_is_this_order)
     transitions = repo.custody_transitions()
+    (attested,) = _attested(repo)
+    assert (
+        attested.broker_state, attested.broker_filled_quantity,
+        attested.broker_filled_avg_price, attested.broker_updated_at_ms,
+    ) == ("filled", 10.0, 100.0, clock.value)
     db_path = repo.db_path
     repo.close()
     db_path.rename(db_path.with_suffix(".db.corrupt"))
@@ -2257,6 +2288,7 @@ async def test_a_mirror_rebuild_replays_an_order_taken_up_by_its_alpaca_id(tmp_p
     )
     try:
         assert rebuilt.custody_transitions() == transitions
+        assert _attested(rebuilt) == [attested]
         assert _exit_state(rebuilt, exit_id) == "succeeded"
         assert rebuilt.position(SID, "SPY") == 0.0
         taken_up = rebuilt.order(closing.order_ref)

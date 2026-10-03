@@ -106,6 +106,7 @@ from app.broker.alpaca.clerk.sqlite.facts import (
     ExitAcceptedFacts,
     ExitReducingOrderCreatedFacts,
     OrderCancelRequestedFacts,
+    OrderOutcomeAttestedFacts,
     OrderSubmitFailedFacts,
     OrderSubmitUncertainFacts,
     UncertaintyRaisedFacts,
@@ -165,6 +166,7 @@ from app.broker.alpaca.clerk.sqlite.uncertainty import (
 )
 from app.broker.alpaca.clerk.sqlite.uncertainty_causes import ExitNotFlatCause
 from app.broker.alpaca.clerk.sqlite.unknown_exit_orders import send_wait_from_ms
+from app.broker.alpaca.config import BROKER_ID
 from app.broker.contract.errors import BrokerError, BrokerUnavailable
 from app.broker.contract.models import BrokerOrder, BrokerOrderLeg, OrderSide
 from app.broker.contract.ports import BrokerReadPort, BrokerTradePort
@@ -1695,6 +1697,10 @@ async def _refresh_or_resume_reducing_order(
     observed = await broker.observe_exact(reducing.client_order_id)
     if observed is None and reducing.broker_order_id is not None:
         observed = await _observe_by_broker_order_id(broker, reducing)
+        if observed is None:
+            # The broker answered that it has no order under either id. A
+            # read that failed is an error above, and never reaches here.
+            observed = await run(lambda: _attested_order_as_recorded(repo, reducing))
     if isinstance(observed, BrokerError):
         await run(
             lambda: fold_uncertain(
@@ -1797,6 +1803,71 @@ async def _observe_by_broker_order_id(
             f"client_order_id={observed.client_order_id!r}, expected {reducing.client_order_id!r}"
         )
     return observed
+
+
+def _attested_order_as_recorded(
+    repo: ClerkSqliteRepository, reducing: OrderResource
+) -> BrokerOrder | None:
+    """The reducing order as the Clerk read it for an operator's attestation, when that read was its end (#2854).
+
+    For an order taken up by its broker order id
+    (:func:`fold_exit_attested_order`) whose evidence was not all folded
+    before the process stopped, once the broker answers that it has no order
+    under that id. The attestation's own row records what the Clerk read of
+    the order: its state, its cumulative filled quantity, the average price
+    of that, and the broker's time for it. An order that had ended does
+    nothing more, so that read is its whole outcome, and it is folded from
+    the row exactly as it would have been from the answer: the fill is
+    credited by its difference from what is already recorded, so never
+    twice.
+
+    ``None``, and the order stays ``unknown`` for the next pass to ask the
+    broker about again, for an order no attestation took up under this
+    broker order id, for one that was still working when it was read -- what
+    it did since is not on the row -- and for a row that records a fill and
+    no price for it.
+
+    Asked only after the broker answered that it has no such order. A read
+    that failed is not that answer, and is retried.
+    """
+    row = repo.last_order_transition(
+        order_ref=reducing.order_ref, transition_kind="ORDER_OUTCOME_ATTESTED"
+    )
+    if row is None:
+        return None
+    facts = OrderOutcomeAttestedFacts.from_facts_json(row["facts_json"])
+    if facts.attestation != "exists" or facts.broker_order_id != reducing.broker_order_id:
+        return None
+    assert facts.broker_state is not None and facts.broker_filled_quantity is not None
+    if not _is_terminal(facts.broker_state):
+        return None
+    if facts.broker_filled_quantity > 0 and facts.broker_filled_avg_price is None:
+        return None
+    created = _reducing_order_facts(repo, reducing.order_ref)
+    return BrokerOrder(
+        broker=BROKER_ID,
+        order_id=facts.broker_order_id,
+        client_order_id=reducing.client_order_id,
+        symbol=facts.symbol,
+        asset_class=None,
+        side=facts.side.lower(),
+        order_type=created.order_type,
+        time_in_force=created.time_in_force,
+        quantity=facts.quantity,
+        filled_quantity=facts.broker_filled_quantity,
+        limit_price=created.limit_price,
+        stop_price=None,
+        extended_hours=created.extended_hours,
+        filled_avg_price=facts.broker_filled_avg_price,
+        status=facts.broker_state,
+        submitted_at_ms=None,
+        created_at_ms=None,
+        updated_at_ms=facts.broker_updated_at_ms,
+        filled_at_ms=None,
+        canceled_at_ms=None,
+        expired_at_ms=None,
+        observed_at_ms=facts.broker_observed_at_ms,
+    )
 
 
 async def _submit_reducing_order(
@@ -2507,7 +2578,10 @@ def fold_exit_attested_order(
     process stop between the writes made here, each of which commits alone,
     the next pass reads the order by that id while its client-id lookup still
     reads absent (:func:`_observe_by_broker_order_id`) and folds what is
-    left; nothing here is lost with it.
+    left; nothing here is lost with it. Should the broker answer that pass
+    that it has no order under the id, an order that had ended when the
+    attestation read it is finished from the attestation's own record
+    (:func:`_attested_order_as_recorded`).
     """
     reducing = _read_exit_claim_state(repo, effect_operation_id).reducing
     if reducing is None or observed.client_order_id != reducing.client_order_id:

@@ -786,6 +786,8 @@ _ABSENT_ATTESTATION_FIELDS = (
     "account_attributed_qty",
 )
 _EXISTS_ATTESTATION_FIELDS = ("broker_order_id", "broker_state", "broker_filled_quantity")
+# What an ``exists`` attestation records only when the broker stated it.
+_EXISTS_ATTESTATION_OPTIONAL_FIELDS = ("broker_filled_avg_price", "broker_updated_at_ms")
 
 
 @dataclass(frozen=True)
@@ -815,7 +817,14 @@ class OrderOutcomeAttestedFacts:
       read it: ended, with nothing filled. Recorded only for an order whose
       send was answered so, and never among ``ended_foreign_orders``.
     - ``exists``: the broker order id that was read, its state and its
-      cumulative filled quantity as read.
+      cumulative filled quantity as read. ``broker_filled_avg_price`` is the
+      average price of what had filled, recorded when anything had, and
+      ``broker_updated_at_ms`` the broker's own time for that state, when it
+      gave one. With them the row holds everything the order's evidence is
+      folded from, so an order that had ended when it was read can be
+      finished from the row should the broker no longer answer for its id
+      (``exit_resolution._attested_order_as_recorded``). Both are omitted
+      when absent, like every optional fact here.
 
     The row is the settlement, not a note beside it: its own fold settles
     the order (``folds._fold_order_outcome_attested``), so no ledger holds an
@@ -848,6 +857,8 @@ class OrderOutcomeAttestedFacts:
     broker_order_id: str | None = None
     broker_state: str | None = None
     broker_filled_quantity: float | None = None
+    broker_filled_avg_price: float | None = None
+    broker_updated_at_ms: int | None = None
 
     def __post_init__(self) -> None:
         if self.attestation not in _ORDER_OUTCOME_ATTESTATIONS:
@@ -855,7 +866,10 @@ class OrderOutcomeAttestedFacts:
         if not self.operator or len(self.operator) > 64:
             raise ValueError("An attestation records who made it, in 1 to 64 characters")
         recorded, left_out = (
-            (_ABSENT_ATTESTATION_FIELDS, _EXISTS_ATTESTATION_FIELDS)
+            (
+                _ABSENT_ATTESTATION_FIELDS,
+                (*_EXISTS_ATTESTATION_FIELDS, *_EXISTS_ATTESTATION_OPTIONAL_FIELDS),
+            )
             if self.attestation == "absent"
             else (
                 _EXISTS_ATTESTATION_FIELDS,
