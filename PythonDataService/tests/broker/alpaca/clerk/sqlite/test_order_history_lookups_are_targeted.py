@@ -24,7 +24,7 @@ import pytest
 from app.broker.alpaca.clerk.sqlite import writes
 from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.enter import submit_enter
-from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol
+from app.broker.alpaca.clerk.sqlite.order_evidence import entry_order_symbol, fold_uncertain
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from tests.broker.alpaca.clerk.sqlite.conftest import _broker_leg, _clock_at, _FakeTradePort
 
@@ -158,3 +158,60 @@ async def test_the_first_after_a_sequence_agrees_with_reading_the_whole_history(
             assert repo.first_order_transition(
                 order_ref=order_ref, transition_kind=kind, after_sequence=row["sequence"]
             ) == (later_of_kind[0] if later_of_kind else None)
+
+
+@pytest.mark.asyncio
+async def test_counting_a_kind_reads_no_row_into_python_and_stops_at_its_bound(
+    repo: ClerkSqliteRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """How many times an order was sent is a count the database makes, up to the bound asked for (#2854).
+
+    It agrees with reading the whole history, capped at ``at_most``, and it
+    builds no transition in Python to get there.
+    """
+    order_ref = await _an_order_with_history(repo)
+    order = repo.order(order_ref)
+    assert order is not None
+    for lost in ("first", "second", "third"):
+        fold_uncertain(
+            repo, effect_operation_id=order.effect_operation_id, order_ref=order_ref,
+            why=f"the {lost} lookup was lost",
+        )
+    history = repo.transitions_for_order(order_ref)
+    kinds = {transition["transition_kind"] for transition in history}
+    assert sum(t["transition_kind"] == "ORDER_SUBMIT_UNCERTAIN" for t in history) == 3
+
+    rows_materialized = 0
+    real_row_to_payload = writes.row_to_payload
+
+    def counting_row_to_payload(row: Any) -> dict:
+        nonlocal rows_materialized
+        rows_materialized += 1
+        return real_row_to_payload(row)
+
+    monkeypatch.setattr(writes, "row_to_payload", counting_row_to_payload)
+
+    for kind in (*kinds, "NO_SUCH_KIND"):
+        of_kind = sum(t["transition_kind"] == kind for t in history)
+        for at_most in (1, 2, 3, 10):
+            assert repo.count_order_transitions(
+                order_ref=order_ref, transition_kind=kind, at_most=at_most
+            ) == min(of_kind, at_most)
+    assert repo.count_order_transitions(
+        order_ref="no-such-order", transition_kind="ORDER_SUBMIT_UNCERTAIN", at_most=10
+    ) == 0
+    assert rows_materialized == 0
+
+
+@pytest.mark.asyncio
+async def test_the_count_walks_the_orders_index(repo: ClerkSqliteRepository) -> None:
+    """The count is bounded by the order's own index, never a scan of the ledger (#2854)."""
+    order_ref = await _an_order_with_history(repo)
+    plan = repo._conn.execute(
+        "EXPLAIN QUERY PLAN SELECT COUNT(*) AS matches FROM (SELECT 1 FROM custody_transitions "
+        "WHERE order_ref = ? AND transition_kind = ? LIMIT ?)",
+        (order_ref, "ORDER_SUBMIT_REQUESTED", 4),
+    ).fetchall()
+    detail = " ".join(str(row[-1]) for row in plan)
+
+    assert "ix_custody_transitions_order_ref" in detail, detail
