@@ -390,8 +390,9 @@ _EMA_LENGTHS_PROVENANCE = NumericalProvenanceContract(
     ),
     # The trace/decision identity is Decimal-exact and
     # SHA-256-compared (signal_program.py), not
-    # tolerance-compared — see test_validated_ema_settings_corpus_
-    # has_a_pinned_trace_root's byte-exact trace_root assertion.
+    # tolerance-compared — see
+    # test_validated_settings_corpus_has_a_pinned_trace_root[ema_crossover_signal]'s
+    # byte-exact trace_root assertion.
     equivalence_level="bit_exact",
     # One level down (the EMA/RSI *value* parity against LEAN,
     # not the trace-identity hash above): documented absolute
