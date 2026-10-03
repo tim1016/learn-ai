@@ -30,13 +30,9 @@ import numpy as np
 import pytest
 
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
-    CRASH_CANDIDATE_OUTCOME,
     MAX_DECISION_RECEIPT_READ,
-    QUARANTINE_OUTCOME,
     SqliteDecisionReceipts,
 )
-from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
-from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
 from app.broker.ibkr.bars import IBKRBarStreamError
 from app.engine.execution.portfolio import Portfolio
@@ -626,82 +622,6 @@ def test_captured_decision_outcomes_sees_decisions_older_than_the_presentation_c
     assert captured.outcomes["0:ENTER"] == "entered"
     assert len(captured.outcomes) == MAX_DECISION_RECEIPT_READ + 1
     assert captured.rotated_out_before_ms is None
-
-
-class _RetainedWindow:
-    """The one read ``captured_decision_outcomes`` makes of a receipt store."""
-
-    def __init__(self, rows: list[DecisionReceiptResource]) -> None:
-        self._rows = rows
-
-    def retained_window(self) -> list[DecisionReceiptResource]:
-        return self._rows
-
-
-_FIRST_RETAINED_SEQ = 41
-"""A window that opens here has dropped the forty receipts before it."""
-
-
-def _receipt(
-    seq: int, *, outcome: str = "no_action", close_ms: int | None, identified: bool = True
-) -> DecisionReceiptResource:
-    """One retained row; its wall-clock ``observed_at_ms`` is never its bar close."""
-    facts: dict[str, Any] = {"bar_ref": f"SPY@{seq}"}
-    if close_ms is not None:
-        facts["decision_bar_close_ms"] = close_ms
-    return DecisionReceiptResource(
-        strategy_instance_id="spy-bot",
-        seq=seq,
-        outcome=outcome,
-        symbol="SPY",
-        intent_id=f"evaluation-{seq}" if identified else None,
-        order_ref=None,
-        observed_at_ms=9_000_000_000_000 + seq,
-        facts_json=canonicalize(facts),
-    )
-
-
-def _rotation_boundary(rows: list[DecisionReceiptResource]) -> int | None:
-    return captured_decision_outcomes(_RetainedWindow(rows)).rotated_out_before_ms  # type: ignore[arg-type]
-
-
-def test_a_rotated_window_s_boundary_is_its_oldest_decision_s_bar_close() -> None:
-    """Once receipts have rotated out, a bucket that closed before the oldest
-    decision still retained may have lost its receipt (#2850). The boundary is
-    that decision's bar close -- the instant a replayed bucket's own close is
-    compared with -- not the later wall clock its receipt was written at."""
-    rows = [
-        _receipt(_FIRST_RETAINED_SEQ, close_ms=1_790_000_060_000),
-        _receipt(_FIRST_RETAINED_SEQ + 1, close_ms=1_790_000_120_000),
-    ]
-
-    assert _rotation_boundary(rows) == 1_790_000_060_000
-
-
-def test_the_rotation_boundary_passes_over_rows_not_written_when_their_bucket_was_decided() -> None:
-    """Crash evidence is written by a later Resume for an older bucket, and a
-    quarantine row names no decision. Neither says how far back the retained
-    decisions reach: reading the crash evidence's own (older) bar close as
-    the boundary would leave every rotated-out bucket after it flaggable."""
-    rows = [
-        _receipt(_FIRST_RETAINED_SEQ, outcome=CRASH_CANDIDATE_OUTCOME, close_ms=1_780_000_000_000),
-        _receipt(_FIRST_RETAINED_SEQ + 1, outcome=QUARANTINE_OUTCOME, close_ms=None, identified=False),
-        _receipt(_FIRST_RETAINED_SEQ + 2, close_ms=1_790_000_060_000),
-    ]
-
-    assert _rotation_boundary(rows) == 1_790_000_060_000
-
-
-def test_a_decision_that_records_no_bar_close_names_no_rotation_boundary() -> None:
-    """The boundary is never guessed from when the receipt was written: a
-    bucket decided late closes before that wall clock, so a real crash
-    candidate could fall under it and go unflagged."""
-    rows = [
-        _receipt(_FIRST_RETAINED_SEQ, close_ms=None),
-        _receipt(_FIRST_RETAINED_SEQ + 1, close_ms=1_790_000_120_000),
-    ]
-
-    assert _rotation_boundary(rows) is None
 
 
 _EXP_001_INPUT = (

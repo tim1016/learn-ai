@@ -25,6 +25,7 @@ from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open
 from app.marketdata.feed import MarketDataBar
 from app.services.bot_runtime import DecisionFenceFeed
 from app.services.bot_trade_strategy import StrategyEvaluation, strategy_evaluations
+from app.services.bot_trade_strategy_warmup import CapturedDecisions
 from tests._helpers.bot_runner.ema_parity import _ema_signal_evaluation_id
 from tests.services.test_candidate_uncaptured_at_crash import _binding, _PhaseFeed
 
@@ -106,7 +107,11 @@ async def test_resume_never_redecides_a_bucket_the_earlier_run_decided() -> None
 
     evaluations = await _drain(
         strategy_evaluations(
-            _binding(run_id="run-2"), feed, captured_decisions={decided: "no_action"}
+            _binding(run_id="run-2"),
+            feed,
+            captured_decisions=CapturedDecisions(
+                outcomes={decided: "no_action"}, rotated_out_before_ms=None
+            ),
         )
     )
 

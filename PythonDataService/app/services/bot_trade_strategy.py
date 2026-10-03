@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
@@ -53,7 +53,11 @@ from app.marketdata.feed import (
 from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.schemas.market_liveness import MarketLivenessFact
 from app.services.bot_decision_quarantine import QuarantineJournal, QuarantineReceiptSink
-from app.services.bot_trade_strategy_warmup import captured_decision_outcomes, replay_warmup_bars
+from app.services.bot_trade_strategy_warmup import (
+    CapturedDecisions,
+    captured_decision_outcomes,
+    replay_warmup_bars,
+)
 from app.services.decision_session import RunDecisionSession
 from app.services.feed_continuity_policy import (
     DECISION_LATE_REASON_CODE,
@@ -572,8 +576,7 @@ async def _warm_up_signal_strategy(
     feed: MarketDataFeed,
     binding: BrokerBotBinding,
     *,
-    captured_decisions: Mapping[str, str] | None,
-    rotated_out_before_ms: int | None = None,
+    captured_decisions: CapturedDecisions | None,
     record_before_start: BeforeStartSink | None = None,
 ) -> StrategyEvaluation | None:
     """Replay recent closed bars so indicators are ready before live
@@ -595,7 +598,6 @@ async def _warm_up_signal_strategy(
         feed,
         binding,
         captured_decisions=captured_decisions,
-        rotated_out_before_ms=rotated_out_before_ms,
         record_before_start=record_before_start,
     )
     if uncaptured is None:
@@ -626,11 +628,9 @@ async def _warm_up_signal_strategy(
 async def _signal_strategy_evaluations(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
-    captured_decisions: Mapping[str, str] | None,
+    captured_decisions: CapturedDecisions | None,
     quarantine_receipts: QuarantineReceiptSink | None,
     record_before_start: BeforeStartSink | None = None,
-    *,
-    rotated_out_before_ms: int | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Run one canonical signal-intent strategy on the production minute stream."""
     runtime = _build_signal_strategy(
@@ -647,7 +647,6 @@ async def _signal_strategy_evaluations(
         feed,
         binding,
         captured_decisions=captured_decisions,
-        rotated_out_before_ms=rotated_out_before_ms,
         record_before_start=record_before_start,
     )
     # Warmup replays backfilled buckets through the same entrypoint, so it is
@@ -747,29 +746,23 @@ async def strategy_evaluations(
     binding: BrokerBotBinding,
     feed: MarketDataFeed,
     *,
-    captured_decisions: Mapping[str, str] | None = None,
+    captured_decisions: CapturedDecisions | None = None,
     quarantine_receipts: QuarantineReceiptSink | None = None,
     session: RunDecisionSession | None = None,
     record_before_start: BeforeStartSink | None = None,
-    rotated_out_before_ms: int | None = None,
 ) -> AsyncIterator[StrategyEvaluation]:
     """Stream one strategy's evaluations.
 
-    ``captured_decisions`` maps this strategy instance's own recently
-    durable decision identities to their outcomes (FR-016) -- pass it so
-    warmup replay can reapply each bucket's own known disposition and
-    recognize a candidate a crash left uncaptured. Omitting it (the
-    default) means no such recovery is attempted, which is correct for a
-    read-only stream with no custody seam to record or discard a recovered
-    candidate through.
-
-    ``rotated_out_before_ms`` comes from the same receipt read as
-    ``captured_decisions``
-    (:func:`bot_trade_strategy_warmup.captured_decision_outcomes` returns
-    both): the decision-bar close before which a bucket's receipt may have
-    rotated out of that read. Warmup replay never flags a bucket that closed
-    before it as a crash candidate (#2850). ``None`` (the default) says no
-    receipt is known to have rotated out.
+    ``captured_decisions`` is one read of this strategy instance's own
+    retained decision receipts (FR-016;
+    :func:`bot_trade_strategy_warmup.captured_decision_outcomes`) -- pass it
+    so warmup replay can reapply each bucket's own known disposition and
+    recognize a candidate a crash left uncaptured. It carries how far back
+    the read reaches along with the decisions, so replay never takes a
+    bucket whose receipt has rotated out for a crash candidate (#2850).
+    Omitting it (the default) means no such recovery is attempted, which is
+    correct for a read-only stream with no custody seam to record or discard
+    a recovered candidate through.
 
     ``quarantine_receipts`` is where a refused decision bar becomes durable
     evidence rather than only a log line (issue #1827). Pass a custody
@@ -796,12 +789,7 @@ async def strategy_evaluations(
         raise ValueError(f"unsupported Alpaca paper strategy: {binding.strategy_key}")
     _validate_decision_session(binding, session)
     async for evaluation in _signal_strategy_evaluations(
-        binding,
-        feed,
-        captured_decisions,
-        quarantine_receipts,
-        record_before_start,
-        rotated_out_before_ms=rotated_out_before_ms,
+        binding, feed, captured_decisions, quarantine_receipts, record_before_start
     ):
         yield evaluation
 
@@ -915,12 +903,10 @@ async def run_trade_bot(
         )
     )
     async with run_feed_scope as run_feed:
-        captured = captured_decision_outcomes(decision_receipts)
         async for evaluation in strategy_evaluations(
             binding,
             run_feed,
-            captured_decisions=captured.outcomes,
-            rotated_out_before_ms=captured.rotated_out_before_ms,
+            captured_decisions=captured_decision_outcomes(decision_receipts),
             quarantine_receipts=decision_receipts,
             session=session,
             record_before_start=_before_start_recorder(source_bars, binding),
@@ -1386,12 +1372,10 @@ async def run_dry_run_bot(
         session=session,
         continuity=continuity,
     ) as retained_feed:
-        captured = captured_decision_outcomes(decision_receipts)
         async for evaluation in strategy_evaluations(
             binding,
             retained_feed,
-            captured_decisions=captured.outcomes,
-            rotated_out_before_ms=captured.rotated_out_before_ms,
+            captured_decisions=captured_decision_outcomes(decision_receipts),
             quarantine_receipts=decision_receipts,
             session=session,
             record_before_start=_before_start_recorder(source_bars, binding),

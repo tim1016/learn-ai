@@ -8,8 +8,9 @@ broker custody nor changes account control revision.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
@@ -22,6 +23,8 @@ from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 if TYPE_CHECKING:
     from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+
+logger = logging.getLogger(__name__)
 
 MAX_DECISION_RECEIPT_READ = 500
 MAX_DECISION_RECEIPTS_PER_STRATEGY = 1_000
@@ -406,6 +409,69 @@ def _append_decision_receipt_in_transaction(
         observed_at_ms=observed_at_ms,
         facts_json=facts_json,
     )
+
+
+def rotated_out_before_ms(window: Sequence[DecisionReceiptResource]) -> int | None:
+    """The decision-bar close before which a bucket's receipt may have rotated out of ``window`` (#2850).
+
+    ``window`` is one :meth:`SqliteDecisionReceipts.retained_window` read:
+    the newest ``MAX_DECISION_RECEIPTS_PER_STRATEGY`` rows, which is the
+    depth the prune above keeps ordinary rows to.
+
+    ``None`` unless the window has dropped a receipt. Sequences start at 1
+    and are never reused, so a window that still opens at sequence 1 holds
+    every receipt the instance wrote: a bucket missing from it was never
+    receipted, however old it is, and stays a crash candidate.
+
+    Once the window has dropped receipts, this is the decision-bar close of
+    the oldest row left that was written when its bucket was decided and
+    records that close. One runner decides an instance's buckets in bar
+    order and receipts each before the next, so:
+
+    * a bucket that closed before that row's came before it, so the receipt
+      it got when it was decided, if any, is either among the dropped -- its
+      absence proves nothing -- or a row passed over below, which is still
+      in the window and found by identity, never judged by this boundary;
+    * the bucket a crash left staged was reached after every decision
+      receipted before the crash, so at the Resume that follows it closed
+      after each of them -- whichever one the boundary is read from -- and
+      is never exempt.
+
+    What this gives up: a bucket a crash left staged that no Resume named
+    while the boundary was still behind it can no longer be told from a
+    rotated-out one, and is left unflagged.
+
+    Three kinds of row are passed over on the way to that close. A
+    quarantine row has no evaluation identity, and crash evidence is
+    written by a later Resume for a bucket that run only replayed: neither
+    was written when its bucket was decided. A decided row that records no
+    close is passed over for the next one that does, which the second point
+    above makes as safe as reading the first. The wall clock a row was
+    written at is never read instead: a bucket decided late closed before
+    it, and so can the bucket a crash left staged.
+
+    A rotated window in which no row gives a close has no boundary: nothing
+    is exempt, and a Resume can fail the way it did before #2850. That is
+    logged, naming the instance and the rows that were read.
+    """
+    if not window or window[0].seq == 1:
+        return None
+    for receipt in window:
+        if receipt.intent_id is None or receipt.outcome == CRASH_CANDIDATE_OUTCOME:
+            continue
+        close_ms = json.loads(receipt.facts_json).get("decision_bar_close_ms")
+        if isinstance(close_ms, int):
+            return close_ms
+    logger.warning(
+        "decision receipts have rotated out but no retained decision records its bar close",
+        extra={
+            "action": "decision_receipt_rotation_boundary_unknown",
+            "strategy_instance_id": window[0].strategy_instance_id,
+            "first_retained_seq": window[0].seq,
+            "last_retained_seq": window[-1].seq,
+        },
+    )
+    return None
 
 
 def _bar_ref(facts_json: str) -> str | None:

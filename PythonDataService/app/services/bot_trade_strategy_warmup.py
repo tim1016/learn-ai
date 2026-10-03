@@ -18,16 +18,14 @@ runtime/binding types this module duck-types against.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
-    CRASH_CANDIDATE_OUTCOME,
     SqliteDecisionReceipts,
+    rotated_out_before_ms,
 )
-from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
 from app.engine.strategy.base import StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.signal_program import EvaluationMode, EvaluationStage, Settlement
@@ -97,8 +95,7 @@ async def replay_warmup_bars(
     feed: MarketDataFeed,
     binding: BrokerBotBinding,
     *,
-    captured_decisions: Mapping[str, str] | None,
-    rotated_out_before_ms: int | None = None,
+    captured_decisions: CapturedDecisions | None,
     record_before_start: Callable[[Sequence[DecisionExplanationRecord]], None] | None = None,
 ) -> tuple[MarketDataBar, EvaluationStage] | None:
     """Replay recent closed bars so indicators are ready before live
@@ -106,8 +103,9 @@ async def replay_warmup_bars(
     known Clerk disposition so position-lifecycle state -- not just
     indicator math -- carries forward correctly (FR-016).
 
-    ``captured_decisions`` maps this strategy instance's own recently
-    durable decision identities to their outcomes (``None`` or empty when
+    ``captured_decisions`` is one read of this instance's retained decision
+    receipts (:class:`CapturedDecisions`); its ``outcomes`` map recently
+    durable decision identities to their outcomes (``None``, or empty, when
     it has never captured one). Every bucket whose evaluation identity is
     present is reapplied exactly as it was originally disposed -- COMMIT
     for an effect-bearing outcome, DISCARD otherwise -- so a bucket later
@@ -137,17 +135,14 @@ async def replay_warmup_bars(
     ``_build_signal_strategy`` refuses a strategy with no registered
     Signal Program rather than returning a runtime that cannot stage.
 
-    A bucket that closed before ``rotated_out_before_ms`` is never flagged
-    either (#2850). A Resume replays every retained bar back to the
-    instance's warm floor (#2314), and a long-lived instance has decided
-    more buckets over that span than the receipt window retains: such a
-    bucket is missing from ``captured_decisions`` because its receipt
-    rotated out, not because a crash left it staged. The bucket a crash
-    did leave staged closed after every decision made before the crash, so
-    it never falls before that instant -- see
-    :func:`captured_decision_outcomes`, where it comes from. ``None`` (the
-    default) says no receipt is known to have rotated out, and every
-    uncaptured bucket is judged by presence alone.
+    A bucket the read no longer covers (:meth:`CapturedDecisions.covers`)
+    is never flagged either (#2850). A Resume replays every retained bar
+    back to the instance's warm floor (#2314), and a long-lived instance
+    has decided more buckets over that span than the receipt window
+    retains: such a bucket is missing from ``captured_decisions`` because
+    its receipt rotated out, not because a crash left it staged. The bucket
+    a crash did leave staged closed after every decision made before the
+    crash, so the read always covers it.
 
     Returns the ``(bar, stage)`` pair for the one bucket a crash left
     staged but uncaptured, or ``None`` when replay found no such bucket.
@@ -169,7 +164,11 @@ async def replay_warmup_bars(
     warmup_bars = await feed.recent_closed_bars(
         binding.symbol, use_rth=binding.use_rth, lookback_days=_warmup_lookback_days_for(binding)
     )
-    captured = captured_decisions or {}
+    captured = (
+        captured_decisions
+        if captured_decisions is not None
+        else CapturedDecisions(outcomes={}, rotated_out_before_ms=None)
+    )
     uncaptured: tuple[MarketDataBar, EvaluationStage] | None = None
     before_start: list[DecisionExplanationRecord] = []
     for market_bar in warmup_bars:
@@ -184,7 +183,7 @@ async def replay_warmup_bars(
                 record = DecisionExplanationRecord.from_decision(stage.bar, stage.decision)
                 if record is not None:
                     before_start.append(record)
-            known_outcome = captured.get(stage.trace.evaluation_id)
+            known_outcome = captured.outcomes.get(stage.trace.evaluation_id)
             if known_outcome is not None:
                 runtime.settle(
                     Settlement.COMMIT
@@ -197,14 +196,11 @@ async def replay_warmup_bars(
                 # never decided, so its candidates are ordinary catch-up. Nor
                 # is a bucket whose receipt has rotated out (#2850).
                 if (
-                    captured
+                    captured.outcomes
                     and uncaptured is None
                     and stage.decision.intent is not None
                     and market_bar.provenance != "history"
-                    and (
-                        rotated_out_before_ms is None
-                        or stage.trace.bar_close_ms >= rotated_out_before_ms
-                    )
+                    and captured.covers(stage.trace.bar_close_ms)
                 ):
                     uncaptured = (market_bar, stage)
                 runtime.settle(Settlement.DISCARD)
@@ -224,11 +220,23 @@ class CapturedDecisions:
     identity. ``rotated_out_before_ms`` is the decision-bar close before
     which a bucket's receipt may have rotated out of that same read, or
     ``None`` while the read still holds every receipt the instance wrote
-    (:func:`_rotated_out_before_ms`).
+    (``decision_receipts.rotated_out_before_ms``). Neither has a default: a
+    caller that names decisions also says how far back they reach, because
+    replay reads the two together (#2850).
     """
 
-    outcomes: dict[str, str]
+    outcomes: Mapping[str, str]
     rotated_out_before_ms: int | None
+
+    def covers(self, bar_close_ms: int) -> bool:
+        """Whether this read reaches back to a bucket that closed at ``bar_close_ms``.
+
+        Only then does a bucket missing from ``outcomes`` mean it was never
+        receipted. One that closed before ``rotated_out_before_ms`` may have
+        lost its receipt to rotation instead, so its absence is not evidence
+        of a crash.
+        """
+        return self.rotated_out_before_ms is None or bar_close_ms >= self.rotated_out_before_ms
 
 
 def captured_decision_outcomes(receipts: SqliteDecisionReceipts) -> CapturedDecisions:
@@ -259,51 +267,5 @@ def captured_decision_outcomes(receipts: SqliteDecisionReceipts) -> CapturedDeci
             for receipt in window
             if receipt.intent_id is not None
         },
-        rotated_out_before_ms=_rotated_out_before_ms(window),
+        rotated_out_before_ms=rotated_out_before_ms(window),
     )
-
-
-def _rotated_out_before_ms(window: Sequence[DecisionReceiptResource]) -> int | None:
-    """The decision-bar close before which a bucket's receipt may have rotated out (#2850).
-
-    ``None`` unless the window has dropped a receipt. Sequences start at 1
-    and are never reused, so a window that still opens at sequence 1 holds
-    every receipt the instance wrote: a bucket missing from it was never
-    receipted, however old it is, and stays a crash candidate.
-
-    Once the window has dropped receipts, this is the decision-bar close of
-    the oldest receipt left that was written when its bucket was decided.
-    One runner decides an instance's buckets in bar order and receipts each
-    before the next, so:
-
-    * a bucket that closed before that one came before it, and the receipt
-      it got when it was decided, if any, is among the dropped -- its
-      absence proves nothing;
-    * the bucket a crash left staged was reached after every decision
-      receipted before the crash, that one included, so at the Resume that
-      follows it closed after it and is never exempt.
-
-    What this gives up: a staged bucket that no Resume named before the
-    whole window turned over past it can no longer be told from a
-    rotated-out one, and is left unflagged.
-
-    Two kinds of row are passed over on the way to that receipt, because
-    neither was written when its bucket was decided: a quarantine row has
-    no evaluation identity, and crash evidence is written by a later
-    Resume for a bucket that run only replayed. A receipt that does not
-    record its decision-bar close gives no boundary, and nothing is exempt.
-    """
-    if not window or window[0].seq == 1:
-        return None
-    oldest_decided = next(
-        (
-            receipt
-            for receipt in window
-            if receipt.intent_id is not None and receipt.outcome != CRASH_CANDIDATE_OUTCOME
-        ),
-        None,
-    )
-    if oldest_decided is None:
-        return None
-    close_ms = json.loads(oldest_decided.facts_json).get("decision_bar_close_ms")
-    return close_ms if isinstance(close_ms, int) else None

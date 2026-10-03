@@ -276,6 +276,9 @@ green minutes, inside the first session's detection window."""
 _LATE_ENTER_MINUTE = 1_081
 """Minute whose close stages an ENTER in the third session, after more
 decisions than the receipt window retains."""
+_OLDEST_RETAINED_ENTER_MINUTE = _LATE_ENTER_MINUTE - MAX_DECISION_RECEIPTS_PER_STRATEGY
+"""Minute whose ENTER is the oldest receipt left once ``_LATE_ENTER_MINUTE``
+minutes have been decided: the tape holds one decision per bar."""
 
 
 def _red_tape(*, minutes: int, enter_minutes: Sequence[int]) -> list[MarketDataBar]:
@@ -363,6 +366,54 @@ async def test_resume_past_the_receipt_window_fabricates_no_crash_evidence(tmp_p
         # The window no longer reaches back to that ENTER.
         assert after_first_run[0].seq > 1
         assert json.loads(after_first_run[0].facts_json)["decision_bar_close_ms"] > early_enter_close_ms
+
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-2", strategy_key=_DV), _PhaseFeed(retained_bars=bars)
+        )
+
+        assert _retained(repo) == after_first_run
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_reads_how_far_back_the_window_reaches_off_a_clerk_effect_receipt(
+    tmp_path: Path,
+) -> None:
+    """The oldest receipt a window retains can be one the Clerk wrote (#2850).
+
+    An ENTER is receipted by the Clerk, with the effect it admits, not by the
+    runner. Here the run stops with a second ENTER's receipt as the oldest one
+    retained, the first ENTER's having rotated out. The Clerk records the
+    decision bar's close on that row as the runner does on its own, so the
+    Resume reads how far back the window reaches off it and leaves the first
+    ENTER unflagged, where flagging it collided with its protected receipt.
+    """
+    repo, clerk = _sqlite_clerk(tmp_path)
+    set_alpaca_clerk(clerk)
+    try:
+        bars = _red_tape(
+            minutes=_LATE_ENTER_MINUTE,
+            enter_minutes=[_EARLY_ENTER_MINUTE, _OLDEST_RETAINED_ENTER_MINUTE],
+        )
+
+        await bot_trade_strategy.run_trade_bot(
+            _binding(run_id="run-1", strategy_key=_DV), _PhaseFeed(live_bars=bars)
+        )
+        after_first_run = _retained(repo)
+        second_enter = clerk.calls[2]
+        assert second_enter["purpose"] == "ENTER"
+        # The window opens on the Clerk's receipt for that second ENTER, which
+        # says when its decision bar closed.
+        oldest_retained = after_first_run[0]
+        assert oldest_retained.seq > 1
+        assert oldest_retained.outcome == "enter_intent"
+        assert oldest_retained.intent_id == second_enter["decision_evidence"].evaluation_id
+        assert (
+            json.loads(oldest_retained.facts_json)["decision_bar_close_ms"]
+            == bars[_OLDEST_RETAINED_ENTER_MINUTE].end_ms
+        )
 
         await bot_trade_strategy.run_trade_bot(
             _binding(run_id="run-2", strategy_key=_DV), _PhaseFeed(retained_bars=bars)

@@ -96,7 +96,7 @@ from app.engine.strategy.signal_program import (
 from app.marketdata.feed import MarketDataBar
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from app.services.bot_trade_strategy import _build_signal_strategy
-from app.services.bot_trade_strategy_warmup import replay_warmup_bars
+from app.services.bot_trade_strategy_warmup import CapturedDecisions, replay_warmup_bars
 from tests._helpers.signal_program import (
     SEALED_KEYS,
     BarBody,
@@ -487,7 +487,11 @@ async def test_replay_warmup_bars_is_idempotent_for_an_already_blocked_candidate
     runtime, context, executor = _fresh_runtime_and_executor(key, symbol)
     binding = _binding(strategy_key=key, symbol=symbol)
     recovered = await replay_warmup_bars(
-        runtime, context, _StaticWarmupFeed(replay_bars), binding, captured_decisions=captured
+        runtime,
+        context,
+        _StaticWarmupFeed(replay_bars),
+        binding,
+        captured_decisions=CapturedDecisions(outcomes=captured, rotated_out_before_ms=None),
     )
 
     assert recovered is None, f"'{key}' re-flagged an already-captured (blocked) candidate as a crash window"
@@ -541,7 +545,11 @@ async def test_warmup_replay_then_live_loop_never_duplicates_broker_contact(key:
     runtime, context, executor = _fresh_runtime_and_executor(key, symbol)
     binding = _binding(strategy_key=key, symbol=symbol)
     recovered = await replay_warmup_bars(
-        runtime, context, _StaticWarmupFeed(warmup_bars), binding, captured_decisions=captured
+        runtime,
+        context,
+        _StaticWarmupFeed(warmup_bars),
+        binding,
+        captured_decisions=CapturedDecisions(outcomes=captured, rotated_out_before_ms=None),
     )
     assert recovered is None, f"'{key}' flagged a crash candidate in a fully-captured warmup window"
     assert runtime.program is not None
@@ -619,7 +627,11 @@ async def test_replay_warmup_bars_names_the_candidate_without_disposition(key: s
     runtime, context, executor = _fresh_runtime_and_executor(key, symbol)
     binding = _binding(strategy_key=key, symbol=symbol)
     recovered: tuple[MarketDataBar, EvaluationStage] | None = await replay_warmup_bars(
-        runtime, context, _StaticWarmupFeed(replay_bars), binding, captured_decisions=captured
+        runtime,
+        context,
+        _StaticWarmupFeed(replay_bars),
+        binding,
+        captured_decisions=CapturedDecisions(outcomes=captured, rotated_out_before_ms=None),
     )
 
     assert recovered is not None, (
@@ -683,8 +695,9 @@ async def test_replay_warmup_bars_does_not_flag_a_bucket_that_closed_before_the_
         context,
         _StaticWarmupFeed(replay_bars),
         binding,
-        captured_decisions=captured,
-        rotated_out_before_ms=retained[0].bar_close_ms,
+        captured_decisions=CapturedDecisions(
+            outcomes=captured, rotated_out_before_ms=retained[0].bar_close_ms
+        ),
     )
 
     assert recovered is None, (
@@ -723,8 +736,9 @@ async def test_replay_warmup_bars_still_flags_a_bucket_that_closed_at_the_rotati
         context,
         _StaticWarmupFeed(replay_bars),
         binding,
-        captured_decisions=captured,
-        rotated_out_before_ms=target_trace.bar_close_ms,
+        captured_decisions=CapturedDecisions(
+            outcomes=captured, rotated_out_before_ms=target_trace.bar_close_ms
+        ),
     )
 
     assert recovered is not None, (

@@ -1,40 +1,48 @@
-"""Retention floor for sealed Signal Programs (#1740, closing #1727's last criterion).
+"""Retention floors for sealed Signal Programs (#1740, closing #1727's last criterion).
 
 #1727 required retention "covering warmup plus the open cycle". Two stores
-retain what a program replays after a crash or restore, and only one of them
-has a floor to pin:
+retain what a program replays after a crash or restore:
 
 * ``SOURCE_BAR_STREAM_CAPACITY`` -- retained one-minute source bars per
   provider/symbol stream (``app.services.source_bar_ledger``). Nothing is
   pruned; the stream fails closed at capacity and needs a reviewed rollover.
   Asserted here: a fresh deploy's sealed warmup plus one open session fits.
 * ``MAX_DECISION_RECEIPTS_PER_STRATEGY`` -- decision receipts per strategy
-  instance (``app.broker.alpaca.clerk.sqlite.decision_receipts``). Not
-  asserted. This file used to size that window against the warmup lookback,
-  but the lookback stopped bounding what a Resume replays: a Resume replays
-  every retained bar back to the instance's warm floor (#2314), so a
-  long-lived instance replays more decisions than any fixed window holds.
-  Replay leaves a bucket whose receipt has rotated out unflagged instead
-  (#2850, ``tests/services/test_candidate_uncaptured_at_crash.py``).
+  instance (``app.broker.alpaca.clerk.sqlite.decision_receipts``). Asserted
+  here: one open cycle fits. The window is not sized against the warmup
+  lookback any more, because the lookback stopped bounding what a Resume
+  replays: a Resume replays every retained bar back to the instance's warm
+  floor (#2314), so a long-lived instance replays more decisions than any
+  fixed window holds, and replay leaves a bucket whose receipt has rotated
+  out unflagged instead (#2850,
+  ``tests/services/test_candidate_uncaptured_at_crash.py``).
 
-The floor is checked against what a seal of each program records, derived
+Both floors are checked against what a seal of each program records, derived
 from the registry so a future promotion is covered on registration: the
-warmup lookback its parameters resolve (#2841), at its validated settings and
-at one long-period deploy. "The open cycle" is bounded here by one full
-session -- the widest any sealed exit path (countdown or session barrier) can
-stay open without a new decision.
+warmup lookback and decision clock its parameters resolve (#2841), at its
+validated settings and at one long-period deploy. "The open cycle" is bounded
+here by one full session -- the widest any sealed exit path (countdown or
+session barrier) can stay open without a new decision.
 
-Two stated limits of this floor: the session span is the regular RTH session
+Stated limits of these floors: the session span is the regular RTH session
 from the canonical calendar (a program deciding in extended hours retains
-more bars over the same days than this model assumes); and the assertion only
-guards absurd inputs -- 200,000 bars is ~511 sessions, so it exists to state
-the invariant, not because any sealed program is near it.
+more bars, and writes more receipts, over the same days than this model
+assumes); the bar-capacity assertion only guards absurd inputs -- 200,000
+bars is ~511 sessions, so it exists to state the invariant, not because any
+sealed program is near it; and only the points named here are covered -- a
+deploy on a shorter bar decides more often over the same session and is not
+sized here. The receipt window is the one that bites: ``deployment_validation``
+decides 390 times a session against 1,000 receipts.
 """
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
+from app.broker.alpaca.clerk.sqlite.decision_receipts import MAX_DECISION_RECEIPTS_PER_STRATEGY
+from app.engine.strategy.params import decision_timeframe_ms_for
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.lean_sidecar.trading_calendar import session_close_ms_utc, session_open_ms_utc
 from app.services.source_bar_ledger import SOURCE_BAR_STREAM_CAPACITY
@@ -85,4 +93,23 @@ def test_source_bar_stream_covers_warmup_plus_one_open_cycle(key: str, overrides
     assert bars_needed <= SOURCE_BAR_STREAM_CAPACITY, (
         f"'{key}' needs {bars_needed} retained minute bars for warmup ({lookback_days}d) "
         f"plus one open session, but the source-bar stream caps at {SOURCE_BAR_STREAM_CAPACITY}"
+    )
+
+
+@pytest.mark.parametrize(("key", "overrides"), _SEALED_POINTS)
+def test_receipt_window_covers_one_open_cycle(key: str, overrides: dict[str, int]) -> None:
+    """Replay restages an EXIT a crash left staged only while the ENTER that
+    opened its position is still in the receipt read: a rotated-out ENTER is
+    replayed as discarded, the replay stays flat, and the EXIT is never named."""
+    registration = _STRATEGY_REGISTRY[key]
+    contract = registration.signal_program_contract
+    assert contract is not None
+    params = registration.param_schema(**{**contract.validated_settings, **overrides})
+    decision_timeframe_ms = decision_timeframe_ms_for(params, qualified_ms=contract.decision_timeframe_ms)
+    clocks_per_session = math.ceil(_ordinary_session_minutes() * _MINUTE_MS / decision_timeframe_ms)
+
+    assert clocks_per_session <= MAX_DECISION_RECEIPTS_PER_STRATEGY, (
+        f"'{key}' writes {clocks_per_session} decision receipts over one open session "
+        f"(at its {decision_timeframe_ms}ms clock), but only "
+        f"{MAX_DECISION_RECEIPTS_PER_STRATEGY} ordinary receipts are retained per strategy"
     )
