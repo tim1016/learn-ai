@@ -3,6 +3,7 @@
  * values the server computed — no metric, return or estimate is derived here.
  */
 
+import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import type { CapabilityKnob, ExposureState, IncumbentRef, Metrics, Point, PointValue, StrategyCapability, StudyDetail } from './golden-search.types';
 
 export interface PointEntry {
@@ -160,9 +161,9 @@ export const RULE_WORDS: Readonly<Record<string, string>> = {
   NOT_PROFITABLE: 'not profitable',
 };
 
-/** A rule code in words; a code the map does not know is shown as sent. */
+/** A rule code in words; a code the map does not know goes through the shared receipt label. */
 export function ruleWords(code: string | null): string {
-  return code === null ? 'meets the rules' : (RULE_WORDS[code] ?? code);
+  return code === null ? 'meets the rules' : (RULE_WORDS[code] ?? formatReceiptLabel(code));
 }
 
 /** The note every development chart's tooltip carries: these runs chose the candidates, so they are in-sample. */

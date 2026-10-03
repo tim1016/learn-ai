@@ -21,47 +21,8 @@ const LABELS: Readonly<Record<ProcedureCharts['key'], string>> = { search: 'All-
   selector: 'app-golden-search-procedure-charts',
   imports: [GoldenSearchChartComponent, GoldenSearchGridComponent, GoldenSearchPairLandscapeComponent, GoldenSearchPanelComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
-  template: `
-    @let zoom = procedure().method === 'zoom';
-    <app-golden-search-grid>
-      @if (zoom) {
-        <app-golden-search-panel chart="search-path" data-span="8" [instance]="instance()">
-          @if (path(); as spec) {
-            <app-golden-search-chart [spec]="spec" [height]="260" />
-          } @else if (pathNote(); as note) {
-            <p class="muted">{{ note }}</p>
-          }
-          <p caption class="caption">Each dot is a point the search scored, in order; the line is the best result so far that meets the rules.</p>
-        </app-golden-search-panel>
-      }
-      <app-golden-search-panel chart="knob-moves" [attr.data-span]="zoom ? 4 : 6" [instance]="instance()">
-        @if (moves(); as spec) { <app-golden-search-chart [spec]="spec" [height]="220" /> }
-        <p caption class="caption">Hollow: the starting value. Filled: the value kept; amber at an end of its range.</p>
-      </app-golden-search-panel>
-      <app-golden-search-panel chart="eligibility-map" data-span="6" [instance]="instance()">
-        @if (eligibility(); as spec) { <app-golden-search-chart [spec]="spec" [height]="260" /> }
-        <p caption class="caption">
-          Every point scored on this window, the winner outlined: blue meets the rules, amber too few trades, red too deep a fall, light blue no profit, grey failed or undefined. The dashed lines are the trade floor{{ procedure().policy.require_positive_net ? ' and $0' : '' }}.
-        </p>
-      </app-golden-search-panel>
-      @if (maps().length > 0) {
-        <app-golden-search-pair-landscape data-span="6" [maps]="maps()" [capability]="capability()" [center]="center()" centerLabel="the all-period result" [instance]="instance()" />
-      }
-      <app-golden-search-panel chart="knob-profiles" data-span="12" [instance]="instance()">
-        @if (profiles(); as spec) {
-          <app-golden-search-chart [spec]="spec" [height]="220" [minWidth]="profilesMinWidth()" />
-        } @else {
-          <p class="muted">No profile can be drawn: the search path could not be rebuilt.</p>
-        }
-        <p caption class="caption">{{ zoom ? 'Each knob as its last pass searched it, the other knobs held at their values then — not at the final winner.' : 'Each knob through the winner, the other knobs at the winner’s values.' }}</p>
-      </app-golden-search-panel>
-    </app-golden-search-grid>
-  `,
-  styles: `
-    :host { display: block; min-width: 0; }
-    p { margin: 0; }
-    .muted, .caption { color: var(--text-secondary); font-size: var(--fs-xs); }
-  `,
+  templateUrl: './golden-search-procedure-charts.component.html',
+  styleUrl: './golden-search-procedure-charts.component.scss',
 })
 export class GoldenSearchProcedureChartsComponent {
   readonly procedure = input.required<ProcedureCharts>();
@@ -87,6 +48,8 @@ export class GoldenSearchProcedureChartsComponent {
   protected readonly moves = computed(() => (this.procedure().moves.length === 0 ? null : knobMovesSpec(this.procedure(), this.label())), { equal: sameChart });
   protected readonly profiles = computed(() => (this.procedure().profiles.length === 0 ? null : profilesSpec(this.procedure(), this.label())), { equal: sameChart });
   protected readonly profilesMinWidth = computed(() => profilesMinWidth(this.procedure().profiles.length));
+  /** Failed runs have no numbers to place on the eligibility map; the caption counts them. */
+  protected readonly failedRuns = computed(() => this.procedure().points.filter((point) => point.ineligibility === 'FAILED').length);
   protected readonly eligibility = computed(
     () => (this.procedure().points.length === 0 ? null : eligibilityMapSpec(this.procedure(), this.capability(), this.label())),
     { equal: sameChart },

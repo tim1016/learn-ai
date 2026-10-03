@@ -8,7 +8,9 @@ window, with the window's frozen selection policy (``TradeFloors.policy``):
     the procedure built them), after which current[k] = the round's chosen
     value. Each tried point joins its base-scenario evaluation on the window
     by point hash. The replay is trusted only when its final point is the
-    recorded winner; otherwise the convergence chart is not recorded;
+    recorded winner and it holds every point the procedure's own step stored
+    on the window (a budget stop mid-round stores points no round records);
+    otherwise the convergence chart is not recorded;
   * best so far — after each tried point, the highest objective among the
     eligible points tried so far (``selection.objective_value`` and
     ``selection.ineligibility``); none until one is eligible;
@@ -52,6 +54,7 @@ from app.research.golden_search.selection import Metrics, ineligibility, objecti
 from app.research.golden_search.zoom import ProcedureResult
 
 NOT_REPLAYED = "The recorded path does not rebuild the recorded winner, so the search path is not drawn."
+PARTIAL_ROUND = "The search ran out of budget partway through a round; the points it scored there belong to no recorded round, so the path is not drawn."
 GRID_PATH = "Grid scores every combination at once, so it has no path to draw."
 
 
@@ -212,7 +215,10 @@ def procedure_charts(
     metrics = {record_.point_hash: metrics_of(record_) for record_ in records}
     if result.method == "zoom":
         replay = _Replay(declaration, protocol, result)
-        convergence = _convergence(replay, result, metrics, policy)
+        # A budget stop mid-batch stores the points scored before it but records no round for them: the path would be short of them.
+        replayed = {hashed for *_, hashed in replay.tried}
+        unrecorded = any(record_.stage == key and record_.point_hash not in replayed for record_ in records)
+        convergence = {"status": "missing", "reason": PARTIAL_ROUND} if unrecorded and replay.matches_winner else _convergence(replay, result, metrics, policy)
         profiles = _zoom_profiles(declaration, protocol, replay, result, metrics, policy) if replay.matches_winner else []
     else:
         convergence = {"status": "missing", "reason": GRID_PATH}

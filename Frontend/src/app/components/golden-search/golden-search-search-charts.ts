@@ -56,6 +56,13 @@ function scoredRows(scored: Pick<ScoredPoint, 'sharpe_ratio' | 'total_return_pct
   ];
 }
 
+/** The table's columns for the same numbers, so the table holds what the hover shows. */
+const SCORED_COLUMNS = ['Sharpe', 'Net return', 'Net profit', 'Trades', 'Worst fall', 'Rules'] as const;
+
+function scoredCells(scored: Parameters<typeof scoredRows>[0]): string[] {
+  return scoredRows(scored).map((row) => (row.values[0] === NOT_RECORDED ? '—' : row.values[0]));
+}
+
 function rulesNote(procedure: ProcedureCharts): string {
   const policy = procedure.policy;
   const floor = policy.min_trades === null ? 'no trade floor' : `at least ${policy.min_trades} trades`;
@@ -86,16 +93,16 @@ export function convergenceSpec(procedure: ProcedureCharts, tried: readonly Trie
     featured: null,
     option: (theme) => convergenceOption(procedure, tried, capability, theme),
     table: {
-      caption: `${label}: every point tried, in order`,
-      columns: ['Tried', 'Step', 'Value', name, 'Rules', `Best ${name} so far`],
+      caption: `${label}: every point tried, in order, with its settings and numbers`,
+      columns: ['Tried', 'Step', 'Value', 'Settings', ...SCORED_COLUMNS, `Best ${name} so far`],
       rows: tried.map((point) => ({
         key: String(point.order),
         cells: [
           String(point.order + 1),
           stepText(point, capability),
           point.value === null ? '—' : String(point.value),
-          objectiveText(objective, point.objective),
-          ruleWords(point.ineligibility),
+          pointText(point.point, capability),
+          ...scoredCells(point),
           objectiveText(objective, point.best_so_far),
         ],
       })),
@@ -238,12 +245,12 @@ export function profilesSpec(procedure: ProcedureCharts, label: string): ChartSp
     featured: null,
     option: (theme) => profilesOption(procedure, theme),
     table: {
-      caption: `${label}: each knob's values tried, every other knob held`,
-      columns: ['Knob', 'Value', OBJECTIVE_NAMES[objective], 'Rules', 'Retained'],
+      caption: `${label}: each knob's values tried, every other knob held as listed`,
+      columns: ['Knob', 'Value', ...SCORED_COLUMNS, 'Retained', 'Others held at'],
       rows: profiles.flatMap((profile) =>
         profile.points.map((point) => ({
           key: `${profile.name}|${point.value}`,
-          cells: [profile.label, String(point.value), objectiveText(objective, point.objective), ruleWords(point.ineligibility), point.retained ? 'yes' : ''],
+          cells: [profile.label, String(point.value), ...scoredCells(point), point.retained ? 'yes' : '', heldText(profile)],
         })),
       ),
     },
@@ -264,7 +271,8 @@ function profilesOption(procedure: ProcedureCharts, theme: ChartTheme): ChartOpt
   const profiles = procedure.profiles;
   const share = 100 / Math.max(1, profiles.length);
   return {
-    grid: profiles.map((_, i) => ({ left: `${i * share + 7}%`, width: `${share - 10}%`, top: 28, bottom: 40 })),
+    // Each profile gets its own slot: a gutter for its value axis on the left, the plot in the rest.
+    grid: profiles.map((_, i) => ({ left: `${i * share + share * 0.2}%`, width: `${share * 0.72}%`, top: 28, bottom: 40 })),
     tooltip: {
       ...tooltipFrame(theme),
       trigger: 'item',
@@ -333,7 +341,7 @@ const RULE_GROUPS: readonly RuleGroup[] = [
   { group: 'trades', name: 'Too few trades', codes: ['TOO_FEW_TRADES', 'NO_TRADES'] },
   { group: 'fall', name: 'Worst fall too deep', codes: ['DRAWDOWN_ABOVE_CEILING'] },
   { group: 'loss', name: 'Not profitable', codes: ['NOT_PROFITABLE'] },
-  { group: 'other', name: 'Failed or undefined', codes: ['FAILED', 'OBJECTIVE_UNDEFINED', 'DRAWDOWN_UNDEFINED', 'NOT_EVALUATED'] },
+  { group: 'other', name: 'No objective or worst fall', codes: ['FAILED', 'OBJECTIVE_UNDEFINED', 'DRAWDOWN_UNDEFINED', 'NOT_EVALUATED'] },
 ];
 
 function groupOf(code: string | null): string {
@@ -343,23 +351,18 @@ function groupOf(code: string | null): string {
 /** Every point scored on the window by its trades and net profit, coloured by the rule it fails. */
 export function eligibilityMapSpec(procedure: ProcedureCharts, capability: StrategyCapability | null, label: string): ChartSpec {
   const points = procedure.points;
+  const failed = points.filter((point) => point.ineligibility === 'FAILED').length;
   return {
     label: `${label} eligibility map`,
-    summary: `${label}: ${points.length} points scored on the window, each by its trades and net profit, coloured by the rule it fails.`,
+    summary: `${label}: ${points.length} points scored on the window, each by its trades and net profit, coloured by the rule it fails${failed === 0 ? '' : `; ${failed} failed and have no numbers, listed in the table`}.`,
     featured: null,
     option: (theme) => eligibilityOption(procedure, capability, theme),
     table: {
-      caption: `${label}: every point scored on the window`,
-      columns: ['Settings', 'Trades', 'Net profit', 'Worst fall', 'Rules'],
+      caption: `${label}: every point scored on the window, failed runs included`,
+      columns: ['Settings', ...SCORED_COLUMNS],
       rows: points.map((point) => ({
         key: point.point_hash,
-        cells: [
-          `${pointText(point.point, capability)}${point.winner ? ' (winner)' : ''}`,
-          point.total_trades === null ? '—' : String(point.total_trades),
-          signedUsdText(point.net_profit),
-          percentText(point.max_drawdown_pct),
-          ruleWords(point.ineligibility),
-        ],
+        cells: [`${pointText(point.point, capability)}${point.winner ? ' (winner)' : ''}`, ...scoredCells(point)],
       })),
     },
   };
