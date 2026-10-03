@@ -218,6 +218,11 @@ NONTERMINAL_EFFECT_STATES: frozenset[str] = frozenset(
     {"reserved", "accepted", "in_progress", "unknown"}
 )
 
+#: Effect-operation states that ended in failure. The effect's order row and
+#: its decision receipt stay stored, so their presence alone never says the
+#: effect happened: the terminal state does.
+FAILED_EFFECT_STATES: frozenset[str] = frozenset({"failed", "rejected"})
+
 
 def strategy_instances_with_live_custody(conn: sqlite3.Connection, *, dormant: bool = False) -> set[str]:
     """Roster ids whose custody can still change, or still needs attention.

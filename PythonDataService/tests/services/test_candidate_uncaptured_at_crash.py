@@ -37,7 +37,11 @@ from app.lean_sidecar.trading_calendar import is_early_close, session_windows_ms
 from app.marketdata.feed import ContinuityPolicy, MarketDataBar
 from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
 from tests._helpers.bot_runner.custody import _SID
-from tests._helpers.bot_runner.doubles import _FakeClerk
+from tests._helpers.bot_runner.doubles import (
+    ACCEPTED_IN_STORE,
+    FAILED_AFTER_ACCEPTANCE,
+    _FakeClerk,
+)
 from tests._helpers.bot_runner.ema_parity import (
     _EMA_FIRST_EXIT_MS,
     _ema_parity_bars_through_first_exit,
@@ -322,10 +326,12 @@ def _red_tape(*, minutes: int, enter_minutes: Sequence[int]) -> list[MarketDataB
     ]
 
 
-def _sqlite_clerk(tmp_path: Path) -> tuple[ClerkSqliteRepository, _FakeClerk]:
+def _sqlite_clerk(
+    tmp_path: Path, *, effect_state: str = "submitted"
+) -> tuple[ClerkSqliteRepository, _FakeClerk]:
     repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path / "clerk")
     repo.register_strategy_instance(strategy_instance_id=_SID, symbol="SPY", config_hash="config-1")
-    clerk = _FakeClerk(repository=repo)
+    clerk = _FakeClerk(effect_state=effect_state, repository=repo)
     clerk.authority_kind = "sqlite"
     clerk.account_id = "PA-TEST"
     return repo, clerk
@@ -650,8 +656,11 @@ async def test_resume_names_the_exit_a_crash_left_staged_when_its_enter_is_older
     the receipt is protected and still stored, only older than the window. The
     run then dies on the bar that stages its EXIT. Replayed flat, that bucket
     staged nothing, and the crash went unnamed.
+
+    The ENTER is accepted through the real store, so the effect the Resume
+    reads beside the receipt is the store's own, and it has not failed.
     """
-    repo, clerk = _sqlite_clerk(tmp_path)
+    repo, clerk = _sqlite_clerk(tmp_path, effect_state=ACCEPTED_IN_STORE)
     set_alpaca_clerk(clerk)
     try:
         minutes = _SMA_ENTER_MINUTE + MAX_DECISION_RECEIPTS_PER_STRATEGY + 50
@@ -660,6 +669,7 @@ async def test_resume_names_the_exit_a_crash_left_staged_when_its_enter_is_older
         binding = _binding(run_id="run-1", strategy_key=_SMA).model_copy(
             update={"strategy_params": _SMA_ONE_MINUTE}
         )
+        await clerk.register_strategy_run(binding)
 
         await bot_trade_strategy.run_trade_bot(binding, _PhaseFeed(live_bars=bars[:-1]))
         assert [call["purpose"] for call in clerk.calls] == ["ENTER"]
@@ -676,6 +686,58 @@ async def test_resume_names_the_exit_a_crash_left_staged_when_its_enter_is_older
         assert [call["purpose"] for call in clerk.calls] == ["ENTER"]
         assert _crash_evidence_closes(repo) == [crash_close_ms]
         assert json.loads(_retained(repo)[-1].facts_json)["explanation"]["holding"] is True
+    finally:
+        set_alpaca_clerk(None)
+        repo.close()
+
+
+@pytest.mark.asyncio
+async def test_resume_names_no_exit_for_an_enter_older_than_the_window_that_failed_at_submission(
+    tmp_path: Path,
+) -> None:
+    """#2859: an ENTER the Clerk accepted and then could not send opened no position.
+
+    The Clerk receipts an ENTER when it accepts it. Here the broker then
+    refuses the order: the effect ends failed, the runner discards the
+    candidate and the strategy stays flat, but the receipt still reads
+    ``enter_intent``. The run decides more buckets than the window retains
+    and stops one bar before the tape falls. Taken for a held position, that
+    receipt had the Resume stage an EXIT on the falling bar and name it as
+    one a crash left staged -- an EXIT the flat run could never have staged.
+    """
+    repo, clerk = _sqlite_clerk(tmp_path, effect_state=FAILED_AFTER_ACCEPTANCE)
+    set_alpaca_clerk(clerk)
+    try:
+        minutes = _SMA_ENTER_MINUTE + MAX_DECISION_RECEIPTS_PER_STRATEGY + 50
+        bars = _rising_tape_with_a_final_drop(minutes=minutes)
+        binding = _binding(run_id="run-1", strategy_key=_SMA).model_copy(
+            update={"strategy_params": _SMA_ONE_MINUTE}
+        )
+        await clerk.register_strategy_run(binding)
+
+        await bot_trade_strategy.run_trade_bot(binding, _PhaseFeed(live_bars=bars[:-1]))
+        # The run asked for one ENTER and, flat after it failed, nothing else.
+        assert [call["purpose"] for call in clerk.calls] == ["ENTER"]
+        before_resume = _retained(repo)
+        assert {receipt.outcome for receipt in before_resume} == {"no_action"}
+        # The ENTER's receipt is still stored, older than the window, and
+        # still reads as an entry; only its effect says it failed.
+        [entry] = repo.decision_receipt_tail(
+            strategy_instance_id=_SID,
+            limit=MAX_DECISION_RECEIPTS_PER_STRATEGY,
+            before_seq=before_resume[0].seq,
+        )
+        assert entry.outcome == "enter_intent"
+        effect = repo.effect_operation(json.loads(entry.facts_json)["effect_operation_id"])
+        assert effect is not None and effect.state == "failed"
+
+        await bot_trade_strategy.run_trade_bot(
+            binding.model_copy(update={"run_id": "run-2"}), _PhaseFeed(retained_bars=bars)
+        )
+
+        assert _crash_evidence_closes(repo) == []
+        assert _retained(repo) == before_resume
+        assert [call["purpose"] for call in clerk.calls] == ["ENTER"]
     finally:
         set_alpaca_clerk(None)
         repo.close()

@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.models import DecisionReceiptResource
+from app.broker.alpaca.clerk.sqlite.reads import FAILED_EFFECT_STATES
 from app.schemas.decision_explanation import DecisionExplanationRecord
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -741,6 +742,11 @@ class SqliteDecisionReceipts:
         rows stored from before the window, which are protected rows only
         (the prune keeps no ordinary row there). A position held through
         more refusals than that is not found, and that is logged.
+
+        An ENTER receipt alone does not say a position was opened: the Clerk
+        writes it when it accepts the ENTER and never amends it. So the
+        ENTER's effect is read with it (:meth:`_entered`), and an ENTER whose
+        effect ended failed is not returned.
         """
         if not window or window[0].seq == 1:
             return None
@@ -764,7 +770,46 @@ class SqliteDecisionReceipts:
                     "first_retained_seq": window[0].seq,
                 },
             )
-        return held
+        return held if held is not None and self._entered(held) else None
+
+    def _entered(self, entry: DecisionReceiptResource) -> bool:
+        """Whether the ENTER that ``entry`` receipts has an effect on record that did not end failed (#2859).
+
+        The Clerk can accept an ENTER and then not send it: its own check
+        just before broker contact refuses it, or the broker does. The
+        effect ends failed, the runner is answered as it is for a refusal
+        and discards the candidate, and the strategy stays flat -- while the
+        receipt, written at acceptance, still reads ``enter_intent``.
+        Replayed as an entry, it stages an EXIT no live run staged.
+
+        An ENTER whose order was sent and ended unfilled afterwards ends
+        failed too, though the runner had committed it and the run went on
+        holding it in its own state. Replay takes that one as flat as well,
+        which is how it replayed every ENTER older than the window before
+        this read existed.
+
+        The read is one effect row by its id. A receipt that names no
+        effect on record does not show a position either: that is logged,
+        and the ENTER is not returned.
+        """
+        effect_operation_id = json.loads(entry.facts_json).get("effect_operation_id")
+        effect = (
+            self._repository.effect_operation(effect_operation_id)
+            if isinstance(effect_operation_id, str)
+            else None
+        )
+        if effect is None:
+            logger.warning(
+                "the entry stored before the retained window names no effect on record",
+                extra={
+                    "action": "decision_receipt_held_entry_effect_unknown",
+                    "strategy_instance_id": self._strategy_instance_id,
+                    "entry_seq": entry.seq,
+                    "effect_operation_id": effect_operation_id,
+                },
+            )
+            return False
+        return effect.state not in FAILED_EFFECT_STATES
 
 
 def _read_limit(requested: int) -> int:

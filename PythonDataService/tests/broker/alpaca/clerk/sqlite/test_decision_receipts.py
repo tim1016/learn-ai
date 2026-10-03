@@ -10,18 +10,30 @@ from pathlib import Path
 import pytest
 
 import app.broker.alpaca.clerk.sqlite.decision_receipts as decision_receipts_module
+from app.broker.alpaca.clerk.decision_evidence import EffectDecisionEvidence
+from app.broker.alpaca.clerk.models import EffectOperationState, EffectPurpose
+from app.broker.alpaca.clerk.sqlite.commands import submit_start_run
 from app.broker.alpaca.clerk.sqlite.decision_receipts import (
     CRASH_CANDIDATE_OUTCOME,
     MAX_DECISION_RECEIPT_READ,
     MAX_DECISION_RECEIPTS_PER_STRATEGY,
     QUARANTINE_OUTCOME,
+    AtomicDecisionReceipt,
     DecisionOutcome,
     DecisionReceiptConflictError,
     SqliteDecisionReceipts,
     rotated_out_before_ms,
     run_first_closes_ms,
 )
+from app.broker.alpaca.clerk.sqlite.enter import accept_enter
+from app.broker.alpaca.clerk.sqlite.hashchain import canonicalize
 from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository
+from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
+from app.broker.contract.errors import BrokerRequestInvalid
+from app.broker.contract.models import BrokerOrder, BrokerOrderLeg
+from app.services.bot_binding_repository import BrokerBotBinding, alpaca_v1_action_plan
+from tests._helpers.bot_runner.doubles import _SqliteRuntimeBroker
+from tests._helpers.exit_terms import DEPLOY_EXIT_TERMS
 
 
 @pytest.fixture()
@@ -375,14 +387,32 @@ def test_a_run_starts_at_its_first_decision_not_at_the_crash_evidence_it_wrote(
 # ---------------------------------------------------------------------------
 
 
-def _enter(receipts: SqliteDecisionReceipts, minute: int, *, run: str) -> None:
-    """The Clerk's receipt for an ENTER it admitted: protected, under its own run id."""
-    _receipt_bucket(
-        receipts,
-        minute,
-        outcome="enter_intent",
-        run_id=f"spy-bot:{run}",
-        retention_class="protected_effect",
+def _enter(repository: ClerkSqliteRepository, minute: int, *, run: str) -> None:
+    """An ENTER the Clerk accepted, through the store's own intake.
+
+    One transaction writes the effect, its order and the protected receipt
+    that names the effect, under the Clerk's own run id.
+    """
+    if repository.active_run("spy-bot") is None:
+        submit_start_run(
+            repository, account_id="PA-TEST", strategy_instance_id="spy-bot", lifecycle_run_id=run
+        )
+    accept_enter(
+        repository,
+        account_id="PA-TEST",
+        strategy_instance_id="spy-bot",
+        decision_id=f"evaluation-{minute}",
+        lifecycle_run_id=run,
+        leg=BrokerOrderLeg(symbol="SPY", side="buy", quantity=1),
+        decision_receipt=AtomicDecisionReceipt(
+            outcome="enter_intent",
+            symbol="SPY",
+            decision_id=f"evaluation-{minute}",
+            observed_at_ms=9_000_000_000_000 + minute,
+            facts_json=canonicalize(
+                {"bar_ref": f"SPY@{minute}", "decision_bar_close_ms": _close_ms(minute)}
+            ),
+        ),
     )
 
 
@@ -392,6 +422,7 @@ def _refusal(receipts: SqliteDecisionReceipts, minute: int, *, run: str) -> None
 
 @pytest.mark.usefixtures("short_window")
 def test_the_entry_still_held_where_the_window_starts_is_read_past_the_refusals_since(
+    repository: ClerkSqliteRepository,
     receipts: SqliteDecisionReceipts,
 ) -> None:
     """An ENTER receipt is protected, so it is still stored once the window
@@ -399,7 +430,7 @@ def test_the_entry_still_held_where_the_window_starts_is_read_past_the_refusals_
     oldest decision and nothing closed the position in between: it is still
     open there, and the refusals written since do not hide it."""
     _receipt_bucket(receipts, 0, run_id="run-1")
-    _enter(receipts, 1, run="run-1")
+    _enter(repository, 1, run="run-1")
     _refusal(receipts, 2, run="run-1")
     for minute in (3, 4, 5):
         _receipt_bucket(receipts, minute, run_id="run-1")
@@ -414,12 +445,13 @@ def test_the_entry_still_held_where_the_window_starts_is_read_past_the_refusals_
 
 @pytest.mark.usefixtures("short_window")
 def test_no_entry_is_held_into_the_window_once_its_position_was_closed(
+    repository: ClerkSqliteRepository,
     receipts: SqliteDecisionReceipts,
 ) -> None:
     """Only the last decision the position moved on says what it was at the
     window's start. After an EXIT that is flat: replaying the older ENTER
     there would hold a position the run had already closed."""
-    _enter(receipts, 0, run="run-1")
+    _enter(repository, 0, run="run-1")
     _receipt_bucket(
         receipts, 1, outcome="exit_intent", run_id="spy-bot:run-1", retention_class="protected_effect"
     )
@@ -433,11 +465,12 @@ def test_no_entry_is_held_into_the_window_once_its_position_was_closed(
 
 @pytest.mark.usefixtures("short_window")
 def test_no_entry_is_held_into_a_window_that_another_run_starts(
+    repository: ClerkSqliteRepository,
     receipts: SqliteDecisionReceipts,
 ) -> None:
     """A run starts flat. An ENTER the run before it was stopped holding is
     not the later run's position, however recently it was made."""
-    _enter(receipts, 0, run="run-1")
+    _enter(repository, 0, run="run-1")
     for minute in (1, 2, 3):
         _receipt_bucket(receipts, minute, run_id="run-2")
 
@@ -448,13 +481,15 @@ def test_no_entry_is_held_into_a_window_that_another_run_starts(
 
 @pytest.mark.usefixtures("short_window")
 def test_an_entry_held_through_more_refusals_than_the_read_reaches_is_not_found_and_says_so(
-    receipts: SqliteDecisionReceipts, caplog: pytest.LogCaptureFixture
+    repository: ClerkSqliteRepository,
+    receipts: SqliteDecisionReceipts,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The read of rows older than the window is bounded. When it ends
     without reaching any ENTER or EXIT, the position at the window's start is
     unknown: nothing is replayed as held, and the log says the read fell
     short rather than leaving a Resume to look flat for no stated reason."""
-    _enter(receipts, 0, run="run-1")
+    _enter(repository, 0, run="run-1")
     for minute in (1, 2, 3):
         _refusal(receipts, minute, run="run-1")
     for minute in (4, 5, 6):
@@ -472,6 +507,121 @@ def test_an_entry_held_through_more_refusals_than_the_read_reaches_is_not_found_
         if getattr(record, "action", None) == "decision_receipt_held_entry_unknown"
     ]
     assert (record.first_read_seq, record.first_retained_seq) == (2, 5)
+
+
+@pytest.mark.usefixtures("short_window")
+def test_an_entry_that_names_no_effect_on_record_is_not_held_and_says_so(
+    receipts: SqliteDecisionReceipts, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An ENTER receipt is written when the ENTER is accepted; whether a
+    position followed is on its effect. A receipt that names no effect on
+    record shows no position: nothing is replayed as held, and the log says
+    which row could not be read rather than leaving a Resume flat for no
+    stated reason."""
+    _receipt_bucket(
+        receipts,
+        0,
+        outcome="enter_intent",
+        run_id="spy-bot:run-1",
+        retention_class="protected_effect",
+    )
+    for minute in (1, 2, 3):
+        _receipt_bucket(receipts, minute, run_id="run-1")
+
+    window = receipts.retained_window()
+    assert [receipt.seq for receipt in window] == [2, 3, 4]
+    with caplog.at_level(logging.WARNING, logger=decision_receipts_module.__name__):
+        held = receipts.entry_held_into(window)
+
+    assert held is None
+    [record] = [
+        record
+        for record in caplog.records
+        if getattr(record, "action", None) == "decision_receipt_held_entry_effect_unknown"
+    ]
+    assert (record.strategy_instance_id, record.entry_seq, record.effect_operation_id) == (
+        "spy-bot",
+        1,
+        None,
+    )
+
+
+class _RefusingBroker(_SqliteRuntimeBroker):
+    """A broker that refuses every order it is sent."""
+
+    async def submit(self, leg: BrokerOrderLeg, *, client_order_id: str) -> BrokerOrder:
+        raise BrokerRequestInvalid("the broker refused this order", broker="alpaca")
+
+
+@pytest.mark.usefixtures("short_window", "wall_clock_in_session")
+@pytest.mark.parametrize("refused", [False, True])
+async def test_the_real_clerks_enter_is_held_into_the_window_unless_the_broker_refused_it(
+    tmp_path: Path, refused: bool
+) -> None:
+    """The real Clerk writes the ENTER's receipt when it accepts it, before it
+    reaches for the broker, and never amends it. When the broker then refuses
+    the order the Clerk answers the runner as for a refusal, and the
+    strategy stays flat -- but the receipt stored past the window reads
+    ``enter_intent`` either way. Only the effect it names says which
+    happened, and that is what decides whether the ENTER is held (#2859)."""
+    repo = ClerkSqliteRepository.initialize(account_id="PA-TEST", artifacts_root=tmp_path)
+    broker = _RefusingBroker() if refused else _SqliteRuntimeBroker()
+    clerk = SqliteAlpacaClerkFacade(repo=repo, read=broker, trade=broker, account_mode="paper")
+    binding = BrokerBotBinding(
+        exit_terms=DEPLOY_EXIT_TERMS,
+        strategy_instance_id="spy-bot",
+        strategy_key="deployment_validation",
+        broker="alpaca",
+        symbol="SPY",
+        use_rth=True,
+        mode="trade",
+        quantity=1,
+        carryover_policy="FORBID",
+        sealed_account_id="PA-TEST",
+        action_plan=alpaca_v1_action_plan("SPY"),
+        run_id="run-1",
+        created_at_ms=1,
+    )
+    await clerk.register_strategy_run(binding)
+    receipts = SqliteDecisionReceipts(repo, strategy_instance_id="spy-bot")
+    evaluation_id = "a" * 64
+
+    answer = await clerk.execute_for_instance(
+        strategy_instance_id="spy-bot",
+        run_id="run-1",
+        decision_id=evaluation_id,
+        purpose=EffectPurpose.ENTER,
+        action_plan=binding.action_plan,
+        quantity=binding.quantity,
+        decision_evidence=EffectDecisionEvidence(
+            evaluation_id=evaluation_id,
+            bar_ref="decision-bar:test:SPY:0",
+            symbol="SPY",
+            outcome="enter_intent",
+            observed_at_ms=9_000_000_000_000,
+            decision_bar_close_ms=_close_ms(0),
+        ),
+    )
+    for minute in (1, 2, 3):
+        _receipt_bucket(receipts, minute, run_id="run-1")
+
+    window = receipts.retained_window()
+    assert [receipt.seq for receipt in window] == [2, 3, 4]
+    [entry] = repo.decision_receipt_tail(
+        strategy_instance_id="spy-bot", limit=_SHORT_WINDOW, before_seq=window[0].seq
+    )
+    assert (entry.outcome, entry.intent_id) == ("enter_intent", evaluation_id)
+    effect = repo.effect_operation(json.loads(entry.facts_json)["effect_operation_id"])
+    assert effect is not None
+    if refused:
+        assert answer.state is EffectOperationState.REJECTED
+        assert effect.state == "failed"
+        assert receipts.entry_held_into(window) is None
+    else:
+        assert answer.state is EffectOperationState.SUBMITTED
+        assert effect.state == "in_progress"
+        assert receipts.entry_held_into(window) == entry
+    repo.close()
 
 
 def test_receipts_do_not_advance_custody_transition_or_control_revision(
