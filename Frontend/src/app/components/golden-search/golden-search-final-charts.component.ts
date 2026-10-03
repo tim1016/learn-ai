@@ -46,6 +46,9 @@ const CHECK_ICONS: Readonly<Record<ExamCheck['status'], string>> = { pass: 'pi-c
           <button type="button" class="link" (click)="runs.reload()">Try again</button>
         </div>
       } @else if (comparison(); as spec) {
+        @if (missing(); as names) {
+          <p class="missing" data-span="12" role="status">No final-test run is recorded for {{ names }}, so these charts show the other run only.</p>
+        }
         <app-golden-search-panel chart="final-comparison" data-span="6">
           <app-golden-search-chart [spec]="spec" [height]="height()" />
           <p caption class="caption">Each measure on its own scale; annual rates over each window's own trading years.</p>
@@ -73,6 +76,7 @@ const CHECK_ICONS: Readonly<Record<ExamCheck['status'], string>> = { pass: 'pi-c
     :host { display: block; min-width: 0; }
     p { margin: 0; }
     .muted, .caption { color: var(--text-secondary); font-size: var(--fs-xs); }
+    .missing { color: var(--warn); font-size: var(--fs-sm); }
     .checks { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); }
     .checks li { display: flex; gap: var(--space-2); align-items: baseline; }
     .checks li[data-status='pass'] i { color: var(--bull); }
@@ -113,8 +117,14 @@ export class GoldenSearchFinalChartsComponent {
     return this.runs.value().flatMap(({ key, detail }) =>
       detail.exam === null
         ? []
-        : [{ key, label: key === 'incumbent' ? 'Current settings' : this.candidateLabel(), comparison: detail.exam.comparison ?? [], returns: detail.exam.cumulative_return, falls: detail.exam.drawdown, monthly: detail.exam.monthly }],
+        : [{ key, label: this.labelOf(key), comparison: detail.exam.comparison ?? [], returns: detail.exam.cumulative_return, falls: detail.exam.drawdown, monthly: detail.exam.monthly }],
     );
+  });
+  /** The run of the pair whose final-test record is missing, by name; null when both are recorded. */
+  protected readonly missing = computed(() => {
+    if (!this.runs.hasValue()) return null;
+    const names = this.runs.value().filter(({ detail }) => detail.exam === null).map(({ key }) => this.labelOf(key));
+    return names.length === 0 ? null : names.join(' and ');
   });
   protected readonly comparison = computed(() => {
     const runs = this.finalRuns();
@@ -129,4 +139,8 @@ export class GoldenSearchFinalChartsComponent {
     return runs === null || runs.every((run) => run.monthly.length === 0) ? null : finalMonthsSpec(runs);
   }, { equal: sameChart });
   protected readonly height = computed(() => comparisonHeight(this.finalRuns()?.[0]?.comparison.length ?? 0));
+
+  private labelOf(key: CandidateKey): string {
+    return key === 'incumbent' ? 'Current settings' : this.candidateLabel();
+  }
 }
