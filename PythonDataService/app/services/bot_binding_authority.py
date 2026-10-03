@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -39,11 +40,17 @@ from app.broker.alpaca.clerk.active_authority import (
 from app.broker.alpaca.clerk.active_runtime import DEFAULT_EXECUTION_LEASE_WAIT_TIMEOUT_S
 from app.broker.alpaca.clerk.models import ReconciliationCut
 from app.broker.alpaca.clerk.shadow_authority import open_graduated_shadow_store
+from app.broker.alpaca.clerk.shadow_broker import ShadowBookUnreadable, open_book_orders
 from app.broker.alpaca.clerk.sqlite.budget_authority import authority_review_token, commit_budget_authority_cutover
 from app.broker.alpaca.clerk.sqlite.commands import submit_stop_run
-from app.broker.alpaca.clerk.sqlite.repository import ClerkSqliteRepository, ExecutionLeaseHeld
+from app.broker.alpaca.clerk.sqlite.recorded_custody import RecordedCustody, read_recorded_custody
+from app.broker.alpaca.clerk.sqlite.repository import (
+    ClerkSqliteError,
+    ClerkSqliteRepository,
+    ExecutionLeaseHeld,
+)
 from app.broker.alpaca.clerk.sqlite.run_ownership import RUNNER_GONE_REASON
-from app.broker.alpaca.clerk.synthetic_activation import SyntheticActivationStore
+from app.broker.alpaca.clerk.synthetic_activation import IsolatedActivationInvalid, SyntheticActivationStore
 from app.broker.alpaca.clerk.synthetic_broker import SyntheticBroker
 from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo
 from app.schemas.account_authority import CustodyWorld
@@ -557,6 +564,17 @@ class UnboundDryRunAuthority:
         await self._account.ensure_operating(lease_wait_s=lease_wait_s)
 
 
+class RehearsalRecordsUnavailable(Exception):
+    """A graduated ``shadow:`` store could not be opened, leased or read, so it proves nothing (#2694)."""
+
+
+#: What keeps a sealed store's records from being read: its lease is held or
+#: its file fails a startup check (``ClerkSqliteError``), its activation
+#: record is missing or names another store, its order book cannot be parsed,
+#: or the files themselves fail.
+_RECORDS_UNREADABLE = (ClerkSqliteError, IsolatedActivationInvalid, ShadowBookUnreadable, sqlite3.Error, OSError)
+
+
 @dataclass(frozen=True)
 class SealedShadowBindingAuthority:
     """A binding sealed on a graduated live account's ``shadow:`` store (#2589).
@@ -564,16 +582,21 @@ class SealedShadowBindingAuthority:
     The bots that rehearsed on the shadow authority stay sealed on it after
     their live account graduates, while the installed authority custodies the
     live account itself: no sweep reads their store again, and Start refuses
-    them ``SEALED_ACCOUNT_MISMATCH``. This authority offers the one thing such
-    a bot still needs -- settling a dead run's duty record through its own
-    store, never through the installed authority (ADR 0050's posture). It
-    admits, trades and proves custody for nothing.
+    them ``SEALED_ACCOUNT_MISMATCH``. This authority offers the two things
+    such a bot still needs, both through its own store and never through the
+    installed authority (ADR 0050's posture): settling a dead run's duty
+    record, and clearing the bot on what that store's records show it holds
+    (#2694). It admits and trades nothing.
     """
 
     binding: BrokerBotBinding
     account_id: str
     artifacts_root: Path
     lifecycle_repo_for: Callable[[str], BotLifecycleStateRepo]
+    #: One opening of the store at a time in this process: the store's lease
+    #: is taken in a single attempt, so a settle and a Clear of two bots
+    #: sealed on it would otherwise refuse each other.
+    access: asyncio.Lock
 
     @asynccontextmanager
     async def lifecycle_for_settle(self) -> AsyncIterator[AlpacaLifecycleProjector]:
@@ -586,9 +609,7 @@ class SealedShadowBindingAuthority:
         on the installed account. The projector keeps the identity guard.
         """
         sid = self.binding.strategy_instance_id
-        async with open_graduated_shadow_store(
-            account_id=self.account_id, artifacts_root=self.artifacts_root
-        ) as repository:
+        async with self._opened() as repository:
             run = repository.active_run(sid)
             if run is not None:
                 submit_stop_run(
@@ -599,12 +620,53 @@ class SealedShadowBindingAuthority:
                     operator_reason=RUNNER_GONE_REASON,
                     clock=repository.clock,
                 )
-            identity = AlpacaBotIdentityGuard(self.artifacts_root)
-            yield AlpacaLifecycleProjector(
-                authority=SqliteAlpacaLifecycleAuthority(repository),
-                lifecycle_repo_for=self.lifecycle_repo_for,
-                require_alpaca_identity=lambda instance, claim: identity.require(instance, sqlite_claim=claim),
-            )
+            yield self._projector(repository)
+
+    @asynccontextmanager
+    async def custody_for_clear(self) -> AsyncIterator[tuple[RecordedCustody, AlpacaLifecycleProjector]]:
+        """What this bot holds by the sealed store's own records, and the projector that retires it there (#2694).
+
+        One opening, so one execution lease covers the proof and the
+        retirement it permits. Nothing is stopped here: a run the store still
+        holds ACTIVE is a holding, and the settle above is what closes one.
+        Whatever keeps the records from being opened and read raises
+        ``RehearsalRecordsUnavailable`` before the caller's block runs.
+        """
+        sid = self.binding.strategy_instance_id
+        async with AsyncExitStack() as stack:
+            try:
+                repository = await stack.enter_async_context(self._opened())
+                custody = read_recorded_custody(
+                    repository,
+                    sid,
+                    open_book_orders=len(
+                        open_book_orders(
+                            artifacts_root=self.artifacts_root,
+                            account_id=self.account_id,
+                            strategy_instance_id=sid,
+                        )
+                    ),
+                )
+            except _RECORDS_UNREADABLE as exc:
+                raise RehearsalRecordsUnavailable(f"{type(exc).__name__}: {exc}") from exc
+            yield custody, self._projector(repository)
+
+    @asynccontextmanager
+    async def _opened(self) -> AsyncIterator[ClerkSqliteRepository]:
+        """The sealed store under its execution lease, one caller of this process at a time."""
+        async with (
+            self.access,
+            open_graduated_shadow_store(account_id=self.account_id, artifacts_root=self.artifacts_root) as repository,
+        ):
+            yield repository
+
+    def _projector(self, repository: ClerkSqliteRepository) -> AlpacaLifecycleProjector:
+        identity = AlpacaBotIdentityGuard(self.artifacts_root)
+        return AlpacaLifecycleProjector(
+            authority=SqliteAlpacaLifecycleAuthority(repository),
+            lifecycle_repo_for=self.lifecycle_repo_for,
+            require_alpaca_identity=lambda instance, claim: identity.require(instance, sqlite_claim=claim),
+        )
 
 
 @dataclass
@@ -618,6 +680,8 @@ class BindingAuthoritySelector:
     runtime_in_use: Callable[[str], bool]
     synthetic_brokers: dict[str, SyntheticBroker] = field(default_factory=dict)
     synthetic_runtime_access: dict[str, SyntheticRuntimeAccess] = field(default_factory=dict)
+    #: One lock per graduated ``shadow:`` store (``SealedShadowBindingAuthority.access``).
+    sealed_shadow_access: dict[str, asyncio.Lock] = field(default_factory=dict)
     clock: Clock = now_ms_utc
 
     def for_binding(self, binding: BrokerBotBinding) -> BindingAuthority:
@@ -652,13 +716,22 @@ class BindingAuthoritySelector:
         """
         if foreign_account_id is None:
             return self.for_binding(binding)
-        if not is_shadow_account_id(foreign_account_id):
+        return self.sealed_shadow(binding, account_id=foreign_account_id)
+
+    def sealed_shadow(self, binding: BrokerBotBinding, *, account_id: str) -> SealedShadowBindingAuthority | None:
+        """The authority of a binding sealed on ``account_id``, a store the installed authority does not custody.
+
+        ``None`` unless that store is a ``shadow:`` one: no other account this
+        lane does not hold keeps records it can read.
+        """
+        if not is_shadow_account_id(account_id):
             return None
         return SealedShadowBindingAuthority(
             binding=binding,
-            account_id=foreign_account_id,
+            account_id=account_id,
             artifacts_root=self.artifacts_root,
             lifecycle_repo_for=self.lifecycle_repo_for,
+            access=self.sealed_shadow_access.setdefault(account_id, asyncio.Lock()),
         )
 
     def for_unbound_dry_run(self, strategy_instance_id: str) -> UnboundDryRunAuthority | None:
@@ -728,6 +801,7 @@ __all__ = [
     "BindingAuthority",
     "BindingAuthoritySelector",
     "PrimaryAccountBindingAuthority",
+    "RehearsalRecordsUnavailable",
     "SealedShadowBindingAuthority",
     "SyntheticBindingAuthority",
     "UnboundDryRunAuthority",

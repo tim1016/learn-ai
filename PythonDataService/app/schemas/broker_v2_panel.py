@@ -212,6 +212,10 @@ class BotCatalogView(BaseModel):
     # A Dry Run's simulated starting cash (its consent amount); never the
     # account's money.
     simulated_cash_usd: str | None = None
+    # Why the bot's own page cannot open; ``None`` when it can. A bot that
+    # rehearsed in a live account's Shadow world has no page once the account
+    # is live (#2694): Home lists it by name, never as a link.
+    page_unavailable_reason: str | None = None
 
     @model_validator(mode="after")
     def carries_its_group_facts(self) -> BotCatalogView:

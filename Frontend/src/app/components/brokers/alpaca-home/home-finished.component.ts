@@ -21,6 +21,10 @@ import { HomeClearOutcomeComponent } from './home-clear-outcome.component';
  * (Python-authored, or "unknown" when the fee evidence cannot vouch for it —
  * never $0) and Deploy again. Folded by default.
  *
+ * A bot that rehearsed in a live account's Shadow world has no page once the
+ * account is live (#2694): it is listed by name with the backend's reason,
+ * never as a link, and offers no Deploy again. It is cleared like any other.
+ *
  * The owner clears them from here and only here (owner decision 2026-09-28):
  * tick bots, or clear them all, behind one plain confirmation. The fold owns
  * the selection and the confirmation; Home sends the clear, fenced to the lane
@@ -55,6 +59,8 @@ export class HomeFinishedComponent {
     this.bots().map((bot) => ({
       bot,
       dryRun: bot.mode === 'dry_run',
+      /** Why the bot has no page to open, in the backend's words; `null` when it has one. */
+      noPage: bot.page_unavailable_reason ?? null,
       page: accountWorkspaceBotRoute(this.account(), bot.strategy_instance_id).commands,
       again: accountWorkspaceDeployAgainRoute(this.account(), bot.strategy_instance_id),
       againLabel: `Deploy again from ${bot.strategy_instance_id}`,

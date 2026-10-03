@@ -4142,6 +4142,17 @@
             ],
             "title": "Open Pnl"
           },
+          "page_unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Unavailable Reason"
+          },
           "phase": {
             "enum": [
               "OFF_DUTY",

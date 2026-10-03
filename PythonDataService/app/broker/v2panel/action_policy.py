@@ -57,9 +57,25 @@ ArchiveBlockedCause = Literal[
     "BOT_STILL_RUNNING",
     "ARCHIVE_SEALED_ACCOUNT_CUSTODY",
     "BOT_DUTY_NOT_SETTLED",
+    "ARCHIVE_REHEARSAL_RECORDS_UNAVAILABLE",
+    "ARCHIVE_REHEARSAL_STILL_HOLDS",
     "ARCHIVE_CUSTODY_UNPROVABLE",
     "ARCHIVE_WOULD_STRAND_CUSTODY",
 ]
+
+
+@dataclass(frozen=True)
+class RehearsalRecords:
+    """What a graduated Shadow store's own records say a bot sealed on it holds (#2694).
+
+    ``readable=False`` is a store that could not be opened, leased or read:
+    it proves nothing. ``held`` names what the records show the bot still
+    holds, in words a refusal can say; ``None`` is the proof that it holds
+    nothing.
+    """
+
+    readable: bool
+    held: str | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +93,8 @@ class ArchiveVerdict:
     eligible: bool
     cause: ArchiveBlockedCause | None = None
     already_retired: bool = False
+    #: What ``ARCHIVE_REHEARSAL_STILL_HOLDS`` names: the holdings its records show.
+    held: str | None = None
 
 
 def evaluate_archive(
@@ -88,6 +106,7 @@ def evaluate_archive(
     working_order_count: int,
     outstanding_effect_count: int,
     custody_provable: bool,
+    rehearsal: RehearsalRecords | None = None,
 ) -> ArchiveVerdict:
     """Decide archive eligibility, nearest obstacle first (ADR 0052).
 
@@ -110,10 +129,18 @@ def evaluate_archive(
     writes it states there is no active run; this is what makes that true.
 
     ``custody_account_foreign`` is a registration sealed on an account the
-    installed Clerk does not custody -- a live account's shadow rehearsal
-    after graduation (#2589). Nothing here can prove it holds nothing, and no
-    wait changes that, so it is refused before its duty settles: a
-    not-yet-settled refusal would promise a clear that never comes.
+    installed Clerk does not custody (#2589). With no ``rehearsal`` nothing
+    can prove it holds nothing, and no wait changes that, so it is refused
+    before its duty settles: a not-yet-settled refusal would promise a clear
+    that never comes.
+
+    ``rehearsal`` is that proof for the one such account that keeps one: a
+    live account's Shadow store after graduation (#2694). No broker stands
+    behind it and nothing reconciles it again, so its own records are the last
+    word, and they stand in for the installed custody facts below. Its duty is
+    settled through the same store (#2589), so the not-yet-settled promise
+    holds for it. Records that could not be read prove nothing; records that
+    show a holding refuse and name it.
 
     ``outstanding_effect_count`` is bot-scoped and asymmetric by design: the
     commit-time caller reads it from a freshly reconciled custody snapshot,
@@ -128,16 +155,37 @@ def evaluate_archive(
         return ArchiveVerdict(eligible=False, already_retired=True)
     if running:
         return ArchiveVerdict(eligible=False, cause="BOT_STILL_RUNNING")
-    if custody_account_foreign:
+    if custody_account_foreign and rehearsal is None:
         return ArchiveVerdict(eligible=False, cause="ARCHIVE_SEALED_ACCOUNT_CUSTODY")
     if phase != "OFF_DUTY":
         return ArchiveVerdict(eligible=False, cause="BOT_DUTY_NOT_SETTLED")
+    if rehearsal is not None:
+        if not rehearsal.readable:
+            return ArchiveVerdict(eligible=False, cause="ARCHIVE_REHEARSAL_RECORDS_UNAVAILABLE")
+        if rehearsal.held is not None:
+            return ArchiveVerdict(eligible=False, cause="ARCHIVE_REHEARSAL_STILL_HOLDS", held=rehearsal.held)
+        return ArchiveVerdict(eligible=True)
     if not custody_provable:
         return ArchiveVerdict(eligible=False, cause="ARCHIVE_CUSTODY_UNPROVABLE")
     if has_exposure or working_order_count or outstanding_effect_count:
         return ArchiveVerdict(eligible=False, cause="ARCHIVE_WOULD_STRAND_CUSTODY")
     return ArchiveVerdict(eligible=True)
 
+
+#: The two rehearsal refusals (#2694), worded once for the page's blocker and
+#: the commit's refusal alike. ``{held}`` is the verdict's ``held``.
+REHEARSAL_RECORDS_UNAVAILABLE_COPY = (
+    "This bot's Shadow records could not be read.",
+    "It rehearsed in the account's Shadow world, and a bot is cleared only "
+    "when its records show it holds nothing. They could not be opened and "
+    "read just now, so nothing was changed.",
+)
+REHEARSAL_STILL_HOLDS_COPY = (
+    "This bot's Shadow records still show {held}.",
+    "It rehearsed in the account's Shadow world, and a bot is cleared only "
+    "when its records show it holds nothing. Nothing trades or settles in "
+    "that world now that the account is live, so the bot stays in History.",
+)
 
 _ARCHIVE_BLOCKER_COPY: dict[ArchiveBlockedCause, tuple[str, str]] = {
     "BOT_STILL_RUNNING": (
@@ -156,6 +204,8 @@ _ARCHIVE_BLOCKER_COPY: dict[ArchiveBlockedCause, tuple[str, str]] = {
         "shortly, usually within a minute; then you can clear the bot. A Dry "
         "Run's is recorded when the service next starts.",
     ),
+    "ARCHIVE_REHEARSAL_RECORDS_UNAVAILABLE": REHEARSAL_RECORDS_UNAVAILABLE_COPY,
+    "ARCHIVE_REHEARSAL_STILL_HOLDS": REHEARSAL_STILL_HOLDS_COPY,
     "ARCHIVE_CUSTODY_UNPROVABLE": (
         "This account cannot prove the bot is flat.",
         "A bot is cleared only on proof that it holds nothing. Choose Reconcile "
@@ -178,20 +228,24 @@ def archive_action(
     account_id: str,
     strategy_instance_id: str,
     revision: int,
+    custody_account_foreign: bool = False,
+    rehearsal: RehearsalRecords | None = None,
 ) -> PanelAction:
     """Present the shared archive rule on one bot's page (ADR 0052).
 
     ``exposure`` is the bot's attributed net exposure per symbol; any nonzero
     quantity blocks archive while the bot still holds a position.
+
+    A page is built from the installed Clerk's custody record, which a bot
+    sealed on another account does not have -- its page is not found (#2589).
+    Only a Clear request presents one for such a bot, from the runner's own
+    duty record (``custody_account_foreign``, ``rehearsal``; #2694).
     """
     has_exposure = any(abs(qty) > 0 for qty in exposure.values())
     verdict = evaluate_archive(
         running=running,
         phase=phase,
-        # A page is built from the installed Clerk's custody record, which a
-        # bot sealed on another account does not have -- its page is not
-        # found -- so a presented archive is never for one (#2589).
-        custody_account_foreign=False,
+        custody_account_foreign=custody_account_foreign,
         has_exposure=has_exposure,
         working_order_count=working_order_count,
         # The panel has no bot-scoped effect count; the commit does, and it is
@@ -199,6 +253,7 @@ def archive_action(
         # safe here and is the action's existing contract, not a gap in it.
         outstanding_effect_count=0,
         custody_provable=not freeze_active,
+        rehearsal=rehearsal,
     )
     copy = copy_for("archive")
     return PanelAction(
@@ -249,7 +304,7 @@ def _archive_blockers(verdict: ArchiveVerdict, *, strategy_instance_id: str) -> 
         _blocker(
             verdict.cause,
             scope="account" if verdict.cause == "ARCHIVE_CUSTODY_UNPROVABLE" else "bot",
-            headline=headline,
+            headline=headline.format(held=verdict.held),
             detail=detail,
             evidence=evidence,
         )

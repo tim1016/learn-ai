@@ -23,6 +23,7 @@ from typing import Literal, NoReturn
 from app.broker.alpaca.clerk.account_authority import (
     account_route_matches_custody,
     evidence_account_id_for,
+    is_shadow_account_id,
     synthetic_account_id_for_strategy,
 )
 from app.broker.alpaca.clerk.active_authority import (
@@ -41,6 +42,7 @@ from app.broker.alpaca.clerk.sqlite.repository import (
 )
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker.ibkr.config import live_artifacts_root
+from app.broker.v2panel.action_policy import RehearsalRecords, archive_action
 from app.engine.live.identity import INSTANCE_ID_PATTERN
 from app.schemas.broker_bots import (
     BotRunView,
@@ -52,6 +54,7 @@ from app.schemas.broker_v2_panel import (
     ChartHistoryResponse,
     ChartHistoryTimeframe,
     ChartLiveResponse,
+    PanelAction,
     PanelActionRequest,
     PanelActionResult,
 )
@@ -74,6 +77,7 @@ from app.services.broker_v2_panel.action_execution_service import (
     REVIVAL_OUTCOME_TRANSIENT_STORE_ERROR,
     REVIVAL_REMEDY_TRANSIENT_STORE_ERROR,
     ActionNotAvailableError,
+    ActionOutcomeUnknownError,
     ActionPerformer,
     AuthorityPoisonedError,
     DryRunAuthorityLeaseLostError,
@@ -105,6 +109,7 @@ from app.services.broker_v2_panel.panel_scope import (
     clerk_status,
     validate_account,
 )
+from app.services.broker_v2_panel.rehearsal_roster import finished_rehearsal_rows
 from app.services.broker_v2_panel.sqlite_panel_adapter import (
     adapt_sqlite_panel,
     exit_in_progress,
@@ -337,8 +342,14 @@ def read_run_ledger[T](
         return None
 
 
-async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
-    """Build the bots-list catalog for one account."""
+async def get_catalog(broker: str, account_id: str, *, home: bool = False) -> list[BotCatalogView]:
+    """Build the bots-list catalog for one account.
+
+    ``home`` adds what only the account's Home lists: each finished bot of
+    its graduated Shadow rehearsal (#2694). Such a bot has no page, so no
+    other reader of the roster -- the cohort flatten, the Wall's feed -- is
+    handed one.
+    """
     resolved = await validate_account(broker, account_id)
     try:
         sqlite_catalog = await read_sqlite_catalog(
@@ -358,7 +369,8 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
     if registry is None:
         return sqlite_catalog
     synthetic_rows: list[BotCatalogView] = []
-    for binding in registry.bindings_for_broker(broker):
+    bindings = registry.bindings_for_broker(broker)
+    for binding in bindings:
         if binding.mode != "dry_run":
             continue
         # A cleared Dry Run leaves Home and this poll: its sealed simulator is
@@ -415,7 +427,13 @@ async def get_catalog(broker: str, account_id: str) -> list[BotCatalogView]:
             for row in rows
             if row.strategy_instance_id == binding.strategy_instance_id
         )
-    return [*sqlite_catalog, *synthetic_rows]
+    facade = active_sqlite_facade(broker)
+    rehearsal_rows = (
+        await finished_rehearsal_rows(broker, facade, registry, bindings)
+        if home and facade is not None
+        else []
+    )
+    return [*sqlite_catalog, *synthetic_rows, *rehearsal_rows]
 
 
 async def _get_panel_with_entries_from_authority(
@@ -960,6 +978,135 @@ def _log_authority_unavailable(
     )
 
 
+#: A command sent for a bot sealed on an account the installed Clerk does not
+#: custody, other than Clear: the Clerk here holds nothing of the bot's to act on.
+BOT_SEALED_ON_ANOTHER_ACCOUNT = "BOT_SEALED_ON_ANOTHER_ACCOUNT"
+
+
+def _sealed_account_archive(registry: BotTaskRegistry, broker: str, sid: str) -> PanelAction | None:
+    """Clear, as presented for a bot sealed on an account the installed Clerk does not custody (#2694).
+
+    ``None`` for every other bot the runner has bound to ``broker``. Such a
+    bot has no custody record here, so no page is built for it and its panel
+    read answers "no custody record". Its Clear is presented from the
+    runner's own duty record instead. What the bot holds is the commit's to
+    prove, from the store it is sealed on (``BotTaskRegistry.archive``) --
+    the asymmetry every presented Clear has (``evaluate_archive``): only a
+    ``shadow:`` store keeps records to read.
+    """
+    foreign = registry.foreign_binding(sid)
+    if foreign is None:
+        return None
+    status = registry.status(broker, sid)
+    return archive_action(
+        running=status.running,
+        phase=status.phase,
+        freeze_active=False,
+        exposure={},
+        working_order_count=0,
+        account_id=foreign.sealed_account_id,
+        strategy_instance_id=sid,
+        revision=0,
+        custody_account_foreign=True,
+        rehearsal=(
+            RehearsalRecords(readable=True) if is_shadow_account_id(foreign.sealed_account_id) else None
+        ),
+    )
+
+
+async def presented_archive(broker: str, account_id: str, sid: str) -> PanelAction | None:
+    """The bot's Clear as it is presented now; ``None`` when nothing presents one.
+
+    A bot's page presents it, and a bot sealed on another account has no
+    page (``_sealed_account_archive``). ``account_id`` is the route's,
+    already resolved by the caller. A bot the runner has not bound to
+    ``broker`` is the panel read's to refuse, in the runner's own words.
+    """
+    registry = get_bot_task_registry()
+    if registry is not None and _is_bound(registry, broker, sid):
+        sealed = _sealed_account_archive(registry, broker, sid)
+        if sealed is not None:
+            return sealed
+    panel = await get_panel(broker, account_id, sid)
+    return next((candidate for candidate in panel.actions if candidate.action_id == "archive"), None)
+
+
+def _is_bound(registry: BotTaskRegistry, broker: str, sid: str) -> bool:
+    try:
+        registry.binding_for_control(broker, sid)
+    except (RunnerUnknownBotError, InvalidStrategyInstanceIdError):
+        return False
+    return True
+
+
+def _availability_error(action: PanelAction) -> ActionNotAvailableError | None:
+    """The refusal a presented-but-disabled action answers with; ``None`` when it is enabled.
+
+    The refusal is the guard's own: its headline, its why and its condition
+    code, so a batch leg reports the reason its bot gave.
+    """
+    if action.enabled:
+        return None
+    blocker = action.blockers[0] if action.blockers else None
+    if blocker is None:
+        return ActionNotAvailableError(
+            f"The '{action.label}' action is blocked by the current panel state.",
+            detail="Refresh the panel and inspect the operation's readiness check.",
+        )
+    return ActionNotAvailableError(blocker.headline, detail=blocker.detail, reason_code=blocker.condition.id)
+
+
+async def _run_sealed_account_action(
+    broker: str,
+    sid: str,
+    request: PanelActionRequest,
+    archive: PanelAction,
+    *,
+    registry: BotTaskRegistry,
+    operator_identity: str,
+) -> PanelActionResult:
+    """Act on a bot sealed on an account the installed Clerk does not custody (#2694).
+
+    Clear is the one command such a bot is offered: it runs under the same
+    idempotency ledger and token as any Clear, and the runner proves and
+    retires the bot through the store it is sealed on, or refuses. Every
+    other command acts through the installed Clerk, which holds nothing of
+    this bot's.
+    """
+    if request.action_id != "archive":
+        raise ActionNotAvailableError(
+            "This bot's account is no longer managed here.",
+            detail=(
+                "It ran on another account, such as a live account's rehearsal before it went live, "
+                "so the Clerk here holds nothing of this bot's to act on."
+            ),
+            reason_code=BOT_SEALED_ON_ANOTHER_ACCOUNT,
+        )
+    try:
+        return await execute_action(
+            request,
+            sid=sid,
+            current_revision=archive.revision,
+            current_concurrency_token=archive.concurrency_token,
+            performers=_action_performers(broker, sid),
+            operator_identity=operator_identity,
+            store=durable_idempotency_store_for(registry.artifacts_root, sid),
+            availability_error=_availability_error(archive),
+        )
+    except RepositoryPoisoned as error:
+        # The sealed store's own fence, never the installed account's: the
+        # retirement may have committed there, so this bot's outcome is
+        # unknown, and no other bot's Clear is refused for it.
+        logger.error(
+            "A sealed store could not confirm a bot's retirement; its outcome is unknown",
+            extra={"action": "sealed_store_retirement_unconfirmed", "strategy_instance_id": sid, "error": str(error)},
+        )
+        raise ActionOutcomeUnknownError(
+            "The command did not return a terminal receipt.",
+            detail="This bot's own records could not confirm the clear. Look at its row in History before clearing it again.",
+        ) from error
+
+
 async def _run_action_under_live_authority(
     broker: str,
     account_id: str,
@@ -978,6 +1125,12 @@ async def _run_action_under_live_authority(
     a Dry Run recovers inside its simulator and never reaches Alpaca.
     """
     async with selected_panel_authority(broker, account_id, sid) as (resolved, registry, binding, facade):
+        sealed_archive = _sealed_account_archive(registry, broker, sid)
+        if sealed_archive is not None:
+            # No custody record here means no panel to build (#2694).
+            return await _run_sealed_account_action(
+                broker, sid, request, sealed_archive, registry=registry, operator_identity=operator_identity
+            )
         panel, _entries, _session_fills = await _get_panel_with_entries_from_authority(
             broker, account_id, sid, resolved=resolved, captured_now_ms=now_ms_utc(),
             registry=registry, binding=binding, facade=facade,
@@ -991,21 +1144,7 @@ async def _run_action_under_live_authority(
                 f"Action '{request.action_id}' is not available for bot '{sid}'.",
                 detail="Refresh the panel before retrying the command.",
             )
-        availability_error: ActionNotAvailableError | None = None
-        if not action.enabled:
-            # The refusal is the guard's own: its headline, its why and its
-            # condition code, so a batch leg reports the reason its bot gave.
-            blocker = action.blockers[0] if action.blockers else None
-            availability_error = (
-                ActionNotAvailableError(
-                    f"The '{action.label}' action is blocked by the current panel state.",
-                    detail="Refresh the panel and inspect the operation's readiness check.",
-                )
-                if blocker is None
-                else ActionNotAvailableError(
-                    blocker.headline, detail=blocker.detail, reason_code=blocker.condition.id
-                )
-            )
+        availability_error = _availability_error(action)
         try:
             sqlite_result = await execute_sqlite_panel_action(
                 broker,

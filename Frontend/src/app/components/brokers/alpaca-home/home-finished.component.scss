@@ -87,6 +87,16 @@
   font-family: var(--font-mono);
 }
 
+/* A bot with no page is named, not linked. */
+.home-finished__sid--no-page {
+  color: var(--text-primary);
+}
+
+.home-finished__no-page {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+}
+
 .home-finished__again {
   color: var(--accent-text);
   font-weight: var(--fw-semi);

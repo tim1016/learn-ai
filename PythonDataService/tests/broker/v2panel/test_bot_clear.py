@@ -259,7 +259,7 @@ async def test_an_unknown_bot_is_refused_and_never_aborts_its_siblings(lane: _La
     ]
     unknown = result.legs[1].error
     assert unknown is not None
-    assert (unknown.outcome, unknown.reason_code) == ("conflict", None)
+    assert (unknown.outcome, unknown.reason_code) == ("conflict", "CLEAR_BOT_NOT_FOUND")
     assert unknown.message == "No bot 'not-a-bot' is bound to broker 'alpaca'."
     assert [call[0] for call in lane.calls] == [_FINISHED, _DRY_RUN]
     assert (result.applied_count, result.refused_count) == (2, 1)
