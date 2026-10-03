@@ -1,12 +1,13 @@
 import type { HighlightTarget } from './golden-search-chart-spec';
 
 /** Every chart with a guide section; the id is that section's anchor in the Golden Search guide. */
-export type GoldenSearchChartId = 'equity-and-fall';
+export type GoldenSearchChartId = 'candidate-cards' | 'equity-and-fall' | 'side-by-side' | 'neighbor-tornado' | 'cost-stress';
 
 export interface WalkthroughStep {
-  /** Word for word the guide's "How to read it" step; the guide contract spec holds the two together. */
+  /** The guide's "How to read it" step, in the same words. */
   readonly text: string;
-  readonly target: HighlightTarget;
+  /** What the step lights up on the chart; null when it reads the panel as a whole. */
+  readonly target: HighlightTarget | null;
 }
 
 export interface ChartGuide {
@@ -18,6 +19,17 @@ export interface ChartGuide {
 }
 
 export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
+  'candidate-cards': {
+    title: 'Candidate cards',
+    question: 'Which settings are you comparing, and how did each do on the development data?',
+    steps: [
+      { text: 'Find the selected card. The rest of the page explains that candidate; pick another card to switch.', target: null },
+      { text: 'Read its settings line: the value of every knob the search chose.', target: null },
+      { text: 'Compare net return, Sharpe and worst fall across the cards. More return with a much deeper fall is not a clear win.', target: null },
+      { text: 'Check trades against the minimum. A card below its minimum rests on too few trades to judge.', target: null },
+      { text: 'Glance at the small line: the same development return as the equity chart, at a glance.', target: null },
+    ],
+  },
   'equity-and-fall': {
     title: 'Equity and fall from peak',
     question: 'How did each candidate grow over the development period, and how deep were its falls?',
@@ -30,6 +42,40 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
       },
       { text: 'Find the lowest point of each line in the lower part. That is its deepest fall at a session close.', target: { kind: 'point', group: 'fall', at: 'lowest' } },
       { text: 'Note how long each line stays below 0%. Long stretches below a high are hard to sit through.', target: { kind: 'series', group: 'fall' } },
+    ],
+  },
+  'side-by-side': {
+    title: 'Candidates side by side',
+    question: 'Which candidate leads on each measure?',
+    steps: [
+      { text: 'Find the selected candidate: its dots are the larger ones.', target: { kind: 'series', group: 'selected' } },
+      { text: 'Read one row at a time. Each measure has its own scale, and further right is better on every row.', target: null },
+      {
+        text: 'Compare the other dots on the same row. A dot well to the right of the selected one marks a measure where that candidate leads.',
+        target: { kind: 'series', group: 'other' },
+      },
+      { text: 'Weigh the rows together. A lead in return that comes with a deeper fall or fewer stress runs in profit is bought with risk.', target: null },
+    ],
+  },
+  'neighbor-tornado': {
+    title: 'Neighbor tornado',
+    question: 'Does the result hold when one setting moves one step?',
+    steps: [
+      { text: 'Start at the dashed line at 0: the candidate’s own net return. Each bar shows how far a one-step move changes it.', target: null },
+      { text: 'Read the lighter bars: each knob one step below the candidate’s value.', target: { kind: 'series', group: 'below' } },
+      { text: 'Read the darker bars: each knob one step above.', target: { kind: 'series', group: 'above' } },
+      { text: 'Look for a knob marked “loses money” and its red bar. A one-step change there turns the result into a loss.', target: null },
+      { text: 'Hover a knob to see each step’s value and net return, and why a step has no bar.', target: null },
+    ],
+  },
+  'cost-stress': {
+    title: 'Cost stress ladder',
+    question: 'Does the result survive harsher costs and fills?',
+    steps: [
+      { text: 'Start with the top bar: the result at the study’s own costs.', target: { kind: 'series', group: 'base' } },
+      { text: 'Each bar below reruns the same settings with one harsher cost or fill.', target: { kind: 'series', group: 'stress' } },
+      { text: 'Find the stressed bar with the lowest return. That stress is the one the result is most sensitive to.', target: { kind: 'point', group: 'stress', at: 'lowest' } },
+      { text: 'A bar left of 0% marks a stress that turns the result into a loss.', target: null },
     ],
   },
 };

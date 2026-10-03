@@ -266,7 +266,16 @@ def _candidate(key: str, point_hash: str, *, net: float | None = 1_000.0, drawdo
 
 def test_the_evidence_view_marks_duplicates_the_incumbent_and_ineligible_candidates() -> None:
     protocol = replace(protocol_from_request(plan_request("SPY")), policy=replace(protocol_from_request(plan_request("SPY")).policy, max_drawdown_ceiling=0.12))
-    losing = [{"knob": "gap", "one_sided": False, "rows": [{"value": 0.15, "status": "tested", "metrics": metrics(1.0, net=-5.0).as_dict(), "reason": None}]}]
+    losing = [
+        {
+            "knob": "gap",
+            "one_sided": True,
+            "rows": [
+                {"value": 0.15, "status": "tested", "metrics": metrics(1.0, net=-5.0).as_dict(), "reason": None},
+                {"value": 0.2, "status": "center", "metrics": metrics(1.0).as_dict(), "reason": None},
+            ],
+        }
+    ]
     stored = {
         "window": {"start_ms": 0, "end_ms": 1},
         "candidates": [_candidate("incumbent", "i"), _candidate("all_period", "a", neighbors=losing), _candidate("recent", "r", drawdown=0.15)],

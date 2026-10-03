@@ -7,6 +7,16 @@ p { margin: 0; }
 .caption strong { color: var(--text-primary); }
 .caption--end { text-align: right; }
 .side { display: grid; gap: var(--space-4); min-width: 0; }
+.muted { color: var(--text-secondary); font-size: var(--fs-xs); }
+.legend { display: flex; flex-wrap: wrap; gap: var(--space-3); margin: 0; padding: 0; list-style: none; color: var(--text-secondary); font-size: var(--fs-xs); }
+.legend li { display: inline-flex; align-items: center; gap: var(--space-1); }
+.legend .selected { color: var(--text-primary); font-weight: var(--fw-semi); }
+.dot { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--chart-series-blue); }
+.dot[data-key='recent'] { background: var(--chart-series-amber); }
+.dot[data-key='incumbent'] { background: var(--text-secondary); }
+.bar { display: inline-block; width: 0.9rem; height: 0.45rem; border-radius: 1px; background: var(--chart-series-blue); }
+.bar[data-tone='below'] { background: var(--chart-series-sky); }
+.bar[data-tone='loss'] { background: var(--bear); }
 .note { display: flex; gap: var(--space-2); align-items: flex-start; padding: var(--space-3); border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--warn); font-size: var(--fs-xs); }
 .note--blue { background: var(--accent-soft); color: var(--accent-text); }
 .note--blue strong { color: var(--text-primary); }

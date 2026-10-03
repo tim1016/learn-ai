@@ -647,6 +647,10 @@ class GoldenSearchNeighborRow(_Wire):
     status: CellStatus
     metrics: GoldenSearchMetrics | None
     reason: str | None
+    step: Literal[-1, 0, 1] = Field(description="The row's step from the candidate on this knob: -1 below, 0 the candidate itself, +1 above.")
+    return_change: float | None = Field(
+        description="This neighbor's net return less the candidate's, a fraction of starting capital; null for the candidate's own row or when either run has no completed result."
+    )
 
 
 class GoldenSearchNeighborhood(_Wire):
@@ -659,6 +663,15 @@ class GoldenSearchStressResult(_Wire):
     scenario: str
     label: str
     metrics: GoldenSearchMetrics | None
+    return_change: float | None = Field(
+        description="This stressed run's net return less the unstressed development run's, a fraction of starting capital; null when either run has no completed result."
+    )
+
+
+class GoldenSearchStressTally(_Wire):
+    in_profit: int = Field(description="Stress runs that completed with a net profit above zero.")
+    recorded: int = Field(description="Stress runs that completed with a net profit.")
+    scenarios: int = Field(description="Stress scenarios the plan scheduled.")
 
 
 class GoldenSearchCandidateGuidance(_Wire):
@@ -682,6 +695,10 @@ class GoldenSearchEvidenceCandidate(_Wire):
     ineligibility: str | None
     neighbors: list[GoldenSearchNeighborhood]
     stress: list[GoldenSearchStressResult]
+    trades_per_year: float | None = Field(
+        description="Development trades per trading year of the development window; null when the development run has no completed result."
+    )
+    stress_tally: GoldenSearchStressTally
     edge_hits: list[str]
     guidance: GoldenSearchCandidateGuidance
     flags: list[GoldenSearchFinding]
@@ -762,8 +779,10 @@ class GoldenSearchResults(_Wire):
 
 
 class GoldenSearchSummaryLink(_Wire):
-    kind: Literal["tab", "step"]
-    target: str = Field(description="An evidence tab of the Compare step (trades, neighbors, stress, months) or a study step (search, test, decision).")
+    kind: Literal["tab", "chart", "step"]
+    target: str = Field(
+        description="An evidence tab of the Compare step (trades, months), a Compare chart (neighbor-tornado, cost-stress) or a study step (search, test, decision)."
+    )
 
 
 class GoldenSearchSummaryRow(_Wire):

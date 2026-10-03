@@ -1,10 +1,12 @@
 import { InjectionToken } from '@angular/core';
-import type { LineSeriesOption } from 'echarts/charts';
+import type { BarSeriesOption, LineSeriesOption, ScatterSeriesOption } from 'echarts/charts';
 import type { AxisPointerComponentOption, GridComponentOption, MarkLineComponentOption, TooltipComponentOption } from 'echarts/components';
 import type { ComposeOption } from 'echarts/core';
 
 /** The ECharts option shape the Golden Search charts may use; a chart type joins it when its loader registers it. */
-export type ChartOption = ComposeOption<LineSeriesOption | GridComponentOption | TooltipComponentOption | AxisPointerComponentOption | MarkLineComponentOption>;
+export type ChartOption = ComposeOption<
+  LineSeriesOption | BarSeriesOption | ScatterSeriesOption | GridComponentOption | TooltipComponentOption | AxisPointerComponentOption | MarkLineComponentOption
+>;
 
 /** An ECharts action (`highlight`, `downplay`, `showTip`, `hideTip`). */
 export interface ChartAction {
@@ -17,6 +19,8 @@ export interface ChartInstance {
   draw(option: ChartOption): void;
   resize(): void;
   dispatch(action: ChartAction): void;
+  /** Removes everything drawn, keeping the instance for the next draw. */
+  clear(): void;
   dispose(): void;
 }
 
@@ -41,6 +45,7 @@ export function loadGoldenSearchCharts(): Promise<ChartLibrary> {
           draw: (option) => chart.setOption(option, { notMerge: true }),
           resize: () => chart.resize(),
           dispatch: (action) => chart.dispatchAction(action),
+          clear: () => chart.clear(),
           dispose: () => chart.dispose(),
         };
       },

@@ -31,7 +31,8 @@ import { MARKDOWN_DOC_REGISTRY } from './markdown-drawer.model';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [Drawer, ButtonModule, RouterLink, MarkdownViewerComponent],
   template: `
-    @if (doc(); as d) {
+    <!-- Keyed by modality: PrimeNG applies [modal] only as the drawer enters, so switching between a modal and a non-modal document builds a new drawer. -->
+    @for (d of docs(); track d.modal ?? true) {
       <p-drawer
         [visible]="svc.visible()"
         (visibleChange)="onVisibleChange($event)"
@@ -152,10 +153,10 @@ import { MARKDOWN_DOC_REGISTRY } from './markdown-drawer.model';
 export class MarkdownDrawerHostComponent {
   protected readonly svc = inject(MarkdownDrawerService);
 
-  /** Resolves the active document descriptor, or null when no drawer is open. */
-  protected readonly doc = computed(() => {
+  /** The active document's descriptor as a one-item list, empty when no document was opened. */
+  protected readonly docs = computed(() => {
     const id = this.svc.activeDocId();
-    return id ? MARKDOWN_DOC_REGISTRY[id] : null;
+    return id ? [MARKDOWN_DOC_REGISTRY[id]] : [];
   });
 
   onVisibleChange(v: boolean): void {

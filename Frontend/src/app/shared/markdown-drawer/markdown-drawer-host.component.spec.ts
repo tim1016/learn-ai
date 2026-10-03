@@ -23,7 +23,7 @@ describe('MarkdownDrawerHostComponent', () => {
   it('renders nothing when no document is open', () => {
     const { fixture } = setup();
     const drawer = fixture.nativeElement.querySelector('p-drawer');
-    // The @if(doc()) guard means no drawer is rendered until open() is called.
+    // No drawer is rendered until open() is called.
     expect(drawer).toBeNull();
   });
 
@@ -49,6 +49,20 @@ describe('MarkdownDrawerHostComponent', () => {
     expect(svc.activeDocId()).toBe('methodology');
     expect(svc.anchor()).toBe('glossary');
     expect(svc.visible()).toBe(true);
+  });
+
+  it('switching between a non-modal and a modal document builds a new drawer, so the new modality applies', () => {
+    const { fixture, svc } = setup();
+    svc.open('golden-search-guide', 'equity-and-fall');
+    fixture.detectChanges();
+    const guide = fixture.nativeElement.querySelector('p-drawer');
+
+    svc.open('methodology');
+    fixture.detectChanges();
+
+    const methodology = fixture.nativeElement.querySelector('p-drawer');
+    expect(methodology).not.toBeNull();
+    expect(methodology).not.toBe(guide);
   });
 
   it('close sets visible to false', () => {

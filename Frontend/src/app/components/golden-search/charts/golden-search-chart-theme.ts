@@ -12,6 +12,13 @@ export interface ChartTheme {
   readonly gridLine: string;
   readonly tooltipBackground: string;
   readonly warn: string;
+  /** A result that loses money. */
+  readonly loss: string;
+  /** One step below a candidate's value, and one step above it. */
+  readonly stepBelow: string;
+  readonly stepAbove: string;
+  /** A run under a cost stress. */
+  readonly stressed: string;
   /** Current settings grey, All-period fit blue, Recent fit amber. */
   readonly candidates: Readonly<Record<CandidateKey, string>>;
 }
@@ -24,6 +31,10 @@ export function chartTheme(element: HTMLElement): ChartTheme {
     gridLine: themeColor(element, '--border-light'),
     tooltipBackground: themeColor(element, '--bg-elevated'),
     warn: themeColor(element, '--warn'),
+    loss: themeColor(element, '--bear'),
+    stepBelow: themeColor(element, '--chart-series-sky'),
+    stepAbove: themeColor(element, '--chart-series-blue'),
+    stressed: themeColor(element, '--chart-series-teal'),
     candidates: {
       incumbent: themeColor(element, '--text-secondary'),
       all_period: themeColor(element, '--chart-series-blue'),

@@ -24,6 +24,29 @@ export interface ChartSpec {
   readonly table: ChartTable;
 }
 
+/**
+ * Whether two specs draw the same chart: the same name, summary, featured
+ * series and table. A spec's option and table come from the same server
+ * values, so a study poll that changes none of them need not redraw.
+ */
+export function sameChart(a: ChartSpec | null, b: ChartSpec | null): boolean {
+  if (a === null || b === null) return a === b;
+  const [x, y] = [a.table, b.table];
+  return (
+    a.label === b.label &&
+    a.summary === b.summary &&
+    a.featured === b.featured &&
+    x.caption === y.caption &&
+    sameStrings(x.columns, y.columns) &&
+    x.rows.length === y.rows.length &&
+    x.rows.every((row, i) => row.key === y.rows[i].key && sameStrings(row.cells, y.rows[i].cells))
+  );
+}
+
+function sameStrings(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((text, i) => text === b[i]);
+}
+
 /** What a walkthrough step lights up: every series in a group, or one point of the featured series. */
 export type HighlightTarget =
   | { readonly kind: 'series'; readonly group: string }

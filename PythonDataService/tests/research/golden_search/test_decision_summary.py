@@ -157,8 +157,8 @@ def test_every_row_links_to_its_evidence() -> None:
     assert {key: (row["link"]["kind"], row["link"]["target"]) for key, row in rows.items()} == {
         "development_activity": ("tab", "trades"),
         "test_over_time": ("step", "test"),
-        "neighbors": ("tab", "neighbors"),
-        "stress": ("tab", "stress"),
+        "neighbors": ("chart", "neighbor-tornado"),
+        "stress": ("chart", "cost-stress"),
         "concentration": ("tab", "months"),
         "final_exposure": ("step", "decision"),
     }

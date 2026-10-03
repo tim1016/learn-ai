@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 from app.research.golden_search.activity import TradeFloors
+from app.research.golden_search.compare_measures import completed_net
 
 Status = Literal["meets", "concern", "missing"]
 Window = tuple[int, int]
@@ -97,7 +98,7 @@ def _test_over_time(validation: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def _neighbors(item: Mapping[str, Any]) -> dict[str, Any]:
-    label, link = "Neighbor sensitivity", ("tab", "neighbors")
+    label, link = "Neighbor sensitivity", ("chart", "neighbor-tornado")
     hoods: Sequence[Mapping[str, Any]] = item.get("neighbors") or []
     if not item.get("neighbors_audited") or not hoods:
         return _row("neighbors", label, "missing", "No neighbor audit was recorded for these settings.", link)
@@ -117,7 +118,7 @@ def _neighbors(item: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _stress(item: Mapping[str, Any]) -> dict[str, Any]:
-    label, link = "Cost stresses", ("tab", "stress")
+    label, link = "Cost stresses", ("chart", "cost-stress")
     base = item["development_metrics"]
     results: Sequence[Mapping[str, Any]] = item.get("stress") or []
     if base is None or base["status"] != "completed" or base.get("net_profit") is None:
@@ -128,7 +129,7 @@ def _stress(item: Mapping[str, Any]) -> dict[str, Any]:
         return _row("stress", label, "concern", "It loses money before any cost stress.", link)
     if base["net_profit"] == 0:
         return _row("stress", label, "concern", "It only breaks even before any cost stress.", link)
-    nets = [(result["label"], _completed_net(result)) for result in results]
+    nets = [(result["label"], completed_net(result.get("metrics"))) for result in results]
     losses = [scenario for scenario, net in nets if net is not None and net < 0]
     even = [scenario for scenario, net in nets if net == 0]
     unrecorded = sum(1 for _, net in nets if net is None)
@@ -138,14 +139,6 @@ def _stress(item: Mapping[str, Any]) -> dict[str, Any]:
     if unrecorded:
         return _row("stress", label, "missing", f"{unrecorded} stress {'run was' if unrecorded == 1 else 'runs were'} not recorded.", link)
     return _row("stress", label, "meets", "Every stressed run still makes money.", link)
-
-
-def _completed_net(result: Mapping[str, Any]) -> float | None:
-    metrics = result.get("metrics")
-    if metrics is None or metrics.get("status") != "completed":
-        return None
-    net = metrics.get("net_profit")
-    return None if net is None else float(net)
 
 
 def _concentration() -> dict[str, Any]:

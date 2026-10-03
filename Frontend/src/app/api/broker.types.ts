@@ -13724,6 +13724,12 @@ export interface components {
             same_as: ("incumbent" | "all_period" | "recent")[];
             /** Stress */
             stress: components["schemas"]["GoldenSearchStressResult"][];
+            stress_tally: components["schemas"]["GoldenSearchStressTally"];
+            /**
+             * Trades Per Year
+             * @description Development trades per trading year of the development window; null when the development run has no completed result.
+             */
+            trades_per_year: number | null;
         };
         /** GoldenSearchEvidenceScope */
         GoldenSearchEvidenceScope: {
@@ -14083,10 +14089,21 @@ export interface components {
             /** Reason */
             reason: string | null;
             /**
+             * Return Change
+             * @description This neighbor's net return less the candidate's, a fraction of starting capital; null for the candidate's own row or when either run has no completed result.
+             */
+            return_change: number | null;
+            /**
              * Status
              * @enum {string}
              */
             status: "center" | "tested" | "failed" | "untested" | "invalid" | "outside_domain";
+            /**
+             * Step
+             * @description The row's step from the candidate on this knob: -1 below, 0 the candidate itself, +1 above.
+             * @enum {integer}
+             */
+            step: -1 | 0 | 1;
             /** Value */
             value: number;
         };
@@ -14542,6 +14559,11 @@ export interface components {
             /** Label */
             label: string;
             metrics: components["schemas"]["GoldenSearchMetrics"] | null;
+            /**
+             * Return Change
+             * @description This stressed run's net return less the unstressed development run's, a fraction of starting capital; null when either run has no completed result.
+             */
+            return_change: number | null;
             /** Scenario */
             scenario: string;
         };
@@ -14576,6 +14598,24 @@ export interface components {
              * @default 0
              */
             slippageAdd?: number;
+        };
+        /** GoldenSearchStressTally */
+        GoldenSearchStressTally: {
+            /**
+             * In Profit
+             * @description Stress runs that completed with a net profit above zero.
+             */
+            in_profit: number;
+            /**
+             * Recorded
+             * @description Stress runs that completed with a net profit.
+             */
+            recorded: number;
+            /**
+             * Scenarios
+             * @description Stress scenarios the plan scheduled.
+             */
+            scenarios: number;
         };
         /** GoldenSearchStudyDetail */
         GoldenSearchStudyDetail: {
@@ -14727,10 +14767,10 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "tab" | "step";
+            kind: "tab" | "chart" | "step";
             /**
              * Target
-             * @description An evidence tab of the Compare step (trades, neighbors, stress, months) or a study step (search, test, decision).
+             * @description An evidence tab of the Compare step (trades, months), a Compare chart (neighbor-tornado, cost-stress) or a study step (search, test, decision).
              */
             target: string;
         };

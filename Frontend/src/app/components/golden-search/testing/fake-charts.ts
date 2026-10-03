@@ -9,6 +9,7 @@ export interface FakeChart {
   readonly options: ChartOption[];
   readonly actions: ChartAction[];
   resizes: number;
+  clears: number;
   disposed: boolean;
 }
 
@@ -20,24 +21,29 @@ export const FAKE_CHART_THEME: ChartTheme = {
   gridLine: '#1e222d',
   tooltipBackground: '#1b1f2e',
   warn: '#ff9800',
+  loss: '#ef5350',
+  stepBelow: '#4fc3f7',
+  stepAbove: '#2962ff',
+  stressed: '#26a69a',
   candidates: { incumbent: '#b2b5be', all_period: '#2962ff', recent: '#ffb300' },
 };
 
 /**
  * A stand-in for ECharts behind `GOLDEN_SEARCH_CHARTS`: it records every
- * draw, action, resize and dispose, so specs check what a chart was told
+ * draw, action, resize, clear and dispose, so specs check what a chart was told
  * without loading the library or a canvas, drawn in fixed colours.
  */
 export function fakeCharts(): { readonly charts: FakeChart[]; readonly providers: Provider[] } {
   const charts: FakeChart[] = [];
   const library: ChartLibrary = {
     init(element: HTMLElement): ChartInstance {
-      const chart: FakeChart = { element, options: [], actions: [], resizes: 0, disposed: false };
+      const chart: FakeChart = { element, options: [], actions: [], resizes: 0, clears: 0, disposed: false };
       charts.push(chart);
       return {
         draw: (option) => chart.options.push(option),
         resize: () => chart.resizes++,
         dispatch: (action) => chart.actions.push(action),
+        clear: () => chart.clears++,
         dispose: () => (chart.disposed = true),
       };
     },

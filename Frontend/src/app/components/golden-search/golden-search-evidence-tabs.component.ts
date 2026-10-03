@@ -2,30 +2,27 @@ import { ChangeDetectionStrategy, Component, computed, input, output, signal } f
 
 import type { CandidateRow } from './golden-search-compare';
 import { GoldenSearchMonthlyComponent } from './golden-search-monthly.component';
-import { GoldenSearchNeighborhoodComponent } from './golden-search-neighborhood.component';
 import { GoldenSearchPairMapComponent } from './golden-search-pair-map.component';
 import { GoldenSearchTradesComponent } from './golden-search-trades.component';
 import type { CandidateDetail, CandidateKey, PairMap, Point, StrategyCapability } from './golden-search.types';
 
-export type EvidenceTab = 'map' | 'months' | 'trades' | 'neighbors' | 'stress';
+export type EvidenceTab = 'map' | 'months' | 'trades';
 
 export const EVIDENCE_TABS: readonly { id: EvidenceTab; label: string }[] = [
   { id: 'map', label: 'Parameter map' },
   { id: 'months', label: 'By month' },
   { id: 'trades', label: 'Trades' },
-  { id: 'neighbors', label: 'Neighborhood' },
-  { id: 'stress', label: 'Stress' },
 ];
 
 /**
- * The Compare step's evidence (#2696): the parameter map, the selected
- * candidate's months and trades, and its neighborhood and stress runs. The
- * detail runs come from the step, which reads them for its equity chart.
- * Everything shown is development evidence, used to choose.
+ * The Compare step's evidence (#2696): the parameter map and the selected
+ * candidate's months and trades. The detail runs come from the step, which
+ * reads them for its charts. Everything shown is development evidence, used
+ * to choose.
  */
 @Component({
   selector: 'app-golden-search-evidence-tabs',
-  imports: [GoldenSearchMonthlyComponent, GoldenSearchNeighborhoodComponent, GoldenSearchPairMapComponent, GoldenSearchTradesComponent],
+  imports: [GoldenSearchMonthlyComponent, GoldenSearchPairMapComponent, GoldenSearchTradesComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './golden-search-evidence-tabs.component.html',
   styleUrl: './golden-search-evidence-tabs.component.scss',
