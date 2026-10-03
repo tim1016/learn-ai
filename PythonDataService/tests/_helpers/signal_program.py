@@ -50,6 +50,59 @@ def sealed_programs() -> list[tuple[str, StrategyRegistration]]:
 SEALED_KEYS: tuple[str, ...] = tuple(key for key, _ in sealed_programs())
 """Parametrization source for every per-sealed-program test in this suite."""
 
+OFF_VALIDATED_PERIODS: dict[str, dict[str, int]] = {
+    "ema_crossover_signal": {"fast_period": 7, "slow_period": 20},
+    "sma_crossover": {"short_window": 7, "long_window": 21},
+    "rsi_mean_reversion": {"window": 21},
+    "spy_strategy_a": {
+        "ema_fast_period": 8,
+        "ema_slow_period": 23,
+        "macd_fast": 5,
+        "macd_slow": 13,
+        "macd_signal": 4,
+        "rsi_period": 21,
+        "adx_period": 10,
+    },
+    "spy_strategy_b": {
+        "supertrend_atr_period": 7,
+        "macd_fast": 5,
+        "macd_slow": 13,
+        "macd_signal": 4,
+        "rsi_period": 21,
+        "adx_period": 10,
+    },
+    "spy_strategy_c": {"rsi_period": 21, "adx_period": 10},
+}
+"""One point off the validated settings per program that seals an indicator
+series, moving every period that is a parameter: what a non-default deploy
+runs, and so what its seal and its view must name (#2796). No two periods of
+a program share a value, so a series wired to the wrong one cannot pass."""
+
+
+def sealed_series_points() -> list[tuple[str, dict[str, int]]]:
+    """Every sealed program at its validated settings, then each one that seals a series at its point off them.
+
+    Pairs are ``(program key, overrides on the validated settings)``. A
+    program that seals a series but names no point in
+    ``OFF_VALIDATED_PERIODS`` raises here, at collection, rather than going
+    unchecked off its validated settings.
+    """
+    points: list[tuple[str, dict[str, int]]] = [(key, {}) for key in SEALED_KEYS]
+    for key, registration in sealed_programs():
+        contract = registration.signal_program_contract
+        if contract is not None and contract.signals:
+            periods = OFF_VALIDATED_PERIODS[key]
+            assert len(set(periods.values())) == len(periods), f"'{key}' repeats a period value off its validated point"
+            points.append((key, periods))
+    return points
+
+
+def series_point_id(value: object) -> str:
+    """Readable test ids for :func:`sealed_series_points` pairs."""
+    if isinstance(value, str):
+        return value
+    return "off_validated" if value else "validated"
+
 
 class RecordingExecutor:
     """Absorbs every committed ``SignalIntent`` so a COMMIT needs no broker.
