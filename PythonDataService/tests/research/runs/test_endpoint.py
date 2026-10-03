@@ -161,7 +161,8 @@ async def test_post_runs_under_every_fill_mode_a_research_request_may_name(clien
 
 
 # ``next_session_open`` is a real mode the runner runs for parity callers; the route does not offer it.
-@pytest.mark.parametrize("fill_mode", ["magic", "next_session_open"])
+# ``open`` is the engine backtest's short name, which names nothing among three "...open" modes.
+@pytest.mark.parametrize("fill_mode", ["magic", "next_session_open", "open"])
 async def test_post_invalid_fill_mode_returns_400(client, fill_mode: str):
     body = _request_body()
     body["fill_mode"] = fill_mode

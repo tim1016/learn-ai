@@ -7,6 +7,7 @@
         <p class="muted">
           <app-timestamp-display [value]="d.window_start_ms" mode="date-et" /> → <app-timestamp-display [value]="d.window_end_ms - 1" mode="date-et" />
           · ranked by {{ d.measure | receiptLabel }} · min {{ d.min_trades }} trades
+          · fill mode: {{ fillMode() }}
           · launched <app-timestamp-display [value]="d.created_at_ms" mode="local" />
         </p>
       } @else { <h2 id="grid-search-result-title">Search</h2> }

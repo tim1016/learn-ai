@@ -468,6 +468,7 @@ def test_decision_minute_open_fills_at_the_open_of_the_minute_the_bucket_is_emit
     """The runner runs the mode and records it (#2599)."""
     spec = _build_test_spec()
     at_close, close_result = _run(spec, fake_data_factory, fill_mode="signal_bar_close")
+    _, next_bar_result = _run(spec, fake_data_factory, fill_mode="next_bar_open")
     ledger, result = _run(spec, fake_data_factory, fill_mode="Decision-Minute-Open")
 
     assert ledger.status == "completed"
@@ -475,6 +476,11 @@ def test_decision_minute_open_fills_at_the_open_of_the_minute_the_bucket_is_emit
     assert result.trades
     opens = {bar.start_ms: float(bar.open) for bar in build_minute_bars(closes_for_spy_ema(2000))}
     assert [trade.entry_price for trade in result.trades] == [opens[trade.entry_time_ms] for trade in result.trades]
+    # ``next_bar_open`` also fills at a minute's open: the minute after this one.
+    minute = {start_ms: index for index, start_ms in enumerate(sorted(opens))}
+    assert [minute[trade.entry_time_ms] + 1 for trade in result.trades] == [
+        minute[trade.entry_time_ms] for trade in next_bar_result.trades
+    ]
     assert ledger.result_hash != at_close.result_hash
     assert [trade.entry_price for trade in result.trades] != [trade.entry_price for trade in close_result.trades]
 

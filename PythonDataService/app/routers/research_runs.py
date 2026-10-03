@@ -48,7 +48,6 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
-from app.engine.execution.fill_mode_names import REQUEST_FILL_MODES, UnknownFillModeError, parse_fill_mode
 from app.engine.strategy.spec import StrategySpec
 from app.research.runs import (
     BacktestRunResult,
@@ -63,6 +62,7 @@ from app.research.runs import (
     run_strategy_spec,
     save_run,
 )
+from app.services.fill_mode_request import fill_mode_or_400
 from app.services.spec_run_data import SpecDataSourceFactory, materialize_spec_data_source
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
@@ -160,14 +160,6 @@ def _parse_date(s: str, field: str) -> Date:
         ) from exc
 
 
-def validate_fill_mode(s: str) -> None:
-    """Refuse, with a 400 naming them, any mode a research request may not ask for."""
-    try:
-        parse_fill_mode(s, allowed=REQUEST_FILL_MODES)
-    except UnknownFillModeError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-
 # ---------------------------------------------------------------------------
 # Endpoints.
 # ---------------------------------------------------------------------------
@@ -185,7 +177,7 @@ def create_run(
     """
     start_d = _parse_date(request.start_date, "start_date")
     end_d = _parse_date(request.end_date, "end_date")
-    validate_fill_mode(request.fill_mode)
+    fill_mode = fill_mode_or_400(request.fill_mode)
     if start_d >= end_d:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -198,7 +190,7 @@ def create_run(
         start_ms=run_date_to_ms(start_d),
         end_ms=run_date_to_ms(end_d),
         initial_cash=request.initial_cash,
-        fill_mode=request.fill_mode,
+        fill_mode=fill_mode.value,
         commission_per_order=request.commission_per_order,
         slippage_per_share=request.slippage_per_share,
         random_seed=request.random_seed,

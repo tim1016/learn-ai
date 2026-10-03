@@ -14,6 +14,12 @@ export type FillModeName = NonNullable<components["schemas"]["GridSearchSpecRequ
  */
 export const RESEARCH_DEFAULT_FILL_MODE: FillModeName = "decision_minute_open";
 
+/**
+ * What a run or sweep saved before it recorded its fill mode ran under; the
+ * backend's `UNRECORDED_FILL_MODE` (#2599). It never follows the default above.
+ */
+export const UNRECORDED_FILL_MODE: FillModeName = "signal_bar_close";
+
 /** Keyed by the contract's vocabulary, so a mode the backend adds cannot go unlabelled. */
 const FILL_MODE_LABELS: Record<FillModeName, string> = {
   signal_bar_close: "Signal bar close",
@@ -27,6 +33,11 @@ export function isFillModeName(value: unknown): value is FillModeName {
 
 export function fillModeLabel(value: FillModeName): string {
   return FILL_MODE_LABELS[value];
+}
+
+/** The rule a stored run, sweep or study ran under: the one its request recorded, else the unrecorded one. */
+export function storedFillMode(recorded: unknown): FillModeName {
+  return isFillModeName(recorded) ? recorded : UNRECORDED_FILL_MODE;
 }
 
 /** The pickers' options, in the vocabulary's order. */

@@ -1224,7 +1224,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    action plan binds ENTER/EXIT to one long stock leg\n"
             "\n"
             "Execution\n"
-            "    fill_mode = signal_bar_close (LEAN default) | next_bar_open"
+            "    fill_mode = signal_bar_close (LEAN default) | next_bar_open | decision_minute_open"
         ),
         gotchas=[
             "Window sizes are in BARS, not minutes. With "
@@ -1385,7 +1385,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    action plan binds ENTER/EXIT to one long stock leg\n"
             "\n"
             "Execution\n"
-            "    fill_mode = signal_bar_close | next_bar_open"
+            "    fill_mode = signal_bar_close | next_bar_open | decision_minute_open"
         ),
         gotchas=[
             "Uses Wilders smoothing — first average gain/loss is a plain "

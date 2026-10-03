@@ -4,9 +4,10 @@ Both request surfaces a researcher grades with -- Strategy Lab's engine run
 and Grid Search (which Walk-Forward sweeps through) -- accept the
 ``decision_minute_open`` fill mode and record it in their receipts, and both
 default the flat fee to $0: Alpaca charges no commission, and its regulatory
-fees are not modelled. Grid Search defaults to that fill mode too; the engine
+fees are not modelled. Grid Search defaults to that fill mode too. The engine
 request's own default stays the signal bar's close, which a LEAN-paired run
-relies on. The engine-level fill rule itself is pinned in
+relies on: ``tests/integration/test_engine_persistence_data_policy.py`` pins
+it. The engine-level fill rule itself is pinned in
 ``tests/engine/test_engine_fill_modes.py``.
 """
 
@@ -87,7 +88,12 @@ def test_an_engine_run_fills_at_the_decision_minute_open_and_records_it(
 
 @pytest.mark.parametrize(
     ("spelling", "canonical"),
-    [("close", "signal_bar_close"), ("NextBarOpen", "next_bar_open"), ("Signal-Bar-Close", "signal_bar_close")],
+    [
+        ("close", "signal_bar_close"),
+        ("open", "next_bar_open"),
+        ("NextBarOpen", "next_bar_open"),
+        ("Signal-Bar-Close", "signal_bar_close"),
+    ],
 )
 def test_an_engine_run_still_parses_the_aliases(
     lake: Path, monkeypatch: pytest.MonkeyPatch, spelling: str, canonical: str
@@ -168,23 +174,6 @@ def test_a_sweep_saved_before_it_recorded_a_fill_mode_still_runs_at_the_signal_b
 
     assert stored.fill_mode == "signal_bar_close"
     assert engine_adapter.engine_request(record, stored, CANDIDATE).fill_mode == "signal_bar_close"
-
-
-def test_grid_search_defaults_to_the_decision_minute_open_and_the_engine_request_does_not() -> None:
-    engine = EngineBacktestRequest(strategy_name="sma_crossover")
-    grid = GridSearchSpecRequest(strategy_key="sma_crossover", symbol="SPY", start_ms=0, end_ms=DAY_MS)
-    spec = service.GridSearchSpec(
-        strategy_key="sma_crossover",
-        symbol="SPY",
-        param_ranges={"short_window": ValueListRange((2.0,))},
-        start_ms=0,
-        end_ms=DAY_MS,
-    )
-
-    assert grid.fill_mode == "decision_minute_open"
-    assert spec.fill_mode == "decision_minute_open"
-    # A LEAN-paired run sends no fill mode and its profile refuses any other.
-    assert engine.fill_mode == "signal_bar_close"
 
 
 def test_the_research_request_surfaces_default_to_no_fee() -> None:

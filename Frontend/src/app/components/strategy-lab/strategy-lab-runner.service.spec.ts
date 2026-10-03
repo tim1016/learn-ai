@@ -155,6 +155,15 @@ describe("StrategyLab configuration and runner", () => {
     expect(payload.backtest).not.toHaveProperty("fill_mode");
   });
 
+  it("submits a Python run that fills at the decision minute's open when the rail is left as it loads (#2599)", async () => {
+    await runner.run();
+
+    expect(startJob).toHaveBeenCalledOnce();
+    const [, payload] = startJob.mock.calls[0] as [string, { backtest: Record<string, unknown> }];
+    expect(payload.backtest["requested_engine"]).toBe("python");
+    expect(payload.backtest["fill_mode"]).toBe("decision_minute_open");
+  });
+
   it("fills a Python run at the decision minute's open by default, and names the signal bar's close for LEAN whatever the rail holds (#2599)", () => {
     expect(config.runFillMode()).toBe("decision_minute_open");
 

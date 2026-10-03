@@ -15,7 +15,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
-from app.engine.execution.fill_mode_names import RESEARCH_DEFAULT_FILL_MODE
+from app.engine.execution.fill_mode_names import RESEARCH_DEFAULT_FILL_MODE, FillModeName
 from app.research.grid_search.models import GridSearchSpec
 from app.research.sweep.grid import LowHighStepRange, ParamRange, ValueListRange
 from app.research.sweep.ranking import RankingMeasure
@@ -23,7 +23,6 @@ from app.schemas.engine_backtest import COMMISSION_PER_ORDER_DESCRIPTION
 from app.utils.session_anchors import MAX_TIMESTAMP_MS
 
 SYMBOL_PATTERN = r"^[A-Z][A-Z0-9.\-]{0,11}$"
-FillModeName = Literal["signal_bar_close", "next_bar_open", "decision_minute_open"]
 
 
 class _CamelTolerantModel(BaseModel):

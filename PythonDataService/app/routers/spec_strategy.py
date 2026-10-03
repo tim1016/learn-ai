@@ -32,11 +32,10 @@ from pydantic import BaseModel, Field, ValidationError
 from app.data_lake.run_materialization import LakeMaterializationError
 from app.engine.data.availability import MissingSessionsError
 from app.engine.engine import ZERO_BARS_EVALUATED, BacktestEngine, pin_strategy_window
-from app.engine.execution.fill_mode_names import REQUEST_FILL_MODES, UnknownFillModeError, parse_fill_mode
 from app.engine.execution.fill_model import FillModel
-from app.engine.execution.order import FillMode
 from app.engine.strategy.base import LoggedTrade
 from app.engine.strategy.spec import SpecAlgorithm, StrategySpec
+from app.services.fill_mode_request import fill_mode_or_400
 from app.services.spec_run_data import (
     MaterializedSpecReader,
     SpecDataSourceFactory,
@@ -132,13 +131,6 @@ def _parse_date(s: str, field: str) -> Date:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"{field} must be YYYY-MM-DD: {s!r}",
         ) from exc
-
-
-def _parse_fill_mode(s: str) -> FillMode:
-    try:
-        return parse_fill_mode(s, allowed=REQUEST_FILL_MODES)
-    except UnknownFillModeError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 def _failed_response(request: SpecBacktestRequest, error: str) -> SpecBacktestResponse:
@@ -237,7 +229,7 @@ def run_spec_backtest(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"end_date must not precede start_date (got start={start_d.isoformat()}, end={end_d.isoformat()})",
         )
-    fill_mode = _parse_fill_mode(request.fill_mode)
+    fill_mode = fill_mode_or_400(request.fill_mode)
     symbol = spec.symbols[0]
 
     try:

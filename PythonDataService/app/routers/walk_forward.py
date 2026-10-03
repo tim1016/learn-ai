@@ -53,8 +53,8 @@ from app.research.walk_forward import (
 from app.routers.research_runs import (
     get_artifacts_root,
     get_data_source_factory,
-    validate_fill_mode,
 )
+from app.services.fill_mode_request import fill_mode_or_400
 from app.utils.session_anchors import MAX_TIMESTAMP_MS, require_schedulable_end
 
 router = APIRouter()
@@ -115,7 +115,7 @@ async def create_walk_forward(
     artifacts_root: Path | None = Depends(get_artifacts_root),
 ) -> WalkForwardResponse:
     """Run a walk-forward analysis, persist, and return ``(config, result)``."""
-    validate_fill_mode(request.fill_mode)
+    fill_mode = fill_mode_or_400(request.fill_mode)
     if request.start_ms >= request.end_ms:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -141,7 +141,9 @@ async def create_walk_forward(
         end_ms=request.end_ms,
         split_policy=split_policy,
         initial_cash=request.initial_cash,
-        fill_mode=request.fill_mode,
+        # The canonical name, not the request's spelling: the runner stores
+        # this string in the walk-forward config as it is (#2599).
+        fill_mode=fill_mode.value,
         commission_per_order=request.commission_per_order,
         slippage_per_share=request.slippage_per_share,
         random_seed=request.random_seed,

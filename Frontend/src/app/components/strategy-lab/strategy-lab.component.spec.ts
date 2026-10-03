@@ -895,7 +895,7 @@ describe("Strategy Lab saved configuration", () => {
     });
   });
 
-  it("restores a decision-minute-open run's fill mode and reads an unknown one as the default (#2599)", () => {
+  it("restores a decision-minute-open run's fill mode and reads an unknown one as the unrecorded rule, not the default (#2599)", () => {
     const range = { symbol: "SPY", from: "2025-01-01", to: "2025-01-02", resolution: "minute" } as const;
 
     expect(inputsFromSavedRun(run({ fillMode: "decision_minute_open" }), range).fillMode).toBe("decision_minute_open");

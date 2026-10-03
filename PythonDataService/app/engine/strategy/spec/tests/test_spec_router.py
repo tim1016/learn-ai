@@ -189,7 +189,8 @@ async def test_backtest_runs_under_every_fill_mode_a_research_request_may_name()
     assert entries["decision_minute_open"] != entries["next_bar_open"]
 
 
-@pytest.mark.parametrize("fill_mode", ["magic", "next_session_open"])
+# ``open`` is the engine backtest's short name, which names nothing among three "...open" modes.
+@pytest.mark.parametrize("fill_mode", ["magic", "next_session_open", "open"])
 async def test_backtest_rejects_an_unknown_fill_mode_naming_the_modes(fill_mode: str) -> None:
     resp = await _post_sma_backtest(fill_mode)
 
