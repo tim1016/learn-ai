@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, resource } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, input, resource, untracked } from '@angular/core';
 import { DecimalPipe, NgTemplateOutlet } from '@angular/common';
 
 import { extractServerMessage } from '../broker/operation-error';
@@ -12,11 +12,6 @@ import { GoldenSearchProcedureComponent } from './golden-search-procedure.compon
 import { convergenceSpec, eligibilityMapSpec, knobMovesSpec, profilesMinWidth, profilesSpec } from './golden-search-search-charts';
 import { GoldenSearchService } from './golden-search.service';
 import type { ProcedureCharts, SearchCharts, StrategyCapability, StudyDetail } from './golden-search.types';
-
-interface ChartRequest {
-  readonly studyId: string;
-  readonly revision: number;
-}
 
 /** One procedure's charts as the step lays them out. */
 export interface ProcedureChartsView {
@@ -39,9 +34,9 @@ const LABELS: Readonly<Record<ProcedureCharts['key'], string>> = { search: 'All-
  * development interval, the recent-window procedure when the plan asked for
  * one, and the study's engine-run accounting. Their charts (#2821) — the
  * path Zoom took, each knob's move and profile, every point scored against
- * the rules, and the pair landscape — come from their own read, once per
- * study revision. Everything here is development evidence: it chose the
- * settings.
+ * the rules, and the pair landscape — come from their own read, read again
+ * when the study's revision moves. Everything here is development evidence:
+ * it chose the settings.
  */
 @Component({
   selector: 'app-golden-search-search-step',
@@ -64,14 +59,14 @@ export class GoldenSearchSearchStepComponent {
 
   private readonly service = inject(GoldenSearchService);
 
-  private readonly request = computed<ChartRequest | undefined>(
-    () => (this.study().results.search === null ? undefined : { studyId: this.study().id, revision: this.study().revision }),
-    { equal: (a, b) => a?.studyId === b?.studyId && a?.revision === b?.revision },
-  );
+  private readonly request = computed(() => (this.study().results.search === null ? undefined : { studyId: this.study().id }), {
+    equal: (a, b) => a?.studyId === b?.studyId,
+  });
   private readonly charts = resource({
     params: () => this.request(),
     loader: ({ params }) => this.service.searchCharts(params.studyId),
   });
+  private readonly revision = computed(() => this.study().revision);
   private readonly chartData = computed<SearchCharts | null>(() => (this.charts.hasValue() ? this.charts.value() : null));
   protected readonly chartsError = computed(() => {
     const error = this.charts.error();
@@ -95,6 +90,16 @@ export class GoldenSearchSearchStepComponent {
   protected readonly pairMaps = computed(() => this.study().results.search?.pair_maps ?? []);
   /** Each landscape's valid and invalid cells, counted from the server's cells. */
   protected readonly audits = computed(() => this.pairMaps().map((map) => pairAudit(map, this.capability())));
+
+  constructor() {
+    // A new revision reloads the charts; a reload keeps what is drawn, where a change of params would blank it.
+    let seen: number | null = null;
+    effect(() => {
+      const revision = this.revision();
+      if (seen !== null && revision !== seen && this.request() !== undefined) untracked(() => this.charts.reload());
+      seen = revision;
+    });
+  }
 
   protected retry(): void {
     this.charts.reload();
