@@ -20459,6 +20459,18 @@
             "title": "Fold Index",
             "type": "integer"
           },
+          "incumbent_failure": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the incumbent's run on this test window failed; null when it completed or never ran.",
+            "title": "Incumbent Failure"
+          },
           "incumbent_return": {
             "anyOf": [
               {
@@ -20617,7 +20629,8 @@
           "incumbent_return",
           "return_difference",
           "test_trades",
-          "incumbent_trades"
+          "incumbent_trades",
+          "incumbent_failure"
         ],
         "title": "GoldenSearchFoldChart",
         "type": "object"
@@ -24165,6 +24178,18 @@
       "GoldenSearchTestOverTimeCharts": {
         "additionalProperties": false,
         "properties": {
+          "below_minimum": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The finished verdict's total is under the forward minimum; null while in progress or when either is missing.",
+            "title": "Below Minimum"
+          },
           "drift": {
             "description": "Each searched knob, in the plan's order.",
             "items": {
@@ -24254,6 +24279,7 @@
           "median_retention",
           "test_trades_total",
           "forward_minimum",
+          "below_minimum",
           "drift"
         ],
         "title": "GoldenSearchTestOverTimeCharts",
