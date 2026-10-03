@@ -11,6 +11,13 @@ from typing import Literal, Protocol
 from weakref import WeakKeyDictionary
 
 from app.broker.alpaca.clerk.recovery_reduction import RecoveryPricing
+from app.broker.alpaca.clerk.sqlite.account_open_work import (
+    MAX_OPEN_ORDER_SNAPSHOT,
+    broker_order_in_flight,
+    broker_quantity_by_symbol,
+    open_order_snapshot_is_full,
+    read_account_open_work,
+)
 from app.broker.alpaca.clerk.sqlite.dry_run_close import close_exposure_of_ended_dry_runs
 from app.broker.alpaca.clerk.sqlite.exit import resolve_exit
 from app.broker.alpaca.clerk.sqlite.exit_recovery import DEFAULT_RECOVERY_INTERVAL_MS, pause_exit_recovery
@@ -53,7 +60,6 @@ from app.broker.alpaca.clerk.sqlite.order_evidence import (
 )
 from app.broker.alpaca.clerk.sqlite.order_projection import (
     ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES,
-    signed_broker_position_quantity,
 )
 from app.broker.alpaca.clerk.sqlite.repository import (
     ClerkSqliteError,
@@ -99,7 +105,6 @@ from app.engine.live.order_identity import (
 
 logger = logging.getLogger(__name__)
 
-MAX_OPEN_ORDER_SNAPSHOT = 500
 #: Exact lookups one pass spends on failed ENTERs in drifted symbols (#2348).
 MAX_TERMINAL_ENTER_LOOKUPS = 5
 #: Clerk-clock wait before a failed ENTER the broker answered is looked up
@@ -167,17 +172,6 @@ async def _under_intake[LocalResult](
     return await intake.off_loop(operation, *args, **kwargs)
 
 
-def _broker_quantity_by_symbol(broker_positions: list[BrokerPosition]) -> dict[str, float]:
-    """The broker's signed position per upper-cased symbol."""
-    broker_by_symbol: dict[str, float] = {}
-    for position in broker_positions:
-        symbol = position.symbol.upper()
-        broker_by_symbol[symbol] = broker_by_symbol.get(symbol, 0.0) + signed_broker_position_quantity(
-            position
-        )
-    return broker_by_symbol
-
-
 def _attributed_quantity_by_symbol(attributed_positions: dict[str, float]) -> dict[str, float]:
     """The Clerk's account-wide attributed position per upper-cased symbol."""
     attributed_by_symbol: dict[str, float] = {}
@@ -204,7 +198,7 @@ def broker_symbol_reader(
     snapshot that the snapshot did not see reads as disagreement and the
     watchdog defers rather than trusting either side.
     """
-    broker_by_symbol = _broker_quantity_by_symbol(broker_positions)
+    broker_by_symbol = broker_quantity_by_symbol(broker_positions)
     in_flight = _in_flight_symbols(broker_orders)
 
     def read(symbol: str) -> BrokerSymbolView:
@@ -227,9 +221,7 @@ def broker_symbol_reader(
 def _in_flight_symbols(broker_orders: list[BrokerOrder]) -> frozenset[str]:
     """Upper-cased symbols with an order the broker may still act on."""
     return frozenset(
-        order.symbol.upper()
-        for order in broker_orders
-        if order.status.lower() not in ACCOUNT_EXPOSURE_TERMINAL_ORDER_STATUSES
+        order.symbol.upper() for order in broker_orders if broker_order_in_flight(order)
     )
 
 
@@ -237,7 +229,7 @@ def _mismatched_symbols(
     broker_positions: list[BrokerPosition], attributed_positions: dict[str, float]
 ) -> frozenset[str]:
     """Upper-cased symbols whose broker position differs from the attributed one."""
-    broker_by_symbol = _broker_quantity_by_symbol(broker_positions)
+    broker_by_symbol = broker_quantity_by_symbol(broker_positions)
     attributed_by_symbol = _attributed_quantity_by_symbol(attributed_positions)
     return frozenset(
         symbol
@@ -576,7 +568,7 @@ def _sync_position_drift(
         )
         return
     symbols = ", ".join(mismatched_symbols)
-    broker_by_symbol = _broker_quantity_by_symbol(broker_positions)
+    broker_by_symbol = broker_quantity_by_symbol(broker_positions)
     cause = PositionDriftCause(
         positions=tuple(
             PositionDriftObservation(
@@ -855,25 +847,6 @@ class _StaleSnapshot:
         )
 
 
-async def read_account_open_work(
-    read: BrokerReadPort,
-) -> tuple[list[BrokerOrder], list[BrokerPosition]]:
-    """The account's open orders and positions, as the broker reports them.
-
-    The one read of whole-account broker truth: reconciliation folds it into
-    custody and the lane-quiet observation (#2154) asks only whether it is
-    empty. A ``BrokerError`` propagates, because what an unreadable broker
-    means is the caller's to decide. The two lists are gathered concurrently
-    with no consistency fence between them, so a caller that needs them to
-    describe one instant owes its own re-read rule.
-    """
-    broker_orders, broker_positions = await asyncio.gather(
-        read.list_orders(status="open", limit=MAX_OPEN_ORDER_SNAPSHOT),
-        read.list_positions(),
-    )
-    return broker_orders, broker_positions
-
-
 async def _read_account_snapshot(
     repo: ClerkSqliteRepository,
     read: BrokerReadPort,
@@ -897,7 +870,7 @@ async def _read_account_snapshot(
             },
         )
         return _StaleSnapshot(broker_error=exc)
-    if len(broker_orders) >= MAX_OPEN_ORDER_SNAPSHOT:
+    if open_order_snapshot_is_full(broker_orders):
         await _under_intake(
             intake,
             _raise_stale_snapshot_uncertainty,
@@ -1387,6 +1360,7 @@ def _finalize_reconciliation_verdict(
 
 
 __all__ = [
+    "MAX_OPEN_ORDER_SNAPSHOT",
     "AccountReconciliationResult",
     "ReconcilePlan",
     "ReconciliationInvariantError",
