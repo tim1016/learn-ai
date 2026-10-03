@@ -33,11 +33,10 @@ import { formatTimestampDisplay } from '../../../../shared/timestamp/timestamp-d
 import { formatChartCrosshairTime } from '../dual-pane-chart/dual-pane-chart.component';
 import type { IndicatorSeriesPlan } from '../dual-pane-chart/dual-pane-chart-indicators';
 import type { StrategyViewResponse } from '../lib/broker-v2-panel.types';
-import { chartLanes, formingBar, type ChartLane, type LaneMark, type StrategyRunContext } from './chart-lanes';
+import { chartLanes, formingBar, placeLanes, type PlacedLane, type StrategyRunContext } from './chart-lanes';
+import { ChartLanesComponent } from './chart-lanes.component';
 import {
   StrategyChartOverlay,
-  coordinateOfLogical,
-  logicalIndexAt,
   type OverlayBar,
   type OverlayLine,
   type StrategyChartOverlayState,
@@ -80,16 +79,6 @@ function barOf(ms: number): string {
   return `${formatTimestampDisplay(ms, { mode: 'local', granularity: 'date' })} ${minuteOf(ms)}`;
 }
 
-/** A lane mark where the chart draws it: `null` while it is off the visible bars. */
-interface PlacedMark extends LaneMark {
-  readonly left: number | null;
-  readonly width: number | null;
-}
-
-interface PlacedLane extends Omit<ChartLane, 'marks'> {
-  readonly marks: readonly PlacedMark[];
-}
-
 /**
  * The bot's own decision candles on a lightweight-charts canvas (#2639).
  *
@@ -111,6 +100,7 @@ interface PlacedLane extends Omit<ChartLane, 'marks'> {
 @Component({
   selector: 'app-strategy-chart',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ChartLanesComponent],
   templateUrl: './strategy-chart.component.html',
   styleUrl: './strategy-chart.component.scss',
 })
@@ -185,27 +175,7 @@ export class StrategyChartComponent implements AfterViewInit {
     const context = this.runContext();
     if (context === null) return [];
     this.geometry();
-    const bars = this.bars();
-    const timeScale = this.chart?.timeScale();
-    const width = this.plotWidth();
-    const xAt = (ms: number): number | null => {
-      const logical = logicalIndexAt(bars, ms);
-      return logical === null || timeScale === undefined ? null : coordinateOfLogical(timeScale, logical);
-    };
-    return chartLanes(this.view(), context).map((lane) => ({
-      ...lane,
-      marks: lane.marks.map((mark): PlacedMark => {
-        const left = xAt(mark.atMs);
-        if (mark.endMs === null) {
-          const shown = left !== null && left >= 0 && left <= width;
-          return { ...mark, left: shown ? left : null, width: null };
-        }
-        const right = xAt(mark.endMs);
-        if (left === null || right === null || right < 0 || left > width) return { ...mark, left: null, width: null };
-        const from = Math.max(0, left);
-        return { ...mark, left: from, width: Math.max(2, Math.min(width, right) - from) };
-      }),
-    }));
+    return placeLanes(chartLanes(this.view(), context), this.bars(), this.chart?.timeScale(), this.plotWidth());
   });
 
   private chart: IChartApi | null = null;

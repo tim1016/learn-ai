@@ -336,7 +336,7 @@ describe('StrategyChartComponent with the bot page’s run facts (#2794)', () =>
     await renderWithContext(fakeStrategyView(), runContext(), 150);
 
     const enter = screen.getByRole('listitem', { name: `${minute(barCloseMs(3))} · Enter` });
-    expect(enter.className).toContain('strategy-lanes__mark--off');
+    expect(enter.className).toContain('chart-lanes__mark--off');
     expect(enter.style.left).toBe('');
   });
 

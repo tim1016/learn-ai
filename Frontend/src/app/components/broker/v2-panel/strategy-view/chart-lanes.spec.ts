@@ -10,7 +10,15 @@ import {
   barCloseMs,
   fakeStrategyView,
 } from '../../../../testing/strategy-view-fixtures';
-import { chartLanes, formingBar, type ChartLane, type LaneKey, type StrategyRunContext } from './chart-lanes';
+import {
+  chartLanes,
+  formingBar,
+  placeLanes,
+  type ChartLane,
+  type LaneKey,
+  type LaneMark,
+  type StrategyRunContext,
+} from './chart-lanes';
 
 function minuteOf(ms: number): string {
   return formatTimestampDisplay(ms, { mode: 'local', granularity: 'minute' });
@@ -95,6 +103,24 @@ describe('chartLanes (#2794)', () => {
   });
 });
 
+describe('chartLanes on the tape’s ET setting (#2808)', () => {
+  it('writes every time in ET when asked, so a label never names another clock than the axis', () => {
+    const et = (ms: number): string => formatTimestampDisplay(ms, { mode: 'et', granularity: 'minute' });
+    const lanes = chartLanes(
+      fakeStrategyView({ run_stopped_at_ms: STRATEGY_RUN_STOPPED_AT_MS }),
+      context({ fills: [{ filled_at_ms: barCloseMs(3), side: 'buy', quantity: 1, price: 501, order_ref: 'o-1', event_key: 'e-1' }] }),
+      'et',
+    );
+
+    expect(lane(lanes, 'bot').marks.map((mark) => mark.label)).toEqual([
+      `Started ${et(STRATEGY_RUN_STARTED_AT_MS)}`,
+      `Ended ${et(STRATEGY_RUN_STOPPED_AT_MS)}`,
+    ]);
+    expect(lane(lanes, 'orders').marks[0].label).toBe(`${et(barCloseMs(3))} · Bought 1 @ 501`);
+    expect(lane(lanes, 'decisions').marks.every((mark) => mark.label.startsWith(et(mark.atMs)))).toBe(true);
+  });
+});
+
 describe('formingBar (#2794)', () => {
   it('is the bar after the last close while now falls inside it, and nothing otherwise', () => {
     const view = fakeStrategyView();
@@ -104,5 +130,51 @@ describe('formingBar (#2794)', () => {
     expect(formingBar(view, null)).toBeNull();
     // A read that has fallen behind the clock draws no forming bar it cannot place.
     expect(formingBar(view, start + STRATEGY_BAR_MS)).toBeNull();
+  });
+});
+
+describe('placeLanes (#2808)', () => {
+  // Three one-minute bars; bar `i`'s candle is centred at x 100 + 10·i.
+  const T0 = 1_700_000_040_000;
+  const bars = [0, 1, 2].map((index) => ({ startMs: T0 + index * 60_000, closeMs: T0 + (index + 1) * 60_000 }));
+  const timeScale = { logicalToCoordinate: (logical: number) => 100 + 10 * logical };
+  const mark = (atMs: number, endMs: number | null = null): LaneMark => ({
+    key: `m:${atMs}`, atMs, endMs, glyph: endMs === null ? 'dot' : 'span', tone: 'neutral', label: 'mark',
+  });
+  const placed = (marks: LaneMark[], beyondBars: 'beside' | 'off', width = 600) =>
+    placeLanes([{ key: 'market', title: 'Market data', marks }], bars, timeScale, width, beyondBars)[0].marks
+      .map(({ left, width: span }) => ({ left, width: span }));
+
+  it('places an instant inside a bar between that candle’s edges', () => {
+    expect(placed([mark(T0 + 90_000)], 'off')).toEqual([{ left: 110, width: null }]);
+  });
+
+  it('keeps an instant hours before the bars beside the first one, or off a chart whose bars are a window', () => {
+    const hoursEarlier = mark(T0 - 3 * 3_600_000);
+
+    // One bar out at most: bar 0's left edge is 95, a bar before it 85.
+    expect(placed([hoursEarlier], 'beside')).toEqual([{ left: 85, width: null }]);
+    expect(placed([hoursEarlier], 'off')).toEqual([{ left: null, width: null }]);
+  });
+
+  it('still places an instant within a bar of the window’s end, such as the next decision', () => {
+    expect(placed([mark(T0 + 3 * 60_000 + 30_000)], 'off')).toEqual([{ left: 130, width: null }]);
+  });
+
+  it('clips a span that overlaps the window to it, and drops one that misses it', () => {
+    const overlapping = mark(T0 - 3_600_000, T0 + 60_000);
+    const missed = mark(T0 - 2 * 3_600_000, T0 - 3_600_000);
+
+    expect(placed([overlapping, missed], 'off')).toEqual([
+      // From a bar before the first candle to bar 0's right edge.
+      { left: 85, width: 20 },
+      { left: null, width: null },
+    ]);
+  });
+
+  it('places nothing before the chart has bars or a time scale', () => {
+    expect(placeLanes([{ key: 'bot', title: 'Bot', marks: [mark(T0)] }], [], timeScale, 600)[0].marks[0].left).toBeNull();
+    expect(placeLanes([{ key: 'bot', title: 'Bot', marks: [mark(T0)] }], bars, undefined, 600)[0].marks[0].left)
+      .toBeNull();
   });
 });
