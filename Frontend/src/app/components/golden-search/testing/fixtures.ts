@@ -18,9 +18,11 @@ import type {
   PairMap,
   PairMapCell,
   ProcedureView,
+  ProcedureCharts,
   ProtocolRequest,
   QualificationDeployOffer,
   QualificationView,
+  SearchCharts,
   SearchView,
   StrategyCapability,
   StudyDetail,
@@ -270,6 +272,65 @@ export function procedureView(overrides: Partial<ProcedureView> = {}): Procedure
 /** The all-period procedure with its pair landscape around the winner. */
 export function searchView(overrides: Partial<SearchView> = {}): SearchView {
   return { ...procedureView(), pair_maps: [pairMap()], pair_maps_incomplete: false, ...overrides };
+}
+
+/** One procedure's Search charts: Zoom tried the start, then fast 3 (too few trades) and 8 (kept). */
+export function procedureCharts(key: ProcedureCharts['key'] = 'search', overrides: Partial<ProcedureCharts> = {}): ProcedureCharts {
+  const numbers = (sharpe: number | null, trades: number, ineligibility: string | null) => ({
+    sharpe_ratio: sharpe,
+    net_profit: sharpe === null ? null : sharpe * 1000,
+    total_return_pct: sharpe === null ? null : sharpe / 100,
+    total_trades: trades,
+    max_drawdown_pct: 0.06,
+    ineligibility,
+    objective: sharpe,
+  });
+  const start = { ...INCUMBENT_PARAMS };
+  const kept = { ...INCUMBENT_PARAMS, fast_period: 8 };
+  return {
+    key,
+    method: 'zoom',
+    window: { start_ms: DEVELOPMENT_START_MS, end_ms: FINAL_START_MS },
+    policy: { objective: 'sharpe_ratio', min_trades: 30, max_drawdown_ceiling: 0.2, require_positive_net: true },
+    winner_hash: 'w',
+    convergence: {
+      status: 'measured',
+      tried: [
+        { order: 0, pass_index: null, knob: null, round_index: null, value: null, point: start, ...numbers(0.9, 40, null), best_so_far: 0.9 },
+        { order: 1, pass_index: 0, knob: 'fast_period', round_index: 0, value: 3, point: { ...start, fast_period: 3 }, ...numbers(1.6, 12, 'TOO_FEW_TRADES'), best_so_far: 0.9 },
+        { order: 2, pass_index: 0, knob: 'fast_period', round_index: 0, value: 8, point: kept, ...numbers(1.18, 146, null), best_so_far: 1.18 },
+      ],
+    },
+    moves: [
+      { name: 'fast_period', label: 'Fast EMA length', unit: 'decision bars', low: 3, high: 12, start: 5, retained: 8, start_position: 2 / 9, retained_position: 5 / 9, moved: true, edge_hit: false },
+    ],
+    profiles: [
+      {
+        name: 'fast_period',
+        label: 'Fast EMA length',
+        unit: 'decision bars',
+        low: 3,
+        high: 12,
+        pass_index: 0,
+        held: [{ name: 'gap', label: 'Crossover gap', value: 0.2 }],
+        points: [
+          { value: 3, ...numbers(1.6, 12, 'TOO_FEW_TRADES'), retained: false },
+          { value: 5, ...numbers(0.9, 40, null), retained: false },
+          { value: 8, ...numbers(1.18, 146, null), retained: true },
+        ],
+      },
+    ],
+    points: [
+      { point: start, point_hash: 's', ...numbers(0.9, 40, null), winner: false },
+      { point: { ...start, fast_period: 3 }, point_hash: 'f3', ...numbers(1.6, 12, 'TOO_FEW_TRADES'), winner: false },
+      { point: kept, point_hash: 'w', ...numbers(1.18, 146, null), winner: true },
+    ],
+    ...overrides,
+  };
+}
+
+export function searchCharts(procedures: ProcedureCharts[] = [procedureCharts('search'), procedureCharts('recent')]): SearchCharts {
+  return { procedures };
 }
 
 /** The Test over time read for `validationView`: fold 1 completed and kept 64% of its training Sharpe, fold 2 failed. */

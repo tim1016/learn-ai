@@ -626,6 +626,106 @@ class GoldenSearchLinkedReturn(_Wire):
     fold_missing: bool = Field(description="This fold has no test return of its own (a null linked_return after it is the broken line).")
 
 
+class GoldenSearchScoredNumbers(_Wire):
+    """A scored point's development numbers under the window's frozen selection policy."""
+
+    sharpe_ratio: float | None
+    net_profit: float | None
+    total_return_pct: float | None
+    total_trades: int | None
+    max_drawdown_pct: float | None
+    ineligibility: str | None = Field(description="Why the rules reject the point; null when it is eligible.")
+    objective: float | None = Field(description="The policy's objective; null when undefined.")
+
+
+class GoldenSearchTriedPoint(GoldenSearchScoredNumbers):
+    order: int = Field(description="0 for the seed, then each evaluated value in the order the procedure tried it.")
+    pass_index: int | None = Field(description="Null for the seed.")
+    knob: str | None
+    round_index: int | None
+    value: float | None = Field(description="The knob's value this point tried; null for the seed.")
+    point: dict[str, Any]
+    best_so_far: float | None = Field(description="The highest objective among the eligible points tried so far; null before one is eligible.")
+
+
+class GoldenSearchConvergenceMeasured(_Wire):
+    status: Literal["measured"]
+    tried: list[GoldenSearchTriedPoint]
+
+
+class GoldenSearchConvergenceMissing(_Wire):
+    status: Literal["missing"]
+    reason: str
+
+
+GoldenSearchConvergence = Annotated[GoldenSearchConvergenceMeasured | GoldenSearchConvergenceMissing, Field(discriminator="status")]
+
+
+class GoldenSearchKnobMove(_Wire):
+    name: str
+    label: str
+    unit: str
+    low: float
+    high: float
+    start: float = Field(description="The seed's value.")
+    retained: float = Field(description="The winner's value.")
+    start_position: float | None = Field(description="(start − low) / (high − low); null for a range of one value.")
+    retained_position: float | None
+    moved: bool
+    edge_hit: bool = Field(description="The retained value is an end of the searched range.")
+
+
+class GoldenSearchHeldKnob(_Wire):
+    name: str
+    label: str
+    value: float
+
+
+class GoldenSearchProfilePoint(GoldenSearchScoredNumbers):
+    value: float
+    retained: bool = Field(description="The winner's value of this knob.")
+
+
+class GoldenSearchKnobProfile(_Wire):
+    name: str
+    label: str
+    unit: str
+    low: float
+    high: float
+    pass_index: int | None = Field(description="Zoom: the last pass that searched this knob; null for Grid, whose profile slices the scored points through the winner.")
+    held: list[GoldenSearchHeldKnob] = Field(description="Every other knob's value while this one varied.")
+    points: list[GoldenSearchProfilePoint] = Field(description="By value, ascending.")
+
+
+class GoldenSearchScoredPoint(GoldenSearchScoredNumbers):
+    point: dict[str, Any]
+    point_hash: str
+    winner: bool
+
+
+class GoldenSearchChartPolicy(_Wire):
+    objective: RankingMeasure
+    min_trades: int | None = Field(description="This window's trade floor.")
+    max_drawdown_ceiling: float
+    require_positive_net: bool
+
+
+class GoldenSearchProcedureCharts(_Wire):
+    key: Literal["search", "recent"]
+    method: Literal["zoom", "grid"]
+    window: GoldenSearchWindow
+    policy: GoldenSearchChartPolicy
+    winner_hash: str
+    convergence: GoldenSearchConvergence
+    moves: list[GoldenSearchKnobMove] = Field(description="Each searched knob, in the plan's order.")
+    profiles: list[GoldenSearchKnobProfile] = Field(description="Each searched knob, in the plan's order; empty when the Zoom path cannot be rebuilt.")
+    points: list[GoldenSearchScoredPoint] = Field(description="Every scored base-scenario point on the window, in the order first asked for.")
+
+
+class GoldenSearchSearchCharts(_Wire):
+    procedures: list[GoldenSearchProcedureCharts] = Field(description="The all-period search, then the recent fit, as far as the study has recorded them.")
+
+
 class GoldenSearchFoldChart(_Wire):
     fold_index: int
     train_start_ms: InstantMs

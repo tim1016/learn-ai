@@ -3,6 +3,7 @@
  * values the server computed — no metric, return or estimate is derived here.
  */
 
+import { formatReceiptLabel } from '../../shared/pipes/receipt-label.pipe';
 import type { CapabilityKnob, ExposureState, IncumbentRef, Metrics, Point, PointValue, StrategyCapability, StudyDetail } from './golden-search.types';
 
 export interface PointEntry {
@@ -147,6 +148,23 @@ const SIGNED_USD = new Intl.NumberFormat('en-US', { style: 'currency', currency:
 const SIGNED_CENTS = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2, signDisplay: 'exceptZero' });
 const CENTS = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const COMPACT_USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1, signDisplay: 'exceptZero' });
+
+/** Why the frozen rules reject a scored point, by the server's code. */
+export const RULE_WORDS: Readonly<Record<string, string>> = {
+  NOT_EVALUATED: 'not evaluated',
+  FAILED: 'run failed',
+  NO_TRADES: 'no trades',
+  TOO_FEW_TRADES: 'too few trades',
+  OBJECTIVE_UNDEFINED: 'objective undefined',
+  DRAWDOWN_UNDEFINED: 'worst fall not recorded',
+  DRAWDOWN_ABOVE_CEILING: 'worst fall above the limit',
+  NOT_PROFITABLE: 'not profitable',
+};
+
+/** A rule code in words; a code the map does not know goes through the shared receipt label. */
+export function ruleWords(code: string | null): string {
+  return code === null ? 'meets the rules' : (RULE_WORDS[code] ?? formatReceiptLabel(code));
+}
 
 /** The note every development chart's tooltip carries: these runs chose the candidates, so they are in-sample. */
 export const DEVELOPMENT_NOTE = 'Development data, used for choosing.';

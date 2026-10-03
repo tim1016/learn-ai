@@ -139,10 +139,6 @@ export interface PairCellView {
   readonly text: string;
   /** The same in words, for the table alternative. */
   readonly words: string;
-  readonly ariaLabel: string;
-  /** A CSS background for a tested cell: deeper means a higher return (display scale only). */
-  readonly fill: string | null;
-  readonly loss: boolean;
   readonly center: boolean;
   readonly metrics: Metrics | null;
   readonly reason: string | null;
@@ -157,7 +153,6 @@ interface PairNames {
 }
 
 export interface PairMapView extends PairNames {
-  readonly unitNote: string;
   readonly xValues: readonly number[];
   readonly yValues: readonly number[];
   readonly rows: readonly (readonly PairCellView[])[];
@@ -195,14 +190,6 @@ function cellKind(cell: PairMapCell | undefined): PairCellKind {
   return cell.status;
 }
 
-/** Fill depth for a tested return: 14–48% of the gain colour by share of the map's best gain; losses get one amber tint. */
-function fillFor(value: number | null, bestGain: number): { fill: string | null; loss: boolean } {
-  if (value === null) return { fill: null, loss: false };
-  if (value < 0) return { fill: 'color-mix(in srgb, var(--warn) 22%, var(--bg-surface))', loss: true };
-  const share = bestGain > 0 ? value / bestGain : 0;
-  return { fill: `color-mix(in srgb, var(--bull) ${Math.round(14 + 34 * share)}%, var(--bg-surface))`, loss: false };
-}
-
 function pairNames(map: PairMap, knobs: ReadonlyMap<string, CapabilityKnob>): PairNames {
   const xLabel = knobs.get(map.x_knob)?.label ?? map.x_knob;
   const yLabel = knobs.get(map.y_knob)?.label ?? map.y_knob;
@@ -217,61 +204,37 @@ export function pairAudit(map: PairMap, capability: StrategyCapability | null): 
 
 /**
  * The parameter map as the screen lays it out: rows are `y_knob`'s values
- * (top to bottom), columns `x_knob`'s, every cell named for a screen reader.
+ * (top to bottom), columns `x_knob`'s, each cell with its value or status in words.
  * `center` is the candidate the map is drawn through; its cell is marked.
  */
 export function pairMapView(map: PairMap, capability: StrategyCapability | null, center: Point | null): PairMapView {
   const knobs = knobsByName(capability);
-  const xKnob = knobs.get(map.x_knob);
-  const yKnob = knobs.get(map.y_knob);
   const names = pairNames(map, knobs);
-  const { xLabel, yLabel } = names;
   const lookup = new Map(map.cells.map((cell) => [`${cell.y}|${cell.x}`, cell]));
   const valueAt = (name: string): number | null => (center === null ? null : (numberOf(center[name]) ?? knobs.get(name)?.default_value ?? null));
   const centerX = valueAt(map.x_knob);
   const centerY = valueAt(map.y_knob);
-  const gains = map.cells.flatMap((cell) => (cellKind(cell) === 'tested' && (cell.metrics?.total_return_pct ?? 0) > 0 ? [cell.metrics?.total_return_pct ?? 0] : []));
-  const bestGain = gains.length === 0 ? 0 : Math.max(...gains);
   const rows = map.y_values.map((y, row) =>
     map.x_values.map((x, column): PairCellView => {
       const cell = lookup.get(`${y}|${x}`);
       const kind = cellKind(cell);
-      const where = `${yLabel} ${y}, ${xLabel} ${x}`;
       const reason = cell?.reason ?? null;
       const metrics = cell?.metrics ?? null;
       const value = kind === 'tested' ? (metrics?.total_return_pct ?? null) : null;
-      const shade = fillFor(value, bestGain);
-      const text = kind === 'tested' ? signedPercentText(value) : STATUS_MARKS[kind];
+      // A tested cell whose run recorded no return says so, never the invalid pair's dash.
+      const text = kind === 'tested' ? (value === null ? 'no return' : signedPercentText(value)) : STATUS_MARKS[kind];
       const words = kind === 'tested' ? text : STATUS_WORDS[kind];
-      const ariaLabel =
-        kind === 'tested'
-          ? `${where}, development net return ${signedPercentText(value)}`
-          : kind === 'failed'
-            ? `${where}, the run failed`
-            : kind === 'invalid'
-              ? `Invalid: ${where}${reason ? ` — ${reason}` : ''}`
-              : kind === 'outside_domain'
-                ? `Outside the legal range: ${where}`
-                : `Not tested: ${where}`;
-      return { key: `${y}|${x}`, row, column, x, y, kind, text, words, ariaLabel, ...shade, center: x === centerX && y === centerY, metrics, reason };
+      return { key: `${y}|${x}`, row, column, x, y, kind, text, words, center: x === centerX && y === centerY, metrics, reason };
     }),
   );
   const held = center === null ? [] : pointEntries(center, capability).filter((entry) => entry.name !== map.x_knob && entry.name !== map.y_knob);
-  const unitNote = xKnob && yKnob && xKnob.unit === yKnob.unit ? `Both in ${xKnob.unit}` : `${yKnob?.unit ?? ''} ↓ · ${xKnob?.unit ?? ''} →`;
   return {
     ...names,
-    unitNote,
     xValues: map.x_values,
     yValues: map.y_values,
     rows,
     heldFixed: held.map((entry) => `${entry.label} ${entry.value ?? '—'}`).join(' · '),
   };
-}
-
-/** The cell a map opens on: the candidate's own cell when it was tested, else the first tested cell. */
-export function initialCell(view: PairMapView): PairCellView | null {
-  const cells = view.rows.flat();
-  return cells.find((cell) => cell.center && cell.kind === 'tested') ?? cells.find((cell) => cell.kind === 'tested') ?? cells[0] ?? null;
 }
 
 /** The selected cell in one line: where it is and what it earned, or why it has no result. */

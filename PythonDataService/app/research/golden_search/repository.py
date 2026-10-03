@@ -941,6 +941,22 @@ async def find_detail_evaluation(
     return _evaluation(row) if row is not None else None
 
 
+async def window_evaluations(conn: asyncpg.Connection, study_id: str, *, window_start_ms: int, window_end_ms: int) -> list[EvaluationRecord]:
+    """Every scored base-scenario point over one window, one row per point, in the order they were first asked for."""
+    rows = await conn.fetch(
+        f"""
+        SELECT {_EVALUATION_COLUMNS} FROM research_golden_search_evaluations
+         WHERE study_id = $1 AND window_start_ms = $2 AND window_end_ms = $3
+           AND scenario = 'base' AND NOT detail AND status <> 'pending'
+         ORDER BY created_at_ms, evaluation_key
+        """,
+        study_id,
+        window_start_ms,
+        window_end_ms,
+    )
+    return [_evaluation(row) for row in rows]
+
+
 async def count_recorded_evaluations(conn: asyncpg.Connection, study_id: str, steps: Sequence[str]) -> int:
     """Evaluations with a recorded result for the named steps — a running stage's progress."""
     value = await conn.fetchval(

@@ -18702,6 +18702,48 @@
         "title": "GoldenSearchCapabilityKnob",
         "type": "object"
       },
+      "GoldenSearchChartPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "max_drawdown_ceiling": {
+            "title": "Max Drawdown Ceiling",
+            "type": "number"
+          },
+          "min_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This window's trade floor.",
+            "title": "Min Trades"
+          },
+          "objective": {
+            "enum": [
+              "sharpe_ratio",
+              "total_return_pct",
+              "net_profit"
+            ],
+            "title": "Objective",
+            "type": "string"
+          },
+          "require_positive_net": {
+            "title": "Require Positive Net",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "objective",
+          "min_trades",
+          "max_drawdown_ceiling",
+          "require_positive_net"
+        ],
+        "title": "GoldenSearchChartPolicy",
+        "type": "object"
+      },
       "GoldenSearchCodeIdentity": {
         "additionalProperties": false,
         "properties": {
@@ -18923,6 +18965,47 @@
           "message"
         ],
         "title": "GoldenSearchConstraint",
+        "type": "object"
+      },
+      "GoldenSearchConvergenceMeasured": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "const": "measured",
+            "title": "Status"
+          },
+          "tried": {
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchTriedPoint"
+            },
+            "title": "Tried",
+            "type": "array"
+          }
+        },
+        "required": [
+          "status",
+          "tried"
+        ],
+        "title": "GoldenSearchConvergenceMeasured",
+        "type": "object"
+      },
+      "GoldenSearchConvergenceMissing": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "const": "missing",
+            "title": "Status"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "GoldenSearchConvergenceMissing",
         "type": "object"
       },
       "GoldenSearchCosts": {
@@ -20571,6 +20654,30 @@
         "title": "GoldenSearchGuidance",
         "type": "object"
       },
+      "GoldenSearchHeldKnob": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "value"
+        ],
+        "title": "GoldenSearchHeldKnob",
+        "type": "object"
+      },
       "GoldenSearchHistogram": {
         "additionalProperties": false,
         "properties": {
@@ -20864,6 +20971,88 @@
         "title": "GoldenSearchKnobDrift",
         "type": "object"
       },
+      "GoldenSearchKnobMove": {
+        "additionalProperties": false,
+        "properties": {
+          "edge_hit": {
+            "description": "The retained value is an end of the searched range.",
+            "title": "Edge Hit",
+            "type": "boolean"
+          },
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "moved": {
+            "title": "Moved",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "retained": {
+            "description": "The winner's value.",
+            "title": "Retained",
+            "type": "number"
+          },
+          "retained_position": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retained Position"
+          },
+          "start": {
+            "description": "The seed's value.",
+            "title": "Start",
+            "type": "number"
+          },
+          "start_position": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "(start \u2212 low) / (high \u2212 low); null for a range of one value.",
+            "title": "Start Position"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "unit",
+          "low",
+          "high",
+          "start",
+          "retained",
+          "start_position",
+          "retained_position",
+          "moved",
+          "edge_hit"
+        ],
+        "title": "GoldenSearchKnobMove",
+        "type": "object"
+      },
       "GoldenSearchKnobPlan": {
         "additionalProperties": false,
         "properties": {
@@ -20987,6 +21176,71 @@
           "fixedValue"
         ],
         "title": "GoldenSearchKnobPlanRequest",
+        "type": "object"
+      },
+      "GoldenSearchKnobProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "held": {
+            "description": "Every other knob's value while this one varied.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchHeldKnob"
+            },
+            "title": "Held",
+            "type": "array"
+          },
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pass_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Zoom: the last pass that searched this knob; null for Grid, whose profile slices the scored points through the winner.",
+            "title": "Pass Index"
+          },
+          "points": {
+            "description": "By value, ascending.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchProfilePoint"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "unit",
+          "low",
+          "high",
+          "pass_index",
+          "held",
+          "points"
+        ],
+        "title": "GoldenSearchKnobProfile",
         "type": "object"
       },
       "GoldenSearchKnobSummary": {
@@ -21552,6 +21806,92 @@
         "title": "GoldenSearchPreflight",
         "type": "object"
       },
+      "GoldenSearchProcedureCharts": {
+        "additionalProperties": false,
+        "properties": {
+          "convergence": {
+            "discriminator": {
+              "mapping": {
+                "measured": "#/components/schemas/GoldenSearchConvergenceMeasured",
+                "missing": "#/components/schemas/GoldenSearchConvergenceMissing"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoldenSearchConvergenceMeasured"
+              },
+              {
+                "$ref": "#/components/schemas/GoldenSearchConvergenceMissing"
+              }
+            ],
+            "title": "Convergence"
+          },
+          "key": {
+            "enum": [
+              "search",
+              "recent"
+            ],
+            "title": "Key",
+            "type": "string"
+          },
+          "method": {
+            "enum": [
+              "zoom",
+              "grid"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "moves": {
+            "description": "Each searched knob, in the plan's order.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchKnobMove"
+            },
+            "title": "Moves",
+            "type": "array"
+          },
+          "points": {
+            "description": "Every scored base-scenario point on the window, in the order first asked for.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchScoredPoint"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/GoldenSearchChartPolicy"
+          },
+          "profiles": {
+            "description": "Each searched knob, in the plan's order; empty when the Zoom path cannot be rebuilt.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchKnobProfile"
+            },
+            "title": "Profiles",
+            "type": "array"
+          },
+          "window": {
+            "$ref": "#/components/schemas/GoldenSearchWindow"
+          },
+          "winner_hash": {
+            "title": "Winner Hash",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "method",
+          "window",
+          "policy",
+          "winner_hash",
+          "convergence",
+          "moves",
+          "profiles",
+          "points"
+        ],
+        "title": "GoldenSearchProcedureCharts",
+        "type": "object"
+      },
       "GoldenSearchProcedureCounts": {
         "additionalProperties": false,
         "properties": {
@@ -21668,6 +22008,112 @@
           "window"
         ],
         "title": "GoldenSearchProcedureView",
+        "type": "object"
+      },
+      "GoldenSearchProfilePoint": {
+        "additionalProperties": false,
+        "properties": {
+          "ineligibility": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the rules reject the point; null when it is eligible.",
+            "title": "Ineligibility"
+          },
+          "max_drawdown_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Drawdown Pct"
+          },
+          "net_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Profit"
+          },
+          "objective": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The policy's objective; null when undefined.",
+            "title": "Objective"
+          },
+          "retained": {
+            "description": "The winner's value of this knob.",
+            "title": "Retained",
+            "type": "boolean"
+          },
+          "sharpe_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Ratio"
+          },
+          "total_return_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Return Pct"
+          },
+          "total_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Trades"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "sharpe_ratio",
+          "net_profit",
+          "total_return_pct",
+          "total_trades",
+          "max_drawdown_pct",
+          "ineligibility",
+          "objective",
+          "value",
+          "retained"
+        ],
+        "title": "GoldenSearchProfilePoint",
         "type": "object"
       },
       "GoldenSearchProgress": {
@@ -22589,6 +23035,134 @@
           "data_source"
         ],
         "title": "GoldenSearchScope",
+        "type": "object"
+      },
+      "GoldenSearchScoredPoint": {
+        "additionalProperties": false,
+        "properties": {
+          "ineligibility": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the rules reject the point; null when it is eligible.",
+            "title": "Ineligibility"
+          },
+          "max_drawdown_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Drawdown Pct"
+          },
+          "net_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Profit"
+          },
+          "objective": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The policy's objective; null when undefined.",
+            "title": "Objective"
+          },
+          "point": {
+            "title": "Point",
+            "type": "object"
+          },
+          "point_hash": {
+            "title": "Point Hash",
+            "type": "string"
+          },
+          "sharpe_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Ratio"
+          },
+          "total_return_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Return Pct"
+          },
+          "total_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Trades"
+          },
+          "winner": {
+            "title": "Winner",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sharpe_ratio",
+          "net_profit",
+          "total_return_pct",
+          "total_trades",
+          "max_drawdown_pct",
+          "ineligibility",
+          "objective",
+          "point",
+          "point_hash",
+          "winner"
+        ],
+        "title": "GoldenSearchScoredPoint",
+        "type": "object"
+      },
+      "GoldenSearchSearchCharts": {
+        "additionalProperties": false,
+        "properties": {
+          "procedures": {
+            "description": "The all-period search, then the recent fit, as far as the study has recorded them.",
+            "items": {
+              "$ref": "#/components/schemas/GoldenSearchProcedureCharts"
+            },
+            "title": "Procedures",
+            "type": "array"
+          }
+        },
+        "required": [
+          "procedures"
+        ],
+        "title": "GoldenSearchSearchCharts",
         "type": "object"
       },
       "GoldenSearchSearchView": {
@@ -23900,6 +24474,175 @@
           "exit_reason"
         ],
         "title": "GoldenSearchTradeRecord",
+        "type": "object"
+      },
+      "GoldenSearchTriedPoint": {
+        "additionalProperties": false,
+        "properties": {
+          "best_so_far": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The highest objective among the eligible points tried so far; null before one is eligible.",
+            "title": "Best So Far"
+          },
+          "ineligibility": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the rules reject the point; null when it is eligible.",
+            "title": "Ineligibility"
+          },
+          "knob": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Knob"
+          },
+          "max_drawdown_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Drawdown Pct"
+          },
+          "net_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Profit"
+          },
+          "objective": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The policy's objective; null when undefined.",
+            "title": "Objective"
+          },
+          "order": {
+            "description": "0 for the seed, then each evaluated value in the order the procedure tried it.",
+            "title": "Order",
+            "type": "integer"
+          },
+          "pass_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for the seed.",
+            "title": "Pass Index"
+          },
+          "point": {
+            "title": "Point",
+            "type": "object"
+          },
+          "round_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Round Index"
+          },
+          "sharpe_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sharpe Ratio"
+          },
+          "total_return_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Return Pct"
+          },
+          "total_trades": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Trades"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The knob's value this point tried; null for the seed.",
+            "title": "Value"
+          }
+        },
+        "required": [
+          "sharpe_ratio",
+          "net_profit",
+          "total_return_pct",
+          "total_trades",
+          "max_drawdown_pct",
+          "ineligibility",
+          "objective",
+          "order",
+          "pass_index",
+          "knob",
+          "round_index",
+          "value",
+          "point",
+          "best_so_far"
+        ],
+        "title": "GoldenSearchTriedPoint",
         "type": "object"
       },
       "GoldenSearchValidationFold": {
@@ -65028,6 +65771,107 @@
           }
         },
         "summary": "Get Candidate",
+        "tags": [
+          "research-golden-search"
+        ]
+      }
+    },
+    "/api/research/golden-search/studies/{study_id}/charts/search": {
+      "get": {
+        "description": "The Search step's charts: each procedure's replayed path, knob moves and profiles, and every point it scored.",
+        "operationId": "get_search_charts_api_research_golden_search_studies__study_id__charts_search_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "study_id",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 1,
+              "title": "Study Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchSearchCharts"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoldenSearchRefusalBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "summary": "Get Search Charts",
         "tags": [
           "research-golden-search"
         ]

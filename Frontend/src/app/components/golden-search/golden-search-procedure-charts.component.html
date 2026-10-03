@@ -1,0 +1,37 @@
+@let zoom = procedure().method === 'zoom';
+<app-golden-search-grid>
+  @if (zoom) {
+    <app-golden-search-panel chart="search-path" data-span="8" [instance]="instance()">
+      @if (path(); as spec) {
+        <app-golden-search-chart [spec]="spec" [height]="260" />
+      } @else if (pathNote(); as note) {
+        <p class="muted">{{ note }}</p>
+      }
+      <p caption class="caption">Each dot is a point the search scored, in order; the line is the best result so far that meets the rules.</p>
+    </app-golden-search-panel>
+  }
+  <app-golden-search-panel chart="knob-moves" [attr.data-span]="zoom ? 4 : 6" [instance]="instance()">
+    @if (moves(); as spec) { <app-golden-search-chart [spec]="spec" [height]="220" /> }
+    <p caption class="caption">Hollow: the starting value. Filled: the value kept; amber at an end of its range.</p>
+  </app-golden-search-panel>
+  <app-golden-search-panel chart="eligibility-map" data-span="6" [instance]="instance()">
+    @if (eligibility(); as spec) { <app-golden-search-chart [spec]="spec" [height]="260" /> }
+    <p caption class="caption">
+      Every point scored on this window, the winner outlined: blue meets the rules, amber too few trades, red too deep a fall, light blue no profit, grey no objective or worst fall recorded. The dashed lines are the trade floor{{ procedure().policy.require_positive_net ? ' and $0' : '' }}.
+      @if (failedRuns() > 0) {
+        {{ failedRuns() === 1 ? 'One run failed and has' : failedRuns() + ' runs failed and have' }} no numbers to place; Show as table lists {{ failedRuns() === 1 ? 'it' : 'them' }}.
+      }
+    </p>
+  </app-golden-search-panel>
+  @if (maps().length > 0) {
+    <app-golden-search-pair-landscape data-span="6" [maps]="maps()" [capability]="capability()" [center]="center()" centerLabel="the all-period result" [instance]="instance()" />
+  }
+  <app-golden-search-panel chart="knob-profiles" data-span="12" [instance]="instance()">
+    @if (profiles(); as spec) {
+      <app-golden-search-chart [spec]="spec" [height]="220" [minWidth]="profilesMinWidth()" />
+    } @else {
+      <p class="muted">No profile can be drawn: the search path could not be rebuilt.</p>
+    }
+    <p caption class="caption">{{ zoom ? 'Each knob as its last pass searched it, the other knobs held at their values then — not at the final winner.' : 'Each knob through the winner, the other knobs at the winner’s values.' }}</p>
+  </app-golden-search-panel>
+</app-golden-search-grid>
