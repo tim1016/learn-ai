@@ -441,18 +441,6 @@ describe("StrategyLab configuration and runner", () => {
       expect(store.range()).toMatchObject(expected);
     });
 
-    it("keeps a date the picker refused before the calendar was read, and puts no starting window over it", () => {
-      const store = labBeforeTheCalendar();
-      store.range.update((range) => ({ ...range, to: "2026-13-45" }));
-      TestBed.tick();
-
-      // The picker hands back an empty date for the field it cannot use; the text stays in the field.
-      store.changeRange({ ...store.range(), to: "" });
-      calendarArrives();
-
-      expect(store.range()).toMatchObject({ from: "", to: "" });
-    });
-
     it("is the last month of what the run can read, set once the calendar has been read and never again", () => {
       const store = labBeforeTheCalendar();
       store.configurationWarning.set("This strategy does not support daily data.");

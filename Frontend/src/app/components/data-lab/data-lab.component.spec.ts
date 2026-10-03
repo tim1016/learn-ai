@@ -300,6 +300,42 @@ describe('DataLabComponent (shell)', () => {
     expect([end.value, end.getAttribute('aria-invalid')]).toEqual(['2026-09-11', 'false']);
   });
 
+  it('keeps a typed date, and its refusal, when another scope control changes (#2858)', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY', window: { startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc } });
+    fixture.detectChanges();
+    const apply = screen.getByRole<HTMLButtonElement>('button', { name: 'Apply scope' });
+    const start = screen.getByRole<HTMLInputElement>('textbox', { name: 'Start date' });
+    const end = screen.getByRole<HTMLInputElement>('textbox', { name: 'End date' });
+    // An end before the start: the start is refused, and the draft window stays as it was.
+    fireEvent.change(end, { target: { value: '2026-02-02' } });
+    await fixture.whenStable();
+    expect(apply.disabled).toBe(true);
+
+    // The session is another field of the same draft; the window is not replaced.
+    store.patchDraft({ session: 'extended' });
+    await fixture.whenStable();
+
+    expect([end.value, start.getAttribute('aria-invalid'), apply.disabled]).toEqual(['2026-02-02', 'true', true]);
+  });
+
+  it('commits nothing when Apply scope arrives in the task that refused a date (#2858)', async () => {
+    const { store, fixture } = await renderRoutedShell();
+    store.patchDraft({ ticker: 'SPY', window: { startMsUtc: preset6M.start_ms_utc, endMsUtc: preset6M.end_ms_utc } });
+    fixture.detectChanges();
+    const apply = screen.getByRole<HTMLButtonElement>('button', { name: 'Apply scope' });
+
+    // One task, as a touch tap delivers them: the field's change, then the click, with no render between.
+    const end = screen.getByRole<HTMLInputElement>('textbox', { name: 'End date' });
+    end.value = '2026-05';
+    end.dispatchEvent(new Event('change'));
+    apply.click();
+    await fixture.whenStable();
+
+    expect(store.committedWindow()).toBeNull();
+    expect(store.chartRefreshRequests()).toBe(0);
+  });
+
   it('shows a clicked quick range over an end date the field had refused (#2858)', async () => {
     const { store, fixture } = await renderRoutedShell();
     store.patchDraft({ ticker: 'SPY', window: { startMsUtc: preset1D.start_ms_utc, endMsUtc: preset1D.end_ms_utc } });

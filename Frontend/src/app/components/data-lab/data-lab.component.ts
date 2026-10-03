@@ -290,13 +290,20 @@ export class DataLabComponent {
     this.store.draft().adjusted ? DEFAULT_ADJUSTMENT_MODE : 'raw',
   );
   /**
+   * The draft's window on its own. What follows it starts over when the
+   * window is replaced, and not when another scope field changes: read
+   * straight off the draft, a session or ticker change would wipe a date
+   * the operator had just typed.
+   */
+  private readonly draftWindow = computed(() => this.store.draft().window);
+  /**
    * The dates the picker holds for the draft window; empty while the draft
    * has no window, which is ms 0, not 1970. The picker empties a date it
    * cannot use, and a replaced window (a saved setup, a preset) puts both
    * dates back in the fields, even one that is the same day as before.
    */
-  readonly draftFromIso = linkedSignal({ source: () => this.store.draft().window, computation: (held) => isoOrEmpty(held.startMsUtc) });
-  readonly draftToIso = linkedSignal({ source: () => this.store.draft().window, computation: (held) => isoOrEmpty(held.endMsUtc) });
+  readonly draftFromIso = linkedSignal({ source: this.draftWindow, computation: (held) => isoOrEmpty(held.startMsUtc) });
+  readonly draftToIso = linkedSignal({ source: this.draftWindow, computation: (held) => isoOrEmpty(held.endMsUtc) });
   /**
    * Data Lab charts the session still forming and takes any calendar day, so
    * its dates run from the provider's oldest day with no last day, and need
@@ -308,7 +315,7 @@ export class DataLabComponent {
    * starts over whenever the draft window is replaced (a saved setup, a
    * preset), because the fields then show the new window's dates.
    */
-  protected readonly datesUnusable = linkedSignal({ source: () => this.store.draft().window, computation: () => false });
+  protected readonly datesUnusable = linkedSignal({ source: this.draftWindow, computation: () => false });
   readonly draftTimeframeValue = computed(() => {
     const d = this.store.draft();
     const match = BAR_TIMEFRAMES.find(
@@ -367,6 +374,8 @@ export class DataLabComponent {
    *  scope on purpose and expects the chart to follow (2026-09-13 product
    *  decision, superseding the earlier explicit-refresh-only rule). */
   applyScope(): void {
+    // A tap can arrive in the task that refused a date, before the button is drawn disabled.
+    if (this.datesUnusable()) return;
     const result = this.store.commitScope();
     this.scopeCommitError.set(result.ok ? null : result.error);
     if (result.ok) this.store.requestChartRefresh();
