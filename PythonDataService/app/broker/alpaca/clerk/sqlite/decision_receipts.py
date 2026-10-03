@@ -424,9 +424,9 @@ def rotated_out_before_ms(window: Sequence[DecisionReceiptResource]) -> int | No
     receipted, however old it is, and stays a crash candidate.
 
     Once the window has dropped receipts, this is the decision-bar close of
-    the oldest row left that was written when its bucket was decided and
-    records that close. One runner decides an instance's buckets in bar
-    order and receipts each before the next, so:
+    the oldest row left that was written when its bucket was decided. One
+    runner decides an instance's buckets in bar order and receipts each
+    before the next, so:
 
     * a bucket that closed before that row's came before it, so the receipt
       it got when it was decided, if any, is either among the dropped -- its
@@ -434,36 +434,43 @@ def rotated_out_before_ms(window: Sequence[DecisionReceiptResource]) -> int | No
       in the window and found by identity, never judged by this boundary;
     * the bucket a crash left staged was reached after every decision
       receipted before the crash, so at the Resume that follows it closed
-      after each of them -- whichever one the boundary is read from -- and
-      is never exempt.
+      after that row's and is not exempt.
 
     What this gives up: a bucket a crash left staged that no Resume named
     while the boundary was still behind it can no longer be told from a
     rotated-out one, and is left unflagged.
 
-    Three kinds of row are passed over on the way to that close. A
-    quarantine row has no evaluation identity, and crash evidence is
-    written by a later Resume for a bucket that run only replayed: neither
-    was written when its bucket was decided. A decided row that records no
-    close is passed over for the next one that does, which the second point
-    above makes as safe as reading the first. The wall clock a row was
-    written at is never read instead: a bucket decided late closed before
-    it, and so can the bucket a crash left staged.
+    Two kinds of row are passed over on the way to that row. A quarantine
+    row has no evaluation identity, and crash evidence is written by a later
+    Resume for a bucket that run only replayed: neither was written when its
+    bucket was decided.
 
-    A rotated window in which no row gives a close has no boundary: nothing
-    is exempt, and a Resume can fail the way it did before #2850. That is
-    logged, naming the instance and the rows that were read.
+    Only that oldest decided row is read. If it records no close, a later
+    row's close is not read in its place: a later boundary exempts more, and
+    a bucket a crash left staged between the two rows would go unnamed. The
+    wall clock a row was written at is never read either: a bucket decided
+    late closed before it, and so can the bucket a crash left staged.
+
+    A rotated window whose oldest decided row gives no close has no
+    boundary: nothing is exempt, and a Resume can fail the way it did before
+    #2850. That is logged, naming the instance and the rows that were read.
     """
     if not window or window[0].seq == 1:
         return None
-    for receipt in window:
-        if receipt.intent_id is None or receipt.outcome == CRASH_CANDIDATE_OUTCOME:
-            continue
-        close_ms = json.loads(receipt.facts_json).get("decision_bar_close_ms")
+    oldest_decided = next(
+        (
+            receipt
+            for receipt in window
+            if receipt.intent_id is not None and receipt.outcome != CRASH_CANDIDATE_OUTCOME
+        ),
+        None,
+    )
+    if oldest_decided is not None:
+        close_ms = json.loads(oldest_decided.facts_json).get("decision_bar_close_ms")
         if isinstance(close_ms, int):
             return close_ms
     logger.warning(
-        "decision receipts have rotated out but no retained decision records its bar close",
+        "decision receipts have rotated out but the oldest retained decision records no bar close",
         extra={
             "action": "decision_receipt_rotation_boundary_unknown",
             "strategy_instance_id": window[0].strategy_instance_id,

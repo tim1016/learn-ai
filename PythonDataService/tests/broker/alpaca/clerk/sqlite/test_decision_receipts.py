@@ -302,20 +302,22 @@ def test_the_rotation_boundary_passes_over_rows_not_written_when_their_bucket_wa
 
 
 @pytest.mark.usefixtures("short_window")
-def test_the_rotation_boundary_passes_over_a_decision_that_records_no_bar_close(
+def test_the_rotation_boundary_is_not_read_from_a_later_decision_when_the_oldest_records_no_close(
     receipts: SqliteDecisionReceipts,
 ) -> None:
-    """A decided row with no close does not switch the boundary off, which
-    would fail the Resume the way it failed before #2850. The next decision
-    that records its close is read instead. Every decision in the window was
-    receipted before the crash a Resume recovers from, so the bucket that
-    crash left staged closed after that one too."""
+    """A later decision's close is a later boundary, and a later boundary
+    exempts more: a bucket a crash left staged between the oldest decision and
+    that later one would never be named. So when the oldest retained decision
+    records no close there is no boundary at all, even though the decisions
+    after it record theirs."""
     _receipt_bucket(receipts, 0)
     _receipt_bucket(receipts, 1, records_close=False)
     _receipt_bucket(receipts, 2)
     _receipt_bucket(receipts, 3)
 
-    assert rotated_out_before_ms(receipts.retained_window()) == _close_ms(2)
+    window = receipts.retained_window()
+    assert [receipt.seq for receipt in window] == [2, 3, 4]
+    assert rotated_out_before_ms(window) is None
 
 
 @pytest.mark.usefixtures("short_window")
