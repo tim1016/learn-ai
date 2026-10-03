@@ -306,8 +306,11 @@ def test_sqlite_roster_falls_back_to_the_authoritative_terminal_receipt(
 
     # Missing per-bot custody is an explicit warning, including a crash whose
     # RUN_STOPPED fold failed. It must not disappear from the desk or bell.
-    ends, notices = sqlite_panel_source._unclean_ends(facade, SimpleNamespace(bot_snapshot=lambda _sid: None))
-    assert ends == []
+    ended, unreadable = sqlite_panel_source._uncleanly_ended(facade)
+    ends, notices = sqlite_panel_source._unclean_ends(
+        SimpleNamespace(bot_snapshot=lambda _sid, published_pass: None), ended, {}, account_id="paper-account"
+    )
+    assert (ends, unreadable) == ([], [])
     assert [(notice.strategy_instance_id, notice.kind) for notice in notices] == [
         ("active-spy", "position_unverified"),
     ]
@@ -834,7 +837,7 @@ async def test_panel_evidence_retries_status_revision_race_with_verified_zero_ec
             assert received_facade is facade
             return cls()
 
-        def bot_snapshot(self, strategy_instance_id: str) -> SimpleNamespace:
+        def bot_snapshot(self, strategy_instance_id: str, *, published_pass: None) -> SimpleNamespace:
             return SimpleNamespace(
                 account_id="paper-account",
                 strategy_instance_id=strategy_instance_id,
@@ -1276,7 +1279,7 @@ async def test_panel_evidence_raises_bot_not_found_for_an_absent_projection(
         def from_facade(cls, _received: SimpleNamespace) -> _CustodyReader:
             return cls()
 
-        def bot_snapshot(self, _strategy_instance_id: str) -> None:
+        def bot_snapshot(self, _strategy_instance_id: str, *, published_pass: None) -> None:
             return None
 
         def close(self) -> None:

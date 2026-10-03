@@ -13,6 +13,9 @@ from typing import Literal
 ClerkScope = Literal["CUSTODY_SUBJECT", "ACCOUNT_CLERK"]
 AuthorityHealth = Literal["healthy", "degraded_to_mirror", "failed"]
 EvidenceFreshness = Literal["fresh", "stale", "not_required", "unavailable"]
+# The check of the account against Alpaca a safe-flatten plan rests on: an
+# operator's Reconcile now receipt, or the Clerk's own published pass (#2839).
+AccountCheckKind = Literal["reconcile_now", "clerk_pass"]
 
 
 @dataclass(frozen=True)
@@ -209,7 +212,13 @@ class SafeFlattenPlan:
     control_revision: int
     scope: ClerkScope
     strategy_instance_id: str | None
-    reconciliation_id: str
+    # The Reconcile now receipt the plan rests on; ``None`` when it rests on
+    # the Clerk's own pass, which writes no receipt (#2839).
+    reconciliation_id: str | None
+    account_check_kind: AccountCheckKind
+    # When that check was made. The plan expires a bound after it: 30 s for a
+    # receipt, the sweep's liveness bound for the Clerk's pass.
+    account_check_observed_at_ms: int
     prepared_at_ms: int
     expires_at_ms: int
     legs: tuple[SafeFlattenPlanLeg, ...]

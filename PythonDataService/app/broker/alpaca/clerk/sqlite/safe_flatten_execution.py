@@ -136,7 +136,8 @@ async def execute_safe_flatten_plan(
     accepted_effect_operation_ids: list[str] = []
     for leg in plan.legs:
         # Re-check expiry before each leg so a long, multi-leg run cannot submit
-        # a later reduction on reconciliation evidence that has gone stale.
+        # a later reduction on a check of the account that has gone stale: the
+        # plan expires with the receipt or the Clerk's pass it rests on (#2839).
         if repo.clock() > plan.expires_at_ms:
             raise SafeFlattenExecutionError(
                 "The prepared reduction plan expired; prepare a fresh plan."

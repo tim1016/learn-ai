@@ -221,26 +221,9 @@ class ClerkSqliteRepositoryReadApi:
             return [writes.row_to_payload(row) for row in rows]
 
     def last_custody_sequence(self: ClerkSqliteRepository, strategy_instance_id: str | None = None) -> int:
-        """The newest custody transition's sequence, the ledger's or one bot's; 0 when none.
-
-        Per bot it reads the ``(strategy_instance_id, sequence)`` index. Every
-        transition that moves a bot's orders, effects, fills or runs carries
-        its ``strategy_instance_id``; the untagged ones are account-level
-        (uncertainties, fee evidence, budgets, risk limits) or belong to
-        manual and outside orders, which are never a bot's custody.
-        """
+        """The newest custody transition's sequence, the ledger's or one bot's; 0 when none."""
         with self._write_lock:
-            if strategy_instance_id is None:
-                row = self._conn.execute(
-                    "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM custody_transitions"
-                ).fetchone()
-            else:
-                row = self._conn.execute(
-                    "SELECT COALESCE(MAX(sequence), 0) AS sequence FROM custody_transitions "
-                    "WHERE strategy_instance_id = ?",
-                    (strategy_instance_id,),
-                ).fetchone()
-            return int(row["sequence"])
+            return reads.last_custody_sequence(self._conn, strategy_instance_id)
 
     def last_strategy_transition(
         self: ClerkSqliteRepository, *, strategy_instance_id: str, transition_kind: str,

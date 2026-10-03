@@ -708,6 +708,8 @@ async def test_execute_safe_flatten_plan_refuses_manual_custody_leg(
         scope="ACCOUNT_CLERK",
         strategy_instance_id=None,
         reconciliation_id="reconciliation:1",
+        account_check_kind="reconcile_now",
+        account_check_observed_at_ms=1_700_000_000_000,
         prepared_at_ms=1_700_000_000_000,
         expires_at_ms=1_700_000_999_999,
         legs=(

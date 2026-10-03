@@ -44,6 +44,8 @@ from app.broker.alpaca.clerk.sqlite.projections import (
     InvalidTimelineCursor,
     ProjectionReadError,
     SqliteClerkProjectionReader,
+    read_pass_for_page,
+    read_recovery_context,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_execution import (
     RecoveryExecutionError,
@@ -364,11 +366,15 @@ async def get_bot_snapshot(
     if failed is not None:
         return ClerkProjectionResponse.from_projection(failed)
     async with _bot_facade(account_id, strategy_instance_id) as facade:
+        # Read before the snapshot, as every presentation and commit of this
+        # bot's recovery actions reads it (#2839). A bot with an ACTIVE run
+        # reads none, so its snapshot takes no intake lock (#2826).
+        published_pass = await read_pass_for_page(facade, strategy_instance_id)
         try:
             projection = await asyncio.to_thread(
                 _read_projection,
                 facade,
-                lambda reader: reader.bot_snapshot(strategy_instance_id),
+                lambda reader: reader.bot_snapshot(strategy_instance_id, published_pass=published_pass),
             )
         except ProjectionReadError as exc:
             raise _projection_read_error(exc) from exc
@@ -466,13 +472,7 @@ async def _check_recovery_action(
     suggested limit in PRE/POST, or why nothing can be sent.
     """
     try:
-        context = await asyncio.to_thread(
-            _read_projection,
-            facade,
-            lambda reader: reader.recovery_context(
-                strategy_instance_id=strategy_instance_id,
-            ),
-        )
+        context = await read_recovery_context(facade, strategy_instance_id=strategy_instance_id)
     except ProjectionReadError as exc:
         raise _projection_read_error(exc) from exc
     if context is None:
@@ -666,13 +666,10 @@ async def _execute_presented_recovery_action(
     body: RecoveryActionExecuteRequest,
 ) -> RecoveryActionExecuteResponse:
     async def current_context():
-        context = await asyncio.to_thread(
-            _read_projection,
-            facade,
-            lambda reader: reader.recovery_context(
-                strategy_instance_id=strategy_instance_id,
-            ),
-        )
+        # Read afresh on every call, the Clerk's published pass included: a
+        # Flatten presented under a pass is committed only while that pass
+        # still stands (#2839).
+        context = await read_recovery_context(facade, strategy_instance_id=strategy_instance_id)
         if context is None:
             raise HTTPException(
                 status_code=404,

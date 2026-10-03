@@ -934,6 +934,8 @@ def _single_leg_flatten_capability() -> RecoveryCapability:
             scope="CUSTODY_SUBJECT",
             strategy_instance_id=SID,
             reconciliation_id="reconciliation:1",
+            account_check_kind="reconcile_now",
+            account_check_observed_at_ms=1_700_136_000_000,
             prepared_at_ms=1_700_136_000_000,
             expires_at_ms=1_700_136_060_000,
             legs=(

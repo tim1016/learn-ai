@@ -23,6 +23,7 @@ from app.broker.alpaca.clerk.sqlite.execution_coverage_policy import (
 )
 from app.broker.alpaca.clerk.sqlite.folds import position_quantity_is_nonzero
 from app.broker.alpaca.clerk.sqlite.projection_models import (
+    AccountCheckKind,
     AuthorityHealth,
     ClerkScope,
     ProjectedExecutionCoverageConflict,
@@ -96,6 +97,31 @@ class AuthorityRecoveryProof:
 
 
 @dataclass(frozen=True)
+class PublishedPass:
+    """The Clerk's latest published check of the account, as one bot's Flatten gate reads it (#2839).
+
+    ``vouches`` is whether that pass proves what the bot holds: it is recent,
+    it saw the bot's every custody transition, it found the account clean,
+    and no order of the bot's is working or unresolved
+    (``SqliteAlpacaClerkFacade.published_pass``).
+
+    ``observed_at_ms`` is the pass's own time: when its verdict was reached
+    (``AccountReconciliationResult.verdict_at_ms``), read with
+    ``through_sequence`` under one intake hold. It is never when the pass was
+    published -- the Clerk can record more between the two, which the
+    comparison never saw -- and never when this value, or a proof read from
+    the pass, was built: a pass is read many times after it ran.
+
+    ``through_sequence`` is the newest custody transition the pass's final
+    broker comparison saw (``AccountReconciliationResult.through_sequence``).
+    """
+
+    vouches: bool
+    observed_at_ms: int
+    through_sequence: int
+
+
+@dataclass(frozen=True)
 class RecoveryPolicyContext:
     account_id: str
     strategy_instance_id: str | None
@@ -112,6 +138,36 @@ class RecoveryPolicyContext:
     latest_account_reconciliation: ProjectedReconciliation | None
     execution_coverage_conflicts: tuple[ProjectedExecutionCoverageConflict, ...] = ()
     recovery_proof: AuthorityRecoveryProof = AuthorityRecoveryProof()
+    # The Clerk's latest published pass, read before this context's snapshot
+    # was taken, and the bot's newest custody transition read inside it
+    # (#2839). ``None`` for an account-scoped context and wherever no pass was
+    # read: the safe-flatten gate then accepts a Reconcile now receipt only.
+    published_pass: PublishedPass | None = None
+    subject_custody_sequence: int | None = None
+
+
+@dataclass(frozen=True)
+class AccountCheckEvidence:
+    """The check of the account against Alpaca that a safe-flatten plan rests on (#2839).
+
+    A Reconcile now receipt (``reference`` is its reconciliation id) or the
+    Clerk's own published pass. ``observed_at_ms`` is when that check was
+    made, and the plan is good until ``max_age_ms`` after it: each kind of
+    check is aged by its own bound.
+    """
+
+    kind: AccountCheckKind
+    reference: str
+    observed_at_ms: int
+    max_age_ms: int
+
+
+@dataclass(frozen=True)
+class _AccountCheckRefused:
+    """Why no check of the account stands behind a safe flatten."""
+
+    reason_code: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -126,6 +182,8 @@ class _Decision:
     execution_ref: str | None = None
     # False when there is nothing for the action to do (see ``RecoveryCapability.needed``).
     needed: bool = True
+    # The account check an available safe flatten rests on; its plan is built from it.
+    account_check: AccountCheckEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -307,11 +365,12 @@ def _evidence(
     label: str,
     observed_at_ms: int | None,
     required_fresh: bool,
+    max_age_ms: int = FRESH_EVIDENCE_MAX_AGE_MS,
 ) -> RecoveryEvidence:
     age_ms = _age(ctx.now_ms, observed_at_ms)
     if observed_at_ms is None:
         freshness = "unavailable"
-    elif required_fresh and age_ms is not None and age_ms > FRESH_EVIDENCE_MAX_AGE_MS:
+    elif required_fresh and age_ms is not None and age_ms > max_age_ms:
         freshness = "stale"
     else:
         freshness = "fresh"
@@ -423,21 +482,22 @@ def _safe_flatten_blocking_uncertainties(
 
 
 def _admitted_uncertainties_newer_than(
-    ctx: RecoveryPolicyContext, reconciliation: ProjectedReconciliation
+    ctx: RecoveryPolicyContext, checked_at_ms: int
 ) -> tuple[ProjectedUncertainty, ...]:
-    """Admitted broker-side episodes raised or updated after ``reconciliation``.
+    """Admitted broker-side episodes raised or updated after the account check made at ``checked_at_ms``.
 
     A safe flatten admitted under such an episode must not reuse broker truth
     that predates it (#2363 review); the registry's
     ``safe_flatten_requires_later_reconciliation`` names which causes are
-    that kind of evidence.
+    that kind of evidence. The check is a Reconcile now receipt or the
+    Clerk's own pass (#2839), judged alike.
     """
     return tuple(
         uncertainty
         for uncertainty in _relevant_uncertainties(ctx)
         if (policy := reason_policy(uncertainty.reason_code)) is not None
         and policy.safe_flatten_requires_later_reconciliation
-        and uncertainty.observed_at_ms > reconciliation.attempted_at_ms
+        and uncertainty.observed_at_ms > checked_at_ms
     )
 
 
@@ -606,6 +666,102 @@ def _decision(ctx: RecoveryPolicyContext, action_id: RecoveryActionId) -> _Decis
     raise AssertionError(f"healthy catalog cannot evaluate {action_id!r}")
 
 
+def _receipt_evidence(
+    ctx: RecoveryPolicyContext,
+    positions: tuple[ProjectedPosition, ...],
+    reconciliation_evidence: RecoveryEvidence,
+) -> AccountCheckEvidence | _AccountCheckRefused:
+    """A fresh Reconcile now receipt for the whole account, or why the latest one does not stand."""
+    reconciliation = ctx.latest_account_reconciliation
+    if not _is_successful_account_reconciliation(reconciliation):
+        return _AccountCheckRefused(
+            "CLEAN_RECONCILIATION_REQUIRED",
+            "A successful account reconciliation is required before preparing reduction.",
+        )
+    if _admitted_uncertainties_newer_than(ctx, reconciliation.attempted_at_ms):
+        return _AccountCheckRefused(
+            "UNCERTAINTY_EVIDENCE_NOT_RECONCILED",
+            "Broker evidence the Clerk could not record arrived after the account "
+            "reconciliation.",
+        )
+    if any(position.updated_at_ms > reconciliation.attempted_at_ms for position in positions):
+        return _AccountCheckRefused(
+            "POSITION_EVIDENCE_NOT_RECONCILED",
+            "Attributed position evidence changed after the account reconciliation.",
+        )
+    if reconciliation_evidence.freshness != "fresh":
+        return _AccountCheckRefused(
+            "RECONCILIATION_EVIDENCE_STALE",
+            "The successful reconciliation is too old for a reduction decision.",
+        )
+    return AccountCheckEvidence(
+        kind="reconcile_now",
+        reference=reconciliation.reconciliation_id,
+        observed_at_ms=reconciliation.attempted_at_ms,
+        max_age_ms=FRESH_EVIDENCE_MAX_AGE_MS,
+    )
+
+
+def _pass_evidence(
+    ctx: RecoveryPolicyContext, positions: tuple[ProjectedPosition, ...]
+) -> AccountCheckEvidence | None:
+    """The Clerk's own latest check of the account, when one stopped bot's flatten may rest on it (#2839).
+
+    Accepted because an operator's Flatten is checked against the account
+    again as it is sent (``flatten_cover``). For one bot's flatten only, never
+    the account's, and only while every one of these holds:
+
+    - the pass vouches for this bot (``PublishedPass.vouches``);
+    - the bot has no ACTIVE run: a running bot's own decisions can move its
+      custody at any moment, and its Flatten is refused until it stops;
+    - the pass is no older than the sweep's liveness bound, counted from the
+      pass's own time;
+    - nothing of the bot's custody was written after what the pass's final
+      broker comparison saw;
+    - no admitted broker-side episode and no attributed position is newer
+      than the pass: the two tests a receipt passes.
+    """
+    published = ctx.published_pass
+    if (
+        ctx.strategy_instance_id is None
+        or published is None
+        or ctx.subject_custody_sequence is None
+        or not published.vouches
+        or _relevant_runs(ctx)
+        or not 0 <= ctx.now_ms - published.observed_at_ms <= SWEEP_LIVENESS_BOUND_MS
+        or ctx.subject_custody_sequence > published.through_sequence
+        # An episode recorded in the verdict's own millisecond may have
+        # landed just after it, so the pass counts it as newer (#2839).
+        or _admitted_uncertainties_newer_than(ctx, published.observed_at_ms - 1)
+        or any(position.updated_at_ms > published.observed_at_ms for position in positions)
+    ):
+        return None
+    return AccountCheckEvidence(
+        kind="clerk_pass",
+        reference=f"clerk-pass:{published.through_sequence}",
+        observed_at_ms=published.observed_at_ms,
+        max_age_ms=SWEEP_LIVENESS_BOUND_MS,
+    )
+
+
+def _account_evidence(
+    ctx: RecoveryPolicyContext,
+    positions: tuple[ProjectedPosition, ...],
+    reconciliation_evidence: RecoveryEvidence,
+) -> AccountCheckEvidence | _AccountCheckRefused:
+    """The check of the account a safe flatten of ``positions`` rests on, or why none stands (#2839).
+
+    A fresh Reconcile now receipt, judged as it was before the Clerk's own
+    pass was accepted, and preferred when both stand. Otherwise the Clerk's
+    latest published pass (:func:`_pass_evidence`). With neither, the refusal
+    is the receipt's own.
+    """
+    receipt = _receipt_evidence(ctx, positions, reconciliation_evidence)
+    if isinstance(receipt, AccountCheckEvidence):
+        return receipt
+    return _pass_evidence(ctx, positions) or receipt
+
+
 def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     positions = _relevant_positions(ctx)
     non_finite_positions = _non_finite_positions(ctx)
@@ -625,6 +781,7 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     relevant_uncertainties = _safe_flatten_blocking_uncertainties(ctx)
     reason_code: str | None = None
     reason: str | None = None
+    account_check: AccountCheckEvidence | None = None
     if non_finite_positions:
         reason_code = "EXPOSURE_NOT_PROVEN"
         reason = (
@@ -639,34 +796,79 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
     elif relevant_uncertainties:
         reason_code = "EXPOSURE_NOT_PROVEN"
         reason = "Active uncertainty prevents the Clerk from proving a safe reduction quantity."
-    elif not _is_successful_account_reconciliation(reconciliation):
-        reason_code = "CLEAN_RECONCILIATION_REQUIRED"
-        reason = "A successful account reconciliation is required before preparing reduction."
-    elif _admitted_uncertainties_newer_than(ctx, reconciliation):
-        reason_code = "UNCERTAINTY_EVIDENCE_NOT_RECONCILED"
-        reason = (
-            "Broker evidence the Clerk could not record arrived after the account "
-            "reconciliation."
-        )
-    elif any(
-        position.updated_at_ms > reconciliation.attempted_at_ms
-        for position in positions
-    ):
-        reason_code = "POSITION_EVIDENCE_NOT_RECONCILED"
-        reason = (
-            "Attributed position evidence changed after the account reconciliation."
-        )
-    elif reconciliation_evidence.freshness != "fresh":
-        reason_code = "RECONCILIATION_EVIDENCE_STALE"
-        reason = "The successful reconciliation is too old for a reduction decision."
+    else:
+        checked = _account_evidence(ctx, positions, reconciliation_evidence)
+        if isinstance(checked, AccountCheckEvidence):
+            account_check = checked
+        else:
+            reason_code, reason = checked.reason_code, checked.reason
     available = reason_code is None
+    token_facts: dict[str, object] = {
+        "positions": [
+            (
+                position.strategy_instance_id,
+                position.symbol,
+                position.attributed_qty,
+                position.updated_at_ms,
+            )
+            for position in positions
+        ],
+        "non_finite_positions": [
+            (
+                position.strategy_instance_id,
+                position.symbol,
+                repr(position.attributed_qty),
+                position.updated_at_ms,
+            )
+            for position in non_finite_positions
+        ],
+        "working_orders": [
+            (order.order_ref, order.broker_state, order.updated_at_ms)
+            for order in working_orders
+        ],
+        "uncertainties": [
+            (uncertainty.uncertainty_id, uncertainty.reason_code)
+            for uncertainty in relevant_uncertainties
+        ],
+        "reconciliation": (
+            None
+            if reconciliation is None
+            else (
+                reconciliation.reconciliation_id,
+                reconciliation.outcome,
+                reconciliation.attempted_at_ms,
+            )
+        ),
+    }
+    # A plan resting on a receipt shows, and is versioned by, exactly what it
+    # was before the Clerk's own pass was accepted. One resting on the pass
+    # shows the pass and adds the bot's newest custody record to its token.
+    check_evidence = reconciliation_evidence
+    if account_check is not None and account_check.kind == "clerk_pass":
+        check_evidence = _evidence(
+            ctx,
+            reference=account_check.reference,
+            label="The Clerk's latest check of the account",
+            observed_at_ms=account_check.observed_at_ms,
+            required_fresh=True,
+            max_age_ms=account_check.max_age_ms,
+        )
+        # Never the pass itself: it is published again every 15 s, so a token
+        # naming it would go stale under the operator's hands with nothing
+        # about the bot changed. The bot's newest custody record is what a
+        # Flatten moves. One that fails or is refused writes a new record, so
+        # the plan prepared after it has a new token, is a new EXIT, and reads
+        # the account again as it is sent; without it the retry would be the
+        # failed EXIT, told its stored refusal with no new read (#2839).
+        token_facts["subject_custody_sequence"] = ctx.subject_custody_sequence
     return _Decision(
         available=available,
         reason_code=reason_code,
         reason=reason,
         needed=reason_code != "NO_ATTRIBUTED_EXPOSURE",
-        freshness=reconciliation_evidence.freshness,
-        evidence=(reconciliation_evidence,),
+        freshness=check_evidence.freshness,
+        evidence=(check_evidence,),
+        account_check=account_check,
         next_step=(
             "Review the exact attributed quantities in the generated plan; "
             "no order was submitted."
@@ -677,43 +879,7 @@ def _safe_flatten_decision(ctx: RecoveryPolicyContext) -> _Decision:
                 else "Run Reconcile now and refresh the custody snapshot."
             )
         ),
-        token_facts={
-            "positions": [
-                (
-                    position.strategy_instance_id,
-                    position.symbol,
-                    position.attributed_qty,
-                    position.updated_at_ms,
-                )
-                for position in positions
-            ],
-            "non_finite_positions": [
-                (
-                    position.strategy_instance_id,
-                    position.symbol,
-                    repr(position.attributed_qty),
-                    position.updated_at_ms,
-                )
-                for position in non_finite_positions
-            ],
-            "working_orders": [
-                (order.order_ref, order.broker_state, order.updated_at_ms)
-                for order in working_orders
-            ],
-            "uncertainties": [
-                (uncertainty.uncertainty_id, uncertainty.reason_code)
-                for uncertainty in relevant_uncertainties
-            ],
-            "reconciliation": (
-                None
-                if reconciliation is None
-                else (
-                    reconciliation.reconciliation_id,
-                    reconciliation.outcome,
-                    reconciliation.attempted_at_ms,
-                )
-            ),
-        },
+        token_facts=token_facts,
     )
 
 
@@ -928,6 +1094,7 @@ def _build_safe_flatten_plan(
     ctx: RecoveryPolicyContext,
     *,
     version_token: str,
+    account_check: AccountCheckEvidence | None,
 ) -> SafeFlattenPlan:
     """Build the read-only exact-close plan for proven attributed positions.
 
@@ -940,12 +1107,13 @@ def _build_safe_flatten_plan(
       tests/broker/alpaca/clerk/sqlite/test_recovery_policy.py::
       test_safe_flatten_prepares_versioned_exact_close_plan and the adjacent
       account-reconciliation, position-clock, uncertainty, and order gates.
+
+    ``account_check`` is the check of the account the gate accepted
+    (:func:`_account_evidence`). The plan names it and expires with it, each
+    kind of check by its own bound (#2839).
     """
-    reconciliation = ctx.latest_account_reconciliation
-    if not _is_successful_account_reconciliation(reconciliation):
-        raise AssertionError(
-            "available safe-flatten plan requires successful account reconciliation"
-        )
+    if account_check is None:
+        raise AssertionError("available safe-flatten plan requires an accepted account check")
     return SafeFlattenPlan(
         version_token=version_token,
         account_id=ctx.account_id,
@@ -954,11 +1122,13 @@ def _build_safe_flatten_plan(
         control_revision=ctx.control_revision,
         scope=_scope(ctx),
         strategy_instance_id=ctx.strategy_instance_id,
-        reconciliation_id=reconciliation.reconciliation_id,
-        prepared_at_ms=ctx.now_ms,
-        expires_at_ms=(
-            reconciliation.attempted_at_ms + FRESH_EVIDENCE_MAX_AGE_MS
+        reconciliation_id=(
+            account_check.reference if account_check.kind == "reconcile_now" else None
         ),
+        account_check_kind=account_check.kind,
+        account_check_observed_at_ms=account_check.observed_at_ms,
+        prepared_at_ms=ctx.now_ms,
+        expires_at_ms=account_check.observed_at_ms + account_check.max_age_ms,
         legs=tuple(
             SafeFlattenPlanLeg(
                 strategy_instance_id=position.strategy_instance_id,
@@ -998,6 +1168,7 @@ def build_recovery_catalog(ctx: RecoveryPolicyContext) -> tuple[RecoveryCapabili
                     _build_safe_flatten_plan(
                         ctx,
                         version_token=concurrency_token,
+                        account_check=decision.account_check,
                     )
                     if descriptor.action_id in ("prepare_safe_flatten", "execute_safe_flatten")
                     and decision.available

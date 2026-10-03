@@ -162,12 +162,16 @@ function verifiedPlan(check: SqliteRecoveryActionCheck, request: FlattenRequest)
 /**
  * Flatten a stopped bot's position in one confirmed sequence (hurdle H30).
  *
- * The Clerk accepts a flatten only on fresh recovery evidence (its window is
- * `FRESH_EVIDENCE_MAX_AGE_MS`, 30 s), so the steps run back to back rather
- * than across three separate clicks: reconcile the bot, re-read the panel for
- * the tokens that reconciliation minted, prepare the plan and check it sells
- * exactly what the owner confirmed, then send it. Every step's refusal is the
- * backend's own reason, and the sequence stops at the first one.
+ * The Clerk accepts a flatten only on a fresh check of the account. A
+ * Reconcile now receipt is one for 30 s (`FRESH_EVIDENCE_MAX_AGE_MS`), so the
+ * steps run back to back rather than across three separate clicks: reconcile
+ * the bot, re-read the panel for the tokens that reconciliation minted,
+ * prepare the plan and check it sells exactly what the owner confirmed, then
+ * send it. Every step's refusal is the backend's own reason, and the sequence
+ * stops at the first one. The Clerk's own periodic check also opens the Sell
+ * button (#2839). A sale sent at once rests on the reconciliation run here;
+ * an extended-hours ticket left open past that receipt's 30 s is refreshed,
+ * and sent, on the Clerk's own check for as long as one stands for the bot.
  *
  * During regular hours the prepared sale is sent at market. Outside them the
  * sale needs a limit price, so the sequence stops at `needs_limit` and the

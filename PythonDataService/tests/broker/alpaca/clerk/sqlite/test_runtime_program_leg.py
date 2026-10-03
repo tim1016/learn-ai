@@ -948,7 +948,8 @@ async def test_each_bots_flatten_ticket_uses_its_own_terms(tmp_path: Path) -> No
             await facade.register_strategy_run(binding)
             plan = SafeFlattenPlan(version_token='test', account_id=ACCOUNT_ID, authority_generation=1,
                 db_identity_token='test', control_revision=0, scope='strategy', strategy_instance_id=sid,
-                reconciliation_id='test', prepared_at_ms=now, expires_at_ms=now + 1000,
+                reconciliation_id='test', account_check_kind='reconcile_now', account_check_observed_at_ms=now,
+                prepared_at_ms=now, expires_at_ms=now + 1000,
                 legs=(SafeFlattenPlanLeg(sid, 'SPY', 'sell', 1, now),))
             priced = facade.price_safe_flatten(plan)
             assert priced.suggested_limit_price == Decimal('99.90' if sid == 'one' else '99.60')
@@ -979,7 +980,8 @@ async def test_unset_backfill_stays_unset_after_restart_and_allows_regular_marke
                 source="ibkr", observed_at_ms=stamp))
         plan = SafeFlattenPlan(version_token="test", account_id=ACCOUNT_ID, authority_generation=1,
             db_identity_token="test", control_revision=0, scope="strategy", strategy_instance_id=SID,
-            reconciliation_id="test", prepared_at_ms=now, expires_at_ms=now + 1000,
+            reconciliation_id="test", account_check_kind="reconcile_now", account_check_observed_at_ms=now,
+            prepared_at_ms=now, expires_at_ms=now + 1000,
             legs=(SafeFlattenPlanLeg(SID, "SPY", "sell", 1, now),))
         held = restarted.price_safe_flatten(plan)
         assert isinstance(held, LegRefusal)

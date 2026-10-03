@@ -39553,6 +39553,20 @@
       },
       "SafeFlattenPlanResponse": {
         "properties": {
+          "account_check_kind": {
+            "enum": [
+              "reconcile_now",
+              "clerk_pass"
+            ],
+            "title": "Account Check Kind",
+            "type": "string"
+          },
+          "account_check_observed_at_ms": {
+            "maximum": 253402300799999.0,
+            "minimum": 0.0,
+            "title": "Account Check Observed At Ms",
+            "type": "integer"
+          },
           "account_id": {
             "title": "Account Id",
             "type": "string"
@@ -39585,8 +39599,15 @@
             "type": "integer"
           },
           "reconciliation_id": {
-            "title": "Reconciliation Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciliation Id"
           },
           "scope": {
             "enum": [
@@ -39621,6 +39642,8 @@
           "scope",
           "strategy_instance_id",
           "reconciliation_id",
+          "account_check_kind",
+          "account_check_observed_at_ms",
           "prepared_at_ms",
           "expires_at_ms",
           "legs"

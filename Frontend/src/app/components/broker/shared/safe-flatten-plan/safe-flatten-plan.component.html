@@ -66,8 +66,19 @@
           <dd class="m-0 mt-1 break-words"><code>{{ plan().db_identity_token }}</code></dd>
         </div>
         <div class="min-w-0">
-          <dt class="text-xs text-[var(--text-secondary)]">Reconciliation</dt>
-          <dd class="m-0 mt-1 break-words"><code>{{ plan().reconciliation_id }}</code></dd>
+          <dt class="text-xs text-[var(--text-secondary)]">Account check</dt>
+          <dd class="m-0 mt-1 break-words">
+            @if (plan().account_check_kind === 'clerk_pass') {
+              <span>The Account Clerk's own check</span>
+            } @else {
+              <span>Reconcile now</span> <code>{{ plan().reconciliation_id }}</code>
+            }
+            <app-timestamp-display
+              class="block"
+              [value]="plan().account_check_observed_at_ms"
+              mode="local"
+            />
+          </dd>
         </div>
       </dl>
 

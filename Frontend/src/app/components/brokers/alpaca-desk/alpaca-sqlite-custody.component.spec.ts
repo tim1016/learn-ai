@@ -34,6 +34,8 @@ const SAFE_FLATTEN_PLAN: SqliteSafeFlattenPlan = {
   scope: 'ACCOUNT_CLERK',
   strategy_instance_id: null,
   reconciliation_id: 'reconciliation-17',
+  account_check_kind: 'reconcile_now',
+  account_check_observed_at_ms: NOW - 1_000,
   prepared_at_ms: NOW,
   expires_at_ms: 4_102_444_800_000,
   legs: [{

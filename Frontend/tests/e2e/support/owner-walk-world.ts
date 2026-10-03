@@ -1206,6 +1206,8 @@ export class OwnerWalkWorld {
         next_step: PLAN_NEXT_STEP,
         primary: true,
         reduction_plan: {
+          account_check_kind: 'reconcile_now',
+          account_check_observed_at_ms: NOW_MS,
           account_id: PAPER_ACCOUNT,
           authority_generation: BINDING_GENERATION,
           control_revision: 7,

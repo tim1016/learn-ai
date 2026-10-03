@@ -28,6 +28,11 @@ from app.services.broker_v2_panel.sqlite_panel_source import (
 _SID = "bot-alpha"
 
 
+async def _no_published_pass(_strategy_instance_id: str) -> None:
+    """The stand-in authority has published no account pass (#2839)."""
+    return None
+
+
 def _request(*, action_id: str, revision: int = 42, token: str = "token") -> PanelActionRequest:
     return PanelActionRequest(
         action_id=action_id,  # type: ignore[arg-type]
@@ -76,7 +81,7 @@ async def test_context_read_failure_releases_the_same_key_for_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A failed pre-execution projection read leaves no in-flight command."""
-    facade = SimpleNamespace(repository=object(), authority_kind="sqlite")
+    facade = SimpleNamespace(repository=object(), authority_kind="sqlite", published_pass=_no_published_pass)
     store = IdempotencyStore(wait_timeout_s=0)
     monkeypatch.setattr(
         "app.services.broker_v2_panel.sqlite_panel_source.SqliteClerkProjectionReader.from_facade",
@@ -113,7 +118,7 @@ async def test_stop_failure_releases_the_same_key_to_redrive_quiescence(
     """
 
     class _Reader:
-        def recovery_context(self, *, strategy_instance_id: str) -> SimpleNamespace:
+        def recovery_context(self, *, strategy_instance_id: str, published_pass: None) -> SimpleNamespace:
             assert strategy_instance_id == _SID
             return SimpleNamespace(strategy_instance_id=_SID)
 
@@ -121,7 +126,7 @@ async def test_stop_failure_releases_the_same_key_to_redrive_quiescence(
             return None
 
     attempts = 0
-    facade = SimpleNamespace(repository=object(), authority_kind="sqlite")
+    facade = SimpleNamespace(repository=object(), authority_kind="sqlite", published_pass=_no_published_pass)
     store = IdempotencyStore(wait_timeout_s=0)
     monkeypatch.setattr(
         "app.services.broker_v2_panel.sqlite_panel_source.SqliteClerkProjectionReader.from_facade",

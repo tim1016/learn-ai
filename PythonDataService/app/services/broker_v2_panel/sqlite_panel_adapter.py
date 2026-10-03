@@ -798,13 +798,14 @@ def _vouched_holdings(
     - the Clerk's latest published pass, when it saw the bot's every custody
       transition and can prove what the bot holds (``pass_proof``). The Clerk
       runs one every 15 s, so this is the proof an ended bot normally has;
-    - a fresh account-wide Reconcile now receipt.
+    - a fresh account-wide Reconcile now receipt, or the account check this
+      cut's own Flatten rests on (``_flatten_ready``).
     """
     if projection.authority_health != "healthy" or projection.uncertainties:
         return None
     if pass_proof is not None and not pass_proof.unprovable:
         return dict(pass_proof.exposure)
-    if not _has_fresh_account_receipt(projection):
+    if not _flatten_ready(projection):
         return None
     return {
         position.symbol: position.attributed_qty
@@ -814,12 +815,29 @@ def _vouched_holdings(
 
 
 def _has_fresh_account_receipt(projection: ClerkProjection) -> bool:
-    """Whether a Reconcile now receipt for the whole account is still fresh: what Flatten asks for."""
+    """Whether a Reconcile now receipt for the whole account is still fresh."""
     reconciliation = projection.latest_reconciliation
     return (
         reconciliation is not None and reconciliation.outcome == "RESOLVED_SUCCESS"
         and reconciliation.effect_operation_id is None and reconciliation.order_ref is None
         and 0 <= projection.generated_at_ms - reconciliation.attempted_at_ms <= FRESH_EVIDENCE_MAX_AGE_MS
+    )
+
+
+def _flatten_ready(projection: ClerkProjection) -> bool:
+    """Whether this cut's Flatten has a check of the account to rest on.
+
+    A fresh Reconcile now receipt, as before, or the plan the recovery policy
+    prepared in this same cut: it also accepts the Clerk's own pass for a
+    stopped bot (#2839). The plan is the page's own Sell button, so under the
+    Clerk's pass a notice offers Flatten exactly when the button does. The
+    receipt is wider than the button: while one is fresh this is true even
+    when something else blocks the plan (a working order, a record newer than
+    the receipt), as it was before #2839.
+    """
+    return _has_fresh_account_receipt(projection) or any(
+        action.action_id == "prepare_safe_flatten" and action.available
+        for action in projection.recovery_actions
     )
 
 
@@ -876,10 +894,9 @@ def terminal_exposure_notices(
         return []
     notices: list[ExposureNoticeView] = []
     held = _vouched_holdings(projection, sid, pass_proof)
-    # Flatten still asks for a fresh Reconcile now receipt; the Clerk's own
-    # pass vouches for the notice only, so the notice never offers a Flatten
-    # the page would refuse.
-    flatten_ready = _has_fresh_account_receipt(projection)
+    # A pass that vouches for what the bot holds, but that the page's own
+    # gate did not accept in this cut, sends the owner to Reconcile now first.
+    flatten_ready = _flatten_ready(projection)
     if held is None:
         notices.append(_POSITION_UNVERIFIED)
     elif held:

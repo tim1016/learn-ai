@@ -53,11 +53,16 @@ FLATTEN_COVER_NEXT_STEPS: dict[str, str] = {
 }
 """What the operator can do about each refusal, keyed by its code.
 
-The same step for both. A refused Flatten is the one EXIT of the plan it was
-prepared as, and a refusal changes nothing that plan is made from: preparing
-again before a new reconciliation presents the same plan, which is told this
-refusal again with no new read of the account. Only a new reconciliation makes
-a new plan, whose Flatten reads the account afresh.
+The same step for both, and true whichever check of the account the refused
+plan rested on (#2839). A refused Flatten is the one EXIT of the plan it was
+prepared as. A plan that rested on a Reconcile now receipt is unchanged by the
+refusal: prepared again while that receipt is fresh, it is the same plan, told
+this refusal again with no new read of the account. A plan that rested on the
+Clerk's own pass is withdrawn by the refusal, which is a record of the bot's
+that the pass never saw. Either way a new reconciliation makes a new plan at
+once, whose Flatten reads the account afresh. With no fresh receipt standing,
+the Clerk's own passes make one too, once a pass has seen every record the
+refusal left.
 """
 
 FLATTEN_COVER_HEADLINES: dict[str, str] = {

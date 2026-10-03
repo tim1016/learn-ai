@@ -16,8 +16,11 @@ from app.broker.alpaca.clerk.sqlite.projection_models import (
     RecoveryCapability,
 )
 from app.broker.alpaca.clerk.sqlite.recovery_policy import (
+    FRESH_EVIDENCE_MAX_AGE_MS,
+    SWEEP_LIVENESS_BOUND_MS,
     UNCONDITIONAL_RECOVERY_ACTION_IDS,
     AuthorityRecoveryProof,
+    PublishedPass,
     RecoveryActionUnavailableError,
     RecoveryPolicyContext,
     StaleRecoveryTokenError,
@@ -1014,3 +1017,259 @@ def test_a_reconciliation_older_than_the_residue_does_not_hide_the_discharge() -
     )
 
     assert action.available is True
+
+
+# ── The Flatten gate accepts the Clerk's own check of the account (#2839) ────
+
+_NOW_MS = 1_700_000_010_000  # ``_context``'s clock
+_PASS_AT_MS = _NOW_MS - 5_000
+_PASS_SAW_THROUGH = 40
+
+
+def _clerk_pass(**changes: object) -> PublishedPass:
+    """The Clerk's latest pass: five seconds old, vouching for the bot, seen through its newest record."""
+    return replace(
+        PublishedPass(vouches=True, observed_at_ms=_PASS_AT_MS, through_sequence=_PASS_SAW_THROUGH), **changes
+    )
+
+
+def _receipt(*, age_ms: int) -> ProjectedReconciliation:
+    return ProjectedReconciliation(
+        reconciliation_id="reconciliation-17",
+        effect_operation_id=None,
+        order_ref=None,
+        trigger="OPERATOR_RECONCILE_NOW",
+        attempted_at_ms=_NOW_MS - age_ms,
+        outcome="RESOLVED_SUCCESS",
+        evidence_age_ms=age_ms,
+        evidence_refs=("fresh_account_snapshot",),
+    )
+
+
+def _stopped_holding(**overrides: object) -> RecoveryPolicyContext:
+    """A bot stopped minutes ago holding 1 SPY, with no Reconcile now receipt, read beside the Clerk's pass."""
+    values: dict[str, object] = {
+        "runs": (
+            ProjectedRun(
+                run_id="run-1",
+                strategy_instance_id="spy-bot",
+                lifecycle_run_id="lifecycle-1",
+                state="STOPPED",
+                started_at_ms=_NOW_MS - 600_000,
+                stopped_at_ms=_NOW_MS - 240_000,
+            ),
+        ),
+        "positions": (
+            ProjectedPosition(
+                strategy_instance_id="spy-bot",
+                symbol="SPY",
+                attributed_qty=1.0,
+                updated_at_ms=_NOW_MS - 300_000,
+            ),
+        ),
+        "published_pass": _clerk_pass(),
+        "subject_custody_sequence": _PASS_SAW_THROUGH,
+    }
+    values.update(overrides)
+    return _context(**values)
+
+
+def _flatten(context: RecoveryPolicyContext, action_id: str = "prepare_safe_flatten") -> RecoveryCapability:
+    return next(action for action in build_recovery_catalog(context) if action.action_id == action_id)
+
+
+def test_a_stopped_bots_flatten_rests_on_the_clerks_own_pass() -> None:
+    """The Clerk checked the whole account five seconds ago and saw every record of this bot.
+
+    Before #2839 the plan was refused until someone pressed Reconcile now.
+    """
+    context = _stopped_holding()
+
+    prepare, execute = _flatten(context), _flatten(context, "execute_safe_flatten")
+
+    assert prepare.available and execute.available
+    plan = prepare.reduction_plan
+    assert plan is not None
+    assert (plan.account_check_kind, plan.account_check_observed_at_ms, plan.reconciliation_id) == (
+        "clerk_pass",
+        _PASS_AT_MS,
+        None,
+    )
+    # The plan is good for the pass's own bound, counted from the pass -- not from when it was prepared.
+    assert plan.expires_at_ms == _PASS_AT_MS + SWEEP_LIVENESS_BOUND_MS
+    assert [(leg.symbol, leg.side, leg.quantity) for leg in plan.legs] == [("SPY", "sell", 1.0)]
+    (evidence,) = prepare.evidence
+    assert (evidence.reference, evidence.observed_at_ms, evidence.age_ms, evidence.freshness) == (
+        f"clerk-pass:{_PASS_SAW_THROUGH}",
+        _PASS_AT_MS,
+        5_000,
+        "fresh",
+    )
+    wire_plan = RecoveryCapabilityResponse.model_validate(prepare).model_dump(mode="json")["reduction_plan"]
+    assert wire_plan["reconciliation_id"] is None
+    assert wire_plan["account_check_kind"] == "clerk_pass"
+
+
+def _an_unfoldable_order_seen_after_the_pass(*, later_by_ms: int = 1) -> ProjectedUncertainty:
+    return _account_uncertainty("UNFOLDABLE_BROKER_ORDER", observed_at_ms=_PASS_AT_MS + later_by_ms)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"published_pass": None}, id="no-pass-was-read"),
+        pytest.param({"published_pass": _clerk_pass(vouches=False)}, id="the-pass-does-not-vouch-for-this-bot"),
+        pytest.param(
+            {"published_pass": _clerk_pass(observed_at_ms=_NOW_MS - SWEEP_LIVENESS_BOUND_MS - 1)},
+            id="the-pass-is-older-than-the-sweeps-bound",
+        ),
+        pytest.param(
+            {"published_pass": _clerk_pass(observed_at_ms=_NOW_MS + 1)}, id="the-pass-is-dated-after-now"
+        ),
+        pytest.param(
+            {"subject_custody_sequence": _PASS_SAW_THROUGH + 1},
+            id="the-bot-wrote-a-custody-record-after-the-pass",
+        ),
+        pytest.param({"subject_custody_sequence": None}, id="the-bots-newest-record-was-not-read"),
+        pytest.param(
+            {
+                "positions": (
+                    ProjectedPosition(
+                        strategy_instance_id="spy-bot", symbol="SPY", attributed_qty=1.0,
+                        updated_at_ms=_PASS_AT_MS + 1,
+                    ),
+                )
+            },
+            id="the-position-changed-after-the-pass",
+        ),
+        pytest.param(
+            {"uncertainties": (_an_unfoldable_order_seen_after_the_pass(),)},
+            id="broker-evidence-arrived-after-the-pass",
+        ),
+        pytest.param(
+            {"uncertainties": (_an_unfoldable_order_seen_after_the_pass(later_by_ms=0),)},
+            id="broker-evidence-arrived-in-the-passs-own-millisecond",
+        ),
+        pytest.param({"runs": _context().runs}, id="the-bot-is-still-running"),
+        pytest.param({"strategy_instance_id": None}, id="the-whole-account-not-one-bot"),
+    ],
+)
+def test_a_pass_that_does_not_qualify_leaves_the_gate_exactly_as_it_was(overrides: dict[str, object]) -> None:
+    """Refused, word for word and token for token, as if the Clerk's pass had never been read.
+
+    The reason is whatever the receipt alone gives -- nothing new is said.
+    """
+    context = _stopped_holding(**overrides)
+    unread = replace(context, published_pass=None, subject_custody_sequence=None)
+
+    for action_id in ("prepare_safe_flatten", "execute_safe_flatten"):
+        refused = _flatten(context, action_id)
+        assert refused.available is False, action_id
+        assert refused.reduction_plan is None
+        assert refused == _flatten(unread, action_id)
+    prepare = _flatten(context)
+    if "uncertainties" not in overrides:
+        assert (prepare.unavailable_reason_code, prepare.unavailable_reason, prepare.next_step) == (
+            "CLEAN_RECONCILIATION_REQUIRED",
+            "A successful account reconciliation is required before preparing reduction.",
+            "Run Reconcile now and refresh the custody snapshot.",
+        )
+
+
+def test_a_pass_exactly_at_the_sweeps_bound_still_stands() -> None:
+    context = _stopped_holding(published_pass=_clerk_pass(observed_at_ms=_NOW_MS - SWEEP_LIVENESS_BOUND_MS))
+
+    assert _flatten(context).available
+
+
+def test_a_fresh_receipt_wins_over_the_pass_and_the_plan_is_the_receipts_own() -> None:
+    """With both standing nothing about a receipt-backed plan changes: not its evidence, expiry or token."""
+    with_both = _stopped_holding(latest_account_reconciliation=_receipt(age_ms=1_000))
+    receipt_only = replace(with_both, published_pass=None, subject_custody_sequence=None)
+
+    for action_id in ("prepare_safe_flatten", "execute_safe_flatten"):
+        assert _flatten(with_both, action_id) == _flatten(receipt_only, action_id), action_id
+    plan = _flatten(with_both).reduction_plan
+    assert plan is not None
+    assert (plan.account_check_kind, plan.reconciliation_id, plan.account_check_observed_at_ms) == (
+        "reconcile_now",
+        "reconciliation-17",
+        _NOW_MS - 1_000,
+    )
+    assert plan.expires_at_ms == _NOW_MS - 1_000 + FRESH_EVIDENCE_MAX_AGE_MS
+
+
+def test_a_stale_receipt_does_not_stop_the_pass_from_being_accepted() -> None:
+    context = _stopped_holding(latest_account_reconciliation=_receipt(age_ms=FRESH_EVIDENCE_MAX_AGE_MS + 1))
+
+    plan = _flatten(context).reduction_plan
+
+    assert plan is not None and plan.account_check_kind == "clerk_pass"
+
+
+def test_a_plan_under_the_pass_outlives_the_next_pass_but_not_a_new_record_of_the_bot() -> None:
+    """The token names the bot's newest custody record, never the pass.
+
+    The Clerk publishes a new pass every 15 s; the plan the operator is
+    looking at must survive that. A new record of the bot -- what a Flatten
+    that failed leaves -- must end it, even under a pass that saw the record:
+    the next plan is then a new EXIT that reads the account again.
+    """
+    presented = _stopped_holding()
+    plan = _flatten(presented, "execute_safe_flatten")
+    next_pass = replace(
+        presented,
+        now_ms=_NOW_MS + 15_000,
+        published_pass=_clerk_pass(observed_at_ms=_NOW_MS + 10_000),
+    )
+    bot_moved = replace(
+        next_pass,
+        published_pass=_clerk_pass(observed_at_ms=_NOW_MS + 10_000, through_sequence=_PASS_SAW_THROUGH + 3),
+        subject_custody_sequence=_PASS_SAW_THROUGH + 3,
+    )
+
+    renewed = recheck_recovery_action(
+        next_pass, action_id="execute_safe_flatten", concurrency_token=plan.concurrency_token
+    )
+
+    assert renewed.reduction_plan is not None
+    # The commit's plan expires with the pass that stands at the commit.
+    assert renewed.reduction_plan.expires_at_ms == _NOW_MS + 10_000 + SWEEP_LIVENESS_BOUND_MS
+    assert _flatten(bot_moved, "execute_safe_flatten").available
+    with pytest.raises(StaleRecoveryTokenError):
+        recheck_recovery_action(
+            bot_moved, action_id="execute_safe_flatten", concurrency_token=plan.concurrency_token
+        )
+
+
+def test_a_flatten_presented_under_a_pass_is_refused_at_commit_once_the_pass_no_longer_stands() -> None:
+    """The commit judges the pass it reads then, never the one the plan was presented under."""
+    presented = _stopped_holding()
+    plan = _flatten(presented, "execute_safe_flatten")
+    assert plan.available
+
+    for at_commit in (
+        replace(presented, now_ms=_PASS_AT_MS + SWEEP_LIVENESS_BOUND_MS + 1),
+        replace(presented, published_pass=_clerk_pass(vouches=False)),
+        replace(presented, subject_custody_sequence=_PASS_SAW_THROUGH + 1),
+        replace(presented, published_pass=None, subject_custody_sequence=None),
+    ):
+        assert _flatten(at_commit, "execute_safe_flatten").available is False
+        with pytest.raises(StaleRecoveryTokenError):
+            recheck_recovery_action(
+                at_commit, action_id="execute_safe_flatten", concurrency_token=plan.concurrency_token
+            )
+
+
+def test_a_plan_presented_under_a_pass_is_never_committed_as_a_receipts_plan() -> None:
+    """A Reconcile now landing between presentation and commit changes the evidence: the operator refreshes."""
+    presented = _stopped_holding()
+    plan = _flatten(presented, "execute_safe_flatten")
+    reconciled = replace(presented, latest_account_reconciliation=_receipt(age_ms=0))
+
+    assert _flatten(reconciled, "execute_safe_flatten").available
+    with pytest.raises(StaleRecoveryTokenError):
+        recheck_recovery_action(
+            reconciled, action_id="execute_safe_flatten", concurrency_token=plan.concurrency_token
+        )
+

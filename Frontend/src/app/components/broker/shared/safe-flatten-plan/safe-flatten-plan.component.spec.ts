@@ -1,7 +1,8 @@
-import { render, screen } from '@testing-library/angular';
+import { render, screen, within } from '@testing-library/angular';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SqliteSafeFlattenPlan } from '../../../../api/alpaca.types';
+import { formatTimestampDisplay } from '../../../../shared/timestamp';
 import { SafeFlattenPlanComponent } from './safe-flatten-plan.component';
 
 const PLAN: SqliteSafeFlattenPlan = {
@@ -13,6 +14,8 @@ const PLAN: SqliteSafeFlattenPlan = {
   scope: 'CUSTODY_SUBJECT',
   strategy_instance_id: 'spy-bot',
   reconciliation_id: 'reconciliation-17',
+  account_check_kind: 'reconcile_now',
+  account_check_observed_at_ms: 1_700_000_009_000,
   prepared_at_ms: 1_700_000_010_000,
   expires_at_ms: 1_700_000_039_000,
   legs: [{
@@ -42,6 +45,49 @@ describe('SafeFlattenPlanComponent', () => {
     expect(screen.getByText('db-generation-4')).toBeTruthy();
     expect(screen.getByText('reconciliation-17')).toBeTruthy();
     expect(screen.getByText('plan-token-17-exact')).toBeTruthy();
+    expect(screen.getByText(/No order has been submitted/)).toBeTruthy();
+    expect(screen.queryByText('Expired')).toBeNull();
+  });
+
+  /** The definition of the "Account check" term: what the plan says it rests on. */
+  function accountCheck(): HTMLElement {
+    const definition = screen.getByText('Account check').nextElementSibling;
+    if (!(definition instanceof HTMLElement)) throw new Error('The plan shows no account check.');
+    return definition;
+  }
+
+  it('names the Reconcile now receipt a plan rests on, and when it was made', async () => {
+    await render(SafeFlattenPlanComponent, {
+      inputs: { plan: { ...PLAN, expires_at_ms: Date.now() + 30_000 } },
+    });
+
+    const check = within(accountCheck());
+    expect(check.getByText('Reconcile now')).toBeTruthy();
+    expect(check.getByText('reconciliation-17')).toBeTruthy();
+    expect(check.getByText(formatTimestampDisplay(PLAN.account_check_observed_at_ms, { mode: 'local' }))).toBeTruthy();
+  });
+
+  it("says a plan rests on the Account Clerk's own check, never on a Reconcile now that was not run", async () => {
+    // #2839: the Clerk's periodic check writes no receipt, so the plan carries no reconciliation id.
+    const checkedAtMs = PLAN.prepared_at_ms - 12_000;
+    await render(SafeFlattenPlanComponent, {
+      inputs: {
+        plan: {
+          ...PLAN,
+          reconciliation_id: null,
+          account_check_kind: 'clerk_pass',
+          account_check_observed_at_ms: checkedAtMs,
+          expires_at_ms: Date.now() + 48_000,
+        },
+      },
+    });
+
+    const check = within(accountCheck());
+    expect(check.getByText("The Account Clerk's own check")).toBeTruthy();
+    expect(check.getByText(formatTimestampDisplay(checkedAtMs, { mode: 'local' }))).toBeTruthy();
+    expect(screen.queryByText('Reconcile now')).toBeNull();
+    expect(screen.queryByText('reconciliation-17')).toBeNull();
+    // The rest of the plan reads as any other: nothing was sent, and it is not expired.
     expect(screen.getByText(/No order has been submitted/)).toBeTruthy();
     expect(screen.queryByText('Expired')).toBeNull();
   });
