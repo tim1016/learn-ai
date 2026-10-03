@@ -395,6 +395,11 @@ export class BrokerV2PanelService {
    * `panel_action_rejected` log line naming the 409 subclass
    * (`StaleRevisionError` vs `ActionNotAvailableError`), not this retry.
    *
+   * `attestation` is what the operator says Alpaca shows for an uncertain
+   * closing order (#2854); only that action's ticket passes one. Its action
+   * carries a confirmation, so it is never resubmitted here either: a retry
+   * is the ticket's own, under the key its target was frozen with.
+   *
    * This is the single public action entry point, so every caller (the bot
    * page AND Home) shares the same policy and there is no bare, dead-ending
    * variant to reach by accident.
@@ -404,6 +409,7 @@ export class BrokerV2PanelService {
     sid: string,
     action: PanelAction,
     reason: string | null = null,
+    attestation: PanelActionRequest['attestation'] = null,
   ): Promise<PanelActionResult> {
     if (target.idempotencyKey === null) {
       throw new Error('A bot action requires a target frozen by its interaction owner.');
@@ -412,7 +418,7 @@ export class BrokerV2PanelService {
     // interaction owner captured before presenting the action.
     const actionTarget = target;
     try {
-      return await this.submitAction(actionTarget, sid, action, reason);
+      return await this.submitAction(actionTarget, sid, action, reason, attestation);
     } catch (error) {
       if (
         !(error instanceof HttpErrorResponse) ||
@@ -434,7 +440,7 @@ export class BrokerV2PanelService {
       }
       // Same operator-confirmed action, resubmitted against a refreshed
       // token — not a new action, so the same reason still applies.
-      return await this.submitAction(actionTarget, sid, fresh, reason);
+      return await this.submitAction(actionTarget, sid, fresh, reason, attestation);
     }
   }
 
@@ -443,6 +449,7 @@ export class BrokerV2PanelService {
     sid: string,
     action: PanelAction,
     reason: string | null,
+    attestation: PanelActionRequest['attestation'],
   ): Promise<PanelActionResult> {
     const idempotencyKey = target.idempotencyKey;
     if (idempotencyKey === null) {
@@ -454,6 +461,7 @@ export class BrokerV2PanelService {
       concurrency_token: action.concurrency_token,
       idempotency_key: idempotencyKey,
       reason,
+      ...(attestation == null ? {} : { attestation }),
     };
     return this.runAction(target, sid, request);
   }

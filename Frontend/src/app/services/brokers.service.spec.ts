@@ -43,6 +43,26 @@ describe('BrokersService', () => {
     await promise;
   });
 
+  it('asks the Clerk what it reads at Alpaca for an attestation, on the bot’s check route (#2854)', async () => {
+    const attestation = { kind: 'exists' as const, broker_order_id: '61e69015-8549-4bfd-b9c3-01e75843f47d' };
+    const findings = {
+      attestation: 'exists', would_settle: true, refusal_reason_code: null,
+      lines: ['It carries this order’s client order id, symbol, side and quantity.'], observed_at_ms: 1,
+    };
+    const promise = service.checkSqliteSettlement(TEST_CLERK_ID, 'PA1', 'sid-1', 'settle-token', attestation);
+    const request = httpMock.expectOne(
+      `/api/brokers/alpaca/clerks/${TEST_CLERK_ID}/accounts/PA1/custody/bots/sid-1/recovery-actions/check`,
+    );
+    expect(request.request.method).toBe('POST');
+    // A read: the bare check body, no command envelope.
+    expect(request.request.body).toEqual({
+      action_id: 'settle_unknown_exit_order', concurrency_token: 'settle-token', attestation,
+    });
+    request.flush({ capability: {}, attestation_findings: findings });
+
+    await expect(promise).resolves.toMatchObject({ attestation_findings: findings });
+  });
+
   it('GETs the account for the named broker', async () => {
     const promise = service.getAccount(TARGET);
 

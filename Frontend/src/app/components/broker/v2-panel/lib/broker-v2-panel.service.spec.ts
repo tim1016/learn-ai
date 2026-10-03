@@ -527,6 +527,31 @@ describe('BrokerV2PanelService resilient action retry (defect #10)', () => {
     await expect(recovery).resolves.toMatchObject({ receipt_id: 'r-stop' });
   });
 
+  it('sends what the operator says Alpaca shows with a settle, on the quiesce operation under the frozen key (#2854)', async () => {
+    const settle: PanelAction = {
+      ...fakeSqliteStopAction(), action_id: 'settle_unknown_exit_order', concurrency_token: 'settle-token',
+    };
+    const attestation = { kind: 'exists' as const, broker_order_id: '61e69015-8549-4bfd-b9c3-01e75843f47d' };
+
+    const settled = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', settle, null, attestation);
+    const sent = http.expectOne(QUIESCE_URL);
+    expect(sent.request.body).toMatchObject({
+      action_id: 'settle_unknown_exit_order', concurrency_token: 'settle-token', idempotency_key: 'command-key-1',
+      attestation, command_context: { idempotency_key: 'command-key-1' },
+    });
+    // The action carries a confirmation: a 409 is the operator's to read, never resubmitted.
+    sent.flush({ detail: { outcome: 'failure', message: 'Nothing was changed.' } }, { status: 409, statusText: 'Conflict' });
+    await expect(settled).rejects.toMatchObject({ status: 409 });
+    http.expectNone(PANEL_URL);
+
+    // Every other action's request is as it was: no attestation field at all.
+    const stop = service.runBotAction(target('acct-1', 'sid-1'), 'sid-1', fakeSqliteStopAction());
+    const stopRequest = http.expectOne(QUIESCE_URL);
+    expect('attestation' in stopRequest.request.body).toBe(false);
+    stopRequest.flush({ action_id: 'stop_bot_decisions', receipt_id: 'r-stop', recorded_at_ms: 1, applied: true });
+    await stop;
+  });
+
   const request = (actionId: PanelActionRequest['action_id']): PanelActionRequest => ({
     action_id: actionId,
     revision: 1,
