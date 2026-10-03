@@ -145,12 +145,7 @@ def record_stop_outcome(
     Shared by a Stop that reconciles for its proof (:func:`prove_stop_outcome`)
     and a stop at the bot's end, whose proof is the Clerk's own pass (#2607).
     """
-    if (
-        proof.freeze.active
-        or proof.reconciliation_verdict != "clean"
-        or proof.working_order_refs
-        or proof.unresolved_intent_refs
-    ):
+    if proof.unprovable:
         outcome: StopCustodyOutcome = "STOPPED_CUSTODY_UNPROVABLE"
         approved = False
     elif not proof.exposure:

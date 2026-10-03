@@ -2,7 +2,7 @@ import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec } from './charts/golden-search-chart-spec';
 import { dataIndexOf, tooltipFrame, tooltipHtml, type ChartTheme, type TooltipRow } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
-import { percentText, signedCentsText, signedUsdText } from './golden-search-display';
+import { DEVELOPMENT_NOTE, percentText, signedCentsText, signedUsdText } from './golden-search-display';
 import type { ConcentrationCurve, EvidenceCandidate, MeasuredConcentration } from './golden-search.types';
 
 /**
@@ -14,7 +14,6 @@ import type { ConcentrationCurve, EvidenceCandidate, MeasuredConcentration } fro
  * gates nothing.
  */
 
-const DEVELOPMENT = 'Development data, used for choosing.';
 const RULE = 'Concern at $0 or less.';
 const NET_OF_COMMISSION = 'Each trade counts its net profit: its P&L less its entry and exit commission.';
 /** How many removed trades a tooltip lists before it says how many more there are. */
@@ -78,7 +77,7 @@ function curveOption(candidate: EvidenceCandidate, curve: ConcentrationCurve, th
         ];
         const marked = point.trades === count ? ['The best 5% of trades, rounded up.'] : [];
         const title = point.trades === 0 ? 'Before any trade' : `The best ${tradesText(point.trades)} of ${total}`;
-        return tooltipHtml({ title, columns: ['Value'], rows, notes: [...marked, NET_OF_COMMISSION, DEVELOPMENT] }, theme);
+        return tooltipHtml({ title, columns: ['Value'], rows, notes: [...marked, NET_OF_COMMISSION, DEVELOPMENT_NOTE] }, theme);
       },
     },
     xAxis: {
@@ -235,13 +234,13 @@ function withoutBestTooltip(bar: Bar, measure: MeasuredConcentration, theme: Cha
   const net = { label: 'Net profit', values: [signedCentsText(bar.value)] };
   if (bar.key === 'all') {
     const rows: TooltipRow[] = [net, { label: 'Trades', values: [String(measure.trades)] }];
-    return tooltipHtml({ title: bar.label, columns: ['Value'], rows, notes: ['The development run’s net profit, every trade included.', DEVELOPMENT] }, theme);
+    return tooltipHtml({ title: bar.label, columns: ['Value'], rows, notes: ['The development run’s net profit, every trade included.', DEVELOPMENT_NOTE] }, theme);
   }
   if (bar.key === 'month') {
     const month = measure.best_month;
     const rows: TooltipRow[] = [net, { label: 'The best month made', values: [signedCentsText(month.net_profit)] }];
     const which = `The best month is the one from ${formatTimestampDisplay(month.month_start_ms, { mode: 'date-et' })} (ET).`;
-    return tooltipHtml({ title: bar.label, columns: ['Value'], rows, notes: [which, RULE, DEVELOPMENT] }, theme);
+    return tooltipHtml({ title: bar.label, columns: ['Value'], rows, notes: [which, RULE, DEVELOPMENT_NOTE] }, theme);
   }
   const removed = measure.best_trades;
   const rows: TooltipRow[] = [
@@ -251,5 +250,5 @@ function withoutBestTooltip(bar: Bar, measure: MeasuredConcentration, theme: Cha
   ];
   const more = removed.length > LISTED_TRADES ? [`${removed.length - LISTED_TRADES} more of the best trades are not listed.`] : [];
   const which = `The best 5% of its ${measure.trades} trades, rounded up, each net of its entry and exit commission.`;
-  return tooltipHtml({ title: bar.label, columns: ['Value'], rows, notes: [...more, which, RULE, DEVELOPMENT] }, theme);
+  return tooltipHtml({ title: bar.label, columns: ['Value'], rows, notes: [...more, which, RULE, DEVELOPMENT_NOTE] }, theme);
 }

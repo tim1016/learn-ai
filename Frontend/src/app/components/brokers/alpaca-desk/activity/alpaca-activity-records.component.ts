@@ -21,7 +21,8 @@ export interface ActivityRecordsWindow {
  *
  * Closed by default, and nothing inside is read until it is first opened —
  * these are the heaviest reads on the page and most visits never need them.
- * A recovery link that names an order (`?timelineBot=…`) opens it on arrival.
+ * A recovery link that names an order (`?timelineBot=…`) or a recovery action
+ * (`?recover=reconcile_now`) opens it on arrival.
  */
 @Component({
   selector: 'app-alpaca-activity-records',
@@ -47,6 +48,8 @@ export class AlpacaActivityRecordsComponent {
   /** Re-read the period's window after it could not be read. */
   readonly retry = output();
   readonly timelineQuery = input<SqliteTimelineQuery | null>(null);
+  /** The recovery action a link asked for; its button is brought into view. */
+  readonly focusAction = input<string | null>(null);
 
   protected readonly opened = signal(false);
   /** Bumped after a recovery action so every record here re-reads. */
@@ -54,7 +57,7 @@ export class AlpacaActivityRecordsComponent {
 
   constructor() {
     effect(() => {
-      if (this.timelineQuery() !== null) this.opened.set(true);
+      if (this.timelineQuery() !== null || this.focusAction() !== null) this.opened.set(true);
     });
   }
 

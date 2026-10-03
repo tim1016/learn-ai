@@ -20560,10 +20560,22 @@
             },
             "title": "Bins",
             "type": "array"
+          },
+          "rule": {
+            "description": "What set the width: Freedman\u2013Diaconis; Sturges when the middle half of the trades net the same; the bin cap; one bin when every trade does.",
+            "enum": [
+              "freedman_diaconis",
+              "sturges",
+              "capped",
+              "single"
+            ],
+            "title": "Rule",
+            "type": "string"
           }
         },
         "required": [
           "bin_width",
+          "rule",
           "bins"
         ],
         "title": "GoldenSearchHistogram",
@@ -23650,9 +23662,16 @@
         "additionalProperties": false,
         "properties": {
           "bar_span_ms": {
-            "description": "The strategy's decision bar, in ms; a day or longer means one bar per session.",
-            "title": "Bar Span Ms",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The strategy's decision bar, in ms (a day or longer means one bar per session); null when hold times are not counted.",
+            "title": "Bar Span Ms"
           },
           "entry_rsi": {
             "discriminator": {
@@ -23678,6 +23697,18 @@
           "histogram": {
             "$ref": "#/components/schemas/GoldenSearchHistogram"
           },
+          "hold_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why hold times are not counted; null when they are.",
+            "title": "Hold Reason"
+          },
           "status": {
             "const": "measured",
             "title": "Status"
@@ -23694,6 +23725,7 @@
         "required": [
           "status",
           "bar_span_ms",
+          "hold_reason",
           "trades",
           "histogram",
           "entry_rsi",
@@ -23725,9 +23757,16 @@
         "additionalProperties": false,
         "properties": {
           "bars_held": {
-            "description": "Decision bars that closed after the entry and by the exit, on the trading calendar.",
-            "title": "Bars Held",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Decision bars that closed after the entry and by the exit, on the trading calendar; null when hold times are not counted.",
+            "title": "Bars Held"
           },
           "entry_ms": {
             "maximum": 253402300799999.0,
@@ -27273,6 +27312,7 @@
             "enum": [
               "bot",
               "activity",
+              "reconcile",
               "settings"
             ],
             "title": "Destination",

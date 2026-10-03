@@ -85,6 +85,8 @@ export class GoldenSearchEvidenceTabsComponent {
   protected readonly histogram = computed(() => this.tradeChart(histogramSpec), { equal: sameChart });
   protected readonly holdTime = computed(() => this.tradeChart(holdTimeSpec), { equal: sameChart });
   protected readonly entryTime = computed(() => this.tradeChart(entryTimeSpec), { equal: sameChart });
+  /** Why hold times are not counted, in the server's words. */
+  protected readonly holdNote = computed(() => this.tradeCharts()?.hold_reason ?? null);
   protected readonly entryRsi = computed(
     () => {
       const charts = this.tradeCharts();
@@ -117,7 +119,7 @@ export class GoldenSearchEvidenceTabsComponent {
     return measure.status === 'missing' ? measure.reason : null;
   });
 
-  private tradeChart(spec: (candidate: CandidateRow['candidate'], charts: MeasuredTradeCharts) => ChartSpec): ChartSpec | null {
+  private tradeChart(spec: (candidate: CandidateRow['candidate'], charts: MeasuredTradeCharts) => ChartSpec | null): ChartSpec | null {
     const charts = this.tradeCharts();
     return charts === null ? null : spec(this.selected().candidate, charts);
   }

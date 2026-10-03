@@ -275,6 +275,8 @@ export type ConcentrationCurve = Schemas['GoldenSearchConcentrationCurve'];
 /** The concentration measure the evidence stage stored (#2815), or why there is none — evidence recorded before it included. */
 export type Concentration = Schemas['GoldenSearchEvidenceCandidate']['concentration'];
 export type MeasuredConcentration = Schemas['GoldenSearchConcentrationMeasured'];
+/** The candidate a development chart draws: its key for colour and walkthrough targets, its label for words. */
+export type CandidateRef = Pick<EvidenceCandidate, 'key' | 'label'>;
 export type CandidateRunDetail = Schemas['GoldenSearchRunDetail'];
 
 /** `GET /studies/{id}/charts/test-over-time`: every fold, from the receipt's plan before testing over time ran. */

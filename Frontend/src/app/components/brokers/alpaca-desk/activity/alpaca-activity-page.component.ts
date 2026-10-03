@@ -15,6 +15,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { ActivatedRoute } from '@angular/router';
 
 import type { ActivityPeriod, ActivityPeriodRead, PortfolioHistoryRange } from '../../../../api/alpaca.types';
+import { ACTIVITY_RECOVER_QUERY_PARAM } from '../../../../fleet/account-workspace';
 import { BrokersService, sqliteTimelineQueryFromParams } from '../../../../services/brokers.service';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../../shared/timestamp';
@@ -161,6 +162,8 @@ export class AlpacaActivityPageComponent {
   });
 
   protected readonly timelineQuery = computed(() => sqliteTimelineQueryFromParams(this.queryParams()));
+  /** The recovery action a link asked for (`?recover=reconcile_now`), or `null`. */
+  protected readonly recoverAction = computed(() => this.queryParams().get(ACTIVITY_RECOVER_QUERY_PARAM));
 
   /** The latest Clerk↔Alpaca sync check, from the workspace's shared status
    * read. `null` while there is none to show. */

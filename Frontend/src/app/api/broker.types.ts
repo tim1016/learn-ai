@@ -14154,6 +14154,12 @@ export interface components {
              * @description From the lowest to the highest, with $0 as an edge; empty bins between are kept.
              */
             bins: components["schemas"]["GoldenSearchHistogramBin"][];
+            /**
+             * Rule
+             * @description What set the width: Freedman–Diaconis; Sturges when the middle half of the trades net the same; the bin cap; one bin when every trade does.
+             * @enum {string}
+             */
+            rule: "freedman_diaconis" | "sturges" | "capped" | "single";
         };
         /** GoldenSearchHistogramBin */
         GoldenSearchHistogramBin: {
@@ -15201,13 +15207,18 @@ export interface components {
         GoldenSearchTradeChartsMeasured: {
             /**
              * Bar Span Ms
-             * @description The strategy's decision bar, in ms; a day or longer means one bar per session.
+             * @description The strategy's decision bar, in ms (a day or longer means one bar per session); null when hold times are not counted.
              */
-            bar_span_ms: number;
+            bar_span_ms: number | null;
             /** Entry Rsi */
             entry_rsi: components["schemas"]["GoldenSearchEntryRsiMeasured"] | components["schemas"]["GoldenSearchEntryRsiMissing"];
             entry_times: components["schemas"]["GoldenSearchEntryTimes"];
             histogram: components["schemas"]["GoldenSearchHistogram"];
+            /**
+             * Hold Reason
+             * @description Why hold times are not counted; null when they are.
+             */
+            hold_reason: string | null;
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -15233,9 +15244,9 @@ export interface components {
         GoldenSearchTradeRecord: {
             /**
              * Bars Held
-             * @description Decision bars that closed after the entry and by the exit, on the trading calendar.
+             * @description Decision bars that closed after the entry and by the exit, on the trading calendar; null when hold times are not counted.
              */
-            bars_held: number;
+            bars_held: number | null;
             /** Entry Ms */
             entry_ms: number;
             /** Entry Price */
@@ -16718,7 +16729,7 @@ export interface components {
              * Destination
              * @enum {string}
              */
-            destination: "bot" | "activity" | "settings";
+            destination: "bot" | "activity" | "reconcile" | "settings";
             /** Label */
             label: string;
         };

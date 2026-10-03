@@ -8,14 +8,18 @@ Formula: over a run whose trades reconcile (``trade_net.reconciled_run``),
     the closes of the strategy's decision bars on the canonical NYSE
     calendar: each session's open + j·s for j = 1..⌊(close − open) / s⌋ at an
     intraday span s (whole bars only, so a half-day holds fewer and an
-    overnight gap none), or the session close at a daily cadence;
-  * histogram — the Freedman–Diaconis width h = 2·IQR·n^(−1/3), quartiles
-    linearly interpolated (R type 7), and bins [k·h, (k+1)·h) for k from
-    ⌊min t / h⌋ to ⌊max t / h⌋, so $0 is an edge and no bin holds both a
-    win and a loss. When IQR = 0, h = (max − min) / ⌈log2 n + 1⌉ (Sturges);
-    when h would need more than MAX_BINS bins, h = (max − min) / (MAX_BINS − 2),
-    which needs at most MAX_BINS; when every trade nets the same, one bin
-    [t, t];
+    overnight gap none), or the session close at a daily cadence. Sessions
+    open and close on the half hour, so for a span that divides 30 minutes
+    these are the closes of the engine's wall-clock-aligned bars; any other
+    span is not counted;
+  * histogram — over each t to the cent (so float noise from price × quantity
+    never splits trades that net the same), the Freedman–Diaconis width
+    h = 2·IQR·n^(−1/3), quartiles linearly interpolated (R type 7), and bins
+    [k·h, (k+1)·h) for k from ⌊min t / h⌋ to ⌊max t / h⌋, so $0 is an edge and
+    no bin holds both a win and a loss. When IQR = 0, h = (max − min) /
+    ⌈log2 n + 1⌉ (Sturges); when h would need more than MAX_BINS bins,
+    h = (max − min) / (MAX_BINS − 2), which needs at most MAX_BINS; when every
+    trade nets the same, one bin [t, t]. The read names the rule that set h;
   * RSI bands — the gates [g_lo, g_hi] cut at every multiple of
     RSI_BAND_WIDTH strictly between them; a band [a, b) holds the trades
     whose RSI at entry lies in it (the last band also takes b = g_hi), with
@@ -42,20 +46,20 @@ import math
 import statistics
 from bisect import bisect_right
 from collections.abc import Mapping, Sequence
-from datetime import UTC, date, datetime
+from datetime import datetime
 from itertools import accumulate
-from typing import Any
-from zoneinfo import ZoneInfo
+from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration
 from app.engine.strategy.strategy_view import ChartParamRef
-from app.lean_sidecar.trading_calendar import session_windows_ms_utc
+from app.lean_sidecar.trading_calendar import SessionWindow, session_windows_ms_utc
 from app.research.golden_search.evaluator import EXIT_AT_WINDOW_END
 from app.research.golden_search.selection import Metrics
-from app.research.golden_search.trade_net import reconciled_run
+from app.research.golden_search.trade_net import reconciled_run, to_cent
 from app.utils.session_anchors import et_date_at_ms
+from app.utils.timestamps import ny_datetime
 
 MAX_BINS = 60
 RSI_BAND_WIDTH = 5
@@ -64,12 +68,16 @@ MIN_CELL_TRADES = 5
 RSI_KEY = "rsi"
 
 STRATEGY_EXIT = "Exited by the strategy"
-NO_CADENCE = "The strategy's decision cadence could not be read for these settings, so hold times cannot be counted."
+NO_CADENCE = "The strategy's decision cadence could not be read for these settings, so hold times are not counted."
+UNALIGNED_CADENCE = "This strategy's decision bars do not line up with the session's half hours, so hold times are not counted."
 NO_RSI_GATES = "This strategy has no RSI gates to compare entries against."
+NO_SETTINGS = "This candidate's settings could not be read, so its RSI gates are unknown."
 NO_RSI_RECORDED = "No trade recorded its RSI at entry."
 
-_ET = ZoneInfo("America/New_York")
+BinRule = Literal["freedman_diaconis", "sturges", "capped", "single"]
+
 _MINUTE_MS = 60_000
+_HALF_HOUR_MS = 30 * _MINUTE_MS
 _DAY_MS = 86_400_000
 _WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
@@ -104,25 +112,30 @@ def decision_bar_span_ms(strategy_key: str, point: Mapping[str, Any]) -> int | N
     return int(multiplier) * (_MINUTE_MS if cadence.timespan == "minute" else _DAY_MS)
 
 
-def entry_rsi_gates(strategy_key: str, point: Mapping[str, Any]) -> tuple[float, float] | None:
-    """The RSI band the strategy enters inside at ``point``, or None when it declares none."""
+def entry_rsi_gates(strategy_key: str, point: Mapping[str, Any]) -> tuple[float, float] | str:
+    """The RSI band the strategy enters inside at ``point``, or why there is none to read."""
     registration = _STRATEGY_REGISTRY.get(strategy_key)
     if registration is None or registration.strategy_view is None:
-        return None
+        return NO_RSI_GATES
     band = next((value.band for value in registration.strategy_view.values if value.key == RSI_KEY and value.band is not None), None)
     if band is None:
-        return None
+        return NO_RSI_GATES
     low, high = (_resolve(registration, point, bound) for bound in band)
-    return None if low is None or high is None else (low, high)
+    return NO_SETTINGS if low is None or high is None else (low, high)
 
 
 # ── Decision bars ────────────────────────────────────────────────────────
 
 
-def decision_bar_closes(first_day: date, last_day: date, bar_span_ms: int) -> list[int]:
-    """Every decision bar's close over the sessions from ``first_day`` to ``last_day``, in order."""
+def countable(bar_span_ms: int) -> bool:
+    """Whether bars of this length can be counted from the calendar: a day or more, or a span that divides 30 minutes."""
+    return bar_span_ms >= _DAY_MS or _HALF_HOUR_MS % bar_span_ms == 0
+
+
+def decision_bar_closes(windows: Sequence[SessionWindow], bar_span_ms: int) -> list[int]:
+    """Every decision bar's close over ``windows``, in order; the span must be ``countable``."""
     closes: list[int] = []
-    for window in session_windows_ms_utc(first_day, last_day):
+    for window in windows:
         if bar_span_ms >= _DAY_MS:
             closes.append(window.close_ms_utc)
             continue
@@ -149,31 +162,33 @@ def _bin(low: float, high: float, nets: Sequence[float]) -> dict[str, Any]:
     }
 
 
-def bin_width(nets: Sequence[float]) -> float:
-    """The Freedman–Diaconis width, with the fallbacks the module docstring names; 0 when every trade nets the same."""
+def bin_width(nets: Sequence[float]) -> tuple[float, BinRule]:
+    """The bin width and the rule that set it, per the module docstring; 0 when every trade nets the same."""
     low, high = min(nets), max(nets)
     if low == high:
-        return 0.0
+        return 0.0, "single"
     count = len(nets)
     q1, _, q3 = statistics.quantiles(nets, n=4, method="inclusive")
+    rule: BinRule = "freedman_diaconis"
     width = 2.0 * (q3 - q1) * count ** (-1.0 / 3.0)
     if width <= 0:
-        width = (high - low) / math.ceil(math.log2(count) + 1)
+        width, rule = (high - low) / math.ceil(math.log2(count) + 1), "sturges"
     if math.floor(high / width) - math.floor(low / width) + 1 > MAX_BINS:
-        width = (high - low) / (MAX_BINS - 2)
-    return width
+        width, rule = (high - low) / (MAX_BINS - 2), "capped"
+    return width, rule
 
 
 def histogram(nets: Sequence[float]) -> dict[str, Any]:
-    """The trades' net profits in bins with $0 as an edge, each with its trades, wins and losses."""
-    width = bin_width(nets)
+    """The trades' net profits, to the cent, in bins with $0 as an edge, each with its trades, wins and losses."""
+    cents = [to_cent(net) for net in nets]
+    width, rule = bin_width(cents)
     if width == 0:
-        return {"bin_width": 0.0, "bins": [_bin(nets[0], nets[0], nets)]}
+        return {"bin_width": 0.0, "rule": rule, "bins": [_bin(cents[0], cents[0], cents)]}
     members: dict[int, list[float]] = {}
-    for net in nets:
+    for net in cents:
         members.setdefault(math.floor(net / width), []).append(net)
     first, last = min(members), max(members)
-    return {"bin_width": width, "bins": [_bin(k * width, (k + 1) * width, members.get(k, [])) for k in range(first, last + 1)]}
+    return {"bin_width": width, "rule": rule, "bins": [_bin(k * width, (k + 1) * width, members.get(k, [])) for k in range(first, last + 1)]}
 
 
 # ── RSI bands ────────────────────────────────────────────────────────────
@@ -207,26 +222,22 @@ def rsi_bands(entries: Sequence[tuple[float | None, float]], gates: tuple[float,
 # ── Entry times ──────────────────────────────────────────────────────────
 
 
-def _et(ms: int) -> datetime:
-    return datetime.fromtimestamp(ms / 1000, tz=UTC).astimezone(_ET)
-
-
 def _half_hour(moment: datetime) -> int:
     """Minutes past ET midnight at the start of the half hour holding ``moment``."""
     return moment.hour * 60 + moment.minute // 30 * 30
 
 
-def entry_times(entries: Sequence[tuple[int, float]], first_day: date, last_day: date) -> dict[str, Any]:
+def entry_times(entries: Sequence[tuple[int, float]], windows: Sequence[SessionWindow]) -> dict[str, Any]:
     """Count, mean and total net profit by ET weekday and half hour of entry; ``entries`` are (entry ms, net profit)."""
     weekdays: set[int] = set()
     half_hours: set[int] = set()
-    for window in session_windows_ms_utc(first_day, last_day):
-        opened = _et(window.open_ms_utc)
+    for window in windows:
+        opened = ny_datetime(window.open_ms_utc)
         weekdays.add(opened.weekday())
-        half_hours.update(range(_half_hour(opened), _half_hour(_et(window.close_ms_utc - 1)) + 1, 30))
+        half_hours.update(range(_half_hour(opened), _half_hour(ny_datetime(window.close_ms_utc - 1)) + 1, 30))
     cells: dict[tuple[int, int], list[float]] = {}
     for entry_ms, net in entries:
-        entered = _et(entry_ms)
+        entered = ny_datetime(entry_ms)
         weekdays.add(entered.weekday())
         half_hours.add(_half_hour(entered))
         cells.setdefault((entered.weekday(), _half_hour(entered)), []).append(net)
@@ -263,20 +274,20 @@ def trade_charts(
     *,
     commission_per_order: float,
     bar_span_ms: int | None,
-    rsi_gates: tuple[float, float] | None,
+    rsi_gates: tuple[float, float] | str,
 ) -> dict[str, Any]:
     """Each trade's record with its net, running net and bars held, and the histogram, RSI bands and entry-time cells."""
     run = reconciled_run(metrics, detail, commission_per_order=commission_per_order)
     if isinstance(run, str):
         return {"status": "missing", "reason": run}
-    if bar_span_ms is None:
-        return {"status": "missing", "reason": NO_CADENCE}
     order = sorted(range(len(run.trades)), key=lambda i: (int(run.trades[i]["exit_ms"]), int(run.trades[i]["entry_ms"])))
     trades = [run.trades[i] for i in order]
     nets = [run.nets[i] for i in order]
-    first_day = et_date_at_ms(min(int(trade["entry_ms"]) for trade in trades))
-    last_day = et_date_at_ms(max(int(trade["exit_ms"]) for trade in trades))
-    closes = decision_bar_closes(first_day, last_day, bar_span_ms)
+    windows = session_windows_ms_utc(
+        et_date_at_ms(min(int(trade["entry_ms"]) for trade in trades)), et_date_at_ms(max(int(trade["exit_ms"]) for trade in trades))
+    )
+    hold_reason = NO_CADENCE if bar_span_ms is None else None if countable(bar_span_ms) else UNALIGNED_CADENCE
+    closes = None if hold_reason is not None or bar_span_ms is None else decision_bar_closes(windows, bar_span_ms)
     at_window_end = [trade.get("exit_reason") == EXIT_AT_WINDOW_END for trade in trades]
     records = [
         {
@@ -288,7 +299,7 @@ def trade_charts(
             "pnl": float(trade["pnl"]),
             "net_profit": net,
             "running_net_profit": running,
-            "bars_held": bars_held(int(trade["entry_ms"]), int(trade["exit_ms"]), closes),
+            "bars_held": None if closes is None else bars_held(int(trade["entry_ms"]), int(trade["exit_ms"]), closes),
             "entry_rsi": _rsi_at_entry(trade),
             "exit_kind": "window_end" if window_end else "strategy",
             "exit_reason": EXIT_AT_WINDOW_END if window_end else STRATEGY_EXIT,
@@ -296,17 +307,18 @@ def trade_charts(
         for trade, net, running, window_end in zip(trades, nets, accumulate(nets), at_window_end, strict=True)
     ]
     rsis = [(record["entry_rsi"], record["net_profit"]) for record in records]
-    if rsi_gates is None:
-        entry_rsi: dict[str, Any] = {"status": "missing", "reason": NO_RSI_GATES}
+    if isinstance(rsi_gates, str):
+        entry_rsi: dict[str, Any] = {"status": "missing", "reason": rsi_gates}
     elif all(rsi is None for rsi, _ in rsis):
         entry_rsi = {"status": "missing", "reason": NO_RSI_RECORDED}
     else:
         entry_rsi = rsi_bands(rsis, rsi_gates)
     return {
         "status": "measured",
-        "bar_span_ms": bar_span_ms,
+        "bar_span_ms": None if hold_reason is not None else bar_span_ms,
+        "hold_reason": hold_reason,
         "trades": records,
         "histogram": histogram(nets),
         "entry_rsi": entry_rsi,
-        "entry_times": entry_times([(record["entry_ms"], record["net_profit"]) for record in records], first_day, last_day),
+        "entry_times": entry_times([(record["entry_ms"], record["net_profit"]) for record in records], windows),
     }

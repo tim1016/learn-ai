@@ -2,7 +2,7 @@ import { formatTimestampDisplay } from '../../shared/timestamp';
 import type { ChartSpec } from './charts/golden-search-chart-spec';
 import { dataIndexOf, NOT_RECORDED, tooltipFrame, tooltipHtml, type ChartTheme } from './charts/golden-search-chart-theme';
 import type { ChartOption } from './charts/golden-search-echarts';
-import { percentText, signedPercentText } from './golden-search-display';
+import { DEVELOPMENT_NOTE, percentText, signedPercentText } from './golden-search-display';
 import type { CandidateKey, CumulativeReturnPoint, DrawdownPoint } from './golden-search.types';
 
 /** One candidate's development detail run as the server sent it; both lists are empty when no run is recorded. */
@@ -136,7 +136,7 @@ function tooltip(aligned: readonly AlignedLine[], date: string, index: number, c
       })),
       notes: [
         `Worst-fall limit ${percentText(ceiling)}. The rules judge each run's bar-by-bar fall, which can be deeper than this session-close line.`,
-        'Development data, used for choosing.',
+        DEVELOPMENT_NOTE,
       ],
     },
     theme,

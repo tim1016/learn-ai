@@ -553,7 +553,7 @@ When did the selected candidate make its development profit, trade by trade?
 
 #### What you're looking at
 
-Two parts share one time axis, in Eastern dates. The upper line is the running net profit: after each trade exits, the net profit of that trade and every trade before it. It steps at each exit and stays level until the next. A dashed line marks $0. Beneath it, each trade is a thin bar at its exit time, as tall as its own net profit: green for a gain, red for a loss.
+Two parts share one time axis, dated in your local time. The upper line is the running net profit: after each trade exits, the net profit of that trade and every trade before it. It steps at each exit and stays level until the next. A dashed line marks $0. Beneath it, each trade is a thin bar at its exit time, as tall as its own net profit: green for a gain, red for a loss.
 
 $$\text{running net profit after trade } k = \sum_{i \le k} \text{net profit of trade } i$$
 
@@ -591,7 +591,7 @@ $$\text{bin width} = 2 \times \text{IQR} \times n^{-1/3}$$
 
 where IQR is the gap between the 25th and 75th percentile of the trades' net profits and n is the number of trades. The bins are lined up so that $0 is always an edge: no bin holds both a win and a loss. Bins left of $0 hold losing trades, in red; the rest, in green. Empty bins between are kept, at zero trades.
 
-When the middle half of the trades are all the same, the width falls back to the trades' full range divided by Sturges' bin count; an extreme outlier can widen the bins so that there are never more than 60; and when every trade nets the same, there is one bin.
+The trades are binned to the cent. When the middle half of the trades net the same, the width falls back to the trades' full range divided by Sturges' bin count; an extreme outlier can widen the bins so that there are never more than 60; and when every trade nets the same, there is one bin. The hover names the rule that set the width.
 
 Hover a bar to see its range and how many trades, wins and losses it holds.
 
@@ -624,7 +624,7 @@ Each dot is a development trade. Across is how many decision bars it was held; u
 
 $$\text{bars held} = \text{the number of decision bars that close after the entry and by the exit}$$
 
-The bars are counted on the trading calendar: nights, weekends and holidays hold none, and a half-day holds fewer. They are counted between the entry and exit fills, so a trade can show a bar more than the strategy's hold, for example when an exit decided at the last bar of a session fills in the next one. Circles are trades the strategy closed itself. Diamonds are trades closed because the tested window ended. A dashed line marks $0.
+The bars are counted on the trading calendar: nights, weekends and holidays hold none, and a half-day holds fewer. They are counted on the calendar between the entry and exit fills, so a trade can show more bars than the strategy's hold when the strategy did not see every bar the calendar schedules. When the strategy's bars do not line up with the session's half hours, or its cadence cannot be read, the panel says so and counts nothing. Circles are trades the strategy closed itself. Diamonds are trades closed because the tested window ended. A dashed line marks $0.
 
 A strategy that exits after a fixed number of bars puts most of its trades in one column. That column's spread of results is what the hold time delivers.
 

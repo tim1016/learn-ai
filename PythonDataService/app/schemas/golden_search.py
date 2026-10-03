@@ -963,7 +963,7 @@ class GoldenSearchTradeRecord(_Wire):
     pnl: float = Field(description="Price change times filled quantity, before fees.")
     net_profit: float = Field(description="P&L before fees less the entry and exit commission.")
     running_net_profit: float = Field(description="Net profit of this trade and every trade that exited before it.")
-    bars_held: int = Field(description="Decision bars that closed after the entry and by the exit, on the trading calendar.")
+    bars_held: int | None = Field(description="Decision bars that closed after the entry and by the exit, on the trading calendar; null when hold times are not counted.")
     entry_rsi: float | None = Field(description="RSI the strategy recorded when it decided to enter; null when it recorded none.")
     exit_kind: Literal["strategy", "window_end"]
     exit_reason: str
@@ -979,6 +979,9 @@ class GoldenSearchHistogramBin(_Wire):
 
 class GoldenSearchHistogram(_Wire):
     bin_width: float = Field(description="0 when every trade nets the same.")
+    rule: Literal["freedman_diaconis", "sturges", "capped", "single"] = Field(
+        description="What set the width: Freedman–Diaconis; Sturges when the middle half of the trades net the same; the bin cap; one bin when every trade does."
+    )
     bins: list[GoldenSearchHistogramBin] = Field(description="From the lowest to the highest, with $0 as an edge; empty bins between are kept.")
 
 
@@ -1023,7 +1026,8 @@ class GoldenSearchEntryTimes(_Wire):
 
 class GoldenSearchTradeChartsMeasured(_Wire):
     status: Literal["measured"]
-    bar_span_ms: int = Field(description="The strategy's decision bar, in ms; a day or longer means one bar per session.")
+    bar_span_ms: int | None = Field(description="The strategy's decision bar, in ms (a day or longer means one bar per session); null when hold times are not counted.")
+    hold_reason: str | None = Field(description="Why hold times are not counted; null when they are.")
     trades: list[GoldenSearchTradeRecord] = Field(description="In exit order.")
     histogram: GoldenSearchHistogram
     entry_rsi: GoldenSearchEntryRsi
