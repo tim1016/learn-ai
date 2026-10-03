@@ -946,6 +946,47 @@ def position_quantity_is_nonzero(quantity: float) -> bool:
     return abs(quantity) >= POSITION_QTY_EPSILON
 
 
+def _fill_credit_is_withheld(conn: sqlite3.Connection, *, payload: dict[str, Any], symbol: str) -> bool:
+    """Whether this fill stays on the record without moving the position (#2854).
+
+    The append decides it, in one step with the read it rests on
+    (``ClerkSqliteRepository.append_fill``), and records the decision as the
+    fill's summary code. It is not decided here from the ledger alone: a
+    fill recorded before this rule was credited, and must fold as it did, or
+    a ledger in which the residue it left was discharged again would no
+    longer replay. So a fill without the mark is a credit.
+
+    What the append recorded is proven again here by the append's own rule
+    (``reads.discharge_accounts_for_fill``), from the transitions before this
+    one, which a replay holds in the same order. A fill marked withheld with
+    no discharge behind it, or one that executed after that discharge's
+    broker read, fails instead of dropping a credit.
+    """
+    if payload["summary_code"] != reads.FILL_CREDIT_WITHHELD_BY_DISCHARGE:
+        return False
+    discharge = reads.residue_discharge_since_order_created(
+        conn,
+        order_ref=payload["order_ref"],
+        strategy_instance_id=payload["strategy_instance_id"],
+        symbol=symbol,
+    )
+    if discharge is None:
+        raise ValueError(
+            "a fill's position credit is withheld for a residue discharge the ledger does not hold: "
+            f"order {payload['order_ref']!r} in {symbol.upper()!r}"
+        )
+    if not reads.discharge_accounts_for_fill(
+        discharge,
+        transition_kind=payload["transition_kind"],
+        source_event_at_ms=payload["source_event_at_ms"],
+    ):
+        raise ValueError(
+            "a fill's position credit is withheld, but it executed after the broker read of the "
+            f"residue discharge before it: order {payload['order_ref']!r} in {symbol.upper()!r}"
+        )
+    return True
+
+
 def _apply_attributed_position_delta(
     conn: sqlite3.Connection,
     *,
@@ -954,12 +995,24 @@ def _apply_attributed_position_delta(
     side: str,
     quantity: float,
 ) -> None:
+    """The one write that moves an attributed position for a fill.
+
+    Formula: attributed_qty' = attributed_qty + sign(side) * quantity, or
+      attributed_qty' = attributed_qty for a fill whose credit is withheld
+      (:func:`_fill_credit_is_withheld`).
+    Reference: none external; #2854 for the withheld credit.
+    Canonical implementation: this file.
+    Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
+      test_late_fill_after_residue_discharge.py.
+    """
     owner = conn.execute(
         "SELECT subject_id, strategy_instance_id FROM effect_operations WHERE effect_operation_id = ?",
         (payload["effect_operation_id"],),
     ).fetchone()
     if owner is None:
         raise ValueError("execution fill requires its durable owning effect")
+    if _fill_credit_is_withheld(conn, payload=payload, symbol=symbol):
+        return
     signed_delta = quantity if side == "BUY" else -quantity
     conn.execute(
         "INSERT INTO positions (subject_id, strategy_instance_id, symbol, attributed_qty, updated_at_ms) "
@@ -1011,7 +1064,9 @@ def _fold_attributed_residue_discharged(conn: sqlite3.Connection, payload: dict[
 def _fold_execution_slice_filled(conn: sqlite3.Connection, payload: dict[str, Any]) -> None:
     """Fold one idempotent broker execution slice into exposure.
 
-    Formula: attributed_qty' = attributed_qty + sign(side) * slice_qty.
+    Formula: attributed_qty' = attributed_qty + sign(side) * slice_qty; the
+      slice is recorded and attributed_qty kept when its credit is withheld
+      (:func:`_fill_credit_is_withheld`, #2854).
     Reference: none external.
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/
@@ -1259,7 +1314,9 @@ def _fold_order_fill_observed(conn: sqlite3.Connection, payload: dict[str, Any])
     ``exposure.py`` semantics).
 
     Formula: delta_qty = cumulative_qty - prior_effective_qty; attributed_qty'
-      = attributed_qty + sign(side) * delta_qty.
+      = attributed_qty + sign(side) * delta_qty; the delta is recorded and
+      attributed_qty kept when its credit is withheld
+      (:func:`_fill_credit_is_withheld`, #2854).
     Reference: ADR 0036, 2026-09-30 amendment, item 2.
     Canonical implementation: this file.
     Validated against: PythonDataService/tests/broker/alpaca/clerk/sqlite/

@@ -29,6 +29,7 @@ from app.broker.alpaca.clerk.active_authority import get_active_clerk_runtime
 from app.broker.alpaca.clerk.active_runtime import SQLITE_FACADE_AUTHORITIES
 from app.broker.alpaca.clerk.sqlite.projection_models import TimelineEntry
 from app.broker.alpaca.clerk.sqlite.projections import SqliteClerkProjectionReader
+from app.broker.alpaca.clerk.sqlite.reads import FILL_CREDIT_WITHHELD_BY_DISCHARGE
 from app.broker.alpaca.clerk.sqlite.runtime import SqliteAlpacaClerkFacade
 from app.broker_configuration.runtime import resolve_clerk_dir
 from app.schemas.broker_v2_evidence import EvidenceAuditEntry, EvidenceEntry, EvidencePage
@@ -263,6 +264,16 @@ _SQLITE_TRANSITION_COPY: Final[dict[str, tuple[str, str]]] = {
     ),
 }
 
+# A summary code that changes what its transition did to the position takes
+# its own copy over the transition kind's.
+_SQLITE_SUMMARY_COPY: Final[dict[str, tuple[str, str]]] = {
+    FILL_CREDIT_WITHHELD_BY_DISCHARGE: (
+        "Fill recorded, not counted",
+        "The Account Clerk recorded this fill. It did not count it in the bot's position, "
+        "because the position had already been written off.",
+    ),
+}
+
 _SQLITE_OPERATION_STATE_COPY: Final[dict[str, str]] = {
     "accepted": "Accepted",
     "failed": "Failed",
@@ -309,7 +320,9 @@ def _append_audit_entry(entry: EvidenceAuditEntry) -> None:
 
 def _sqlite_evidence_entry(entry: TimelineEntry) -> EvidenceEntry:
     try:
-        kind_label, summary = _SQLITE_TRANSITION_COPY[entry.transition_kind]
+        kind_label, summary = (
+            _SQLITE_SUMMARY_COPY.get(entry.summary_code) or _SQLITE_TRANSITION_COPY[entry.transition_kind]
+        )
         state = _SQLITE_OPERATION_STATE_COPY[entry.operation_state]
         custody = _SQLITE_CUSTODY_COPY[entry.custody_owner]
     except KeyError as exc:
