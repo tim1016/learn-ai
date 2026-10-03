@@ -957,6 +957,15 @@ async def window_evaluations(conn: asyncpg.Connection, study_id: str, *, window_
     return [_evaluation(row) for row in rows]
 
 
+async def workload_snapshot(conn: asyncpg.Connection, study_id: str) -> tuple[StudyRow, dict[str, int], int] | None:
+    """The study, its evaluation rows per step and the proof's units, read in one snapshot: a run reserved meanwhile counts in all three or none."""
+    async with conn.transaction(isolation="repeatable_read", readonly=True):
+        row = await get_study(conn, study_id)
+        if row is None:
+            return None
+        return row, await evaluation_rows_by_step(conn, study_id), await consumed_outside_evaluator(conn, study_id, "proof")
+
+
 async def evaluation_rows_by_step(conn: asyncpg.Connection, study_id: str) -> dict[str, int]:
     """How many evaluation rows each step has reserved for a study, pending ones included: one budget unit each."""
     rows = await conn.fetch("SELECT stage, COUNT(*) AS n FROM research_golden_search_evaluations WHERE study_id = $1 GROUP BY stage", study_id)
