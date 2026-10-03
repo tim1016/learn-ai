@@ -33,6 +33,13 @@ describe('etMidnightMs', () => {
   it('rejects a malformed date', () => {
     expect(() => etMidnightMs('2024/01/02')).toThrow(/YYYY-MM-DD/);
   });
+
+  it('keeps a year below 100 as given instead of reading it as 19xx', () => {
+    // Date.UTC(22, …) is 1922; a date field reports 0022 while 2022 is half typed.
+    const ms = etMidnightMs('0022-11-01');
+    expect(new Date(ms).getUTCFullYear()).toBe(22);
+    expect(etIsoDate(ms)).toBe('0022-11-01');
+  });
 });
 
 
@@ -42,6 +49,12 @@ describe('calendar-month arithmetic', () => {
     expect(shiftIsoDateByMonths('2025-03-31', -1)).toBe('2025-02-28');
     expect(shiftIsoDateByMonths('2024-02-29', 12)).toBe('2025-02-28');
     expect(isoDateAfter('2025-12-31')).toBe('2026-01-01');
+  });
+
+  it('keeps a year below 100 as given', () => {
+    expect(isoDateAfter('0022-12-31')).toBe('0023-01-01');
+    expect(shiftIsoDateByMonths('0022-11-01', -12)).toBe('0021-11-01');
+    expect(shiftIsoDateByMonths('0099-12-15', 1)).toBe('0100-01-15');
   });
 
   it('makes a default window that is a whole number of months, leap years included', () => {
