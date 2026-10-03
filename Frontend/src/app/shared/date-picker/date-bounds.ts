@@ -48,8 +48,12 @@ export function heldBounds(symbol: string, firstHeld: IsoDate | null, lastHeld: 
  * dates. The range stays selectable; the host's run decides what a gap means.
  */
 export interface DataGaps {
-  /** The sessions inside the bounds that the host's data does not hold. */
-  readonly unheld: ReadonlySet<IsoDate>;
+  /**
+   * The sessions inside the bounds that the host's data does not hold, each as
+   * the `int64 ms UTC` instant its source names it by (the session's open).
+   * The picker resolves them to ET dates where it counts and draws them.
+   */
+  readonly unheldMs: ReadonlySet<number>;
   /** Why the gaps could not be read; null when they were. */
   readonly problem: string | null;
 }

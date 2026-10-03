@@ -2,7 +2,6 @@ import { Injectable, Injector, inject, resource, untracked, type ResourceRef } f
 
 import { DataLakeService, MAX_TRADING_RANGE_DAYS, type PriceAdjustmentMode } from '../data-lake';
 import type { DataGaps, DateBounds } from '../date-picker';
-import { etIsoDate } from '../date/et-midnight';
 import { addDays, type IsoDate } from '../date/iso-date';
 
 /** The spans whose gaps are kept, and read again with the lake's holdings. A page shows one or two. */
@@ -41,10 +40,18 @@ export class HeldGapsService {
       // `resource()` installs an effect, which a reactive context forbids.
       read = untracked(() => resource({ loader: () => this.load(mode, symbol, min, max), injector: this.injector }));
       this.reads.set(key, read);
-      // The oldest span is let go, so a reload never re-reads every symbol the tab has shown.
-      if (this.reads.size > KEPT_READS) this.reads.delete(this.reads.keys().next().value as string);
+      this.letGoOfTheOldest();
     }
     return read.value() ?? null;
+  }
+
+  /** Keeps the newest spans only, so the tab neither re-reads nor holds on to every symbol it has shown. */
+  private letGoOfTheOldest(): void {
+    if (this.reads.size <= KEPT_READS) return;
+    const [oldest, read] = this.reads.entries().next().value as [string, ResourceRef<DataGaps | undefined>];
+    this.reads.delete(oldest);
+    // Destroying a resource writes its state, which a reactive context forbids.
+    untracked(() => read.destroy());
   }
 
   /**
@@ -61,15 +68,15 @@ export class HeldGapsService {
 
   /** Reads the span in windows the coverage endpoint accepts; a session is held when its artifact is complete. */
   private async load(mode: PriceAdjustmentMode, symbol: string, from: IsoDate, to: IsoDate): Promise<DataGaps> {
-    const unheld = new Set<IsoDate>();
+    const unheldMs = new Set<number>();
     for (let start = from; start <= to; start = addDays(start, MAX_TRADING_RANGE_DAYS)) {
       const last = addDays(start, MAX_TRADING_RANGE_DAYS - 1);
       const read = await this.lake.coverage({ symbol, startTradingDate: start, endTradingDate: last < to ? last : to, priceAdjustmentMode: mode });
-      if (read.kind !== 'ok') return { unheld: new Set(), problem: read.message };
+      if (read.kind !== 'ok') return { unheldMs: new Set(), problem: read.message };
       for (const day of read.value.days) {
-        if (day.status !== 'complete') unheld.add(etIsoDate(day.trading_date_ms));
+        if (day.status !== 'complete') unheldMs.add(day.trading_date_ms);
       }
     }
-    return { unheld, problem: null };
+    return { unheldMs, problem: null };
   }
 }

@@ -168,7 +168,7 @@ describe('TickerCatalogService', () => {
       TestBed.tick();
       await new Promise((resolve) => setTimeout(resolve, 0));
       TestBed.tick();
-      return gaps.gapsFor('raw', 'SPY', span, 'minute')?.unheld.size;
+      return gaps.gapsFor('raw', 'SPY', span, 'minute')?.unheldMs.size;
     };
     gaps.gapsFor('raw', 'SPY', span, 'minute');
     expect(await unheld()).toBe(1);
