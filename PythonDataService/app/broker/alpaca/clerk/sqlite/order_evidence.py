@@ -1132,10 +1132,7 @@ def fold_uncertain(
     effect = repo.effect_operation(effect_operation_id)
     assert effect is not None
     facts = OrderSubmitUncertainFacts(
-        why=why,
-        answered_as_client_order_id=answered_as_client_order_id,
-        notice_explanation=None if notice is None else notice.explanation,
-        notice_next_step=None if notice is None else notice.next_step,
+        why=why, answered_as_client_order_id=answered_as_client_order_id, notice=notice
     )
     repo.append_transition(
         TransitionInput(

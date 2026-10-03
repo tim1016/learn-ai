@@ -55,8 +55,12 @@ again nor refused: custody is retained until the order's exact lookup answers.
 A reducing order whose send was lost is sent again, under the same client
 order id, once an exact lookup has read it absent a whole submit-absence wait
 after its latest send (#2845). Each send made again waits longer than the
-last, and nothing ends them (:func:`resend_wait_ms`, #2854). Three things
-guard a send made again. Whether
+last (:func:`resend_wait_ms`, #2854), and they go on only while the order may
+still be sent (:func:`_created_leg_may_be_sent`). Once its session has ended,
+a scheduled-end sale holds with custody kept and goes out again, under the
+same client order id, after the next open; any other EXIT fails and releases
+custody. An operator's Flatten the account no longer covers fails too (#2839).
+Three things guard a send made again. Whether
 the order ever reached the broker is read again in the run that records the
 send (:func:`_resend_still_proven_absent`). No refusal of a send made again
 fails the EXIT: an earlier send may have arrived, so custody is retained as an
@@ -2100,7 +2104,7 @@ def _retain_refused_resend(
     is retained as an unknown outcome instead. The next pass's exact lookup
     folds the order once the broker shows it; while it stays absent, the wait
     runs again from this answer, longer each time (:func:`resend_wait_ms`),
-    and the same order is sent again.
+    and the same order is sent again while its session is open.
 
     What a first send's refusal records is not recorded here: the orders open
     on the other side of the symbol that the watchdog's re-drive waits behind
@@ -2135,15 +2139,16 @@ def _retain_refused_resend(
         notice=UnknownOutcomeNotice(
             explanation=(
                 f"Alpaca refused the order to {_the_reduction(created)} when the Clerk sent it again. "
-                "An earlier send of this order may have reached Alpaca, so the Clerk keeps custody "
-                "of the position and sends the same order again, under the same client order id, "
-                f"for as long as Alpaca shows no order under that id. Alpaca's answer: {error}"
+                "An earlier send of this order may have reached Alpaca, so while the order's "
+                "session is open the Clerk keeps custody of the position and sends the same order "
+                "again, under the same client order id, for as long as Alpaca shows no order under "
+                f"that id. Alpaca's answer: {error}"
             ),
             next_step=(
-                "Look at this account's orders and position at Alpaca. The Clerk sends the order "
-                "again by itself, waiting longer after each refusal (up to "
-                f"{RESEND_WAIT_CEILING_MS // 60_000} minutes), and takes it up as soon as Alpaca "
-                "shows it."
+                "Look at this account's orders and position at Alpaca. While the order's session "
+                "is open the Clerk sends the order again by itself, waiting longer after each "
+                f"refusal (up to {RESEND_WAIT_CEILING_MS // 60_000} minutes), and takes it up as "
+                "soon as Alpaca shows it."
             ),
         ),
     )
@@ -2630,11 +2635,13 @@ def resend_wait_ms(sends: int) -> int:
     longer: :data:`RESEND_WAITS_AFTER_A_RESEND_MS`, then
     :data:`RESEND_WAIT_CEILING_MS` every time.
 
-    A send made again can be refused for as long as its cause stands, and
-    nothing ends the sends: an end would have to release custody of an order
-    that may be working (#2845). So the sends back off instead of asking the
-    broker twice a minute until the session closes. Never shorter than the
-    submit-absence wait, whatever that is set to.
+    A send made again can be refused for as long as its cause stands, and no
+    number of refusals ends the sends. Only the send-time rule does
+    (:func:`_created_leg_may_be_sent`): past the order's session a
+    scheduled-end sale holds for the next open, and any other EXIT fails and
+    releases custody. So the sends back off instead of asking the broker twice
+    a minute until then. Never shorter than the submit-absence wait, whatever
+    that is set to.
     """
     base_ms = submit_absence_grace_ms()
     if sends <= 1:
