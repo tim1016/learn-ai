@@ -652,13 +652,15 @@ class GoldenSearchPlanKnob(_Wire):
     low_position: float | None = Field(description="Positions in the legal domain, 0 to 1; null for a domain of one value.")
     high_position: float | None
     current_position: float | None
+    start: float | None = Field(description="Where Zoom starts (the seed's value), which it keeps in every round; null for Grid.")
+    start_position: float | None
 
 
 class GoldenSearchStageWorkload(_Wire):
     stage: str
     label: str
-    planned: int = Field(description="The receipt's planned maximum evaluations.")
-    reserved: int = Field(description="Evaluations the stage has reserved so far.")
+    planned: int = Field(description="The receipt's planned maximum evaluations: an upper bound, never a stopping point.")
+    used: int = Field(description="Engine runs used so far, runs in flight included; the stages' together equal the study's consumed evaluations.")
 
 
 class GoldenSearchWorkload(_Wire):
@@ -694,6 +696,7 @@ class GoldenSearchCoverageMonth(_Wire):
     sessions: int
     complete: int
     fetching: int
+    stale: int
     failed: int
     missing: int
 

@@ -91,10 +91,10 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     row = await driver.lock(symbol)
     detail = await driver.detail(row)
     assert detail["state"] == "locked" and detail["presented_status"] == "idle"
-    # The Plan charts read the frozen windows and the receipt's estimate; nothing is reserved before the search.
+    # The Plan charts read the frozen windows and the receipt's estimate; nothing is used before the search.
     planned = await service.plan_step_charts(row.id)
     assert [window["kind"] for window in planned["windows"]][:2] == ["run_up", "development"]
-    assert {stage["reserved"] for stage in planned["workload"]["stages"]} == {0} and planned["coverage"]["status"] in ("measured", "missing")
+    assert {stage["used"] for stage in planned["workload"]["stages"]} == {0} and planned["coverage"]["status"] in ("measured", "missing")
     assert detail["permitted_actions"] == ["continue", "run_research", "close", "revise"]
     assert detail["guidance"]["headline"] == "Ready to search"
     assert detail["scope"]["final_state"] == "locked"
@@ -167,6 +167,9 @@ async def test_lifecycle_runs_from_lock_to_an_approved_golden_configuration(conn
     assert "symbol" not in qualification["deploy"]["parameters"]
     assert detail["consumed_evaluations"] <= row.receipt["estimate"]["total_max"]
     assert await repo.consumed_outside_evaluator(conn, row.id, "proof") == 3
+    # Every run the study used lands on the stage that planned it: pair audits under the search, the proof's draw under the proof.
+    used = {stage["stage"]: stage["used"] for stage in (await service.plan_step_charts(row.id))["workload"]["stages"]}
+    assert used["proof"] == 3 and sum(used.values()) == detail["consumed_evaluations"]
 
 
 APPROVE = {"note": "Reviewed.", "acknowledge_missing_parity": True, "acknowledge_research_weakness": False, "expected_default_qualification_id": None}

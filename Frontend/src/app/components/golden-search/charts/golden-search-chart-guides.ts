@@ -340,7 +340,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
     steps: [
       { text: 'Each row is a knob, drawn across its whole legal range.', target: null },
       { text: 'The band is the range the search may try; a held knob is a single grey mark.', target: { kind: 'series', group: 'range' } },
-      { text: 'The diamond is the current settings. A diamond outside a band means the search cannot return to today’s value.', target: { kind: 'series', group: 'current' } },
+      { text: 'The diamond is the current settings; the ring is where Zoom starts. Grid tries only the band. Zoom keeps its starting value in every round, so it can end there even outside the band.', target: { kind: 'series', group: 'current' } },
       { text: 'Hover a knob for its step, how many values it can take and its importance: higher importance is searched first.', target: null },
     ],
   },
@@ -350,8 +350,8 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
     steps: [
       { text: 'Each row is a stage of the study.', target: null },
       { text: 'The grey bar is the most runs the plan allows the stage.', target: { kind: 'series', group: 'planned' } },
-      { text: 'The blue bar is how many it has reserved so far.', target: { kind: 'series', group: 'reserved' } },
-      { text: 'A stage that reaches its plan may stop short; the study notes it as incomplete.', target: null },
+      { text: 'The blue bar is how many it has used so far, runs in flight included.', target: { kind: 'series', group: 'used' } },
+      { text: 'The plan is an upper bound, not a stop. A stage stops short only when the study’s cap runs out; the study then notes it as incomplete.', target: null },
     ],
   },
   'trade-minimums': {
@@ -370,7 +370,7 @@ export const CHART_GUIDES: Readonly<Record<GoldenSearchChartId, ChartGuide>> = {
     steps: [
       { text: 'Each bar is a month of the study’s data span, as tall as its trading sessions.', target: null },
       { text: 'Green sessions are complete in the lake.', target: { kind: 'series', group: 'complete' } },
-      { text: 'Amber is still fetching, red failed, and grey not in the lake at all.', target: { kind: 'series', group: 'missing' } },
+      { text: 'Amber is still fetching, teal stale, red failed, and grey not in the lake at all.', target: { kind: 'series', group: 'missing' } },
       { text: 'This is the lake now. The study ran on the data snapshot frozen at lock, which this cannot change.', target: null },
     ],
   },

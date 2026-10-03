@@ -31,10 +31,10 @@ describe('GoldenSearchPlanSummaryComponent', () => {
     const tiles = await screen.findByRole('region', { name: 'Plan at a glance' });
     expect(tiles.textContent).toMatch(/Engine runs\s*Up to 900\s*of a 5,000 cap · 420 used so far/);
     expect(tableRows('Window map')[4]).toMatch(/Fold 1 test.*63\s*—/);
-    expect(tableRows('Search space')[2]).toMatch(/RSI lower gate\s*held at 50\s*—\s*1/);
+    expect(tableRows('Search space')[1]).toMatch(/Fast EMA length.*5\s*5\s*1 to 50/);
     expect(tableRows('Workload')[1]).toMatch(/Search the development period\s*400\s*380/);
     expect(tableRows('Trade minimums')[1]).toMatch(/Development\s*1\.996\s*100\s*2024: 252 of 252 sessions; 2025: 250 of 251 sessions/);
-    expect(tableRows('Data coverage')[1]).toMatch(/Jun 2024\s*19\s*18\s*0\s*0\s*1/);
+    expect(tableRows('Data coverage')[1]).toMatch(/Jun 2024\s*19\s*18\s*0\s*0\s*0\s*1/);
   });
 
   it('reads the charts again when a running stage uses more engine runs, not on every poll', async () => {

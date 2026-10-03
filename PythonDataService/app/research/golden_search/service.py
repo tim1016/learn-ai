@@ -25,6 +25,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import asyncpg
 import redis
 
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, SignalProgramContract
@@ -53,7 +54,7 @@ from app.research.golden_search.models import (
     StudyRow,
     require_mapping,
 )
-from app.research.golden_search.plan_charts import coverage_span, plan_charts
+from app.research.golden_search.plan_charts import coverage_span, plan_charts, runs_used
 from app.research.golden_search.planning import (
     DEFAULT_FINAL_MONTHS,
     DEFAULT_TEST_MONTHS,
@@ -538,6 +539,7 @@ LAKE_UNREADABLE = "The data lake catalog could not be read, so coverage is not s
 async def _lake_statuses(row: StudyRow) -> dict[date, str] | str:
     """Each session's minute-bar artifact status over the study's data span, or why the catalog could not say."""
     from app.data_lake import catalog_client
+    from app.data_lake.catalog_client import CatalogSchemaNotReadyError, CatalogUnavailableError
     from app.data_lake.ensure_data import provider_for_data_type
     from app.data_lake.types import polygon_mode_for
 
@@ -554,7 +556,7 @@ async def _lake_statuses(row: StudyRow) -> dict[date, str] | str:
             start_trading_date=start,
             end_trading_date=end,
         )
-    except Exception:
+    except (CatalogUnavailableError, CatalogSchemaNotReadyError, asyncpg.PostgresError, asyncpg.InterfaceError, OSError):
         logger.warning(
             "lake coverage unreadable; the plan's coverage chart says so",
             extra={"action": "golden_search_plan_coverage_unreadable", "study_id": row.id},
@@ -567,8 +569,9 @@ async def _lake_statuses(row: StudyRow) -> dict[date, str] | str:
 async def plan_step_charts(study_id: str) -> dict[str, Any]:
     """The Plan step's charts for a locked study: its frozen windows, search space, workload, trade minimums and data coverage."""
     row = await get_row(study_id)
-    reserved = await with_connection(repo.reserved_by_stage, row.id)
-    return plan_charts(row, reserved=reserved, statuses=await _lake_statuses(row))
+    rows_by_step = await with_connection(repo.evaluation_rows_by_step, row.id)
+    proof = await with_connection(repo.consumed_outside_evaluator, row.id, "proof")
+    return plan_charts(row, used=runs_used(rows_by_step, proof), statuses=await _lake_statuses(row))
 
 
 async def search_step_charts(study_id: str) -> dict[str, Any]:

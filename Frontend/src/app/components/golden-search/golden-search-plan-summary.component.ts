@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, input, resource, untracked } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, input, resource } from '@angular/core';
 import { DecimalPipe, PercentPipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
@@ -11,6 +11,7 @@ import { GoldenSearchChartComponent } from './charts/golden-search-chart.compone
 import { sameChart } from './charts/golden-search-chart-spec';
 import { GoldenSearchGridComponent } from './charts/golden-search-grid.component';
 import { GoldenSearchPanelComponent } from './charts/golden-search-panel.component';
+import { reloadOnProgress } from './charts/golden-search-reload';
 import { incumbentLabel, knobsByName, usesTradeFrequency } from './golden-search-display';
 import { GoldenSearchActivityComponent } from './golden-search-activity.component';
 import { GoldenSearchKnobTableComponent } from './golden-search-knob-table.component';
@@ -118,20 +119,7 @@ export class GoldenSearchPlanSummaryComponent {
   protected readonly incumbent = computed(() => incumbentLabel(this.study().protocol.incumbent));
 
   constructor() {
-    // A reload keeps the drawn charts while it reads; a change of params would blank them.
-    // The first read starts with the progress at creation; a change during any read waits for it to settle, then reloads.
-    let seen: string | null = null;
-    effect(() => {
-      const progress = this.progress();
-      const loading = this.charts.isLoading();
-      if (seen === null) {
-        seen = progress;
-        return;
-      }
-      if (loading || progress === seen) return;
-      seen = progress;
-      untracked(() => this.charts.reload());
-    });
+    reloadOnProgress(this.progress, this.charts);
   }
 
   protected retry(): void {

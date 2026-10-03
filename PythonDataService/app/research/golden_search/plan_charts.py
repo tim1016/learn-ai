@@ -11,17 +11,21 @@ Formula, from the frozen protocol and lock receipt:
   * search space — each declared knob, searched over [low, high] at its
     step with ``knob_value_counts`` values and its importance, or held at
     its fixed value; positions in the legal domain
-    p(v) = (v − domain low) / (domain high − domain low) for the range's ends
-    and the incumbent's value;
-  * workload — each stage's planned maximum (the receipt's estimate) against
-    the evaluation rows it has reserved so far;
+    p(v) = (v − domain low) / (domain high − domain low) for the range's ends,
+    the incumbent's value and, for Zoom, the seed's (where it starts and the
+    value it keeps in every round);
+  * workload — each estimate row's planned maximum against the engine runs
+    used so far: the evaluation rows of the steps it plans (the search's
+    include its pair audits) and, for the proof, the units it drew outside
+    the evaluator; together they equal the study's consumed evaluations;
   * trade minimums — a frequency plan's minimum per window,
     ⌈F × Σ_y selected_y / scheduled_y⌉, with its yearly terms as the receipt
     froze them; a fixed-floor plan's two flat floors;
   * data coverage — for each ET calendar month of [data start, final end):
     the calendar's sessions, and how many the lake catalog holds complete,
-    still fetching, failed or not at all (minute trade bars under the
-    study's price adjustment, on the active data root).
+    still fetching, stale, failed or not at all (minute trade bars under the
+    study's price adjustment, on the active data root); a status it does not
+    know fails the read.
 Reference: PRD https://github.com/tim1016/learn-ai/issues/2821 "Server work by
   chart" (V1–V6); the floors are app/research/golden_search/activity.py.
 Canonical implementation: this file.
@@ -43,7 +47,8 @@ from app.research.golden_search.protocol import GoldenSearchProtocol, knob_value
 from app.research.grid_search.service import window_dates
 from app.utils.session_anchors import et_midnight_ms
 
-COVERAGE_STATUSES = ("complete", "fetching", "failed", "missing")
+# The catalog's artifact statuses (``data_lake.types.ArtifactStatus``), and "missing" for a session it has no row for.
+COVERAGE_STATUSES = ("complete", "fetching", "stale", "failed", "missing")
 
 
 def _sessions(start_ms: int, end_ms: int) -> int:
@@ -90,6 +95,8 @@ def search_space(row: StudyRow, protocol: GoldenSearchProtocol) -> list[dict[str
         return []
     counts = knob_value_counts(protocol)
     incumbent = knob_values(declaration, protocol.incumbent.params)
+    # Only Zoom has a starting point; Grid scores every combination.
+    start = knob_values(declaration, protocol.seed) if protocol.method == "zoom" else None
     knobs = []
     for plan in protocol.knobs:
         knob = declaration.knob(plan.name)
@@ -113,20 +120,36 @@ def search_space(row: StudyRow, protocol: GoldenSearchProtocol) -> list[dict[str
                 "low_position": _position(low, knob.domain_low, knob.domain_high),
                 "high_position": _position(high, knob.domain_low, knob.domain_high),
                 "current_position": _position(incumbent[knob.name], knob.domain_low, knob.domain_high),
+                "start": None if start is None else float(start[knob.name]),
+                "start_position": None if start is None else _position(start[knob.name], knob.domain_low, knob.domain_high),
             }
         )
     return knobs
 
 
-def workload(row: StudyRow, reserved: Mapping[str, int]) -> dict[str, Any]:
-    """Each stage's planned maximum against the evaluations it has reserved so far, within the study's cap."""
+# The estimate row (``budget.estimate``) that plans each evaluation step's runs.
+ESTIMATE_ROW_OF_STEP = {"search": "search", "pair_audit": "search", "recent": "recent", "validation": "validation", "evidence": "evidence", "exam": "exam"}
+
+
+def runs_used(rows_by_step: Mapping[str, int], proof_units: int) -> dict[str, int]:
+    """Engine runs used per estimate row: each step's evaluation rows under the row that plans them, and the proof's units drawn outside the evaluator."""
+    used = {"proof": proof_units}
+    for step, count in rows_by_step.items():
+        if step not in ESTIMATE_ROW_OF_STEP:
+            raise ValueError(f"Evaluation step {step!r} has no row in the study's estimate.")
+        used[ESTIMATE_ROW_OF_STEP[step]] = used.get(ESTIMATE_ROW_OF_STEP[step], 0) + count
+    return used
+
+
+def workload(row: StudyRow, used: Mapping[str, int]) -> dict[str, Any]:
+    """Each estimate row's planned maximum against the engine runs it has used so far, within the study's cap."""
     estimate = row.receipt["estimate"]
     return {
         "cap": row.budget_cap,
         "consumed": row.consumed_evaluations,
         "planned_total": int(estimate["total_max"]),
         "stages": [
-            {"stage": item["stage"], "label": item["label"], "planned": int(item["max_evaluations"]), "reserved": int(reserved.get(item["stage"], 0))}
+            {"stage": item["stage"], "label": item["label"], "planned": int(item["max_evaluations"]), "used": int(used.get(item["stage"], 0))}
             for item in estimate["stages"]
         ],
     }
@@ -168,7 +191,9 @@ def coverage(row: StudyRow, protocol: GoldenSearchProtocol, statuses: Mapping[da
         day = window.session_date
         counts = months.setdefault((day.year, day.month), dict.fromkeys(COVERAGE_STATUSES, 0))
         status = statuses.get(day, "missing")
-        counts[status if status in counts else "missing"] += 1
+        if status not in counts:
+            raise ValueError(f"The lake catalog reports status {status!r} for {day}, which the coverage chart does not know.")
+        counts[status] += 1
     return {
         "status": "measured",
         "months": [
@@ -184,14 +209,14 @@ def coverage_span(row: StudyRow) -> tuple[date, date]:
     return window_dates(int(row.receipt["intervals"]["data_start_ms"]), protocol.final_end_ms)
 
 
-def plan_charts(row: StudyRow, *, reserved: Mapping[str, int], statuses: Mapping[date, str] | str) -> dict[str, Any]:
+def plan_charts(row: StudyRow, *, used: Mapping[str, int], statuses: Mapping[date, str] | str) -> dict[str, Any]:
     """The Plan step's charts for a locked study."""
     protocol = GoldenSearchProtocol.from_dict(row.protocol)
     floors = TradeFloors(protocol, row.receipt)
     return {
         "windows": windows(row, protocol, floors),
         "search_space": search_space(row, protocol),
-        "workload": workload(row, reserved),
+        "workload": workload(row, used),
         "minimums": minimums(row, protocol),
         "coverage": coverage(row, protocol, statuses),
     }

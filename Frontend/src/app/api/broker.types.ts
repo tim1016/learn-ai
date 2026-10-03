@@ -13664,6 +13664,8 @@ export interface components {
             month_start_ms: number;
             /** Sessions */
             sessions: number;
+            /** Stale */
+            stale: number;
             /** Year */
             year: number;
         };
@@ -14791,6 +14793,13 @@ export interface components {
             name: string;
             /** Searched */
             searched: boolean;
+            /**
+             * Start
+             * @description Where Zoom starts (the seed's value), which it keeps in every round; null for Grid.
+             */
+            start: number | null;
+            /** Start Position */
+            start_position: number | null;
             /** Step */
             step: number | null;
             /** Unit */
@@ -15383,16 +15392,16 @@ export interface components {
             label: string;
             /**
              * Planned
-             * @description The receipt's planned maximum evaluations.
+             * @description The receipt's planned maximum evaluations: an upper bound, never a stopping point.
              */
             planned: number;
-            /**
-             * Reserved
-             * @description Evaluations the stage has reserved so far.
-             */
-            reserved: number;
             /** Stage */
             stage: string;
+            /**
+             * Used
+             * @description Engine runs used so far, runs in flight included; the stages' together equal the study's consumed evaluations.
+             */
+            used: number;
         };
         /** GoldenSearchStressResult */
         GoldenSearchStressResult: {
